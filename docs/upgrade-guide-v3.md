@@ -66,6 +66,27 @@ transform, end-to-end. A version bump is the whole fix; no per-repo change is
 needed. The D010 conformance rule covers the residual case of an app on plain
 `atlan-application-sdk` with no extras at all.
 
+### Packages the SDK no longer declares
+
+The SDK declares only what it imports (a unit test holds this). These were
+declared but never imported, and are gone:
+
+| Package | Was in | Still arrives via |
+|---------|--------|-------------------|
+| `aiohttp` | core | the `[harness]` extra (kubernetes) only |
+| `uvloop` | core | `fastapi[standard]` (uvicorn) |
+| `opentelemetry-exporter-otlp` | core | — (the SDK now declares `opentelemetry-exporter-otlp-proto-grpc`) |
+| `duckdb-engine` | `[sql]`, `[incremental]` | — |
+| `azure-storage-blob`, `azure-storage-file-datalake` | `[azure]` | — |
+| `pytest-order` | `[tests]` | — |
+| `numpy` | `[scale_data_generator]` | pandas, where installed |
+
+If your app imports one of these, declare it in your own `pyproject.toml`; it
+was never a promise of the SDK's. The usual cases: `aiohttp` in app code,
+`create_engine("duckdb:///...")` (needs `duckdb-engine`), the Azure Storage SDK
+used directly, and `@pytest.mark.order` in tests. The SDK's own HTTP client is
+`httpx`.
+
 ### pandas 3 and pyarrow 26
 
 The `[sql]`, `[incremental]` and `[pandas]` extras accept `pandas>=2.2.3,<4`

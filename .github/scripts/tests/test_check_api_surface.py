@@ -86,6 +86,9 @@ def test_clean(tmp_path: Path, src: str) -> None:
         ("from application_sdk.execution import worker\n", "not in"),
         ("from ..execution import worker\n", "not in"),
         ("import temporalio\n", "does not declare"),
+        # pydantic happens to bring typing_extensions today, but it is not part
+        # of pydantic's API: a file that imports it needs its own declaration.
+        ("from typing_extensions import deprecated\n", "does not declare"),
         (
             "def f():\n    from application_sdk.execution.worker import W\n",
             "without a try/except ModuleNotFoundError",

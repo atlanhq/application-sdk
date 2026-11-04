@@ -684,7 +684,7 @@ class TaskExecutionContext:
             the SDK is async-first. Reach for an async library before reaching
             for this:
 
-            - HTTP → ``httpx`` / ``aiohttp`` (not ``requests``)
+            - HTTP → ``httpx`` (not ``requests``)
             - AWS  → ``aioboto3`` / ``aiobotocore`` (not ``boto3``)
             - Postgres → ``asyncpg`` (not ``psycopg2``)
             - File I/O → ``aiofiles`` (not blocking ``open()``)

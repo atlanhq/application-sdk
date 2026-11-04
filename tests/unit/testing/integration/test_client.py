@@ -2,6 +2,7 @@
 
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 from application_sdk.errors.leaves import DependencyUnavailableError
@@ -273,3 +274,48 @@ class TestProvisionAndStartWorkflow:
 
         vault_body = post.call_args_list[0].kwargs["data"]
         assert vault_body == {"host": "db", "extra": {"ssl": "true"}}
+
+
+class TestHttpTransport:
+    """_get/_post map httpx outcomes onto the client's result dicts."""
+
+    @pytest.fixture
+    def client(self):
+        return IntegrationTestClient(host="http://app", version="v1", timeout=7)
+
+    @pytest.mark.parametrize("method", ["get", "post"])
+    def test_json_body_carries_http_status(self, client, method):
+        response = httpx.Response(202, json={"success": True})
+        with patch(f"httpx.{method}", return_value=response) as call:
+            result = (
+                client._get("/x") if method == "get" else client._post("/x", {"a": 1})
+            )
+        assert result == {"success": True, "_http_status": 202}
+        assert call.call_args.args[0] == "http://app/workflows/v1/x"
+        assert call.call_args.kwargs["timeout"] == 7
+        assert call.call_args.kwargs["follow_redirects"] is True
+
+    def test_non_json_body_is_invalid_response(self, client):
+        response = httpx.Response(502, text="bad gateway")
+        with patch("httpx.get", return_value=response):
+            result = client._get("/x")
+        assert result["error"]["code"] == "INVALID_RESPONSE"
+        assert result["error"]["body"] == "bad gateway"
+        assert result["_http_status"] == 502
+
+    @pytest.mark.parametrize("method", ["get", "post"])
+    @pytest.mark.parametrize(
+        ("error", "code"),
+        [
+            (httpx.ConnectError("refused"), "CONNECTION_FAILED"),
+            (httpx.ReadTimeout("slow"), "REQUEST_TIMEOUT"),
+            (httpx.RemoteProtocolError("garbled"), "REQUEST_FAILED"),
+        ],
+    )
+    def test_transport_errors_become_error_results(self, client, method, error, code):
+        with patch(f"httpx.{method}", side_effect=error):
+            result = (
+                client._get("/x") if method == "get" else client._post("/x", {"a": 1})
+            )
+        assert result["success"] is False
+        assert result["error"]["code"] == code

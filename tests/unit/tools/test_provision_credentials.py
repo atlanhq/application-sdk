@@ -21,7 +21,7 @@ class TestProvisionCredentialsBodyFlag:
         mock_response.raise_for_status = MagicMock()
 
         with (
-            patch("requests.post", return_value=mock_response) as mock_post,
+            patch("httpx.post", return_value=mock_response) as mock_post,
             patch(
                 "sys.argv",
                 [
@@ -59,7 +59,7 @@ class TestProvisionCredentialsBodyFlag:
         )
 
         with (
-            patch("requests.post", return_value=mock_response) as mock_post,
+            patch("httpx.post", return_value=mock_response) as mock_post,
             patch("sys.argv", ["provision-credentials", "--body", body]),
             patch("builtins.print"),
         ):
@@ -88,7 +88,7 @@ class TestProvisionCredentialsFromFileFlag:
         mock_response.raise_for_status = MagicMock()
 
         with (
-            patch("requests.post", return_value=mock_response) as mock_post,
+            patch("httpx.post", return_value=mock_response) as mock_post,
             patch(
                 "sys.argv",
                 ["provision-credentials", "--from-file", str(creds_file)],
@@ -155,7 +155,7 @@ class TestProvisionCredentialsPortFlag:
         mock_response.raise_for_status = MagicMock()
 
         with (
-            patch("requests.post", return_value=mock_response) as mock_post,
+            patch("httpx.post", return_value=mock_response) as mock_post,
             patch(
                 "sys.argv",
                 ["provision-credentials", "--body", "{}", "--port", "9090"],
