@@ -114,6 +114,11 @@ on:
         required: false
         type: boolean
         default: false
+      apt_packages:
+        description: "Space-separated Ubuntu packages apt-installed in the certify gate before `uv sync`, for an app whose Python dependencies build a native extension the runner lacks headers for (e.g. hive's pykerberos needs libkrb5-dev). Default none. Each name is matched against a strict Debian package-name allowlist before install; anything else fails the gate. Mirrors tests-reusable.yaml's `apt-packages`, so pass the same list."
+        required: false
+        type: string
+        default: ""
       unit_test_shards:
         description: "Opt-in: split the certify gate's `tests/unit` across this many parallel runners (2-10). Default 1 = no split: `certify` runs the tests itself in one job, exactly as before, and no extra jobs start. Any value outside 1-10 fails the run. When set, pytest-split balances the runners from the app's committed `.test_durations` if it has one, else splits evenly by count. See docs/standards/app-certification.md."
         required: false
@@ -411,9 +416,24 @@ jobs:
           repository: atlanhq/application-sdk
           ref: main
           path: sdk
-          sparse-checkout: .github/scripts
+          # The Dockerfile too: it holds the golden tag the Python pin reads.
+          sparse-checkout: |
+            .github/scripts
+            /Dockerfile
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      # Certify on the Python the app image ships, not the runner's system
+      # python3 (3.14 on ubuntu-latest, while the golden base is 3.13). Unpinned,
+      # an app with no .python-version certified on 3.14 and failed to install
+      # deps with no cp314 wheels. UV_PYTHON outranks an app's .python-version,
+      # so certify always tests what the image runs. The SDK Dockerfile's golden
+      # tag is the single source (container_python_version.py, CNCT-85).
+      - name: Pin Python to the app image's version
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 sdk/.github/scripts/container_python_version.py print-version)
+          echo "UV_PYTHON=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -427,6 +447,25 @@ jobs:
         run: |
           git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
           git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+
+      # Before `uv sync`: a dependency that builds a native extension (hive's
+      # pykerberos needs libkrb5-dev) cannot install without its headers, and
+      # an app whose deps do not install fails certification. The guard is
+      # byte-identical to tests-reusable.yaml's (pinned by
+      # test_build_and_publish_certify_wiring.py): the value is unquoted for
+      # word-splitting, so it is matched whole against a Debian package-name
+      # allowlist first, failing closed.
+      - name: Install system packages (apt_packages)
+        if: inputs.apt_packages != ''
+        env:
+          APT_PACKAGES: ${{ inputs.apt_packages }}
+        run: |
+          set -euo pipefail
+          echo "Validating and installing apt packages: $APT_PACKAGES"
+          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
+            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
       - name: Install app dependencies
         id: app_install
@@ -522,6 +561,18 @@ jobs:
           path: sdk
           token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
+      # Certify on the Python the app image ships, not the runner's system
+      # python3 (3.14 on ubuntu-latest, while the golden base is 3.13). Unpinned,
+      # an app with no .python-version certified on 3.14 and failed to install
+      # deps with no cp314 wheels. UV_PYTHON outranks an app's .python-version,
+      # so certify always tests what the image runs. The SDK Dockerfile's golden
+      # tag is the single source (container_python_version.py, CNCT-85).
+      - name: Pin Python to the app image's version
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 sdk/.github/scripts/container_python_version.py print-version)
+          echo "UV_PYTHON=${VERSION}" >> "$GITHUB_ENV"
+
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
@@ -549,6 +600,25 @@ jobs:
         run: |
           git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
           git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+
+      # Before `uv sync`: a dependency that builds a native extension (hive's
+      # pykerberos needs libkrb5-dev) cannot install without its headers, and
+      # an app whose deps do not install fails certification. The guard is
+      # byte-identical to tests-reusable.yaml's (pinned by
+      # test_build_and_publish_certify_wiring.py): the value is unquoted for
+      # word-splitting, so it is matched whole against a Debian package-name
+      # allowlist first, failing closed.
+      - name: Install system packages (apt_packages)
+        if: inputs.apt_packages != ''
+        env:
+          APT_PACKAGES: ${{ inputs.apt_packages }}
+        run: |
+          set -euo pipefail
+          echo "Validating and installing apt packages: $APT_PACKAGES"
+          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
+            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
       - name: Install app dependencies
         id: app_install
@@ -657,6 +727,10 @@ jobs:
       # non-zero, trips `prepare`'s `if: !failure()`, and skips build + publish.
       # (CD's enforcement comes from the step itself — no continue-on-error.
       # The verdict re-checks CD only to render the summary correctly.)
+      # App deps that did not install (APP_INSTALL here, or UT=install_failed
+      # from a shard's own runner) also block: contract drift and unit tests
+      # could not run, and an uncertified app must not publish. An app with no
+      # tests/unit (UT=skipped) still passes.
       # Coverage threshold (COV) and v3 shape (CM) are warn-only — they
       # annotate but do not block.
       - name: Certification verdict

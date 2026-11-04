@@ -159,8 +159,15 @@ def _write_results(results: Path, outcomes: dict[int, str]) -> None:
     [
         ({1: "success", 2: "success", 3: "success"}, "success"),
         ({1: "success", 2: "failure", 3: "success"}, "failure"),
+        # No tests/unit anywhere: passes, an app may have no unit tests.
         ({1: "skipped", 2: "skipped", 3: "skipped"}, "skipped"),
-        ({1: "success", 2: "install_failed", 3: "success"}, "skipped"),
+        # A shard whose deps did not install never ran its tests: kept apart
+        # from "skipped" so the certification verdict can fail closed on it.
+        ({1: "success", 2: "install_failed", 3: "success"}, "install_failed"),
+        (
+            {1: "install_failed", 2: "install_failed", 3: "install_failed"},
+            "install_failed",
+        ),
         # A real failure outranks an install problem elsewhere.
         ({1: "failure", 2: "install_failed", 3: "success"}, "failure"),
         # Some empty shards are fine: more shards than tests.
@@ -226,3 +233,33 @@ def test_verdict_writes_outcome_and_never_exits_nonzero(
     _write_results(results, {1: "failure"})
     assert main(["verdict", "--results-dir", str(results), "--total", "1"]) == 0
     assert output.read_text(encoding="utf-8") == "outcome=failure\n"
+
+
+@pytest.mark.parametrize(
+    ("outcomes", "written", "annotation"),
+    [
+        ({1: "install_failed"}, "outcome=install_failed\n", "::error::"),
+        ({1: "skipped"}, "outcome=skipped\n", ""),
+    ],
+)
+def test_verdict_reports_install_failure_distinct_from_no_tests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    outcomes: dict[int, str],
+    written: str,
+    annotation: str,
+) -> None:
+    # The two non-runs reach the certification verdict as different outputs:
+    # it blocks on install_failed and passes on skipped (FND-4538).
+    output = tmp_path / "out"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    results = tmp_path / "results"
+    _write_results(results, outcomes)
+    assert main(["verdict", "--results-dir", str(results), "--total", "1"]) == 0
+    assert output.read_text(encoding="utf-8") == written
+    out = capsys.readouterr().out
+    if annotation:
+        assert annotation in out
+    else:
+        assert "::error::" not in out and "::warning::" not in out
