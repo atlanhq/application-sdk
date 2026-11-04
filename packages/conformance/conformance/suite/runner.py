@@ -57,6 +57,7 @@ from conformance.suite.checks import (
     integration_deselect,
     integration_marking,
     legacy_contract,
+    local_staging_root,
     manifest_app_name,
     manifest_contract,
     optimizations,
@@ -366,6 +367,11 @@ _CHECKS: list[CheckRegistration] = [
         series=retry_ladder.SERIES,
         discover=retry_ladder.discover,
         scan_path=retry_ladder.scan_path,
+    ),
+    CheckRegistration(
+        series=local_staging_root.SERIES,
+        discover=local_staging_root.discover,
+        scan_path=local_staging_root.scan_path,
     ),
 ]
 

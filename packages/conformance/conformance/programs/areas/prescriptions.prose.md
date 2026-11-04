@@ -1540,6 +1540,39 @@ path component, and this rule governs that package's sources too).
   retry.  Propose `# conformance: ignore[P060] <reason>` naming the cadence,
   not a migration.
 
+**Local-staging rule (P063)** — suggest-only, scope=app,
+`classification = "judgment"`; backed by `suite.checks.local_staging_root`.
+
+- **P063 LocalStagingOutsideTemporaryPath** (WARN) — a
+  `WORKFLOW_OUTPUT_PATH_TEMPLATE.format(...)` call whose result is not rooted
+  under `TEMPORARY_PATH`.  The template is an object-store key
+  (`artifacts/apps/<app>/workflows/<workflow>/<run>`); used as a local
+  directory it resolves against the container working directory, which is
+  read-only on many customer-hosted runtimes, so each fetch activity fails
+  with `LocalVolumeUnwritableError`.  The finding sits on the `.format(...)`
+  call.
+
+  **Follow where the value goes before drafting.**  If it reaches a file
+  writer's `path=`, a `local_path=`, `os.makedirs` or `open` — directly or via
+  `input.output_path` — wrap it:
+
+      from application_sdk.constants import TEMPORARY_PATH
+
+      base = os.path.join(
+          TEMPORARY_PATH,
+          WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
+              application_name=APPLICATION_NAME,
+              workflow_id=info.workflow_id,
+              run_id=info.run_id,
+          ),
+      )
+
+  Object-store calls keep receiving the key: `get_object_store_prefix()` and
+  `normalize_key()` strip `TEMPORARY_PATH` back off.  A value that is only ever
+  an object-store key (handed to `upload`/`download` or stored as a prefix, never
+  written under) is not a violation; propose
+  `# conformance: ignore[P063] <reason>` saying so.
+
 - **P048 AppDerivedPersistentArtifactPrefix** (WARN) — app code assembles the
   connection-scoped layout `persistent-artifacts/apps/<app>/connection/…`
   itself instead of asking the SDK where a connection's persistent state lives.

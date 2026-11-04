@@ -498,6 +498,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P056",
         "P057",
         "P058",
+        "P063",
         "P059",
         "C002",
         "D001",
@@ -796,6 +797,10 @@ def test_catalog_p_series_present() -> None:
     never calls ``super().close()``); gated on an app SDK >= 3.46.0 (FND-3778).
     P060 is HandRolledRetryLadder — a sleep in a loop that also catches
     exceptions, outside application_sdk.common.backoff (FND-4284).
+    P063 is LocalStagingOutsideTemporaryPath — a run root built from
+    WORKFLOW_OUTPUT_PATH_TEMPLATE and never rooted under TEMPORARY_PATH, which
+    lands local writes on a read-only working directory on customer-hosted
+    runtimes.
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -856,6 +861,7 @@ def test_catalog_p_series_present() -> None:
         "P058",
         "P059",
         "P060",
+        "P063",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
