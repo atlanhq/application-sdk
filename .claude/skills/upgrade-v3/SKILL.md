@@ -1546,11 +1546,11 @@ with output_file.open("wb") as f:
 
 All blocking DB calls inside the loop must be wrapped in `self.run_in_thread()` — see "Use `self.run_in_thread()` for blocking work" below.
 
-### workflows extra is required
+### Use `[sql]` or no extra, not the deprecated extras
 
-`orjson`, `temporalio`, and `dapr` are in the `[workflows]` optional extra, not core dependencies. Without it the container fails with `ModuleNotFoundError: No module named 'orjson'`.
+`orjson`, `temporalio`, `boto3`, `azure-identity` and `rocksdict` are core dependencies. Do not add `[workflows]`, `[storage]`, `[iam_auth]` or `[azure]` for them. Those extras, and `[sqlalchemy]`, `[pandas]` and `[daft]`, are deprecated and removed in v4.0.0 (conformance rule D017). A SQL connector uses `[sql]`. Other supported extras still install real packages and stay as they are, e.g. `[distributed_lock]` (redis, for `RedisClient`), `[mcp]` and `[tests]`:
 ```toml
-"atlan-application-sdk[sql,iam-auth,pandas,workflows]"
+"atlan-application-sdk[sql]"
 ```
 
 ### Seeding credentials for local dev
