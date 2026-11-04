@@ -213,9 +213,12 @@ def test_enforced_failures_block(
     assert "::error title=Publish blocked::" in capsys.readouterr().out
 
 
-def test_install_failures_are_labelled(
+def test_install_failures_block_and_are_labelled(
     summary: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # The shape a run takes when the app's deps fail to install: drift is
+    # skipped and the unit fan-in reports install_failed — nothing failed, yet
+    # nothing was certified, so publish is blocked (FND-4538).
     assert (
         _verdict(
             monkeypatch,
@@ -223,7 +226,8 @@ def test_install_failures_are_labelled(
             APP_INSTALL="failure",
             CM="skipped",
             CD="skipped",
-            UT="failure",
+            UT="install_failed",
+            COV="skipped",
         )
         == 1
     )
@@ -233,7 +237,43 @@ def test_install_failures_are_labelled(
         in text
     )
     assert "**Contract drift (poe generate) — enforced (app install failed)**" in text
-    assert "**Unit tests — enforced (app install failed)** — failure" in text
+    assert (
+        "- ❌ **Unit tests — enforced (app install failed)** — install_failed" in text
+    )
+    assert "\n\n### ❌ Publish blocked — app dependencies did not install\n\n" in text
     out = capsys.readouterr().out
     assert "SDK install failed, so check_migration did not run." in out
-    assert "App install failed; contract drift and unit tests did not run." in out
+    assert "::error title=Publish blocked::App dependencies did not install" in out
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        # certify's own install failed (default single-shard layout).
+        {"APP_INSTALL": "failure", "CD": "skipped", "UT": "install_failed"},
+        # Install outcome not "success" for any reason (cancelled, skipped).
+        {"APP_INSTALL": "cancelled", "CD": "skipped", "UT": "skipped"},
+        # Sharded: certify installed, but a shard runner did not.
+        {"UT": "install_failed", "COV": "skipped"},
+    ],
+)
+def test_app_install_failure_fails_closed(
+    summary: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    env: dict[str, str],
+) -> None:
+    assert _verdict(monkeypatch, **env) == 1
+    assert "Publish blocked — app dependencies did not install" in summary.read_text()
+    assert "::error title=Publish blocked::" in capsys.readouterr().out
+
+
+def test_an_app_without_unit_tests_still_passes(
+    summary: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # No tests/unit: certify_unit_shards reports "skipped" with the install a
+    # success. By design this is not a block — 8 fleet apps have no unit suite.
+    assert _verdict(monkeypatch, UT="skipped", COV="skipped") == 0
+    assert "- ➖ **Unit tests — enforced** — skipped" in summary.read_text()
+    assert "Publish blocked" not in summary.read_text()
+    assert "::error" not in capsys.readouterr().out
