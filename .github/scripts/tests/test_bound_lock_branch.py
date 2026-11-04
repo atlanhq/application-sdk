@@ -218,13 +218,18 @@ class TestBoundProject:
             hold = [argv[i + 1] for i, a in enumerate(argv) if a == "--hold"]
             assert hold == list(project.hold)
 
-    def test_a_held_package_is_passed_to_the_driver(self, monkeypatch, tmp_path):
+    def test_a_held_package_is_passed_to_the_driver(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
         # No project in PROJECTS holds anything today; keep the passthrough
         # covered for when one does.
         calls: list[list[str]] = []
-        monkeypatch.setattr(
-            orchestrator.bounded, "main", lambda argv: calls.append(argv) or 0
-        )
+
+        def record(argv: list[str]) -> int:
+            calls.append(argv)
+            return 0
+
+        monkeypatch.setattr(orchestrator.bounded, "main", record)
         project = orchestrator.Project(directory="x", hold=("a", "b"))
         orchestrator.bound_project(project, "P7D", "origin/main", tmp_path)
         argv = calls[0]
