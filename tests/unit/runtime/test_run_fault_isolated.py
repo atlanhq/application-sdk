@@ -325,7 +325,7 @@ def test_available_cpus_never_exceeds_affinity(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# fresh=True: a single-use child per call, never shared
+# fresh_child=True: a single-use child per call, never shared
 # ---------------------------------------------------------------------------
 
 
@@ -337,11 +337,11 @@ def _pid_after(seconds: float) -> int:
 
 
 async def test_fresh_calls_back_to_back_each_get_a_new_child(monkeypatch):
-    """The point of fresh=True: a pooled child would serve all three calls,
+    """The point of fresh_child=True: a pooled child would serve all three calls,
     carrying each one's peak heap into the next (the idle period never elapses
     between back-to-back steps)."""
     monkeypatch.setenv(offload.FAULT_ISOLATION_IDLE_SECONDS_ENV, "30")
-    pids = [await run_fault_isolated(_pid, fresh=True) for _ in range(3)]
+    pids = [await run_fault_isolated(_pid, fresh_child=True) for _ in range(3)]
     assert len(set(pids)) == 3
 
 
@@ -350,11 +350,11 @@ async def test_fresh_child_exits_as_soon_as_its_call_ends(monkeypatch):
 
     Keeps a reference to the pool: an unreferenced ProcessPoolExecutor stops
     its workers when it is garbage-collected, which would let this pass even
-    if fresh never retired the pool itself. ``reaped`` is set only by that
+    if fresh_child never retired the pool itself. ``reaped`` is set only by that
     retirement. Checked through the pool rather than by probing the PID,
     because ``os.kill(pid, 0)`` is ``TerminateProcess`` on Windows.
     """
-    # An idle period far longer than the deadline: only fresh's own retirement
+    # An idle period far longer than the deadline: only fresh_child's own retirement
     # can shut the pool down in time.
     monkeypatch.setenv(offload.FAULT_ISOLATION_IDLE_SECONDS_ENV, "3600")
     created: list[offload._IsolationPool] = []
@@ -366,7 +366,7 @@ async def test_fresh_child_exits_as_soon_as_its_call_ends(monkeypatch):
 
     monkeypatch.setattr(offload, "_IsolationPool", _RecordingPool)
 
-    assert await run_fault_isolated(_echo, "once", fresh=True) == "echo:once"
+    assert await run_fault_isolated(_echo, "once", fresh_child=True) == "echo:once"
 
     # reaped is set only after shutdown(wait=True) has joined every child.
     (pool,) = created
@@ -378,9 +378,9 @@ async def test_fresh_never_touches_the_shared_width_one_pool(monkeypatch):
     shared_pid = await run_fault_isolated(_pid, max_workers=1)
     shared = offload._PROCESS_POOLS[1]
 
-    fresh_pid = await run_fault_isolated(_pid, fresh=True, max_workers=1)
+    fresh_pid = await run_fault_isolated(_pid, fresh_child=True, max_workers=1)
     with pytest.raises(TimeoutError):
-        await run_fault_isolated(_sleep_forever, timeout=0.5, fresh=True)
+        await run_fault_isolated(_sleep_forever, timeout=0.5, fresh_child=True)
 
     assert fresh_pid != shared_pid
     assert offload._PROCESS_POOLS.get(1) is shared
@@ -390,24 +390,34 @@ async def test_fresh_never_touches_the_shared_width_one_pool(monkeypatch):
 
 async def test_fresh_calls_run_concurrently_on_separate_children():
     a, b = await asyncio.gather(
-        run_fault_isolated(_pid_after, 0.5, fresh=True),
-        run_fault_isolated(_pid_after, 0.5, fresh=True),
+        run_fault_isolated(_pid_after, 0.5, fresh_child=True),
+        run_fault_isolated(_pid_after, 0.5, fresh_child=True),
     )
     assert a != b
 
 
 async def test_fresh_native_crash_surfaces_as_broken_pool():
     with pytest.raises(BrokenProcessPool):
-        await run_fault_isolated(_segfault, fresh=True)
-    assert await run_fault_isolated(_echo, "next", fresh=True) == "echo:next"
+        await run_fault_isolated(_segfault, fresh_child=True)
+    assert await run_fault_isolated(_echo, "next", fresh_child=True) == "echo:next"
 
 
 async def test_fresh_propagates_ordinary_exceptions():
     with pytest.raises(ValueError, match="boom"):
-        await run_fault_isolated(_raise_value_error, fresh=True)
+        await run_fault_isolated(_raise_value_error, fresh_child=True)
 
 
 @pytest.mark.parametrize("width", [0, 2, 4])
 async def test_fresh_rejects_a_width_other_than_one(width):
     with pytest.raises(ValueError, match="max_workers"):
-        await run_fault_isolated(_echo, "x", fresh=True, max_workers=width)
+        await run_fault_isolated(_echo, "x", fresh_child=True, max_workers=width)
+
+
+def _echo_fresh(*, fresh: str) -> str:
+    return f"fresh:{fresh}"
+
+
+async def test_a_workers_own_fresh_kwarg_is_still_forwarded():
+    """The option is named fresh_child so it never captures a ``fresh`` kwarg
+    that callers forward to ``func``, as they could before it existed."""
+    assert await run_fault_isolated(_echo_fresh, fresh="yes") == "fresh:yes"

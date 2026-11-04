@@ -1279,7 +1279,7 @@ def _discard_process_pool(max_workers: int, pool: _IsolationPool) -> None:
 
 
 def _retire_single_use_pool(pool: _IsolationPool) -> None:
-    """Shut a ``fresh=True`` pool down once its one call's child is done.
+    """Shut a ``fresh_child=True`` pool down once its one call's child is done.
 
     Runs from the child future's done callback, which fires on the executor's
     own manager thread — joining the children there would deadlock, so the
@@ -1301,7 +1301,7 @@ async def run_fault_isolated(
     *args: Any,
     timeout: float | None = None,
     max_workers: int | None = None,
-    fresh: bool = False,
+    fresh_child: bool = False,
     **kwargs: Any,
 ) -> T:
     """Run ``func`` in an isolated child process (native-crash containment).
@@ -1348,11 +1348,11 @@ async def run_fault_isolated(
             all ``max_workers=1`` callers share a single child and queue behind
             one another; pass another integer to bound concurrency at a
             different width. Must be >= 1.
-        fresh: Run on a single-use child that serves this call only and exits
+        fresh_child: Run on a single-use child that serves this call only and exits
             as soon as it finishes, instead of a pooled one. A pooled child
             serves every call that arrives within the idle period, and the
             peak heap one call leaves behind stays resident into the next. Use
-            ``fresh=True`` for heavy calls made back to back — each step then
+            ``fresh_child=True`` for heavy calls made back to back — each step then
             starts on an empty heap, and the memory is returned the moment the
             call ends rather than after the idle period. Costs one spawn and
             import per call. Never shared, so no other caller can queue behind
@@ -1366,16 +1366,16 @@ async def run_fault_isolated(
         TimeoutError: ``timeout`` elapsed. The child is killed and the pool
             discarded.
         InvalidInputValueError: ``max_workers`` is < 1, or is neither ``None``
-            nor ``1`` with ``fresh=True`` (also a ``ValueError``).
+            nor ``1`` with ``fresh_child=True`` (also a ``ValueError``).
     """
-    if fresh and max_workers not in (None, 1):
+    if fresh_child and max_workers not in (None, 1):
         raise InvalidInputValueError(
-            message=f"fresh=True runs on a single-use width-1 child; got max_workers={max_workers}",
+            message=f"fresh_child=True runs on a single-use width-1 child; got max_workers={max_workers}",
             field="max_workers",
-            constraint="None or 1 when fresh=True",
+            constraint="None or 1 when fresh_child=True",
             value_summary=str(max_workers),
         )
-    if fresh:
+    if fresh_child:
         workers = 1
     else:
         workers = (
@@ -1410,7 +1410,7 @@ async def run_fault_isolated(
     # the child, so the call returns at its deadline whether or not a hold is
     # watching.
     with _auto_hold(_ISOLATED_HOLD_PREFIX + _offloaded_callable_name(func), timeout):
-        if fresh:
+        if fresh_child:
             # Never registered in _PROCESS_POOLS, so no other caller can reach
             # it; _discard_process_pool below leaves the shared width-1 pool
             # alone for the same reason.
