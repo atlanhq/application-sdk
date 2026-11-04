@@ -1,0 +1,81 @@
+# Conditional run: blocks that predate the guard in
+# .github/scripts/tests/test_no_conditional_run_blocks.py (FND-4244).
+#
+# This list only shrinks. Do not add to it: move the logic into a tested script
+# under .github/scripts/ instead (docs/standards/ci.md). When you migrate a
+# block, delete its line and lower ALLOWLIST_CEILING in the test to match.
+#
+# Format: <file>::jobs.<job_id>.<step id|name> (workflows)
+#         <file>::runs.<step id|name>          (composite actions)
+.github/actions/build-app-image/action.yaml::runs.Pin application-sdk to dispatched ref (pre-build)
+.github/actions/build-app-image/action.yaml::runs.build
+.github/actions/connector-integration-tests/action.yaml::runs.Cleanup
+.github/actions/connector-integration-tests/action.yaml::runs.Install daprd runtime (no Dapr CLI)
+.github/actions/connector-integration-tests/action.yaml::runs.Start app server
+.github/actions/connector-integration-tests/action.yaml::runs.Start daprd + Temporal
+.github/actions/connector-unit-tests/action.yaml::runs.Fail if unit tests or the coverage gate failed
+.github/actions/connector-unit-tests/action.yaml::runs.tests
+.github/actions/e2e-apps/action.yaml::runs.Fail job if dispatched run did not succeed
+.github/actions/e2e-apps/action.yaml::runs.Validate callback-mode inputs
+.github/actions/e2e-apps/action.yaml::runs.dispatched_summary
+.github/actions/sdr-e2e/action.yaml::runs.Generate secrets bundle
+.github/actions/sdr-e2e/action.yaml::runs.Resolve Temporal + auth hostnames to IPv4
+.github/actions/sdr-e2e/action.yaml::runs.Resolve test-config.yaml
+.github/actions/sdr-e2e/action.yaml::runs.Restore action assets for post-hooks
+.github/actions/sdr-e2e/action.yaml::runs.Wait for app to be ready
+.github/actions/sdr-e2e/action.yaml::runs.Write GitHub Step Summary
+.github/actions/sdr-e2e/action.yaml::runs.action_root
+.github/actions/sdr-e2e/action.yaml::runs.asset_summary
+.github/actions/sdr-e2e/action.yaml::runs.image
+.github/actions/sdr-e2e/action.yaml::runs.wf_links
+.github/actions/secure-build-push-apps/action.yaml::runs.decision
+.github/actions/setup-deps/action.yaml::runs.Install dependencies
+.github/actions/twingate-connect/action.yml::runs.connect
+.github/workflows/build-and-publish-app.yaml::jobs.certify.Certification verdict
+.github/workflows/build-and-publish-app.yaml::jobs.certify.Seed pkl CA bundle from system trust store
+.github/workflows/build-and-publish-app.yaml::jobs.certify.check_migration
+.github/workflows/build-and-publish-app.yaml::jobs.certify.contract_drift
+.github/workflows/build-and-publish-app.yaml::jobs.leak-scan.Creds-into-logs report (run summary)
+.github/workflows/build-and-publish-app.yaml::jobs.leak-scan.Notify Slack on hardcoded-secret block
+.github/workflows/build-and-publish-app.yaml::jobs.leak-scan.Notify Slack on warnings
+.github/workflows/build-and-publish-app.yaml::jobs.leak-scan.credscan
+.github/workflows/build-and-publish-app.yaml::jobs.leak-scan.gitleaks
+.github/workflows/build-and-publish-app.yaml::jobs.merge.Create and push multi-arch manifest
+.github/workflows/build-and-publish-app.yaml::jobs.prepare.Validate SDR secrets
+.github/workflows/build-and-publish-app.yaml::jobs.prepare.Validate publish secrets
+.github/workflows/build-and-publish-app.yaml::jobs.prepare.app_configs
+.github/workflows/build-and-publish-app.yaml::jobs.prepare.tags
+.github/workflows/build-and-publish-app.yaml::jobs.publish.Publish version
+.github/workflows/build-and-publish-app.yaml::jobs.unit-tests-gate.prepare
+.github/workflows/build-and-publish-app.yaml::jobs.unit-tests-gate.wait
+.github/workflows/build-and-publish-app.yaml::jobs.validate-channel.Enforce main-branch invariant for channel='all'
+.github/workflows/build-and-scan.yaml::jobs.build.meta
+.github/workflows/capability-manifest-check.yaml::jobs.drift-check.ctx
+.github/workflows/capability-manifest-check.yaml::jobs.drift-check.drift
+.github/workflows/capability-manifest-regen.yaml::jobs.commit.Refuse a branch that moved since regeneration
+.github/workflows/capability-manifest-regen.yaml::jobs.regen.handover
+.github/workflows/check-dapr-version.yaml::jobs.sync.Bump version.py
+.github/workflows/check-dapr-version.yaml::jobs.sync.baked
+.github/workflows/check-dapr-version.yaml::jobs.sync.compare
+.github/workflows/check-dapr-version.yaml::jobs.sync.open-pr
+.github/workflows/check-dapr-version.yaml::jobs.sync.pinned
+.github/workflows/codeql.yaml::jobs.analyze.Generate summary
+.github/workflows/conformance-publish.yml::jobs.publish.Create source tag
+.github/workflows/conformance-publish.yml::jobs.publish.meta
+.github/workflows/contract-toolkit-publish.yml::jobs.publish.Create source tag
+.github/workflows/contract-toolkit-publish.yml::jobs.publish.Publish package to GitHub Pages branch
+.github/workflows/contract-toolkit-publish.yml::jobs.publish.meta
+.github/workflows/contract-toolkit-reusable.yaml::jobs.changelog-guard.Fail if toolkit changelog is hand-edited
+.github/workflows/contract-toolkit-reusable.yaml::jobs.docs-check.Check docs coverage for toolkit source changes
+.github/workflows/contract-toolkit-reusable.yaml::jobs.generated-output.Check for stale generated output
+.github/workflows/prune-dashboard-repo.yaml::jobs.prune.Validate slug
+.github/workflows/pull_request.yaml::jobs.changes.sdk-refine
+.github/workflows/pull_request.yaml::jobs.matrix-builder.set-matrix
+.github/workflows/release.yaml::jobs.bump-version.Update version.py
+.github/workflows/sdk-gate.yaml::jobs.changes.final-force
+.github/workflows/sdk-gate.yaml::jobs.changes.force
+.github/workflows/sdk-gate.yaml::jobs.changes.sdk-refine
+.github/workflows/sdk-gate.yaml::jobs.gate.Evaluate composed areas
+.github/workflows/tag-and-release.yaml::jobs.create-release.Create git tag
+.github/workflows/tests-reusable.yaml::jobs.scorecard.Generate test-readiness scorecard
+.github/workflows/update-dashboard.yaml::jobs.test-readiness.discover
