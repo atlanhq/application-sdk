@@ -11,7 +11,7 @@ consuming app needs:
 amends "@app-contract-toolkit/App.pkl"
 ```
 
-Contracts generate — from one `pkl eval -m . contract/app.pkl` at repo root:
+Contracts generate — from one `pkl eval --project-dir contract -m . contract/app.pkl` at repo root:
 
 - `atlan.yaml` — marketplace deployment manifest (repo root)
 - `app.yaml` — SDR CI shim: `app_name`, `app_image`, `app_port` (repo root)

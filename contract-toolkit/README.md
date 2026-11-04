@@ -71,9 +71,14 @@ uiConfig = new UIConfig {
 Generate (run from the **app repo root** — not from inside `contract/`):
 
 ```bash
-cd contract && pkl project resolve && cd ..
-pkl eval -m . contract/app.pkl
+pkl project resolve contract
+pkl eval --project-dir contract -m . contract/app.pkl
 ```
+
+`--project-dir contract` is required: pkl looks for `PklProject` in the current
+directory, not next to the module, so without it the eval fails with "no project
+found" on the `@app-contract-toolkit` amend. Use the pkl version the SDK pins
+(`python -m application_sdk.dev.pkl check`).
 
 Output (emitted at the repo root):
 
@@ -691,12 +696,36 @@ The SDK v3 handler serves files from `ATLAN_CONTRACT_GENERATED_DIR` (default: `a
 ### Recommended poe task
 
 ```toml
+[project.optional-dependencies]
+dev = [
+    "poethepoet>=0.34.0",
+]
+
 [tool.poe.tasks]
-generate-contract.shell = """
-  cd contract && pkl project resolve && cd ..
-  pkl eval -m . contract/app.pkl
-"""
+generate.shell = "pkl project resolve contract && pkl eval --project-dir contract -m . contract/app.pkl"
+generate-contract.ref = "generate"
 ```
+
+The SDK certify gate runs `uv sync --all-extras --frozen`, then `uv run poe
+generate`, then checks the regenerated output for drift. So:
+
+- Name the task `generate`. Certify calls `poe generate`; `generate-contract` is
+  an optional alias.
+- Put `poethepoet` in an extra under `[project.optional-dependencies]`, not in a
+  `[dependency-groups]` group. `uv sync --all-extras` always installs every
+  extra. Of the dependency groups it installs only uv's default groups (just
+  `dev`, unless `[tool.uv] default-groups` changes that), so poe in any other
+  group is missing in CI and the drift check can't run. An extra doesn't depend
+  on that setting. Run `uv lock`
+  after adding it.
+- Commit everything `poe generate` writes, and check `git status --short` is
+  empty afterwards. The drift check may not cover every output (for example the
+  root `atlan.yaml` and `app.yaml`), so a stale file it doesn't check can still
+  ship.
+
+Avoid the older per-app variant that evals into a subfolder and copies `*.json`
+up: outputs it doesn't copy (`_input.py`, `atlan.yaml`, nested entrypoint dirs)
+go stale without a diff.
 
 ### App playground
 

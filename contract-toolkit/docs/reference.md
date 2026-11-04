@@ -17,7 +17,7 @@ contract/app.pkl (developer writes)
 
 **Consumption flow:**
 ```
-pkl eval -m . contract/app.pkl
+pkl eval --project-dir contract -m . contract/app.pkl
     → SDK serves at /workflows/v1/configmap/{id}
     → SDK wraps in K8s ConfigMap format
     → Frontend JSON.parse(data.data.config)
@@ -49,14 +49,14 @@ dependencies {
 
 Resolve after creating or updating the version:
 ```bash
-cd contract && pkl project resolve
+pkl project resolve contract
 ```
 
 To bump an existing project to the latest toolkit version, update the version in `PklProject`, then re-resolve:
 ```bash
 # Update version in PklProject, then:
-cd contract && pkl project resolve && cd ..
-pkl eval -m . contract/app.pkl
+pkl project resolve contract
+pkl eval --project-dir contract -m . contract/app.pkl
 ```
 
 ### app.pkl — single amend line (v0.10.0+)
@@ -71,8 +71,10 @@ import "@app-contract-toolkit/Connectors.pkl"
 ### Generate (run from the **app repo root**)
 
 ```bash
-pkl eval -m . contract/app.pkl
+pkl eval --project-dir contract -m . contract/app.pkl
 ```
+
+`--project-dir contract` is required from the repo root: pkl looks for `PklProject` in the current directory, so without it the `@app-contract-toolkit` amend fails with "no project found".
 
 Output files carry full paths relative to the repo root (`atlan.yaml`, `app.yaml`, `app/generated/…`) so a single invocation lays everything down in the right place.
 
@@ -3999,11 +4001,7 @@ Have your `generate` task call the same script, so local and CI agree:
 
 ```toml
 [tool.poe.tasks]
-generate = """
-cd contract && pkl project resolve && cd ..
-pkl eval --project-dir contract -m . contract/app.pkl
-sh contract/post-generate.sh
-"""
+generate.shell = "pkl project resolve contract && pkl eval --project-dir contract -m . contract/app.pkl && sh contract/post-generate.sh"
 ```
 
 Wiring the step **only** into a `poe`/`make` task is the trap: it works
