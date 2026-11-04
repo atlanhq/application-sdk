@@ -488,13 +488,13 @@ class AppError(Exception):
         evidence: dict[str, Any] = {
             f.name: getattr(self, f.name)
             for f in dataclasses.fields(self)
-            if f.name not in _BASE_FIELDS
+            if f.name not in _BASE_FIELDS and f.name != "audience"
         }
         return FailureDetails(
             category=self.category,
             code=self.code,
             retryable=self.effective_retryable,
-            audience=type(self).audience,
+            audience=self.audience,
             message=self.message,
             suggested_action=self.suggested_action,
             evidence=evidence,

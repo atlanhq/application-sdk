@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from typing import ClassVar
 
 from application_sdk.errors.base import AppError
@@ -419,12 +420,12 @@ class DiskFullError(ResourceExhaustedError):
     app's parser forty minutes later. A typed error is classified, attributable
     to the writing step, and alertable.
 
-    **This error is also the operator's signal that the deployment needs more
-    ephemeral storage.** Requests and limits are deployment configuration and
-    are deliberately not requested from either the SDK or the app — neither can
-    know the number. Naming the path, what the write needed, and what was free
-    tells the operator which deployment to raise and by roughly how much,
-    without either codebase guessing.
+    **This error is also the operator's signal that the local volume needs
+    more room.** Hosted workers retain platform routing and ephemeral-storage
+    guidance. Self-Deployed Runtime (SDR) workers route to the customer and name
+    the host volume backing ``ATLAN_TEMPORARY_PATH``. Naming the path, what the
+    write needed, and what was free tells the operator what to expand without
+    either codebase guessing a deployment's storage request or limit.
 
     **Retryable, inherited deliberately.** Disk pressure is often not ours: a
     co-tenant's scratch space frees, or a fresh attempt starts on a node that
@@ -441,6 +442,12 @@ class DiskFullError(ResourceExhaustedError):
 
     code: ClassVar[str] = "RESOURCE_EXHAUSTED_DISK_FULL"
     resource: str | None = "disk"
+    # Unlike category/code, ownership depends on this worker's storage mode.
+    # Keep the class default for callers inspecting error types, but snapshot
+    # ownership per instance so changing it never re-routes another worker.
+    audience: Audience = field(  # pyright: ignore[reportIncompatibleVariableOverride]
+        init=False, default=Audience.PLATFORM
+    )
     # Defaulted on the class rather than passed at each raise site: the
     # remediation is the same wherever this is raised from, and a raise site
     # that forgot it would ship the one failure whose whole purpose is telling
@@ -449,6 +456,29 @@ class DiskFullError(ResourceExhaustedError):
         "Raise the ephemeral-storage request/limit on this deployment, or "
         "reduce the volume this step stages on local disk."
     )
+
+    def __post_init__(self) -> None:
+        """Route SDR disk pressure to the operator who owns the host volume."""
+        super().__post_init__()
+        # A deployment name also exists on hosted workers. The storage layer's
+        # SDR discriminator is ENABLE_ATLAN_UPLOAD, not worker versioning.
+        if os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() != "true":
+            return
+        self.audience = Audience.USER  # pyright: ignore[reportIncompatibleVariableOverride]
+        if self.suggested_action != type(self).suggested_action:
+            return
+        temporary_path = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
+        self.suggested_action = (
+            "Free space or expand the agent host volume backing "
+            f"ATLAN_TEMPORARY_PATH ({temporary_path}), or reduce the volume "
+            "this step stages on local disk."
+        )
+        if self.required_bytes is not None:
+            self.suggested_action += f" The write needs {self.required_bytes} bytes."
+        if self.free_bytes is not None:
+            self.suggested_action += (
+                f" The filesystem has {self.free_bytes} bytes free."
+            )
 
 
 @dataclass(kw_only=True)
