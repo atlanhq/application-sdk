@@ -207,6 +207,39 @@ def test_export_fails_closed_on_an_empty_version(tmp_path: Path) -> None:
     assert env_file.read_text(encoding="utf-8") == ""
 
 
+@pytest.mark.parametrize(
+    "version",
+    [
+        "3.13\nBASH_ENV=.github/ci-hook.sh",
+        "3.13\n",
+        "3.13 ",
+        "3.13.5",
+        "latest",
+        "3",
+    ],
+)
+def test_export_rejects_anything_but_one_major_minor(
+    tmp_path: Path, version: str
+) -> None:
+    """A newline in a caller-supplied version would add its own line to
+    $GITHUB_ENV (BASH_ENV=... runs code in every later bash step). Nothing
+    may reach either command file unless the value is exactly major.minor."""
+    out, env_file = tmp_path / "github_output", tmp_path / "github_env"
+    out.write_text("", encoding="utf-8")
+    env_file.write_text("", encoding="utf-8")
+    step = _steps(SETUP_DEPS)[_index(_steps(SETUP_DEPS), EXPORT_ID)]
+
+    proc = _run(
+        step["run"],
+        tmp_path,
+        {"VERSION": version, "GITHUB_OUTPUT": str(out), "GITHUB_ENV": str(env_file)},
+    )
+
+    assert proc.returncode != 0
+    assert out.read_text(encoding="utf-8") == ""
+    assert env_file.read_text(encoding="utf-8") == ""
+
+
 # ── connector tiers ───────────────────────────────────────────────────────────
 
 

@@ -57,6 +57,12 @@ runs:
     # One value for the rest of the action. UV_PYTHON outranks a repo's
     # .python-version, so a stale pin there cannot move the tests off it, and
     # it reaches every later `uv` command in the job, not just this action's.
+    #
+    # The value must be exactly one major.minor before it reaches a command
+    # file. A caller-supplied input with a newline would otherwise write a
+    # second line to $GITHUB_ENV (e.g. BASH_ENV=...) and run code in every later
+    # bash step. `[[ =~ ]]` matches the WHOLE string, unlike a per-line grep,
+    # and an empty value fails it too; under `set -e` a mismatch fails the step.
     - name: Export the Python version
       id: python-version
       shell: bash
@@ -64,7 +70,7 @@ runs:
         VERSION: ${{ inputs.python-version || steps.image-python.outputs.version }}
       run: |
         set -euo pipefail
-        test -n "${VERSION}"
+        [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+$ ]]
         echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
         echo "UV_PYTHON=${VERSION}" >> "$GITHUB_ENV"
 
