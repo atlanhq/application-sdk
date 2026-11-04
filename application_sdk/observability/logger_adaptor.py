@@ -10,11 +10,9 @@ from typing import Any, Callable, ClassVar
 from loguru import logger
 from opentelemetry import trace as otel_trace
 from opentelemetry._logs import LogRecord, SeverityNumber
-from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.trace.span import TraceFlags
-from temporalio.exceptions import FailureError
 
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -467,6 +465,44 @@ def _format_exception_stacktrace(exception: Any) -> str:
     ).rstrip()
 
 
+def _otlp_log_processor(endpoint: str) -> BatchLogRecordProcessor:
+    """A batching processor exporting log records over OTLP/gRPC to *endpoint*.
+
+    The exporter is imported here rather than at module level: it loads grpc
+    and its generated protobuf stubs, which every importer of this module would
+    otherwise pay for — including the handler on an API-only pod, which exports
+    nothing over OTLP (FND-4257).
+    """
+    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (  # noqa: PLC0415 — cold path: only when OTLP log export is enabled
+        OTLPLogExporter,
+    )
+
+    return BatchLogRecordProcessor(
+        OTLPLogExporter(endpoint=endpoint, timeout=OTEL_EXPORTER_TIMEOUT_SECONDS),
+        schedule_delay_millis=OTEL_BATCH_DELAY_MS,
+        max_export_batch_size=OTEL_BATCH_SIZE,
+        max_queue_size=OTEL_QUEUE_SIZE,
+    )
+
+
+def _temporal_failure_message(exc_value: object) -> str | None:
+    """The ``message`` of a Temporal ``FailureError``, or ``None`` for any other value.
+
+    Reads ``sys.modules`` instead of importing temporalio: an instance of
+    ``FailureError`` can only exist once ``temporalio.exceptions`` has been
+    imported, so a process that never loaded it (the handler on an API-only
+    pod) holds none. Importing it here would load Temporal on the first logged
+    exception, and at module level on every import of this module (FND-4257).
+    """
+    exceptions_module = sys.modules.get("temporalio.exceptions")
+    if exceptions_module is None:
+        return None
+    if not isinstance(exc_value, exceptions_module.FailureError):
+        return None
+    message: str = exc_value.message
+    return message
+
+
 def _extract_exception_attributes(exception: Any) -> dict[str, str]:
     """Extract OTEL semantic exception attributes from a Loguru exception record."""
     if exception is None:
@@ -482,8 +518,9 @@ def _extract_exception_attributes(exception: Any) -> dict[str, str]:
     type_name = f"{module}.{qualname}" if module and qualname else str(exc_type)
 
     attrs: dict[str, str] = {"exception.type": type_name}
-    if isinstance(exc_value, FailureError) and exc_value.message:
-        attrs["exception.message"] = redact_secrets(exc_value.message)
+    temporal_message = _temporal_failure_message(exc_value)
+    if temporal_message:
+        attrs["exception.message"] = redact_secrets(temporal_message)
     elif exc_value is not None:
         attrs["exception.message"] = redact_secrets(str(exc_value))
 
@@ -1071,31 +1108,11 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             otlp_processors = []
 
             if ENABLE_OTLP_LOGS or _has_remote_otlp_endpoint():
-                otlp_processors.append(
-                    BatchLogRecordProcessor(
-                        OTLPLogExporter(
-                            endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
-                            timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
-                        ),
-                        schedule_delay_millis=OTEL_BATCH_DELAY_MS,
-                        max_export_batch_size=OTEL_BATCH_SIZE,
-                        max_queue_size=OTEL_QUEUE_SIZE,
-                    )
-                )
+                otlp_processors.append(_otlp_log_processor(OTEL_EXPORTER_OTLP_ENDPOINT))
                 logging.info("OTLP exporter enabled: %s", OTEL_EXPORTER_OTLP_ENDPOINT)
 
             if ENABLE_OTLP_WORKFLOW_LOGS and OTEL_WORKFLOW_LOGS_ENDPOINT:
-                otlp_processors.append(
-                    BatchLogRecordProcessor(
-                        OTLPLogExporter(
-                            endpoint=OTEL_WORKFLOW_LOGS_ENDPOINT,
-                            timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
-                        ),
-                        schedule_delay_millis=OTEL_BATCH_DELAY_MS,
-                        max_export_batch_size=OTEL_BATCH_SIZE,
-                        max_queue_size=OTEL_QUEUE_SIZE,
-                    )
-                )
+                otlp_processors.append(_otlp_log_processor(OTEL_WORKFLOW_LOGS_ENDPOINT))
                 logging.info(
                     "OTLP workflow logs exporter enabled: %s",
                     OTEL_WORKFLOW_LOGS_ENDPOINT,

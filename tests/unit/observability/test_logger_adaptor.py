@@ -1773,6 +1773,23 @@ class TestExtractExceptionAttributes:
         attrs = _extract_exception_attributes(mock.Mock(type=t, value=v, traceback=tb))
         assert attrs["exception.message"] == "Preflight failed: bad secret"
 
+    def test_the_temporal_check_does_not_import_temporalio(self):
+        """With ``temporalio.exceptions`` not loaded, no exception can be a
+        ``FailureError``: the check falls through to ``str()`` and leaves the
+        module unloaded, so the handler on an API-only pod never pays for
+        Temporal by logging an exception (FND-4257)."""
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            t, v, tb = sys.exc_info()
+        with mock.patch.dict(sys.modules):
+            sys.modules.pop("temporalio.exceptions", None)
+            attrs = _extract_exception_attributes(
+                mock.Mock(type=t, value=v, traceback=tb)
+            )
+            assert "temporalio.exceptions" not in sys.modules
+        assert attrs["exception.message"] == "boom"
+
 
 class TestFormatExceptionStacktrace:
     def test_none_returns_empty_string(self):
@@ -2716,8 +2733,10 @@ class TestSecondaryWorkflowLogsExporter:
                 "application_sdk.observability.logger_adaptor.OTEL_WORKFLOW_LOGS_ENDPOINT",
                 secondary_endpoint,
             ),
+            # Patched at its source: the adaptor imports the exporter on first
+            # use rather than at module level (FND-4257).
             mock.patch(
-                "application_sdk.observability.logger_adaptor.OTLPLogExporter"
+                "opentelemetry.exporter.otlp.proto.grpc._log_exporter.OTLPLogExporter"
             ) as mock_exporter,
             mock.patch(
                 "application_sdk.observability.logger_adaptor.BatchLogRecordProcessor"
