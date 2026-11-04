@@ -6,6 +6,7 @@ Separate from the SDR activity tests — the gate is its own module/concern.
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import warnings
 from contextlib import ExitStack, contextmanager
@@ -3096,3 +3097,59 @@ class TestOutcomeRowNamesTheFailure:
         ev = _outcome_event(ml)
         assert ev["outcome"] == "no_verdict"
         assert ev[FAILURE_MESSAGE_KEY] == "Source API throttled: 429 after 3 retries"
+
+
+class TestLocalVolumeCheck:
+    """A read-only local write root fails preflight through the existing error."""
+
+    @staticmethod
+    def _patches(tmp_path: Any, read_only: str | None):
+        from application_sdk.common import atomic
+
+        def probe(root: Any) -> None:
+            if root.name == read_only:
+                raise OSError(errno.EROFS, "Read-only file system", str(root))
+
+        return (
+            mock.patch.object(
+                atomic,
+                "_local_write_roots",
+                return_value=(tmp_path / "tmp-root", tmp_path / "artifacts"),
+            ),
+            mock.patch.object(atomic, "_probe_write_root", probe),
+        )
+
+    async def test_read_only_artifacts_root_downgrades_a_ready_verdict(
+        self, tmp_path: Any
+    ) -> None:
+        from application_sdk.execution._temporal.preflight_gate import (
+            LOCAL_VOLUME_CHECK_NAME,
+            _append_local_volume_check,
+        )
+
+        result = PreflightOutput(status=PreflightStatus.READY, checks=[])
+        first, second = self._patches(tmp_path, "artifacts")
+        with first, second:
+            await _append_local_volume_check(result)
+
+        assert result.status is PreflightStatus.NOT_READY
+        (check,) = result.checks
+        assert check.name == LOCAL_VOLUME_CHECK_NAME and not check.passed
+        assert check.error is not None
+        assert check.error.code == "RESOURCE_EXHAUSTED_VOLUME_UNWRITABLE"
+        assert "artifacts" in check.message and "TEMPORARY_PATH" in check.message
+        assert result.error == check.error
+
+    async def test_writable_roots_leave_the_verdict_untouched(
+        self, tmp_path: Any
+    ) -> None:
+        from application_sdk.execution._temporal.preflight_gate import (
+            _append_local_volume_check,
+        )
+
+        result = PreflightOutput(status=PreflightStatus.READY, checks=[])
+        first, second = self._patches(tmp_path, None)
+        with first, second:
+            await _append_local_volume_check(result)
+
+        assert result.status is PreflightStatus.READY and result.checks == []

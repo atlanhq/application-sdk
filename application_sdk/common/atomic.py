@@ -61,6 +61,7 @@ there is typed and attributed even though the file is not atomic.
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import os
 import shutil
@@ -89,6 +90,7 @@ __all__ = [
     "classify_unwritable_oserror",
     "disk_full_guard",
     "ensure_free_space",
+    "probe_local_write_roots",
 ]
 
 #: ``errno`` values that mean "this filesystem has no room for your write".
@@ -133,6 +135,15 @@ def _local_write_roots() -> tuple[Path, ...]:
             # same outcome as keeping it, without the exception.
             continue
     return tuple(roots)
+
+
+#: Appended to every unwritable-volume message so whoever reads it knows the fix:
+#: an app that stages files on a bare relative path lands under the container's
+#: working directory, which is commonly read-only, while ``TEMPORARY_PATH`` is the
+#: prefix the deployment guarantees writable.
+_LOCAL_STAGING_HINT = (
+    "Root local staging under TEMPORARY_PATH (the SDK's writable temp prefix)."
+)
 
 
 def _is_under_local_write_root(filename: object) -> bool:
@@ -206,11 +217,63 @@ def classify_unwritable_oserror(
     name = errno.errorcode.get(exc.errno, str(exc.errno))
     path = os.fsdecode(exc.filename)
     return LocalVolumeUnwritableError(
-        message=f"local write failed: {os.strerror(exc.errno)} ('{path}')",
+        message=(
+            f"local write failed: {os.strerror(exc.errno)} ('{path}'). "
+            f"{_LOCAL_STAGING_HINT}"
+        ),
         path=path,
         errno_name=name,
         cause=exc,
     )
+
+
+def _probe_write_root(root: Path) -> None:
+    """Create and remove a tiny file where a write under *root* would land.
+
+    Probes the nearest existing ancestor when *root* is not there yet, so the
+    probe never creates the directory: whether ``mkdir`` would succeed is a
+    property of that ancestor's mount. Blocking; run off the event loop.
+    """
+    target = _nearest_existing_dir(root)
+    if target is None:
+        return
+    probe = target / f".write-probe-{uuid.uuid4().hex}"
+    with open(probe, "xb"):
+        pass
+    probe.unlink()
+
+
+async def probe_local_write_roots() -> list[LocalVolumeUnwritableError]:
+    """Probe every local write root and return one typed error per unwritable one.
+
+    A read-only root fails mid-extract, long after preflight passed, when the app
+    stages on a path other than ``TEMPORARY_PATH``; probing each root in
+    :func:`_local_write_roots` (the same set the mid-run classifier trusts)
+    surfaces that before the run starts. Only unwritable-volume errnos count: any
+    other ``OSError`` is not evidence about the volume and is ignored. The error
+    names the root, not the probe file, so the message says which root to move.
+    """
+    from application_sdk.errors import LocalVolumeUnwritableError  # noqa: PLC0415
+
+    errors: list[LocalVolumeUnwritableError] = []
+    for root in _local_write_roots():
+        try:
+            await asyncio.to_thread(_probe_write_root, root)
+        except OSError as exc:
+            if exc.errno not in _UNWRITABLE_ERRNOS:
+                continue
+            errors.append(
+                LocalVolumeUnwritableError(
+                    message=(
+                        f"local write failed: {os.strerror(exc.errno)} ('{root}'). "
+                        f"{_LOCAL_STAGING_HINT}"
+                    ),
+                    path=str(root),
+                    errno_name=errno.errorcode.get(exc.errno, str(exc.errno)),
+                    cause=exc,
+                )
+            )
+    return errors
 
 
 def _format_bytes(count: int) -> str:

@@ -277,3 +277,79 @@ class TestActivityBoundaryTranslatesIt:
 
         assert exc_info.value.errno == errno.EACCES
         assert not isinstance(exc_info.value, LocalVolumeUnwritableError)
+
+
+class TestProbeLocalWriteRoots:
+    """The preflight probe covers every SDK write root, not only TEMPORARY_PATH."""
+
+    @staticmethod
+    def _roots(tmp_path: Path) -> tuple[Path, Path]:
+        temp = tmp_path / "tmp-root"
+        temp.mkdir()
+        return temp, tmp_path / "artifacts"
+
+    @staticmethod
+    def _read_only(*read_only_names: str):
+        def fail(root: Path) -> None:
+            if root.name in read_only_names:
+                raise OSError(errno.EROFS, "Read-only file system", str(root))
+
+        return fail
+
+    async def test_read_only_artifacts_root_fails_while_temporary_path_is_writable(
+        self, tmp_path: Path
+    ) -> None:
+        temp, artifacts = self._roots(tmp_path)
+        with (
+            mock.patch.object(
+                atomic, "_local_write_roots", return_value=(temp, artifacts)
+            ),
+            mock.patch.object(
+                atomic, "_probe_write_root", self._read_only("artifacts")
+            ),
+        ):
+            errors = await atomic.probe_local_write_roots()
+
+        assert len(errors) == 1
+        assert isinstance(errors[0], LocalVolumeUnwritableError)
+        assert errors[0].code == "RESOURCE_EXHAUSTED_VOLUME_UNWRITABLE"
+        assert errors[0].path == str(artifacts)
+        assert "artifacts" in errors[0].message
+        assert "TEMPORARY_PATH" in errors[0].message
+
+    async def test_writable_roots_pass(self, tmp_path: Path) -> None:
+        temp, artifacts = self._roots(tmp_path)
+        artifacts.mkdir()
+        with mock.patch.object(
+            atomic, "_local_write_roots", return_value=(temp, artifacts)
+        ):
+            assert await atomic.probe_local_write_roots() == []
+        assert list(temp.iterdir()) == [] and list(artifacts.iterdir()) == []
+
+    async def test_a_missing_root_is_probed_without_being_created(
+        self, tmp_path: Path
+    ) -> None:
+        _, artifacts = self._roots(tmp_path)
+        with mock.patch.object(atomic, "_local_write_roots", return_value=(artifacts,)):
+            assert await atomic.probe_local_write_roots() == []
+        assert not artifacts.exists()
+
+    async def test_a_non_volume_oserror_is_not_reported(self, tmp_path: Path) -> None:
+        temp, _ = self._roots(tmp_path)
+
+        def full(root: Path) -> None:
+            raise OSError(errno.ENOSPC, "No space left on device", str(root))
+
+        with (
+            mock.patch.object(atomic, "_local_write_roots", return_value=(temp,)),
+            mock.patch.object(atomic, "_probe_write_root", full),
+        ):
+            assert await atomic.probe_local_write_roots() == []
+
+
+def test_the_mid_run_erofs_message_carries_the_temporary_path_hint() -> None:
+    err = classify_unwritable_oserror(
+        OSError(errno.EROFS, "Read-only file system", "artifacts")
+    )
+    assert err is not None
+    assert "TEMPORARY_PATH" in err.message

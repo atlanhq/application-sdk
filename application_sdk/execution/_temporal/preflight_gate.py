@@ -1816,6 +1816,51 @@ def _storage_failure_details(
     return details
 
 
+LOCAL_VOLUME_CHECK_NAME = "localVolumeWritable"
+
+# Probing creates and removes one tiny file per root; this only bounds a hung mount.
+_LOCAL_VOLUME_PROBE_TIMEOUT_SECONDS = 5.0
+
+
+async def _append_local_volume_check(result: PreflightOutput) -> None:
+    """Fail preflight when a local write root is read-only or unwritable.
+
+    A volume the app stages files on can be read-only while the source and the
+    object store are healthy, so a run passes the other checks and dies mid-extract
+    with ``LocalVolumeUnwritableError``. Reports through the same typed error, so
+    the row carries the existing code and the ``TEMPORARY_PATH`` hint. Skipped when
+    the verdict is already ``NOT_READY``. **Never raises**: a probe that cannot run
+    leaves the verdict as it was.
+    """
+    try:
+        if result.status is PreflightStatus.NOT_READY:
+            return
+        from application_sdk.common.atomic import (  # noqa: PLC0415 — activity frame only
+            probe_local_write_roots,
+        )
+
+        errors = await asyncio.wait_for(
+            probe_local_write_roots(), timeout=_LOCAL_VOLUME_PROBE_TIMEOUT_SECONDS
+        )
+        if not errors:
+            return
+        for err in errors:
+            result.checks.append(
+                PreflightCheck(
+                    name=LOCAL_VOLUME_CHECK_NAME,
+                    passed=False,
+                    message=err.message,
+                    error=err.to_failure_details(),
+                )
+            )
+        result.status = PreflightStatus.NOT_READY
+        result.error = errors[0].to_failure_details()
+    except Exception:
+        logger.warning(
+            "Local volume check could not run; proceeding without it", exc_info=True
+        )
+
+
 async def _append_storage_checks(
     result: PreflightOutput, budget_seconds: float, started_monotonic: float
 ) -> bool:
@@ -2542,6 +2587,10 @@ def build_preflight_gate_activity(
                         retryable=False,
                     )
                 )
+            # Unconditional (not behind the storage opt-in): a read-only staging
+            # root dooms the run whichever stores the app verifies.
+            if row_tier is not CheckTier.WARMUP:
+                await _append_local_volume_check(result)
             # Per-app opt-in: the handler certified the source; now certify the
             # stores this run will upload artifacts to, in whatever budget is left.
             # Appends checks and may downgrade READY → NOT_READY, so it must run
