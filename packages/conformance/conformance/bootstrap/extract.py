@@ -198,6 +198,11 @@ SDK_UNIT_COVERAGE_FLOOR = 0
 # fails in the monorepo instead of nine repos silently losing their install.
 SDK_INSTALL_APP_TO_TENANT_DEFAULT = "true"
 
+# ``tests-reusable.yaml``'s ``enable-e2e`` default, which is also the value the
+# template omits the line for. Pinned against the real input default by
+# ``test_bootstrap``, same as the install default above.
+SDK_ENABLE_E2E_DEFAULT = "true"
+
 # Conditions earlier canonical tests.yaml templates put on the `tests` caller
 # job to skip a bump-version PR's own run. They were the template's only `if:`.
 # The current template has none: the skip moved inside the reusable
@@ -916,6 +921,9 @@ def unpreserved_tests_yaml_declarations(existing: str, rerendered: str) -> list[
     same value-conditioned terms — see ``redundant_install_app_to_tenant`` for
     why that one input gets a policy drop where the rest got slots.
 
+    ``enable-e2e: true`` is the third, on the same terms — see
+    ``redundant_enable_e2e``.
+
     ``secrets`` is added in the other direction, because for that key alone a
     shared name is *not* evidence of preservation: an inline mapping and the
     canonical ``inherit`` both spell the key ``secrets``, so the key-set
@@ -929,6 +937,8 @@ def unpreserved_tests_yaml_declarations(existing: str, rerendered: str) -> list[
         dropped = [key for key in dropped if key != "unit-coverage-fail-under"]
     if redundant_install_app_to_tenant(existing):
         dropped = [key for key in dropped if key != "install-app-to-tenant"]
+    if redundant_enable_e2e(existing):
+        dropped = [key for key in dropped if key != "enable-e2e"]
     if retired_tests_job_condition(existing):
         dropped = [key for key in dropped if key != "if"]
     if unpreservable_secrets_form(existing) and "secrets" not in dropped:
@@ -970,6 +980,34 @@ def rejected_unit_coverage_fail_under(text: str) -> str:
     return ""
 
 
+# A bare YAML boolean, optionally followed by a comment. Deliberately not
+# ``extract_field``: that strips quotes, and ``"true"`` is a YAML *string*, not
+# the boolean the reusable's default is.
+_BARE_BOOLEAN_RE = re.compile(r"^[ \t]+(?P<value>true|false)[ \t]*(?:#.*)?$")
+
+
+def _restated_boolean_default(text: str, key: str, default: str) -> str:
+    """Return *default* when *text*'s reusable ``with: <key>`` is the bare
+    boolean *default*, else ``""``.
+
+    The shared value condition behind the policy drops. Only the unquoted
+    boolean qualifies: a quoted ``"true"`` is a string whatever it spells, and
+    a value that is not a decision anyone made is not one to act on, so it
+    reaches the refusal like any other unknown declaration.
+    """
+    declaration = extract_with_declaration(text, key)
+    if not declaration:
+        return ""
+    first = declaration.splitlines()[0]
+    key_line = _KEY_LINE_RE.match(first)
+    if key_line is None:
+        return ""
+    value = _BARE_BOOLEAN_RE.match(first[key_line.end() :])
+    if value is None or value.group("value") != default:
+        return ""
+    return default
+
+
 def redundant_install_app_to_tenant(text: str) -> str:
     """Return *text*'s ``install-app-to-tenant`` when it merely restates the
     reusable's own default, else ``""``.
@@ -992,13 +1030,28 @@ def redundant_install_app_to_tenant(text: str) -> str:
     in the monorepo. If the SDK flips it to ``false``, that test fails there
     rather than nine repos silently losing their pre-e2e install.
     """
-    declaration = extract_with_declaration(text, "install-app-to-tenant")
-    if not declaration:
-        return ""
-    value = extract_field(declaration, "install-app-to-tenant")
-    if value == SDK_INSTALL_APP_TO_TENANT_DEFAULT:
-        return value
-    return ""
+    return _restated_boolean_default(
+        text, "install-app-to-tenant", SDK_INSTALL_APP_TO_TENANT_DEFAULT
+    )
+
+
+def redundant_enable_e2e(text: str) -> str:
+    """Return *text*'s ``enable-e2e`` when it merely restates the reusable's
+    own default, else ``""``.
+
+    Unlike ``install-app-to-tenant`` this input has a slot, but the template
+    renders it only for ``false``: ``true`` is the default, so the canonical
+    file omits the line. A repo that spelled the default out was therefore
+    refused by the key-set guard on every ``--resync``, and frozen out of every
+    structural update since. One connector missed the ``/e2e`` e2e-only switch
+    (FND-3839) this way, and its comments were refused until it was resynced
+    by hand (FND-4540). Dropping the line changes no behaviour.
+
+    Conditioned on the value, like ``redundant_install_app_to_tenant``: an
+    explicit ``false`` is carried by the slot, and a value that is neither
+    boolean still reaches the refusal.
+    """
+    return _restated_boolean_default(text, "enable-e2e", SDK_ENABLE_E2E_DEFAULT)
 
 
 def retired_tests_job_condition(text: str) -> str:
