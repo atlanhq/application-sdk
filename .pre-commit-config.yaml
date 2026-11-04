@@ -85,7 +85,7 @@ repos:
         files: ^(renovate\.json|renovate-config/(default\.json|self-hosted\.js))$
 
   - repo: https://github.com/RobertCraigie/pyright-python
-    rev: v1.1.410
+    rev: v1.1.414
     hooks:
       - id: pyright
   # Every `extra_javascript` entry in mkdocs.yml runs on every docs page.
