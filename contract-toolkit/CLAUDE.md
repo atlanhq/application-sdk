@@ -27,7 +27,7 @@ Contracts generate — from one `pkl eval --project-dir contract -m . contract/a
 - `src/Widgets.pkl`: widget catalog re-exported from `App.pkl`.
 - `src/Inputs.pkl`: typed input field classes for `App.inputs` (system apps), re-exported from `App.pkl`.
 - `src/InputContract.pkl`: renders a system app's caller node (`contract/generated/input.pkl`) from its `inputs`.
-- `src/PyFormat.pkl`: lays every generated `.py` out as ruff does with default settings (import order, 88-column wrapping). Renderers emit plain one-line statements and pass the module through `format`; never hand-wrap.
+- `src/PyFormat.pkl`: lays every generated `.py` out as ruff does with default settings (import order, 88-column wrapping). Renderers emit plain one-line statements and pass the module through `format`. One exception: `fmtSubsField` keeps the one-argument-per-line layout (trailing comma) for long `_e2e_substitutions.py` fields, because ruff preserves it and apps already commit it; don't replace it with a one-line statement.
 - `src/Deployment.pkl`: deployment classes (`DeployConfig`, `Pool`, `KedaConfig`, `DaprComponents`, `ResourceConfig`, `VpaConfig`) re-exported from `App.pkl`.
 - `src/Connectors.pkl`: connector type registry (still imported explicitly by consumers).
 - Legacy modules (reference only, not for new apps):

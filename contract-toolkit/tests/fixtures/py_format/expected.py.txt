@@ -186,3 +186,6 @@ end"""
         default='say "hi" xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
         alias="{{quoted}}",
     )
+    emoji: str = Field(
+        default="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx🫠", alias="{{a}}"
+    )
