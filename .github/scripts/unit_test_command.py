@@ -10,16 +10,24 @@ Usage::
 
     python .github/scripts/unit_test_command.py \\
         --python-version 3.12 --runner-os Linux --coverage true --fail-under 85
+
+    # The dependency-floor leg: the same suite with pandas and pyarrow at the
+    # lowest versions the SDK publishes, instead of the locked ones.
+    python .github/scripts/unit_test_command.py \\
+        --python-version 3.11 --runner-os Linux --coverage false --fail-under 85 \\
+        --dependency-floors pandas,pyarrow
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -54,6 +62,59 @@ _PY314_IGNORES = (
 )
 
 
+#: The extra whose published floors the dependency-floor leg installs. pandas
+#: and pyarrow reach apps through it; the [incremental] and [pandas] extras
+#: carry the same pins, and tests/unit/test_api_distribution.py holds
+#: packages/api to them.
+FLOOR_EXTRA = "sql"
+
+_PYPROJECT = Path(__file__).resolve().parents[2] / "pyproject.toml"
+
+_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+_FLOOR_RE = re.compile(r">=\s*([^,;\s]+)")
+
+
+class FloorError(ValueError):
+    """A requested package has no ``>=`` floor in :data:`FLOOR_EXTRA`."""
+
+
+def _canonical(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def dependency_floors(
+    packages: Sequence[str], pyproject: Path = _PYPROJECT
+) -> list[str]:
+    """``name==floor`` for each of *packages*, read from :data:`FLOOR_EXTRA`.
+
+    Read from pyproject.toml rather than written into the workflow, so the leg
+    tests the floor the SDK actually publishes and moves when the floor does.
+    A package that is missing from the extra, or has no ``>=`` bound there, is
+    an error: a leg that silently ran at the locked version would pass while
+    testing nothing it claims to.
+    """
+    extras = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"][
+        "optional-dependencies"
+    ]
+    floors: dict[str, str] = {}
+    for spec in extras.get(FLOOR_EXTRA, []):
+        name = _NAME_RE.match(spec)
+        floor = _FLOOR_RE.search(spec)
+        if name and floor:
+            floors[_canonical(name.group(1))] = floor.group(1)
+
+    pins = []
+    for package in packages:
+        floor = floors.get(_canonical(package))
+        if floor is None:
+            raise FloorError(
+                f"{package!r} has no '>=' floor in the [{FLOOR_EXTRA}] extra of "
+                f"{pyproject}"
+            )
+        pins.append(f"{package}=={floor}")
+    return pins
+
+
 def _python_minor(python_version: str) -> int:
     major, minor, *_ = python_version.split(".")
     if major != "3":
@@ -68,15 +129,29 @@ def build_command(
     coverage: bool,
     fail_under: str,
     junit_xml: str | None = None,
+    floor_pins: Sequence[str] = (),
 ) -> list[str]:
-    """Return the argv for this leg's unit-test run."""
+    """Return the argv for this leg's unit-test run.
+
+    *floor_pins* (``name==version``, from :func:`dependency_floors`) are
+    installed over the locked environment with ``uv run --with``; the lock
+    itself is still ``--frozen``.
+    """
     py314 = _python_minor(python_version) >= 14
     windows = runner_os == "Windows"
 
     argv = ["uv", "run", "--frozen"]
     if py314:
         argv += ["--no-group", "dev"]
-    argv += ["pytest", "--import-mode=importlib", "tests/"]
+    for pin in floor_pins:
+        argv += ["--with", pin]
+    # With --with, uv runs an overlay interpreter on top of the project venv.
+    # The bare `pytest` console script is the venv's, and its shebang starts
+    # the venv's own python, so the floor pins would never be imported and the
+    # leg would pass on the locked versions while claiming the floors.
+    # `python -m pytest` runs under the overlay interpreter.
+    argv += ["python", "-m", "pytest"] if floor_pins else ["pytest"]
+    argv += ["--import-mode=importlib", "tests/"]
     if py314:
         argv += _PY314_IGNORES
 
@@ -215,7 +290,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--runner-os", required=True)
     parser.add_argument("--coverage", required=True, type=_parse_bool)
     parser.add_argument("--fail-under", required=True)
+    parser.add_argument(
+        "--dependency-floors",
+        default="",
+        help="comma-separated packages to install at their published floor",
+    )
     args = parser.parse_args(argv)
+
+    packages = [p.strip() for p in args.dependency_floors.split(",") if p.strip()]
+    try:
+        floor_pins = dependency_floors(packages)
+    except FloorError as exc:
+        print(f"::error title=Dependency floor::{exc}", flush=True)
+        return 2
 
     junit_xml = Path(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()) / (
         "unit-tests-junit.xml"
@@ -226,6 +313,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         coverage=args.coverage,
         fail_under=args.fail_under,
         junit_xml=str(junit_xml),
+        floor_pins=floor_pins,
     )
     # A report left by an earlier run on a reused runner would be read as this one's.
     junit_xml.unlink(missing_ok=True)

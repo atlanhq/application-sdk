@@ -89,7 +89,8 @@ EXEMPT = {
     "Kryptonite publish do not read the artifact",
     (
         "actions/unit-tests/action.yaml",
-        "unit-test-timings-${{ runner.os }}-${{ inputs.python-version }}",
+        "unit-test-timings-${{ runner.os }}-${{ inputs.python-version }}"
+        "${{ inputs.dependency-floors != '' && '-floors' || '' }}",
     ): "diagnostic per-test timings; continue-on-error, so a failed upload never "
     "fails the leg, and nothing reads the artifact to gate (FND-4304)",
 }
