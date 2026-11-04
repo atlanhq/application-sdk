@@ -119,7 +119,11 @@ def test_no_contract_skips(
     ("codes", "expected", "message"),
     [
         ({}, 0, ""),
-        ({"uv run poe --help": 1}, 0, "::warning::'poe' task runner not available"),
+        (
+            {"uv run poe --help": 1},
+            1,
+            "::error::contract/app.pkl exists but the 'poe' task runner is not installed",
+        ),
         ({"uv run poe generate": 1}, 1, "::error::'poe generate' failed"),
         ({"git diff": 1}, 1, "::error::generated/ is stale"),
     ],
@@ -141,6 +145,19 @@ def test_contract_drift(
             ["uv", "run", "poe", "generate"],
             ["git", "diff", "--exit-code", "--", "generated/"],
         ]
+
+
+def test_contract_without_poe_fails_closed(
+    app: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An app with contract/app.pkl but no poe must block publish, not pass."""
+    calls = _stub(monkeypatch, {"uv run poe --help": 1})
+    assert certify.main(["contract-drift"]) == 1
+    assert calls == [["uv", "run", "poe", "--help"]]
+    out = capsys.readouterr().out
+    assert out.startswith("::error::")
+    assert "poethepoet" in out
+    assert "[project.optional-dependencies]" in out
 
 
 # ── verdict ───────────────────────────────────────────────────────────────────

@@ -13,7 +13,8 @@ Subcommands (each one is a former inline ``run:`` block):
 
 ``contract-drift``
     Enforced. In the app checkout, ``poe generate`` must leave ``generated/``
-    unchanged.
+    unchanged. An app with ``contract/app.pkl`` but no ``poe`` fails: the
+    check cannot run, so it must not pass.
 
 ``verdict``
     Render the certification summary from the step outcomes and fail when an
@@ -77,8 +78,14 @@ def contract_drift() -> int:
         print("No contract/app.pkl — skipping contract-drift check.")
         return 0
     if _bap.run(["uv", "run", "poe", "--help"], quiet=True).returncode != 0:
-        print("::warning::'poe' task runner not available — cannot run drift check.")
-        return 0
+        print(
+            "::error::contract/app.pkl exists but the 'poe' task runner is not "
+            "installed, so the drift check cannot run. Add 'poethepoet' to an "
+            "extra in [project.optional-dependencies] (certify installs with "
+            "'uv sync --all-extras', not dependency groups), define a "
+            "[tool.poe.tasks] 'generate' task, and re-lock."
+        )
+        return 1
     if _bap.run(["uv", "run", "poe", "generate"]).returncode != 0:
         print("::error::'poe generate' failed")
         return 1

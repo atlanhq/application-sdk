@@ -17,7 +17,7 @@ and runs:
 | Layer | Command | Skips when |
 |-------|---------|------------|
 | **v3 shape** | `tools.migrate_v3.check_migration` — no deprecated imports, `@task`-only, typed `Input`/`Output`, async clients, … | SDK install fails (annotated as incomplete) |
-| **Contract drift** | `poe generate` must produce no diff vs the committed `app/generated/` artifacts | no `contract/app.pkl`, or `poe` unavailable |
+| **Contract drift** | `poe generate` must produce no diff vs the committed `app/generated/` artifacts | no `contract/app.pkl` (fails, not skips, when `contract/app.pkl` exists but `poe` is not installed) |
 | **Unit tests** | `pytest tests/unit --cov=app --cov-report=term` | no `tests/unit/` directory |
 | **Coverage threshold** | `coverage report --fail-under=85` | unit tests skipped or failed |
 
