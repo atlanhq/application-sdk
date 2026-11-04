@@ -103,7 +103,7 @@ def dependency_floors(
         if name and floor:
             floors[_canonical(name.group(1))] = floor.group(1)
 
-    pins = []
+    pins: list[str] = []
     for package in packages:
         floor = floors.get(_canonical(package))
         if floor is None:
