@@ -155,7 +155,9 @@ def build_config(pyproject: Path, repo_root: Path) -> dict[str, object]:
         config["venvPath"] = str((repo_root / venv_path).resolve())
     extra_paths = config.get("extraPaths")
     if isinstance(extra_paths, list):
-        config["extraPaths"] = [str((repo_root / str(e)).resolve()) for e in extra_paths]
+        config["extraPaths"] = [
+            str((repo_root / str(e)).resolve()) for e in extra_paths
+        ]
     # Pinned, not inferred from the interpreter that runs this, so a baseline
     # regenerated on a laptop matches the Linux CI runner. The version is the
     # requires-python floor: the oldest Python the scripts must stay valid on.
@@ -281,7 +283,9 @@ def parse_baseline(text: str) -> Baseline:
         if not isinstance(raw_rules, dict):
             raise ValueError(f"baseline entry for {file!r} is not a rule -> count map")
         per_rule = cast("dict[object, object]", raw_rules)
-        if not all(isinstance(k, str) and isinstance(n, int) for k, n in per_rule.items()):
+        if not all(
+            isinstance(k, str) and isinstance(n, int) for k, n in per_rule.items()
+        ):
             raise ValueError(f"baseline entry for {file!r} is not a rule -> count map")
         files[file] = cast("dict[str, int]", per_rule)
     version = doc.get("pyright_version")
@@ -304,7 +308,9 @@ def read_base_baseline(
         raise BaseRevisionError("--base-sha was given but is empty")
     fetch = git(["fetch", "--no-tags", "--depth=1", "origin", base_sha])
     if fetch.returncode != 0:
-        raise BaseRevisionError(f"could not fetch base {base_sha}: {fetch.stderr.strip()}")
+        raise BaseRevisionError(
+            f"could not fetch base {base_sha}: {fetch.stderr.strip()}"
+        )
     if git(["cat-file", "-e", f"{base_sha}^{{commit}}"]).returncode != 0:
         raise BaseRevisionError(f"base {base_sha} is not a commit in this checkout")
     # ``cat-file -e <sha>:<path>`` cannot tell "no such path" from "tree
@@ -323,7 +329,9 @@ def read_base_baseline(
     try:
         return parse_baseline(show.stdout)
     except ValueError as exc:
-        raise BaseRevisionError(f"{baseline_rel} at {base_sha} is not a baseline: {exc}") from exc
+        raise BaseRevisionError(
+            f"{baseline_rel} at {base_sha} is not a baseline: {exc}"
+        ) from exc
 
 
 def renamed_paths(base_sha: str, git: Runner = _git) -> dict[str, str]:
@@ -414,7 +422,9 @@ def main(
         )
         failed = True
     if args.base_sha is not None:
-        failed = _check_base(args.base_sha, head, baseline_path, repo_root, git) or failed
+        failed = (
+            _check_base(args.base_sha, head, baseline_path, repo_root, git) or failed
+        )
     _write_summary(actual, baseline)
     regressions, stale = compare(baseline, actual)
     t = totals(actual)

@@ -328,7 +328,11 @@ class TestBaseRevision:
         return git(["rev-parse", "HEAD"]).stdout.strip()
 
     def _main(
-        self, repo: Path, git: cpb.Runner, head: dict[str, dict[str, int]], base_sha: str
+        self,
+        repo: Path,
+        git: cpb.Runner,
+        head: dict[str, dict[str, int]],
+        base_sha: str,
     ) -> int:
         a = repo / ".github/scripts/a.py"
         diags = [
@@ -393,12 +397,16 @@ class TestBaseRevision:
         script = repo / ".github/scripts/a.py"
         script.write_text("x = 1\n" * 20, encoding="utf-8")
         base = self._commit(repo, git, {".github/scripts/a.py": {"error:x": 1}})
-        assert git(["mv", ".github/scripts/a.py", ".github/scripts/b.py"]).returncode == 0
+        assert (
+            git(["mv", ".github/scripts/a.py", ".github/scripts/b.py"]).returncode == 0
+        )
         head = {".github/scripts/b.py": {"error:x": 1}}
         self._commit(repo, git, head)
         assert self._main(repo, git, head, base) == 0
 
-    def test_new_file_cannot_add_findings_via_the_baseline(self, tmp_path: Path) -> None:
+    def test_new_file_cannot_add_findings_via_the_baseline(
+        self, tmp_path: Path
+    ) -> None:
         repo, git = self._init(tmp_path)
         base = self._commit(repo, git, {})
         (repo / ".github/scripts/b.py").write_text("y = 2\n", encoding="utf-8")
