@@ -179,14 +179,14 @@ class TestProjects:
             "packages/conformance",
         ]
 
-    def test_the_conformance_project_holds_the_sdk_and_exempts_pyatlan(self):
-        """packages/conformance resolves atlan-application-sdk from PyPI. The
-        lock refresh must not move it (FND-3481): the atlan framework
-        dependencies lane owns it, and both lanes rewriting the same entries is
-        what left one PR in conflict whichever merged first."""
+    def test_neither_project_holds_the_sdk_and_both_exempt_pyatlan(self):
+        """packages/conformance path-sources atlan-application-sdk from this
+        checkout (FND-4256), so its lock has no registry SDK to hold. A hold
+        here would be a stale leftover of the PyPI pin that ran its tests
+        against an old release."""
         exempt = {p.directory: set(p.exempt) for p in orchestrator.PROJECTS}
         hold = {p.directory: set(p.hold) for p in orchestrator.PROJECTS}
-        assert hold["packages/conformance"] == {"atlan-application-sdk"}
+        assert hold["packages/conformance"] == set()
         assert exempt["packages/conformance"] == {"pyatlan"}
         # The root project consumes neither of its own packages from PyPI:
         # atlan-application-sdk IS this project, and the conformance package is
@@ -217,6 +217,21 @@ class TestBoundProject:
             assert exempt == list(project.exempt)
             hold = [argv[i + 1] for i, a in enumerate(argv) if a == "--hold"]
             assert hold == list(project.hold)
+
+    def test_a_held_package_is_passed_to_the_driver(self, monkeypatch, tmp_path):
+        # No project in PROJECTS holds anything today; keep the passthrough
+        # covered for when one does.
+        calls: list[list[str]] = []
+        monkeypatch.setattr(
+            orchestrator.bounded, "main", lambda argv: calls.append(argv) or 0
+        )
+        project = orchestrator.Project(directory="x", hold=("a", "b"))
+        orchestrator.bound_project(project, "P7D", "origin/main", tmp_path)
+        argv = calls[0]
+        assert [argv[i + 1] for i, a in enumerate(argv) if a == "--hold"] == [
+            "a",
+            "b",
+        ]
 
 
 class TestBoundNpm:

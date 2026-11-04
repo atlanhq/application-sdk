@@ -16,7 +16,12 @@ into a clean venv outside the checkout and runs, against that install:
    hiding a template, schema or ``.pkl`` the wheel failed to ship.
 
 Third-party versions come from ``packages/conformance/uv.lock`` via
-``uv export --frozen``, so the gate resolves nothing fresh.
+``uv export --frozen``, so the gate resolves nothing fresh. That lock
+path-sources the SDK and api packages from this checkout (FND-4256), which
+``uv export`` writes as ``-e ../../`` lines: relative to a requirements file in
+the work dir they point nowhere, and an editable install would put the checkout
+back on ``sys.path``. So they are left out of the export (``LOCAL_PACKAGES``)
+and installed from their source directories as ordinary, non-editable builds.
 
 Called by conformance-release.yml (after ``uv build``) and
 conformance-publish.yml (between ``uv build`` and ``uv publish``).
@@ -35,6 +40,13 @@ from typing import Sequence
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_DIR = REPO_ROOT / "packages" / "conformance"
 SMOKE = Path(__file__).resolve().parent / "import_smoke.py"
+
+#: Distributions the conformance lock path-sources from this checkout, and the
+#: directory each is built from. Kept out of the export, installed from here.
+LOCAL_PACKAGES = {
+    "atlan-application-sdk": REPO_ROOT,
+    "atlan-application-sdk-api": REPO_ROOT / "packages" / "api",
+}
 
 #: Tests that run against an install with no checkout to lean on. Chosen for
 #: what the wheel must carry: the rule catalog and generated rule docs,
@@ -88,12 +100,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             [
                 "uv", "export", "--frozen", "--no-hashes", "--extra", "test",
                 "--no-emit-project", "--no-dev", "--output-file", str(requirements),
+                *(f"--no-emit-package={name}" for name in LOCAL_PACKAGES),
             ],
             cwd=PACKAGE_DIR,
         )  # fmt: skip
         _run(["uv", "venv", "--python", sys.executable, str(venv)], cwd=work)
         _run(
-            ["uv", "pip", "install", "--python", str(python), "-r", str(requirements), str(wheel)],
+            [
+                "uv", "pip", "install", "--python", str(python), "-r", str(requirements), str(wheel),
+                *(str(path) for path in LOCAL_PACKAGES.values()),
+            ],
             cwd=work,
         )  # fmt: skip
 

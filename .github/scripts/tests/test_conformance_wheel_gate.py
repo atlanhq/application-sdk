@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from typing import Sequence
 
@@ -162,3 +163,33 @@ def test_find_wheel_wants_exactly_one(tmp_path: Path) -> None:
     (tmp_path / "atlan_application_sdk_conformance-0.9.0-py3-none-any.whl").touch()
     with pytest.raises(SystemExit):
         gate.find_wheel(tmp_path)
+
+
+def test_path_sourced_packages_are_installed_from_source_not_exported(
+    monkeypatch: pytest.MonkeyPatch, wheel_dir: Path
+) -> None:
+    """The conformance lock path-sources the SDK and api (FND-4256). Exported,
+    they become ``-e ../../`` lines that resolve against the work dir and would
+    install the checkout editable; the gate builds them from source instead."""
+    fake, result = _drive(monkeypatch, wheel_dir)
+    assert result == 0
+    _, export, _ = fake.calls[0]
+    for name in gate.LOCAL_PACKAGES:
+        assert f"--no-emit-package={name}" in export
+    _, install, _ = fake.calls[2]
+    assert "-e" not in install
+    for path in gate.LOCAL_PACKAGES.values():
+        assert str(path) in install
+        assert (path / "pyproject.toml").is_file()
+
+
+def test_local_packages_match_the_conformance_lock_sources() -> None:
+    """Every editable source in the conformance lock is one the gate installs
+    from source, so a newly path-sourced package cannot slip into the export."""
+    lock = tomllib.loads((gate.PACKAGE_DIR / "uv.lock").read_text(encoding="utf-8"))
+    editable = {
+        p["name"]
+        for p in lock["package"]
+        if "editable" in p.get("source", {}) and p["source"]["editable"] != "."
+    }
+    assert editable == set(gate.LOCAL_PACKAGES)
