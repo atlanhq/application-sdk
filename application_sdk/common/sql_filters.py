@@ -283,7 +283,7 @@ def validate_filter_regex_syntax(v: Any) -> Any:
     """Reject filter patterns that no regex dialect can compile.
 
     Walks the same shapes as :func:`validate_filter_no_sql_injection` — a raw
-    regex string, a JSON-encoded filter-map or list string, or a ``FilterMap`` /
+    regex string, a JSON-encoded filter-map string, or a ``FilterMap`` /
     APITree dict (keys and string values) — and raises ``ValueError`` on an
     unterminated group or character class, a reversed character range, or a
     trailing backslash, so the workflow is rejected at submission instead of failing
@@ -291,8 +291,8 @@ def validate_filter_regex_syntax(v: Any) -> Any:
     left for the source to judge (see ``_DIALECT_INDEPENDENT_REGEX_ERRORS``).
 
     Args:
-        v: A filter value — raw regex string, JSON-encoded filter map or list
-            string, or filter dict.
+        v: A filter value — raw regex string, JSON-encoded filter map string,
+            or filter dict.
 
     Returns:
         ``v`` unchanged when every pattern is structurally valid.
@@ -317,18 +317,12 @@ def validate_filter_regex_syntax(v: Any) -> Any:
 
     if isinstance(v, str):
         stripped = v.strip()
-        # A JSON-encoded list is decoded like a JSON-encoded object: the setup
-        # form sends an empty picker as ``"[]"``, which ``parse_filter_input``
-        # reads as an empty filter. Compiled as a regex it is an unterminated
-        # character class and would reject a filter that means "no filter".
-        if (stripped.startswith("{") and stripped.endswith("}")) or (
-            stripped.startswith("[") and stripped.endswith("]")
-        ):
+        if stripped.startswith("{") and stripped.endswith("}"):
             try:
                 parsed = orjson.loads(stripped)
             except json.JSONDecodeError:
                 parsed = None
-            if isinstance(parsed, (dict, list)):
+            if isinstance(parsed, dict):
                 _walk("value", parsed)
                 return v
         _walk("value", v)
@@ -420,6 +414,22 @@ def normalize_legacy_filter_value(value: str) -> str:
     normalised = "|".join(items)
     validate_filter_no_sql_injection(normalised)
     return normalised
+
+
+def normalize_empty_json_list_filter(value: Any) -> Any:
+    """Map an empty JSON-list filter string (``"[]"``) to ``""``, no filter.
+
+    A setup form sends an empty picker as the JSON text ``"[]"``. As a regex it
+    is an unterminated character class that no dialect compiles, so left as-is
+    it is rejected at submission and, if it got past that, would be rendered
+    into extraction SQL verbatim. Every reader means "no filter" by it
+    (``filter_matching`` resolves it to match-all), and ``""`` is how the
+    filter fields spell that. Any other value, including a non-empty
+    bracketed regex like ``[A-Z]+``, is returned unchanged.
+    """
+    if isinstance(value, str) and value.strip() == "[]":
+        return ""
+    return value
 
 
 def extract_database_names_from_regex_common(
@@ -697,9 +707,12 @@ def parse_filter_input(
         if not filter_input.strip():
             return {}
         try:
-            return orjson.loads(filter_input)
+            parsed = orjson.loads(filter_input)
         except json.JSONDecodeError as e:
             raise InvalidSqlFilterError(cause=e) from e
+        # An empty JSON list (an empty picker) is no filter, like ``{}``;
+        # downstream ``normalize_filters`` needs a mapping.
+        return {} if parsed == [] else parsed
 
 
 def prepare_filters(
