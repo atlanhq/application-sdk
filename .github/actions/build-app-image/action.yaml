@@ -164,16 +164,15 @@ runs:
     # The script is shared from the sibling action rather than copied a third
     # time. Reaching across action dirs with `../` is the established pattern
     # here (see connector-unit-tests/action.yaml, which reads
-    # connector-integration-tests' copy the same way). Note there are already
-    # two byte-identical copies of this script in the repo; consolidating them
-    # is worth doing, but not as a side effect of this change.
+    # connector-integration-tests' copy the same way). That copy is the only
+    # one; sdr-e2e stashes it too.
     - name: Pin application-sdk to dispatched ref (pre-build)
       if: inputs.application-sdk-ref != ''
       shell: bash
       env:
         SDK_REF: ${{ inputs.application-sdk-ref }}
       run: |
-        "${{ github.action_path }}/../sdr-e2e/repin-application-sdk.sh"
+        "${{ github.action_path }}/../connector-integration-tests/repin-application-sdk.sh"
         if ! command -v uv >/dev/null 2>&1; then
           echo "Installing uv for the pre-build re-lock..."
           "${{ github.action_path }}/../../scripts/with-retry.sh" \

@@ -8,20 +8,14 @@ package from PyPI: absent before its first release, and stale after it.
 
 from __future__ import annotations
 
-import filecmp
 import os
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[3]
-SCRIPTS = [
-    ROOT / ".github/actions/connector-integration-tests/repin-application-sdk.sh",
-    ROOT / ".github/actions/sdr-e2e/repin-application-sdk.sh",
-]
+SCRIPT = ROOT / ".github/actions/connector-integration-tests/repin-application-sdk.sh"
 REF = "0123456789abcdef0123456789abcdef01234567"
 SDK = 'atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", rev = "old" }'
 API = (
@@ -31,7 +25,7 @@ API = (
 HEAD = '[project]\nname = "demo-app"\nversion = "1.0.0"\n'
 
 
-def _repin(tmp_path: Path, pyproject: str, script: Path = SCRIPTS[0]) -> dict:
+def _repin(tmp_path: Path, pyproject: str, script: Path = SCRIPT) -> dict:
     (tmp_path / "pyproject.toml").write_text(pyproject)
     env = {
         **os.environ,
@@ -58,13 +52,15 @@ def _assert_pinned(sources: dict) -> None:
     }
 
 
-def test_the_two_copies_are_identical() -> None:
-    assert filecmp.cmp(*SCRIPTS, shallow=False)
+def test_there_is_one_copy() -> None:
+    """sdr-e2e and build-app-image use connector-integration-tests' copy; a
+    second copy is how the two drifted apart before (FND-4244)."""
+    copies = sorted(ROOT.glob(".github/**/repin-application-sdk.sh"))
+    assert copies == [SCRIPT]
 
 
-@pytest.mark.parametrize("script", SCRIPTS, ids=["integration", "sdr-e2e"])
-def test_an_existing_sdk_pin_gains_the_api_pin(tmp_path: Path, script: Path) -> None:
-    _assert_pinned(_repin(tmp_path, f"{HEAD}\n[tool.uv.sources]\n{SDK}\n", script))
+def test_an_existing_sdk_pin_gains_the_api_pin(tmp_path: Path) -> None:
+    _assert_pinned(_repin(tmp_path, f"{HEAD}\n[tool.uv.sources]\n{SDK}\n"))
 
 
 def test_an_app_on_pypi_gets_both_pins(tmp_path: Path) -> None:
@@ -90,11 +86,10 @@ def test_rerunning_is_a_no_op(tmp_path: Path) -> None:
     assert (tmp_path / "pyproject.toml").read_text() == first
 
 
-@pytest.mark.parametrize("script", SCRIPTS, ids=["integration", "sdr-e2e"])
-def test_indented_pins_are_moved_not_duplicated(tmp_path: Path, script: Path) -> None:
+def test_indented_pins_are_moved_not_duplicated(tmp_path: Path) -> None:
     """Indentation is valid TOML; a pin that is not matched is inserted again,
     and the duplicate key fails the parse after pyproject.toml is written."""
-    sources = _repin(tmp_path, f"{HEAD}\n[tool.uv.sources]\n  {SDK}\n\t{API}\n", script)
+    sources = _repin(tmp_path, f"{HEAD}\n[tool.uv.sources]\n  {SDK}\n\t{API}\n")
     _assert_pinned(sources)
     text = (tmp_path / "pyproject.toml").read_text()
     assert text.count("atlan-application-sdk =") == 1
