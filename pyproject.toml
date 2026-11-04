@@ -186,6 +186,10 @@ dev = [
     # (enforced by .github/scripts/tests/test_lint_guards.py), so `uv run ruff`
     # and the CI hook lint, format and sort imports identically.
     "ruff==0.17.3",
+    # Exact pin, equal to the pyright-python rev in .pre-commit-config.yaml
+    # (enforced by .github/scripts/tests/test_check_pyright_baseline.py), so the
+    # .github/scripts baseline check and the pre-commit hook run one pyright.
+    "pyright==1.1.410",
     "boto3-stubs>=1.38.6,<2.0.0",
     "poethepoet>=0.49.0,<0.50.0",
     "libcst>=1.4.0,<2.0.0",

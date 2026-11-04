@@ -43,7 +43,7 @@ The `CI script tests` workflow (`.github/workflows/scripts-tests.yaml`) runs
 `pytest .github/scripts/tests` on every PR:
 
 ```bash
-uv run --extra workflows --with pytest python -m pytest .github/scripts/tests -q
+uv run --frozen --extra workflows python -m pytest .github/scripts/tests -q
 ```
 
 If you add a new script, add its test in the same PR — the workflow will pick
@@ -54,9 +54,35 @@ cross-file guards that read YAML outside `.github/scripts/` — the mask-before-
 call-site check below is one — and any `paths:` list would have to enumerate every
 file they inspect, so it would silently stop firing on exactly the edits those
 guards exist to catch. Don't add one; a sub-minute suite is cheaper than that
-failure mode. Because it now concludes on every PR, it can be added to branch
-protection directly, without the always-concluding-gate wrapper that
+failure mode. Because it concludes on every PR, both of its jobs are required
+checks on the `main` ruleset (`pytest .github/scripts/tests` and
+`pyright .github/scripts`), without the always-concluding-gate wrapper that
 path-filtered required checks need (see `sdk-gate.yaml` for that pattern).
+Renaming either job renames the required context: update the ruleset in the
+same change, or every PR waits on a check that never reports.
+
+## pyright on `.github/scripts`: a baseline that only shrinks
+
+`[tool.pyright]` excludes `.github/**`, so the pre-commit pyright hook never
+sees the CI scripts. The `pyright .github/scripts` job runs
+`.github/scripts/check_pyright_baseline.py`, which runs pyright over
+`.github/scripts` with the repo's own pyright settings (minus the exclude,
+pinned to Linux and the `requires-python` floor) and compares the result,
+per file and per rule, with `.github/scripts/pyright_baseline.json`:
+
+- **A count above the baseline fails.** Fix the new finding. Do not raise the
+  baseline to make room for it; a reviewer sees any baseline increase in the diff.
+- **A count below the baseline also fails.** You fixed something: lock it in.
+
+```bash
+uv run --frozen --extra workflows python .github/scripts/check_pyright_baseline.py           # check
+uv run --frozen --extra workflows python .github/scripts/check_pyright_baseline.py --update  # rewrite baseline
+```
+
+Counts are per (file, rule), so fixing one finding does not pay for a different
+new one in the same file. A new script starts at zero: it must be pyright-clean.
+A pyright upgrade (the `dev`-group pin, kept equal to the pre-commit hook's rev)
+may move counts either way; regenerate the baseline in that PR.
 
 ## An artifact upload retry must use a DIFFERENT artifact name
 
