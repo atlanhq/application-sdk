@@ -55,6 +55,35 @@ leave the skipped version permanently absent.
 If only `merge` failed, re-running that job alone is enough — the staging images from the
 build legs are still in GHCR under `:sha-<sha>-amd64` / `:sha-<sha>-arm64`.
 
+### Golden base policy: a mutable tag, recorded per release
+
+The `Dockerfile` builds `FROM cgr.dev/atlan.com/app-framework-golden:<python major.minor>`
+with no digest pin, on purpose:
+
+- **The tag is how base fixes arrive.** Chainguard rebuilds the golden tag as fixes land
+  in its packages. A release of `app-runtime-base` picks up whatever the tag points at
+  when it builds.
+- **Nothing could keep a pin current.** `cgr.dev/atlan.com` is private and Renovate has no
+  credentials for it, so `renovate.json` disables the dependency (the
+  `app-framework-golden` packageRule says why). A digest pin would stay at one rebuild
+  until someone moved it by hand, and CVE fixes would stop shipping in the meantime.
+- **The trade-off:** two builds of the same commit can land on different bases. Each
+  release still records which one it used, so a shipped image can always be traced.
+
+#### Which golden base a release shipped on
+
+The release build attaches SLSA provenance to each architecture of every published
+image. Its `resolvedDependencies` lists the golden base by digest, as
+`pkg:docker/cgr.dev/atlan.com/app-framework-golden@<tag>?platform=linux%2F<arch>`
+with a `sha256` digest. The image is public, so no login is needed:
+
+```bash
+docker buildx imagetools inspect ghcr.io/atlanhq/app-runtime-base:<version> \
+  --format '{{json .Provenance}}'
+```
+
+amd64 and arm64 are separate builds, so each has its own golden digest.
+
 ### Pulling the base from GHCR directly in app CI
 
 App Dockerfiles keep `FROM registry.atlan.com/public/app-runtime-base:3` — that

@@ -1,3 +1,20 @@
+# Base image policy: the golden tag is deliberately mutable, with no digest pin.
+#
+# Chainguard rebuilds the golden tag below as fixes land in its packages,
+# and a release of this image is how those fixes reach every app. A digest pin
+# would freeze the base at one rebuild, and nothing would move it: Renovate
+# cannot read the private cgr.dev/atlan.com registry, so it skips this image
+# (see the `app-framework-golden` packageRule in renovate.json). A pin would only
+# stop CVE fixes from shipping until someone bumped it by hand.
+#
+# The cost is that a rebuild of the same commit can pick up a newer base. What a
+# release actually shipped on is still recorded: the release build attaches
+# SLSA provenance to every published `app-runtime-base` image, and its
+# `resolvedDependencies` entry names the golden image by digest. To read it, see
+# "Which golden base a release shipped on" in docs/standards/build-security.md.
+#
+# The major.minor in this tag is also the container's Python version, which
+# .github/scripts/container_python_version.py reads, so change both together.
 FROM cgr.dev/atlan.com/app-framework-golden:3.13
 
 # Switch to root for setup
@@ -62,6 +79,10 @@ spec: {}
 EOF
 
 # Common environment variables for all apps
+#
+# DO_NOT_TRACK and SCARF_NO_ANALYTICS are the generic telemetry opt-outs. They
+# are for the apps built on this image, not for the SDK: some apps still lock
+# libraries that report usage to Scarf unless one of these is set.
 ENV UV_NO_CACHE=1 \
     DAPR_HTTP_PORT=3500 \
     DAPR_GRPC_PORT=50001 \
@@ -72,7 +93,6 @@ ENV UV_NO_CACHE=1 \
     DAPR_GRACEFUL_SHUTDOWN_SECONDS=3600 \
     DO_NOT_TRACK=true \
     SCARF_NO_ANALYTICS=true \
-    DAFT_ANALYTICS_ENABLED=0 \
     ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated
 
 # Point grpcio at the image's system CA bundle.
