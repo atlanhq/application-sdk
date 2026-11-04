@@ -336,20 +336,6 @@ def _pid_after(seconds: float) -> int:
     return os.getpid()
 
 
-async def _wait_until_exited(pid: int) -> None:
-    """Wait until ``pid`` no longer exists (its parent has joined it)."""
-    import os
-
-    deadline = time.monotonic() + _REAP_DEADLINE_SECONDS
-    while True:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
-        assert time.monotonic() < deadline, f"fresh child {pid} never exited"
-        await asyncio.sleep(0.05)
-
-
 async def test_fresh_calls_back_to_back_each_get_a_new_child(monkeypatch):
     """The point of fresh=True: a pooled child would serve all three calls,
     carrying each one's peak heap into the next (the idle period never elapses
@@ -360,11 +346,31 @@ async def test_fresh_calls_back_to_back_each_get_a_new_child(monkeypatch):
 
 
 async def test_fresh_child_exits_as_soon_as_its_call_ends(monkeypatch):
+    """The single-use pool is shut down and its child joined once the call ends.
+
+    Keeps a reference to the pool: an unreferenced ProcessPoolExecutor stops
+    its workers when it is garbage-collected, which would let this pass even
+    if fresh never retired the pool itself. ``reaped`` is set only by that
+    retirement. Checked through the pool rather than by probing the PID,
+    because ``os.kill(pid, 0)`` is ``TerminateProcess`` on Windows.
+    """
     # An idle period far longer than the deadline: only fresh's own retirement
-    # can make the child exit in time.
+    # can shut the pool down in time.
     monkeypatch.setenv(offload.FAULT_ISOLATION_IDLE_SECONDS_ENV, "3600")
-    pid = await run_fault_isolated(_pid, fresh=True)
-    await _wait_until_exited(pid)
+    created: list[offload._IsolationPool] = []
+
+    class _RecordingPool(offload._IsolationPool):
+        def __init__(self, max_workers: int) -> None:
+            super().__init__(max_workers)
+            created.append(self)
+
+    monkeypatch.setattr(offload, "_IsolationPool", _RecordingPool)
+
+    assert await run_fault_isolated(_echo, "once", fresh=True) == "echo:once"
+
+    # reaped is set only after shutdown(wait=True) has joined every child.
+    (pool,) = created
+    await _wait_until_reaped(pool)
 
 
 async def test_fresh_never_touches_the_shared_width_one_pool(monkeypatch):
