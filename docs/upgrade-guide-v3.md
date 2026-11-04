@@ -66,6 +66,35 @@ transform, end-to-end. A version bump is the whole fix; no per-repo change is
 needed. The D010 conformance rule covers the residual case of an app on plain
 `atlan-application-sdk` with no extras at all.
 
+### pandas 3 and pyarrow 26
+
+The `[sql]`, `[incremental]` and `[pandas]` extras accept `pandas>=2.2.3,<4`
+and `pyarrow>=23.0.1,<27`. The SDK is tested against both pandas 2 and
+pandas 3. An app that pins `pandas<3` keeps resolving and needs no change.
+
+When your app's lock moves to pandas 3, two pandas changes reach code that
+reads SDK DataFrames (for example `ParquetFileReader.read()` and
+`read_batches()`):
+
+- Text columns use pandas' `str` dtype, and a missing value in one is `NaN`,
+  not `None`. Test for a missing value with `pd.isna(value)`, not
+  `value is None`.
+- Copy-on-write is always on. Assigning through a chained index such as
+  `df["col"][mask] = value` no longer changes `df`. Use
+  `df.loc[mask, "col"] = value`.
+
+`ParquetFileWriter`, the JSON-to-Parquet file converter and the scale data
+generator keep the same Parquet schema under either pandas version: text
+columns are written as Arrow `string`, as they were under pandas 2, rather
+than the `large_string` pandas 3 converts to by default. Two exceptions:
+
+- A text column holding more than 2 GiB of text in one chunk does not fit
+  Arrow's `string` type, so it is written as `large_string`. The SDK's readers
+  merge `string` and `large_string` shards.
+- A `flush_fn` you pass to `RollingFileWriter` serializes the data itself, so
+  its schema is yours. `DataFrame.to_parquet` under pandas 3 writes text as
+  `large_string`.
+
 ### Install by app type
 
 | App type | Install command |
