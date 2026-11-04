@@ -179,7 +179,8 @@ pkl eval --project-dir contract -m . contract/app.pkl
 **Capture the commands in the app's `pyproject.toml`** so they are repeatable and
 don't live only in the author's head. The SDK certify gate depends on this
 wiring: for an app with `contract/app.pkl` it runs `uv sync --all-extras
---frozen`, then `uv run poe generate`, then fails if the tree is not clean. Add
+--frozen`, then `uv run poe --help` and `uv run poe generate`, then checks the
+regenerated output for drift. Add
 (or verify) the toolkit's recommended `poe` task:
 
 ```toml
@@ -207,11 +208,12 @@ output up. That variant only refreshes the files it copies, so outputs it skips
   `uv sync --all-extras`, which always installs every extra. Of the dependency
   groups it installs only uv's default groups (just `dev`, unless the app sets
   `[tool.uv] default-groups`), so poe in any other group, such as `tools` or
-  `lint`, is missing in CI and the gate fails. An extra doesn't depend on that
+  `lint`, is missing in CI and the drift check can't run. An extra doesn't depend on that
   setting. Re-lock (`uv lock`) after adding it so `--frozen` succeeds.
-- Commit everything `poe generate` writes. Certify re-runs it and fails on any
-  diff, so run it locally and check `git status --short` is empty before
-  pushing.
+- Commit everything `poe generate` writes, and check `git status --short` is
+  empty after running it locally. Certify's drift check may not cover every
+  output (for example the root `atlan.yaml` and `app.yaml`), so a stale file
+  it doesn't check can still ship.
 - The task calls `pkl` from `PATH`. Run
   `python -m application_sdk.dev.pkl check` to confirm your `PATH` pkl matches
   the pinned version CI uses.

@@ -707,7 +707,7 @@ generate-contract.ref = "generate"
 ```
 
 The SDK certify gate runs `uv sync --all-extras --frozen`, then `uv run poe
-generate`, and fails if the tree is not clean afterwards. So:
+generate`, then checks the regenerated output for drift. So:
 
 - Name the task `generate`. Certify calls `poe generate`; `generate-contract` is
   an optional alias.
@@ -715,9 +715,13 @@ generate`, and fails if the tree is not clean afterwards. So:
   `[dependency-groups]` group. `uv sync --all-extras` always installs every
   extra. Of the dependency groups it installs only uv's default groups (just
   `dev`, unless `[tool.uv] default-groups` changes that), so poe in any other
-  group is missing in CI. An extra doesn't depend on that setting. Run `uv lock`
+  group is missing in CI and the drift check can't run. An extra doesn't depend
+  on that setting. Run `uv lock`
   after adding it.
-- Commit everything `poe generate` writes.
+- Commit everything `poe generate` writes, and check `git status --short` is
+  empty afterwards. The drift check may not cover every output (for example the
+  root `atlan.yaml` and `app.yaml`), so a stale file it doesn't check can still
+  ship.
 
 Avoid the older per-app variant that evals into a subfolder and copies `*.json`
 up: outputs it doesn't copy (`_input.py`, `atlan.yaml`, nested entrypoint dirs)
