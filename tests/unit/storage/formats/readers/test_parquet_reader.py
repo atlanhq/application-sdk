@@ -5,6 +5,7 @@ from types import ModuleType
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -732,7 +733,11 @@ class TestReadNonBatchedSchemaUnification:
 
         assert len(df) == 4
         assert set(df["id"].tolist()) == {1, 2, 3, 4}
-        assert set(df["tag"].tolist()) == {None, "a", "b"}
+        # The missing value is None under pandas 2 and NaN under pandas 3's
+        # default ``str`` dtype; both are a null, which is what is pinned here.
+        tags = df.sort_values("id")["tag"].tolist()
+        assert [pd.isna(t) for t in tags] == [True, True, False, False]
+        assert tags[2:] == ["a", "b"]
 
     @pytest.mark.asyncio
     async def test_read_merges_legacy_all_null_large_string_with_numeric(

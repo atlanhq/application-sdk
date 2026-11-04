@@ -164,32 +164,25 @@ class TestConvertDataFiles:
 class TestConvertJsonToParquet:
     """Test suite for the convert_json_to_parquet function."""
 
-    @patch("pandas.read_json")
-    def test_successful_json_to_parquet_conversion(self, mock_read_json):
-        """Test successful conversion from JSON to Parquet."""
-        # Arrange
-        mock_df = MagicMock()
-        mock_filtered_df = MagicMock()
+    def test_successful_json_to_parquet_conversion(self, tmp_path):
+        """JSON lines become a Parquet file whose text columns are ``string``.
 
-        # Mock the column filtering chain: df.loc[:, ~df.where(df.astype(bool)).isna().all(axis=0)]
-        mock_df.where.return_value = mock_df
-        mock_df.astype.return_value = mock_df
-        mock_df.isna.return_value = mock_df
-        mock_df.all.return_value = MagicMock()
-        mock_df.loc.__getitem__.return_value = mock_filtered_df
+        pandas 3 reads text as its ``str`` dtype, which pyarrow would write as
+        ``large_string``; the converter keeps the type pandas 2 wrote.
+        """
+        import pyarrow as pa
+        import pyarrow.parquet as pq
 
-        mock_read_json.return_value = mock_df
+        source = tmp_path / "input.json"
+        source.write_text('{"id": 1, "name": "a"}\n{"id": 2, "name": "b"}\n')
 
-        file_path = "/path/input.json"
-        expected_output = "/path/input.parquet"
+        result = convert_json_to_parquet(str(source))
 
-        # Act
-        result = convert_json_to_parquet(file_path)
-
-        # Assert
-        assert result == expected_output
-        mock_read_json.assert_called_once_with(file_path, orient="records", lines=True)
-        mock_filtered_df.to_parquet.assert_called_once_with(expected_output)
+        assert result == str(tmp_path / "input.parquet")
+        table = pq.read_table(result)
+        assert table.schema.field("name").type == pa.string()
+        assert table.column("name").to_pylist() == ["a", "b"]
+        assert table.column("id").to_pylist() == [1, 2]
 
     @patch("pandas.read_json")
     def test_json_to_parquet_read_error_returns_none(self, mock_read_json):
@@ -236,34 +229,20 @@ class TestConvertJsonToParquet:
         assert result is None
         mock_logger.assert_called_once()
 
-    @patch("pandas.read_json")
-    def test_json_to_parquet_column_filtering(self, mock_read_json):
-        """Test that empty columns are filtered out during conversion."""
-        # Arrange
-        mock_df = MagicMock()
-        mock_filtered_df = MagicMock()
+    def test_json_to_parquet_column_filtering(self, tmp_path):
+        """A column with no truthy value is dropped from the Parquet output."""
+        import pyarrow.parquet as pq
 
-        # Mock the column filtering chain
-        mock_df.where.return_value = mock_df
-        mock_df.astype.return_value = mock_df
-        mock_df.isna.return_value = mock_df
-        mock_df.all.return_value = MagicMock()
-        mock_df.loc.__getitem__.return_value = mock_filtered_df
+        source = tmp_path / "input.json"
+        source.write_text(
+            '{"id": 1, "empty": null, "name": "a"}\n'
+            '{"id": 2, "empty": null, "name": "b"}\n'
+        )
 
-        mock_read_json.return_value = mock_df
+        result = convert_json_to_parquet(str(source))
 
-        file_path = "/path/input.json"
-
-        # Act
-        convert_json_to_parquet(file_path)
-
-        # Assert
-        # Verify that column filtering logic was applied
-        mock_df.where.assert_called_once()
-        mock_df.astype.assert_called_once_with(bool)
-        mock_df.isna.assert_called_once()
-        mock_df.all.assert_called_once_with(axis=0)
-        mock_filtered_df.to_parquet.assert_called_once()
+        assert result is not None
+        assert pq.read_schema(result).names == ["id", "name"]
 
 
 class TestConvertParquetToJson:
