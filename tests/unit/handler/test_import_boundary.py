@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import functools
 import importlib
+import os
 import subprocess
 import sys
 
@@ -130,6 +131,63 @@ def test_creating_the_handler_service_imports_no_worker_code() -> None:
     assert not offenders, (
         "Creating the handler service loaded worker module(s):\n  "
         + "\n  ".join(offenders)
+    )
+
+
+#: The worker's runtime stack: Temporal and the gRPC transport under it and the
+#: OTLP exporters. ``import application_sdk.handler`` used to load both through
+#: the logger adaptor's module-level imports, 208 ms on every API-only pod's
+#: cold start (FND-4257). Unlike :data:`_FORBIDDEN_PREFIXES` this covers all of
+#: ``temporalio``, not just its worker packages: none of it is needed to serve
+#: a contract or log a line.
+_WORKER_RUNTIME_PACKAGES = ("temporalio", "grpc")
+
+#: Env vars that switch OTLP log export on. With export on, the adaptor loads
+#: the gRPC exporter on purpose, so the probe clears them; whatever the host
+#: running the suite has set, in its environment or its ``.env``, must not
+#: decide the result.
+_OTLP_EXPORT_ENV = (
+    "ENABLE_OTLP_LOGS",
+    "ENABLE_OTLP_WORKFLOW_LOGS",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_WORKFLOW_LOGS_ENDPOINT",
+)
+
+
+def test_importing_the_handler_loads_neither_temporal_nor_grpc() -> None:
+    """``import application_sdk.handler`` loads no ``temporalio`` or ``grpc`` module.
+
+    Fix a failure by deferring the import to first use on the path that needs
+    it (as the logger adaptor does for the OTLP exporter), or by testing
+    ``sys.modules`` for a type that can only exist once its module is loaded
+    (as it does for Temporal's ``FailureError``). ``handler.service`` is left
+    out: the ``/workflows/v1/start`` route imports ``temporalio.client``.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in _OTLP_EXPORT_ENV}
+    # ``application_sdk.constants`` loads the checkout's ``.env``, which would
+    # put the cleared settings straight back.
+    env["PYTHON_DOTENV_DISABLED"] = "1"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, application_sdk.handler; print('\\n'.join(sys.modules))",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    offenders = sorted(
+        name
+        for name in result.stdout.splitlines()
+        if name.split(".")[0] in _WORKER_RUNTIME_PACKAGES
+    )
+    assert not offenders, (
+        f"Importing application_sdk.handler loaded {len(offenders)} "
+        "temporalio/grpc module(s):\n  " + "\n  ".join(offenders)
     )
 
 
