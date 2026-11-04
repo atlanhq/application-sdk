@@ -70,3 +70,34 @@ def test_json_encoded_filter_map_is_checked() -> None:
 def test_non_string_shapes_pass_through() -> None:
     assert validate_filter_regex_syntax(None) is None
     assert validate_filter_regex_syntax(3) == 3
+
+
+@pytest.mark.parametrize("empty", ["[]", " [] ", "[ ]"])
+def test_empty_json_list_string_is_no_filter(empty: str) -> None:
+    """A setup form sends an empty picker as ``"[]"``.
+
+    ``parse_filter_input`` reads that as an empty filter, so submission must
+    accept it rather than compile it as an unterminated character class.
+    """
+    assert validate_filter_regex_syntax(empty) == empty
+
+
+def test_json_encoded_list_items_are_checked() -> None:
+    with pytest.raises(ValueError, match="filter value: unterminated group"):
+        validate_filter_regex_syntax('["^db("]')
+
+
+@pytest.mark.parametrize("pattern", ["[", "[]a", "[a-"])
+def test_bracket_pattern_that_is_not_json_is_still_a_regex(pattern: str) -> None:
+    with pytest.raises(ValueError, match="unterminated character class"):
+        validate_filter_regex_syntax(pattern)
+
+
+@pytest.mark.parametrize("field", ["include_filter", "exclude_filter"])
+def test_extraction_input_accepts_empty_json_list_filter(field: str) -> None:
+    from application_sdk.templates.contracts.sql_metadata import (
+        ExtractionTaskInput,
+    )
+
+    task_input = ExtractionTaskInput.model_validate({field: "[]"})
+    assert getattr(task_input, field) == "[]"
