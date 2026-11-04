@@ -165,6 +165,10 @@ if TYPE_CHECKING:
         read_records,
         require_golden_corpus,
     )
+
+    # Deliberately repeats the eager import above: griffe and pyright read
+    # names from this block only (test_type_checking_block_matches_the_lazy_map).
+    from .lazy import Lazy, evaluate_if_lazy, is_lazy, lazy  # noqa: F811
     from .models import APIType, Scenario, ScenarioResult
     from .runner import (
         BaseIntegrationTest,
