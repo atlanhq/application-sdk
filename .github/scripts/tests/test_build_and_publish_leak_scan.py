@@ -15,7 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "build_and_publish"))
 import _bap  # noqa: E402
 import leak_scan  # noqa: E402
 
-WEBHOOK = "https://hooks.slack.com/services/T/B/x"
+WEBHOOK_SECRET_PATH = "/services/T0SECRET/B0SECRET/x0secret"
+WEBHOOK = "https://hooks.slack.com" + WEBHOOK_SECRET_PATH
 
 
 @pytest.fixture
@@ -215,7 +216,8 @@ def _posted(rec: Recorder) -> tuple[list[str], str]:
     # The webhook URL is a credential: it reaches curl on stdin via
     # `--config -`, never in argv.
     assert cmd[-2:] == ["--config", "-"]
-    assert not any("hooks.slack.com" in arg for arg in cmd)
+    # The secret is the path, so check argv for that, not for the host.
+    assert not any(WEBHOOK_SECRET_PATH in arg for arg in cmd)
     assert kwargs["input"] == f'url = "{WEBHOOK}"\n'
     return cmd, json.loads(cmd[cmd.index("--data") + 1])["text"]
 
