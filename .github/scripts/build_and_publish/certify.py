@@ -17,8 +17,10 @@ Subcommands (each one is a former inline ``run:`` block):
 
 ``verdict``
     Render the certification summary from the step outcomes and fail when an
-    enforced layer (contract drift, unit tests) failed. Reads ``CM``, ``CD``,
-    ``UT``, ``COV``, ``SDK_INSTALL``, ``APP_INSTALL``.
+    enforced layer (contract drift, unit tests) failed or could not run because
+    the app's dependencies did not install. An app with no ``tests/unit``
+    (``UT`` = ``skipped``) still passes. Reads ``CM``, ``CD``, ``UT``, ``COV``,
+    ``SDK_INSTALL``, ``APP_INSTALL``.
 
 See docs/standards/app-certification.md.
 """
@@ -38,7 +40,7 @@ DOCS_URL = (
     "https://github.com/atlanhq/application-sdk/blob/main/docs/standards/"
     "app-certification.md"
 )
-_ICONS = {"success": "✅", "failure": "❌", "skipped": "➖"}
+_ICONS = {"success": "✅", "failure": "❌", "skipped": "➖", "install_failed": "❌"}
 
 
 def check_migration() -> int:
@@ -119,11 +121,6 @@ def verdict() -> int:
             "::warning title=Certification incomplete::SDK install failed, so "
             "check_migration did not run."
         )
-    if app_install != "success":
-        print(
-            "::warning title=Certification incomplete::App install failed; contract "
-            "drift and unit tests did not run."
-        )
     if cm == "failure":
         print(
             "::warning title=Certification warning (warn-only)::v3 shape failed; "
@@ -155,7 +152,24 @@ def verdict() -> int:
         print(
             "::error title=Publish blocked::Unit tests failed. Build and publish blocked."
         )
-    return 1 if "failure" in (cd, ut) else 0
+    # Fail closed: an enforced layer that could not run is not a pass. Two
+    # sources, because sharded unit tests install on their own runners — the
+    # app can install here (APP_INSTALL) yet not on a shard (UT).
+    install_failed = app_install != "success" or ut == "install_failed"
+    if install_failed:
+        _bap.summary(
+            "",
+            "### ❌ Publish blocked — app dependencies did not install",
+            "",
+            "`uv sync --all-extras --frozen` failed, so contract drift and unit "
+            "tests could not run. Native build dependencies go in the "
+            "`apt_packages` input. See the install step's log.",
+        )
+        print(
+            "::error title=Publish blocked::App dependencies did not install; "
+            "contract drift and unit tests did not run. Build and publish blocked."
+        )
+    return 1 if install_failed or "failure" in (cd, ut) else 0
 
 
 def main(argv: list[str] | None = None) -> int:

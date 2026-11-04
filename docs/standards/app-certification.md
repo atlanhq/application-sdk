@@ -21,10 +21,30 @@ and runs:
 | **Unit tests** | `pytest tests/unit --cov=app --cov-report=term` | no `tests/unit/` directory |
 | **Coverage threshold** | `coverage report --fail-under=85` | unit tests skipped or failed |
 
+Contract drift and unit tests need the app's dependencies installed
+(`uv sync --all-extras --frozen`). If that install fails, they cannot run, and
+publish is blocked (see [Enforcement](#enforcement)).
+
 These are the layers that are **identical for every app**. App-specific layers
 — integration, SDR, and e2e/Playwright — are **not** run here: they need the
 app's own live stack (databases, Dapr, Temporal) and secrets, so they stay in
 the app's own CI (`tests.yaml`, the marketplace-releases e2e reusables, …).
+
+## Install environment
+
+- **Python.** Certify runs on the Python the app image ships, not on the
+  runner's system `python3`. It sets `UV_PYTHON` to the major.minor of the SDK
+  `Dockerfile`'s golden base tag (`container_python_version.py print-version`),
+  the same source `app-runtime-base` is built from. This overrides an app's
+  `.python-version`. Unpinned, the runner's newer Python made deps with no
+  wheels for it build from source and fail.
+- **System packages.** An app whose Python dependencies build a native
+  extension the runner lacks headers for sets the `apt_packages` input to a
+  space-separated list of Ubuntu packages. For example, hive's `pykerberos`
+  needs `libkrb5-dev`. They install before `uv sync`, in `certify` and in
+  every `certify-unit` leg. Each name must be a plain Debian package name; any
+  other value fails the gate. Pass the same list as `tests-reusable.yaml`'s
+  `apt-packages`.
 
 ## Sharded unit tests (opt-in)
 
@@ -70,18 +90,22 @@ for free, with zero changes to its repo.
 |-------|------|
 | **Unit tests** | **Enforced** — a ❌ exits the verdict step non-zero and blocks publish. |
 | **Contract drift** | **Enforced** — a ❌ on the step fails the job (no `continue-on-error`) and blocks publish. |
+| **App install** | **Enforced** — if the app's dependencies do not install (in `certify`, or in any `certify-unit` leg), contract drift and unit tests cannot run, so the verdict exits non-zero and blocks publish. |
 | **Coverage threshold** | Warn-only — annotated, does not block. |
 | **v3 shape** | Warn-only — annotated, does not block. |
 
 Unit test pass/fail and contract drift are enforced: a failing run blocks
 publish. Coverage threshold and v3 shape remain warn-only during rollout —
 every check runs and the verdict is annotated on the workflow summary, but
-only a test or contract-drift failure exits non-zero.
+only a test failure, a contract-drift failure, or an app install failure
+exits non-zero.
 
 Checks that don't apply to an app skip cleanly (➖) so non-conforming apps are
 never hard-failed before they onboard. In particular, an app with no
 `tests/unit/` directory skips both the unit and coverage checks (➖), and an
-app with no `contract/app.pkl` skips the contract-drift check.
+app with no `contract/app.pkl` skips the contract-drift check. An app whose
+dependencies fail to install does **not** skip: the checks it cannot run count
+as failed, so an app is never published uncertified.
 
 ## Known rollout gaps (before enforcement)
 
