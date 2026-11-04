@@ -712,13 +712,13 @@ facts {
   }
 
   ["Radio with possibleValues emits Literal type"] {
-    // 90 chars → fmtSubsField wraps to multi-line form
-    widgetSubs.contains("radio_field: Literal[\"alpha\", \"beta\"] = Field(\n        default=\"alpha\",\n        alias=\"{{radio_field}}\",\n    )")
+    // 90 columns on one line → wrapped as ruff would: the arguments hugged
+    widgetSubs.contains("radio_field: Literal[\"alpha\", \"beta\"] = Field(\n        default=\"alpha\", alias=\"{{radio_field}}\"\n    )")
   }
 
   ["DropDown (single-select) with possibleValues emits Literal type"] {
-    // 90 chars → fmtSubsField wraps to multi-line form
-    widgetSubs.contains("dropdown_field: Literal[\"x\", \"y\", \"z\"] = Field(\n        default=\"x\",\n        alias=\"{{dropdown_field}}\",\n    )")
+    // 90 columns on one line → wrapped as ruff would: the arguments hugged
+    widgetSubs.contains("dropdown_field: Literal[\"x\", \"y\", \"z\"] = Field(\n        default=\"x\", alias=\"{{dropdown_field}}\"\n    )")
   }
 
   // A multiSelect DropDown submits a LIST of keys, so the substitution field is
@@ -731,8 +731,8 @@ facts {
   }
 
   ["defaultSelection drives the generated list default"] {
-    // 92 chars → fmtSubsField wraps to multi-line form
-    widgetSubs.contains("multi_default_field: list[str] = Field(\n        default_factory=lambda: [\"p\", \"q\"],\n        alias=\"{{multi_default_field}}\",\n    )")
+    // 92 columns on one line → wrapped as ruff would: the arguments hugged
+    widgetSubs.contains("multi_default_field: list[str] = Field(\n        default_factory=lambda: [\"p\", \"q\"], alias=\"{{multi_default_field}}\"\n    )")
   }
 
   // TagsInput and InputRepeater submit a list, as `_input.py` already types them.
@@ -742,7 +742,7 @@ facts {
   }
 
   ["a one-key defaultSelection generates a one-element list"] {
-    widgetSubs.contains("multi_single_default_field: list[str] = Field(\n        default_factory=lambda: [\"p\"],\n        alias=\"{{multi_single_default_field}}\",\n    )")
+    widgetSubs.contains("multi_single_default_field: list[str] = Field(\n        default_factory=lambda: [\"p\"], alias=\"{{multi_single_default_field}}\"\n    )")
   }
 
   // `default` is generated, so the rendered workflow config must carry exactly the
@@ -753,7 +753,7 @@ facts {
   }
 
   ["Substitution defaults escape quotes so the generated Python parses"] {
-    widgetSubs.contains("quoted_default_field: str = Field(\n        default=\"he said \\\"hi\\\"\",\n        alias=\"{{quoted_default_field}}\",\n    )")
+    widgetSubs.contains("quoted_default_field: str = Field(\n        default=\"he said \\\"hi\\\"\", alias=\"{{quoted_default_field}}\"\n    )")
   }
 
   ["Input contract defaults escape quotes so the generated Python parses"] {
@@ -879,7 +879,8 @@ facts {
 
   ["CredentialBodyExtra uses frozen=True in ConfigDict"] {
     // extraFieldsApp has extraFields → triggers nested Extra model generation
-    extraFieldsCred.contains("ConfigDict(frozen=True, populate_by_name=True, serialize_by_alias=True)")
+    // 91 columns on one line, so it is wrapped as ruff would.
+    extraFieldsCred.contains("model_config = ConfigDict(\n        frozen=True, populate_by_name=True, serialize_by_alias=True\n    )")
   }
 
   ["CredentialBodyExtra contains extraFields as typed fields"] {
@@ -897,8 +898,9 @@ facts {
   // ── fmtSubsField: line-length wrapping ───────────────────────────────────────
 
   ["Long Literal field is wrapped to multi-line (>88 chars)"] {
-    // output_format: Literal["parquet", "json"] + alias exceeds 88 chars
-    fullSubsPy.contains("output_format: Literal[\"parquet\", \"json\"] = Field(\n        default=\"parquet\",\n        alias=\"{{output_format}}\",\n    )")
+    // output_format: Literal["parquet", "json"] + alias exceeds 88 chars; the
+    // arguments fit on one indented line, so ruff hugs them there.
+    fullSubsPy.contains("output_format: Literal[\"parquet\", \"json\"] = Field(\n        default=\"parquet\", alias=\"{{output_format}}\"\n    )")
   }
 
   ["Short field stays single-line (≤88 chars)"] {

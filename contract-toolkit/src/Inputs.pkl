@@ -287,10 +287,9 @@ const local function pyDoc(s: String): String = s.replaceAll("\"\"\"", "\\\"\\\"
 
 /// The field's annotation line(s), without indent or docstring.
 ///
-/// The layout is fixed, because existing `_input.py` files were generated with
-/// it: a `default_factory` line longer than 84 characters breaks the call
-/// across lines, and lifecycle kwargs are appended inside the final `)` (or
-/// wrap a plain default as `Field(default=...)`).
+/// Always one line: `PyFormat.format` wraps the rendered module as ruff
+/// would. Lifecycle kwargs are appended inside the final `)` (or wrap a plain
+/// default as `Field(default=...)`).
 function renderFieldLine(name: String, f: InputField): String =
   let (typ = if (f.nullable) "\(f.pyType) | None" else f.pyType)
   let (explicit = f.pyExplicitDefault)
@@ -303,10 +302,7 @@ function renderFieldLine(name: String, f: InputField): String =
   let (isFactory = dflt != null && dflt != "None" && f.pyDefaultIsFactory)
   let (constraints = f.pyConstraints.join(", "))
   let (base =
-    if (isFactory)
-      let (line = "\(name): \(typ) = Field(default_factory=\(dflt))")
-      if (line.length <= 84) line
-      else "\(name): \(typ) = Field(\n        default_factory=\(dflt)\n    )"
+    if (isFactory) "\(name): \(typ) = Field(default_factory=\(dflt))"
     else if (dflt == null)
       if (constraints.isEmpty) "\(name): \(typ)" else "\(name): \(typ) = Field(\(constraints))"
     else if (constraints.isEmpty) "\(name): \(typ) = \(dflt)"

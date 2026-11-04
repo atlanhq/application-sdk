@@ -5,12 +5,11 @@ from __future__ import annotations
 from typing import Annotated, Any, ClassVar
 
 import orjson
-from pydantic import Field, field_validator
-
 from application_sdk.contracts.types import MaxItems
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.contracts import ExtractionInput
+from pydantic import Field, field_validator
 
 logger = get_logger(__name__)
 

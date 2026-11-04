@@ -48,10 +48,12 @@ src/
 |-- Credential.pkl         # Legacy Argo-era credential module
 |-- Connectors.pkl         # Connector constants
 |-- Renderers.pkl          # Legacy renderers
+|-- PyFormat.pkl           # Lays generated Python out as ruff does (default settings)
 `-- PklProject             # Package metadata
 scripts/
 |-- regenerate-all.sh
 |-- check-invariants.sh
+|-- check-ruff-stable.py  # ruff changes no generated .py (default settings)
 `-- test-sdk-import.py
 examples/
 |-- connection-ref/        # ConnectionRefInput typed output
@@ -89,6 +91,9 @@ pkl test tests/*.pkl
 
 # SDK import validation for generated _input.py files
 python scripts/test-sdk-import.py
+
+# Generated Python must already be what ruff (default settings) writes
+uv run python scripts/check-ruff-stable.py
 
 # Generate one example
 pkl eval -m examples/trino/generated examples/trino/app.pkl
@@ -212,6 +217,7 @@ Before opening a PR that touches `src/`:
 ./scripts/check-invariants.sh
 pkl test tests/*.pkl
 python scripts/test-sdk-import.py
+uv run python scripts/check-ruff-stable.py
 ```
 
 For widget, manifest, or SDK input changes, add targeted `tests/*_test.pkl` coverage against the curated examples.

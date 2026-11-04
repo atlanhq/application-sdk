@@ -1,0 +1,254 @@
+/// Lays out generated Python the way ruff does with its default settings.
+///
+/// Apps run `ruff check --fix` and `ruff format` on `app/generated/*.py` in
+/// pre-commit. If the toolkit's output is not already what ruff would write,
+/// the committed file differs from what `pkl eval` produces, and a regenerate
+/// shows drift even though the contract did not change. So every renderer
+/// emits plain logical lines and passes the module through `format`, which:
+///
+/// - rebuilds the leading import block the way ruff's isort rules (`I001`) do
+///   by default: `__future__`, standard library and third-party sections;
+///   `import x` before `from x import ...`; modules sorted; names sorted
+///   constants, then classes, then the rest; repeated modules merged; an
+///   import longer than 88 columns wrapped one name per line. `application_sdk`
+///   is third-party here, as it is in an app repo.
+/// - wraps every other line longer than 88 columns, trying ruff's layouts in
+///   ruff's order (see `assignment`).
+///
+/// Only shapes the toolkit emits are handled: single-line imports, `class`
+/// lines, decorators, plain and annotated assignments, and expressions built
+/// from calls, subscripts, lists, dicts and atoms. A line it cannot improve is
+/// left as it is. `scripts/check-ruff-stable.py` runs ruff over every example
+/// and fails on any difference, so a new shape that needs more is caught there.
+///
+/// Internal to the toolkit: not re-exported from `App.pkl`.
+module com.atlan.app.contract.PyFormat
+
+/// ruff's default `line-length`.
+const lineLength: Int = 88
+
+/// Top-level modules ruff classifies as standard library. Only the ones a
+/// renderer could plausibly import; everything else is third-party.
+const local stdlibModules: Set<String> = Set(
+  "abc", "collections", "dataclasses", "datetime", "decimal", "enum", "functools",
+  "itertools", "json", "logging", "os", "pathlib", "re", "sys", "typing", "uuid"
+)
+
+const local openers: Set<String> = Set("(", "[", "{")
+const local closers: Set<String> = Set(")", "]", "}")
+
+const local function fits(line: String): Boolean = line.length <= lineLength
+
+// ── bracket scanning ─────────────────────────────────────────────────────────
+
+/// Fold state while scanning a line character by character.
+class ScanState {
+  /// Per character: its bracket depth, or -1 inside a string literal. An
+  /// opening or closing bracket gets the depth outside it.
+  marks: List<Int>
+  depth: Int
+  quote: String?
+  escaped: Boolean
+}
+
+const local function step(st: ScanState, c: String): ScanState =
+  if (st.quote != null)
+    if (st.escaped) (st) { marks = st.marks.add(-1); escaped = false }
+    else if (c == "\\") (st) { marks = st.marks.add(-1); escaped = true }
+    else if (c == st.quote) (st) { marks = st.marks.add(-1); quote = null }
+    else (st) { marks = st.marks.add(-1) }
+  else if (c == "\"" || c == "'") (st) { marks = st.marks.add(-1); quote = c }
+  else if (openers.contains(c)) (st) { marks = st.marks.add(st.depth); depth = st.depth + 1 }
+  else if (closers.contains(c)) (st) { marks = st.marks.add(st.depth - 1); depth = st.depth - 1 }
+  else (st) { marks = st.marks.add(st.depth) }
+
+const local function scan(s: String): ScanState =
+  s.chars.fold(new ScanState { marks = List(); depth = 0; quote = null; escaped = false }, (st, c) -> step(st, c))
+
+/// Every bracket and string opened in `s` is closed in `s`. A line that is
+/// part of a multi-line construct is not, and is left alone.
+const local function balanced(s: String): Boolean =
+  let (st = scan(s))
+  st.depth == 0 && st.quote == null
+
+/// Index of the first `needle` outside any bracket or string, or null.
+const local function findTop(s: String, needle: String): Int? =
+  let (marks = scan(s).marks)
+  IntSeq(0, s.length - needle.length).toList()
+    .findOrNull((i) -> marks[i] == 0 && s.drop(i).startsWith(needle))
+
+/// `s` split at commas outside any bracket or string, each part trimmed.
+const local function splitTop(s: String): List<String> =
+  let (marks = scan(s).marks)
+  let (chars = s.chars)
+  let (cuts = IntSeq(0, s.length - 1).toList().filter((i) -> marks[i] == 0 && chars[i] == ","))
+  let (bounds = List(-1) + cuts + List(s.length))
+  IntSeq(0, cuts.length).toList()
+    .map((k) -> s.substring(bounds[k] + 1, bounds[k + 1]).trim())
+    .filter((p) -> !p.isEmpty)
+
+/// When `s` ends with a non-empty bracket group (`f(...)`, `x[...]`, `[...]`,
+/// `{...}`, `lambda: [...]`), the index of that group's opening bracket.
+const local function groupStart(s: String): Int? =
+  if (s.isEmpty || !closers.contains(s.takeLast(1))) null
+  else
+    let (marks = scan(s).marks)
+    let (chars = s.chars)
+    let (j = IntSeq(0, s.length - 1).toList()
+      .findLastOrNull((i) -> marks[i] == 0 && openers.contains(chars[i])))
+    if (marks.last != 0 || j == null || j >= s.length - 2) null else j
+
+const local function inner(s: String, j: Int): String = s.substring(j + 1, s.length - 1)
+
+// ── layout ───────────────────────────────────────────────────────────────────
+
+/// A bracket group's contents, one level deeper than `indent`.
+///
+/// The arguments of a call or a subscript (`hug`) go all on one line if that
+/// fits. A lone item, in any bracket, goes on its own line without a trailing
+/// comma (expanded in turn if it is still too long). Otherwise, and for every
+/// list, dict or set literal, one item per line, each with a trailing comma.
+/// That is what ruff does.
+const local function contents(indent: String, s: String, hug: Boolean): List<String> =
+  let (deeper = indent + "    ")
+  let (items = splitTop(s))
+  if (hug && fits(deeper + items.join(", "))) List(deeper + items.join(", "))
+  else if (items.length == 1) expression(deeper, items.first, "")
+  else items.flatMap((item) -> expression(deeper, item, ","))
+
+/// A bracket opened right after a name or a closing bracket is a call or a
+/// subscript; anything else opens a literal.
+const local function isCallOrSubscript(s: String, j: Int): Boolean =
+  j > 0 && s.substring(j - 1, j).matches(Regex(#"[A-Za-z0-9_)\]]"#))
+
+/// `head` and the group's opening bracket, its contents, then the closing
+/// bracket followed by `trail`.
+const local function group(indent: String, head: String, s: String, j: Int, trail: String): List<String> =
+  List(indent + head + s.take(j + 1))
+    + contents(indent, inner(s, j), isCallOrSubscript(s, j))
+    + List(indent + s.takeLast(1) + trail)
+
+/// `s` at `indent`, followed by `trail` (`","`, `":"` or nothing): on one
+/// line if it fits, else with its trailing bracket group split. An atom that
+/// does not fit stays on one line; ruff cannot split it either.
+const local function expression(indent: String, s: String, trail: String): List<String> =
+  let (j = groupStart(s))
+  if (fits(indent + s + trail) || j == null) List(indent + s + trail)
+  else group(indent, "", s, j!!, trail)
+
+/// `target = value`, where `target` is a name or `name: annotation`. The
+/// layouts, in the order ruff tries them:
+///
+/// 1. split the value's own brackets, if the line up to them fits;
+/// 2. wrap the value in parentheses, if it then fits on its own line;
+/// 3. split the annotation's brackets, keeping the value on the closing line,
+///    or splitting the value's brackets too when that line is still too long;
+/// 4. split the value's brackets anyway, or leave the line long.
+const local function assignment(indent: String, target: String, value: String): List<String> =
+  let (vj = groupStart(value))
+  let (colon = findTop(target, ": "))
+  let (annotation = if (colon != null) target.drop(colon!! + 2) else "")
+  let (aj = if (colon != null) groupStart(annotation) else null)
+  let (lhs = indent + target + " = ")
+  if (vj != null && fits(lhs + value.take(vj!! + 1)))
+    group(indent, target + " = ", value, vj!!, "")
+  else if (fits(lhs + "(") && fits(indent + "    " + value))
+    List(lhs + "(", indent + "    " + value, indent + ")")
+  else if (aj != null)
+    let (name = target.take(colon!!))
+    let (opened = List(indent + name + ": " + annotation.take(aj!! + 1)) + contents(indent, inner(annotation, aj!!), true))
+    let (closed = annotation.takeLast(1) + " = ")
+    if (fits(indent + closed + value) || vj == null) opened + List(indent + closed + value)
+    else opened + group(indent, closed, value, vj!!, "")
+  else if (vj != null) group(indent, target + " = ", value, vj!!, "")
+  else List(indent + target + " = " + value)
+
+/// One physical line, wrapped if it is longer than `lineLength`.
+function wrapLine(line: String): List<String> =
+  if (fits(line)) List(line)
+  else
+    let (body = line.trimStart())
+    let (indent = line.take(line.length - body.length))
+    if (body.startsWith("#") || !balanced(body)) List(line)
+    else if (body.startsWith("class ") && body.endsWith(":")) expression(indent, body.dropLast(1), ":")
+    else
+      let (eq = findTop(body, " = "))
+      if (eq == null) expression(indent, body, "")
+      else assignment(indent, body.take(eq!!), body.drop(eq!! + 3))
+
+// ── imports ──────────────────────────────────────────────────────────────────
+
+const local function isImport(line: String): Boolean =
+  (line.startsWith("from ") && line.contains(" import ") && !line.endsWith("(")) || line.startsWith("import ")
+
+/// One import: `names` is null for `import module`.
+class PyImport {
+  moduleName: String
+  names: List<String>?
+}
+
+const local function parseImport(line: String): PyImport =
+  if (line.startsWith("import ")) new PyImport { moduleName = line.drop(7).trim(); names = null }
+  else
+    let (parts = line.drop(5).split(" import "))
+    new PyImport { moduleName = parts[0].trim(); names = parts[1].split(",").map((n) -> n.trim()).filter((n) -> !n.isEmpty) }
+
+/// 0 = `__future__`, 1 = standard library, 2 = third-party.
+const local function section(mod: String): Int =
+  if (mod == "__future__") 0
+  else if (stdlibModules.contains(mod.split(".")[0])) 1
+  else 2
+
+/// ruff's `order-by-type`: CONSTANTS, then Classes, then everything else,
+/// each case-insensitively.
+const local function nameKey(name: String): String =
+  let (bare = name.split(" as ")[0])
+  let (kind =
+    if (bare.length > 1 && bare.toUpperCase() == bare && bare.toLowerCase() != bare) "0"
+    else if (bare.take(1).toUpperCase() == bare.take(1) && bare.take(1).toLowerCase() != bare.take(1)) "1"
+    else "2")
+  kind + bare.toLowerCase()
+
+const local function renderFrom(mod: String, names: List<String>): String =
+  let (sorted = names.distinct.sortBy((n) -> nameKey(n)))
+  let (flat = "from \(mod) import \(sorted.join(", "))")
+  if (fits(flat)) flat
+  else "from \(mod) import (\n" + sorted.map((n) -> "    \(n),\n").join("") + ")"
+
+const local function renderSection(imports: List<PyImport>): String =
+  let (straight = imports.filter((i) -> i.names == null).map((i) -> i.moduleName).distinct.sortBy((m) -> m.toLowerCase()))
+  let (froms = imports.filter((i) -> i.names != null).groupBy((i) -> i.moduleName))
+  let (fromLines = froms.keys.toList().sortBy((m) -> m.toLowerCase())
+    .map((m) -> renderFrom(m, froms[m].flatMap((i) -> i.names!!))))
+  (straight.map((m) -> "import \(m)") + fromLines).join("\n")
+
+/// The import lines as ruff's isort rules would write them.
+function importBlock(lines: List<String>): String =
+  let (imports = lines.map((l) -> parseImport(l)))
+  IntSeq(0, 2).toList()
+    .map((s) -> imports.filter((i) -> section(i.moduleName) == s))
+    .filter((group) -> !group.isEmpty)
+    .map((group) -> renderSection(group))
+    .join("\n\n")
+
+// ── module ───────────────────────────────────────────────────────────────────
+
+/// A generated Python module laid out as ruff would leave it.
+///
+/// The first run of top-level import lines (with blank lines between them) is
+/// rebuilt by `importBlock`; blank lines after it are kept as the renderer
+/// wrote them. Every other line goes through `wrapLine`.
+function format(text: String): String =
+  // `split` drops trailing empty strings, so the final newline(s) are put back.
+  let (body = text.replaceFirst(Regex(#"\n+$"#), ""))
+  let (lines = body.split("\n"))
+  let (first = lines.findIndexOrNull((l) -> isImport(l)))
+  let (formatted =
+    if (first == null) lines.flatMap((l) -> wrapLine(l))
+    else
+      let (afterFirst = lines.drop(first!!))
+      let (runLength = afterFirst.findIndexOrNull((l) -> !isImport(l) && !l.isBlank) ?? afterFirst.length)
+      let (lastImport = afterFirst.take(runLength).findLastIndex((l) -> isImport(l)))
+      let (block = importBlock(afterFirst.take(lastImport + 1).filter((l) -> isImport(l))))
+      lines.take(first!!) + List(block) + lines.drop(first!! + lastImport + 1).flatMap((l) -> wrapLine(l)))
+  formatted.join("\n") + text.drop(body.length)

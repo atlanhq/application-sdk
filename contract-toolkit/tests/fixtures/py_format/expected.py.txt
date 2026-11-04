@@ -1,0 +1,123 @@
+from __future__ import annotations
+
+from typing import Any, Literal
+
+import orjson
+from application_sdk.contracts.base import Input
+from application_sdk.contracts.types import (
+    ConnectionRef,
+    FileReference,
+    MaxItems,
+    TreeSelection,
+)
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class A(Base):
+    a_very_long_field_name_here: str = Field(
+        default="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", alias="{{a}}"
+    )
+    a_very_long_field_name_here_that_is_really_quite_long: str = Field(
+        default="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        alias="{{a}}",
+    )
+    mode: Literal[
+        "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"
+    ] = Field(default="alpha", alias="{{mode}}")
+    mode2: Literal[
+        "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "thetaxxxxx"
+    ] = "alpha"
+    mode3: Literal[
+        "alpha",
+        "beta",
+        "gamma",
+        "delta",
+        "epsilon",
+        "zeta",
+        "eta",
+        "theta",
+        "iota",
+        "kappa",
+        "lambda",
+        "mu",
+    ] = Field(
+        default="alpha",
+        alias="{{mode}}",
+        description="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    )
+    url = "http://artifact-schemas-example.artifact-schemas-example-app.svc.cluster.localxxxxxxxxxxxxxxxxxxxxxxxx"
+    url2: str = (
+        "http://artifact-schemas-example.artifact-schemas-example-app.svc.cluster.loc"
+    )
+    some_name: str = Field(
+        default="",
+        json_schema_extra={
+            "x-lifecycle": "sunset",
+            "xxxxxxxxxxxxxxxxx": "yyyyyyyyyyyyyyyyyyyyyy",
+        },
+    )
+    a: str = Field(
+        default_factory=lambda: [
+            "aaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "cccccccc",
+        ]
+    )
+    extra: VeryLongConnectorNameForTestingCredentialBodyExtra = Field(
+        default_factory=VeryLongConnectorNameForTestingCredentialBodyExtra,
+        alias="extra",
+    )
+    b1: str = Field(
+        default="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    )
+    b2: str = Field(
+        default="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        alias="y",
+    )
+    c: dict[str, Any] | None = Field(
+        default=None, alias="{{some_really_long_key_name_here_xxxxxx}}"
+    )
+    d: Annotated[list[str], MaxItems(1000)] = Field(
+        default_factory=list, deprecated="xxxxxxxxxxxx"
+    )
+    e: str = Field(
+        default="",
+        json_schema_extra={"x-lifecycle": "sunset", "xxxxxxxxxxxxxxx": "yyy"},
+        deprecated=True,
+    )
+    ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff: Inner = Field()
+    g: Annotated[dict[str, Annotated[list[str], MaxItems(1000)]], MaxItems(1000)] = (
+        Field(default_factory=dict, deprecated="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+    )
+    include_filter: Annotated[
+        dict[str, Annotated[list[str], MaxItems(1000)]], MaxItems(1000)
+    ] = Field(default_factory=dict)
+    one: list[str] = Field(
+        default_factory=lambda: [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ]
+    )
+    two = {
+        "k": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+    """A docstring line that is very long and goes past the limit of eighty-eight columns for sure."""
+
+    @field_validator(
+        "aaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbb",
+        "cccccccccccccccccc",
+        "ddddddddddd",
+        mode="before",
+    )
+    @classmethod
+    def f(cls): ...
+
+
+class AVeryLongConnectorNameThatGoesOnAndOnAndOnAndOnAndOnGeneratedE2EBase(
+    SystemAppE2ETest
+):
+    x = 1
+
+
+class AVeryLongConnectorNameThatGoesOnAndOnAndOnAndOnGeneratedE2EBase(SystemAppE2ETest):
+    x = 1

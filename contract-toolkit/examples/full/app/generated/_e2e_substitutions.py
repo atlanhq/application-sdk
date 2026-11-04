@@ -4,26 +4,22 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import Field
-
 from application_sdk.testing.e2e.substitutions import SQLMustacheSubstitutions
+from pydantic import Field
 
 
 class FullFeaturedMustacheSubstitutions(SQLMustacheSubstitutions):
     output_format: Literal["parquet", "json"] = Field(
-        default="parquet",
-        alias="{{output_format}}",
+        default="parquet", alias="{{output_format}}"
     )
     max_results: int = Field(default=500, alias="{{max_results}}")
     enable_lineage: bool = Field(default=False, alias="{{enable_lineage}}")
     load_to_atlan: bool = Field(default=True, alias="{{load-to-atlan}}")
     log_level: Literal["INFO", "DEBUG", "WARNING"] = Field(
-        default="INFO",
-        alias="{{log_level}}",
+        default="INFO", alias="{{log_level}}"
     )
     asset_types: list[str] = Field(
-        default_factory=lambda: ["Table", "View"],
-        alias="{{asset_types}}",
+        default_factory=lambda: ["Table", "View"], alias="{{asset_types}}"
     )
     tag_keys: list[str] = Field(default_factory=list, alias="{{tag_keys}}")
     lineage_depth: int = Field(default=3, alias="{{lineage_depth}}")

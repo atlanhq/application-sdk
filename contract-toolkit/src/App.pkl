@@ -32,6 +32,7 @@ import "Connectors.pkl" as ConnectorsPkg
 import "Deployment.pkl" as DeploymentPkg
 import "InputContract.pkl" as InputContractPkg
 import "Inputs.pkl" as InputsPkg
+import "PyFormat.pkl" as PyFormatPkg
 import "Widgets.pkl"
 
 // ── CONNECTOR RE-EXPORT ───────────────────────────────────────────────────────
@@ -3896,7 +3897,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
       "TreeSelection"
     }
   }).toList()
-  local firstPartyImportLines: String =
+  local sdkImportLines: String =
     (if (!sdkTypeImports.isEmpty)
       "from application_sdk.contracts.types import \(sdkTypeImports.join(", "))\n"
     else "") +
@@ -3911,24 +3912,24 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   // than silently swallowed. The message never logs the value itself.
   local loggerModuleLine: String =
     if (!objectStringCoercionFields.isEmpty) "logger = get_logger(__name__)\n\n\n" else ""
+  // In any order: `PyFormatPkg.format` sorts and groups them as ruff does.
   local inputImportBlock: String =
-    "from __future__ import annotations\n\n" +
-    (if (!stdlibImportLines.isEmpty) stdlibImportLines + "\n" else "") +
-    (if (!thirdPartyImportLines.isEmpty || !pydanticImportLines.isEmpty)
-      thirdPartyImportLines + pydanticImportLines + "\n"
-    else "") +
-    firstPartyImportLines +
+    "from __future__ import annotations\n" +
+    stdlibImportLines +
+    thirdPartyImportLines +
+    pydanticImportLines +
+    sdkImportLines +
     // One blank line before the module-level logger assignment (if any),
     // two before the class itself — matches ruff/isort canonical spacing.
     (if (!loggerModuleLine.isEmpty) "\n" else "\n\n")
-  text =
+  text = PyFormatPkg.format(
     "# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.\n" +
     "# To regenerate: pkl eval -m . contract/app.pkl\n" +
     inputImportBlock +
     loggerModuleLine +
     nestedClassText +
     "class AppInputContract(\(inputBaseClass)):\n" +
-    (if (classBody.isEmpty) "    pass\n" else classBody)
+    (if (classBody.isEmpty) "    pass\n" else classBody))
 }
 
 // ── e2e code generation ───────────────────────────────────────────────────────
@@ -4008,11 +4009,9 @@ local function e2eSubsSkip(): Set<String> =
   if (e2eSubsParent() == "SQLMustacheSubstitutions") e2eSubsSqlSkip
   else e2eSubsBaseSkip
 
-// Line-length-aware Field line: inlines if ≤ 88 chars, wraps otherwise.
+// One substitution Field line, on one line: `PyFormatPkg.format` wraps it.
 local function fmtSubsField(pyName: String, typeStr: String, defaultExpr: String, k: String): String =
-  let (inline = "    \(pyName): \(typeStr) = Field(\(defaultExpr), alias=\"{{\(k)}}\")")
-  if (inline.length <= 88) inline
-  else "    \(pyName): \(typeStr) = Field(\n        \(defaultExpr),\n        alias=\"{{\(k)}}\",\n    )"
+  "    \(pyName): \(typeStr) = Field(\(defaultExpr), alias=\"{{\(k)}}\")"
 
 // Returns a typed pydantic Field line for a substitution field, or null to skip.
 local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
@@ -4109,7 +4108,7 @@ local function generateE2EBasePy(): FileOutput = new FileOutput {
   // name the emitted line simply restates the fallback (harmless).
   local emitConnType = connector != null
   local emitConnCat = connector != null && connector!!.category != "warehouse"
-  text =
+  text = PyFormatPkg.format(
     "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
     "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
     "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
@@ -4129,7 +4128,7 @@ local function generateE2EBasePy(): FileOutput = new FileOutput {
       "    # This app generates no manifest.json: its callers declare its DAG node.\n" +
       "    # Set manifest_path in the suite to a fixture DAG copied from a calling\n" +
       "    # connector's manifest, and required_dag_nodes to the nodes it runs.\n"
-    else "")
+    else ""))
 }
 
 // ── Bundle (multi-entrypoint) e2e base ────────────────────────────────────────
@@ -4260,7 +4259,7 @@ local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOut
   // wrong for every bundle whose source differs from it.
   local connType = ep.source ?? c.connector?.value
   local connCat = ep.sourceCategory ?? c.connector?.category
-  text =
+  text = PyFormatPkg.format(
     "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
     "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
     "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
@@ -4298,7 +4297,7 @@ local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOut
       "    required_dag_nodes = \(epRequiredDagNodes(c))\n" +
       "    expect_connection = \(pyBool(publishes))\n" +
       "    require_nonempty_assets = \(pyBool(publishes))\n" +
-      "    expect_lineage = \(pyBool(expectsLineage))\n")
+      "    expect_lineage = \(pyBool(expectsLineage))\n"))
 }
 
 local function generateE2ESubstitutionsPy(): FileOutput? =
@@ -4318,24 +4317,24 @@ local function generateE2ESubstitutionsPy(): FileOutput? =
     local usesLiteral = fieldLines.contains("Literal[")
     local usesAny = fieldLines.contains("dict[str, Any]")
     local typingLine =
-      if (usesLiteral && usesAny) "from typing import Any, Literal\n\n"
-      else if (usesLiteral) "from typing import Literal\n\n"
-      else if (usesAny) "from typing import Any\n\n"
+      if (usesLiteral && usesAny) "from typing import Any, Literal\n"
+      else if (usesLiteral) "from typing import Literal\n"
+      else if (usesAny) "from typing import Any\n"
       else ""
     local parentImport =
       if (parentClass == "SQLMustacheSubstitutions")
         "from application_sdk.testing.e2e.substitutions import SQLMustacheSubstitutions\n"
       else
         "from application_sdk.testing.e2e.substitutions import MustacheSubstitutions\n"
-    text =
+    text = PyFormatPkg.format(
       "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
       "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
-      "from __future__ import annotations\n\n" +
+      "from __future__ import annotations\n" +
       typingLine +
-      "from pydantic import Field\n\n" +
+      "from pydantic import Field\n" +
       parentImport +
       "\n\nclass \(cname)MustacheSubstitutions(\(parentClass)):\n" +
-      fieldLines
+      fieldLines)
   }
 
 // Returns a typed Field line for a single FieldSpec in a CredentialBody class.
@@ -4368,9 +4367,7 @@ local function agentCredentialClass(cname: String, firstAuthKey: String): String
   "\n\nclass \(cname)AgentCredentialBody(CredentialBody):\n" +
   "    name: str = Field(alias=\"name\")\n" +
   "    auth_type: str = Field(default=\"\(firstAuthKey)\", alias=\"authType\")\n" +
-  "    connector_config_name: str = Field(\n" +
-  "        default=\"\(connectorConfigName)\", alias=\"connectorConfigName\"\n" +
-  "    )\n" +
+  "    connector_config_name: str = Field(default=\"\(connectorConfigName)\", alias=\"connectorConfigName\")\n" +
   "    extra: dict = Field(default_factory=dict, alias=\"extra\")\n"
 
 local function generateE2ECredentialPy(): FileOutput? =
@@ -4484,9 +4481,7 @@ local function generateE2ECredentialPy(): FileOutput? =
 
     local extraFieldProp: String =
       if (hasExtraModel)
-        let (line = "    extra: \(cname)CredentialBodyExtra = Field(default_factory=\(cname)CredentialBodyExtra, alias=\"extra\")")
-        (if (line.length <= 88) line
-        else "    extra: \(cname)CredentialBodyExtra = Field(\n        default_factory=\(cname)CredentialBodyExtra, alias=\"extra\"\n    )") + "\n"
+        "    extra: \(cname)CredentialBodyExtra = Field(default_factory=\(cname)CredentialBodyExtra, alias=\"extra\")\n"
       else ""
 
     local extraModelLines = (new Listing {
@@ -4516,16 +4511,16 @@ local function generateE2ECredentialPy(): FileOutput? =
       when (hasExtraModel) { "BaseModel"; "ConfigDict" }
     }).toList()
 
-    text =
+    text = PyFormatPkg.format(
       "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
       "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
-      (if (hasPipeType) "from __future__ import annotations\n\n" else "") +
-      "from pydantic import \(pydanticImports.join(", "))\n\n" +
+      (if (hasPipeType) "from __future__ import annotations\n" else "") +
+      "from pydantic import \(pydanticImports.join(", "))\n" +
       "from application_sdk.testing.e2e.credential import CredentialBody\n" +
       extraModelBlock +
       "\n\nclass \(cname)CredentialBody(CredentialBody):\n" +
       mainClassBody +
-      agentCredentialClass(cname, firstAuthKey)
+      agentCredentialClass(cname, firstAuthKey))
   }
 
 // ── atlan.yaml generation ─────────────────────────────────────────────────────
@@ -5100,7 +5095,8 @@ local function bundleInputPy(entrypointName: String, file: FileOutput): FileOutp
   let (cls = bundleInputClassName(entrypointName))
   if (cls == "AppInputContract" || !file.text.contains(bundleInputClassDecl)) file
   else new FileOutput {
-    text = file.text.replaceFirst(bundleInputClassDecl, "\nclass \(cls)(") + "\n\nAppInputContract = \(cls)\n"
+    text = PyFormatPkg.format(
+      file.text.replaceFirst(bundleInputClassDecl, "\nclass \(cls)(") + "\n\nAppInputContract = \(cls)\n")
   }
 
 local bundleContractEntrypointNames: List<String> =

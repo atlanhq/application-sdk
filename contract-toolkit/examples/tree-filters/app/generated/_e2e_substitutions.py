@@ -4,17 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import Field
-
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
+from pydantic import Field
 
 
 class TreeFiltersMustacheSubstitutions(MustacheSubstitutions):
     include_filter: dict[str, Any] | None = Field(
-        default=None,
-        alias="{{include-filter}}",
+        default=None, alias="{{include-filter}}"
     )
     exclude_filter: dict[str, Any] | None = Field(
-        default=None,
-        alias="{{exclude-filter}}",
+        default=None, alias="{{exclude-filter}}"
     )
