@@ -980,6 +980,34 @@ def rejected_unit_coverage_fail_under(text: str) -> str:
     return ""
 
 
+# A bare YAML boolean, optionally followed by a comment. Deliberately not
+# ``extract_field``: that strips quotes, and ``"true"`` is a YAML *string*, not
+# the boolean the reusable's default is.
+_BARE_BOOLEAN_RE = re.compile(r"^[ \t]+(?P<value>true|false)[ \t]*(?:#.*)?$")
+
+
+def _restated_boolean_default(text: str, key: str, default: str) -> str:
+    """Return *default* when *text*'s reusable ``with: <key>`` is the bare
+    boolean *default*, else ``""``.
+
+    The shared value condition behind the policy drops. Only the unquoted
+    boolean qualifies: a quoted ``"true"`` is a string whatever it spells, and
+    a value that is not a decision anyone made is not one to act on, so it
+    reaches the refusal like any other unknown declaration.
+    """
+    declaration = extract_with_declaration(text, key)
+    if not declaration:
+        return ""
+    first = declaration.splitlines()[0]
+    key_line = _KEY_LINE_RE.match(first)
+    if key_line is None:
+        return ""
+    value = _BARE_BOOLEAN_RE.match(first[key_line.end() :])
+    if value is None or value.group("value") != default:
+        return ""
+    return default
+
+
 def redundant_install_app_to_tenant(text: str) -> str:
     """Return *text*'s ``install-app-to-tenant`` when it merely restates the
     reusable's own default, else ``""``.
@@ -1002,13 +1030,9 @@ def redundant_install_app_to_tenant(text: str) -> str:
     in the monorepo. If the SDK flips it to ``false``, that test fails there
     rather than nine repos silently losing their pre-e2e install.
     """
-    declaration = extract_with_declaration(text, "install-app-to-tenant")
-    if not declaration:
-        return ""
-    value = extract_field(declaration, "install-app-to-tenant")
-    if value == SDK_INSTALL_APP_TO_TENANT_DEFAULT:
-        return value
-    return ""
+    return _restated_boolean_default(
+        text, "install-app-to-tenant", SDK_INSTALL_APP_TO_TENANT_DEFAULT
+    )
 
 
 def redundant_enable_e2e(text: str) -> str:
@@ -1027,13 +1051,7 @@ def redundant_enable_e2e(text: str) -> str:
     explicit ``false`` is carried by the slot, and a value that is neither
     boolean still reaches the refusal.
     """
-    declaration = extract_with_declaration(text, "enable-e2e")
-    if not declaration:
-        return ""
-    value = extract_field(declaration, "enable-e2e")
-    if value == SDK_ENABLE_E2E_DEFAULT:
-        return value
-    return ""
+    return _restated_boolean_default(text, "enable-e2e", SDK_ENABLE_E2E_DEFAULT)
 
 
 def retired_tests_job_condition(text: str) -> str:

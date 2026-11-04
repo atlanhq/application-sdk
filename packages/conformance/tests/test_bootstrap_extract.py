@@ -1544,7 +1544,9 @@ def test_redundant_enable_e2e_is_dropped_not_refused() -> None:
     """``enable-e2e: true`` is the reusable's default and the template renders
     no line for it, so a repo that spelled it out was refused on every resync
     and never received a structural update."""
-    text = _with_inputs('      app-name: "widget"', "      enable-e2e: true")
+    text = _with_inputs(
+        '      app-name: "widget"', "      enable-e2e: true  # the default"
+    )
     assert extract_mod.redundant_enable_e2e(text) == "true"
     rendered = render("tests.yaml", **extract_tests_yaml_params(text))
     assert "enable-e2e" not in rendered
@@ -1561,9 +1563,15 @@ def test_enable_e2e_false_is_carried_by_its_slot() -> None:
     assert unpreserved_tests_yaml_declarations(text, rendered) == []
 
 
-def test_non_boolean_enable_e2e_still_refuses() -> None:
-    """Not a decision anyone made, so not one to act on."""
-    text = _with_inputs('      app-name: "widget"', "      enable-e2e: maybe")
+@pytest.mark.parametrize(
+    "value",
+    ["maybe", '"true"', "'true'", "TRUE"],
+    ids=["garbage", "double-quoted", "single-quoted", "shouting"],
+)
+def test_non_boolean_enable_e2e_still_refuses(value: str) -> None:
+    """Not a decision anyone made, so not one to act on. A quoted ``"true"``
+    is a YAML string, not the boolean default, so it must not be dropped."""
+    text = _with_inputs('      app-name: "widget"', f"      enable-e2e: {value}")
     assert extract_mod.redundant_enable_e2e(text) == ""
     rendered = render("tests.yaml", **extract_tests_yaml_params(text))
     assert "enable-e2e" in unpreserved_tests_yaml_declarations(text, rendered)
@@ -1586,7 +1594,9 @@ def test_redundant_install_app_to_tenant_is_dropped_not_refused() -> None:
 
 
 @pytest.mark.parametrize(
-    "value", ["false", "TRUE", "maybe"], ids=["opt-out", "shouting", "garbage"]
+    "value",
+    ["false", "TRUE", "maybe", '"true"', "'true'"],
+    ids=["opt-out", "shouting", "garbage", "double-quoted", "single-quoted"],
 )
 def test_non_default_install_app_to_tenant_still_refuses(value: str) -> None:
     """The drop is conditioned on the VALUE, not the key.

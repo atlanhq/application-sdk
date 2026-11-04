@@ -3555,19 +3555,37 @@ def test_resync_still_refuses_an_install_app_to_tenant_opt_out(
     assert wf.read_text() == customised
 
 
+def _reusable_input_default(workflow: pathlib.Path, name: str) -> str:
+    """Return the boolean ``default:`` declared inside *workflow*'s ``name``
+    input block, failing the test when that block has none.
+
+    Bounded to the input's own block (lines indented deeper than its key): an
+    unbounded search would fall through to the next sibling's ``default:`` if
+    this input lost its own, and an omitted boolean default is ``false``.
+    """
+    m = re.search(
+        rf"^      {re.escape(name)}:\n(?:        .*\n)*?"
+        r"        default:\s*\"?(true|false)\"?\s*$",
+        workflow.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    assert m is not None, (
+        f"tests-reusable.yaml's {name} input no longer declares a boolean "
+        "default in its own block"
+    )
+    return m.group(1)
+
+
 def test_sdk_enable_e2e_default_matches_the_reusable_workflow() -> None:
     """``SDK_ENABLE_E2E_DEFAULT`` must equal the input's own default, or
     dropping ``enable-e2e: true`` on resync would turn e2e off."""
     workflow = _MONOREPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"
     if not workflow.exists():
         pytest.skip(f"monorepo source not checked out: {workflow}")
-    block = workflow.read_text(encoding="utf-8").split("\n      enable-e2e:", 1)
-    assert len(block) == 2, "tests-reusable.yaml no longer declares the input"
-    m = re.search(r"default:\s*\"?(true|false)\"?", block[1])
-    assert m is not None, "the input no longer declares a boolean default"
-    assert m.group(1) == extract_mod.SDK_ENABLE_E2E_DEFAULT, (
+    default = _reusable_input_default(workflow, "enable-e2e")
+    assert default == extract_mod.SDK_ENABLE_E2E_DEFAULT, (
         "tests-reusable.yaml's enable-e2e default has moved to "
-        f"{m.group(1)} — update SDK_ENABLE_E2E_DEFAULT in "
+        f"{default} — update SDK_ENABLE_E2E_DEFAULT in "
         "conformance/bootstrap/extract.py and the template's enable-e2e slot."
     )
 
@@ -3587,13 +3605,10 @@ def test_sdk_install_app_to_tenant_default_matches_the_reusable_workflow() -> No
     workflow = _MONOREPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"
     if not workflow.exists():
         pytest.skip(f"monorepo source not checked out: {workflow}")
-    block = workflow.read_text(encoding="utf-8").split("install-app-to-tenant:", 1)
-    assert len(block) == 2, "tests-reusable.yaml no longer declares the input"
-    m = re.search(r"default:\s*\"?(true|false)\"?", block[1])
-    assert m is not None, "the input no longer declares a boolean default"
-    assert m.group(1) == extract_mod.SDK_INSTALL_APP_TO_TENANT_DEFAULT, (
+    default = _reusable_input_default(workflow, "install-app-to-tenant")
+    assert default == extract_mod.SDK_INSTALL_APP_TO_TENANT_DEFAULT, (
         "tests-reusable.yaml's install-app-to-tenant default has moved to "
-        f"{m.group(1)} — update SDK_INSTALL_APP_TO_TENANT_DEFAULT in "
+        f"{default} — update SDK_INSTALL_APP_TO_TENANT_DEFAULT in "
         "conformance/bootstrap/extract.py, or --resync will keep deleting a "
         "declaration that is no longer redundant."
     )
