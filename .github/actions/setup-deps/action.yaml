@@ -1,7 +1,8 @@
 name: Setup Python Dependencies for Atlan Apps
 description: |
   Sets up Python project dependencies and manages dependency caching for Atlan Apps.
-  This action handles the installation of Python 3.11, uv package manager, and project dependencies.
+  This action installs Python (by default the version the app image ships), the uv package
+  manager, and project dependencies.
   It implements efficient caching strategies to speed up workflow execution by storing and reusing
   the virtual environment.
 
@@ -12,8 +13,14 @@ inputs:
     default: "true"
   python-version:
     required: false
-    description: The Python version to use for the action.
-    default: "3.11"
+    description: |
+      The Python major.minor to install and test on. Empty (the default) means
+      the version the app image ships: the golden base tag in the SDK
+      `Dockerfile`, read by `container_python_version.py resolve`. Pass a value
+      only to test on another version on purpose (the SDK's own unit matrix).
+      Either way the job exports `UV_PYTHON`, which outranks a repo's
+      `.python-version`, so every later `uv` command runs on this version.
+    default: ""
   lookup-only:
     required: false
     description: |
@@ -29,11 +36,43 @@ runs:
       with:
         fetch-depth: 1
 
+    # Test on the Python the app image ships (FND-4611). A literal default here
+    # ("3.11" until FND-4611) let every connector's unit and integration tiers
+    # run on 3.11 while the image ran 3.13. The SDK Dockerfile's golden tag is
+    # the single source (CNCT-85); the Dockerfile read is the one in this
+    # action's own checkout of the SDK, never the caller's. Skipped when the
+    # caller names a version, so the SDK's Windows legs never need python3.
+    - name: Resolve the app image's Python version
+      id: image-python
+      if: inputs.python-version == ''
+      shell: bash
+      env:
+        SDK_ROOT: ${{ github.action_path }}/../../..
+      run: |
+        set -euo pipefail
+        VERSION=$(python3 "${SDK_ROOT}/.github/scripts/container_python_version.py" print-version \
+          --dockerfile "${SDK_ROOT}/Dockerfile")
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+    # One value for the rest of the action. UV_PYTHON outranks a repo's
+    # .python-version, so a stale pin there cannot move the tests off it, and
+    # it reaches every later `uv` command in the job, not just this action's.
+    - name: Export the Python version
+      id: python-version
+      shell: bash
+      env:
+        VERSION: ${{ inputs.python-version || steps.image-python.outputs.version }}
+      run: |
+        set -euo pipefail
+        test -n "${VERSION}"
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+        echo "UV_PYTHON=${VERSION}" >> "$GITHUB_ENV"
+
     - name: Set up Python
       id: setup-python
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
       with:
-        python-version: ${{ inputs.python-version }}
+        python-version: ${{ steps.python-version.outputs.version }}
 
     # The key's version must be the one `Install uv` installs, or the restored
     # binary is never the one setup-uv wants and the cache only costs time (it
@@ -89,7 +128,7 @@ runs:
       env:
         UV_COMPILE_BYTECODE: "1"
       run: |
-        PYTHON_MINOR=$(echo "${{ inputs.python-version }}" | cut -d. -f2)
+        PYTHON_MINOR=$(echo "${{ steps.python-version.outputs.version }}" | cut -d. -f2)
         if [ "${PYTHON_MINOR}" -ge 14 ] 2>/dev/null; then
           # Python 3.14+: skip dev group (libcst's pyo3 doesn't support 3.14 yet)
           "${{ github.action_path }}/../../scripts/with-retry.sh" uv sync --all-extras --no-group dev
