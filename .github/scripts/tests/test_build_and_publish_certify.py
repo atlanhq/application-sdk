@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -125,7 +127,11 @@ def test_no_contract_skips(
             "::error::contract/app.pkl exists but the 'poe' task runner is not installed",
         ),
         ({"uv run poe generate": 1}, 1, "::error::'poe generate' failed"),
-        ({"git diff": 1}, 1, "::error::generated/ is stale"),
+        (
+            {"git status": 128},
+            1,
+            "::error::'git status' failed, so contract drift could not be checked",
+        ),
     ],
 )
 def test_contract_drift(
@@ -143,7 +149,7 @@ def test_contract_drift(
         assert calls == [
             ["uv", "run", "poe", "--help"],
             ["uv", "run", "poe", "generate"],
-            ["git", "diff", "--exit-code", "--", "generated/"],
+            ["git", "status", "--porcelain", "--untracked-files=all"],
         ]
 
 
@@ -158,6 +164,110 @@ def test_contract_without_poe_fails_closed(
     assert out.startswith("::error::")
     assert "poethepoet" in out
     assert "[project.optional-dependencies]" in out
+
+
+# The drift tests below run real git against a real repo; only the `uv run`
+# calls are faked, and `poe generate` is simulated by ``generate``.
+
+_GIT = (
+    "git",
+    "-c",
+    "user.name=t",
+    "-c",
+    "user.email=t@t",
+    "-c",
+    "commit.gpgsign=false",
+)
+
+
+@pytest.fixture
+def git_app(app: Path) -> Path:
+    """An app repo whose generated output is committed and up to date."""
+    (app / "app" / "generated").mkdir(parents=True)
+    (app / "app" / "generated" / "_input.py").write_text("FIELDS = ['host']\n")
+    (app / "atlan.yaml").write_text("name: example\n")
+    (app / ".gitignore").write_text(".venv/\n")
+    for cmd in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "init"]):
+        subprocess.run([*_GIT, *cmd], cwd=app, check=True)
+    return app
+
+
+def _generate(
+    monkeypatch: pytest.MonkeyPatch, generate: Callable[[], None]
+) -> list[list[str]]:
+    """Fake only `uv run …`; `poe generate` runs ``generate``. git runs for real."""
+    real_run = _bap.run
+    calls: list[list[str]] = []
+
+    def fake(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(list(cmd))
+        if cmd[:2] == ["uv", "run"]:
+            if cmd[3:] == ["generate"]:
+                generate()
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(_bap, "run", fake)
+    return calls
+
+
+def test_drift_passes_when_generate_is_a_no_op(
+    git_app: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def rewrite_identically() -> None:
+        (git_app / "app" / "generated" / "_input.py").write_text("FIELDS = ['host']\n")
+        (git_app / ".venv").mkdir()  # ignored output must not count
+        (git_app / ".venv" / "x").write_text("")
+
+    _generate(monkeypatch, rewrite_identically)
+    assert certify.main(["contract-drift"]) == 0
+    assert "::error::" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("path", "content", "listed"),
+    [
+        # A stale tracked file under app/generated/ (the old `-- generated/`
+        # pathspec only matched a top-level generated/ directory).
+        (
+            "app/generated/_input.py",
+            "FIELDS = ['host', 'port']\n",
+            " M app/generated/_input.py",
+        ),
+        # New output that was never committed (`git diff` ignores untracked files).
+        ("app/generated/_e2e_base.py", "BASE = 1\n", "?? app/generated/_e2e_base.py"),
+        # A generated root-level file.
+        ("atlan.yaml", "name: changed\n", " M atlan.yaml"),
+    ],
+)
+def test_drift_fails_on_any_working_tree_change(
+    git_app: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    path: str,
+    content: str,
+    listed: str,
+) -> None:
+    _generate(monkeypatch, lambda: (git_app / path).write_text(content))
+    assert certify.main(["contract-drift"]) == 1
+    out = capsys.readouterr().out
+    assert "::error::'poe generate' left 1 changed or untracked file(s)" in out
+    assert f"\n  {listed}\n" in out
+    assert content.strip() not in out  # paths only, never contents
+
+
+def test_drift_listing_is_capped(
+    git_app: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def many() -> None:
+        for i in range(certify._MAX_LISTED_PATHS + 3):
+            (git_app / "app" / "generated" / f"f{i:03}.py").write_text("")
+
+    _generate(monkeypatch, many)
+    assert certify.main(["contract-drift"]) == 1
+    out = capsys.readouterr().out
+    assert out.count("\n  ?? app/generated/") == certify._MAX_LISTED_PATHS
+    assert "  … and 3 more" in out
 
 
 # ── verdict ───────────────────────────────────────────────────────────────────
