@@ -273,8 +273,11 @@ def test_sdr_e2e_pins_its_host_harness_through_setup_deps() -> None:
 def test_tests_reusable_never_overrides_the_python() -> None:
     """No tier of tests-reusable may name a Python: each one must fall through
     to the image's version. A caller-facing input would let an app opt out."""
-    workflow = _load(TESTS_REUSABLE)
-    on = workflow.get("on") or workflow.get(True)
+    # PyYAML (YAML 1.1) reads a bare `on:` key as the boolean True.
+    workflow: dict[object, Any] = yaml.safe_load(
+        TESTS_REUSABLE.read_text(encoding="utf-8")
+    )
+    on: dict[str, Any] = workflow.get("on") or workflow[True]
     assert not [n for n in on["workflow_call"]["inputs"] if "python" in n]
     overrides = [
         f"{job}: {step.get('uses')}"
