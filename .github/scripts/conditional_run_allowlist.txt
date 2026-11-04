@@ -54,11 +54,6 @@
 .github/workflows/capability-manifest-check.yaml::jobs.drift-check.drift
 .github/workflows/capability-manifest-regen.yaml::jobs.commit.Refuse a branch that moved since regeneration
 .github/workflows/capability-manifest-regen.yaml::jobs.regen.handover
-.github/workflows/check-dapr-version.yaml::jobs.sync.Bump version.py
-.github/workflows/check-dapr-version.yaml::jobs.sync.baked
-.github/workflows/check-dapr-version.yaml::jobs.sync.compare
-.github/workflows/check-dapr-version.yaml::jobs.sync.open-pr
-.github/workflows/check-dapr-version.yaml::jobs.sync.pinned
 .github/workflows/codeql.yaml::jobs.analyze.Generate summary
 .github/workflows/conformance-publish.yml::jobs.publish.Create source tag
 .github/workflows/conformance-publish.yml::jobs.publish.meta

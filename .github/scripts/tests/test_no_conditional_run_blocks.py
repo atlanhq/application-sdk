@@ -37,7 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 ALLOWLIST = REPO_ROOT / ".github/scripts/conditional_run_allowlist.txt"
 
 #: Entries the allowlist may hold. Only ever lower this.
-ALLOWLIST_CEILING = 72
+ALLOWLIST_CEILING = 67
 
 _EXPR = re.compile(r"\$\{\{.*?\}\}", re.S)
 _DQ = re.compile(r'"(?:\\.|[^"\\\n])*"')
@@ -146,8 +146,7 @@ def test_allowlist_has_no_stale_entries() -> None:
     assert not stale, (
         "These allowlisted run: blocks no longer exist or no longer branch. "
         "Delete their lines from .github/scripts/conditional_run_allowlist.txt "
-        "and lower ALLOWLIST_CEILING to match:\n"
-        + "\n".join(f"  {k}" for k in stale)
+        "and lower ALLOWLIST_CEILING to match:\n" + "\n".join(f"  {k}" for k in stale)
     )
 
 
@@ -174,7 +173,7 @@ def test_allowlist_only_shrinks() -> None:
         "while read -r line; do :; done < f",
         'case "$X" in a) ;; esac',
         "set -e; until curl -sf x; do sleep 1; done",
-        '[ -f x ] && echo present',
+        "[ -f x ] && echo present",
         '[[ "$X" == y ]] || exit 1',
         'test -n "$REF" || {\n  echo missing\n  exit 1\n}',
         "python3 - <<EOF\nif x:\n    pass\nEOF",
@@ -191,7 +190,7 @@ def test_branching_scripts_are_flagged(script: str) -> None:
         'echo "::error::if it ran, check its logs; for details see x"',
         "echo 'while you wait, do nothing'",
         "# if this were code it would branch\necho hi",
-        'echo "${{ inputs.a || \'b\' }}"',
+        "echo \"${{ inputs.a || 'b' }}\"",
         'echo "ref=${RUNTIME:-$SHARED}" >> "$GITHUB_OUTPUT"',
         "chmod +x /tmp/x.sh || true",
         "make build && make test",

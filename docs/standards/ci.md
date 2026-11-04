@@ -37,6 +37,31 @@ are stubbed, `git` runs against a throwaway repo in `tmp_path`, and every
 branch (opt-in gate, missing input, eval-failure fallback, no-change
 short-circuit) has a case.
 
+### Enforced by a test (FND-4244)
+
+`.github/scripts/tests/test_no_conditional_run_blocks.py` walks every workflow
+under `.github/workflows/` and every composite `action.y*ml` under
+`.github/actions/` (which actionlint does not lint), and fails on any `run:`
+block that branches: an `if`/`for`/`while`/`until`/`case`/`select` in command
+position, or a test chained into the next command (`[ … ] && x`,
+`test -n "$X" || { …; }`). Comments, quoted strings and `${{ … }}` expressions
+are blanked first, so prose in an `echo` does not count. A heredoc interpreter
+(`python3 - <<EOF`) is scanned too: logic in it is still untested.
+
+Blocks that predate the guard are listed in
+`.github/scripts/conditional_run_allowlist.txt`, keyed
+`<file>::jobs.<job>.<step id|name>` (or `::runs.<step>` for a composite
+action). The list only shrinks:
+
+* An entry whose block is gone or no longer branches fails as stale, so a
+  migration deletes its line in the same PR.
+* `ALLOWLIST_CEILING` in the test caps the list. Lower it when you remove
+  entries. Raising it is the only way to add one, and that is the change a
+  reviewer should refuse.
+
+A new step that needs to decide something gets a script, not an allowlist
+entry.
+
 ## Running the script tests
 
 The `CI script tests` workflow (`.github/workflows/scripts-tests.yaml`) runs
