@@ -92,6 +92,24 @@ def _qualified(cls: type) -> str:
     return f"{cls.__module__}.{cls.__qualname__}"
 
 
+def _is_self_dict(node: ast.expr) -> bool:
+    """``self.__dict__`` or ``vars(self)``."""
+    if isinstance(node, ast.Attribute):
+        return (
+            node.attr == "__dict__"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+        )
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "vars"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "self"
+    )
+
+
 def _instance_writes(cls: type) -> list[str]:
     """Writes to an identity attribute on ``self`` inside the class body.
 
@@ -116,6 +134,18 @@ def _instance_writes(cls: type) -> list[str]:
             ):
                 found.append(
                     f"assigns `self.{target.attr}` (line {node.lineno} of the class)"
+                )
+            # self.__dict__["audience"] = v / vars(self)["audience"] = v: an
+            # unslotted dataclass instance shadows the ClassVar either way.
+            if (
+                isinstance(target, ast.Subscript)
+                and _is_self_dict(target.value)
+                and isinstance(target.slice, ast.Constant)
+                and target.slice.value in _IDENTITY
+            ):
+                found.append(
+                    f"writes `{target.slice.value}` into the instance __dict__ "
+                    f"(line {node.lineno} of the class)"
                 )
         if isinstance(node, ast.Call):
             # setattr(self, "audience", v) / object.__setattr__(self, "audience", v)
