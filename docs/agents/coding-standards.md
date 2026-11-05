@@ -219,15 +219,19 @@ coroutine returns but the thread runs on, holding its memory, connection and poo
 slot, while the worker starts its next activity. So:
 
 - Give the blocking call its own driver-level timeout (see below).
-- If the driver can cancel the call from another thread, bind a `CancelHandle` so a
+- If the driver can cancel the call from another thread, register its cancel on
+  `current_cancel_handle()` from inside the thread (or bind a `CancelHandle`), so a
   cancel stops the call itself. See
   [Tasks → Cancelling a blocking call at the driver](../concepts/tasks.md#cancelling-a-blocking-call-at-the-driver).
 - In blocking work that loops (batches, pages), check `self.is_cancelled()` between
-  steps and return when it is `True`.
+  steps and return when it is `True`, or call `raise_if_cancelled()`. Code with no
+  `self` imports both from `application_sdk.execution.heartbeat`.
 
 Give the blocking call its own driver-level timeout (connect, socket, statement). An
-`asyncio.wait_for` / `asyncio.timeout` around `run_in_thread` frees only the caller.
-The thread keeps its pool slot until the driver returns, and is reported as
+`asyncio.wait_for` / `asyncio.timeout` around `run_in_thread` cancels the call the
+same way a Temporal cancel does: it fires any registered driver cancel and makes
+`is_cancelled()` true inside the thread. A thread that neither registered a cancel
+nor checks keeps its pool slot until the driver returns, and is reported as
 *stranded* (a WARNING plus the `offload.stranded_threads` gauge, per app).
 
 When `ATLAN_OFFLOAD_MAX_THREADS_PER_APP` is set, an app with that many calls in flight
