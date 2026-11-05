@@ -36,6 +36,7 @@ from conformance.suite.checks import (
     client_seam,
     coverage_config,
     credential_seam,
+    dapr_objectstore,
     dependency_conformance,
     deprecation,
     determinism,
@@ -331,6 +332,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=release_contract.discover,
         scan_path=release_contract.scan_path,
         scan_all=release_contract.scan_all,
+    ),
+    CheckRegistration(
+        series=dapr_objectstore.SERIES,
+        discover=dapr_objectstore.discover,
+        scan_path=dapr_objectstore.scan_path,
+        scan_all=dapr_objectstore.scan_all,
     ),
     CheckRegistration(
         series=sdr_checks.SERIES,

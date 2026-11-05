@@ -2190,4 +2190,85 @@ RULES: tuple[RuleDefinition, ...] = (
             target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
+    RuleDefinition(
+        id="K029",
+        canonical_reference=(
+            "atlan-mysql-app contract/app.pkl — its deploy block sets "
+            "`dapr { objectstore = true }`, which renders `deploy.dapr.objectstore: "
+            "true` in atlan.yaml so the chart mounts the object-store component the "
+            "SDK requires."
+        ),
+        rule_interactions=(
+            "When the finding anchors on atlan.yaml, the file is generated: a "
+            "hand-edit is erased by the next regeneration and trips the freshness "
+            "gate (K005). Fix contract/app.pkl (or bump the toolkit, whose default "
+            "is now true) and run the repo's own generate task."
+        ),
+        fix_locus=FixLocus.CONTRACT,
+        scope=RuleScope.APP,
+        name="DeploymentObjectStoreDisabled",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=True,
+        since="0.56.0",
+        orthogonal_gate="pkl-eval",
+        rationale=(
+            "The SDK requires the deployment object store: every app reads and "
+            "writes artifacts, credential files and observability exports through "
+            "it, and worker and handler startup builds it unconditionally. The "
+            "atlan-app chart omits the objectstore Dapr component when atlan.yaml "
+            "carries deploy.dapr.objectstore: false, so such an app's pods fail "
+            "at startup. The setting usually arrives by accident: contract-toolkit "
+            "defaulted objectstore to false, and the toolkit renders the whole "
+            "dapr block as soon as any other component is enabled, so declaring "
+            "only dapr { secretstore = true } emitted objectstore: false. The "
+            "rule moves that failure from the deploy to the PR. WARN while the "
+            "fleet's existing findings are counted and fixed; it is a candidate "
+            "for BLOCK once they are, since no app built on the SDK starts "
+            "without the store. "
+            "Customer impact: the app's worker and handler cannot start on the "
+            "tenant, so every workflow of that app fails until the contract is "
+            "fixed and the app redeployed."
+        ),
+        short_description=(
+            "deploy.dapr.objectstore is false — the chart drops the object store "
+            "the SDK requires, and the app cannot start"
+        ),
+        full_description=(
+            "The app's contract sets ``objectstore = false`` in its "
+            "``deploy.dapr`` block, or its generated ``atlan.yaml`` carries "
+            "``deploy.dapr.objectstore: false``. The SDK requires the deployment "
+            "object store and fails at startup with "
+            "``DeploymentObjectStoreMissingError`` when the chart omits it.\n"
+            "\n"
+            "The finding anchors on the explicit assignment in ``contract/*.pkl`` "
+            "when there is one, and otherwise on ``atlan.yaml`` — the case where "
+            "an older contract-toolkit defaulted ``objectstore`` to ``false`` "
+            "because another Dapr component was enabled.\n"
+            "\n"
+            "**Fix:** set ``objectstore = true`` in the contract's ``dapr`` block "
+            "(or remove the explicit ``false`` and take a contract-toolkit whose "
+            "default is ``true``), then regenerate with the repo's generate task "
+            "and commit the updated ``atlan.yaml``:\n"
+            "\n"
+            "    deploy = new DeployConfig {\n"
+            "      dapr { objectstore = true; secretstore = true }\n"
+            "    }\n"
+            "\n"
+            "**Suppress** with ``// conformance: ignore[K029] <reason>`` on the "
+            "``objectstore = false`` line of the contract (or the comment-only "
+            "line above it), or ``# conformance: ignore[K029] <reason>`` on the "
+            "``objectstore:`` line of ``atlan.yaml``. A suppression is almost "
+            "never correct: no app built on the SDK starts without the store.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k029"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
+    ),
 )
