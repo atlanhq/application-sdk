@@ -12,8 +12,11 @@ Subcommands (each one is a former inline ``run:`` block):
     app ``poe generate`` tasks pass to ``pkl --ca-certificates``.
 
 ``contract-drift``
-    Enforced. In the app checkout, ``poe generate`` must leave ``generated/``
-    unchanged.
+    Enforced. In the app checkout, ``poe generate`` must leave the whole
+    working tree clean: no modified tracked file and no new untracked file,
+    anywhere (``app/generated/``, root ``atlan.yaml``, …). An app with
+    ``contract/app.pkl`` but no ``poe`` fails: the check cannot run, so it
+    must not pass.
 
 ``verdict``
     Render the certification summary from the step outcomes and fail when an
@@ -41,6 +44,7 @@ DOCS_URL = (
     "app-certification.md"
 )
 _ICONS = {"success": "✅", "failure": "❌", "skipped": "➖", "install_failed": "❌"}
+_MAX_LISTED_PATHS = 50
 
 
 def check_migration() -> int:
@@ -79,15 +83,37 @@ def contract_drift() -> int:
         print("No contract/app.pkl — skipping contract-drift check.")
         return 0
     if _bap.run(["uv", "run", "poe", "--help"], quiet=True).returncode != 0:
-        print("::warning::'poe' task runner not available — cannot run drift check.")
-        return 0
+        print(
+            "::error::contract/app.pkl exists but the 'poe' task runner is not "
+            "installed, so the drift check cannot run. Add 'poethepoet' to an "
+            "extra in [project.optional-dependencies] (certify installs with "
+            "'uv sync --all-extras', not dependency groups), define a "
+            "[tool.poe.tasks] 'generate' task, and re-lock."
+        )
+        return 1
     if _bap.run(["uv", "run", "poe", "generate"]).returncode != 0:
         print("::error::'poe generate' failed")
         return 1
-    if _bap.run(["git", "diff", "--exit-code", "--", "generated/"]).returncode != 0:
-        print("::error::generated/ is stale — run 'poe generate' locally and commit.")
+    status = _bap.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"], capture=True
+    )
+    if status.returncode != 0:
+        print("::error::'git status' failed, so contract drift could not be checked")
         return 1
-    return 0
+    changed = [line for line in status.stdout.splitlines() if line.strip()]
+    if not changed:
+        return 0
+    # Paths only, never file contents: generated files can carry app config.
+    print(
+        f"::error::'poe generate' left {len(changed)} changed or untracked "
+        "file(s) in the working tree — run 'poe generate' locally and commit "
+        "the result (or .gitignore output that is not meant to be committed)."
+    )
+    for line in changed[:_MAX_LISTED_PATHS]:
+        print(f"  {line}")
+    if len(changed) > _MAX_LISTED_PATHS:
+        print(f"  … and {len(changed) - _MAX_LISTED_PATHS} more")
+    return 1
 
 
 def _render(label: str, outcome: str) -> str:

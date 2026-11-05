@@ -17,7 +17,7 @@ and runs:
 | Layer | Command | Skips when |
 |-------|---------|------------|
 | **v3 shape** | `tools.migrate_v3.check_migration` — no deprecated imports, `@task`-only, typed `Input`/`Output`, async clients, … | SDK install fails (annotated as incomplete) |
-| **Contract drift** | `poe generate` must produce no diff vs the committed `app/generated/` artifacts | no `contract/app.pkl`, or `poe` unavailable |
+| **Contract drift** | `poe generate` must leave the whole working tree clean — see [Contract drift: the whole-tree rule](#contract-drift-the-whole-tree-rule) | no `contract/app.pkl` (fails, not skips, when `contract/app.pkl` exists but `poe` is not installed) |
 | **Unit tests** | `pytest tests/unit --cov=app --cov-report=term` | no `tests/unit/` directory |
 | **Coverage threshold** | `coverage report --fail-under=85` | unit tests skipped or failed |
 
@@ -29,6 +29,29 @@ These are the layers that are **identical for every app**. App-specific layers
 — integration, SDR, and e2e/Playwright — are **not** run here: they need the
 app's own live stack (databases, Dapr, Temporal) and secrets, so they stay in
 the app's own CI (`tests.yaml`, the marketplace-releases e2e reusables, …).
+
+## Contract drift: the whole-tree rule
+
+From the app checkout's root, after `uv sync --all-extras --frozen`, the step
+runs `poe generate` and then:
+
+```
+git status --porcelain --untracked-files=all
+```
+
+Any output fails the step. Every path the generator touches counts, not just
+one directory:
+
+- a committed file that `poe generate` changes, wherever it is
+  (`app/generated/_input.py`, a root-level `atlan.yaml` or `app.yaml`, …);
+- a file `poe generate` creates that was never committed.
+
+Files matched by the app's `.gitignore` don't count. The `::error::`
+annotation lists the offending paths (at most 50) and never their contents.
+
+To fix a failure, run `poe generate` locally and commit the result. If the
+output is genuinely build-time only and must not be committed, add it to
+`.gitignore`.
 
 ## Install environment
 
