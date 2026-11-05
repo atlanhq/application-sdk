@@ -8,7 +8,7 @@ failure log, the preflight outcome) agrees with the failure envelope.
 
 import errno
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -19,8 +19,26 @@ from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.execution._temporal.interceptors.log import (
     _extract_failure_attrs,
 )
+from application_sdk.infrastructure import context as infra_context
+from application_sdk.infrastructure.context import InfrastructureContext
 from application_sdk.storage import StorageDiskFullError, StorageError
 from application_sdk.storage.errors import SdrStorageDiskFullError
+
+
+@pytest.fixture(autouse=True)
+def _no_infrastructure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every test with no infrastructure context, whatever ran before."""
+    monkeypatch.setattr(infra_context, "_infrastructure", None)
+
+
+def _set_stores(monkeypatch: pytest.MonkeyPatch, *, single: bool) -> None:
+    deployment = MagicMock(name="deployment_store")
+    upstream = deployment if single else MagicMock(name="upstream_store")
+    monkeypatch.setattr(
+        infra_context,
+        "_infrastructure",
+        InfrastructureContext(storage=deployment, upstream_storage=upstream),
+    )
 
 
 def _raise_short_write(target: Path) -> DiskFullError:
@@ -52,6 +70,32 @@ def test_an_sdr_worker_short_of_space_routes_the_failure_to_the_customer(
     assert "ATLAN_TEMPORARY_PATH" in action
     assert "ephemeral-storage" not in action
     assert not target.exists()
+
+
+def test_an_sdr_worker_with_a_separate_upstream_store_routes_to_the_customer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(constants, "ENABLE_ATLAN_UPLOAD", True)
+    _set_stores(monkeypatch, single=False)
+
+    error = _raise_short_write(tmp_path / "output.parquet")
+
+    assert type(error) is SdrDiskFullError
+
+
+def test_the_upload_flag_on_a_single_store_worker_keeps_platform_routing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """In-cluster wiring aliases one store under both names; startup only warns
+    when ENABLE_ATLAN_UPLOAD is also set, so the volume is still the platform's."""
+    monkeypatch.setattr(constants, "ENABLE_ATLAN_UPLOAD", True)
+    _set_stores(monkeypatch, single=True)
+
+    error = _raise_short_write(tmp_path / "output.parquet")
+
+    assert type(error) is DiskFullError
+    assert error.to_failure_details().audience is Audience.PLATFORM
+    assert "ephemeral-storage request/limit" in (error.suggested_action or "")
 
 
 def test_the_failure_log_names_the_same_owner_as_the_envelope_on_an_sdr_worker(

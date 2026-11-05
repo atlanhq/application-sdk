@@ -260,12 +260,27 @@ def _disk_full_class() -> type[DiskFullError]:
 
     On a Self-Deployed Runtime agent the volume is the customer's host, so the
     failure routes to them; on a hosted worker it is the platform's. Read at
-    raise time from :data:`application_sdk.constants.ENABLE_ATLAN_UPLOAD`, the
-    storage layer's SDR discriminator, so both raise sites in this module agree.
+    raise time, so both raise sites in this module agree.
+
+    SDR is :data:`application_sdk.constants.ENABLE_ATLAN_UPLOAD` *and* a
+    worker that hands off across the boundary. An in-cluster worker whose
+    upstream store aliases its deployment store (``single_store``) is
+    platform-owned even with the flag set: startup only warns about that
+    wiring and runs on, so the flag alone would hand a platform volume to the
+    customer. With no infrastructure context yet the topology is unknown and
+    the flag decides.
     """
     from application_sdk.errors import DiskFullError, SdrDiskFullError  # noqa: PLC0415
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: the infrastructure package loads the Dapr clients
+        get_infrastructure,
+    )
 
-    return SdrDiskFullError if constants.ENABLE_ATLAN_UPLOAD else DiskFullError
+    if not constants.ENABLE_ATLAN_UPLOAD:
+        return DiskFullError
+    infra = get_infrastructure()
+    if infra is not None and infra.single_store:
+        return DiskFullError
+    return SdrDiskFullError
 
 
 def _raise_disk_full(
