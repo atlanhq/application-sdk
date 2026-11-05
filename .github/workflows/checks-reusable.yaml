@@ -58,10 +58,12 @@ on:
           Set true when the app pins a PRIVATE atlanhq git dependency (e.g.
           query-redaction). `setup-deps` runs `uv sync` before any hook, and an
           unauthenticated clone of a private atlanhq repo fails there, so with
-          this flag atlanhq remotes are rewritten to a token URL
-          (ORG_PAT_GITHUB) first. Requires the caller to pass
-          `secrets: inherit`. Managed per-repo by `bootstrap`, which reads the
-          opt-in back off the caller so a re-sync cannot delete it.
+          this flag the job mints a read-only fleet App token and hands it to
+          that sync (and the uv.lock check) alone, through git_auth.py; no git
+          config is written, so no hook can read it (FND-4740). Requires
+          FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (`secrets: inherit`, or an
+          explicit mapping naming both). Managed per-repo by `bootstrap`, which
+          reads the opt-in back off the caller so a re-sync cannot delete it.
         type: boolean
         required: false
         default: false
@@ -69,10 +71,18 @@ on:
       ORG_PAT_GITHUB:
         required: false
         description: >-
-          Token used to reach PRIVATE atlanhq git dependencies when
-          `private-git-deps` is true. Optional: a caller with only public deps
-          passes nothing. Declared so a caller that maps secrets explicitly is
-          validated at parse time instead of silently supplying an empty token.
+          No longer read (FND-4740: private git dependencies use a read-only
+          fleet App token). Still declared so a caller that maps it explicitly
+          keeps parsing: passing an undeclared secret fails at startup.
+      FLEET_APP_ID:
+        required: false
+        description: >-
+          GitHub App id; with `private-git-deps`, mints the read-only token
+          that reaches the private atlanhq git dependency. Optional: a caller
+          with only public deps passes nothing.
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: Private key paired with FLEET_APP_ID.
 
 jobs:
   # Merge-queue entry only: did combining with the base change the tree?
@@ -134,10 +144,6 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 10
-    # Job-level, not step-level, because the `if:` guards below read it, and
-    # `secrets` cannot be referenced in an `if:` directly.
-    env:
-      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -158,25 +164,34 @@ jobs:
           # shellcheck disable=SC2086  # deliberate word splitting: package list
           sudo apt-get install -y $SYSTEM_DEPS
 
-      # The flag promises a token; with ORG_PAT_GITHUB absent the rewrite below
-      # would redirect every atlanhq URL to an unauthenticated token URL and
-      # fail far from the cause. Condition stays in `if:`, never in the shell
-      # (docs/standards/ci.md). Same pair as conformance-reusable.yaml.
-      - name: "Require ORG_PAT_GITHUB when private-git-deps is set"
-        if: inputs.private-git-deps && env.GIT_TOKEN == ''
+      # Private atlanhq git deps (FND-4740): a read-only fleet App token, handed
+      # to setup-deps' `uv sync` and the uv.lock check alone, through
+      # git_auth.py's scoped GIT_CONFIG_* env. No git config is written, so no
+      # pre-commit hook can read it. `continue-on-error` so a caller that did
+      # not pass the App secrets gets the named error below. Same steps as
+      # conformance-reusable.yaml.
+      - name: "Mint read-only token for private git dependencies"
+        id: git-deps-token
+        if: inputs.private-git-deps
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          # Read is all a clone needs; the sync runs build backends.
+          permission-contents: read
+
+      # Condition stays in `if:`, never in the shell (docs/standards/ci.md).
+      - name: "Require the token when private-git-deps is set"
+        if: inputs.private-git-deps && steps.git-deps-token.outputs.token == ''
         run: |
-          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
+          echo "::error title=No token for private git dependencies::private-git-deps is true but the fleet App token did not mint. Pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (secrets: inherit, or name both in an explicit secrets: mapping)."
           exit 1
 
-      # --global writes ~/.gitconfig, so it applies to the clone `uv sync`
-      # performs inside setup-deps.
-      - name: "Authenticate private atlanhq git dependencies"
-        if: inputs.private-git-deps && env.GIT_TOKEN != ''
-        run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
-
       - uses: atlanhq/application-sdk/.github/actions/setup-deps@main
+        with:
+          git-auth-token: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
 
       # A refused Renovate lock bump is withheld by writing a lock no
       # `--locked` / `--check` consumer accepts (renovate_uv_lock_bounded.py,
@@ -190,15 +205,22 @@ jobs:
         with:
           repository: atlanhq/application-sdk
           ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts/check_uv_lock.py
+          sparse-checkout: |
+            .github/scripts/check_uv_lock.py
+            .github/scripts/git_auth.py
           sparse-checkout-cone-mode: false
           path: .sdk-lock-check
           persist-credentials: false
 
+      # Through git_auth.py: with a cold uv cache, checking the lock can
+      # re-resolve, which clones the private dependency. Without a token (the
+      # flag unset) the wrapper runs the check exactly as before.
       - name: uv.lock matches pyproject.toml
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-        run: python3 .sdk-lock-check/.github/scripts/check_uv_lock.py
+          GIT_TOKEN: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
+          PRIVATE_GIT_DEPS: ${{ inputs.private-git-deps }}
+        run: python3 .sdk-lock-check/.github/scripts/git_auth.py run -- python3 .sdk-lock-check/.github/scripts/check_uv_lock.py
 
       - name: Remove the fetched SDK script
         run: rm -rf .sdk-lock-check

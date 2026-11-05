@@ -221,7 +221,11 @@ def test_conformance_gate_runs_the_lock_check_on_every_pr() -> None:
     names = [s.get("name") for s in steps]
 
     fetch = steps[names.index("Fetch check_uv_lock.py from SDK")]
-    assert fetch["with"]["sparse-checkout"] == ".github/scripts/check_uv_lock.py"
+    # git_auth.py too: the check runs through it (FND-4740).
+    assert fetch["with"]["sparse-checkout"].split() == [
+        ".github/scripts/check_uv_lock.py",
+        ".github/scripts/git_auth.py",
+    ]
     assert fetch["with"]["ref"] == "${{ job.workflow_sha }}"
     assert fetch["with"]["path"] == ".sdk-lock-check"
 
@@ -230,7 +234,12 @@ def test_conformance_gate_runs_the_lock_check_on_every_pr() -> None:
     ]
     check = steps[check_at]
     assert "if" not in check
-    assert check["run"] == "python3 .sdk-lock-check/.github/scripts/check_uv_lock.py"
+    # Through git_auth.py, which hands a private-git-deps token to the check
+    # alone and runs it unchanged without one (FND-4740).
+    assert check["run"] == (
+        "python3 .sdk-lock-check/.github/scripts/git_auth.py run -- "
+        "python3 .sdk-lock-check/.github/scripts/check_uv_lock.py"
+    )
     assert check["env"]["BASE_SHA"] == (
         "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
     )
@@ -243,7 +252,7 @@ def test_conformance_gate_runs_the_lock_check_on_every_pr() -> None:
         for i, s in enumerate(steps)
         if s.get("uses") == "./.github/actions/run-conformance-detect"
     )
-    assert names.index("Authenticate private atlanhq git dependencies") < check_at
+    assert names.index("Mint read-only token for private git dependencies") < check_at
     assert check_at < remove_at < first_series
 
 

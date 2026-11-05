@@ -50,6 +50,15 @@ inputs:
       review too — parity with connector-integration-tests.
     default: ""
 
+  git-auth-token:
+    required: false
+    description: |
+      Read-only GitHub token for a PRIVATE atlanhq git dependency, passed to
+      setup-deps and to the SDK repin's `uv sync`, each through
+      `.github/scripts/git_auth.py` so no git config is written (FND-4740).
+      Empty (the default) installs without one.
+    default: ""
+
 runs:
   using: "composite"
   steps:
@@ -57,12 +66,14 @@ runs:
       uses: atlanhq/application-sdk/.github/actions/setup-deps@main
       with:
         python-version: ${{ inputs.python-version }}
+        git-auth-token: ${{ inputs.git-auth-token }}
 
     - name: Pin application-sdk to dispatched ref
       if: inputs.application-sdk-ref != ''
       shell: bash
       env:
         SDK_REF: ${{ inputs.application-sdk-ref }}
+        GIT_TOKEN: ${{ inputs.git-auth-token }}
       # Reuse the integration action's repin script (a generic pyproject
       # [tool.uv.sources] rewriter, not integration-specific) rather than
       # keeping a third copy. Both actions are checked out together from the
@@ -73,7 +84,7 @@ runs:
         REPIN="${{ github.action_path }}/../connector-integration-tests/repin-application-sdk.sh"
         chmod +x "$REPIN"
         "$REPIN"
-        uv sync --all-extras --all-groups
+        python3 "${{ github.action_path }}/../../scripts/git_auth.py" run -- uv sync --all-extras --all-groups
 
     - name: Run unit tests with coverage
       id: tests

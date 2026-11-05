@@ -824,6 +824,46 @@ against a private git dependency fails on the next build rather than at merge.
 version string, a target arch, a base-image reference — are what `build-args`
 are for, and recording those in image history is a feature.
 
+## Never write a GitHub token into git config
+
+An app with a private atlanhq git dependency needs a GitHub token for the
+`uv sync` or `uv lock` that clones it. Do not hand it over with
+`git config --global url.<authed>.insteadOf`, and do not put it in job-level
+`env:`. Both leave the token readable by every later step: tests, pre-commit
+hooks, conformance series and anything else that imports app code.
+
+Instead:
+
+1. Mint a read-only fleet App token (`actions/create-github-app-token` with
+   `owner: atlanhq` and `permission-contents: read`), `continue-on-error: true`,
+   gated on the caller's opt-in input. Never fall back to `ORG_PAT_GITHUB`.
+2. Follow it with a guard step that fails, naming `FLEET_APP_ID` and
+   `FLEET_APP_PRIVATE_KEY`, when the opt-in is set and the token is empty.
+3. Run the fetching command through `.github/scripts/git_auth.py`, with the
+   token in that step's `env: GIT_TOKEN` only:
+
+   ```yaml
+   env:
+     GIT_TOKEN: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
+     PRIVATE_GIT_DEPS: ${{ inputs.private-git-deps }}
+   run: python3 path/to/git_auth.py run -- uv sync
+   ```
+
+   The script removes `GIT_TOKEN` from the child's env and passes the rewrite
+   as `GIT_CONFIG_*` variables, which git reads like `-c` options. Nothing is
+   persisted. A composite takes the token as its `git-auth-token` input and
+   does the same inside.
+
+Only the first install needs the token. Once it has populated the uv cache and
+venv, later `uv sync`, `uv run`, `uv lock --check` and even a re-lock of a
+stale lock fetch nothing. `uv run --isolated` and a re-resolve on a cold cache
+do fetch, so give them the token too, through `git_auth.py`.
+
+Used by `tests-reusable.yaml` (unit, integration, e2e), `checks-reusable.yaml`,
+`conformance-reusable.yaml`, `release-version-bump.yaml` and the certify gate
+in `build-and-publish-app.yaml` (see `docs/standards/app-certification.md`).
+`test_private_git_deps_wiring.py` pins the shape (FND-4740).
+
 ## Renovate release freeze
 
 Renovate PRs do not merge into application-sdk `main` while a release train is in
