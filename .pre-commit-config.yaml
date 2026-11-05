@@ -17,7 +17,7 @@ repos:
         args: ["--fix"]
       - id: ruff-format
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: v6.0.0
     hooks:
       - id: check-merge-conflict
       - id: debug-statements
@@ -55,7 +55,7 @@ repos:
         args: ['-shellcheck=']
         files: ^\.github/(workflows|workflow-templates)/.*\.ya?ml$
   - repo: https://github.com/compilerla/conventional-pre-commit
-    rev: v4.0.0
+    rev: v4.5.0
     hooks:
       - id: conventional-pre-commit
         stages: [commit-msg]
@@ -85,7 +85,7 @@ repos:
         files: ^(renovate\.json|renovate-config/(default\.json|self-hosted\.js))$
 
   - repo: https://github.com/RobertCraigie/pyright-python
-    rev: v1.1.410
+    rev: v1.1.414
     hooks:
       - id: pyright
   # Every `extra_javascript` entry in mkdocs.yml runs on every docs page.

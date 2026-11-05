@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-import aiohttp
+import httpx
 import obstore as obs
 import orjson
 from obstore.exceptions import PermissionDeniedError, UnauthenticatedError
@@ -740,19 +740,25 @@ async def _lookup_bucket_region(bucket: str) -> str:
     partition is probed next; a failed request stops the lookup rather than
     spend a second timeout on an unreachable network.
     """
-    timeout = aiohttp.ClientTimeout(total=_S3_REGION_LOOKUP_TIMEOUT_SECONDS)
     try:
         from application_sdk.clients.ssl_utils import get_ssl_context  # noqa: PLC0415
 
-        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+        async with httpx.AsyncClient(
+            timeout=_S3_REGION_LOOKUP_TIMEOUT_SECONDS,
+            trust_env=True,
+            verify=get_ssl_context(),
+        ) as client:
             for host in _region_lookup_hosts():
                 url = _S3_REGION_LOOKUP_URL.format(
                     host=host, bucket=quote(bucket, safe="")
                 )
-                async with session.head(
-                    url, allow_redirects=False, ssl=get_ssl_context()
-                ) as response:
-                    region = response.headers.get("x-amz-bucket-region", "")
+                # httpx's scalar timeout bounds each read, not the request; a
+                # peer dripping header bytes could hold it open, so cap the HEAD.
+                response = await asyncio.wait_for(
+                    client.head(url, follow_redirects=False),
+                    timeout=_S3_REGION_LOOKUP_TIMEOUT_SECONDS,
+                )
+                region = response.headers.get("x-amz-bucket-region", "")
                 if region:
                     return region
             return ""

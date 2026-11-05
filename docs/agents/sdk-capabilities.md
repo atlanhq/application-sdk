@@ -475,7 +475,7 @@ Connection clients (SQL, Redis, Azure) and ClientInterface ABC
 
 - **Import:** `from application_sdk.clients import get_ssl_context`
 - **Signature:** `get_ssl_context()`
-- **Summary:** Get the SSL verification context for HTTP clients (httpx, aiohttp, etc.).
+- **Summary:** Get the SSL verification context for HTTP clients such as httpx.
 - **Defined in:** `application_sdk/clients/ssl_utils.py`
 
 ### Constants and Enums

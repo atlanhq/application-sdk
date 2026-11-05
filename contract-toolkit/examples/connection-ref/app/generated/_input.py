@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import Field
-
 from application_sdk.contracts.types import ConnectionRef, MaxItems
 from application_sdk.templates.contracts import ExtractionInput
+from pydantic import Field
 
 
 class AppInputContract(ExtractionInput):

@@ -68,6 +68,27 @@ jobs:
           # wall time for a report nobody read (FND-4238).
           coverage: ${{ matrix.os == 'ubuntu-22.04' && matrix.python-version == '3.12' }}
 
+  unit-dependency-floors:
+    name: Unit Tests (dependency floors)
+    # The SDK publishes pandas>=2.2.3,<4 and pyarrow>=23.0.1,<27, but every
+    # other leg installs the lock (pandas 3, pyarrow 26), so nothing else would
+    # notice a change that breaks an app still on pandas 2. This leg runs the
+    # same unit suite with pandas and pyarrow at the floors the [sql] extra
+    # declares, read from pyproject.toml by unit_test_command.py so the leg
+    # moves with the floor (FND-4254). Python 3.11 is the SDK's
+    # requires-python floor, and an app old enough to sit on pandas 2 is the
+    # likeliest to be on it.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: "./.github/actions/unit-tests"
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          python-version: "3.11"
+          coverage: "false"
+          dependency-floors: "pandas,pyarrow"
+
   unit-perf:
     name: Unit Perf Tests
     # Tests marked `perf` (excluded from the matrix by addopts): throughput

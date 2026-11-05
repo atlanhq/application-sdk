@@ -148,14 +148,19 @@ exploring, but do not trust it to predict CI.
 
 ```bash
 # Resolve / refresh the dependency lock (writes contract/PklProject.deps.json):
-( cd contract && pkl project resolve )
+pkl project resolve contract
 
 # Validate AND generate — the same command. A clean eval IS the validation
 # (pkl type-checks the whole contract graph and fires every constraint), and it
 # writes atlan.yaml, app.yaml, and app/generated/*.
-pkl eval -m . contract/app.pkl
+pkl eval --project-dir contract -m . contract/app.pkl
 ```
 
+- `--project-dir contract` is required. pkl looks for `PklProject` in the
+  current directory, not next to the module, so from the app root a bare
+  `pkl eval -m . contract/app.pkl` fails with "Cannot resolve dependency because
+  there is no project found" on the `amends "@app-contract-toolkit/App.pkl"`
+  line (reproduced on the pinned pkl 0.32.2).
 - `-m .` sets the module output root to the app root so each output file lands at
   its natural path; running from inside `contract/` or with a different `-m`
   writes artifacts to the wrong tree.
@@ -172,21 +177,46 @@ pkl eval -m . contract/app.pkl
   in `contract/PklProject`, then re-run resolve + generate.
 
 **Capture the commands in the app's `pyproject.toml`** so they are repeatable and
-don't live only in the author's head. Add (or verify) the toolkit's recommended
-`poe` task, and ensure `poethepoet` is a dev dependency:
+don't live only in the author's head. The SDK certify gate depends on this
+wiring: for an app with `contract/app.pkl` it runs `uv sync --all-extras
+--frozen`, then `uv run poe --help` and `uv run poe generate`, then checks the
+regenerated output for drift. Add
+(or verify) the toolkit's recommended `poe` task:
 
 ```toml
+[project.optional-dependencies]
+dev = [
+    "poethepoet>=0.34.0",
+]
+
 [tool.poe.tasks]
-generate-contract.shell = """
-  cd contract && pkl project resolve && cd ..
-  pkl eval -m . contract/app.pkl
-"""
+generate.shell = "pkl project resolve contract && pkl eval --project-dir contract -m . contract/app.pkl"
+generate-contract.ref = "generate"
 ```
 
-Then `uv run poe generate-contract` resolves and regenerates in one step. This is
-the canonical wrapper (`contract-toolkit/README.md` § Recommended poe task) —
-prefer it over any older per-app variant that evals into a subfolder and copies
-the output up.
+Then `uv run poe generate` resolves and regenerates in one step. This is the
+canonical wrapper (`contract-toolkit/README.md` § Recommended poe task) — prefer
+it over any older per-app variant that evals into a subfolder and copies the
+output up. That variant only refreshes the files it copies, so outputs it skips
+(`_input.py`, `atlan.yaml`, nested entrypoint dirs) go stale without a diff.
+
+- **The task must be named `generate`.** Certify calls `poe generate`; an app
+  that only defines `generate-contract` fails the gate. Keep
+  `generate-contract` as an alias only if existing scripts call it.
+- **`poethepoet` goes in an extra under `[project.optional-dependencies]`**
+  (`dev` above), not in a `[dependency-groups]` group. Certify installs with
+  `uv sync --all-extras`, which always installs every extra. Of the dependency
+  groups it installs only uv's default groups (just `dev`, unless the app sets
+  `[tool.uv] default-groups`), so poe in any other group, such as `tools` or
+  `lint`, is missing in CI and the drift check can't run. An extra doesn't depend on that
+  setting. Re-lock (`uv lock`) after adding it so `--frozen` succeeds.
+- Commit everything `poe generate` writes, and check `git status --short` is
+  empty after running it locally. Certify's drift check may not cover every
+  output (for example the root `atlan.yaml` and `app.yaml`), so a stale file
+  it doesn't check can still ship.
+- The task calls `pkl` from `PATH`. Run
+  `python -m application_sdk.dev.pkl check` to confirm your `PATH` pkl matches
+  the pinned version CI uses.
 
 ## Discovery
 
@@ -440,8 +470,10 @@ Validate and generate with `pkl` from the app root (see Contract Commands) — a
 clean `pkl eval` is the validation and writes the artifacts in one step:
 
 ```bash
-( cd contract && pkl project resolve )
-pkl eval -m . contract/app.pkl
+uv run poe generate
+# equivalent to:
+pkl project resolve contract
+pkl eval --project-dir contract -m . contract/app.pkl
 ```
 
 Then verify generated output and invariants:
@@ -473,7 +505,8 @@ Summarize:
 - What contract source changed and which migrations were applied.
 - Which generated artifacts changed.
 - Which `pkl` commands ran (resolve / eval), and the `app_name` invariant result.
-- Whether the `generate-contract` poe task was added or verified in the app's
-  `pyproject.toml`.
+- Whether the `generate` poe task was added or verified in the app's
+  `pyproject.toml`, with `poethepoet` in an extra, and whether
+  `uv run poe generate` left a clean tree.
 - The SDK/toolkit versions before and after, relative to the floor.
 - Any skipped validation and the concrete reason.

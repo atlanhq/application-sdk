@@ -15,9 +15,40 @@ contract/app.pkl (developer writes)
     └─▶ app/generated/_input.py           — Python AppInputContract
 ```
 
+**Generated Python is ruff-stable.** Every generated `.py` file
+(`_input.py`, `_e2e_base.py`, `_e2e_credential.py`, `_e2e_substitutions.py`
+and their per-entrypoint copies in a bundle) is passed through
+`src/PyFormat.pkl` before it is written. That module lays the file out exactly
+as ruff does with its default settings:
+
+- **Imports** are sorted the way ruff's isort rules (`I001`) sort them:
+  `__future__`, standard library, then third-party sections; `import x` before
+  `from x import ...`; modules in order; names ordered constants, then classes,
+  then the rest; one module imported once. `application_sdk` is third-party, as
+  it is in an app repo, so it shares a block with `pydantic` and `orjson`.
+- **Lines over 88 columns** are wrapped in ruff's order of preference. First,
+  split the value's own brackets, with the arguments on one indented line if
+  they fit, else one per line with a trailing comma. Next, wrap the value in
+  parentheses. Next, split the annotation (`Literal[...]`, `Annotated[...]`,
+  or `X | None` in parentheses). Last, split both. Width is measured as ruff
+  measures it: East Asian wide characters count as two columns.
+- **Strings** use double quotes, unless a string holds more `"` than `'`; then
+  it is single-quoted (`'say "hi"'`), as ruff writes it.
+- **Docstrings:** a nested object's class docstring is laid out as ruff lays
+  out docstrings (first line trimmed, continuation lines indented to the class
+  body). Field docstrings are written as given, including multi-line ones,
+  because ruff does not treat them as docstrings.
+
+What changes: nothing in what the files declare, only their layout. Running
+`ruff check --fix` and `ruff format` on them changes nothing. What does not
+change: an app with a non-default ruff config (another `line-length`, isort
+`known-*` sections) may still see ruff rewrite them; the toolkit renders for
+the defaults. `scripts/check-ruff-stable.py` checks every example against the
+SDK's locked ruff.
+
 **Consumption flow:**
 ```
-pkl eval -m . contract/app.pkl
+pkl eval --project-dir contract -m . contract/app.pkl
     → SDK serves at /workflows/v1/configmap/{id}
     → SDK wraps in K8s ConfigMap format
     → Frontend JSON.parse(data.data.config)
@@ -49,14 +80,14 @@ dependencies {
 
 Resolve after creating or updating the version:
 ```bash
-cd contract && pkl project resolve
+pkl project resolve contract
 ```
 
 To bump an existing project to the latest toolkit version, update the version in `PklProject`, then re-resolve:
 ```bash
 # Update version in PklProject, then:
-cd contract && pkl project resolve && cd ..
-pkl eval -m . contract/app.pkl
+pkl project resolve contract
+pkl eval --project-dir contract -m . contract/app.pkl
 ```
 
 ### app.pkl — single amend line (v0.10.0+)
@@ -71,8 +102,10 @@ import "@app-contract-toolkit/Connectors.pkl"
 ### Generate (run from the **app repo root**)
 
 ```bash
-pkl eval -m . contract/app.pkl
+pkl eval --project-dir contract -m . contract/app.pkl
 ```
+
+`--project-dir contract` is required from the repo root: pkl looks for `PklProject` in the current directory, so without it the `@app-contract-toolkit` amend fails with "no project found".
 
 Output files carry full paths relative to the repo root (`atlan.yaml`, `app.yaml`, `app/generated/…`) so a single invocation lays everything down in the right place.
 
@@ -3999,11 +4032,7 @@ Have your `generate` task call the same script, so local and CI agree:
 
 ```toml
 [tool.poe.tasks]
-generate = """
-cd contract && pkl project resolve && cd ..
-pkl eval --project-dir contract -m . contract/app.pkl
-sh contract/post-generate.sh
-"""
+generate.shell = "pkl project resolve contract && pkl eval --project-dir contract -m . contract/app.pkl && sh contract/post-generate.sh"
 ```
 
 Wiring the step **only** into a `poe`/`make` task is the trap: it works

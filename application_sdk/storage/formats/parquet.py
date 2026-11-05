@@ -20,6 +20,7 @@ from application_sdk.storage.errors import ObjectStoreNotProvidedError
 from application_sdk.storage.formats import DataframeType, Reader, Writer
 from application_sdk.storage.formats.utils import (
     PARQUET_FILE_EXTENSION,
+    _arrow_table_from_pandas,
     _download_files,
     is_empty_dataframe,
     path_gen,
@@ -1071,7 +1072,6 @@ class ParquetFileWriter(Writer):
         it to ``large_string`` instead made that promotion impossible whenever
         a sibling shard was typed e.g. ``double`` (CNCT-80).
         """
-        import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
         import pyarrow.parquet as pq  # noqa: PLC0415 — optional dep: pyarrow.parquet
 
         # Offloaded as one hop: `Table.from_pandas` is CPU-bound conversion over
@@ -1079,7 +1079,7 @@ class ParquetFileWriter(Writer):
         # inline stalls the event loop — including the auto-heartbeat — for its
         # full duration on large chunks (ADR-0010).
         def _convert_and_write() -> None:
-            table = pa.Table.from_pandas(chunk, preserve_index=False)
+            table = _arrow_table_from_pandas(chunk, preserve_index=False)
             row_group_size = max(
                 1,
                 min(

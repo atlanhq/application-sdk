@@ -77,12 +77,22 @@ def convert_json_to_parquet(file_path: str) -> str | None:
     """Convert the downloaded files from json to parquet"""
     try:
         import pandas as pd  # noqa: PLC0415 — optional dep: pandas
+        import pyarrow.parquet as pq  # noqa: PLC0415 — optional dep: pyarrow
+
+        from application_sdk.storage.formats.utils import (  # noqa: PLC0415
+            _arrow_table_from_pandas,
+        )
 
         logger.info("Converting file to parquet: %s", file_path)
         df = pd.read_json(file_path, orient="records", lines=True)
         df = df.loc[:, ~df.where(df.astype(bool)).isna().all(axis=0)]
         parquet_file_path = file_path.replace(".json", ".parquet")
-        df.to_parquet(parquet_file_path)
+        # preserve_index=None and snappy are what DataFrame.to_parquet passed.
+        pq.write_table(
+            _arrow_table_from_pandas(df, preserve_index=None),
+            parquet_file_path,
+            compression="snappy",
+        )
         return parquet_file_path
     except Exception:
         logger.error("Error converting file to parquet: %s", file_path, exc_info=True)

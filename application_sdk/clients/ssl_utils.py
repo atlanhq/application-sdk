@@ -90,7 +90,7 @@ def create_ssl_context_with_custom_certs(cert_dir: str) -> ssl.SSLContext:
 @functools.lru_cache(maxsize=1)
 def get_ssl_context() -> bool | ssl.SSLContext:
     """
-    Get the SSL verification context for HTTP clients (httpx, aiohttp, etc.).
+    Get the SSL verification context for HTTP clients such as httpx.
 
     If SSL_CERT_DIR is set and points to a valid directory, returns an SSLContext
     that includes both default system certificates AND custom certificates from that directory.
@@ -105,12 +105,6 @@ def get_ssl_context() -> bool | ssl.SSLContext:
         >>> ssl_context = get_ssl_context()
         >>> async with httpx.AsyncClient(verify=ssl_context) as client:
         ...     response = await client.get("https://example.com")
-
-        >>> import aiohttp
-        >>> ssl_context = get_ssl_context()
-        >>> async with aiohttp.ClientSession() as session:
-        ...     async with session.get("https://example.com", ssl=ssl_context) as response:
-        ...         pass
     """
     ssl_cert_dir = get_ssl_cert_dir()
     if ssl_cert_dir:

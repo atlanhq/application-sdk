@@ -182,6 +182,11 @@ RENDER_IMAGE = (
 )
 
 
+# Where the render sees the repo inside the container, so it is also the
+# prefix of every path bootstrap prints.
+RENDER_ROOT = "/w"
+
+
 def render_argv(
     scratch: str, suite: str, resolved_at: str, name: str, uid: int, gid: int
 ) -> list[str]:
@@ -215,9 +220,9 @@ def render_argv(
         "-e",
         "UV_PYTHON_DOWNLOADS=never",
         "-v",
-        f"{scratch}:/w",
+        f"{scratch}:{RENDER_ROOT}",
         "-w",
-        "/w",
+        RENDER_ROOT,
         RENDER_IMAGE,
         *resync_command(suite, resolved_at),
     ]
@@ -471,6 +476,41 @@ def parse_manifest(stdout: str) -> dict | None:
         if isinstance(doc, dict) and isinstance(doc.get("touched"), list):
             manifest = doc
     return manifest
+
+
+# bootstrap's per-file refusal lines: ``skipped: <path> <why>; left untouched``.
+# A refused file is reported in the --json manifest as `unchanged`, exactly
+# like a file that is already canonical, so without reading these lines a repo
+# whose scaffold bootstrap will not touch reads as "in sync" for ever (FND-4540).
+_REFUSAL_PREFIX = "skipped: "
+_REFUSAL_TAIL = "; left untouched"
+# The connector review kit is skipped on purpose when a target cannot be merged
+# safely, so one hand-edited CLAUDE.md never blocks a fleet resync. Not a refusal.
+_KIT_SKIP_MARKER = "connector review kit"
+
+
+def refused_scaffolds(stdout: str, root: str = RENDER_ROOT) -> dict[str, str]:
+    """``{repo-relative path: reason}`` for every scaffold bootstrap refused
+    to rewrite, read from its prose output.
+
+    These lines are the only signal for a refusal: every conformance version
+    the lane renders at prints them, and none of those versions puts a refusal
+    in the --json manifest.
+    """
+    refused: dict[str, str] = {}
+    prefix = root.rstrip("/") + "/"
+    for line in (stdout or "").splitlines():
+        if not line.startswith(_REFUSAL_PREFIX) or _KIT_SKIP_MARKER in line:
+            continue
+        rest = line[len(_REFUSAL_PREFIX) :]
+        path, _, why = rest.partition(" ")
+        if not path.startswith(prefix):
+            continue
+        rel = path[len(prefix) :]
+        if _unsafe_rel(rel):
+            continue
+        refused[rel] = why.split(_REFUSAL_TAIL, 1)[0].strip()
+    return refused
 
 
 def _normalise(line: str) -> str:

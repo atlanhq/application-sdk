@@ -441,7 +441,7 @@ The object-store backend is configured via Dapr component YAML at deploy time (s
 | AssumeRole via STS | `assumeRoleArn` (+ optional `sessionName`, `accessKey`/`secretKey`/`sessionToken` for base identity) |
 | Instance profile / IRSA / env vars | Omit all credential fields |
 
-`boto3` and `azure-identity` are core SDK dependencies — no extra install is required for these auth modes. The `[iam_auth]` and `[azure]` extras are backwards-compatibility shims kept so connector `pyproject.toml` files that listed them continue to install without error.
+`boto3` and `azure-identity` are core SDK dependencies — no extra install is required for these auth modes. The `[iam_auth]` and `[azure]` extras install nothing more. They are deprecated and removed in v4.0.0; drop them from `pyproject.toml` (conformance rule D017 warns on each).
 
 ### Azure Blob (`bindings.azure.blobstorage`)
 

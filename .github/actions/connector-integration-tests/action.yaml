@@ -97,8 +97,10 @@ inputs:
     default: ""
   python-version:
     required: false
-    description: Python version to use.
-    default: "3.11"
+    description: |
+      Python major.minor to test on. Empty (the default) is the version the app
+      image ships, resolved by setup-deps from the SDK Dockerfile.
+    default: ""
   pytest-args:
     required: false
     description: |

@@ -856,30 +856,20 @@ class TestCloudStorePutAttributes:
 class TestS3RegionLookup:
     @staticmethod
     def _stub_head(monkeypatch, *, headers=None, error=None, by_host=None):
-        import aiohttp
+        import httpx
 
         seen: dict = {"urls": []}
 
-        class _Response:
-            def __init__(self, response_headers):
-                self.headers = response_headers
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *_exc):
-                return False
-
-        def _head(_self, url, **kwargs):
+        async def _head(_self, url, **kwargs):
             seen["urls"].append(url)
             seen.update(url=url, **kwargs)
             if error is not None:
                 raise error
             if by_host is not None:
-                return _Response(by_host.get(url.split("/")[2], {}))
-            return _Response(headers or {})
+                return httpx.Response(200, headers=by_host.get(url.split("/")[2], {}))
+            return httpx.Response(200, headers=headers or {})
 
-        monkeypatch.setattr(aiohttp.ClientSession, "head", _head)
+        monkeypatch.setattr(httpx.AsyncClient, "head", _head)
         return seen
 
     @pytest.mark.parametrize(
@@ -908,7 +898,7 @@ class TestS3RegionLookup:
         seen = self._stub_head(monkeypatch, headers=headers)
         assert await _REAL_LOOKUP_BUCKET_REGION("my.bucket") == expected
         assert seen["urls"] == urls
-        assert seen["allow_redirects"] is False
+        assert seen["follow_redirects"] is False
 
     @pytest.mark.parametrize(
         ("env", "region_host", "expected"),
@@ -941,11 +931,11 @@ class TestS3RegionLookup:
         "error", [OSError("unreachable"), RuntimeError("socket blocked")]
     )
     async def test_lookup_failure_returns_empty(self, monkeypatch, error):
-        import aiohttp
+        import httpx
 
         seen = self._stub_head(
             monkeypatch,
-            error=aiohttp.ClientConnectionError("unreachable")
+            error=httpx.ConnectError("unreachable")
             if isinstance(error, OSError)
             else error,
         )
@@ -1087,14 +1077,44 @@ class TestS3RegionLookup:
             monkeypatch.setenv(key, value)
         assert cloud._region_lookup_hosts() == hosts
 
-    async def test_lookup_uses_sdk_ssl_context(self, monkeypatch):
+    async def test_lookup_caps_each_head_at_the_total_timeout(self, monkeypatch):
+        """httpx's scalar timeout is per read; a HEAD that never completes is
+        still cut off at the lookup timeout, and the lookup gives up."""
+        import httpx
+
+        from application_sdk.storage import cloud
+
+        monkeypatch.setattr(cloud, "_S3_REGION_LOOKUP_TIMEOUT_SECONDS", 0.05)
+        heads: list[str] = []
+
+        async def _hang(_self, url, **_kwargs):
+            heads.append(url)
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(httpx.AsyncClient, "head", _hang)
+        assert await asyncio.wait_for(_REAL_LOOKUP_BUCKET_REGION("b"), 5) == ""
+        assert len(heads) == 1
+
+    async def test_lookup_uses_sdk_ssl_context_and_proxy_env(self, monkeypatch):
+        import httpx
+
         from application_sdk.clients import ssl_utils
 
         sentinel = object()
         monkeypatch.setattr(ssl_utils, "get_ssl_context", lambda: sentinel)
-        seen = self._stub_head(monkeypatch, headers={})
+        client_kwargs: dict = {}
+        real_init = httpx.AsyncClient.__init__
+
+        def _init(self, **kwargs):
+            client_kwargs.update(kwargs)
+            real_init(self, **{**kwargs, "verify": True})
+
+        monkeypatch.setattr(httpx.AsyncClient, "__init__", _init)
+        self._stub_head(monkeypatch, headers={})
         await _REAL_LOOKUP_BUCKET_REGION("b")
-        assert seen["ssl"] is sentinel
+        assert client_kwargs["verify"] is sentinel
+        assert client_kwargs["trust_env"] is True
+        assert client_kwargs["timeout"] == 10.0
 
     async def test_rebuild_uses_credentials_as_given(self, monkeypatch):
         from application_sdk.storage import _obstore_config, cloud

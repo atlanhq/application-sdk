@@ -1,0 +1,6 @@
+# ruff's default settings, as in an app repo, for the generated example files.
+#
+# Without this file the SDK's root pyproject.toml applies, and inside the SDK
+# repo ruff sorts `application_sdk` as first-party. In an app it is
+# third-party, which is what the toolkit renders for. The SDK's pre-commit
+# hooks then judge the committed examples the way an app's would.

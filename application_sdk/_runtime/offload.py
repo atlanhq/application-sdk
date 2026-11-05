@@ -704,7 +704,7 @@ async def run_in_thread(
        =========================  ======================  ====================
        Need                       Use (async)             Avoid (blocking)
        =========================  ======================  ====================
-       HTTP requests              ``httpx``, ``aiohttp``  ``requests``
+       HTTP requests              ``httpx``               ``requests``
        AWS SDK                    ``aioboto3``,           ``boto3``
                                   ``aiobotocore``
        PostgreSQL                 ``asyncpg``             ``psycopg2``
@@ -1278,11 +1278,30 @@ def _discard_process_pool(max_workers: int, pool: _IsolationPool) -> None:
     executor.shutdown(wait=False)
 
 
+def _retire_single_use_pool(pool: _IsolationPool) -> None:
+    """Shut a ``fresh_child=True`` pool down once its one call's child is done.
+
+    Runs from the child future's done callback, which fires on the executor's
+    own manager thread — joining the children there would deadlock, so the
+    join happens on a short-lived daemon thread. ``reaped`` is set once every
+    child has exited, as for an idle-reaped pool.
+    """
+
+    def _join() -> None:
+        pool.executor.shutdown(wait=True)
+        pool.reaped.set()
+
+    threading.Thread(
+        target=_join, name="sdk-isolation-fresh-retire", daemon=True
+    ).start()
+
+
 async def run_fault_isolated(
     func: Callable[..., T],
     *args: Any,
     timeout: float | None = None,
     max_workers: int | None = None,
+    fresh_child: bool = False,
     **kwargs: Any,
 ) -> T:
     """Run ``func`` in an isolated child process (native-crash containment).
@@ -1329,6 +1348,15 @@ async def run_fault_isolated(
             all ``max_workers=1`` callers share a single child and queue behind
             one another; pass another integer to bound concurrency at a
             different width. Must be >= 1.
+        fresh_child: Run on a single-use child that serves this call only and exits
+            as soon as it finishes, instead of a pooled one. A pooled child
+            serves every call that arrives within the idle period, and the
+            peak heap one call leaves behind stays resident into the next. Use
+            ``fresh_child=True`` for heavy calls made back to back — each step then
+            starts on an empty heap, and the memory is returned the moment the
+            call ends rather than after the idle period. Costs one spawn and
+            import per call. Never shared, so no other caller can queue behind
+            it or discard it. ``max_workers`` must be ``None`` or ``1``.
 
     Raises:
         BrokenProcessPool: The child died abnormally (native crash), or a
@@ -1337,11 +1365,22 @@ async def run_fault_isolated(
             width gets a fresh child.
         TimeoutError: ``timeout`` elapsed. The child is killed and the pool
             discarded.
-        InvalidInputValueError: ``max_workers`` is < 1 (also a ``ValueError``).
+        InvalidInputValueError: ``max_workers`` is < 1, or is neither ``None``
+            nor ``1`` with ``fresh_child=True`` (also a ``ValueError``).
     """
-    workers = (
-        _default_process_pool_max_workers() if max_workers is None else max_workers
-    )
+    if fresh_child and max_workers not in (None, 1):
+        raise InvalidInputValueError(
+            message=f"fresh_child=True runs on a single-use width-1 child; got max_workers={max_workers}",
+            field="max_workers",
+            constraint="None or 1 when fresh_child=True",
+            value_summary=str(max_workers),
+        )
+    if fresh_child:
+        workers = 1
+    else:
+        workers = (
+            _default_process_pool_max_workers() if max_workers is None else max_workers
+        )
     if workers < 1:
         raise InvalidInputValueError(
             message=f"max_workers must be >= 1, got {workers}",
@@ -1371,7 +1410,21 @@ async def run_fault_isolated(
     # the child, so the call returns at its deadline whether or not a hold is
     # watching.
     with _auto_hold(_ISOLATED_HOLD_PREFIX + _offloaded_callable_name(func), timeout):
-        pool = _acquire_process_pool(workers)
+        if fresh_child:
+            # Never registered in _PROCESS_POOLS, so no other caller can reach
+            # it; _discard_process_pool below leaves the shared width-1 pool
+            # alone for the same reason.
+            pool = _IsolationPool(1)
+
+            def release() -> None:
+                _retire_single_use_pool(pool)
+
+        else:
+            pool = _acquire_process_pool(workers)
+
+            def release() -> None:
+                _release_process_pool(workers, pool)
+
         try:
             child_future = pool.executor.submit(
                 functools.partial(func, *args, **kwargs)
@@ -1379,12 +1432,10 @@ async def run_fault_isolated(
         except BaseException:
             # Never submitted (pool broken or shut down): nothing will release
             # the in-flight count, so release it here.
-            _release_process_pool(workers, pool)
+            release()
             raise
         # Released when the *child* is done, not when this caller stops waiting.
-        child_future.add_done_callback(
-            lambda _done: _release_process_pool(workers, pool)
-        )
+        child_future.add_done_callback(lambda _done: release())
         future = asyncio.wrap_future(child_future, loop=loop)
         if timeout is not None:
             # Not asyncio.wait_for: on timeout it cancels the future and then

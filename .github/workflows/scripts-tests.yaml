@@ -30,10 +30,17 @@ name: CI script tests
 # every toolkit review its atlan-ci approval, because the test that would have
 # caught it was only ever run by hand.
 #
-# Not a *required* check yet. Now that it is unfiltered it can safely become one:
-# add it to branch protection (it concludes on every PR, so it will not sit
-# pending). The always-concluding-gate pattern in sdk-gate.yaml is no longer
-# needed for this workflow, but is still the right shape for path-filtered ones.
+# Both jobs conclude on every PR (no path filter), so both can be required
+# checks on the `main` ruleset without the always-concluding-gate wrapper that
+# path-filtered ones need (see sdk-gate.yaml). Required contexts (FND-4245):
+#   * "pytest .github/scripts/tests"
+#   * "pyright .github/scripts"
+#
+# The pyright job exists because [tool.pyright] excludes .github/**, so the
+# pre-commit pyright hook never sees these scripts. It holds pyright's findings
+# to .github/scripts/pyright_baseline.json, per file and per rule, and fails if
+# a count rises (a new finding) or falls without the baseline being lowered
+# (unlocked slack). See docs/standards/ci.md.
 
 on:
   pull_request:
@@ -76,3 +83,28 @@ jobs:
       # by hand in the review sandbox exactly as it runs here.
       - name: Run PR-review redaction tests
         run: .mothership/pr-review/scripts/test-redact-toolkit-public-review.sh
+
+  pyright:
+    name: pyright .github/scripts
+    # Same reasoning as the pytest job: a bump-version PR never touches
+    # .github/scripts, and a skip reports as a pass.
+    if: ${{ !startsWith(github.head_ref, 'bump-version') }}
+    runs-on: ubuntu-latest
+    # pyright over .github/scripts takes well under a minute.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+
+      # pyright is the exact pin in the locked `dev` group, equal to the
+      # pre-commit hook's rev. `--extra workflows` installs what the scripts
+      # import, so pyright resolves them instead of reporting missing imports.
+      # --base-sha also holds the PR's baseline to the base revision's, so a PR
+      # cannot add a finding and raise the baseline to match in one change.
+      - name: Check pyright findings against the baseline
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: uv run --frozen --extra workflows python .github/scripts/check_pyright_baseline.py --base-sha "$BASE_SHA"

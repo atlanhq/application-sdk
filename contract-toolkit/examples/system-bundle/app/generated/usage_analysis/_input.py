@@ -2,9 +2,8 @@
 # To regenerate: pkl eval -m . contract/app.pkl
 from __future__ import annotations
 
-from pydantic import Field
-
 from application_sdk.contracts.base import Input
+from pydantic import Field
 
 
 class UsageAnalysisAppInputContract(Input):

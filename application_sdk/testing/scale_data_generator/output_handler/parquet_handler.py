@@ -1,8 +1,9 @@
 from pathlib import Path
 from typing import Any, Dict
 
-import pyarrow as pa
 import pyarrow.parquet as pq
+
+from application_sdk.storage.formats.utils import _arrow_table_from_pandas
 
 from .base import OutputFormatHandler
 
@@ -30,7 +31,7 @@ class ParquetFormatHandler(OutputFormatHandler):
             import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
             df = pd.DataFrame(self.file_handlers[table_name]["records"])
-            table = pa.Table.from_pandas(df)
+            table = _arrow_table_from_pandas(df, preserve_index=None)
             file_path = Path(self.file_handlers[table_name]["path"])
 
             if file_path.exists():

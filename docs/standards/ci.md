@@ -75,7 +75,7 @@ The `CI script tests` workflow (`.github/workflows/scripts-tests.yaml`) runs
 `pytest .github/scripts/tests` on every PR:
 
 ```bash
-uv run --extra workflows --with pytest python -m pytest .github/scripts/tests -q
+uv run --frozen --extra workflows python -m pytest .github/scripts/tests -q
 ```
 
 If you add a new script, add its test in the same PR — the workflow will pick
@@ -86,9 +86,46 @@ cross-file guards that read YAML outside `.github/scripts/` — the mask-before-
 call-site check below is one — and any `paths:` list would have to enumerate every
 file they inspect, so it would silently stop firing on exactly the edits those
 guards exist to catch. Don't add one; a sub-minute suite is cheaper than that
-failure mode. Because it now concludes on every PR, it can be added to branch
-protection directly, without the always-concluding-gate wrapper that
+failure mode. Because it concludes on every PR, both of its jobs are required
+checks on the `main` ruleset (`pytest .github/scripts/tests` and
+`pyright .github/scripts`), without the always-concluding-gate wrapper that
 path-filtered required checks need (see `sdk-gate.yaml` for that pattern).
+Renaming either job renames the required context: update the ruleset in the
+same change, or every PR waits on a check that never reports.
+
+## pyright on `.github/scripts`: a baseline that only shrinks
+
+`[tool.pyright]` excludes `.github/**`, so the pre-commit pyright hook never
+sees the CI scripts. The `pyright .github/scripts` job runs
+`.github/scripts/check_pyright_baseline.py`, which runs pyright over
+`.github/scripts` with the repo's own pyright settings (minus the exclude,
+pinned to Linux and the `requires-python` floor) and compares the result,
+per file and per rule, with `.github/scripts/pyright_baseline.json`:
+
+- **A count above the baseline fails.** Fix the new finding.
+- **A count below the baseline also fails.** You fixed something: lock it in.
+- **A baseline count above the base revision's fails.** CI passes
+  `--base-sha` (the PR's base), so raising the baseline with `--update` to make
+  room for a new finding does not get past the check. Two exceptions are handled
+  explicitly: a renamed file carries its counts to the new path, and a PR that
+  changes the pinned pyright version (recorded as `pyright_version` in the
+  baseline, which must equal the `dev` pin) may raise counts. The increases are
+  printed as warnings for the reviewer.
+
+```bash
+uv run --frozen --extra workflows python .github/scripts/check_pyright_baseline.py           # check
+uv run --frozen --extra workflows python .github/scripts/check_pyright_baseline.py --update  # rewrite baseline
+```
+
+Counts are per (file, rule), so fixing one finding does not pay for a different
+new one in the same file. A new script starts at zero: it must be pyright-clean.
+A pyright upgrade (the `dev`-group pin, kept equal to the pre-commit hook's rev)
+may move counts either way; regenerate the baseline in that PR.
+
+The generated pyright config is written inside `.github/scripts`, not at the repo
+root. pyright auto-excludes `**/.*` below a config's root whatever `exclude`
+says, so a repo-root config can never reach `.github/`. If pyright reports 0
+files analysed, the check fails rather than matching an empty baseline.
 
 ## An artifact upload retry must use a DIFFERENT artifact name
 
@@ -1236,6 +1273,30 @@ python -m application_sdk.dev.pkl check           # has my PATH pkl drifted?
    workflow, action or script spells a `pkl` version out, if a call site pins
    one, if the textual and imported reads disagree, or if the declaring file
    falls out of that path filter.
+
+### Connector test tiers run on the container Python (FND-4611)
+
+`setup-deps` used to default `python-version` to `"3.11"`, and so did
+`connector-unit-tests` and `connector-integration-tests`. `tests-reusable.yaml`
+passed nothing, so every connector's unit and integration tiers ran on 3.11
+while its image ran 3.13. A repo's `.python-version` could also move them,
+because `uv` reads it before the interpreter on `PATH`.
+
+Now all three default to `""`. When no version is named, `setup-deps` reads the
+golden tag from the SDK's own `Dockerfile` (beside the action, never the
+caller's) with `container_python_version.py print-version`. It then exports
+`UV_PYTHON`, which outranks `.python-version`, so every later `uv` command in
+the job uses it. The e2e tier already named the version
+(`sdr-e2e`'s `expected-python-version`). It now gets `UV_PYTHON` too, because
+it goes through `setup-deps`.
+
+This departs from the `resolve --requested` recipe above in one way. The empty
+check is a step-level `if:` plus an `||` expression, not a script subcommand.
+`setup-deps` also runs the SDK's Windows and macOS unit legs, which always name
+a version, and there the resolve step does not run at all. So no leg depends on
+a `python3` being on the runner before `setup-python`. There is still no
+conditional shell. `test_setup_deps_python_pin_wiring.py` runs both steps, and
+also fails if `tests-reusable.yaml` ever passes a `python-version` to a tier.
 
 ### The lint toolchain: three ruff pins that move as one
 

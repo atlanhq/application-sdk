@@ -45,7 +45,6 @@ LIST_FILE = API_DIR / "api-files.txt"
 PROVIDED_BY = {
     "pydantic_core": "pydantic",
     "starlette": "fastapi",
-    "typing_extensions": "pydantic",
     "dotenv": "python_dotenv",
     "opentelemetry": "opentelemetry_sdk",
     "certifi": "httpx",
