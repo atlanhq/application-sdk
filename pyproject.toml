@@ -32,7 +32,13 @@ dependencies = [
     "opentelemetry-exporter-prometheus>=0.66b0,<0.67",
     "opentelemetry-instrumentation-fastapi>=0.66b0,<0.67",
     "prometheus-client>=0.20.0,<1.0",
-    "fastapi[standard]>=0.162.0,<0.163.0",
+    # Plain fastapi plus the two packages of its [standard] extra the SDK uses:
+    # uvicorn serves the handler and the worker's health/metrics app, and
+    # python-multipart parses the object-store upload route's form. The rest of
+    # [standard] (fastapi-cli, jinja2, email-validator, pydantic-settings, ...)
+    # was never imported and shipped in every connector image.
+    "fastapi>=0.162.0,<0.163.0",
+    "uvicorn[standard]>=0.30.0,<1.0.0",
     "pyatlan>=11.7.0,<12",  # floor carries authlib~=1.9.1 (CVE-2026-96760) to consumers
     "httpx>=0.27.0,<0.29.0",
     "httpx-retries>=0.6.0,<0.7.0",
@@ -44,10 +50,12 @@ dependencies = [
     "authlib>=1.9.4,<2",  # CVE-2026-96760; GHSA-9qr6-8289-9j56, GHSA-f3fg-34g9-v7jx, GHSA-gp2m-377p-m4j3
     # Transitive runtime deps, published for the same reason as certifi:
     # protobuf arrives via temporalio / opentelemetry-proto, pyjwt via
-    # azure-identity -> msal, python-multipart via fastapi[standard]. The api
-    # wheel already ships python-multipart with this exact pin (parity test).
+    # azure-identity -> msal.
     "protobuf>=6.33.5,<8",  # CVE-2026-0994
     "pyjwt>=2.12.0,<3",  # CVE-2026-32597
+    # fastapi's File/Form parsing (handler/object_routes.py); fastapi imports
+    # it, so it has no import site here. The floor is a CVE floor, and the api
+    # wheel ships it with this exact pin (parity test).
     "python-multipart>=0.0.26",  # CVE-2026-24486, CVE-2026-40347
     "pydantic>=2.10.6,<3.0.0",
     # `deprecated` (PEP 702) and `TypeAliasType`; arrives via pydantic today,
@@ -157,6 +165,10 @@ mcp = [
 tests = [
     "pandera[io]>=0.35.0,<0.36.0",
     "httpx>=0.27.0,<0.29.0",
+    # starlette's TestClient (fastapi.testclient) transport. Apps' tests got it
+    # through fastapi[standard]; without it TestClient falls back to httpx with
+    # a deprecation warning, which fails a suite run with `-W error`.
+    "httpx2>=2.16.0,<3.0.0",
 ]
 # Typed Kubernetes backend for application_sdk.testing.harness.cluster — the
 # in-process client that replaces the `kubectl`-shelling reads in
@@ -213,6 +225,10 @@ test = [
     "pytest-rerunfailures>=16.7,<17.0",
     "pytest-socket>=0.7.0,<1.0.0",
     "pytest-xdist>=3.8.0,<4.0.0",
+    # starlette's TestClient (fastapi.testclient) is built on httpx2 and only
+    # falls back to httpx with a deprecation warning. fastapi[standard] used to
+    # bring it in; the SDK's tests and .github/scripts probes still need it.
+    "httpx2>=2.16.0,<3.0.0",
     # pytest-cov, not bare `coverage run -m pytest`: `coverage run` only traces
     # the parent process, so every xdist worker's coverage is lost and the
     # --fail-under gate reads a number less than half the real one (measured on
