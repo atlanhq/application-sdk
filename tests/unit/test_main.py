@@ -13,6 +13,7 @@ from unittest import mock
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+import yaml
 
 from application_sdk.main import (
     AppConfig,
@@ -44,6 +45,7 @@ from application_sdk.main_errors import (
     MultiAppModuleError,
     UnknownModeError,
 )
+from application_sdk.storage.errors import StorageBindingNotFoundError
 from tests.unit.private_stdlib import private_stdlib
 
 
@@ -1048,13 +1050,7 @@ class TestCreateInfrastructureUpstreamStore:
 
 
 class TestCreateInfrastructureObjectStoreDisabled:
-    """Startup against a real components folder, as the in-cluster chart renders it.
-
-    With ``deploy.dapr.objectstore: false`` the chart's init script skips
-    ``objectstore.yaml`` but still points ``DEPLOYMENT_OBJECT_STORE_NAME`` and
-    ``UPSTREAM_OBJECT_STORE_NAME`` at ``<app>-objectstore``. Only the Dapr
-    sidecar client is faked; the store loaders read the folder for real.
-    """
+    """Startup against a real components folder; only the Dapr sidecar calls are faked."""
 
     _STORE_NAME = "my-app-objectstore"
 
@@ -1077,11 +1073,12 @@ class TestCreateInfrastructureObjectStoreDisabled:
         monkeypatch.setattr(
             "application_sdk.infrastructure._dapr.http.AsyncDaprClient", MagicMock()
         )
+        monkeypatch.setattr(
+            "application_sdk.main._log_dapr_components", AsyncMock(return_value=set())
+        )
         return components
 
     def _write_objectstore(self, components: Path) -> None:
-        import yaml
-
         doc = {
             "apiVersion": "dapr.io/v1alpha1",
             "kind": "Component",
@@ -1113,8 +1110,6 @@ class TestCreateInfrastructureObjectStoreDisabled:
         monkeypatch: pytest.MonkeyPatch,
         declared: str | None,
     ) -> None:
-        from application_sdk.storage.errors import StorageBindingNotFoundError
-
         if declared is None:
             monkeypatch.delenv("ATLAN_ENABLE_OBJECTSTORE", raising=False)
         else:
