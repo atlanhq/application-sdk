@@ -10,10 +10,10 @@ import threading
 from pathlib import Path
 from typing import Any
 from unittest import mock
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import yaml
+from obstore.store import LocalStore
 
 from application_sdk.main import (
     AppConfig,
@@ -46,6 +46,7 @@ from application_sdk.main_errors import (
     UnknownModeError,
 )
 from application_sdk.storage.errors import StorageBindingNotFoundError
+from tests.unit.conftest import write_component
 from tests.unit.private_stdlib import private_stdlib
 
 
@@ -819,23 +820,27 @@ class TestCreateInfrastructureUpstreamStore:
     """Tests for _create_infrastructure() upstream_storage selection."""
 
     _DAPR_CLIENT_MOD = "application_sdk.infrastructure._dapr.client"
-    _STORAGE_MOD = "application_sdk.storage"
+    _OPTIONAL_LOADER = "application_sdk.storage.binding._create_store_from_binding_optional_with_put_attrs"
 
     def _make_dapr_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
+
+    @staticmethod
+    def _loader(stores: dict[str, tuple[Any, Any]]) -> MagicMock:
+        """Stand-in for the optional loader that returns each store by component name."""
+        return MagicMock(side_effect=lambda name, **_: stores.get(name, (None, None)))
+
+    @staticmethod
+    def _required_by_name(loader: MagicMock) -> dict[str, bool]:
+        return {c.args[0]: c.kwargs["required"] for c in loader.call_args_list}
 
     async def test_upstream_storage_none_when_optional_helper_returns_none(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """upstream_storage is None when the optional helper returns (None, None).
-
-        Whether that happens because the component is absent or broken is tested
-        in TestCreateStoreFromBindingOptionalWithPutAttrs; here we only verify
-        that _create_infrastructure surfaces (None, None) correctly.
-        """
+        """upstream_storage is None when the optional helper returns (None, None) for it."""
         self._make_dapr_env(monkeypatch)
-        deployment_store = MagicMock()
+        loader = self._loader({"objectstore": (MagicMock(), None)})
 
         with (
             patch(
@@ -846,13 +851,13 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
+            patch(self._OPTIONAL_LOADER, new=loader),
             patch(
-                "application_sdk.storage.binding._create_store_from_binding_optional_with_put_attrs",
-                return_value=(None, None),
+                "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME", "objectstore"
             ),
             patch(
-                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
-                return_value=(deployment_store, None),
+                "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME",
+                "atlan-objectstore",
             ),
         ):
             infra = await _create_infrastructure()
@@ -866,8 +871,15 @@ class TestCreateInfrastructureUpstreamStore:
     ) -> None:
         """upstream_storage is a live store in SDR deployments (component present)."""
         self._make_dapr_env(monkeypatch)
+        monkeypatch.delenv("ATLAN_ENABLE_OBJECTSTORE", raising=False)
         upstream_store = MagicMock()
         deployment_store = MagicMock()
+        loader = self._loader(
+            {
+                "objectstore": (deployment_store, None),
+                "atlan-objectstore": (upstream_store, None),
+            }
+        )
 
         with (
             patch(
@@ -878,17 +890,9 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
+            patch(self._OPTIONAL_LOADER, new=loader),
             patch(
-                "application_sdk.storage.binding._create_store_from_binding_optional_with_put_attrs",
-                return_value=(upstream_store, None),
-            ) as mock_optional,
-            patch(
-                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
-                return_value=(deployment_store, None),
-            ) as mock_binding,
-            patch(
-                "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME",
-                "objectstore",
+                "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME", "objectstore"
             ),
             patch(
                 "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME",
@@ -899,29 +903,22 @@ class TestCreateInfrastructureUpstreamStore:
 
         assert infra.upstream_storage is upstream_store
         assert infra.storage is deployment_store
-        mock_optional.assert_called_once_with(
-            "atlan-objectstore", components_dir=ANY, required=ANY, secrets=ANY
-        )
-        mock_binding.assert_called_once_with(
-            "objectstore", components_dir=ANY, secrets=ANY
-        )
+        assert self._required_by_name(loader) == {
+            "objectstore": True,
+            "atlan-objectstore": False,
+        }
 
     async def test_upstream_storage_aliases_deployment_when_names_are_one_component(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """One component under both names is one store — one handle, aliased.
-
-        In-cluster charts point UPSTREAM_OBJECT_STORE_NAME and
-        DEPLOYMENT_OBJECT_STORE_NAME at the app's single object-store component.
-        A *second* store object over the same bucket makes App.upload route by
-        identity and copy the bucket onto itself, so startup must not build one;
-        ``None`` would be wrong the other way, because every consumer outside
-        App.upload reads the handle as "is there an upstream store". Alias it.
-        """
+        """One component under both names is one store: one handle, aliased, built once."""
         self._make_dapr_env(monkeypatch)
         deployment_store = MagicMock()
         deployment_attrs = {"Storage-Class": "STANDARD_IA"}
+        loader = self._loader(
+            {"my-app-objectstore": (deployment_store, deployment_attrs)}
+        )
 
         with (
             patch(
@@ -937,14 +934,7 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
-            patch(
-                "application_sdk.storage.binding._create_store_from_binding_optional_with_put_attrs",
-                return_value=(MagicMock(), None),
-            ) as mock_optional,
-            patch(
-                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
-                return_value=(deployment_store, deployment_attrs),
-            ) as mock_binding,
+            patch(self._OPTIONAL_LOADER, new=loader),
             patch(
                 "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME",
                 "my-app-objectstore",
@@ -956,19 +946,13 @@ class TestCreateInfrastructureUpstreamStore:
         ):
             infra = await _create_infrastructure()
 
-        # Same object, not an equal one: identity is what the dual-write
-        # fan-out and _upload_from_store's same-object guard test.
         assert infra.storage is deployment_store
         assert infra.upstream_storage is deployment_store
         assert infra.upstream_storage_put_attributes is deployment_attrs
         assert infra.single_store is True
-        mock_optional.assert_not_called()
-        # The binding is built once and its secrets fetched once.
+        loader.assert_called_once()
         mock_fetch.assert_awaited_once()
         assert mock_fetch.await_args.args[1] == "my-app-objectstore"
-        mock_binding.assert_called_once_with(
-            "my-app-objectstore", components_dir=ANY, secrets=ANY
-        )
 
     async def test_two_distinct_components_are_not_single_store(
         self,
@@ -976,8 +960,13 @@ class TestCreateInfrastructureUpstreamStore:
     ) -> None:
         """A real SDR wiring keeps two handles and reports single_store False."""
         self._make_dapr_env(monkeypatch)
-        deployment_store = MagicMock()
         upstream_store = MagicMock()
+        loader = self._loader(
+            {
+                "objectstore": (MagicMock(), None),
+                "atlan-objectstore": (upstream_store, None),
+            }
+        )
 
         with (
             patch(
@@ -993,17 +982,9 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
+            patch(self._OPTIONAL_LOADER, new=loader),
             patch(
-                "application_sdk.storage.binding._create_store_from_binding_optional_with_put_attrs",
-                return_value=(upstream_store, None),
-            ),
-            patch(
-                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
-                return_value=(deployment_store, None),
-            ),
-            patch(
-                "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME",
-                "objectstore",
+                "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME", "objectstore"
             ),
             patch(
                 "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME",
@@ -1022,8 +1003,12 @@ class TestCreateInfrastructureUpstreamStore:
         """required=True is passed to the upstream factory when ENABLE_ATLAN_UPLOAD=True."""
         self._make_dapr_env(monkeypatch)
         monkeypatch.setattr("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True)
-        upstream_store = MagicMock()
-        deployment_store = MagicMock()
+        loader = self._loader(
+            {
+                "objectstore": (MagicMock(), None),
+                "atlan-objectstore": (MagicMock(), None),
+            }
+        )
 
         with (
             patch(
@@ -1034,19 +1019,18 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
+            patch(self._OPTIONAL_LOADER, new=loader),
             patch(
-                "application_sdk.storage.binding._create_store_from_binding_optional_with_put_attrs",
-                return_value=(upstream_store, None),
-            ) as mock_optional,
+                "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME", "objectstore"
+            ),
             patch(
-                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
-                return_value=(deployment_store, None),
+                "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME",
+                "atlan-objectstore",
             ),
         ):
             await _create_infrastructure()
 
-        _name, _args, kwargs = mock_optional.mock_calls[0]
-        assert kwargs.get("required") is True
+        assert self._required_by_name(loader)["atlan-objectstore"] is True
 
 
 class TestCreateInfrastructureObjectStoreDisabled:
@@ -1078,32 +1062,18 @@ class TestCreateInfrastructureObjectStoreDisabled:
         )
         return components
 
-    def _write_objectstore(self, components: Path) -> None:
-        doc = {
-            "apiVersion": "dapr.io/v1alpha1",
-            "kind": "Component",
-            "metadata": {"name": self._STORE_NAME},
-            "spec": {
-                "type": "bindings.localstorage",
-                "version": "v1",
-                "metadata": [
-                    {"name": "rootPath", "value": str(components.parent / "store")}
-                ],
-            },
-        }
-        (components / "objectstore.yaml").write_text(yaml.dump(doc))
-
+    @pytest.mark.parametrize("declared", ["false", " False "])
     async def test_starts_without_store_when_declared_off(
-        self, components_dir: Path, monkeypatch: pytest.MonkeyPatch
+        self, components_dir: Path, monkeypatch: pytest.MonkeyPatch, declared: str
     ) -> None:
-        monkeypatch.setenv("ATLAN_ENABLE_OBJECTSTORE", "false")
+        monkeypatch.setenv("ATLAN_ENABLE_OBJECTSTORE", declared)
 
         infra = await _create_infrastructure()
 
         assert infra.storage is None
         assert infra.upstream_storage is None
 
-    @pytest.mark.parametrize("declared", [None, "true"])
+    @pytest.mark.parametrize("declared", [None, "true", "1", ""])
     async def test_missing_store_still_fails_unless_declared_off(
         self,
         components_dir: Path,
@@ -1122,67 +1092,32 @@ class TestCreateInfrastructureObjectStoreDisabled:
         self, components_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("ATLAN_ENABLE_OBJECTSTORE", "false")
-        self._write_objectstore(components_dir)
+        write_component(
+            components_dir.parent,
+            self._STORE_NAME,
+            "bindings.localstorage",
+            {"rootPath": str(components_dir.parent / "store")},
+        )
 
         infra = await _create_infrastructure()
 
-        assert infra.storage is not None
+        assert isinstance(infra.storage, LocalStore)
         assert infra.upstream_storage is infra.storage
 
-
-class TestObservabilityStoreSinkDefault:
-    """The store sink default follows the objectstore declaration.
-
-    ``ENABLE_OBSERVABILITY_STORE_SINK`` is read once at import, so each case
-    imports the SDK in a fresh interpreter with only its own env.
-    """
-
-    @staticmethod
-    def _sink_enabled(env: dict[str, str]) -> bool:
-        import os
-        import subprocess
-
-        base = {
-            k: v
-            for k, v in os.environ.items()
-            if k
-            not in {
-                "ATLAN_ENABLE_OBJECTSTORE",
-                "ATLAN_ENABLE_OBSERVABILITY_STORE_SINK",
-                "ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK",
-            }
-        }
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "from application_sdk.constants import ENABLE_OBSERVABILITY_STORE_SINK as s; print(s)",
-            ],
-            env={**base, **env},
-            capture_output=True,
-            text=True,
-            check=True,
+    async def test_broken_store_starts_without_it_when_declared_off(
+        self, components_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_ENABLE_OBJECTSTORE", "false")
+        write_component(
+            components_dir.parent,
+            self._STORE_NAME,
+            "bindings.aws.s3",
+            {"bucket": "{{tenant}}-data", "region": "us-east-1"},
         )
-        return result.stdout.strip().splitlines()[-1] == "True"
 
-    @pytest.mark.parametrize(
-        ("env", "expected"),
-        [
-            ({}, True),
-            ({"ATLAN_ENABLE_OBJECTSTORE": "true"}, True),
-            ({"ATLAN_ENABLE_OBJECTSTORE": "false"}, False),
-            (
-                {
-                    "ATLAN_ENABLE_OBJECTSTORE": "false",
-                    "ATLAN_ENABLE_OBSERVABILITY_STORE_SINK": "true",
-                },
-                True,
-            ),
-            ({"ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK": "false"}, False),
-        ],
-    )
-    def test_sink_default(self, env: dict[str, str], expected: bool) -> None:
-        assert self._sink_enabled(env) is expected
+        infra = await _create_infrastructure()
+
+        assert infra.storage is None
 
 
 class TestInstallGracefulSignalHandlers:

@@ -577,7 +577,7 @@ async def _log_dapr_components(
         else:  # not registered, declared is None
             # conformance: ignore[L006] one-time startup validation over the fixed 4-element `expected` tuple, not a hot loop
             logger.info(
-                "Dapr binding %s (role=%s) not registered in sidecar and %s is unset — "
+                "Dapr binding %s (role=%s) not registered in sidecar and %s is unset or not true/false — "
                 "the SDK cannot determine whether your app needs it; "
                 "set deploy.dapr.%s in atlan.yaml (true or false) to silence this",
                 comp_name,
@@ -706,14 +706,8 @@ async def _create_infrastructure(
             AsyncDaprClient,
             wait_for_dapr_sidecar,
         )
-        from application_sdk.storage import (  # noqa: PLC0415 — cold path: storage init only when binding YAML present
-            create_store_from_binding_with_put_attrs,
-        )
         from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: private helper used only inside _create_infrastructure
             _create_store_from_binding_optional_with_put_attrs,
-        )
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — cold path: startup wiring only
-            StorageBindingNotFoundError,
         )
 
         await wait_for_dapr_sidecar()
@@ -739,19 +733,15 @@ async def _create_infrastructure(
             components_dir=components_dir,
         )
         set_fetched_binding_secrets(DEPLOYMENT_OBJECT_STORE_NAME, deployment_secrets)
-        try:
-            deployment_store, deployment_put_attrs = (
-                create_store_from_binding_with_put_attrs(
-                    DEPLOYMENT_OBJECT_STORE_NAME,
-                    components_dir=components_dir,
-                    secrets=deployment_secrets,
-                )
+        _, objectstore_declared = _read_enable_tri_state("ATLAN_ENABLE_OBJECTSTORE")
+        deployment_store, deployment_put_attrs = (
+            _create_store_from_binding_optional_with_put_attrs(
+                DEPLOYMENT_OBJECT_STORE_NAME,
+                components_dir=components_dir,
+                required=objectstore_declared is not False,
+                secrets=deployment_secrets,
             )
-        except StorageBindingNotFoundError:
-            _, objectstore_declared = _read_enable_tri_state("ATLAN_ENABLE_OBJECTSTORE")
-            if objectstore_declared is not False:
-                raise
-            deployment_store, deployment_put_attrs = None, None
+        )
 
         # The only place the two component *names* are compared: identity cannot
         # be tested before the second object exists, so this is the decision
@@ -770,7 +760,7 @@ async def _create_infrastructure(
             # ``upstream_storage`` as "is there an upstream store", and a name
             # gate that answers ``None`` there is the fragile heuristic 668a06c21
             # removed.  ``context.single_store`` is the topology signal.
-            if ENABLE_ATLAN_UPLOAD:
+            if deployment_store is not None and ENABLE_ATLAN_UPLOAD:
                 logger.warning(
                     "ENABLE_ATLAN_UPLOAD is set but UPSTREAM_OBJECT_STORE_NAME and "
                     "DEPLOYMENT_OBJECT_STORE_NAME both name %r — one object store. "
@@ -780,7 +770,7 @@ async def _create_infrastructure(
                     "hand off across the boundary.",
                     DEPLOYMENT_OBJECT_STORE_NAME,
                 )
-            else:
+            elif deployment_store is not None:
                 logger.info(
                     "UPSTREAM_OBJECT_STORE_NAME and DEPLOYMENT_OBJECT_STORE_NAME both "
                     "name %r — one object store; upstream_storage aliases it",

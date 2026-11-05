@@ -4,9 +4,11 @@ import importlib.util
 import os
 import time
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+import yaml
 from hypothesis import settings
 from loguru import logger as _loguru_logger
 
@@ -513,3 +515,22 @@ def e2e_evidence_stays_out_of_the_repo(_e2e_evidence_root, monkeypatch):
 def _e2e_evidence_root(tmp_path_factory: pytest.TempPathFactory) -> str:
     """One e2e evidence directory per xdist worker, shared by its tests."""
     return str(tmp_path_factory.mktemp("e2e-evidence"))
+
+
+def write_component(
+    tmp_path: Path, name: str, binding_type: str, metadata: dict
+) -> Path:
+    """Write a Dapr component YAML and return the components dir."""
+    components_dir = tmp_path / "components"
+    components_dir.mkdir(parents=True, exist_ok=True)
+    doc = {
+        "apiVersion": "dapr.io/v1alpha1",
+        "kind": "Component",
+        "metadata": {"name": name},
+        "spec": {
+            "type": binding_type,
+            "metadata": [{"name": k, "value": v} for k, v in metadata.items()],
+        },
+    }
+    (components_dir / f"{name}.yaml").write_text(yaml.dump(doc))
+    return components_dir

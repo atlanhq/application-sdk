@@ -11,6 +11,7 @@ from application_sdk.constants import (
     _load_storage_lock_wait_progress_seconds,
     _load_use_server_side_cursor,
     _load_worker_liveness_max_idle_seconds,
+    _read_enable_tri_state,
 )
 
 
@@ -328,3 +329,29 @@ class TestLoadOomRestartCheck:
         monkeypatch.setenv(self.ENV, "apiserver")
         with pytest.warns(UserWarning, match="is not one of"):
             assert _load_oom_restart_check() == "none"
+
+
+class TestReadEnableTriState:
+    """Only an explicit "true" or "false" declares intent; anything else is unknown."""
+
+    ENV = "ATLAN_ENABLE_OBJECTSTORE"
+
+    @pytest.mark.parametrize(
+        ("raw", "parsed"),
+        [
+            ("true", True),
+            (" TRUE ", True),
+            ("false", False),
+            (" False ", False),
+            ("", None),
+            ("1", None),
+            ("flase", None),
+        ],
+    )
+    def test_parses(self, monkeypatch: pytest.MonkeyPatch, raw: str, parsed):
+        monkeypatch.setenv(self.ENV, raw)
+        assert _read_enable_tri_state(self.ENV) == (raw, parsed)
+
+    def test_unset(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv(self.ENV, raising=False)
+        assert _read_enable_tri_state(self.ENV) == (None, None)

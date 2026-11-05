@@ -1063,9 +1063,7 @@ def _create_store_from_binding_optional_with_put_attrs(
         if required:
             raise
         _get_logger().info(
-            "No Dapr component named '%s' found — App.upload/download will use "
-            "the deployment store. Configure this binding in SDR deployments to "
-            "route to the upstream bucket.",
+            "No Dapr component named '%s' found — continuing without this store",
             name,
         )
         return None, None

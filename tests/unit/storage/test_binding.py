@@ -30,26 +30,7 @@ from application_sdk.storage.errors import (
     StorageBindingNotFoundError,
     StorageConfigError,
 )
-
-
-def _write_component(
-    tmp_path: Path, name: str, binding_type: str, metadata: dict
-) -> Path:
-    """Write a Dapr component YAML and return the components dir."""
-    components_dir = tmp_path / "components"
-    components_dir.mkdir(parents=True, exist_ok=True)
-    doc = {
-        "apiVersion": "dapr.io/v1alpha1",
-        "kind": "Component",
-        "metadata": {"name": name},
-        "spec": {
-            "type": binding_type,
-            "metadata": [{"name": k, "value": v} for k, v in metadata.items()],
-        },
-    }
-    (components_dir / f"{name}.yaml").write_text(yaml.dump(doc))
-    return components_dir
-
+from tests.unit.conftest import write_component
 
 # ---------------------------------------------------------------------------
 # Module-level env isolation
@@ -184,7 +165,7 @@ class TestBindingErrors:
             create_store_from_binding("nonexistent", components_dir=components_dir)
 
     def test_unsupported_type_raises(self, tmp_path: Path) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path, "objectstore", "bindings.unknown", {}
         )
         with pytest.raises(StorageConfigError, match="Unsupported binding type"):
@@ -216,7 +197,7 @@ class TestS3StaticCredentials:
     def test_access_and_secret_key_translated(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -239,7 +220,7 @@ class TestS3StaticCredentials:
     def test_session_token_translated(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -334,7 +315,7 @@ class TestS3StaticCredentials:
         # store falls back cleanly to the ambient credential chain.
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV-ACCESS-KEY")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV-SECRET-KEY")
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -358,7 +339,7 @@ class TestS3StaticCredentials:
     ) -> None:
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV-ACCESS-KEY")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV-SECRET-KEY")
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -382,7 +363,7 @@ class TestS3StaticCredentials:
         # STS session tokens require base credentials by definition; a bare
         # sessionToken is a misconfiguration that should warn rather than
         # silently fall back (symmetric with the half-pair warning above).
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -410,7 +391,7 @@ class TestS3EmptyConfigHardening:
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
         """Bucket+region only → no credential keys emitted, IRSA / instance-profile activates."""
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -428,7 +409,7 @@ class TestS3EmptyConfigHardening:
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
         """An empty-string region must not be emitted into the obstore config."""
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -446,7 +427,7 @@ class TestS3BehaviorKnobs:
     def test_endpoint_and_force_path_style(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -472,7 +453,7 @@ class TestS3BehaviorKnobs:
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
         for val in ("True", "TRUE", "1"):
-            components_dir = _write_component(
+            components_dir = write_component(
                 tmp_path / val,
                 "objectstore",
                 "bindings.aws.s3",
@@ -489,7 +470,7 @@ class TestS3BehaviorKnobs:
     def test_disable_ssl_sets_allow_http(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -505,7 +486,7 @@ class TestS3BehaviorKnobs:
     def test_insecure_ssl_sets_allow_invalid_certs(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -521,7 +502,7 @@ class TestS3BehaviorKnobs:
     def test_no_endpoint_no_path_style_no_user_agent(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -549,7 +530,7 @@ class TestS3BehaviorKnobs:
     ) -> None:
         # endpoint.lower().startswith("http://") — RFC 3986 schemes are
         # case-insensitive; test all three casing variants.
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path / endpoint[:4],
             "objectstore",
             "bindings.aws.s3",
@@ -565,7 +546,7 @@ class TestS3BehaviorKnobs:
     def test_https_endpoint_does_not_set_allow_http(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -584,7 +565,7 @@ class TestS3BehaviorKnobs:
     ) -> None:
         # No region in metadata → use AWS_REGION (as Dapr's LoadDefaultConfig
         # would) instead of letting obstore silently default to us-east-1.
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -602,7 +583,7 @@ class TestS3BehaviorKnobs:
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
         # AWS_REGION absent; AWS_DEFAULT_REGION is the second fallback arm.
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -619,7 +600,7 @@ class TestS3BehaviorKnobs:
     def test_metadata_region_takes_precedence_over_env(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -649,7 +630,7 @@ class TestS3AssumeRole:
         mock_sts_cls.return_value = MagicMock()
         mock_session_cls.return_value = MagicMock()
 
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -670,7 +651,7 @@ class TestS3AssumeRole:
         assert "aws_secret_access_key" not in config
 
     def test_trust_anchor_arn_raises_config_error(self, tmp_path: Path) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -699,7 +680,7 @@ class TestS3AssumeRole:
         mock_sts_cls.return_value = MagicMock()
         mock_session_cls.return_value = MagicMock()
 
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -746,7 +727,7 @@ class TestS3AssumeRole:
         mock_sts_cls.return_value = MagicMock()
         mock_session_cls.return_value = MagicMock()
 
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -813,7 +794,7 @@ class TestS3SecretKeyRef:
 class TestAzureAccountKey:
     @patch("obstore.store.AzureStore")
     def test_account_key_auth(self, mock_az_cls: MagicMock, tmp_path: Path) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -836,7 +817,7 @@ class TestAzureAccountKey:
 class TestAzureSASToken:
     @patch("obstore.store.AzureStore")
     def test_sas_token_key(self, mock_az_cls: MagicMock, tmp_path: Path) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -855,7 +836,7 @@ class TestAzureSASToken:
 
     @patch("obstore.store.AzureStore")
     def test_sas_key_alias(self, mock_az_cls: MagicMock, tmp_path: Path) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -875,7 +856,7 @@ class TestAzureSASToken:
 class TestAzureServicePrincipal:
     @patch("obstore.store.AzureStore")
     def test_sp_client_secret(self, mock_az_cls: MagicMock, tmp_path: Path) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -901,7 +882,7 @@ class TestAzureServicePrincipal:
         self, mock_az_cls: MagicMock, tmp_path: Path
     ) -> None:
         """tenantId / clientId (no azure prefix) should work identically."""
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -928,7 +909,7 @@ class TestAzureWorkloadIdentity:
         self, mock_az_cls: MagicMock, tmp_path: Path
     ) -> None:
         """tenantId + clientId without a secret → AKS WI path."""
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -952,7 +933,7 @@ class TestAzureWorkloadIdentity:
     def test_federated_token_file_in_metadata(
         self, mock_az_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -976,7 +957,7 @@ class TestAzureManagedIdentity:
     def test_client_id_only_is_user_assigned_mi(
         self, mock_az_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -995,7 +976,7 @@ class TestAzureManagedIdentity:
         self, mock_az_cls: MagicMock, tmp_path: Path
     ) -> None:
         """accountName + containerName only → empty az_config → config=None (DefaultAzureCredential)."""
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -1017,7 +998,7 @@ class TestAzureEnvironment:
     def test_known_environment_values(
         self, mock_az_cls: MagicMock, env_name: str, expected_host: str, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path / env_name,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -1034,7 +1015,7 @@ class TestAzureEnvironment:
         assert config["azure_storage_authority_host"] == expected_host
 
     def test_unknown_environment_raises(self, tmp_path: Path) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -1053,7 +1034,7 @@ class TestAzureEndpointAndEmulator:
     def test_custom_endpoint_translated(
         self, mock_az_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -1074,7 +1055,7 @@ class TestAzureEndpointAndEmulator:
     def test_http_endpoint_infers_allow_http(
         self, mock_az_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -1098,7 +1079,7 @@ class TestAzureEndpointAndEmulator:
     def test_http_endpoint_infers_allow_http_case_insensitive(
         self, mock_az_cls: MagicMock, tmp_path: Path, endpoint: str
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path / endpoint[:4],
             "objectstore",
             "bindings.azure.blobstorage",
@@ -1119,7 +1100,7 @@ class TestAzureEndpointAndEmulator:
     def test_https_endpoint_does_not_set_allow_http(
         self, mock_az_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -1138,7 +1119,7 @@ class TestAzureEndpointAndEmulator:
 
     @patch("obstore.store.AzureStore")
     def test_use_emulator_flag(self, mock_az_cls: MagicMock, tmp_path: Path) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -1170,7 +1151,7 @@ class TestAzureCertificateProvider:
         mock_cert_cred.return_value = MagicMock()
         mock_az_prov.return_value = MagicMock()
 
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -1198,7 +1179,7 @@ class TestAzureCertificateProvider:
 
     def test_cert_without_tenant_and_client_id_raises(self, tmp_path: Path) -> None:
         """azureCertificateFile without azureTenantId/azureClientId → StorageConfigError."""
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -1218,7 +1199,7 @@ class TestAzureCertificateProvider:
     ) -> None:
         """accountKey + service-principal fields both set → warning logged."""
         mock_az_cls.return_value = MagicMock()
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -1262,7 +1243,7 @@ class TestAzureCertificateProvider:
         mock_cert_cred.return_value = MagicMock()
         mock_az_prov.return_value = MagicMock()
 
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -1287,7 +1268,7 @@ class TestAzureMsiExtras:
     def test_msi_endpoint_and_resource_id(
         self, mock_az_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -1316,7 +1297,7 @@ class TestGCSStoreCredentials:
     def test_full_sa_metadata_passed_as_service_account_key(
         self, mock_gcs_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path, "objectstore", "bindings.gcs", FULL_SA_META
         )
         mock_gcs_cls.return_value = MagicMock()
@@ -1336,7 +1317,7 @@ class TestGCSStoreCredentials:
         self, mock_gcs_cls: MagicMock, tmp_path: Path
     ) -> None:
         """bucket + project_id only → config=None so WIF / ADC takes over (PR #1897)."""
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.gcs",
@@ -1354,7 +1335,7 @@ class TestGCSStoreCredentials:
         self, mock_gcs_cls: MagicMock, tmp_path: Path
     ) -> None:
         """project_id + client_email without private_key → config=None (not a partial SA JSON)."""
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.gcs",
@@ -1375,7 +1356,7 @@ class TestGCSStoreCredentials:
         self, mock_gcs_cls: MagicMock, tmp_path: Path
     ) -> None:
         """bucket only → config=None."""
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path, "objectstore", "bindings.gcs", {"bucket": "dev-bucket"}
         )
         mock_gcs_cls.return_value = MagicMock()
@@ -1393,7 +1374,7 @@ class TestGCSStoreCredentials:
             "type": "service_account",
             "private_key": "-----BEGIN KEY-----\\ndata\\n-----END KEY-----\\n",
         }
-        components_dir = _write_component(tmp_path, "objectstore", "bindings.gcs", meta)
+        components_dir = write_component(tmp_path, "objectstore", "bindings.gcs", meta)
         mock_gcs_cls.return_value = MagicMock()
         create_store_from_binding("objectstore", components_dir=components_dir)
 
@@ -1408,7 +1389,7 @@ class TestGCSStoreCredentials:
         self, mock_gcs_cls: MagicMock, tmp_path: Path
     ) -> None:
         """Both 'bindings.gcs' and 'bindings.gcp.bucket' should route to GCS."""
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path, "objectstore", "bindings.gcp.bucket", {"bucket": "alt-bucket"}
         )
         mock_gcs_cls.return_value = MagicMock()
@@ -1420,7 +1401,7 @@ class TestGCSStoreCredentials:
         self, mock_gcs_cls: MagicMock, tmp_path: Path
     ) -> None:
         """private_key_id without private_key also triggers SA JSON build."""
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.gcs",
@@ -1438,7 +1419,7 @@ class TestGCSStoreCredentials:
         self, mock_gcs_cls: MagicMock, tmp_path: Path
     ) -> None:
         """Verify the obstore config key matches cloud.py ('google_service_account_key')."""
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path, "objectstore", "bindings.gcs", FULL_SA_META
         )
         mock_gcs_cls.return_value = MagicMock()
@@ -1507,7 +1488,7 @@ class TestCreateStoreFromBindingOptionalWithPutAttrs:
     )
 
     def test_returns_none_when_component_absent(self, tmp_path: Path) -> None:
-        """Returns (None, None) and logs INFO with operator guidance when no component exists."""
+        """Returns (None, None) and logs INFO when no component exists."""
         with patch("application_sdk.storage.binding._get_logger") as mock_get_logger:
             mock_logger = MagicMock()
             mock_get_logger.return_value = mock_logger
@@ -1518,7 +1499,7 @@ class TestCreateStoreFromBindingOptionalWithPutAttrs:
         assert put_attrs is None
         mock_logger.info.assert_called_once()
         info_args = mock_logger.info.call_args[0]
-        assert "Configure this binding" in " ".join(str(a) for a in info_args)
+        assert "continuing without this store" in " ".join(str(a) for a in info_args)
 
     def test_returns_none_and_warns_when_binding_broken(self, tmp_path: Path) -> None:
         """Returns (None, None) and logs a warning that includes the broken field names."""
@@ -1741,7 +1722,7 @@ class TestIsBindingConfigured:
         assert is_binding_configured("nonexistent", components_dir=tmp_path) is False
 
     def test_returns_true_for_valid_s3_component(self, tmp_path: Path) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path, "objectstore", "bindings.aws.s3", {"bucket": "b"}
         )
         assert (
@@ -1768,7 +1749,7 @@ class TestIsBindingConfigured:
         )
 
     def test_returns_false_for_unsupported_type(self, tmp_path: Path) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path, "objectstore", "bindings.unknown", {}
         )
         assert (
@@ -1898,7 +1879,7 @@ class TestS3CompatibilityKnobs:
     def test_non_aws_endpoint_auto_disables_tagging(
         self, mock_s3_cls: MagicMock, tmp_path: Path, endpoint: str
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path / endpoint.replace("/", "_").replace(":", "_"),
             "objectstore",
             "bindings.aws.s3",
@@ -1927,7 +1908,7 @@ class TestS3CompatibilityKnobs:
         meta: dict = {"bucket": "b"}
         if endpoint:
             meta["endpoint"] = endpoint
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path / endpoint.replace("/", "_").replace(":", "_"),
             "objectstore",
             "bindings.aws.s3",
@@ -1945,7 +1926,7 @@ class TestS3CompatibilityKnobs:
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
         """disableTagging=true wins even on a real AWS endpoint."""
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -1965,7 +1946,7 @@ class TestS3CompatibilityKnobs:
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
         """disableTagging=false wins over the non-AWS auto-detect rule."""
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -1983,7 +1964,7 @@ class TestS3CompatibilityKnobs:
     def test_conditional_put_pass_through(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -1998,7 +1979,7 @@ class TestS3CompatibilityKnobs:
     def test_copy_if_not_exists_pass_through(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -2013,7 +1994,7 @@ class TestS3CompatibilityKnobs:
     def test_checksum_algorithm_pass_through(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -2028,7 +2009,7 @@ class TestS3CompatibilityKnobs:
     def test_sse_kms_pair_pass_through(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -2051,7 +2032,7 @@ class TestS3CompatibilityKnobs:
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
         """Existing configs with none of the new fields must be unchanged."""
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -2076,7 +2057,7 @@ class TestS3CompatibilityKnobs:
     def test_storage_class_produces_put_attributes(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -2092,7 +2073,7 @@ class TestS3CompatibilityKnobs:
     def test_absent_storage_class_returns_none_put_attributes(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -2108,7 +2089,7 @@ class TestS3CompatibilityKnobs:
     def test_storage_class_glacier_ir(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.aws.s3",
@@ -2124,7 +2105,7 @@ class TestS3CompatibilityKnobs:
     def test_azure_storage_class_produces_put_attributes(
         self, mock_az_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -2145,7 +2126,7 @@ class TestS3CompatibilityKnobs:
     def test_azure_absent_storage_class_returns_none_put_attributes(
         self, mock_az_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.azure.blobstorage",
@@ -2161,7 +2142,7 @@ class TestS3CompatibilityKnobs:
     def test_gcs_storage_class_produces_put_attributes(
         self, mock_gcs_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.gcp.bucket",
@@ -2177,7 +2158,7 @@ class TestS3CompatibilityKnobs:
     def test_gcs_absent_storage_class_returns_none_put_attributes(
         self, mock_gcs_cls: MagicMock, tmp_path: Path
     ) -> None:
-        components_dir = _write_component(
+        components_dir = write_component(
             tmp_path,
             "objectstore",
             "bindings.gcp.bucket",

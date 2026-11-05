@@ -1012,22 +1012,18 @@ def _read_enable_tri_state(name: str) -> tuple[str | None, bool | None]:
     """Return ``(raw, parsed)`` for an ``ATLAN_ENABLE_*`` env var.
 
     ``raw`` is the literal env value (or ``None`` if unset).
-    ``parsed`` is ``True``/``False`` for "true"/"false", ``None`` if unset.
+    ``parsed`` is ``True``/``False`` for "true"/"false", ``None`` if unset or anything else.
     """
     raw = os.getenv(name)
-    if raw is None:
-        return None, None
-    return raw, raw.strip().lower() == "true"
+    parsed = {"true": True, "false": False}.get((raw or "").strip().lower())
+    return raw, parsed
 
 
-# Store Sink Configuration (defaults to ATLAN_ENABLE_OBJECTSTORE, else enabled)
+# Store Sink Configuration (defaults to enabled)
 ENABLE_OBSERVABILITY_STORE_SINK: bool = (
     os.getenv(
         "ATLAN_ENABLE_OBSERVABILITY_STORE_SINK",
-        os.getenv(
-            "ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK",
-            os.getenv("ATLAN_ENABLE_OBJECTSTORE", "true"),
-        ),
+        os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true"),
     ).lower()
     == "true"
 )

@@ -125,6 +125,7 @@ class AtlanObservability(Generic[T], ABC):
     # is defined only here — so one shared entry is also one resolution instead
     # of one per adapter. Same reason ``_instances`` is appended via the base.
     _deployment_store: ClassVar["BoundStore | None"] = None
+    _deployment_store_absent: ClassVar[bool] = False
     _upstream_store: ClassVar["BoundStore | None"] = None
 
     @classmethod
@@ -134,11 +135,18 @@ class AtlanObservability(Generic[T], ABC):
         return os.environ.get("DAPR_COMPONENTS_PATH", "./components")
 
     @classmethod
-    def _get_deployment_store(cls) -> "BoundStore":
-        if AtlanObservability._deployment_store is None:
+    def _get_deployment_store(cls) -> "BoundStore | None":
+        """The deployment store, or ``None`` when its component is absent (``deploy.dapr.objectstore: false``)."""
+        if (
+            AtlanObservability._deployment_store is None
+            and not AtlanObservability._deployment_store_absent
+        ):
             try:
                 from application_sdk.storage.binding import (  # noqa: PLC0415
                     create_store_from_binding_with_put_attrs,
+                )
+                from application_sdk.storage.errors import (  # noqa: PLC0415
+                    StorageBindingNotFoundError,
                 )
                 from application_sdk.storage.ops import BoundStore  # noqa: PLC0415
             except ModuleNotFoundError as exc:
@@ -147,10 +155,14 @@ class AtlanObservability(Generic[T], ABC):
                 # api-only install (the API host): no object store to export to.
                 raise ObjectStoreNotConfiguredError() from exc
 
-            store, put_attrs = create_store_from_binding_with_put_attrs(
-                DEPLOYMENT_OBJECT_STORE_NAME,
-                components_dir=cls._components_dir(),
-            )
+            try:
+                store, put_attrs = create_store_from_binding_with_put_attrs(
+                    DEPLOYMENT_OBJECT_STORE_NAME,
+                    components_dir=cls._components_dir(),
+                )
+            except StorageBindingNotFoundError:
+                AtlanObservability._deployment_store_absent = True
+                return None
             AtlanObservability._deployment_store = BoundStore(store, put_attrs)
         return AtlanObservability._deployment_store
 
@@ -269,6 +281,7 @@ class AtlanObservability(Generic[T], ABC):
         """
         AtlanObservability._instances.clear()
         AtlanObservability._deployment_store = None
+        AtlanObservability._deployment_store_absent = False
         AtlanObservability._upstream_store = None
 
     def _get_signal_type(self) -> str:
@@ -370,12 +383,14 @@ class AtlanObservability(Generic[T], ABC):
         # anyone performs. The upload-side size validation still applies.
         try:
             try:
-                await upload_file(
-                    remote_key,
-                    local_path,
-                    store=self._get_deployment_store(),
-                    write_sidecar=False,
-                )
+                deployment_store = self._get_deployment_store()
+                if deployment_store is not None:
+                    await upload_file(
+                        remote_key,
+                        local_path,
+                        store=deployment_store,
+                        write_sidecar=False,
+                    )
             except Exception:
                 logging.warning(
                     "Deployment objectstore upload failed (non-fatal)",
@@ -719,10 +734,9 @@ class AtlanObservability(Generic[T], ABC):
 
                             # Delete from object store
                             partition_key = os.path.relpath(day_path, self.data_dir)
-                            await delete(
-                                partition_key,
-                                store=self._get_deployment_store(),
-                            )
+                            deployment_store = self._get_deployment_store()
+                            if deployment_store is not None:
+                                await delete(partition_key, store=deployment_store)
                             if ENABLE_ATLAN_UPLOAD:
                                 await delete(
                                     partition_key,
