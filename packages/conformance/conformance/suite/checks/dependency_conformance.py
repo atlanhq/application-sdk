@@ -339,6 +339,19 @@ def _sdk_requirement_proves_pre_removal(spec: str, removed_in: str) -> bool:
     except (InvalidSpecifier, InvalidVersion):
         return False
 
+    def bump_release(version: Version, keep: int) -> Version | None:
+        """Increment the last of the first *keep* release segments.
+
+        The epoch is carried over: ``Version.release`` drops it, and a ceiling
+        rebuilt without it would compare as epoch 0 — below every epoch-1
+        release the specifier actually admits.
+        """
+        release = list(version.release[:keep])
+        if not release:
+            return None
+        release[-1] += 1
+        return Version(f"{version.epoch}!" + ".".join(str(part) for part in release))
+
     def wildcard_upper_bound(raw: str) -> Version | None:
         if not raw.endswith(".*"):
             return None
@@ -346,11 +359,7 @@ def _sdk_requirement_proves_pre_removal(spec: str, removed_in: str) -> bool:
             prefix = Version(raw[:-2])
         except InvalidVersion:
             return None
-        release = list(prefix.release)
-        if not release:
-            return None
-        release[-1] += 1
-        return Version(".".join(str(part) for part in release))
+        return bump_release(prefix, len(prefix.release))
 
     for clause in specifiers:
         operator = clause.operator
@@ -364,14 +373,13 @@ def _sdk_requirement_proves_pre_removal(spec: str, removed_in: str) -> bool:
                 return True
         elif operator == "~=":
             try:
-                release = list(Version(raw_bound).release)
+                floor = Version(raw_bound)
             except InvalidVersion:
                 continue
-            if len(release) < 2:
+            if len(floor.release) < 2:
                 continue
-            release = release[:-1]
-            release[-1] += 1
-            if Version(".".join(str(part) for part in release)) <= removal:
+            ceiling = bump_release(floor, len(floor.release) - 1)
+            if ceiling is not None and ceiling <= removal:
                 return True
         elif operator == "==":
             upper = wildcard_upper_bound(raw_bound)

@@ -574,6 +574,9 @@ def test_d017_is_silent_when_sdk_range_excludes_removal_version(
         ">=4.0.0",
         ">=3.34.0",
         ">=3.34.0,!=4.0.0",
+        # Epoch 1 sorts above every epoch-0 release, v4.0.0 included.
+        "~=1!3.34.0",
+        "==1!3.34.*",
     ],
 )
 def test_d017_fires_when_sdk_range_can_reach_removed_version(
