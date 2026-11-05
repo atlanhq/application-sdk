@@ -321,9 +321,7 @@ def regenerate_tree(
             f"::notice::No {app_pkl}; regenerating {len(roots)} per-entrypoint "
             f"root(s): {', '.join(r.name for r in roots)}."
         )
-        return Regeneration(
-            regenerate_multi_root(contract_dir, roots, run_cmd)
-        )
+        return Regeneration(regenerate_multi_root(contract_dir, roots, run_cmd))
 
     tmp = Path(tempfile.mkdtemp())
     try:

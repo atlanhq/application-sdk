@@ -12,7 +12,6 @@ test_renovate_pkl_sync.py; this file pins the placement rules themselves.
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
