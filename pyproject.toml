@@ -221,6 +221,10 @@ test = [
     "pytest-rerunfailures>=16.7,<17.0",
     "pytest-socket>=0.7.0,<1.0.0",
     "pytest-xdist>=3.8.0,<4.0.0",
+    # starlette's TestClient (fastapi.testclient) is built on httpx2 and only
+    # falls back to httpx with a deprecation warning. fastapi[standard] used to
+    # bring it in; the SDK's tests and .github/scripts probes still need it.
+    "httpx2>=2.16.0,<3.0.0",
     # pytest-cov, not bare `coverage run -m pytest`: `coverage run` only traces
     # the parent process, so every xdist worker's coverage is lost and the
     # --fail-under gate reads a number less than half the real one (measured on
