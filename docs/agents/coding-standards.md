@@ -197,15 +197,33 @@ Breaking a contract silently corrupts in-flight Temporal workflows.
 
 ## Blocking Operations
 
-In `@task` methods, wrap blocking calls with `self.run_in_thread()`:
+Use an async-native library first (`httpx` not `requests`, `asyncpg` not `psycopg2`,
+`aioboto3` not `boto3`), then an SDK async helper (`self.context.storage`,
+`self.context.state`). `self.run_in_thread()` is the last resort, for a blocking call
+with no async alternative. Never call blocking code directly on the loop:
 
 ```python
 # Wrong — blocks event loop, kills heartbeats
 result = requests.get(url)
 
-# Right
-result = await self.run_in_thread(requests.get, url)
+# Right — async-native
+async with httpx.AsyncClient(timeout=30) as client:
+    result = await client.get(url)
+
+# Last resort — no async driver exists; the call has its own timeout
+rows = await self.run_in_thread(legacy_client.fetch, query, timeout=30)
 ```
+
+Python cannot stop a thread from outside. When the task is cancelled, the awaiting
+coroutine returns but the thread runs on, holding its memory, connection and pool
+slot, while the worker starts its next activity. So:
+
+- Give the blocking call its own driver-level timeout (see below).
+- If the driver can cancel the call from another thread, bind a `CancelHandle` so a
+  cancel stops the call itself. See
+  [Tasks → Cancelling a blocking call at the driver](../concepts/tasks.md#cancelling-a-blocking-call-at-the-driver).
+- In blocking work that loops (batches, pages), check `self.is_cancelled()` between
+  steps and return when it is `True`.
 
 Give the blocking call its own driver-level timeout (connect, socket, statement). An
 `asyncio.wait_for` / `asyncio.timeout` around `run_in_thread` frees only the caller.
