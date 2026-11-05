@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from typing_extensions import deprecated
 
+from application_sdk._runtime.offload import raise_if_cancelled
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.common.atomic import (
     atomic_copy,
@@ -485,6 +486,10 @@ def copy_directory_parallel(
     ensure_free_space(dest_dir, total_bytes, operation="carry-forward copy")
 
     for src_file in files:
+        # Once per file: a cancelled carry-forward stops here rather than
+        # copying on after its activity has moved on. Each copy is atomic, so
+        # stopping between two leaves no partial file.
+        raise_if_cancelled()
         atomic_copy(src_file, dest_dir / src_file.name, operation="carry-forward copy")
 
     return len(files)

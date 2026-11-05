@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, TypeAlias
 
+from application_sdk._runtime.offload import current_cancel_handle
 from application_sdk.constants import (
     DUCKDB_COMMON_TEMP_FOLDER,
     DUCKDB_DEFAULT_MEMORY_LIMIT,
@@ -67,6 +68,23 @@ DuckDBConnection: TypeAlias = DuckDBConnectionLike | None
 def _generate_random_uuid(length: int = 8) -> str:
     """Generate a short random UUID string."""
     return uuid.uuid4().hex[:length]
+
+
+def interrupt_on_cancel(conn: DuckDBPyConnection) -> None:
+    """Interrupt *conn*'s running query if the current ``run_in_thread`` call is abandoned.
+
+    Registers ``conn.interrupt`` — safe to call from another thread — as the
+    call's driver cancel. Without it a cancelled scan runs to completion on a
+    thread nobody is waiting for, holding its memory and spill files, and a
+    caller that has moved on may close the connection under it. A no-op
+    outside ``run_in_thread``.
+
+    Args:
+        conn: The connection the offloaded call is about to query.
+    """
+    handle = current_cancel_handle()
+    if handle is not None:
+        handle.set(conn.interrupt)
 
 
 class DuckDBConnectionManager:
@@ -124,6 +142,9 @@ class DuckDBConnectionManager:
             },
             read_only=False,
         )
+        # A manager opened inside an offloaded call (the common case: the
+        # helper opens its own connection) is interrupted when that call is.
+        interrupt_on_cancel(self._connection)
 
     @property
     def connection(self) -> DuckDBPyConnection:
