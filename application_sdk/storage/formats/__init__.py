@@ -82,6 +82,7 @@ async def _close_batch_source(source: object) -> None:
         logger.warning(
             "Could not close the batch source after a failed write: %s",
             type(exc).__name__,
+            exc_info=True,
         )
 
 
