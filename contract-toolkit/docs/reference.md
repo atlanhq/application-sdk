@@ -982,8 +982,12 @@ What changes in the generated `atlan.yaml`:
 - `dapr { secretstore = true }` (any other component enabled) emits
   `objectstore: true`. Earlier toolkit releases emitted `objectstore: false`
   here, which left the app unable to start.
-- An explicit `objectstore = false` is rendered as written, and conformance rule
-  K029 flags it.
+- An explicit `objectstore = false` is rendered as written when another Dapr
+  component is enabled (or `customComponents` is non-empty), and conformance
+  rule K029 flags it in `atlan.yaml`. With all other Dapr fields at their
+  defaults, no `dapr:` block is emitted, so `objectstore = false` does not
+  appear in `atlan.yaml`; K029 still flags the explicit value in the source
+  contract.
 
 **KedaConfig:**
 
