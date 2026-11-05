@@ -202,7 +202,7 @@ def regenerate_multi_root(
     roots: list[Path],
     run_cmd: Runner | None = None,
     protect_overrides: bool = True,
-) -> bool:
+) -> RegenerationStatus:
     """Regenerate an app whose contract has ONE ROOT PER ENTRYPOINT.
 
     Some apps (synapse: ``crawler.pkl`` + ``miner.pkl``) have no single
@@ -218,10 +218,12 @@ def regenerate_multi_root(
     here: no per-entrypoint root emits them, so anything at the repo root is
     hand-authored and must survive (a prior incident clobbered exactly that).
 
-    Returns True iff at least one root regenerated. A root that fails eval or
+    Returns "ok" iff at least one root regenerated. A root that fails eval or
     whose swap refuses the layout is warned about and skipped — a partial
     regeneration is still better than none, and the caller diffs the result.
+    A failed ``contract/post-generate.sh`` rolls every root back.
     """
+    snapshot = dirty_tree()
     placed = False
     for root in roots:
         tmp = Path(tempfile.mkdtemp())
@@ -248,13 +250,18 @@ def regenerate_multi_root(
             shutil.rmtree(tmp, ignore_errors=True)
             if base_work is not None:
                 shutil.rmtree(base_work, ignore_errors=True)
-    if placed:
-        run_post_generate(contract_dir)
-        _format_generated(run_cmd)
-    return placed
+    if not placed:
+        return "eval-failed"
+    if not run_post_generate(contract_dir):
+        restore_tree(snapshot)
+        return "post-generate-failed"
+    _format_generated(run_cmd)
+    return "ok"
 
 
-RegenerationStatus = Literal["ok", "no-contract", "eval-failed", "swap-refused"]
+RegenerationStatus = Literal[
+    "ok", "no-contract", "eval-failed", "swap-refused", "post-generate-failed"
+]
 
 
 @dataclass(frozen=True)
@@ -295,7 +302,9 @@ def regenerate_tree(
     Steps: ``pkl eval`` into a temp dir (with ``EVAL_MAX_ATTEMPTS`` retries),
     ``swap_outputs`` into the working tree, ``contract/post-generate.sh`` if the
     app ships one, then ruff on generated Python. The working tree is touched
-    only once eval succeeds. The swap itself is best-effort (rmtree +
+    only once eval succeeds, and a failed post-generate step rolls the swap
+    back (``restore_tree``), so a regeneration is either the app's complete
+    output or nothing. The swap itself is best-effort (rmtree +
     copytree), not crash-safe, so a caller that commits must commit only after
     this returns.
 
@@ -324,8 +333,9 @@ def regenerate_tree(
             f"::notice::No {app_pkl}; regenerating {len(roots)} per-entrypoint "
             f"root(s): {', '.join(r.name for r in roots)}."
         )
-        placed = regenerate_multi_root(contract_dir, roots, run_cmd, protect_overrides)
-        return Regeneration("ok" if placed else "eval-failed")
+        return Regeneration(
+            regenerate_multi_root(contract_dir, roots, run_cmd, protect_overrides)
+        )
 
     tmp = Path(tempfile.mkdtemp())
     baseline_work: Path | None = None
@@ -344,11 +354,20 @@ def regenerate_tree(
         baseline_out = None
         if protect_overrides:
             baseline_out, baseline_work = _baseline_output(contract_dir)
+        snapshot = dirty_tree()
         if not swap_outputs(tmp, baseline_dir=baseline_out):
             # swap_outputs already warned with the specific reason.
             return Regeneration("swap-refused")
         missing = tuple(root_files_not_emitted(tmp))
-        run_post_generate(contract_dir)
+        if not run_post_generate(contract_dir):
+            # Fail closed: raw output without the app's step is not its real
+            # output, so put the tree back exactly as it was.
+            restore_tree(snapshot)
+            print(
+                "::warning::contract/post-generate.sh failed — regeneration rolled "
+                "back; the working tree is as it was before regenerating."
+            )
+            return Regeneration("post-generate-failed")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         if baseline_work is not None:
@@ -538,6 +557,35 @@ def changed_since(before: TreeState) -> list[str]:
     # A path dirty before and clean now was also changed (restored).
     changed |= {path for path in before if path not in after}
     return sorted(changed)
+
+
+def restore_tree(before: TreeState) -> None:
+    """Put every path changed since *before* back the way it was.
+
+    A path dirty before gets its old content back (or is removed again if it
+    was deleted). A path clean before is restored from HEAD when HEAD has it,
+    and removed when it is new. Used to undo a regeneration whose
+    post-generate step failed."""
+    for path in changed_since(before):
+        target = Path(path)
+        if path in before:
+            content = before[path]
+            if content is None:
+                target.unlink(missing_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+            continue
+        in_head = (
+            subprocess.run(
+                ["git", "cat-file", "-e", f"HEAD:{path}"], capture_output=True
+            ).returncode
+            == 0
+        )
+        if in_head:
+            subprocess.run(["git", "checkout", "HEAD", "--", path], check=True)
+        else:
+            target.unlink(missing_ok=True)
 
 
 def warn_uncommitted_changes(changed: list[str]) -> None:

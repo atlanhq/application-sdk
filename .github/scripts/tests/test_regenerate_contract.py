@@ -718,3 +718,28 @@ def test_format_generated_covers_all_py(tmp_path, monkeypatch):
         "_e2e_base.py",
         "_e2e_substitutions.py",
     }
+
+
+def test_post_generate_failure_leaves_committed_artifacts(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """FND-4736: a failed post-generate step rolls the regeneration back, so
+    tests run against the committed manifest rather than raw `pkl eval` output
+    missing what the step installs."""
+    committed = {
+        p.relative_to(repo).as_posix(): p.read_bytes()
+        for p in (repo / "app" / "generated").rglob("*")
+        if p.is_file()
+    }
+    (repo / "contract" / "post-generate.sh").write_text("exit 4\n")
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo))
+
+    assert mod.main(["--check-drift", "false"]) == 0
+
+    after = {
+        p.relative_to(repo).as_posix(): p.read_bytes()
+        for p in (repo / "app" / "generated").rglob("*")
+        if p.is_file()
+    }
+    assert after == committed
+    assert "Regeneration rolled back" in capsys.readouterr().out

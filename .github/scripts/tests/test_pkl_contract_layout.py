@@ -327,20 +327,19 @@ def test_native_honours_explicit_generated_dir(tree):
 # ── swap_outputs: nothing to place ───────────────────────────────────────────
 
 
-def test_root_only_copies_root_files_but_returns_false(tree, capsys):
-    """Root files are unambiguous in every layout so they are still copied, but
-    no generated artifact was placed — the caller must not report success."""
+def test_root_only_places_root_files_and_succeeds(tree, capsys):
+    """FND-4736 reversed this: it used to return False. A contract that emits
+    only root files (two active apps ship exactly that) regenerates by placing
+    them, and returning False made every gate report it as not regenerating.
+    The generated dir is still left alone."""
     _write(tree / "app" / "generated" / "manifest.json", "stale\n")
     _write(tree / "out" / "atlan.yaml", "deploy: true\n")
 
-    assert mod.swap_outputs(tree / "out") is False
+    assert mod.swap_outputs(tree / "out") is True
 
     assert (tree / "atlan.yaml").read_text() == "deploy: true\n"
     assert (tree / "app" / "generated" / "manifest.json").read_text() == "stale\n"
-    assert (
-        "produced no generated contract artifacts (root-only)"
-        in capsys.readouterr().out
-    )
+    assert "emitted only root files" in capsys.readouterr().out
 
 
 def test_empty_output_returns_false(tree, capsys):
@@ -373,14 +372,20 @@ def test_post_generate_runs_from_repo_root_without_exec_bit(tree):
     assert (tree / "marker.txt").read_text().strip() == "patched"
 
 
-def test_post_generate_failure_warns_and_returns(tree, capsys):
-    """Best-effort: a failing step must not raise — it runs after the swap, so
-    the caller's fresh output stands and the diff is left for a human."""
+def test_post_generate_failure_warns_and_returns_false(tree, capsys):
+    """A failing step does not raise; it returns False so the caller can roll
+    the regeneration back (FND-4736)."""
     _write(tree / "contract" / mod.POST_GENERATE_SCRIPT, "exit 7\n")
 
-    mod.run_post_generate("contract")
+    assert mod.run_post_generate("contract") is False
 
-    assert "post-generate.sh failed" in capsys.readouterr().out
+    assert "post-generate.sh failed (exit 7)" in capsys.readouterr().out
+
+
+def test_post_generate_success_and_absence_return_true(tree):
+    assert mod.run_post_generate("contract") is True
+    _write(tree / "contract" / mod.POST_GENERATE_SCRIPT, "true\n")
+    assert mod.run_post_generate("contract") is True
 
 
 # ── unwired post-processing (FND-1777) ───────────────────────────────────────

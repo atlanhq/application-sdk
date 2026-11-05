@@ -502,15 +502,28 @@ def swap_outputs(
     (e.g. ``frontend/``) survives the wholesale replace unconditionally — no
     baseline needed, since pkl never emits into it in the first place.
 
+    ``root-only`` output (the contract emits only ``atlan.yaml``/``app.yaml``)
+    places the root files, leaves ``generated_dir`` alone and returns True: for
+    such a contract that is the whole regeneration (FND-4736).
+
     Returns False — touching nothing under ``generated_dir`` — when the output
-    holds no generated artifacts (``root-only``/``empty``) or when the native
-    target looks implausible. Callers treat False as "regeneration did not
-    happen" and must surface it; a silent False is the bug this module exists to
-    remove. Note that root files may still have been copied on a False return:
-    they are unambiguous and correct in every layout.
+    is ``empty`` or when the native target looks implausible. Callers treat
+    False as "regeneration did not happen" and must surface it; a silent False
+    is the bug this module exists to remove.
     """
     layout, plan = plan_swap(out_dir, generated_dir)
     target = Path(generated_dir)
+
+    if layout == "root-only":
+        # A complete eval (pkl -m writes every output or fails) whose contract
+        # emits only root files, e.g. an app that ships no generated Python.
+        # Placing those files IS the whole regeneration (FND-4736).
+        _copy_planned(plan, skip=set())
+        print(
+            f"::notice::pkl eval emitted only root files — placed them; "
+            f"{generated_dir}/ left unchanged."
+        )
+        return True
 
     if layout not in ("prefixed", "native"):
         print(
@@ -719,7 +732,7 @@ def export_contract_at(ref: str, contract_dir: str, dest: Path) -> bool:
     )
 
 
-def run_post_generate(contract_dir: str = "contract") -> None:
+def run_post_generate(contract_dir: str = "contract") -> bool:
     """Run ``<contract_dir>/post-generate.sh`` if the app ships one, after
     ``swap_outputs``. Otherwise — almost every app — a no-op, except that it
     warns when the app looks like it post-processes through some other path
@@ -739,10 +752,11 @@ def run_post_generate(contract_dir: str = "contract") -> None:
     content executed in the app's own CI, the same trust level as the
     ``contract/app.pkl`` this module just evaluated and the app's own test suite.
 
-    Best-effort by design: this runs after the swap, so a failure leaves fresh
-    toolkit output in the tree rather than blocking the caller. The resulting
-    diff is visible for a human to judge, which beats failing a dependency bump
-    over an app-side script.
+    Returns False when the script fails. The caller then treats the whole
+    regeneration as failed and rolls the swap back (``renovate_pkl_sync.
+    regenerate_tree``): raw output without the step drops what it installs
+    (e.g. keys a ``merge.py`` adds to a manifest), so it must never be
+    committed or checked as if it were the app's real output (FND-4736).
 
     SECURITY: the safety of running app-repo content rests entirely on the
     caller using a ``push``-triggered (same-repo-branch) workflow, where placing
@@ -756,14 +770,16 @@ def run_post_generate(contract_dir: str = "contract") -> None:
         # the FND-1777 silent drop. Every regeneration path reaches this line,
         # which is why the detection lives here and not in one caller.
         warn_unwired_post_generate(contract_dir)
-        return
+        return True
     print(f"Running post-generate step: {script}")
-    if subprocess.run(["sh", str(script)], text=True).returncode != 0:
+    rc = subprocess.run(["sh", str(script)], text=True).returncode
+    if rc != 0:
         print(
-            f"::warning::{script} failed — generated artifacts are raw `pkl eval` "
-            "output, so anything this step installs over them is missing. Review "
-            "the diff before merging."
+            f"::warning::{script} failed (exit {rc}). Without it the generated "
+            "artifacts are raw `pkl eval` output, missing whatever it installs."
         )
+        return False
+    return True
 
 
 def format_generated_python(

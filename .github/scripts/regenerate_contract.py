@@ -321,6 +321,19 @@ def main(argv: list[str] | None = None) -> int:
             "behaviour)."
         )
         return 0
+    if result.status == "post-generate-failed":
+        if sdk_mode:
+            print(
+                "::error::contract/post-generate.sh failed after regenerating with "
+                "the SDK PR's contract-toolkit, so the toolkit change cannot be "
+                "verified against this connector's real output."
+            )
+            return 1
+        print(
+            "::warning::Regeneration rolled back; tests will run against the "
+            "committed manifest (prior behaviour)."
+        )
+        return 0
     if result.status != "ok":
         # swap_outputs warns with the specific reason (no generated artifacts in
         # the output, or a generated dir it declined to write to).
