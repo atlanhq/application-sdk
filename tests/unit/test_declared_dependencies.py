@@ -59,7 +59,6 @@ NAMESPACE_ROOTS = frozenset({"opentelemetry", "google", "azure"})
 #: not part of pydantic's API.
 PROVIDED_BY: dict[str, str] = {
     "starlette": "fastapi",  # fastapi re-exports and subclasses starlette
-    "uvicorn": "fastapi",  # fastapi[standard] declares uvicorn[standard]
     "pydantic-core": "pydantic",  # pydantic's own core (PydanticCustomError, ...)
     "botocore": "boto3",  # boto3's exceptions and config types are botocore's
     "azure-core": "azure-identity",  # azure-identity credentials are azure-core types
@@ -82,7 +81,12 @@ NO_IMPORT_SITE: dict[str, str] = {
     "authlib": "published CVE floor on a pyatlan dependency",
     "protobuf": "published CVE floor on a temporalio / opentelemetry dependency",
     "pyjwt": "published CVE floor on an azure-identity dependency",
-    "python-multipart": "published CVE floor on a fastapi[standard] dependency",
+    "python-multipart": "fastapi imports it for File/Form parsing; carries a CVE floor",
+}
+
+#: Extra requirements with no import site, and why the extra carries them.
+EXTRA_NO_IMPORT_SITE: dict[str, str] = {
+    "httpx2": "[tests]: starlette's TestClient transport, for the app's own tests",
 }
 
 
@@ -191,9 +195,9 @@ def test_every_core_dependency_is_imported() -> None:
 def test_every_extra_requirement_is_imported_or_an_alias() -> None:
     imported, core = set(_imported()), _core()
     unused = {
-        extra: sorted(names - imported - core - {SELF})
+        extra: sorted(names - imported - core - {SELF} - set(EXTRA_NO_IMPORT_SITE))
         for extra, names in _extras().items()
-        if names - imported - core - {SELF}
+        if names - imported - core - {SELF} - set(EXTRA_NO_IMPORT_SITE)
     }
     assert not unused, f"extra requirements nothing imports: {unused}"
 
@@ -203,6 +207,13 @@ def test_the_exception_tables_have_not_gone_stale() -> None:
     imported, core, declared = set(_imported()), _core(), _declared()
     assert sorted(set(NO_IMPORT_SITE) - core) == [], "not core dependencies"
     assert sorted(set(NO_IMPORT_SITE) & imported) == [], "these have an import site"
+    extra_reqs = {name for names in _extras().values() for name in names}
+    assert sorted(set(EXTRA_NO_IMPORT_SITE) - extra_reqs) == [], (
+        "not extra requirements"
+    )
+    assert sorted(set(EXTRA_NO_IMPORT_SITE) & imported) == [], (
+        "these have an import site"
+    )
     assert sorted(set(PROVIDED_BY) - imported) == [], "PROVIDED_BY: not imported"
     assert sorted(set(PROVIDED_BY) & declared) == [], "PROVIDED_BY: now declared"
     assert sorted(set(PROVIDED_BY.values()) - declared) == []

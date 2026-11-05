@@ -387,13 +387,30 @@ def _query() -> list[tuple[object, ...]]:
 rows = await self.task_context.run_in_thread(handle.bind(_query))
 ```
 
-- When the awaiting task is cancelled, `run_in_thread` calls `handle.request()` and re-raises `CancelledError` immediately, exactly as without a handle.
+Every `run_in_thread` call has a handle — the one bound with `bind`, or a fresh one — so you don't have to create one. Code anywhere inside the call reaches it with `current_cancel_handle()`, without the handle being passed down:
+
+```python
+from application_sdk.execution.heartbeat import current_cancel_handle
+
+def _query() -> list[tuple[object, ...]]:
+    cursor = connection.cursor()
+    handle = current_cancel_handle()
+    if handle is not None:  # None outside run_in_thread
+        handle.set(cursor.cancel)
+    cursor.execute(sql)
+    return cursor.fetchall()
+
+rows = await self.task_context.run_in_thread(_query)
+```
+
+- When the awaiting task is cancelled — by Temporal, `asyncio.timeout` or a failing `TaskGroup` sibling — `run_in_thread` calls `handle.request()` and re-raises `CancelledError` immediately.
 - The action runs at most once, on a small dedicated `sdk-cancel-` pool — never on the loop, and never behind the `sdk-blocking-` calls it is meant to stop.
 - If the cancel was requested before `set()` (a statement id known only after submit, say), `set()` fires the action straight away.
 - A failing action is logged at WARNING, never raised.
-- `handle.requested` lets worker code stop between steps, e.g. in a `fetchmany` loop.
+- The request is scoped to that one call. The caller, and every other offloaded call, still read `False`.
+- Between steps of a loop, `is_cancelled()` (or `handle.requested`) reports the request, and `raise_if_cancelled()` raises `asyncio.CancelledError`. That is a `BaseException`, so a per-record `except Exception` does not swallow it.
+- For a nested scope inside one call — a helper opening its own connection while the caller's is mid-query — use `with handle.registered(conn.interrupt):`. It puts the previous action back when the block exits, so the outer query stays cancellable. A plain `set()` would leave the handle pointing at the closed inner connection.
 - The handle travels on the callable (`handle.bind(func)`), so every keyword argument still reaches `func`; no keyword name is reserved.
-- Without a bound handle, behaviour is unchanged.
 
 After a cancel, don't return the connection to a pool: invalidate it. `BaseSQLClient` already does this for its own read paths — see [Clients](clients.md#cancelling-a-running-query).
 

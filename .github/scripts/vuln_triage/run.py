@@ -24,6 +24,8 @@ BUMP_BRANCH = "fix/bump-"
 SELFTEST_BRANCH = "selftest/vuln-triage-"
 SELFTEST_TITLE = "[selftest] "
 VALIDATE_SCRIPT = ".github/scripts/validate_allowlist.py"
+# Relocked with the root lock: it path-sources the SDK (FND-4716).
+CONFORMANCE_LOCK = "packages/conformance/uv.lock"
 
 
 @dataclass
@@ -255,6 +257,9 @@ def _bump_pr(
     lock_path = ctx.root / "uv.lock"
     old_text = lock_path.read_text()
     old_lock = scan.load_lock(lock_path)
+    follower = ctx.root / CONFORMANCE_LOCK
+    follower_text = follower.read_text()
+    follower_lock = scan.load_lock(follower)
     try:
         pyproject.write_text(
             bump.set_constraints(
@@ -286,6 +291,31 @@ def _bump_pr(
         out.bump_problem = "; ".join(errors)
         effects.reset_to(base, deps.runner)
         return
+    # The conformance lock path-sources the SDK: relock it for the same packages, or
+    # a raised `[project] dependencies` floor leaves it stale (FND-4716).
+    res = effects.uv_lock_upgrade(pkgs, deps.runner, cwd=follower.parent)
+    if res.returncode != 0:
+        out.bump_problem = (
+            f"`uv lock` in {follower.parent.relative_to(ctx.root)} could not resolve "
+            f"{summary}: " + _uv_cause(res.stderr)
+        )
+        effects.reset_to(base, deps.runner)
+        return
+    errors, follower_fresh = bump.verify_follower(
+        label=CONFORMANCE_LOCK,
+        old_lock=follower_lock,
+        new_lock=scan.load_lock(follower),
+        old_text=follower_text,
+        new_text=follower.read_text(),
+        targets=targets,
+        now=ctx.now,
+        cooldown_days=cfg.cooldown_days,
+    )
+    if errors:
+        out.bump_problem = "; ".join(errors)
+        effects.reset_to(base, deps.runner)
+        return
+    fresh += follower_fresh
     # Titled chore(deps): the PR-title check requires chore/ci for a PR that touches
     # only dependency manifests (pr_title_convention.py, "deps").
     bumped = _listing([f"{p} to {targets[p]}" for p in pkgs], 2)
@@ -294,7 +324,8 @@ def _bump_pr(
         f"Resolves {', '.join(all_cves)} from {ctx.ticket}.",
         "",
         "Adds a `constraint-dependencies` floor per package and upgrades only these "
-        "packages (`uv lock --upgrade-package`), so no unrelated release moves.",
+        "packages (`uv lock --upgrade-package`) in `uv.lock` and "
+        f"`{CONFORMANCE_LOCK}`, so no unrelated release moves.",
         "",
     ] + [f"- `{p}` → `{targets[p]}` ({', '.join(sorted(cves[p]))})" for p in pkgs]
     labels = [cfg.label]
@@ -312,7 +343,7 @@ def _bump_pr(
         deps,
         out,
         branch=branch,
-        files=["pyproject.toml", "uv.lock"],
+        files=["pyproject.toml", "uv.lock", CONFORMANCE_LOCK],
         title=title,
         body="\n".join(body),
         labels=labels,

@@ -17,7 +17,12 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.storage.batch import delete_prefix as _delete_prefix
 from application_sdk.storage.errors import ObjectStoreNotProvidedError
-from application_sdk.storage.formats import DataframeType, Reader, Writer
+from application_sdk.storage.formats import (
+    DataframeType,
+    Reader,
+    Writer,
+    _close_batch_source,
+)
 from application_sdk.storage.formats.utils import (
     PARQUET_FILE_EXTENSION,
     _arrow_table_from_pandas,
@@ -697,17 +702,25 @@ class ParquetFileWriter(Writer):
 
         try:
             # Phase 1: Accumulate DataFrames into temp folders
-            if inspect.isasyncgen(batched_dataframe):
-                async for dataframe in batched_dataframe:
-                    if not is_empty_dataframe(dataframe):
-                        await self._accumulate_dataframe(dataframe)
-            else:
-                sync_generator = cast(
-                    Generator["pd.DataFrame", None, None], batched_dataframe
-                )
-                for dataframe in sync_generator:
-                    if not is_empty_dataframe(dataframe):
-                        await self._accumulate_dataframe(dataframe)
+            # Any async iterable, not only an async generator: a source that
+            # offers both (get_batched_results) is read off the event loop.
+            try:
+                if inspect.isasyncgen(batched_dataframe) or hasattr(
+                    batched_dataframe, "__aiter__"
+                ):
+                    async for dataframe in batched_dataframe:
+                        if not is_empty_dataframe(dataframe):
+                            await self._accumulate_dataframe(dataframe)
+                else:
+                    sync_generator = cast(
+                        Generator["pd.DataFrame", None, None], batched_dataframe
+                    )
+                    for dataframe in sync_generator:
+                        if not is_empty_dataframe(dataframe):
+                            await self._accumulate_dataframe(dataframe)
+            except BaseException:
+                await _close_batch_source(batched_dataframe)
+                raise
 
             # Phase 2: Consolidate any remaining temp folder
             if self.current_folder_records > 0:

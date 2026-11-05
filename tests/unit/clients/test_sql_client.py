@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1174,14 +1175,17 @@ async def test_get_batched_results_raises_sql_pandas_result_error(
 @pytest.mark.asyncio
 async def test_get_batched_results_returns_iterator(sql_client: BaseSQLClient):
     sql_client.engine = MagicMock()
-    fake_iter = iter([])
+    frames = [MagicMock(name="frame-1"), MagicMock(name="frame-2")]
     with patch.object(
         sql_client,
         "_execute_async_read_operation",
-        new=AsyncMock(return_value=fake_iter),
+        new=AsyncMock(return_value=iter(frames)),
     ):
         out = await sql_client.get_batched_results("SELECT 1")
-    assert out is fake_iter
+    # Still a plain iterator over the same frames (wrapped so it can also be
+    # read off the loop with ``async for``).
+    assert isinstance(out, Iterator)
+    assert list(out) == frames
 
 
 @pytest.mark.asyncio

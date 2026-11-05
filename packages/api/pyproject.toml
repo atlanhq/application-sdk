@@ -25,8 +25,8 @@ dependencies = [
     # application_sdk/contracts/{base,types}.py import it; same pin as the SDK.
     "typing-extensions>=4.12.2,<5",
     "orjson>=3.11.6,<4.0.0",
-    # Form parsing for the file-upload route. Arrives on the worker through
-    # fastapi[standard]; the floor is the SDK's CVE constraint.
+    # Form parsing for the file-upload route. The SDK declares it directly with
+    # the same pin; the floor is the SDK's CVE constraint.
     "python-multipart>=0.0.26",
     # application_sdk.errors maps httpx failures onto the error leaves
     # (errors/http.py); same pin as the SDK's core dependency.
@@ -61,7 +61,7 @@ pyatlan = [
     # pyatlan 11.5.0 already requires authlib~=1.9.1 on Python >=3.10. Published
     # here too so a resolver that ignores requires-python cannot pick pyatlan's
     # py3.9 authlib branch for this wheel.
-    "authlib>=1.9.1,<2",  # CVE-2026-96760
+    "authlib>=1.9.4,<2",  # CVE-2026-96760
 ]
 
 [project.urls]

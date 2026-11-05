@@ -59,6 +59,7 @@ from conformance.suite.checks import (
     legacy_contract,
     manifest_app_name,
     manifest_contract,
+    offload_cancel,
     optimizations,
     orchestration,
     persistence_seam,
@@ -122,6 +123,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=client_lifecycle.discover,
         scan_path=client_lifecycle.scan_path,
         scan_all=client_lifecycle.scan_all,
+    ),
+    CheckRegistration(
+        series=offload_cancel.SERIES,
+        discover=offload_cancel.discover,
+        scan_path=offload_cancel.scan_path,
+        scan_all=offload_cancel.scan_all,
     ),
     CheckRegistration(
         series=persistence_seam.SERIES,
