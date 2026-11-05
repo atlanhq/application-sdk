@@ -762,7 +762,7 @@ By default, logs, metrics, and traces are also written to gzip-compressed NDJSON
 Control with:
 
 ```bash
-ATLAN_ENABLE_OBSERVABILITY_STORE_SINK=true   # default: true
+ATLAN_ENABLE_OBSERVABILITY_STORE_SINK=true   # default: true, or false when ATLAN_ENABLE_OBJECTSTORE=false
 ```
 
 Retention and batching:

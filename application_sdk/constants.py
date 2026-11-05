@@ -1020,11 +1020,14 @@ def _read_enable_tri_state(name: str) -> tuple[str | None, bool | None]:
     return raw, raw.strip().lower() == "true"
 
 
-# Store Sink Configuration (defaults to enabled)
+# Store Sink Configuration (defaults to ATLAN_ENABLE_OBJECTSTORE, else enabled)
 ENABLE_OBSERVABILITY_STORE_SINK: bool = (
     os.getenv(
         "ATLAN_ENABLE_OBSERVABILITY_STORE_SINK",
-        os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true"),
+        os.getenv(
+            "ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK",
+            os.getenv("ATLAN_ENABLE_OBJECTSTORE", "true"),
+        ),
     ).lower()
     == "true"
 )

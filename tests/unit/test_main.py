@@ -1047,6 +1047,149 @@ class TestCreateInfrastructureUpstreamStore:
         assert kwargs.get("required") is True
 
 
+class TestCreateInfrastructureObjectStoreDisabled:
+    """Startup against a real components folder, as the in-cluster chart renders it.
+
+    With ``deploy.dapr.objectstore: false`` the chart's init script skips
+    ``objectstore.yaml`` but still points ``DEPLOYMENT_OBJECT_STORE_NAME`` and
+    ``UPSTREAM_OBJECT_STORE_NAME`` at ``<app>-objectstore``. Only the Dapr
+    sidecar client is faked; the store loaders read the folder for real.
+    """
+
+    _STORE_NAME = "my-app-objectstore"
+
+    @pytest.fixture
+    def components_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        components = tmp_path / "components"
+        components.mkdir()
+        monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
+        monkeypatch.setenv("DAPR_COMPONENTS_PATH", str(components))
+        monkeypatch.setattr(
+            "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME", self._STORE_NAME
+        )
+        monkeypatch.setattr(
+            "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME", self._STORE_NAME
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http.wait_for_dapr_sidecar",
+            AsyncMock(),
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http.AsyncDaprClient", MagicMock()
+        )
+        return components
+
+    def _write_objectstore(self, components: Path) -> None:
+        import yaml
+
+        doc = {
+            "apiVersion": "dapr.io/v1alpha1",
+            "kind": "Component",
+            "metadata": {"name": self._STORE_NAME},
+            "spec": {
+                "type": "bindings.localstorage",
+                "version": "v1",
+                "metadata": [
+                    {"name": "rootPath", "value": str(components.parent / "store")}
+                ],
+            },
+        }
+        (components / "objectstore.yaml").write_text(yaml.dump(doc))
+
+    async def test_starts_without_store_when_declared_off(
+        self, components_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_ENABLE_OBJECTSTORE", "false")
+
+        infra = await _create_infrastructure()
+
+        assert infra.storage is None
+        assert infra.upstream_storage is None
+
+    @pytest.mark.parametrize("declared", [None, "true"])
+    async def test_missing_store_still_fails_unless_declared_off(
+        self,
+        components_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        declared: str | None,
+    ) -> None:
+        from application_sdk.storage.errors import StorageBindingNotFoundError
+
+        if declared is None:
+            monkeypatch.delenv("ATLAN_ENABLE_OBJECTSTORE", raising=False)
+        else:
+            monkeypatch.setenv("ATLAN_ENABLE_OBJECTSTORE", declared)
+
+        with pytest.raises(StorageBindingNotFoundError):
+            await _create_infrastructure()
+
+    async def test_present_store_is_used_even_when_declared_off(
+        self, components_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_ENABLE_OBJECTSTORE", "false")
+        self._write_objectstore(components_dir)
+
+        infra = await _create_infrastructure()
+
+        assert infra.storage is not None
+        assert infra.upstream_storage is infra.storage
+
+
+class TestObservabilityStoreSinkDefault:
+    """The store sink default follows the objectstore declaration.
+
+    ``ENABLE_OBSERVABILITY_STORE_SINK`` is read once at import, so each case
+    imports the SDK in a fresh interpreter with only its own env.
+    """
+
+    @staticmethod
+    def _sink_enabled(env: dict[str, str]) -> bool:
+        import os
+        import subprocess
+
+        base = {
+            k: v
+            for k, v in os.environ.items()
+            if k
+            not in {
+                "ATLAN_ENABLE_OBJECTSTORE",
+                "ATLAN_ENABLE_OBSERVABILITY_STORE_SINK",
+                "ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK",
+            }
+        }
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from application_sdk.constants import ENABLE_OBSERVABILITY_STORE_SINK as s; print(s)",
+            ],
+            env={**base, **env},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip().splitlines()[-1] == "True"
+
+    @pytest.mark.parametrize(
+        ("env", "expected"),
+        [
+            ({}, True),
+            ({"ATLAN_ENABLE_OBJECTSTORE": "true"}, True),
+            ({"ATLAN_ENABLE_OBJECTSTORE": "false"}, False),
+            (
+                {
+                    "ATLAN_ENABLE_OBJECTSTORE": "false",
+                    "ATLAN_ENABLE_OBSERVABILITY_STORE_SINK": "true",
+                },
+                True,
+            ),
+            ({"ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK": "false"}, False),
+        ],
+    )
+    def test_sink_default(self, env: dict[str, str], expected: bool) -> None:
+        assert self._sink_enabled(env) is expected
+
+
 class TestInstallGracefulSignalHandlers:
     """Tests for _install_graceful_signal_handlers()."""
 

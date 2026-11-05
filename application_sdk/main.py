@@ -695,6 +695,7 @@ async def _create_infrastructure(
             SECRET_STORE_NAME,
             STATE_STORE_NAME,
             UPSTREAM_OBJECT_STORE_NAME,
+            _read_enable_tri_state,
         )
         from application_sdk.infrastructure._dapr.client import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
             DaprBinding,
@@ -710,6 +711,9 @@ async def _create_infrastructure(
         )
         from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: private helper used only inside _create_infrastructure
             _create_store_from_binding_optional_with_put_attrs,
+        )
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — cold path: startup wiring only
+            StorageBindingNotFoundError,
         )
 
         await wait_for_dapr_sidecar()
@@ -735,13 +739,19 @@ async def _create_infrastructure(
             components_dir=components_dir,
         )
         set_fetched_binding_secrets(DEPLOYMENT_OBJECT_STORE_NAME, deployment_secrets)
-        deployment_store, deployment_put_attrs = (
-            create_store_from_binding_with_put_attrs(
-                DEPLOYMENT_OBJECT_STORE_NAME,
-                components_dir=components_dir,
-                secrets=deployment_secrets,
+        try:
+            deployment_store, deployment_put_attrs = (
+                create_store_from_binding_with_put_attrs(
+                    DEPLOYMENT_OBJECT_STORE_NAME,
+                    components_dir=components_dir,
+                    secrets=deployment_secrets,
+                )
             )
-        )
+        except StorageBindingNotFoundError:
+            _, objectstore_declared = _read_enable_tri_state("ATLAN_ENABLE_OBJECTSTORE")
+            if objectstore_declared is not False:
+                raise
+            deployment_store, deployment_put_attrs = None, None
 
         # The only place the two component *names* are compared: identity cannot
         # be tested before the second object exists, so this is the decision
