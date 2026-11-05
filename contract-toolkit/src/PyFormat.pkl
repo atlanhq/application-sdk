@@ -380,7 +380,9 @@ const local function formatBody(lines: List<String>): List<String> =
 /// `wrapLine`, except the inside of a multi-line `"""` string, which is kept
 /// exactly as written.
 function format(text: String): String =
-  // `split` drops trailing empty strings, so the final newline(s) are put back.
+  // Trailing newlines are dropped before splitting and exactly one is put
+  // back, as ruff does: a renderer block that ends in a blank line must not
+  // leave that blank line at the end of the file.
   let (body = text.replaceFirst(Regex(#"\n+$"#), ""))
   let (lines = body.split("\n"))
   let (first = lines.findIndexOrNull((l) -> isImport(l)))
@@ -392,4 +394,4 @@ function format(text: String): String =
       let (lastImport = afterFirst.take(runLength).findLastIndex((l) -> isImport(l)))
       let (block = importBlock(afterFirst.take(lastImport + 1).filter((l) -> isImport(l))))
       lines.take(first!!) + List(block) + formatBody(lines.drop(first!! + lastImport + 1)))
-  formatted.join("\n") + text.drop(body.length)
+  if (body.isEmpty) "" else formatted.join("\n") + "\n"

@@ -1,0 +1,35 @@
+/// A generated `_input.py` ends with exactly one newline, as ruff leaves it.
+///
+/// The JSON-object coercion validator is rendered as a block ending in a blank
+/// line. When it is the last thing in the class (no credential, publish or
+/// streaming fields after it), that blank line used to reach the end of the
+/// file, so plain `pkl eval` output differed from what ruff and the
+/// generated-freshness check expect.
+amends "pkl:test"
+
+import "../examples/minimal/app.pkl" as minimalApp
+import "../src/Widgets.pkl"
+
+local coercionLast = (minimalApp) {
+  uiConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["filter"] = new Widgets.SqlTree { title = "Filter" }
+        }
+      }
+    }
+  }
+}
+
+local inputPy: String = coercionLast.output.files["app/generated/_input.py"].text
+
+facts {
+  ["the coercion validator is the last thing in the module"] {
+    inputPy.contains("def _coerce_json_object_strings(")
+    inputPy.endsWith("        return value\n")
+  }
+  ["the module ends with exactly one newline"] {
+    !inputPy.endsWith("\n\n")
+  }
+}
