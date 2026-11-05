@@ -208,9 +208,14 @@ Deprecated (removal in v4.0.0): subclass `App` for a non-SQL source, or `SqlApp`
 
 ## Offloading Blocking Work (`run_in_thread` and auto-holds)
 
-Connector code runs on Temporal's asyncio event loop, so a blocking call (a sync database driver, a filesystem read, a vendor SDK without async support) must not run on the loop itself. Offload it with `run_in_thread` — reachable as `self.run_in_thread(...)`, `self.task_context.run_in_thread(...)`, or the module-level `application_sdk.execution.heartbeat.run_in_thread`:
+Connector code runs on Temporal's asyncio event loop, so a blocking call (a sync database driver, a filesystem read, a vendor SDK without async support) must not run on the loop itself.
+
+**Use an async-native library first** (`httpx`, `asyncpg`, `aiomysql`, `aioboto3`), then the SDK's own async helpers (`self.context.storage`, `self.context.state`). An async call stops cleanly at its `await` when the task is cancelled. `run_in_thread` is the **last resort**, for a call with no async alternative, because a thread cannot be stopped from outside (see [ADR-0010](../adr/0010-async-first-blocking-code.md)).
+
+When there is no alternative, offload the call with `run_in_thread` — reachable as `self.run_in_thread(...)`, `self.task_context.run_in_thread(...)`, or the module-level `application_sdk.execution.heartbeat.run_in_thread` — and give it its own driver-level timeout:
 
 ```python
+# The connection was opened with a statement/socket timeout, so the call returns on its own.
 rows = await self.run_in_thread(cursor.execute, sql)
 ```
 
@@ -229,6 +234,14 @@ async with self.holding_progress("full table scan", timeout=7200):
 `timeout` is **not** a prediction of how long the call takes. Err generous: too generous only delays detection toward the backstop, while too tight kills a healthy run — and because stall kills retry, a too-tight allowance burns the same wasted work up to three times.
 
 **Inside a `holding_progress` block the automatic holds stand down**, so the allowance you declared is what governs. The example above lapses at 7200s rather than inheriting an unbounded auto-hold that would outlive it — the SDK never adds a vouch that outlives the one you asked for. (An offload running concurrently in a task that never entered the block is still auto-held.)
+
+**A cancel does not stop the thread.** When the awaiting coroutine is cancelled — by Temporal, or locally by `asyncio.timeout` or a failing `TaskGroup` sibling — it raises `CancelledError`, but Python cannot stop the thread doing the blocking work from outside: it runs on, holding its memory and CPU, while the worker starts its next activity. `is_cancelled()` reports a request to stop, not that anything stopped. The thread has to stop itself:
+
+- **A long loop** (rows, files, partitions) checks `self.is_cancelled()` every few seconds and returns when it is `True`. Inside the offloaded thread it reports both the activity's cancel and its own call being abandoned, and only that call: a caller that catches its own timeout and carries on is not affected. Business code with no `self` calls `is_cancelled()` from `application_sdk.execution.heartbeat`.
+- **A single long driver call** (one big `cursor.execute`) never reaches a check. Register the driver's cancel on the call's handle instead — `current_cancel_handle().set(cursor.cancel)` from inside the thread, or bind one with `CancelHandle.bind` — and `run_in_thread` fires it when the caller stops waiting. See [Tasks → Cancelling a blocking call at the driver](tasks.md#cancelling-a-blocking-call-at-the-driver).
+- **Every blocking call** still needs a driver-level timeout, so a call nobody cancels cannot hang forever.
+
+Temporal delivers a server-side cancel to the worker in a heartbeat response. A task declared with `heartbeat_timeout_seconds=None` never heartbeats, so it never receives a server-side cancel. `is_cancelled()` still turns `True` when its start-to-close timeout elapses (plus a small buffer): the Temporal worker runs its own local start-to-close timer and cancels the activity without a heartbeat. A local cancel (`asyncio.timeout`, `TaskGroup`) is unaffected.
 
 For opaque *async* calls (the connector's own async client) there is no SDK-owned seam to auto-hold, so wrap those in `holding_progress` directly. Expect to need it: interleaved streaming reads (fetch a page, write a batch, repeat) are already covered by the SDK's own writer and transfer loops, but almost every connector makes at least one genuinely opaque single call — one large metadata query, one slow list/export that returns everything at once.
 

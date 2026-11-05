@@ -478,6 +478,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # BaseClient; the SDK defines it and constructs no subclass in product code,
     # and the version gate reads a consumed SDK version the SDK repo does not
     # have (FND-3778).
+    # P064/P065: offload cancel — they describe consumer code that offloads raw
+    # cursor statements or iterates batched results, and the version gate reads
+    # a consumed SDK version the SDK repo does not have (FND-4707).
     assert app_scoped == {
         "B001",
         "B007",
@@ -499,6 +502,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P057",
         "P058",
         "P059",
+        "P064",
+        "P065",
         "C002",
         "D001",
         "D002",
@@ -798,6 +803,10 @@ def test_catalog_p_series_present() -> None:
     never calls ``super().close()``); gated on an app SDK >= 3.46.0 (FND-3778).
     P060 is HandRolledRetryLadder — a sleep in a loop that also catches
     exceptions, outside application_sdk.common.backoff (FND-4284).
+    P064/P065 are the offload-cancel rules — UncancellableOffloadedCursorStatement
+    (a run_in_thread cursor statement with no driver cancel registered) and
+    BatchedResultsIteratedOnLoop (get_batched_results read with a sync for in an
+    async def); gated on the SDK release that ships FND-4707.
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -858,6 +867,8 @@ def test_catalog_p_series_present() -> None:
         "P058",
         "P059",
         "P060",
+        "P064",
+        "P065",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"

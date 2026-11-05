@@ -12,6 +12,7 @@ from uuid import uuid4
 from loguru import logger as _loguru_logger
 from temporalio import workflow as _workflow
 
+from application_sdk._runtime.offload import is_cancelled as _is_cancelled
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import holding_progress
 from application_sdk.app.base_errors import (
@@ -283,10 +284,31 @@ class AppContext:
     def is_cancelled(self) -> bool:
         """Check if execution has been cancelled.
 
+        True once the current Temporal activity has been asked to cancel, or,
+        inside a thread started with ``run_in_thread``, once that call's caller
+        stopped waiting (a Temporal cancel, or a local ``asyncio.timeout`` /
+        ``TaskGroup`` cancel). It reports a request to stop, not that anything
+        has stopped.
+
+        That thread is where it matters most. A cancel interrupts only the awaiting
+        coroutine; Python cannot stop the thread from outside, so it keeps its
+        memory and CPU until its own code checks this and returns. The stop is
+        cooperative: a single blocking call that never reaches a check still runs
+        to completion unless a driver cancel is registered on its handle.
+
+        Temporal delivers a server-side cancel to the worker in a heartbeat
+        response, so a task declared with ``heartbeat_timeout_seconds=None``
+        never receives one. It does still see this turn True when its
+        start-to-close timeout elapses: the worker runs a local start-to-close
+        timer and cancels the activity itself (plus a small buffer), without
+        needing a heartbeat.
+
         Apps should check this periodically during long-running operations
-        and exit gracefully if True.
+        and exit gracefully if True. Business code with no ``self`` can call
+        :func:`application_sdk.execution.heartbeat.is_cancelled`, which this
+        delegates to.
         """
-        return self._cancelled
+        return self._cancelled or _is_cancelled()
 
     async def save_state(self, key: str, value: dict[str, Any]) -> None:
         """Save state to the state store.

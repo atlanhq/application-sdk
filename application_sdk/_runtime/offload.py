@@ -191,6 +191,35 @@ class CancelHandle:
                 return
         _fire_cancel_action(action)
 
+    @contextlib.contextmanager
+    def registered(self, action: Callable[[], None]) -> Iterator[None]:
+        """Register *action* for the block, then put the previous action back.
+
+        For nested scopes inside one call — a helper opening its own connection
+        while the caller's is mid-query. A plain :meth:`set` would leave the
+        handle pointing at the inner connection after it closed, and the outer
+        query could no longer be cancelled. If a cancel lands inside the block,
+        the inner action fires then and the outer one fires on the way out.
+
+        Args:
+            action: Zero-argument callable that tells the driver to stop.
+
+        Yields:
+            Nothing; the scoped work runs inside the block.
+        """
+        with self._lock:
+            previous = self._action
+        self.set(action)
+        try:
+            yield
+        finally:
+            with self._lock:
+                fire_previous = self._requested and previous is not None
+                if not self._requested and self._action is action:
+                    self._action = previous
+            if fire_previous:
+                _fire_cancel_action(previous)  # type: ignore[arg-type]
+
     def request(self) -> None:
         """Request a cancel: fire the registered action, if any, at most once.
 
@@ -245,6 +274,107 @@ def _run_cancel_action(action: Callable[[], None]) -> None:
             _offloaded_callable_name(action),
             exc_info=True,
         )
+
+
+#: The :class:`CancelHandle` of the ``run_in_thread`` call whose thread is
+#: running. Set only inside the copied context the thread runs in, so the event
+#: loop, other tasks and other offloaded calls never see it: a cancel is scoped
+#: to the one call whose caller stopped waiting.
+_CURRENT_CANCEL_HANDLE: contextvars.ContextVar[CancelHandle | None] = (
+    contextvars.ContextVar("_CURRENT_CANCEL_HANDLE", default=None)
+)
+
+
+def current_cancel_handle() -> CancelHandle | None:
+    """The :class:`CancelHandle` of the ``run_in_thread`` call running on this thread.
+
+    Every ``run_in_thread`` call has one — the handle bound with
+    :meth:`CancelHandle.bind`, or a fresh one — so code deep inside the
+    offloaded call can register a driver cancel without the handle being
+    passed down to it::
+
+        def _query() -> list[Row]:
+            cursor = connection.cursor()
+            handle = current_cancel_handle()
+            if handle is not None:
+                handle.set(cursor.cancel)
+            cursor.execute(sql)
+            return cursor.fetchall()
+
+        rows = await run_in_thread(_query)
+
+    Returns:
+        The handle, or ``None`` outside a ``run_in_thread`` call (on the event
+        loop, or in a thread the SDK did not start).
+    """
+    return _CURRENT_CANCEL_HANDLE.get()
+
+
+def is_cancelled() -> bool:
+    """Whether the work running here has been asked to stop.
+
+    True when either:
+
+    - the ``run_in_thread`` call this thread is running was abandoned — its
+      awaiting task was cancelled, by Temporal or locally (``asyncio.timeout``,
+      a ``TaskGroup`` sibling failing). Scoped to that one call: a caller that
+      catches its own timeout and carries on does not see it, nor does any
+      other offloaded call; or
+    - the current Temporal activity has been asked to cancel.
+
+    A cancel does not stop an offloaded thread — Python cannot kill one — so a
+    long loop inside ``run_in_thread`` should check this every few seconds and
+    return. Safe to call anywhere: outside an activity and outside an offload it
+    returns ``False``.
+    """
+    handle = _CURRENT_CANCEL_HANDLE.get()
+    if handle is not None and handle.requested:
+        return True
+    try:
+        from temporalio import (  # noqa: PLC0415 — the api distribution ships this file without temporalio
+            activity as _activity,
+        )
+    except ImportError:
+        return False
+    return _activity.in_activity() and _activity.is_cancelled()
+
+
+def raise_if_cancelled() -> None:
+    """Raise ``CancelledError`` if :func:`is_cancelled` is true; else return.
+
+    For the step boundary of a long loop inside ``run_in_thread``: the thread
+    unwinds through its ``with`` blocks and ``finally`` clauses, so files and
+    connections close, instead of running on after its caller has gone.
+
+    Raises ``asyncio.CancelledError``, a ``BaseException``, so the
+    ``except Exception`` a per-record loop uses to skip bad records does not
+    swallow it and keep the loop going.
+
+    Raises:
+        asyncio.CancelledError: The work was asked to stop.
+    """
+    if is_cancelled():
+        raise asyncio.CancelledError
+
+
+def raise_if_offload_abandoned() -> None:
+    """Raise ``CancelledError`` if this ``run_in_thread`` call was abandoned.
+
+    The SDK's own check. Unlike :func:`raise_if_cancelled` it ignores the
+    Temporal activity's flag and reads only this call's handle, which a
+    Temporal cancel also reaches (it arrives as the ``CancelledError`` that
+    abandons the call). So an offload the SDK starts *after* a cancel and
+    waits on to the end — a drain, a shielded finish, cleanup in an activity
+    that caught its cancel — still runs to completion.
+
+    Raises:
+        asyncio.CancelledError: The call's caller stopped waiting. A
+            ``BaseException``, so no ``except Exception`` on the way out
+            swallows it.
+    """
+    handle = _CURRENT_CANCEL_HANDLE.get()
+    if handle is not None and handle.requested:
+        raise asyncio.CancelledError
 
 
 #: Label prefixes for the auto-holds on the two offload seams (ADR-0018 →
@@ -650,8 +780,10 @@ def _abandon(slot: _OffloadSlot, future: "concurrent.futures.Future[Any]") -> No
     logger.warning(
         "Offloaded call %s for app %s outlived its caller; the thread keeps a "
         "blocking-pool slot until the call returns on its own (%d stranded for "
-        "this app). Give the blocking call a driver-level timeout so it returns "
-        "when its caller gives up",
+        "this app). Stop it when its caller gives up: check is_cancelled() "
+        "between steps of a long loop, register the driver's cancel on "
+        "current_cancel_handle() for a single long call, and give the call a "
+        "driver-level timeout",
         slot.label,
         slot.owner,
         count,
@@ -780,6 +912,15 @@ async def run_in_thread(
     travels on the callable, never in ``**kwargs``, so every keyword argument
     still reaches ``func`` — no name is reserved.
 
+    **Every call has a handle.** Without ``bind``, a fresh one is created, and
+    code anywhere inside the call reaches it with :func:`current_cancel_handle`
+    — so a driver cancel can be registered without passing the handle down.
+    It is requested whenever the awaiting task is cancelled, by Temporal or
+    locally (``asyncio.timeout``, a ``TaskGroup`` sibling failing), and that
+    is what :func:`is_cancelled` reports inside the thread: a long loop checks
+    it between steps and returns. It is scoped to this call; the caller, and
+    every other offloaded call, still read ``False``.
+
     Args:
         func: Blocking function to run. MUST have internal timeout handling.
             A :meth:`CancelHandle.bind` result is cancelled at the driver too.
@@ -794,6 +935,11 @@ async def run_in_thread(
         - ``self.context.storage`` / ``self.context.state`` — already async.
     """
     ctx = contextvars.copy_context()
+    # Every call gets a handle, bound or fresh, and the thread can reach it
+    # through `current_cancel_handle()` / `is_cancelled()`. Set in the copy, so
+    # only this call's thread sees it.
+    cancel_handle = _bound_handle(func) or CancelHandle()
+    ctx.run(_CURRENT_CANCEL_HANDLE.set, cancel_handle)
     loop = asyncio.get_running_loop()
     # Auto-hold, unbounded (ADR-0018 → *Feeding the tracker*, mechanism 2).
     # `run_in_thread` is a mandatory seam, so this is the one place the SDK can
@@ -816,7 +962,6 @@ async def run_in_thread(
     scopes = _OFFLOAD_SCOPES.get()
     if scopes:
         call = _tracked_offload(call, scopes, label)
-    cancel_handle = _bound_handle(func)
     # The app's own pool on the consolidated host (``blocking_executor``), else
     # the process-wide one.
     executor = _BLOCKING_EXECUTOR_OVERRIDE.get() or _BLOCKING_EXECUTOR
@@ -836,9 +981,9 @@ async def run_in_thread(
         try:
             return await asyncio.wrap_future(future, loop=loop)
         except asyncio.CancelledError:
-            if cancel_handle is not None:
-                # Non-blocking: the action is handed to the cancel pool.
-                cancel_handle.request()
+            # Non-blocking: any registered action goes to the cancel pool. Also
+            # what flips `is_cancelled()` inside the thread, whoever cancelled.
+            cancel_handle.request()
             _abandon(slot, future)
             raise
 
@@ -1040,6 +1185,12 @@ def submit_in_thread(
         never ran. Ignoring the return value is the normal case.
     """
     ctx = contextvars.copy_context()
+    # Cleanup submitted from inside an offloaded call must not inherit that
+    # call's handle: it runs to completion whether or not its caller survives,
+    # so `raise_if_offload_abandoned()` never stops it. (The Temporal activity
+    # context still travels with the copy, so inside a cancelled activity the
+    # public `is_cancelled()` does report that activity's cancel.)
+    ctx.run(_CURRENT_CANCEL_HANDLE.set, None)
     executor = _BLOCKING_EXECUTOR_OVERRIDE.get() or _BLOCKING_EXECUTOR
     try:
         future = executor.submit(ctx.run, functools.partial(func, *args, **kwargs))

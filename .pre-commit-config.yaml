@@ -101,3 +101,16 @@ repos:
         additional_dependencies: ["pyyaml==6.0.3"]
         files: ^(mkdocs\.yml|\.github/scripts/check_mkdocs_script_hosts\.py)$
         pass_filenames: false
+      # The pyright hook above never sees .github/scripts ([tool.pyright]
+      # excludes .github/**); CI's `pyright .github/scripts` job holds them to
+      # pyright_baseline.json instead. Run the same ratchet here so a PR finds
+      # out before push. It also triggers on pyproject.toml / uv.lock: adding or
+      # dropping a package changes how the scripts' imports resolve (dropping
+      # httpx2 made starlette's TestClient unknown). Without --base-sha, so a
+      # same-PR baseline raise is still caught only in CI.
+      - id: pyright-scripts-baseline
+        name: pyright .github/scripts baseline
+        entry: uv run --frozen --extra workflows python .github/scripts/check_pyright_baseline.py
+        language: system
+        files: ^(\.github/scripts/.*\.py|\.github/scripts/pyright_baseline\.json|pyproject\.toml|uv\.lock)$
+        pass_filenames: false
