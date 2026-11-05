@@ -542,7 +542,7 @@ def _d017(text: str) -> list:
     ],
 )
 def test_d017_fires_on_each_shim_extra(extra: str, replacement: str | None) -> None:
-    text = _write_pyproject(deps=f'    "atlan-application-sdk[{extra}]>=3.33,<4",\n')
+    text = _write_pyproject(deps=f'    "atlan-application-sdk[{extra}]>=3.33,<5",\n')
     findings = _d017(text)
     assert len(findings) == 1
     f = findings[0]
@@ -556,10 +556,37 @@ def test_d017_fires_on_each_shim_extra(extra: str, replacement: str | None) -> N
         assert f"with '{replacement}'" in f.message
 
 
+@pytest.mark.parametrize(
+    "specifier",
+    [">=3.34.0,<4.0.0", "==3.34.0", "~=3.34.0"],
+)
+def test_d017_is_silent_when_sdk_range_excludes_removal_version(
+    specifier: str,
+) -> None:
+    text = _write_pyproject(deps=f'    "atlan-application-sdk[pandas]{specifier}",\n')
+    assert _d017(text) == []
+
+
+@pytest.mark.parametrize(
+    "specifier",
+    [
+        ">=3.34.0,<5.0.0",
+        ">=4.0.0",
+        ">=3.34.0",
+        ">=3.34.0,!=4.0.0",
+    ],
+)
+def test_d017_fires_when_sdk_range_can_reach_removed_version(
+    specifier: str,
+) -> None:
+    text = _write_pyproject(deps=f'    "atlan-application-sdk[pandas]{specifier}",\n')
+    assert [f.discriminator for f in _d017(text)] == ["pandas"]
+
+
 def test_d017_one_finding_per_shim_with_distinct_discriminators() -> None:
-    """The fleet's commonest pin carries three shims on one line."""
+    """A v4-admitting SDK pin gets one finding for each deprecated shim."""
     text = _write_pyproject(
-        deps='    "atlan-application-sdk[iam-auth,pandas,sql,workflows]>=3.33,<4",\n'
+        deps='    "atlan-application-sdk[iam-auth,pandas,sql,workflows]>=3.33,<5",\n'
     )
     findings = _d017(text)
     assert sorted(f.discriminator for f in findings) == [
@@ -597,9 +624,9 @@ def test_d017_checks_optional_dependencies_and_dependency_groups() -> None:
         '    "atlan-application-sdk>=3.33,<4",\n'
         "]\n"
         "[project.optional-dependencies]\n"
-        'extra = ["atlan-application-sdk[workflows]>=3.33,<4"]\n'
+        'extra = ["atlan-application-sdk[workflows]>=3.33,<5"]\n'
         "[dependency-groups]\n"
-        'dev = ["atlan-application-sdk[tests,storage]>=3.33,<4"]\n'
+        'dev = ["atlan-application-sdk[tests,storage]>=3.33,<5"]\n'
     )
     findings = _d017(text)
     assert sorted((f.line, f.discriminator) for f in findings) == [
@@ -612,9 +639,9 @@ def test_d017_checks_optional_dependencies_and_dependency_groups() -> None:
     "deps_block,line",
     [
         # multi-line array, TOML literal (single-quoted) string
-        ("dependencies = [\n    'atlan-application-sdk[workflows]>=3.33,<4',\n]\n", 5),
+        ("dependencies = [\n    'atlan-application-sdk[workflows]>=3.33,<5',\n]\n", 5),
         # inline array, literal string
-        ("dependencies = ['atlan-application-sdk[workflows]>=3.33,<4']\n", 4),
+        ("dependencies = ['atlan-application-sdk[workflows]>=3.33,<5']\n", 4),
     ],
 )
 def test_d017_reads_single_quoted_literal_strings(deps_block: str, line: int) -> None:
@@ -627,8 +654,8 @@ def test_d017_reads_single_quoted_strings_in_dependency_groups() -> None:
     text = (
         _write_pyproject(deps='    "atlan-application-sdk>=3.33,<4",\n')
         + "[dependency-groups]\n"
-        + "dev = ['atlan-application-sdk[storage]>=3.33,<4']\n"
-        + "test = [\n    'atlan-application-sdk[azure]>=3.33,<4',\n]\n"
+        + "dev = ['atlan-application-sdk[storage]>=3.33,<5']\n"
+        + "test = [\n    'atlan-application-sdk[azure]>=3.33,<5',\n]\n"
     )
     assert sorted(f.discriminator for f in _d017(text)) == ["azure", "storage"]
 
@@ -645,7 +672,7 @@ def test_single_quoted_sdk_pin_is_seen_by_d001() -> None:
 def test_d017_suppressed_inline_directive() -> None:
     text = _write_pyproject(
         deps=(
-            '    "atlan-application-sdk[sql,workflows]>=3.33,<4",'
+            '    "atlan-application-sdk[sql,workflows]>=3.33,<5",'
             "  # conformance: ignore[D017] dropped with the v4 bump\n"
         )
     )

@@ -44,8 +44,8 @@ Rules in this check module:
   ``[sql]`` again.
 
 * **D017 DeprecatedSdkExtra** — an ``atlan-application-sdk[extra]``
-  reference names a deprecated shim extra: one that installs nothing core or
-  ``[sql]`` does not already provide, and that the SDK removes in v4.0.0.
+  reference whose version specifier admits a release where the SDK removes a
+  deprecated shim extra (v4.0.0 or later).
 
 * **D012 UnpinnedPackageIndex** — the repo's root ``pyproject.toml`` must pin
   PyPI as the resolver's default index (``[[tool.uv.index]]`` with
@@ -316,6 +316,83 @@ def _sdk_extras_in(raw: str) -> list[str]:
         return []
     blob = m.group("extras") or ""
     return [e.strip() for e in blob.split(",") if e.strip()]
+
+
+def _sdk_requirement_proves_pre_removal(spec: str, removed_in: str) -> bool:
+    """Return True only when a PEP 440 specifier proves the SDK stays pre-removal.
+
+    D017 matters when resolution can select the SDK release that deletes the
+    extra. A finite upper constraint below that release makes the reference
+    safe under its current range. Unbounded, malformed, or otherwise uncertain
+    ranges are not proof and remain subject to D017.
+    """
+    if not spec.strip():
+        return False
+    try:
+        from packaging.specifiers import InvalidSpecifier, SpecifierSet
+        from packaging.version import InvalidVersion, Version
+    except ImportError:
+        return False
+    try:
+        specifiers = SpecifierSet(spec)
+        removal = Version(removed_in)
+    except (InvalidSpecifier, InvalidVersion):
+        return False
+
+    def wildcard_upper_bound(raw: str) -> Version | None:
+        if not raw.endswith(".*"):
+            return None
+        try:
+            prefix = Version(raw[:-2])
+        except InvalidVersion:
+            return None
+        release = list(prefix.release)
+        if not release:
+            return None
+        release[-1] += 1
+        return Version(".".join(str(part) for part in release))
+
+    for clause in specifiers:
+        operator = clause.operator
+        raw_bound = clause.version
+        if operator in {"<", "<="}:
+            try:
+                bound = Version(raw_bound)
+            except InvalidVersion:
+                continue
+            if bound < removal or (bound == removal and operator == "<"):
+                return True
+        elif operator == "~=":
+            try:
+                release = list(Version(raw_bound).release)
+            except InvalidVersion:
+                continue
+            if len(release) < 2:
+                continue
+            release = release[:-1]
+            release[-1] += 1
+            if Version(".".join(str(part) for part in release)) <= removal:
+                return True
+        elif operator == "==":
+            upper = wildcard_upper_bound(raw_bound)
+            if upper is not None:
+                if upper <= removal:
+                    return True
+                continue
+            try:
+                bound = Version(raw_bound)
+            except InvalidVersion:
+                continue
+            if bound < removal:
+                return True
+        elif operator == "===":
+            try:
+                bound = Version(raw_bound)
+            except InvalidVersion:
+                continue
+            if bound < removal:
+                return True
+    return False
 
 
 def _is_floating_range(spec: str) -> bool:
@@ -1162,9 +1239,13 @@ def scan_text(
     for entry in entries + group_entries:
         if entry.name != sdk_norm:
             continue
+        parsed_requirement = _parse_requirement(entry.raw)
+        sdk_specifier = parsed_requirement[1] if parsed_requirement is not None else ""
         for extra in _sdk_extras_in(entry.raw):
             shim = DEPRECATED_SDK_EXTRAS.get(_normalise_name(extra))
             if shim is None:
+                continue
+            if _sdk_requirement_proves_pre_removal(sdk_specifier, shim.removed_in):
                 continue
             if shim.replacement is None:
                 action = (
