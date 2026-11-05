@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**54 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015, P059), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.retry_ladder` (P060), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK) (all AST-based / cross-artifact)
+**56 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015, P059), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.retry_ladder` (P060), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -77,6 +77,8 @@ reassigned.
 | [P058](#p058) | `RawDictEntity` | `warn` | `app` | `asset-modeling` | — | 0.49.0 |
 | [P059](#p059) | `JsonEncodedContractField` | `warn` | `app` | `contract-modeling` | — | 0.51.0 |
 | [P060](#p060) | `HandRolledRetryLadder` | `warn` | `sdk` | `retry-policy` | — | 0.54.0 |
+| [P064](#p064) | `UncancellableOffloadedCursorStatement` | `warn` | `app` | `async-correctness` | — | 0.56.0 |
+| [P065](#p065) | `BatchedResultsIteratedOnLoop` | `warn` | `app` | `async-correctness` | yes | 0.56.0 |
 
 ---
 
@@ -3280,5 +3282,116 @@ arithmetic and the jitter still come from the one helper.
 
 Suppress a loop that is genuinely not a retry ladder (a poller whose `try` only guards a
 log call, say) with a justification: `# conformance: ignore[P060] <reason>`.
+
+---
+
+## P064 — `UncancellableOffloadedCursorStatement` {#p064}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.56.0
+
+> `run_in_thread` runs a DB-API cursor statement with no driver cancel registered
+
+**Rationale:** A cancel stops only the coroutine awaiting run_in_thread; the thread and the query it
+sent run on, holding the source's compute, a connection and this worker's memory while
+the worker starts its next activity. A cancelled offload in a production RCA still held
+~6.4 GiB when its retry landed on the same pod (FND-4707). The query stops only if the
+driver is told to cancel it.
+
+### What correct looks like
+
+- **Compliant example:** application_sdk application_sdk/clients/sql.py — `BaseSQLClient.run_query` and
+  `_execute_async_read_operation` offload every driver call through `run_in_thread` with
+  a `CancelHandle` the cursor's cancel is registered on, so a cancelled caller stops the
+  statement at the driver. No reference app offloads a raw DB-API cursor.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+
+A `run_in_thread` call offloads work that sends a DB-API cursor statement —
+`<cursor>.execute(...)` or `executemany(...)` on a cursor bound from `<conn>.cursor()`
+in the offloaded function, or the bare `cursor.execute` passed straight to
+`run_in_thread` — and nothing in the offloaded function registers a driver cancel.  When
+the activity is cancelled the await stops, but the thread keeps waiting on the query and
+the source keeps running it.
+
+Fix: register the driver's own cancel on the call's handle from inside the offloaded
+function, once the cursor exists:
+
+```python
+from application_sdk.execution.heartbeat import current_cancel_handle
+
+def _query(sql):
+    cursor = connection.cursor()
+    handle = current_cancel_handle()
+    if handle is not None:
+        handle.set(cursor.cancel)   # the driver's own cancel
+    cursor.execute(sql)
+    return cursor.fetchall()
+
+rows = await self.run_in_thread(_query, sql)
+```
+
+Not a mechanical rewrite: the cancel call is driver-specific — `cursor.cancel()`
+(pyodbc), `connection.cancel()` (psycopg2), an abort keyed on the query id (Snowflake) —
+and some drivers have none.  Where the driver cannot cancel, give the statement a
+server-side timeout and suppress with a reason that says so.  See
+https://github.com/atlanhq/application-sdk/blob/main/docs/concepts/apps.md.
+
+Matching is exact and module-local: the offloaded function must be a `def` or `lambda`
+in the same module (a nested `def`, a module-level `def` or a method on `self`), seen
+through `functools.partial`.  `<handle>.bind(fn)` counts as registered, and so does any
+use of `current_cancel_handle` or `CancelHandle` in the function.  A cursor received as
+an argument, or a function from another module, is not followed.  The check is silent
+unless the app's `uv.lock` resolves an SDK that has `current_cancel_handle`.
+
+Land as `WARN`: a justified inline `# conformance: ignore[P064] <reason>` on the
+`run_in_thread` line records a deliberate exception and stays visible in SARIF.
+
+---
+
+## P065 — `BatchedResultsIteratedOnLoop` {#p065}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `async-correctness` · **Autofixable:** yes · **Since:** 0.56.0
+
+> `get_batched_results(...)` iterated with a sync `for` inside an `async def`
+
+**Rationale:** A sync `for` over get_batched_results() runs every fetchmany and every DataFrame build
+on the event loop, which stops the activity's auto-heartbeat and leaves a cancel unable
+to stop the read. `async for` reads each chunk with run_in_thread under a cancel handle
+(FND-4707).
+
+### What correct looks like
+
+- **Compliant example:** application_sdk application_sdk/storage/formats/__init__.py —
+  `Writer._write_batched_dataframe` reads any async iterable with `async for`, which is
+  how `write_batches(await client.get_batched_results(query))` reads each chunk off the
+  event loop.
+- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+
+Inside an `async def`, the result of `await <client>.get_batched_results(...)` is
+iterated with a sync `for` — directly, or through a local name bound once from it — or
+with a sync comprehension.  Each step of that loop fetches the next chunk from the
+cursor and builds its DataFrame on the event loop: the loop blocks, the activity's
+heartbeat stalls, and a cancel cannot stop the read.
+
+Fix: iterate with `async for`, which reads each chunk on the SDK's blocking pool and
+stops the read when the activity is cancelled:
+
+```python
+batches = await client.get_batched_results(query)
+async for frame in batches:
+    ...
+```
+
+A comprehension becomes `[f async for f in batches]`.  The result is the same frames
+either way; only where they are read changes.  Handing the result to
+`write_batches(...)` is already correct and is not flagged.
+
+Matching is exact: the iterable is the `await` itself, or a local name assigned exactly
+once in the function, from that `await`.  A result passed to a helper, stored, or
+rebound is not followed.  The check is silent unless the app's `uv.lock` resolves an SDK
+whose `get_batched_results` result supports `async for`.  See
+https://github.com/atlanhq/application-sdk/blob/main/docs/concepts/apps.md.
+
+Land as `WARN`: a justified inline `# conformance: ignore[P065] <reason>` records a
+deliberate exception and stays visible in SARIF.
 
 ---
