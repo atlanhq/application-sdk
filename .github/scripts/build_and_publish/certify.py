@@ -54,6 +54,7 @@ import _bap
 # .github/scripts, which holds renovate_pkl_sync.py (stdlib only).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import renovate_pkl_sync  # noqa: E402
+from git_auth import git_auth_env  # noqa: E402
 
 DOCS_URL = (
     "https://github.com/atlanhq/application-sdk/blob/main/docs/standards/"
@@ -63,23 +64,7 @@ _ICONS = {"success": "✅", "failure": "❌", "skipped": "➖", "install_failed"
 _MAX_LISTED_PATHS = 50
 
 
-#: Rewritten to carry the token: an app's lock may name either form.
-_ATLANHQ_REMOTES = ("https://github.com/atlanhq/", "ssh://git@github.com/atlanhq/")
 INSTALL_COMMAND = ("uv", "sync", "--all-extras", "--all-groups", "--frozen")
-
-
-def git_auth_env(token: str) -> dict[str, str]:
-    """git config entries, as ``GIT_CONFIG_*`` env, that authenticate atlanhq.
-
-    Equivalent to ``git -c url.<authed>.insteadOf=<remote>`` for each remote,
-    but inherited by every git process uv starts, with nothing persisted.
-    """
-    authed = f"https://x-access-token:{token}@github.com/atlanhq/"
-    env = {"GIT_CONFIG_COUNT": str(len(_ATLANHQ_REMOTES))}
-    for i, remote in enumerate(_ATLANHQ_REMOTES):
-        env[f"GIT_CONFIG_KEY_{i}"] = f"url.{authed}.insteadOf"
-        env[f"GIT_CONFIG_VALUE_{i}"] = remote
-    return env
 
 
 def install_deps() -> int:

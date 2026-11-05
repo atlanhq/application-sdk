@@ -208,6 +208,16 @@ inputs:
               && uv sync --locked --no-install-project
     required: false
     default: ""
+  git-auth-token:
+    description: |
+      Read-only GitHub token for a PRIVATE atlanhq git dependency on the HOST
+      side: passed to setup-deps and to the harness repin's `uv lock` /
+      `uv sync`, each through `.github/scripts/git_auth.py`, so no git config
+      is written and the tests cannot read it (FND-4740). Separate from
+      `git-token`, which only reaches the Docker build. Empty (the default)
+      installs without one.
+    required: false
+    default: ""
   enable-two-store:
     description: |
       Opt-in ADR-0014 two-store SDR posture (docs/adr/0014-two-store-
@@ -378,6 +388,7 @@ runs:
         cp -R "${{ github.action_path }}" /tmp/sdr-e2e
         cp "${{ github.action_path }}/../connector-integration-tests/repin-application-sdk.sh" /tmp/sdr-e2e/
         chmod +x /tmp/sdr-e2e/repin-application-sdk.sh
+        cp "${{ github.action_path }}/../../scripts/git_auth.py" /tmp/sdr-e2e/
 
     # Resolve the effective SDK ref for each side ONCE, so the
     # (runtime||shared) / (harness||shared) fallback isn't repeated as a GHA
@@ -461,6 +472,7 @@ runs:
       uses: atlanhq/application-sdk/.github/actions/setup-deps@main
       with:
         python-version: ${{ inputs.expected-python-version }}
+        git-auth-token: ${{ inputs.git-auth-token }}
 
     # setup-deps' actions/checkout wipes the pre-build re-pin above. Do
     # it again so the host pytest runtime resolves the dispatched SDK
@@ -499,10 +511,11 @@ runs:
       shell: bash
       env:
         SDK_REF: ${{ steps.sdk_refs.outputs.harness_ref }}
+        GIT_TOKEN: ${{ inputs.git-auth-token }}
       run: |
         /tmp/sdr-e2e/repin-application-sdk.sh
-        uv lock
-        uv sync --all-extras --all-groups
+        python3 /tmp/sdr-e2e/git_auth.py run -- uv lock
+        python3 /tmp/sdr-e2e/git_auth.py run -- uv sync --all-extras --all-groups
 
     - name: Download atlan-configurator
       shell: bash

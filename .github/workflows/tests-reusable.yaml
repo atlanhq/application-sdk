@@ -22,8 +22,9 @@ name: tests-reusable
 #   - connector-integration-tests composite with services-script hook (no-op
 #     by default; used when source systems need CI-level startup rather than
 #     pytest fixtures — see openapi's .github/test/setup-services.sh)
-#   - Optional pre-sync token rewrite for private atlanhq git dependencies
-#     (`private-git-deps`), plus `git-token` forwarded to the e2e image build
+#   - Optional read-only App token for private atlanhq git dependencies
+#     (`private-git-deps`), scoped to the `uv sync` that needs it, plus
+#     `git-token` forwarded to the e2e image build
 #   - Label/dispatch-gated full-DAG e2e job (inlined here — see the `e2e` job;
 #     it was previously delegated to e2e-full-reusable.yaml, now folded in so
 #     the whole suite is one reusable + one Tests Gate)
@@ -440,10 +441,12 @@ on:
           dependency (e.g. query-redaction, pinned via `ssh://` or `https://`
           in [tool.uv.sources]).  Every tier of this reusable runs `uv sync` on
           the runner, and an unauthenticated clone of a private atlanhq repo
-          fails there — so with this flag each job rewrites atlanhq remotes to
-          a token URL (ORG_PAT_GITHUB, available via the caller's
-          `secrets: inherit`) BEFORE the deps action syncs.  The Docker build
-          is covered separately: `git-token` is always forwarded to sdr-e2e.
+          fails there — so with this flag each job mints a read-only fleet App
+          token (FLEET_APP_ID / FLEET_APP_PRIVATE_KEY, via `secrets: inherit`
+          or an explicit mapping naming both) and hands it to that `uv sync`
+          alone; no git config is written, so the tests never see it
+          (FND-4740).  The Docker build is covered separately: `git-token` is
+          always forwarded to sdr-e2e.
           Leave false for connectors with only public dependencies.
       git-lfs-skip-smudge:
         required: false
@@ -625,14 +628,15 @@ on:
       ORG_PAT_GITHUB:
         required: false
         description: |
-          Org PAT used for the GHCR push, the connector image build's private
-          git dependency, and the private-git-deps token rewrite.
+          Org PAT used for the GHCR push and the connector image build's
+          private git dependency. Never handed to the runner's `uv sync`.
       FLEET_APP_ID:
         required: false
         description: |
-          GitHub App id used by the cross-repo callback job to mint a token for
-          the dispatching application-sdk repo. Only the SDK-dispatch path uses
-          it; connector-triggered runs leave it unset.
+          GitHub App id. Used by the cross-repo callback job to mint a token
+          for the dispatching application-sdk repo, and with
+          `private-git-deps` to mint a read-only token for the private atlanhq
+          git dependency.
       FLEET_APP_PRIVATE_KEY:
         required: false
         description: Private key paired with FLEET_APP_ID.
@@ -737,10 +741,6 @@ jobs:
       # Empty (the default) leaves the smudge filter enabled, exactly as
       # before; git-lfs only skips on an explicit "1".
       GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
-      # Surfaced as env, like E2E_SOURCE_ENV_JSON below, because a step-level
-      # `if:` cannot read the secrets context — and the rewrite step must gate
-      # on the credential actually being present, not just on the flag.
-      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
@@ -776,26 +776,30 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
-      # The flag promises a token. With ORG_PAT_GITHUB absent, GIT_TOKEN expands
-      # empty and the rewrite below would still install a global redirect of
-      # every atlanhq URL to an unauthenticated token URL — which then also
-      # applies to the connector's own repo checkout, so the job fails far from
-      # the cause. Fail here instead, naming the missing secret. The condition
-      # stays in `if:`, never in the shell (docs/standards/ci.md).
-      - name: Require ORG_PAT_GITHUB when private-git-deps is set
-        if: inputs.private-git-deps && env.GIT_TOKEN == ''
-        run: |
-          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
-          exit 1
+      # Private atlanhq git deps (FND-4740): a read-only fleet App token, handed
+      # to the deps action's `uv sync` alone, through git_auth.py's scoped
+      # GIT_CONFIG_* env. No git config is written, so the tests and the app
+      # code they import cannot read it. `continue-on-error` so a caller that
+      # did not pass the App secrets gets the named error below, not a bare
+      # action failure.
+      - name: Mint read-only token for private git dependencies
+        id: git-deps-token
+        if: inputs.private-git-deps
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          # Read is all a clone needs; the sync runs build backends.
+          permission-contents: read
 
-      # Private atlanhq git deps must be reachable before the deps action's
-      # `uv sync`. --global writes ~/.gitconfig, so it applies to the clone uv
-      # performs later in this job and needs no checkout of its own.
-      - name: Authenticate private atlanhq git dependencies
-        if: inputs.private-git-deps && env.GIT_TOKEN != ''
+      # The condition stays in `if:`, never in the shell (docs/standards/ci.md).
+      - name: Require the token when private-git-deps is set
+        if: inputs.private-git-deps && steps.git-deps-token.outputs.token == ''
         run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+          echo "::error title=No token for private git dependencies::private-git-deps is true but the fleet App token did not mint. Pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (secrets: inherit, or name both in an explicit secrets: mapping)."
+          exit 1
 
       - name: Run unit tests
         id: unit
@@ -807,6 +811,7 @@ jobs:
           # Repin so a cross-repo SDK-PR dispatch exercises the SDK branch in the
           # unit tier too (parity with integration); empty = lockfile version.
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
+          git-auth-token: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
 
   # ── Detect whether the PR's base branch is behind a merge queue ──────────
   # Decides WHERE the integration tier gates. The tier must run before a merge
@@ -1113,8 +1118,6 @@ jobs:
       # source credentials from one locked instance, never two. Empty when the
       # caller does not use dataforge; the fetch chain below then self-skips.
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
-      # Same reason: the rewrite step gates on the credential, not the flag.
-      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
@@ -1133,18 +1136,30 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
-      # See the unit job for why this gates on the token, not just the flag.
-      - name: Require ORG_PAT_GITHUB when private-git-deps is set
-        if: inputs.private-git-deps && env.GIT_TOKEN == ''
-        run: |
-          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
-          exit 1
+      # Private atlanhq git deps (FND-4740): a read-only fleet App token, handed
+      # to the deps action's `uv sync` alone, through git_auth.py's scoped
+      # GIT_CONFIG_* env. No git config is written, so the tests and the app
+      # code they import cannot read it. `continue-on-error` so a caller that
+      # did not pass the App secrets gets the named error below, not a bare
+      # action failure.
+      - name: Mint read-only token for private git dependencies
+        id: git-deps-token
+        if: inputs.private-git-deps
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          # Read is all a clone needs; the sync runs build backends.
+          permission-contents: read
 
-      - name: Authenticate private atlanhq git dependencies
-        if: inputs.private-git-deps && env.GIT_TOKEN != ''
+      # The condition stays in `if:`, never in the shell (docs/standards/ci.md).
+      - name: Require the token when private-git-deps is set
+        if: inputs.private-git-deps && steps.git-deps-token.outputs.token == ''
         run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+          echo "::error title=No token for private git dependencies::private-git-deps is true but the fleet App token did not mint. Pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (secrets: inherit, or name both in an explicit secrets: mapping)."
+          exit 1
 
       # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON) and, when the caller
       # sets dataforge-datasource, the dataforge fetch scripts + the VPN action.
@@ -1328,6 +1343,7 @@ jobs:
         uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@main
         with:
           app-name: ${{ inputs.app-name }}
+          git-auth-token: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
           test-paths: ${{ inputs.test-paths != '' && inputs.test-paths || 'tests/integration/' }}
           pytest-args: ${{ inputs.pytest-args }}
           services-script: ${{ inputs.services-script }}
@@ -2664,7 +2680,6 @@ jobs:
       # See the integration job: needed as env for the step-level `if:` gates.
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
-      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - name: distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
@@ -2846,21 +2861,33 @@ jobs:
           DF_HERMETIC_FALLBACK: ${{ inputs.dataforge-hermetic-fallback }}
         run: python3 application-sdk-scripts/.github/scripts/resolve_e2e_source.py
 
-      # See the unit job for why this gates on the token, not just the flag.
-      - name: Require ORG_PAT_GITHUB when private-git-deps is set
-        if: inputs.private-git-deps && env.GIT_TOKEN == ''
-        run: |
-          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
-          exit 1
-
       # The sdr-e2e action runs `uv sync` on the RUNNER as well as in the image
-      # build, so the token rewrite is needed here too — `git-token` below only
+      # build, so the host side needs the token too; `git-token` below only
       # reaches the Docker build.
-      - name: Authenticate private atlanhq git dependencies
-        if: inputs.private-git-deps && env.GIT_TOKEN != ''
+      # Private atlanhq git deps (FND-4740): a read-only fleet App token, handed
+      # to the deps action's `uv sync` alone, through git_auth.py's scoped
+      # GIT_CONFIG_* env. No git config is written, so the tests and the app
+      # code they import cannot read it. `continue-on-error` so a caller that
+      # did not pass the App secrets gets the named error below, not a bare
+      # action failure.
+      - name: Mint read-only token for private git dependencies
+        id: git-deps-token
+        if: inputs.private-git-deps
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          # Read is all a clone needs; the sync runs build backends.
+          permission-contents: read
+
+      # The condition stays in `if:`, never in the shell (docs/standards/ci.md).
+      - name: Require the token when private-git-deps is set
+        if: inputs.private-git-deps && steps.git-deps-token.outputs.token == ''
         run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+          echo "::error title=No token for private git dependencies::private-git-deps is true but the fleet App token did not mint. Pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (secrets: inherit, or name both in an explicit secrets: mapping)."
+          exit 1
 
       # uv on the host for the sdr-e2e action's `uv run pytest` + summary steps.
       # The action self-installs uv only when application-sdk-ref is set
@@ -2876,6 +2903,7 @@ jobs:
         with:
           app-name: ${{ inputs.app-name }}
           app-image-name: ${{ inputs.app-image-name }}
+          git-auth-token: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
           # Reuse the merged manifest the build legs pushed and prepare-tenant
           # installed, instead of rebuilding the identical deterministic tag per
           # leg. The merged reference, not a per-arch one: compose pulls this on
