@@ -10,6 +10,7 @@ fails instead of hanging the suite.
 """
 
 import asyncio
+import concurrent.futures
 import threading
 import time
 
@@ -20,6 +21,7 @@ from application_sdk._runtime.offload import (
     CancelHandle,
     current_cancel_handle,
     is_cancelled,
+    raise_if_offload_abandoned,
     run_in_thread,
     submit_in_thread,
 )
@@ -138,11 +140,11 @@ async def test_a_driver_cancel_registered_without_bind_fires_on_cancel() -> None
 async def test_cleanup_submitted_from_an_abandoned_call_is_not_cancelled() -> None:
     started = threading.Event()
     release = threading.Event()
-    cleanup_saw: list[bool] = []
+    cleanup_saw: list[object] = []
     cleanup_done = threading.Event()
 
     def cleanup() -> None:
-        cleanup_saw.append(is_cancelled())
+        cleanup_saw.append(current_cancel_handle())
         cleanup_done.set()
 
     def work() -> None:
@@ -157,4 +159,89 @@ async def test_cleanup_submitted_from_an_abandoned_call_is_not_cancelled() -> No
         await task
     release.set()
     assert await asyncio.to_thread(cleanup_done.wait, _RELEASE_AFTER)
-    assert cleanup_saw == [False]
+    assert cleanup_saw == [None]
+
+
+async def test_the_sdk_check_stops_on_a_temporal_cancel_without_reading_its_flag() -> (
+    None
+):
+    environment = ActivityEnvironment()
+    started = threading.Event()
+    stopped = threading.Event()
+
+    def work() -> None:
+        started.set()
+        deadline = time.monotonic() + _RELEASE_AFTER
+        while time.monotonic() < deadline:
+            try:
+                raise_if_offload_abandoned()
+            except concurrent.futures.CancelledError:
+                stopped.set()
+                return
+            time.sleep(0.01)
+
+    async def activity_body() -> None:
+        await run_in_thread(work)
+
+    running = asyncio.ensure_future(environment.run(activity_body))
+    assert await asyncio.to_thread(started.wait, _RELEASE_AFTER)
+    environment.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert await asyncio.to_thread(stopped.wait, _RELEASE_AFTER)
+
+
+async def test_an_offload_started_after_a_caught_cancel_runs_to_completion() -> None:
+    environment = ActivityEnvironment()
+    started = threading.Event()
+
+    def checked_step() -> str:
+        raise_if_offload_abandoned()
+        return "completed"
+
+    async def activity_body() -> str:
+        try:
+            await run_in_thread(started.wait, _RELEASE_AFTER * 2)
+        except asyncio.CancelledError:
+            # Cleanup after the cancel, awaited to the end: nothing abandons it.
+            return await run_in_thread(checked_step)
+        return "not cancelled"
+
+    running = asyncio.ensure_future(environment.run(activity_body))
+    await asyncio.sleep(0.2)
+    environment.cancel()
+    started.set()
+    assert await running == "completed"
+
+
+def test_a_nested_registration_restores_the_outer_action() -> None:
+    handle = CancelHandle()
+    fired: list[str] = []
+    done = threading.Event()
+
+    def outer() -> None:
+        fired.append("outer")
+        done.set()
+
+    handle.set(outer)
+    with handle.registered(lambda: fired.append("inner")):
+        pass
+    handle.request()
+    assert done.wait(_RELEASE_AFTER)
+    assert fired == ["outer"]
+
+
+def test_a_cancel_inside_a_nested_registration_fires_both() -> None:
+    handle = CancelHandle()
+    fired: list[str] = []
+    both = threading.Barrier(3, timeout=_RELEASE_AFTER)
+
+    def record(name: str) -> None:
+        fired.append(name)
+        both.wait()
+
+    handle.set(lambda: record("outer"))
+    with handle.registered(lambda: record("inner")):
+        handle.request()
+    both.wait()
+    assert sorted(fired) == ["inner", "outer"]

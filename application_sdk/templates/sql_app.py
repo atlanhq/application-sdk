@@ -87,7 +87,7 @@ from pydantic import ValidationError
 from temporalio import workflow as _temporal_workflow
 from typing_extensions import deprecated
 
-from application_sdk._runtime.offload import raise_if_cancelled, run_in_thread
+from application_sdk._runtime.offload import raise_if_offload_abandoned, run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
@@ -2009,7 +2009,7 @@ class SqlApp(App):
                     # activity has gone — where a retry on this pod reopens
                     # and truncates the same file under it.
                     if not written % 1024:
-                        raise_if_cancelled()
+                        raise_if_offload_abandoned()
             return written
 
         # Offloaded as one hop: this maps every raw record for the entity —

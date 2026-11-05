@@ -410,8 +410,8 @@ def _interruptible(
 
     @functools.wraps(func)
     def _call(*args: Any, **kwargs: Any) -> _T:
-        interrupt_on_cancel(conn)
-        return func(*args, **kwargs)
+        with interrupt_on_cancel(conn):
+            return func(*args, **kwargs)
 
     return _call
 

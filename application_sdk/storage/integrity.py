@@ -82,7 +82,7 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING
 
-from application_sdk._runtime.offload import raise_if_cancelled, run_in_thread
+from application_sdk._runtime.offload import raise_if_offload_abandoned, run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -159,7 +159,7 @@ def _sha256_file_sync(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             # Per 1 MiB read: a multi-GB hash whose caller was cancelled
             # stops instead of reading the rest of the file for nobody.
-            raise_if_cancelled()
+            raise_if_offload_abandoned()
             h.update(chunk)
     return h.hexdigest()
 

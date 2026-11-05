@@ -139,3 +139,33 @@ def test_hashing_stops_once_its_offload_is_cancelled(tmp_path: Path) -> None:
         offload._CURRENT_CANCEL_HANDLE.reset(token)
     # Outside a cancelled offload the same file hashes normally.
     assert len(_sha256_file_sync(path)) == 64
+
+
+async def test_a_helper_connection_does_not_leave_the_shared_one_uncancellable(
+    tmp_path: Path,
+) -> None:
+    """``create_incremental_diff`` opens a helper connection mid-step."""
+    conn = duckdb.connect()
+    started = threading.Event()
+    outcome: list[str] = []
+
+    def step(sql: str) -> None:
+        with DuckDBConnectionManager(base_path=str(tmp_path)):
+            pass
+        started.set()
+        try:
+            conn.execute(sql).fetchall()
+            outcome.append("ran to completion")
+        except duckdb.InterruptException:
+            outcome.append("interrupted")
+
+    await _cancel_once_started(
+        asyncio.ensure_future(run_in_thread(_interruptible(step, conn), _SLOW_QUERY)),
+        started,
+    )
+    deadline = time.monotonic() + _RELEASE_AFTER
+    while not outcome:
+        assert time.monotonic() < deadline, "shared scan never stopped"
+        await asyncio.sleep(0.01)
+    assert outcome == ["interrupted"]
+    conn.close()

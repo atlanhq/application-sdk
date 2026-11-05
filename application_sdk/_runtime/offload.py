@@ -191,6 +191,35 @@ class CancelHandle:
                 return
         _fire_cancel_action(action)
 
+    @contextlib.contextmanager
+    def registered(self, action: Callable[[], None]) -> Iterator[None]:
+        """Register *action* for the block, then put the previous action back.
+
+        For nested scopes inside one call — a helper opening its own connection
+        while the caller's is mid-query. A plain :meth:`set` would leave the
+        handle pointing at the inner connection after it closed, and the outer
+        query could no longer be cancelled. If a cancel lands inside the block,
+        the inner action fires then and the outer one fires on the way out.
+
+        Args:
+            action: Zero-argument callable that tells the driver to stop.
+
+        Yields:
+            Nothing; the scoped work runs inside the block.
+        """
+        with self._lock:
+            previous = self._action
+        self.set(action)
+        try:
+            yield
+        finally:
+            with self._lock:
+                fire_previous = self._requested and previous is not None
+                if not self._requested and self._action is action:
+                    self._action = previous
+            if fire_previous:
+                _fire_cancel_action(previous)  # type: ignore[arg-type]
+
     def request(self) -> None:
         """Request a cancel: fire the registered action, if any, at most once.
 
@@ -323,6 +352,24 @@ def raise_if_cancelled() -> None:
             other cancel.
     """
     if is_cancelled():
+        raise concurrent.futures.CancelledError
+
+
+def raise_if_offload_abandoned() -> None:
+    """Raise ``CancelledError`` if this ``run_in_thread`` call was abandoned.
+
+    The SDK's own check. Unlike :func:`raise_if_cancelled` it ignores the
+    Temporal activity's flag and reads only this call's handle, which a
+    Temporal cancel also reaches (it arrives as the ``CancelledError`` that
+    abandons the call). So an offload the SDK starts *after* a cancel and
+    waits on to the end — a drain, a shielded finish, cleanup in an activity
+    that caught its cancel — still runs to completion.
+
+    Raises:
+        concurrent.futures.CancelledError: The call's caller stopped waiting.
+    """
+    handle = _CURRENT_CANCEL_HANDLE.get()
+    if handle is not None and handle.requested:
         raise concurrent.futures.CancelledError
 
 
@@ -1135,7 +1182,10 @@ def submit_in_thread(
     """
     ctx = contextvars.copy_context()
     # Cleanup submitted from inside an offloaded call must not inherit that
-    # call's cancel: it runs to completion whether or not its caller survives.
+    # call's handle: it runs to completion whether or not its caller survives,
+    # so `raise_if_offload_abandoned()` never stops it. (The Temporal activity
+    # context still travels with the copy, so inside a cancelled activity the
+    # public `is_cancelled()` does report that activity's cancel.)
     ctx.run(_CURRENT_CANCEL_HANDLE.set, None)
     executor = _BLOCKING_EXECUTOR_OVERRIDE.get() or _BLOCKING_EXECUTOR
     try:
