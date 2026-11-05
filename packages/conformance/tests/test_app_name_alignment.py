@@ -803,6 +803,34 @@ def test_p025_classvar_annotation_form(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_parity_tests_import_the_sdk_from_this_checkout() -> None:
+    """The parity tests here compare conformance's copies with the SDK they
+    import, so that SDK must be the one in this repository, not a PyPI release.
+
+    packages/conformance path-sources atlan-application-sdk in its
+    [tool.uv.sources] (FND-4256). Before that its lock pinned a release from
+    PyPI two minors behind the tree, and every parity assertion here checked
+    that release instead of the code it sits beside.
+    """
+    import tomllib
+
+    import application_sdk
+
+    repo_root = Path(__file__).resolve().parents[3]
+    # The package directory itself, not "somewhere under the repo": a PyPI
+    # install in packages/conformance/.venv is under the repo too.
+    imported = Path(application_sdk.__file__).resolve().parent
+    assert imported == repo_root / "application_sdk", (
+        f"application_sdk imported from {imported}, not from "
+        f"{repo_root / 'application_sdk'}: the conformance environment is not "
+        "using this checkout"
+    )
+    root_version = tomllib.loads((repo_root / "pyproject.toml").read_text())["project"][
+        "version"
+    ]
+    assert application_sdk.__version__ == root_version
+
+
 def test_sdk_base_names_matches_templates_all() -> None:
     """_SDK_APP_BASE_NAMES must equal set(templates.__all__) | {"App"}.
 

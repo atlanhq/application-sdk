@@ -1061,11 +1061,14 @@ and change nothing. Hence `--baseline-ref origin/<default-branch>`, which also
 makes "never roll back what main ships" structural: the driver's rollback gate
 then compares against main by construction.
 
-**Two uv projects, two exempt sets.** `packages/conformance` is a separate uv
-project, and unlike the root it resolves `atlan-application-sdk` from PyPI — so
-its exempt set carries the SDK *and* pyatlan. Exempting the SDK alone does not
-fail; a bounded resolve that cannot see a fresh pyatlan silently backtracks to an
-older SDK instead.
+**Two uv projects, one exempt set.** `packages/conformance` is a separate uv
+project with its own lock. Like the root it never resolves `atlan-application-sdk`
+from PyPI: its `[tool.uv.sources]` path-sources this checkout (FND-4256), so its
+tests run against the tree they ship beside and there is no registry SDK for the
+bound to hold. Both projects exempt only pyatlan. That source is not published
+metadata: the released conformance wheel still declares a plain
+`atlan-application-sdk[sql]` test extra. A change to the SDK's own dependencies
+therefore also re-resolves `packages/conformance/uv.lock`.
 
 **One commit, not one per lock.** Every push to the branch re-fires the PR's
 entire required-check suite, so the bound rewrites both uv locks and the npm lock

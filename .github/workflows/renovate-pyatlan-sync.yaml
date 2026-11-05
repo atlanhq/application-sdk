@@ -3,8 +3,9 @@ name: Sync the conformance lock to a pyatlan floor bump
 # FND-4439. renovate.json's `pyatlan` rule raises the SDK's published
 # `pyatlan>=X` floor on every pyatlan release and Mend relocks the ROOT project.
 # The conformance package's own lock is out of Renovate's reach (it does not
-# declare pyatlan; it gets it through atlan-application-sdk from PyPI), and that
-# lock is what relationship_directions.json is built from and pinned to. This
+# declare pyatlan; it gets it through atlan-application-sdk, path-sourced from
+# this checkout since FND-4256), and that lock is what
+# relationship_directions.json is built from and pinned to. This
 # moves that lock's pyatlan up to the root's and regenerates the table, so the
 # bump lands as one self-contained PR.
 #

@@ -372,6 +372,8 @@ jobs:
   # forgets skipped it entirely on `pull_request` and was evicted from the merge
   # queue instead (FND-921). The job is ~30s and runs parallel to the ~10min
   # Windows unit-test legs, so covering every SDK PR costs no wall-clock.
+  # The package also imports application_sdk from this checkout (path-sourced,
+  # FND-4256), so its parity tests are a check on every SDK change too.
   conformance-suite-tests:
     name: Conformance Suite Tests
     needs: changes
