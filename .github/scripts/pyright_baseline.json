@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 144,
-    "warning": 6127
+    "warning": 6122
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -669,7 +669,7 @@
       "warning:reportUnknownMemberType": 20
     },
     ".github/scripts/tests/test_renovate_pkl_sync.py": {
-      "warning:reportUnknownMemberType": 123
+      "warning:reportUnknownMemberType": 118
     },
     ".github/scripts/tests/test_renovate_pyatlan_sync.py": {
       "warning:reportUnknownMemberType": 20
