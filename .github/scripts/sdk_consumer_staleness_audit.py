@@ -40,7 +40,7 @@ import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
-from typing import Callable, Optional
+from typing import Callable, Optional, cast
 
 # (args) -> (returncode, stdout, stderr). Same seam as discover_org_consumers.py
 # so tests stub `gh` without patching subprocess.
@@ -158,7 +158,29 @@ def make_retrying_run(
     return wrapped
 
 
-def _gh_json(run: RunFn, args: list[str], what: str):
+# GitHub JSON, TOML and lock payloads are untyped. These accessors narrow a
+# value to the shape the caller expects and fall back to empty, so a missing or
+# odd field reads as absent instead of raising mid-sweep or leaking `Any`.
+JsonObj = dict[str, object]
+
+
+def _obj(value: object) -> JsonObj:
+    return cast(JsonObj, value) if isinstance(value, dict) else {}
+
+
+def _list(value: object) -> list[object]:
+    return cast(list[object], value) if isinstance(value, list) else []
+
+
+def _objs(value: object) -> list[JsonObj]:
+    return [_obj(v) for v in _list(value) if isinstance(v, dict)]
+
+
+def _str(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _gh_json(run: RunFn, args: list[str], what: str) -> object:
     rc, out, err = run(args)
     if rc != 0:
         raise AuditError(f"{what}: {err.strip() or f'exit {rc}'}")
@@ -242,20 +264,21 @@ def list_repos(owner: str, run: RunFn) -> list[RepoInfo]:
         ],
         f"gh repo list {owner}",
     )
-    if len(data) >= REPO_LIST_LIMIT:
+    listed = _objs(data)
+    if len(listed) >= REPO_LIST_LIMIT:
         raise AuditError(
-            f"gh repo list returned {len(data)} repos, the --limit cap; "
+            f"gh repo list returned {len(listed)} repos, the --limit cap; "
             "raise REPO_LIST_LIMIT so no repo is silently dropped"
         )
-    repos = []
-    for r in data:
-        ref = r.get("defaultBranchRef") or {}
+    repos: list[RepoInfo] = []
+    for r in listed:
         repos.append(
             RepoInfo(
-                name=r["name"],
+                name=_str(r.get("name")),
                 archived=bool(r.get("isArchived")),
                 fork=bool(r.get("isFork")),
-                default_branch=ref.get("name") or None,
+                default_branch=_str(_obj(r.get("defaultBranchRef")).get("name"))
+                or None,
             )
         )
     return sorted(repos, key=lambda r: r.name)
@@ -276,12 +299,12 @@ def is_manifest_path(path: str) -> bool:
     )
 
 
-def manifest_blobs(tree: dict) -> list[tuple[str, str]]:
-    """(path, blob sha) for every candidate manifest in a recursive tree."""
+def manifest_blobs(entries: list[JsonObj]) -> list[tuple[str, str]]:
+    """(path, blob sha) for every candidate manifest among tree entries."""
     return sorted(
-        (e["path"], e["sha"])
-        for e in tree.get("tree", [])
-        if e.get("type") == "blob" and is_manifest_path(e["path"])
+        (_str(e.get("path")), _str(e.get("sha")))
+        for e in entries
+        if e.get("type") == "blob" and is_manifest_path(_str(e.get("path")))
     )
 
 
@@ -333,37 +356,37 @@ def sdk_requirement(req: str) -> Optional[str]:
 
 def _poetry_requirements(table: object) -> list[str]:
     """Poetry's `name = spec` tables, rendered as `name spec` strings."""
-    if not isinstance(table, dict):
-        return []
-    out = []
-    for name, spec in table.items():
+    out: list[str] = []
+    for name, spec in _obj(table).items():
         if isinstance(spec, dict):
-            spec = spec.get("version") or (
-                f"git+{spec['git']}" if "git" in spec else ""
-            )
-        out.append(f"{name} {spec if isinstance(spec, str) else ''}".strip())
+            detail = _obj(spec)
+            git = _str(detail.get("git"))
+            text = _str(detail.get("version")) or (f"git+{git}" if git else "")
+        else:
+            text = _str(spec)
+        out.append(f"{name} {text}".strip())
     return out
 
 
-def pyproject_requirements(doc: dict) -> list[str]:
+def pyproject_requirements(doc: JsonObj) -> list[str]:
     """Every dependency declaration in a parsed pyproject.toml: PEP 621
     dependencies and extras, PEP 735 dependency groups, uv's legacy
     dev-dependencies, and Poetry's dependency tables. Metadata such as
     ``description`` or the project's own ``name`` is never read."""
     reqs: list[object] = []
-    project = doc.get("project") or {}
-    reqs += project.get("dependencies") or []
-    for extra in (project.get("optional-dependencies") or {}).values():
-        reqs += extra or []
-    for group in (doc.get("dependency-groups") or {}).values():
-        reqs += group or []
-    tool = doc.get("tool") or {}
-    reqs += (tool.get("uv") or {}).get("dev-dependencies") or []
-    poetry = tool.get("poetry") or {}
+    project = _obj(doc.get("project"))
+    reqs += _list(project.get("dependencies"))
+    for extra in _obj(project.get("optional-dependencies")).values():
+        reqs += _list(extra)
+    for group in _obj(doc.get("dependency-groups")).values():
+        reqs += _list(group)
+    tool = _obj(doc.get("tool"))
+    reqs += _list(_obj(tool.get("uv")).get("dev-dependencies"))
+    poetry = _obj(tool.get("poetry"))
     reqs += _poetry_requirements(poetry.get("dependencies"))
     reqs += _poetry_requirements(poetry.get("dev-dependencies"))
-    for group in (poetry.get("group") or {}).values():
-        reqs += _poetry_requirements((group or {}).get("dependencies"))
+    for group in _obj(poetry.get("group")).values():
+        reqs += _poetry_requirements(_obj(group).get("dependencies"))
     # Group includes ({include-group = ...}) and other non-strings are skipped.
     return [r for r in reqs if isinstance(r, str)]
 
@@ -371,7 +394,7 @@ def pyproject_requirements(doc: dict) -> list[str]:
 def setup_cfg_requirements(text: str) -> list[str]:
     parser = configparser.ConfigParser(interpolation=None)
     parser.read_string(text)
-    values = []
+    values: list[str] = []
     if parser.has_option("options", "install_requires"):
         values.append(parser.get("options", "install_requires"))
     if parser.has_section("options.extras_require"):
@@ -380,7 +403,7 @@ def setup_cfg_requirements(text: str) -> list[str]:
 
 
 def requirements_txt_requirements(text: str) -> list[str]:
-    out = []
+    out: list[str] = []
     for raw in text.splitlines():
         line = re.split(r"\s+#", raw, maxsplit=1)[0].strip()
         if not line or line.startswith("#"):
@@ -446,7 +469,8 @@ def read_blob(owner: str, repo: str, sha: str, run: RunFn) -> str:
         ["api", f"repos/{owner}/{repo}/git/blobs/{sha}"],
         f"{repo}: read blob {sha}",
     )
-    return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+    content = _str(_obj(data).get("content"))
+    return base64.b64decode(content).decode("utf-8", "replace")
 
 
 def find_sdk_manifests(
@@ -465,25 +489,26 @@ def find_sdk_manifests(
         if _is_empty_repo(err) or _is_not_found(err):
             return [], False, []
         raise AuditError(f"{repo.name}: read tree: {err.strip()}")
-    tree = json.loads(out)
+    tree = _obj(json.loads(out))
     truncated = bool(tree.get("truncated"))
+    entries = _objs(tree.get("tree"))
     if truncated:
         # The recursive listing caps out on very large repos and drops entries
         # without saying which. Walk it directory by directory instead, so a
         # manifest in the dropped part cannot silently take a consumer with it.
-        tree = {"tree": walk_tree(owner, repo.name, tree["sha"], run)}
-    matches = []
-    for path, sha in manifest_blobs(tree):
+        entries = walk_tree(owner, repo.name, _str(tree.get("sha")), run)
+    matches: list[ManifestMatch] = []
+    for path, sha in manifest_blobs(entries):
         m = match_manifest(path, read_blob(owner, repo.name, sha, run))
         if m:
             matches.append(m)
-    paths = [e["path"] for e in tree.get("tree", [])]
+    paths = [_str(e.get("path")) for e in entries]
     return matches, truncated, paths
 
 
 def walk_tree(
     owner: str, repo: str, sha: str, run: RunFn, prefix: str = ""
-) -> list[dict]:
+) -> list[JsonObj]:
     """Every entry under tree ``sha``, one non-recursive read per directory.
 
     Vendored directories are not descended into (their manifests would be
@@ -494,40 +519,41 @@ def walk_tree(
         ["api", f"repos/{owner}/{repo}/git/trees/{sha}"],
         f"{repo}: read tree {sha}",
     )
-    if data.get("truncated"):
+    listing = _obj(data)
+    if listing.get("truncated"):
         raise AuditError(f"{repo}: directory {prefix or '/'} too large to list")
-    entries: list[dict] = []
-    for e in data.get("tree", []):
-        path = prefix + e["path"]
+    entries: list[JsonObj] = []
+    for e in _objs(listing.get("tree")):
+        path = prefix + _str(e.get("path"))
         entries.append({**e, "path": path})
         if e.get("type") == "tree" and not _SKIP_DIR_RE.search(path + "/"):
-            entries += walk_tree(owner, repo, e["sha"], run, path + "/")
+            entries += walk_tree(owner, repo, _str(e.get("sha")), run, path + "/")
     return entries
 
 
 # --------------------------------------------------------------- staleness
 
 
-def is_bot_commit(commit: dict, bot_re: re.Pattern[str]) -> bool:
-    author = commit.get("author") or {}
+def is_bot_commit(commit: JsonObj, bot_re: re.Pattern[str]) -> bool:
+    author = _obj(commit.get("author"))
     if author.get("type") == "Bot":
         return True
-    login = author.get("login") or ""
-    name = ((commit.get("commit") or {}).get("author") or {}).get("name") or ""
+    login = _str(author.get("login"))
+    name = _str(_obj(_obj(commit.get("commit")).get("author")).get("name"))
     return bool(bot_re.search(login) or bot_re.search(name))
 
 
-def _commit_date(commit: dict) -> str:
+def _commit_date(commit: JsonObj) -> str:
     # Committer date is when the change landed on the branch (merge/squash
     # time); author date can predate that by weeks on a long-lived PR.
-    c = commit.get("commit") or {}
-    return ((c.get("committer") or {}).get("date")) or (
-        (c.get("author") or {}).get("date") or ""
+    c = _obj(commit.get("commit"))
+    return _str(_obj(c.get("committer")).get("date")) or _str(
+        _obj(c.get("author")).get("date")
     )
 
 
-def _subject(commit: dict) -> str:
-    message = (commit.get("commit") or {}).get("message") or ""
+def _subject(commit: JsonObj) -> str:
+    message = _str(_obj(commit.get("commit")).get("message"))
     return message.split("\n", 1)[0].strip()
 
 
@@ -565,7 +591,7 @@ def last_commits(
             if _is_empty_repo(err):
                 return CommitHistory()
             raise AuditError(f"{repo.name}: list commits: {err.strip()}")
-        commits = json.loads(out)
+        commits = _objs(json.loads(out))
         if not commits:
             return CommitHistory(last_commit=last_any)
         if last_any is None:
@@ -610,28 +636,32 @@ def open_prs(
         if after:
             args += ["-f", f"after={after}"]
         data = _gh_json(run, args, f"{repo}: open PRs")
-        prs = data["data"]["repository"]["pullRequests"]
+        repository = _obj(_obj(data).get("data")).get("repository")
+        if not isinstance(repository, dict):
+            raise AuditError(f"{repo}: open PRs: no repository in response")
+        prs = _obj(_obj(repository).get("pullRequests"))
         if total is None:
-            total = int(prs["totalCount"])
+            count = prs.get("totalCount")
+            total = count if isinstance(count, int) else 0
         window_passed = False
-        for pr in prs.get("nodes") or []:
-            days = days_between(pr.get("updatedAt"), as_of)
+        for pr in _objs(prs.get("nodes")):
+            days = days_between(_str(pr.get("updatedAt")) or None, as_of)
             if days is None or days >= ACTIVE_PR_DAYS:
                 # Ordered newest-update first: nothing after this is active.
                 window_passed = True
                 break
-            author = pr.get("author") or {}
+            author = _obj(pr.get("author"))
             if author.get("__typename") == "Bot" or bot_re.search(
-                author.get("login") or ""
+                _str(author.get("login"))
             ):
                 continue
-            active.append(pr.get("title") or "")
-        page = prs.get("pageInfo") or {}
+            active.append(_str(pr.get("title")))
+        page = _obj(prs.get("pageInfo"))
         # Bot PRs can fill a whole page inside the window, so keep paging until
         # the window is behind us; stopping at 100 could hide a human PR.
         if window_passed or not page.get("hasNextPage"):
             return total, active
-        after = page["endCursor"]
+        after = _str(page.get("endCursor")) or None
 
 
 def extends_fleet_preset(owner: str, repo: str, paths: list[str], run: RunFn) -> bool:
@@ -812,8 +842,8 @@ def search_consumers(owner: str, run: RunFn) -> set[str]:
             ],
             f"code search ({filename})",
         )
-        for hit in data:
-            full = (hit.get("repository") or {}).get("nameWithOwner", "")
+        for hit in _objs(data):
+            full = _str(_obj(hit.get("repository")).get("nameWithOwner"))
             if full:
                 found.add(full.split("/", 1)[-1])
     return found
@@ -943,7 +973,7 @@ def render_markdown(rows: list[AuditRow], owner: str, as_of: date, scanned: int)
 
 
 def main(argv: Optional[list[str]] = None, run: RunFn = _run_gh) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument("--owner", default="atlanhq")
     parser.add_argument(
         "--as-of",

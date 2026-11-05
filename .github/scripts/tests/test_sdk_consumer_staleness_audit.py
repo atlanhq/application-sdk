@@ -6,18 +6,21 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 import json
 import re
 import sys
 from datetime import date
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import sdk_consumer_staleness_audit as audit
+
+JsonObj = audit.JsonObj
 
 AS_OF = date(2026, 11, 4)
 BOT_RE = re.compile(audit.DEFAULT_BOT_PATTERN, re.I)
@@ -115,7 +118,9 @@ def test_declaration_ignores_mentions_siblings_and_own_name(path, text):
     assert audit.parse_declaration(path, text) is None
 
 
-def test_unparseable_pyproject_falls_back_to_literal_requirements(capsys):
+def test_unparseable_pyproject_falls_back_to_literal_requirements(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     text = '[project\ndependencies = ["atlan-application-sdk>=3"]\n'
     m = audit.parse_declaration("pyproject.toml", text)
     assert m is not None and m.spec == ">=3"
@@ -199,7 +204,7 @@ def _commit(
     kind: str = "User",
     name: str = "Dev",
     message: str = "feat: work\n\nbody",
-):
+) -> JsonObj:
     return {
         "author": {"login": login, "type": kind} if login else None,
         "commit": {
@@ -230,8 +235,8 @@ REPO = audit.RepoInfo(
 )
 
 
-def _commits_run(pages: list[list[dict]]):
-    def run(args):
+def _commits_run(pages: list[list[JsonObj]]) -> audit.RunFn:
+    def run(args: list[str]) -> tuple[int, str, str]:
         m = re.search(r"[?&]page=(\d+)", args[-1])
         assert m, args
         i = int(m.group(1)) - 1
@@ -262,8 +267,8 @@ def test_last_commits_reports_a_bound_when_the_page_cap_is_hit():
     page = (bots * 4)[:100]
     run = _commits_run([page, page])
     h = audit.last_commits("o", REPO, BOT_RE, run, max_pages=2)
-    assert h.last_commit == page[0]["commit"]["committer"]["date"]
-    assert h.last_human_commit == page[-1]["commit"]["committer"]["date"]
+    assert h.last_commit == audit._commit_date(page[0])
+    assert h.last_human_commit == audit._commit_date(page[-1])
     assert h.human_is_bound is True
 
 
@@ -275,14 +280,14 @@ def test_last_commits_no_human_commit_in_short_history():
 
 
 def test_last_commits_empty_repo_is_not_an_error():
-    def run(args):
+    def run(args: list[str]) -> tuple[int, str, str]:
         return 1, "", "gh: Git Repository is empty. (HTTP 409)"
 
     assert audit.last_commits("o", REPO, BOT_RE, run) == audit.CommitHistory()
 
 
 def test_last_commits_other_failures_raise():
-    def run(args):
+    def run(args: list[str]) -> tuple[int, str, str]:
         return 1, "", "gh: Server Error (HTTP 502)"
 
     with pytest.raises(audit.AuditError):
@@ -292,8 +297,8 @@ def test_last_commits_other_failures_raise():
 # ------------------------------------------------------------------ actions
 
 
-def _row(**kw) -> audit.AuditRow:
-    base = dict(
+def _row(**kw: object) -> audit.AuditRow:
+    base = audit.AuditRow(
         repo="atlan-x-app",
         archived=False,
         fork=False,
@@ -303,8 +308,7 @@ def _row(**kw) -> audit.AuditRow:
         days_since_human_commit=120,
         open_prs=0,
     )
-    base.update(kw)
-    return audit.AuditRow(**base)
+    return dataclasses.replace(base, **kw)
 
 
 @pytest.mark.parametrize(
@@ -358,13 +362,13 @@ OPEN_PRS = {
 
 
 def test_open_prs_counts_only_recent_human_prs():
-    def run(args):
+    def run(args: list[str]) -> tuple[int, str, str]:
         return 0, json.dumps({"data": {"repository": {"pullRequests": OPEN_PRS}}}), ""
 
     assert audit.open_prs("o", "r", AS_OF, BOT_RE, run) == (3, ["fix: own work"])
 
 
-def _pr(title: str, updated: str, login: str = "dev", kind: str = "User") -> dict:
+def _pr(title: str, updated: str, login: str = "dev", kind: str = "User") -> JsonObj:
     return {
         "title": title,
         "updatedAt": updated,
@@ -392,9 +396,9 @@ def test_open_prs_pages_past_a_window_full_of_bot_prs():
             ],
         },
     }
-    seen: list = []
+    seen: list[Optional[str]] = []
 
-    def run(args):
+    def run(args: list[str]) -> tuple[int, str, str]:
         after = next((a.split("=", 1)[1] for a in args if a.startswith("after=")), None)
         seen.append(after)
         return (
@@ -416,9 +420,9 @@ def test_open_prs_stops_paging_once_past_the_active_window():
             _pr("stale", "2026-01-01T00:00:00Z"),
         ],
     }
-    calls: list = []
+    calls: list[list[str]] = []
 
-    def run(args):
+    def run(args: list[str]) -> tuple[int, str, str]:
         calls.append(args)
         return 0, json.dumps({"data": {"repository": {"pullRequests": page}}}), ""
 
@@ -514,7 +518,7 @@ def _fake_org(fail_tree_for: Optional[str] = None):
     }
     calls: list[list[str]] = []
 
-    def run(args):
+    def run(args: list[str]) -> tuple[int, str, str]:
         calls.append(args)
         if args[:2] == ["repo", "list"]:
             return 0, json.dumps(repo_list), ""
@@ -534,7 +538,9 @@ def _fake_org(fail_tree_for: Optional[str] = None):
         if "/git/blobs/" in path:
             return 0, json.dumps({"content": _b64(blobs[path.rsplit("/", 1)[-1]])}), ""
         if "/commits?" in path:
-            page = int(re.search(r"[?&]page=(\d+)", path).group(1))
+            page_m = re.search(r"[?&]page=(\d+)", path)
+            assert page_m, path
+            page = int(page_m.group(1))
             return 0, json.dumps(commits[repo] if page == 1 else []), ""
         if path.endswith("/contents/renovate.json"):
             return 0, json.dumps({"extends": [audit.FLEET_PRESET_MARKER]}), ""
@@ -583,10 +589,10 @@ def test_run_audit_fails_loudly_on_unreadable_repo():
         audit.run_audit("o", AS_OF, set(), workers=1, run=run)
 
 
-def test_main_writes_reports_and_fails_on_search_miss(tmp_path):
+def test_main_writes_reports_and_fails_on_search_miss(tmp_path: Path) -> None:
     run, _ = _fake_org()
 
-    def run_with_search(args):
+    def run_with_search(args: list[str]) -> tuple[int, str, str]:
         if args[:2] == ["search", "code"]:
             hits = [{"repository": {"nameWithOwner": "o/atlan-hidden-app"}}]
             return 0, json.dumps(hits if "pyproject.toml" in args else []), ""
@@ -620,7 +626,7 @@ def test_retrying_run_sleeps_until_reset_then_retries():
     answers = [(1, "", "API rate limit exceeded"), (0, "ok", "")]
     slept: list[float] = []
 
-    def run(args):
+    def run(args: list[str]) -> tuple[int, str, str]:
         if args == ["api", "rate_limit"]:
             return (
                 0,
@@ -635,7 +641,7 @@ def test_retrying_run_sleeps_until_reset_then_retries():
 
 
 def test_retrying_run_passes_other_errors_through():
-    def run(args):
+    def run(args: list[str]) -> tuple[int, str, str]:
         return 1, "", "gh: Not Found (HTTP 404)"
 
     wrapped = audit.make_retrying_run(run, sleep=lambda s: pytest.fail("slept"))
@@ -655,7 +661,7 @@ def test_truncated_tree_is_walked_so_a_hidden_consumer_is_found():
         "t1": [{"path": "pyproject.toml", "sha": "p1", "type": "blob"}],
     }
 
-    def run(args):
+    def run(args: list[str]) -> tuple[int, str, str]:
         path = args[1]
         if path.endswith("?recursive=1"):
             partial = [{"path": "README.md", "sha": "b0", "type": "blob"}]
@@ -684,7 +690,7 @@ def test_truncated_tree_is_walked_so_a_hidden_consumer_is_found():
 
 
 def test_a_directory_too_large_to_list_fails_the_audit():
-    def run(args):
+    def run(args: list[str]) -> tuple[int, str, str]:
         return 0, json.dumps({"sha": "x", "tree": [], "truncated": True}), ""
 
     with pytest.raises(audit.AuditError, match="too large"):
@@ -696,7 +702,7 @@ def test_a_directory_too_large_to_list_fails_the_audit():
 )
 def test_empty_enumeration_fails_instead_of_reporting_zero_consumers(listing):
     # lens F-1adebe: a token that sees no repos must not produce a clean audit.
-    def run(args):
+    def run(args: list[str]) -> tuple[int, str, str]:
         assert args[:2] == ["repo", "list"], args
         return 0, json.dumps(listing), ""
 
@@ -704,9 +710,9 @@ def test_empty_enumeration_fails_instead_of_reporting_zero_consumers(listing):
         audit.run_audit("o", AS_OF, {"application-sdk"}, workers=1, run=run)
 
 
-def test_gh_timeout_becomes_a_failed_call(monkeypatch):
+def test_gh_timeout_becomes_a_failed_call(monkeypatch: pytest.MonkeyPatch) -> None:
     # lens F-a3e817: a stalled gh must not block the audit forever.
-    def fake_run(cmd, **kw):
+    def fake_run(cmd: list[str], **kw: int) -> NoReturn:
         assert kw["timeout"] == audit.GH_TIMEOUT_SECONDS
         raise audit.subprocess.TimeoutExpired(cmd, kw["timeout"])
 
