@@ -29,9 +29,20 @@ from typing import Callable, Sequence
 
 Runner = Callable[[Sequence[str], str], int]
 
+#: A stalled `gh` must fail the step promptly, not hold the runner to the job limit.
+GH_TIMEOUT_S = 60
+#: The exit code a timed-out `gh` is reported with, as `timeout(1)` does.
+TIMED_OUT = 124
+
 
 def _gh(argv: Sequence[str], stdin: str) -> int:
-    return subprocess.run(list(argv), input=stdin, text=True, check=False).returncode
+    try:
+        return subprocess.run(
+            list(argv), input=stdin, text=True, check=False, timeout=GH_TIMEOUT_S
+        ).returncode
+    except subprocess.TimeoutExpired:
+        print(f"::warning::{' '.join(argv[:3])} timed out after {GH_TIMEOUT_S}s")
+        return TIMED_OUT
 
 
 def comment_body(package: str, workflow: str, run_url: str) -> str:

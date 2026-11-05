@@ -157,6 +157,7 @@ jobs:
     needs: open-release-pr
     if: failure() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: write

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -54,6 +55,20 @@ def test_a_failed_comment_fails_the_step() -> None:
     assert notify.main(ARGV, ENV, FakeGh(code=1)) == 1
 
 
+def test_a_stalled_gh_times_out_and_fails_the_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def stalled(argv: list[str], **kw: object) -> None:
+        seen.update(kw)
+        raise subprocess.TimeoutExpired(argv, notify.GH_TIMEOUT_S)
+
+    monkeypatch.setattr(notify.subprocess, "run", stalled)
+    assert notify.main(ARGV, ENV) == 1
+    assert seen["timeout"] == notify.GH_TIMEOUT_S  # bounded, not left to the job
+
+
 @pytest.mark.parametrize("workflow", RELEASE_WORKFLOWS)
 def test_release_workflow_reports_its_own_failure(workflow: str) -> None:
     """A separate job, so a failed token mint or checkout is reported too, and
@@ -63,6 +78,7 @@ def test_release_workflow_reports_its_own_failure(workflow: str) -> None:
     assert job["needs"] == "open-release-pr"
     assert job["if"] == "failure() && github.event_name == 'pull_request'"
     assert job["permissions"] == {"contents": "read", "pull-requests": "write"}
+    assert job["timeout-minutes"] <= 10
     [run] = [s["run"] for s in job["steps"] if "run" in s]
     argv = shlex.split(run)
     assert argv[1] == ".github/scripts/notify_release_failure.py"
