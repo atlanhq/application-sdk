@@ -157,6 +157,87 @@ async def test_the_writer_takes_the_async_path(
     assert threading.current_thread().name not in fetch_threads
 
 
+class _WriteFails(Exception):
+    pass
+
+
+def _base_writer(on_write: object) -> object:
+    from application_sdk.storage.formats import Writer
+
+    class _Failing(Writer):
+        async def _write_dataframe(self, dataframe: pd.DataFrame, **_: object) -> None:
+            await on_write()  # type: ignore[operator]
+
+    writer = _Failing.__new__(_Failing)
+    writer._is_closed = False  # type: ignore[attr-defined]
+    return writer
+
+
+def _consolidating_parquet_writer(on_write: object) -> object:
+    from application_sdk.storage.formats.parquet import ParquetFileWriter
+
+    async def _noop() -> None:
+        return None
+
+    async def _accumulate(dataframe: pd.DataFrame) -> None:
+        await on_write()  # type: ignore[operator]
+
+    writer = ParquetFileWriter.__new__(ParquetFileWriter)
+    writer.use_consolidation = True  # type: ignore[attr-defined]
+    writer._ensure_prefix_replaced = _noop  # type: ignore[method-assign]
+    writer._cleanup_temp_folders = _noop  # type: ignore[method-assign]
+    writer._accumulate_dataframe = _accumulate  # type: ignore[method-assign]
+    return writer
+
+
+@pytest.mark.parametrize(
+    "make_writer",
+    [_base_writer, _consolidating_parquet_writer],
+    ids=["base", "parquet"],
+)
+async def test_a_failed_write_releases_the_connection(
+    client: BaseSQLClient, make_writer: object
+) -> None:
+    async def fail() -> None:
+        raise _WriteFails
+
+    writer = make_writer(fail)  # type: ignore[operator]
+    batches = await client.get_batched_results("SELECT a FROM t ORDER BY a")
+
+    with pytest.raises(Exception) as raised:
+        await writer._write_batched_dataframe(batches)
+    assert isinstance(raised.value, _WriteFails) or isinstance(
+        raised.value.__cause__, _WriteFails
+    )
+    assert _checked_out(client) == 0
+
+
+@pytest.mark.parametrize(
+    "make_writer",
+    [_base_writer, _consolidating_parquet_writer],
+    ids=["base", "parquet"],
+)
+async def test_a_write_cancelled_mid_batch_releases_the_connection(
+    client: BaseSQLClient, make_writer: object
+) -> None:
+    writing = asyncio.Event()
+
+    async def block() -> None:
+        writing.set()
+        await asyncio.Event().wait()
+
+    writer = make_writer(block)  # type: ignore[operator]
+    batches = await client.get_batched_results("SELECT a FROM t ORDER BY a")
+    task = asyncio.ensure_future(writer._write_batched_dataframe(batches))
+    await writing.wait()
+    assert _checked_out(client) == 1
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert _checked_out(client) == 0
+
+
 async def test_closing_before_the_first_chunk_releases_the_connection(
     client: BaseSQLClient,
 ) -> None:

@@ -307,6 +307,9 @@ class _BatchedResults(Iterator["pd.DataFrame"], AsyncIterator["pd.DataFrame"]):
         # cancel waits for the abandoned fetch instead of closing a generator
         # that is still running.
         self._in_use = threading.Lock()
+        # Set when a failed or cancelled fetch has already handed close to a
+        # thread; aclose then returns at once instead of waiting on that fetch.
+        self._close_scheduled = False
 
     def __iter__(self) -> "_BatchedResults":
         return self
@@ -336,6 +339,7 @@ class _BatchedResults(Iterator["pd.DataFrame"], AsyncIterator["pd.DataFrame"]):
         except BaseException:
             # Cancelled or failed: release the connection once the fetch the
             # thread may still be running returns.
+            self._close_scheduled = True
             submit_in_thread(self.close)
             raise
         if frame is _NO_MORE_FRAMES:
@@ -343,7 +347,14 @@ class _BatchedResults(Iterator["pd.DataFrame"], AsyncIterator["pd.DataFrame"]):
         return cast("pd.DataFrame", frame)
 
     async def aclose(self) -> None:
-        """Async counterpart of :meth:`close`, run off the event loop."""
+        """Async counterpart of :meth:`close`, run off the event loop.
+
+        Returns at once when a failed or cancelled fetch already scheduled the
+        close: waiting would hold the caller (often unwinding a cancel) until
+        the abandoned fetch returns.
+        """
+        if self._close_scheduled:
+            return
         await run_in_thread(self.close)
 
 
