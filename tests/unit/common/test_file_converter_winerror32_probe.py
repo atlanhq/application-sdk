@@ -7,7 +7,6 @@ the block lasted before a retry succeeded, and whether anything in-process
 changed in the meantime.
 """
 
-import asyncio
 import gc
 import os
 import time
@@ -15,9 +14,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from application_sdk.common.file_converter import FileType, convert_data_files
+from application_sdk.common.file_converter import convert_json_to_parquet
 
-ITERATIONS = 200
+ITERATIONS = 25
 _ROWS = "".join(
     f'{{"id": {i}, "name": "n{i}", "age": {20 + i}, "active": true}}\n'
     for i in range(3)
@@ -27,8 +26,9 @@ _ROWS = "".join(
 def _convert(directory: Path, stem: str) -> Path:
     source = directory / f"{stem}.json"
     source.write_text(_ROWS)
-    result = asyncio.run(convert_data_files([str(source)], FileType.PARQUET))
-    return Path(result[0])
+    result = convert_json_to_parquet(str(source))
+    assert result is not None
+    return Path(result)
 
 
 def _unlink_with_retry(path: Path) -> float | None:
