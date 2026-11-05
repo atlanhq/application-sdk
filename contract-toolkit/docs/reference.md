@@ -931,7 +931,7 @@ Generated `deploy` blocks are validated in CI against the platform's infra ceili
 |---|---|---|---|
 | `deploy.executionMode` | String | `"native"` | Emitted as `execution_mode`. |
 | `deploy.splitDeployment` | Boolean | `true` | Emitted as `splitDeploymentEnabled`. |
-| `deploy.dapr` | DaprComponents | `new DaprComponents {}` | Dapr sidecar toggles — app-wide, not per-pool. Emitted under `dapr:` when any component is enabled. |
+| `deploy.dapr` | DaprComponents | `new DaprComponents {}` | Dapr sidecar toggles — app-wide, not per-pool. Emitted under `dapr:` when any component is enabled (or `customComponents` is non-empty). `objectstore` defaults to `true`, so every `deploy` block emits one by default. |
 | `deploy.overrides` | Mapping<String, Any> | `{}` | Global escape hatch. Deep-merged on top of the rendered `deploy:` block after first-pool `overrides`. |
 | `deploy.pools` | Mapping<KebabCase, Pool> | `{}` | Named worker-pool map. Pool keys must be lowercase kebab-case and match `@task(pool="…")` in Python. When non-empty, emits `deploy:` (synthesised from the first pool), one `deploy.workerPools[]` entry per pool after the first, and the top-level `pools:` mirror. See [What `deploy.pools` generates](#what-deploypools-generates). |
 
@@ -955,7 +955,7 @@ There is deliberately no `taskQueue` field — see [What `deploy.pools` generate
 
 ```pkl
 class DaprComponents {
-  objectstore: Boolean = false
+  objectstore: Boolean = true   // required by the SDK — keep it on
   secretstore: Boolean = false
   statestore: Boolean = false
   eventstore: Boolean = false
@@ -965,6 +965,29 @@ class DaprComponents {
   customComponents: Mapping<String, Any> = new Mapping {}
 }
 ```
+
+`objectstore` is the deployment object store, and the SDK requires it: worker and
+handler startup fails with `DeploymentObjectStoreMissingError` when the atlan-app
+chart omits the component, which it does when `atlan.yaml` carries
+`deploy.dapr.objectstore: false`. It therefore defaults to `true`, and conformance
+rule K029 flags a contract or `atlan.yaml` that sets it to `false`.
+
+What changes in the generated `atlan.yaml`:
+
+- Every contract with a `deploy` block now emits a `dapr:` block with
+  `objectstore: true`, even when it sets no Dapr toggle. The atlan-app chart
+  enables no Dapr component unless `atlan.yaml` asks for it, so a contract that
+  emitted no block got no object store. The other components render as `false`,
+  which is also the chart's default for them.
+- `dapr { secretstore = true }` (any other component enabled) emits
+  `objectstore: true`. Earlier toolkit releases emitted `objectstore: false`
+  here, which left the app unable to start.
+- An explicit `objectstore = false` is rendered as written when another Dapr
+  component is enabled (or `customComponents` is non-empty), and conformance
+  rule K029 flags it in `atlan.yaml`. With all other Dapr fields at their
+  defaults, no `dapr:` block is emitted, so `objectstore = false` does not
+  appear in `atlan.yaml`; K029 still flags the explicit value in the source
+  contract.
 
 **KedaConfig:**
 

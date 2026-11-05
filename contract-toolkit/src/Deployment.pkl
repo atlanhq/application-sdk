@@ -4,7 +4,16 @@ module com.atlan.app.contract.Deployment
 typealias KebabCase = String(matches(Regex("[a-z][a-z0-9]*(-[a-z0-9]+)*")))
 
 class DaprComponents {
-  objectstore: Boolean = false
+  /// The deployment object store. Required by the SDK: worker and handler
+  /// startup fails with `DeploymentObjectStoreMissingError` when the chart
+  /// omits it, so it defaults to `true` and should stay on. Setting it to
+  /// `false` is flagged by conformance rule K029.
+  ///
+  /// Because it defaults to `true`, every contract with a `deploy` block emits
+  /// a `dapr:` block carrying `objectstore: true`. The atlan-app chart enables
+  /// no Dapr component unless `atlan.yaml` asks for it, so omitting the block
+  /// would leave the app without the store.
+  objectstore: Boolean = true
   secretstore: Boolean = false
   statestore: Boolean = false
   eventstore: Boolean = false

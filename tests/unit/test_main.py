@@ -604,6 +604,36 @@ class TestLogDaprComponentsBindingOutcomes:
             "statestore" in m and "disabled by config" in m for m in info_msgs
         ), f"expected disabled-by-config INFO for statestore; got: {info_msgs}"
 
+    @pytest.mark.parametrize("flag", [None, "false"], ids=["flag_unset", "flag_false"])
+    async def test_missing_objectstore_logs_error_not_expected_info(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str | None
+    ) -> None:
+        """The deployment object store is required: missing is ERROR, never 'expected'."""
+        self._clear_enable_env(monkeypatch)
+        if flag is not None:
+            monkeypatch.setenv("ATLAN_ENABLE_OBJECTSTORE", flag)
+
+        dapr_client = AsyncMock()
+        dapr_client.get_metadata.return_value = {"components": []}
+        with (
+            patch(
+                "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME", "objectstore"
+            ),
+            patch("application_sdk.main.logger") as mock_log,
+        ):
+            await _log_dapr_components(dapr_client, tmp_path)
+
+        error_msgs = self._rendered(mock_log.error.call_args_list)
+        quieter_msgs = self._rendered(
+            mock_log.info.call_args_list + mock_log.warning.call_args_list
+        )
+        assert any(
+            "objectstore" in m and "deploy.dapr.objectstore" in m for m in error_msgs
+        ), f"expected an ERROR naming deploy.dapr.objectstore; got: {error_msgs}"
+        assert not any("role=object_store" in m for m in quieter_msgs), (
+            f"missing object store must not be INFO/WARNING; got: {quieter_msgs}"
+        )
+
     async def test_missing_with_declared_true_logs_warning(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1161,6 +1191,122 @@ class TestCreateInfrastructureNoDapr:
         with pytest.raises(DaprNotDetectedError) as exc_info:
             await _create_infrastructure()
         assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_DAPR_SIDECAR"
+
+
+class TestCreateInfrastructureDeploymentObjectStoreRequired:
+    """The deployment object store is required: its absence is a named config error.
+
+    In a real pod the chart sets ``ATLAN_ENABLE_OBJECTSTORE`` only on the
+    env-seeder init container, so the app container normally sees it unset.
+    The error must therefore fire on the missing component alone, not on the
+    flag.
+    """
+
+    @staticmethod
+    def _write_local_objectstore(components_dir: Path) -> None:
+        import yaml
+
+        doc = {
+            "apiVersion": "dapr.io/v1alpha1",
+            "kind": "Component",
+            "metadata": {"name": "objectstore"},
+            "spec": {
+                "type": "bindings.localstorage",
+                "metadata": [
+                    {"name": "rootPath", "value": str(components_dir / "data")}
+                ],
+            },
+        }
+        (components_dir / "objectstore.yaml").write_text(yaml.dump(doc))
+
+    @staticmethod
+    async def _build(monkeypatch: pytest.MonkeyPatch, components_dir: Path) -> Any:
+        monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
+        monkeypatch.setenv("DAPR_COMPONENTS_PATH", str(components_dir))
+        with (
+            patch(
+                "application_sdk.main._log_dapr_components",
+                new_callable=AsyncMock,
+                return_value=set(),
+            ),
+            patch(
+                "application_sdk.infrastructure._dapr.http.wait_for_dapr_sidecar",
+                new_callable=AsyncMock,
+            ),
+            patch("application_sdk.infrastructure._dapr.http.AsyncDaprClient"),
+            patch(
+                "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME", "objectstore"
+            ),
+            patch(
+                "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME", "objectstore"
+            ),
+        ):
+            return await _create_infrastructure()
+
+    @pytest.mark.parametrize("flag", [None, "false"], ids=["flag_unset", "flag_false"])
+    async def test_missing_component_raises_config_error_naming_the_contract_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str | None
+    ) -> None:
+        from application_sdk.errors.categories import Audience
+        from application_sdk.storage.errors import StorageBindingNotFoundError
+
+        if flag is None:
+            monkeypatch.delenv("ATLAN_ENABLE_OBJECTSTORE", raising=False)
+        else:
+            monkeypatch.setenv("ATLAN_ENABLE_OBJECTSTORE", flag)
+
+        with pytest.raises(StorageBindingNotFoundError) as exc_info:
+            await self._build(monkeypatch, tmp_path)
+
+        err = exc_info.value
+        assert "deploy.dapr.objectstore" in err.message
+        assert type(err).audience is Audience.APP_OWNER
+        assert isinstance(err.__cause__, StorageBindingNotFoundError)
+        assert err.__cause__ is not err
+
+    async def test_missing_component_with_flag_false_says_the_flag_disables_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.storage.errors import StorageBindingNotFoundError
+
+        monkeypatch.setenv("ATLAN_ENABLE_OBJECTSTORE", "false")
+        with pytest.raises(StorageBindingNotFoundError) as exc_info:
+            await self._build(monkeypatch, tmp_path)
+
+        assert "ATLAN_ENABLE_OBJECTSTORE=false" in exc_info.value.message
+
+    async def test_missing_component_logs_error_before_raising(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.storage.errors import StorageBindingNotFoundError
+
+        monkeypatch.delenv("ATLAN_ENABLE_OBJECTSTORE", raising=False)
+        with (
+            patch("application_sdk.main.logger") as mock_log,
+            pytest.raises(StorageBindingNotFoundError),
+        ):
+            await self._build(monkeypatch, tmp_path)
+
+        rendered = [
+            c.args[0] % c.args[1:] if len(c.args) > 1 else c.args[0]
+            for c in mock_log.error.call_args_list
+        ]
+        assert any("deploy.dapr.objectstore" in m for m in rendered), rendered
+
+    @pytest.mark.parametrize("flag", [None, "false"], ids=["flag_unset", "flag_false"])
+    async def test_present_component_starts_whatever_the_flag_says(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str | None
+    ) -> None:
+        if flag is None:
+            monkeypatch.delenv("ATLAN_ENABLE_OBJECTSTORE", raising=False)
+        else:
+            monkeypatch.setenv("ATLAN_ENABLE_OBJECTSTORE", flag)
+        self._write_local_objectstore(tmp_path)
+
+        infra = await self._build(monkeypatch, tmp_path)
+
+        assert infra.storage is not None
+        assert infra.upstream_storage is infra.storage
 
 
 # --------------------------------------------------------------------------- #

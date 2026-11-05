@@ -519,6 +519,48 @@ class StorageBindingNotFoundError(StorageConfigError):
 
 
 @dataclass(kw_only=True)
+class DeploymentObjectStoreMissingError(StorageBindingNotFoundError):
+    """The deployment object-store Dapr component is absent at startup.
+
+    The SDK requires the deployment object store: every app reads and writes
+    artifacts, credential files and observability exports through it.  The
+    atlan-app chart omits the component when the app's contract sets
+    ``deploy.dapr.objectstore = false``, so the fix lives in the app's
+    contract, not in the customer's configuration — hence ``APP_OWNER``
+    rather than the ``USER`` audience the parent inherits from
+    ``StorageConfigError``.
+
+    Subclass of ``StorageBindingNotFoundError`` so existing
+    ``except StorageBindingNotFoundError:`` / ``except StorageConfigError:``
+    catch blocks keep working.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_STORAGE_DEPLOYMENT_OBJECTSTORE_MISSING"
+    audience: ClassVar[Audience] = Audience.APP_OWNER
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        binding_name: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        StorageBindingNotFoundError.__init__(
+            self,
+            message,
+            binding_name=binding_name,
+            cause=cause,
+            error_code=error_code,
+        )
+        self.suggested_action = (
+            "Set deploy.dapr.objectstore to true in the app contract "
+            "(dapr { objectstore = true } in contract/app.pkl), regenerate "
+            "atlan.yaml and redeploy."
+        )
+
+
+@dataclass(kw_only=True)
 class StorageBindingBrokenError(StorageConfigError):
     """Dapr component YAML exists but has unresolvable configuration.
 

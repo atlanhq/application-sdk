@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**22 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
+**23 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -37,6 +37,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [K020](#k020) | `ManifestArgsLegacyNestedEnvelope` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
 | [K021](#k021) | `FilterFieldRejectsAeString` | `warn` | `app` | `contract-toolkit` | yes | 0.26.0 |
 | [K027](#k027) | `EntrypointContractClassNameCollision` | `warn` | `app` | `contract-toolkit` | yes | 0.43.0 |
+| [K029](#k029) | `DeploymentObjectStoreDisabled` | `warn` | `app` | `contract-toolkit` | yes | 0.56.0 |
 
 ---
 
@@ -1471,5 +1472,57 @@ never had now report as B005 and are marked `sunset` in the ledger.
 
 **Suppress** with `# conformance: ignore[K027] <reason>` on the entrypoint method
 definition (or the comment-only line directly above it).
+
+---
+
+## K029 — `DeploymentObjectStoreDisabled` {#k029}
+
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.56.0
+
+> deploy.dapr.objectstore is false — the chart drops the object store the SDK requires, and the app cannot start
+
+**Rationale:** The SDK requires the deployment object store: every app reads and writes artifacts,
+credential files and observability exports through it, and worker and handler startup
+builds it unconditionally. The atlan-app chart omits the objectstore Dapr component when
+atlan.yaml carries deploy.dapr.objectstore: false, so such an app's pods fail at
+startup. The setting usually arrives by accident: contract-toolkit defaulted objectstore
+to false, and the toolkit renders the whole dapr block as soon as any other component is
+enabled, so declaring only dapr { secretstore = true } emitted objectstore: false. The
+rule moves that failure from the deploy to the PR. WARN while the fleet's existing
+findings are counted and fixed; it is a candidate for BLOCK once they are, since no app
+built on the SDK starts without the store. Customer impact: the app's worker and handler
+cannot start on the tenant, so every workflow of that app fails until the contract is
+fixed and the app redeployed.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app contract/app.pkl — its deploy block sets `dapr { objectstore = true }`,
+  which renders `deploy.dapr.objectstore: true` in atlan.yaml so the chart mounts the
+  object-store component the SDK requires.
+- **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
+- **Interacts with:** When the finding anchors on atlan.yaml, the file is generated: a hand-edit is erased by
+  the next regeneration and trips the freshness gate (K005). Fix contract/app.pkl (or
+  bump the toolkit, whose default is now true) and run the repo's own generate task.
+
+The app's contract sets `objectstore = false` in its `deploy.dapr` block, or its
+generated `atlan.yaml` carries `deploy.dapr.objectstore: false`. The SDK requires the
+deployment object store and fails at startup with `DeploymentObjectStoreMissingError`
+when the chart omits it.
+
+The finding anchors on the explicit assignment in `contract/*.pkl` when there is one,
+and otherwise on `atlan.yaml` — the case where an older contract-toolkit defaulted
+`objectstore` to `false` because another Dapr component was enabled.
+
+**Fix:** set `objectstore = true` in the contract's `dapr` block (or remove the explicit
+`false` and take a contract-toolkit whose default is `true`), then regenerate with the
+repo's generate task and commit the updated `atlan.yaml`:
+
+    deploy = new DeployConfig {       dapr { objectstore = true; secretstore = true }
+}
+
+**Suppress** with `// conformance: ignore[K029] <reason>` on the `objectstore = false`
+line of the contract (or the comment-only line above it), or `# conformance:
+ignore[K029] <reason>` on the `objectstore:` line of `atlan.yaml`. A suppression is
+almost never correct: no app built on the SDK starts without the store.
 
 ---

@@ -428,6 +428,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # app's contract/ + app/generated/ tree, which the SDK does not have.
     # K027: entrypoint contract classes sharing one bare class name — the SDK
     # declares no @entrypoint contracts of its own, so nothing can collide (FND-3140).
+    # K029: deploy.dapr.objectstore disabled — reads an app's contract/ and
+    # atlan.yaml; the SDK has neither.
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -539,6 +541,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K020",
         "K021",
         "K027",
+        "K029",
         "P004",
         "P005",
         "P008",
@@ -958,7 +961,8 @@ def test_catalog_k_series_present() -> None:
     the SDK App declaration) (CONNECT-1081), plus the artifact-schema pair K016
     (a public hand-off with no declaration) and K017 (a declaration its own
     writer contradicts) (ADR-0020), and K027 (two entrypoints binding different
-    contract classes under one bare class name) (FND-3140)."""
+    contract classes under one bare class name) (FND-3140), and K029 (the
+    deployment object store disabled in deploy.dapr)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
     expected = {
@@ -984,6 +988,7 @@ def test_catalog_k_series_present() -> None:
         "K020",
         "K021",
         "K027",
+        "K029",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"

@@ -18,7 +18,10 @@ purpose:
 automatically uploads every `FileReference` returned from a `@task` to this
 store, keeping all intermediate data inside the customer's deployment perimeter.
 `objectstore` can be any backend the customer controls (S3, Azure Blob, GCS,
-local disk) — Atlan's infrastructure never reads from it.
+local disk) — Atlan's infrastructure never reads from it. It is **required**:
+startup fails with `DeploymentObjectStoreMissingError` when the component is
+absent, which happens when the app's contract sets `deploy.dapr.objectstore` to
+`false` (see [Configuration](../configuration.md#the-deployment-object-store-is-required)).
 
 **App-to-app hand-off** uses `infra.upstream_storage`. When a connector's
 extract activity produces artifacts that Atlan's publish or lineage apps must
