@@ -298,7 +298,10 @@ class AppContext:
 
         Temporal delivers a server-side cancel to the worker in a heartbeat
         response, so a task declared with ``heartbeat_timeout_seconds=None``
-        does not see it here until its start-to-close timeout.
+        never receives one. It does still see this turn True when its
+        start-to-close timeout elapses: the worker runs a local start-to-close
+        timer and cancels the activity itself (plus a small buffer), without
+        needing a heartbeat.
 
         Apps should check this periodically during long-running operations
         and exit gracefully if True. Business code with no ``self`` can call
