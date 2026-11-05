@@ -70,12 +70,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, NoReturn
 
+from application_sdk import constants
 from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.common.path import convert_to_extended_path
 from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPLATE
 
 if TYPE_CHECKING:
-    from application_sdk.errors import LocalVolumeUnwritableError
+    from application_sdk.errors import DiskFullError, LocalVolumeUnwritableError
 
 #: The top-level directory every workflow artifact is written under, derived from
 #: the output template rather than spelled again here so the two cannot drift.
@@ -254,6 +255,19 @@ def _is_disk_full(exc: OSError) -> bool:
     return exc.errno in _DISK_FULL_ERRNOS
 
 
+def _disk_full_class() -> type[DiskFullError]:
+    """The disk-full class for this worker: who owns its local volume.
+
+    On a Self-Deployed Runtime agent the volume is the customer's host, so the
+    failure routes to them; on a hosted worker it is the platform's. Read at
+    raise time from :data:`application_sdk.constants.ENABLE_ATLAN_UPLOAD`, the
+    storage layer's SDR discriminator, so both raise sites in this module agree.
+    """
+    from application_sdk.errors import DiskFullError, SdrDiskFullError  # noqa: PLC0415
+
+    return SdrDiskFullError if constants.ENABLE_ATLAN_UPLOAD else DiskFullError
+
+
 def _raise_disk_full(
     exc: OSError,
     *,
@@ -262,15 +276,13 @@ def _raise_disk_full(
     required_bytes: int | None = None,
 ) -> NoReturn:
     """Re-raise a disk-full ``OSError`` as the typed error, chained to its cause."""
-    from application_sdk.errors import DiskFullError  # noqa: PLC0415
-
     free = _free_bytes(path)
     detail = f"{operation} of '{path}' failed: no space left on device"
     if free is not None:
         detail += f" ({_format_bytes(free)} free)"
     if required_bytes is not None:
         detail += f"; the write needs about {_format_bytes(required_bytes)}"
-    raise DiskFullError(
+    raise _disk_full_class()(
         message=detail,
         path=str(path),
         operation=operation,
@@ -351,9 +363,7 @@ def ensure_free_space(
     if free is None or free >= required_bytes:
         return
 
-    from application_sdk.errors import DiskFullError  # noqa: PLC0415
-
-    raise DiskFullError(
+    raise _disk_full_class()(
         message=(
             f"{operation} of '{path}' needs about {_format_bytes(required_bytes)} "
             f"but only {_format_bytes(free)} is free on that filesystem. Failing "

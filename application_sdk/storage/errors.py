@@ -31,6 +31,7 @@ from application_sdk.errors import (
 )
 from application_sdk.errors.categories import Audience
 from application_sdk.errors.leaves import (
+    SDR_DISK_FULL_ACTION,
     AppPermissionDeniedError,
     AuthError,
     DataIntegrityError,
@@ -39,6 +40,7 @@ from application_sdk.errors.leaves import (
     InvalidInputError,
     NotFoundError,
     PreconditionError,
+    SdrDiskFullError,
 )
 
 
@@ -965,8 +967,18 @@ class StorageDiskFullError(DiskFullError, StorageError):
     def from_disk_full(
         cls, exc: DiskFullError, *, key: str | None = None
     ) -> StorageDiskFullError:
-        """The same failure as *exc*, now also a ``StorageError`` naming *key*."""
-        return cls(
+        """The same failure as *exc*, now also a ``StorageError`` naming *key*.
+
+        An SDR agent's disk-full stays an SDR one, so the re-wrap does not
+        hand the customer's host volume back to the platform.
+        """
+        target = (
+            SdrStorageDiskFullError
+            if isinstance(exc, SdrDiskFullError)
+            and not issubclass(cls, SdrDiskFullError)
+            else cls
+        )
+        return target(
             exc.message,
             key=key,
             path=exc.path,
@@ -985,3 +997,49 @@ class StorageDiskFullError(DiskFullError, StorageError):
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
+
+
+@dataclass(kw_only=True, init=False)
+class SdrStorageDiskFullError(SdrDiskFullError, StorageDiskFullError):
+    """A ``StorageDiskFullError`` raised on a Self-Deployed Runtime agent.
+
+    Routed to the customer, like :class:`SdrDiskFullError`, and still a
+    ``StorageError`` naming the key. :meth:`StorageDiskFullError.from_disk_full`
+    picks it for an SDR disk-full, so the re-wrap in the download paths keeps
+    the owner the raise site chose.
+    """
+
+    # Declared here as well as on SdrDiskFullError: the two bases inherit the
+    # field from different classes, so the subclass says which one holds.
+    suggested_action: str | None = SDR_DISK_FULL_ACTION
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        key: str | None = None,
+        path: str | None = None,
+        operation: str | None = None,
+        required_bytes: int | None = None,
+        free_bytes: int | None = None,
+        limit: str | None = None,
+        observed: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        StorageDiskFullError.__init__(
+            self,
+            message,
+            key=key,
+            path=path,
+            operation=operation,
+            required_bytes=required_bytes,
+            free_bytes=free_bytes,
+            limit=limit,
+            observed=observed,
+            cause=cause,
+            error_code=error_code,
+        )
+        # The storage constructor takes no remediation and leaves the hosted
+        # default in place; an SDR agent's operator acts on its host volume.
+        self.suggested_action = SDR_DISK_FULL_ACTION
