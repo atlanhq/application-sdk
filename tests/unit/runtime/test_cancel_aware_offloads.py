@@ -133,7 +133,7 @@ def test_hashing_stops_once_its_offload_is_cancelled(tmp_path: Path) -> None:
     handle.request()
     token = offload._CURRENT_CANCEL_HANDLE.set(handle)
     try:
-        with pytest.raises(offload.concurrent.futures.CancelledError):
+        with pytest.raises(asyncio.CancelledError):
             _sha256_file_sync(path)
     finally:
         offload._CURRENT_CANCEL_HANDLE.reset(token)

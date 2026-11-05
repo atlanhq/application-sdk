@@ -10,7 +10,6 @@ fails instead of hanging the suite.
 """
 
 import asyncio
-import concurrent.futures
 import threading
 import time
 
@@ -21,6 +20,7 @@ from application_sdk._runtime.offload import (
     CancelHandle,
     current_cancel_handle,
     is_cancelled,
+    raise_if_cancelled,
     raise_if_offload_abandoned,
     run_in_thread,
     submit_in_thread,
@@ -175,7 +175,7 @@ async def test_the_sdk_check_stops_on_a_temporal_cancel_without_reading_its_flag
         while time.monotonic() < deadline:
             try:
                 raise_if_offload_abandoned()
-            except concurrent.futures.CancelledError:
+            except asyncio.CancelledError:
                 stopped.set()
                 return
             time.sleep(0.01)
@@ -245,3 +245,44 @@ def test_a_cancel_inside_a_nested_registration_fires_both() -> None:
         handle.request()
     both.wait()
     assert sorted(fired) == ["inner", "outer"]
+
+
+async def test_the_cancel_is_not_swallowed_by_a_per_record_except_exception() -> None:
+    """A loop that skips bad records with ``except Exception`` still stops."""
+    started = threading.Event()
+    processed: list[int] = []
+    finished = threading.Event()
+
+    def work() -> None:
+        try:
+            for record in range(10_000):
+                try:
+                    raise_if_cancelled()
+                    processed.append(record)
+                    if record == 0:
+                        started.set()
+                    time.sleep(0.01)
+                except Exception:  # noqa: BLE001, S112 — the pattern under test
+                    continue
+        finally:
+            finished.set()
+
+    task = asyncio.ensure_future(run_in_thread(work))
+    assert await asyncio.to_thread(started.wait, _RELEASE_AFTER)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert await asyncio.to_thread(finished.wait, _RELEASE_AFTER)
+    assert len(processed) < 10_000
+
+
+async def test_a_cancel_raised_in_the_thread_reaches_the_await_as_a_cancel() -> None:
+    """The thread can raise before its awaiting task is cancelled (the Temporal
+    flag flips first); the await must still read it as a cancel, not a failure."""
+
+    def work() -> None:
+        raise asyncio.CancelledError
+
+    task = asyncio.ensure_future(run_in_thread(work))
+    with pytest.raises(asyncio.CancelledError):
+        await task

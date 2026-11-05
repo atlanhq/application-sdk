@@ -346,13 +346,15 @@ def raise_if_cancelled() -> None:
     unwinds through its ``with`` blocks and ``finally`` clauses, so files and
     connections close, instead of running on after its caller has gone.
 
+    Raises ``asyncio.CancelledError``, a ``BaseException``, so the
+    ``except Exception`` a per-record loop uses to skip bad records does not
+    swallow it and keep the loop going.
+
     Raises:
-        concurrent.futures.CancelledError: The work was asked to stop. The
-            awaiting coroutine sees ``asyncio.CancelledError``, as for any
-            other cancel.
+        asyncio.CancelledError: The work was asked to stop.
     """
     if is_cancelled():
-        raise concurrent.futures.CancelledError
+        raise asyncio.CancelledError
 
 
 def raise_if_offload_abandoned() -> None:
@@ -366,11 +368,13 @@ def raise_if_offload_abandoned() -> None:
     that caught its cancel — still runs to completion.
 
     Raises:
-        concurrent.futures.CancelledError: The call's caller stopped waiting.
+        asyncio.CancelledError: The call's caller stopped waiting. A
+            ``BaseException``, so no ``except Exception`` on the way out
+            swallows it.
     """
     handle = _CURRENT_CANCEL_HANDLE.get()
     if handle is not None and handle.requested:
-        raise concurrent.futures.CancelledError
+        raise asyncio.CancelledError
 
 
 #: Label prefixes for the auto-holds on the two offload seams (ADR-0018 →

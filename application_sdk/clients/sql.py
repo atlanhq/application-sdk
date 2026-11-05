@@ -1053,7 +1053,7 @@ class BaseSQLClient(ClientInterface):
             # checked out until garbage collection pools it again.
             _invalidate_if_cancelled(conn, read.handle)
             conn.close()
-            raise concurrent.futures.CancelledError
+            raise asyncio.CancelledError
         if not isinstance(frames, Iterator):
             # An override that materialised the result: nothing left to read.
             conn.close()
