@@ -475,6 +475,10 @@ class SdrDiskFullError(DiskFullError):
     parent, so callers that match on either keep working.
     """
 
+    # Restated, not changed: the code stays the parent's so callers matching
+    # on ``RESOURCE_EXHAUSTED_DISK_FULL`` keep working (P003 wants each leaf to
+    # declare its own).
+    code: ClassVar[str] = "RESOURCE_EXHAUSTED_DISK_FULL"
     audience: ClassVar[Audience] = Audience.USER
     suggested_action: str | None = SDR_DISK_FULL_ACTION
 

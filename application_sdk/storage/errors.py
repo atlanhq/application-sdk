@@ -1009,6 +1009,9 @@ class SdrStorageDiskFullError(SdrDiskFullError, StorageDiskFullError):
     the owner the raise site chose.
     """
 
+    # Restated from DiskFullError: one code for every disk-full variant.
+    code: ClassVar[str] = "RESOURCE_EXHAUSTED_DISK_FULL"
+
     # Declared here as well as on SdrDiskFullError: the two bases inherit the
     # field from different classes, so the subclass says which one holds.
     suggested_action: str | None = SDR_DISK_FULL_ACTION

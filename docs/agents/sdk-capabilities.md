@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.52.0
-source-sha:    ceb8a22d9d759347423105132ab8c83faa44127d
-source-date:   2026-10-27T15:56:40+05:30
+sdk-version:   3.55.0
+source-sha:    82cd414fedf99c32f72ca2bc47f5fbc7e6e87ef5
+source-date:   2026-11-05T13:12:37+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -24,7 +24,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 46 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 75 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 76 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 48 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 28 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 40 |
@@ -1819,6 +1819,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import ResourceExhaustedError`
 - **Signature:** `class ResourceExhaustedError(*, ...)`
 - **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `SdrDiskFullError`
+
+- **Import:** `from application_sdk.errors import SdrDiskFullError`
+- **Signature:** `class SdrDiskFullError(*, ...)`
+- **Summary:** A ``DiskFullError`` raised on a Self-Deployed Runtime (SDR) agent.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `SourceUnavailableError`
