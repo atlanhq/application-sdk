@@ -409,6 +409,8 @@ jobs:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
+          # Read is all a clone needs; the install step runs build backends.
+          permission-contents: read
 
       - name: Checkout SDK helper scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -440,14 +442,6 @@ jobs:
         with:
           version: "0.13.7"
 
-      - name: Configure git auth for private dependencies
-        if: ${{ inputs.private_git_auth }}
-        env:
-          GIT_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
-        run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
-
       # Before `uv sync`: a dependency that builds a native extension (hive's
       # pykerberos needs libkrb5-dev) cannot install without its headers, and
       # an app whose deps do not install fails certification. The guard is
@@ -467,11 +461,19 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
+      # The only step that sees a GitHub token after the checkouts. The script
+      # hands it to git as GIT_CONFIG_* env on the `uv sync` process alone:
+      # nothing lands in ~/.gitconfig, so the unit tests and coverage steps
+      # (app code) have no token to read. App token only, no ORG_PAT_GITHUB
+      # fallback: build backends run in this step, and the PAT is org-admin.
       - name: Install app dependencies
         id: app_install
         continue-on-error: true
         working-directory: app
-        run: uv sync --all-extras --frozen
+        env:
+          PRIVATE_GIT_AUTH: ${{ inputs.private_git_auth }}
+          GIT_TOKEN: ${{ inputs.private_git_auth && steps.app-token.outputs.token || '' }}
+        run: python3 ../sdk/.github/scripts/build_and_publish/certify.py install-deps
 
       # --all-groups (inside the script) so the app's test dependency group
       # (pytest plugins like pytest-asyncio) is installed: `uv run` otherwise
@@ -523,6 +525,11 @@ jobs:
     if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Runs app code (build backends, pytest), so, as in certify-unit, the job
+    # token is read-only and no checkout leaves a token in .git/config.
+    # Artifact download uses the runner's own token, not this one.
+    permissions:
+      contents: read
     steps:
       - name: Checkout app
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -530,15 +537,16 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
           path: app
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Mint fleet App token
-        # Not scoped to a single repo: also used below to authenticate git
-        # config for the consumer app's own (arbitrary) private atlanhq deps.
-        # continue-on-error + the `|| secrets.ORG_PAT_GITHUB` fallback below:
-        # FLEET_APP_ID/FLEET_APP_PRIVATE_KEY are declared optional (every real
-        # caller uses secrets: inherit, so they're always available in
-        # practice) -- this is defense-in-depth so a caller that somehow
-        # doesn't provide them degrades to the old PAT instead of hard-failing.
+        # Not scoped to a single repo: also used below to authenticate the
+        # consumer app's own (arbitrary) private atlanhq deps at install.
+        # continue-on-error + the `|| secrets.ORG_PAT_GITHUB` fallback on the
+        # SDK checkout: FLEET_APP_ID/FLEET_APP_PRIVATE_KEY are declared
+        # optional (every real caller uses secrets: inherit), so a caller
+        # without them still checks out the SDK. The private-deps install has
+        # no such fallback (see Install app dependencies): it fails instead.
         id: app-token
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
@@ -546,6 +554,8 @@ jobs:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
+          # Read is all a clone needs; the install step runs build backends.
+          permission-contents: read
 
       - name: Checkout application-sdk (migration tooling)
         # tools.migrate_v3 ships in the SDK repo, not the published package —
@@ -560,6 +570,7 @@ jobs:
           ref: main
           path: sdk
           token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          persist-credentials: false
 
       # Certify on the Python the app image ships, not the runner's system
       # python3 (3.14 on ubuntu-latest, while the golden base is 3.13). Unpinned,
@@ -593,14 +604,6 @@ jobs:
         run: python3 .github/scripts/build_and_publish/certify.py check-migration
 
       # ── 2. App dependencies ───────────────────────────────────────────────────
-      - name: Configure git auth for private dependencies
-        if: ${{ inputs.private_git_auth }}
-        env:
-          GIT_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
-        run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
-
       # Before `uv sync`: a dependency that builds a native extension (hive's
       # pykerberos needs libkrb5-dev) cannot install without its headers, and
       # an app whose deps do not install fails certification. The guard is
@@ -620,11 +623,19 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
+      # The only step that sees a GitHub token after the checkouts. The script
+      # hands it to git as GIT_CONFIG_* env on the `uv sync` process alone:
+      # nothing lands in ~/.gitconfig, so the unit tests and coverage steps
+      # (app code) have no token to read. App token only, no ORG_PAT_GITHUB
+      # fallback: build backends run in this step, and the PAT is org-admin.
       - name: Install app dependencies
         id: app_install
         continue-on-error: true
         working-directory: app
-        run: uv sync --all-extras --frozen
+        env:
+          PRIVATE_GIT_AUTH: ${{ inputs.private_git_auth }}
+          GIT_TOKEN: ${{ inputs.private_git_auth && steps.app-token.outputs.token || '' }}
+        run: python3 ../sdk/.github/scripts/build_and_publish/certify.py install-deps
 
       # The contract-drift step regenerates with `pkl eval`, so it needs pkl.
       # It does not need the app's dependencies, so neither step waits on
@@ -705,8 +716,8 @@ jobs:
         working-directory: app
         run: |
           set -euo pipefail
-          uv run --all-groups --with coverage coverage combine --data-file=.coverage ../certify-shards/coverage.shard-*
-          uv run --all-groups --with coverage coverage report --data-file=.coverage --fail-under=85
+          uv run --frozen --all-groups --with coverage coverage combine --data-file=.coverage ../certify-shards/coverage.shard-*
+          uv run --frozen --all-groups --with coverage coverage report --data-file=.coverage --fail-under=85
 
       # ── Verdict ───────────────────────────────────────────────────────────────
       # Unit test pass/fail (UT) and contract drift (CD) ENFORCE: a ❌ exits

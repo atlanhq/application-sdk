@@ -3,6 +3,18 @@
 
 Subcommands (each one is a former inline ``run:`` block):
 
+``install-deps``
+    Install the app's dependencies in the app checkout (``uv sync
+    --all-extras --all-groups --frozen``), used by ``certify`` and every
+    ``certify-unit`` leg. All groups now, so the later ``uv run --frozen``
+    of tests and coverage has nothing to fetch. When ``PRIVATE_GIT_AUTH`` is
+    ``true``, atlanhq GitHub remotes are authenticated with ``GIT_TOKEN`` (the
+    fleet App token) through git's ``GIT_CONFIG_COUNT`` environment, set on
+    the ``uv`` process only. Nothing is written to git config, so no later
+    step, and no app code it runs, can read the token. ``PRIVATE_GIT_AUTH``
+    without a token fails: the App token did not mint, and there is no
+    fallback credential.
+
 ``check-migration``
     v3 shape, warn-only. Runs ``tools.migrate_v3.check_migration`` from the SDK
     checkout (cwd ``sdk``) against ``../app``.
@@ -32,6 +44,7 @@ See docs/standards/app-certification.md.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -48,6 +61,43 @@ DOCS_URL = (
 )
 _ICONS = {"success": "✅", "failure": "❌", "skipped": "➖", "install_failed": "❌"}
 _MAX_LISTED_PATHS = 50
+
+
+#: Rewritten to carry the token: an app's lock may name either form.
+_ATLANHQ_REMOTES = ("https://github.com/atlanhq/", "ssh://git@github.com/atlanhq/")
+INSTALL_COMMAND = ("uv", "sync", "--all-extras", "--all-groups", "--frozen")
+
+
+def git_auth_env(token: str) -> dict[str, str]:
+    """git config entries, as ``GIT_CONFIG_*`` env, that authenticate atlanhq.
+
+    Equivalent to ``git -c url.<authed>.insteadOf=<remote>`` for each remote,
+    but inherited by every git process uv starts, with nothing persisted.
+    """
+    authed = f"https://x-access-token:{token}@github.com/atlanhq/"
+    env = {"GIT_CONFIG_COUNT": str(len(_ATLANHQ_REMOTES))}
+    for i, remote in enumerate(_ATLANHQ_REMOTES):
+        env[f"GIT_CONFIG_KEY_{i}"] = f"url.{authed}.insteadOf"
+        env[f"GIT_CONFIG_VALUE_{i}"] = remote
+    return env
+
+
+def install_deps() -> int:
+    private_git_auth = _bap.env("PRIVATE_GIT_AUTH") == "true"
+    token = _bap.env("GIT_TOKEN")
+    # GIT_TOKEN is consumed here and never passed on as itself.
+    child_env = {k: v for k, v in os.environ.items() if k != "GIT_TOKEN"}
+    if private_git_auth:
+        if not token:
+            print(
+                "::error title=No token for private dependencies::"
+                "private_git_auth is set but the fleet App token did not mint "
+                "(FLEET_APP_ID / FLEET_APP_PRIVATE_KEY). Pass them with "
+                "`secrets: inherit`. App dependencies were not installed."
+            )
+            return 1
+        child_env.update(git_auth_env(token))
+    return _bap.run(INSTALL_COMMAND, env=child_env).returncode
 
 
 def check_migration() -> int:
@@ -205,10 +255,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=("check-migration", "contract-drift", "verdict"),
+        choices=("install-deps", "check-migration", "contract-drift", "verdict"),
     )
     args = parser.parse_args(argv)
     return {
+        "install-deps": install_deps,
         "check-migration": check_migration,
         "contract-drift": contract_drift,
         "verdict": verdict,

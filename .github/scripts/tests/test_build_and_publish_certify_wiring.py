@@ -275,3 +275,81 @@ def test_contract_drift_does_not_wait_on_the_app_install(workflow: Workflow) -> 
     pkl = next(s for s in steps if s.get("name") == "Install PKL")
     assert "if" not in pkl
     assert steps.index(pkl) < steps.index(_step_with_id(steps, "contract_drift"))
+
+
+# ── GitHub credentials stay out of app code (FND-4739) ────────────────────────
+# Both jobs run app code: build backends during the install, then pytest and
+# coverage. Only the install may see a GitHub token, and only through its own
+# env: no step writes git config, no checkout persists a token in .git/config,
+# and the job token cannot write.
+
+APP_TOKEN = "steps.app-token.outputs.token"
+INSTALL_ENV = {
+    "PRIVATE_GIT_AUTH": "${{ inputs.private_git_auth }}",
+    "GIT_TOKEN": "${{ inputs.private_git_auth && steps.app-token.outputs.token || '' }}",
+}
+
+
+def _is_checkout(step: Step) -> bool:
+    return str(step.get("uses", "")).startswith("actions/checkout@")
+
+
+@pytest.mark.parametrize("job", CERTIFY_JOBS)
+def test_job_token_is_read_only(workflow: Workflow, job: str) -> None:
+    """The workflow-level grant includes packages/actions/pull-requests write."""
+    assert workflow["jobs"][job]["permissions"] == {"contents": "read"}
+
+
+@pytest.mark.parametrize("job", CERTIFY_JOBS)
+def test_no_checkout_persists_a_token(workflow: Workflow, job: str) -> None:
+    checkouts = [s for s in _steps(workflow, job) if _is_checkout(s)]
+    assert checkouts
+    for step in checkouts:
+        assert step["with"].get("persist-credentials") is False, step.get("name")
+
+
+@pytest.mark.parametrize("job", CERTIFY_JOBS)
+def test_no_step_writes_git_config(workflow: Workflow, job: str) -> None:
+    for step in _steps(workflow, job):
+        run = str(step.get("run", ""))
+        assert "git config" not in run, step.get("name")
+        assert "insteadOf" not in run, step.get("name")
+
+
+@pytest.mark.parametrize("job", CERTIFY_JOBS)
+def test_app_token_is_minted_read_only(workflow: Workflow, job: str) -> None:
+    mint = next(s for s in _steps(workflow, job) if s.get("id") == "app-token")
+    assert mint["with"]["permission-contents"] == "read"
+
+
+@pytest.mark.parametrize("job", CERTIFY_JOBS)
+def test_install_alone_carries_the_token(workflow: Workflow, job: str) -> None:
+    """The install step's env is the token's only route to a `run:` step, and
+    it is the App token alone: no ORG_PAT_GITHUB fallback reaches the build
+    backends that run there."""
+    steps = _steps(workflow, job)
+    install = _step_with_id(steps, "app_install")
+    assert install["env"] == INSTALL_ENV
+    assert install["run"] == (
+        "python3 ../sdk/.github/scripts/build_and_publish/certify.py install-deps"
+    )
+    for step in steps:
+        if step is install:
+            continue
+        text = yaml.safe_dump(step)
+        if APP_TOKEN in text or "ORG_PAT_GITHUB" in text:
+            # Only a checkout's `token:`, which is not persisted (above).
+            assert _is_checkout(step), step.get("name")
+            assert "run" not in step
+
+
+@pytest.mark.parametrize("job", CERTIFY_JOBS)
+def test_post_install_uv_never_relocks(workflow: Workflow, job: str) -> None:
+    """After the install no step has git auth, so any later `uv run` must be
+    --frozen: a re-lock would try to fetch private deps without a token."""
+    steps = _steps(workflow, job)
+    after = steps[steps.index(_step_with_id(steps, "app_install")) + 1 :]
+    for step in after:
+        for line in str(step.get("run", "")).splitlines():
+            if "uv run" in line:
+                assert "uv run --frozen" in line, line

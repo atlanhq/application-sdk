@@ -22,9 +22,26 @@ and runs:
 | **Coverage threshold** | `coverage report --fail-under=85` | unit tests skipped or failed |
 
 Unit tests need the app's dependencies installed
-(`uv sync --all-extras --frozen`). If that install fails, they cannot run, and
-publish is blocked (see [Enforcement](#enforcement)). Contract drift needs only
-`pkl`, so it runs either way.
+(`uv sync --all-extras --all-groups --frozen`). If that install fails, they
+cannot run, and publish is blocked (see [Enforcement](#enforcement)). Contract
+drift needs only `pkl`, so it runs either way.
+
+### Private dependencies and GitHub tokens
+
+An app with a private atlanhq git dependency sets `private_git_auth: true`.
+The install step then authenticates atlanhq GitHub remotes with the fleet App
+token, minted with `contents: read` only. The token reaches git as
+`GIT_CONFIG_*` environment on the `uv sync` process alone. Nothing is written
+to git config, so the unit-test and coverage steps, which run app code, have no
+token to read. Those steps use `uv run --frozen` against what the install
+synced, so they never fetch.
+
+There is no `ORG_PAT_GITHUB` fallback for this credential. If the App token
+does not mint (`FLEET_APP_ID` / `FLEET_APP_PRIVATE_KEY` missing), the install
+fails and publish is blocked. Pass the secrets with `secrets: inherit`.
+
+Both certify jobs also run with a `contents: read` job token, and no checkout
+leaves a token in `.git/config`.
 
 These are the layers that are **identical for every app**. App-specific layers
 — integration, SDR, and e2e/Playwright — are **not** run here: they need the
