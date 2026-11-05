@@ -160,6 +160,26 @@ def test_p064_is_silent_when_cancel_is_registered_or_not_matched(source: str) ->
                 cursor.execute(sql)
             return await self.run_in_thread(_q)
         """,
+        # .set only inside a nested def that is never called
+        """
+        async def fetch(self, sql):
+            def _q():
+                cursor = self.conn.cursor()
+                def register():
+                    handle = current_cancel_handle()
+                    handle.set(cursor.cancel)
+                cursor.execute(sql)
+            return await self.run_in_thread(_q)
+        """,
+        # .set only inside a lambda that is never called
+        """
+        async def fetch(self, sql):
+            def _q():
+                cursor = self.conn.cursor()
+                register = lambda: current_cancel_handle().set(cursor.cancel)
+                cursor.execute(sql)
+            return await self.run_in_thread(_q)
+        """,
         # .set on something that is not the call's handle
         """
         async def fetch(self, sql):

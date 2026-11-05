@@ -78,14 +78,16 @@ def _is_handle_lookup(node: ast.AST | None) -> bool:
 
 
 def _registers_cancel(scope: ast.AST) -> bool:
-    """Whether *scope* (nested functions included) registers a driver cancel.
+    """Whether *scope*'s own body registers a driver cancel.
 
     Only a ``.set(...)`` call on the call's handle registers one — on
     ``current_cancel_handle()`` itself, or on a name bound from it (``=`` or
-    ``:=``).  Looking the handle up without setting it registers nothing.
+    ``:=``).  Looking the handle up without setting it registers nothing, and
+    neither does a ``.set(...)`` inside a nested ``def`` or ``lambda``: whether
+    that ever runs before the statement is not visible here.
     """
     handles: set[str] = set()
-    for node in ast.walk(scope):
+    for node in _walk_local(scope):
         if isinstance(node, (ast.Assign, ast.AnnAssign)) and _is_handle_lookup(
             node.value
         ):
@@ -93,7 +95,7 @@ def _registers_cancel(scope: ast.AST) -> bool:
             handles.update(t.id for t in targets if isinstance(t, ast.Name))
         elif isinstance(node, ast.NamedExpr) and _is_handle_lookup(node.value):
             handles.add(node.target.id)
-    for node in ast.walk(scope):
+    for node in _walk_local(scope):
         if not (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
