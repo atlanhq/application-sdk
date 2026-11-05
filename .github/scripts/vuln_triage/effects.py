@@ -21,7 +21,7 @@ from typing import Any
 # sys.path both under `python -m vuln_triage` (run from there) and in the tests.
 import security_scan_create_linear as ssl
 
-Runner = Callable[..., subprocess.CompletedProcess]
+Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 SCAN_WORKFLOW = "daily-security-scan.yml"
 SCAN_ARTIFACT = "security-scan-raw-results"
@@ -300,8 +300,12 @@ def close_pr(repo: str, url: str, runner: Runner) -> bool:
     return out.returncode == 0
 
 
-def uv_lock_upgrade(packages: list[str], runner: Runner) -> subprocess.CompletedProcess:
+def uv_lock_upgrade(
+    packages: list[str], runner: Runner, cwd: Path | None = None
+) -> subprocess.CompletedProcess:
+    """`uv lock --upgrade-package` for `packages`, in the checkout or in `cwd`."""
     cmd = ["uv", "lock"]
     for p in packages:
         cmd += ["--upgrade-package", p]
-    return runner(cmd, check=False, capture_output=True, text=True)
+    kw = {} if cwd is None else {"cwd": cwd}
+    return runner(cmd, check=False, capture_output=True, text=True, **kw)
