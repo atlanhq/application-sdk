@@ -694,6 +694,13 @@ def main(argv: list[str] | None = None) -> int:
             for p in paths:
                 all_findings.extend(check.scan_path(p, root))
 
+    # --exclude also applies at the finding level: a check that discovers the
+    # repo root (e.g. K029) reads files beneath it that _drop_excluded never
+    # saw, so filtering paths alone would not keep the "all checks" promise.
+    all_findings = [
+        f for f in all_findings if not _is_excluded(f.file, excluded_prefixes)
+    ]
+
     selected_rules = {
         rid
         for rid, rule in CATALOG.items()

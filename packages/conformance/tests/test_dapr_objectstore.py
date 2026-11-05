@@ -135,3 +135,39 @@ def test_contract_finding_can_be_suppressed(tmp_path: Path) -> None:
 
 def test_repo_without_contract_dir_is_skipped(tmp_path: Path) -> None:
     assert _scan(tmp_path, contract=None, atlan=_atlan("false")) == []
+
+
+def test_runner_exclude_drops_findings_anchored_under_the_prefix(
+    tmp_path: Path,
+) -> None:
+    """``--exclude contract/`` drops K029's contract finding.
+
+    K029 discovers the repo root, which no prefix excludes, so the runner must
+    filter at the finding level for ``--exclude`` to apply to every check.
+    """
+    import json
+
+    from conformance.suite.runner import main as runner_main
+
+    contract = (
+        'amends "@app-contract-toolkit/App.pkl"\n'
+        "\n"
+        "deploy = new DeployConfig {\n"
+        "  dapr { objectstore = false }\n"
+        "}\n"
+    )
+    _scan(tmp_path, contract=contract)
+
+    def uris(*extra: str) -> set[str]:
+        out = tmp_path / "out.sarif"
+        runner_main(
+            ["--repo", str(tmp_path), "--rule", _RULE, "--output", str(out), *extra]
+        )
+        results = json.loads(out.read_text())["runs"][0]["results"]
+        return {
+            r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+            for r in results
+        }
+
+    assert uris() == {"contract/app.pkl"}
+    assert uris("--exclude", "contract/") == set()
