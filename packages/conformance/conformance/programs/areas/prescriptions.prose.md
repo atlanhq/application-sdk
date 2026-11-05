@@ -98,6 +98,16 @@ proposal for human review.  (These rules are backed by a separate
 `suite.checks.client_lifecycle` check, which is silent unless the app's `uv.lock`
 resolves `atlan-application-sdk` >= 3.46.0 — see its module docs.)
 
+The offload-cancel rules (P064/P065, FND-4707) are also P-series.  P065's fix is
+a one-line `for` → `async for` over a `get_batched_results` result, but it is
+only correct for a sync-engine client, so it is drafted as a proposal after
+checking which client produced the result.  P064 is not a mechanical rewrite: the driver
+cancel to register differs per driver, and some drivers have none, so it is
+routed to residue with a drafted proposal.  (These rules are backed by a
+separate `suite.checks.offload_cancel` check, which is silent unless the app's
+`uv.lock` resolves `atlan-application-sdk` at or above the floor in that
+module — see its module docs.)
+
 The determinism / async-correctness rules (P020–P024) are also P-series
 and suggest-only.  P020 (non-deterministic primitive in workflow context) has a
 concrete mechanical proposal for time/uuid/sleep — swap to the SDK seam — but its
@@ -986,6 +996,49 @@ package): `docs/concepts/clients.md`.
   anything, wrap it in `try` / `finally` with the super call in the
   `finally`.  There is no case
   where skipping the base close is correct, so do not propose a suppression.
+
+**Offload-cancel rules (P064/P065)** — scope=app, WARN-tier.  A cancel stops
+only the coroutine awaiting `run_in_thread`; the thread runs on.  Read the whole
+enclosing function and the offloaded function before drafting.  For the human
+reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this
+package): `docs/concepts/apps.md`, *Offloading Blocking Work*.
+
+- **P064 UncancellableOffloadedCursorStatement** — `classification` is
+  `"judgment"`.  A `run_in_thread` call offloads a DB-API cursor statement
+  (`<cursor>.execute` / `executemany` on a cursor from `<conn>.cursor()`) and
+  nothing in the offloaded function registers a driver cancel.  Draft, inside
+  the offloaded function and right after the cursor is created:
+  `handle = current_cancel_handle()` (from
+  `application_sdk.execution.heartbeat`) and
+  `if handle is not None: handle.set(<driver cancel>)`.  The driver cancel is
+  driver-specific: `cursor.cancel` for pyodbc, `connection.cancel` for
+  psycopg2, an abort keyed on the query id for Snowflake.  Identify the
+  driver from the connection's construction before drafting, and say which
+  you assumed.  When the driver has no thread-safe cancel, do not invent one:
+  propose a server-side statement timeout and an inline
+  `# conformance: ignore[P064] <reason>` on the `run_in_thread` line that
+  names the driver and the timeout.  Cite as evidence
+  `application_sdk/clients/sql.py` `BaseSQLClient.run_query`, which
+  registers the cursor's cancel on a `CancelHandle` for every driver call.
+  Route to residue with the proposal.
+
+- **P065 BatchedResultsIteratedOnLoop** — `classification` is `"judgment"`.
+  Inside an `async def`, a sync `for` (or a sync comprehension) iterates the
+  result of `await <client>.get_batched_results(...)`, directly or through a
+  local name bound once from it.  First find the client's class.  If it is an
+  `AsyncBaseSQLClient` (or anything built on an async SQLAlchemy engine), the
+  result is a plain sync iterator and `async for` raises `TypeError`: do not
+  rewrite; propose an inline `# conformance: ignore[P065] <reason>` naming the
+  async-engine client and route to residue.  If the client cannot be
+  identified, route to residue with the proposal and say so.  Otherwise
+  draft: change that `for` to `async for` (a
+  comprehension's `for` to `async for`).  Change nothing else: the loop body
+  and the frames it receives are the same.  If the loop body calls blocking
+  code that relied on running between synchronous fetches, leave it as is —
+  this rule only moves the fetch off the loop.  Cite as evidence
+  `application_sdk/storage/formats/__init__.py`
+  `Writer._write_batched_dataframe`, which reads the same result with
+  `async for`.
 
 **Determinism / async-correctness rules (P020–P024)** — all suggest-only,
 scope=both, WARN-tier; `classification` is always `"judgment"`.  Read the enclosing

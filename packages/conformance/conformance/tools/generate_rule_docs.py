@@ -171,7 +171,8 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.atomic_publish` (P050), "
             "`suite.checks.retry_ladder` (P060), "
             "`suite.checks.credential_seam` (P053, gated on the app's locked SDK), "
-            "`suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK) "
+            "`suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK), "
+            "`suite.checks.offload_cancel` (P064/P065, gated on the app's locked SDK) "
             "(all AST-based / cross-artifact)"
         ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",
