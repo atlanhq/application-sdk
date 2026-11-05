@@ -99,8 +99,9 @@ proposal for human review.  (These rules are backed by a separate
 resolves `atlan-application-sdk` >= 3.46.0 — see its module docs.)
 
 The offload-cancel rules (P064/P065, FND-4707) are also P-series.  P065's fix is
-mechanical (`for` → `async for` over a `get_batched_results` result) and is
-drafted as a one-line proposal.  P064 is not a mechanical rewrite: the driver
+a one-line `for` → `async for` over a `get_batched_results` result, but it is
+only correct for a sync-engine client, so it is drafted as a proposal after
+checking which client produced the result.  P064 is not a mechanical rewrite: the driver
 cancel to register differs per driver, and some drivers have none, so it is
 routed to residue with a drafted proposal.  (These rules are backed by a
 separate `suite.checks.offload_cancel` check, which is silent unless the app's
@@ -1021,10 +1022,16 @@ package): `docs/concepts/apps.md`, *Offloading Blocking Work*.
   registers the cursor's cancel on a `CancelHandle` for every driver call.
   Route to residue with the proposal.
 
-- **P065 BatchedResultsIteratedOnLoop** — `classification` is `"mechanical"`.
+- **P065 BatchedResultsIteratedOnLoop** — `classification` is `"judgment"`.
   Inside an `async def`, a sync `for` (or a sync comprehension) iterates the
   result of `await <client>.get_batched_results(...)`, directly or through a
-  local name bound once from it.  Draft: change that `for` to `async for` (a
+  local name bound once from it.  First find the client's class.  If it is an
+  `AsyncBaseSQLClient` (or anything built on an async SQLAlchemy engine), the
+  result is a plain sync iterator and `async for` raises `TypeError`: do not
+  rewrite; propose an inline `# conformance: ignore[P065] <reason>` naming the
+  async-engine client and route to residue.  If the client cannot be
+  identified, route to residue with the proposal and say so.  Otherwise
+  draft: change that `for` to `async for` (a
   comprehension's `for` to `async for`).  Change nothing else: the loop body
   and the frames it receives are the same.  If the loop body calls blocking
   code that relied on running between synchronous fetches, leave it as is —

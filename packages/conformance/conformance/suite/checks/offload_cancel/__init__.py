@@ -16,7 +16,9 @@ SDK-version gate
 ----------------
 Both fixes use SDK surfaces that exist only from :data:`OFFLOAD_CANCEL_SDK_FLOOR`:
 ``current_cancel_handle()`` (a handle on every ``run_in_thread`` call) and a
-``get_batched_results`` result that supports ``async for``.  :func:`scan_all`
+``get_batched_results`` result that supports ``async for`` (from a sync-engine
+``BaseSQLClient``; an ``AsyncBaseSQLClient`` still returns a sync iterator,
+which P065's docs tell the reader to check for).  :func:`scan_all`
 and :func:`scan_path` read the SDK version the repo's ``uv.lock`` resolves and
 return nothing unless it is confirmed at or above the floor; no lock, no SDK in
 it, or an unparseable version all stay silent.  :func:`scan_text` is the pure

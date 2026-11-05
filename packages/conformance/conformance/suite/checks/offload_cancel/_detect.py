@@ -327,7 +327,9 @@ def check_p065(
                             "inside an `async def`: every chunk is fetched and built "
                             "on the event loop, which stalls heartbeats, and a cancel "
                             "cannot stop the read. Use `async for` — each chunk is "
-                            "then read off the loop and a cancel stops the read."
+                            "then read off the loop and a cancel stops the read — "
+                            "unless the client is an `AsyncBaseSQLClient`, whose "
+                            "result is a sync iterator."
                         ),
                         directives=directives,
                     )

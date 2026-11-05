@@ -78,7 +78,7 @@ reassigned.
 | [P059](#p059) | `JsonEncodedContractField` | `warn` | `app` | `contract-modeling` | — | 0.51.0 |
 | [P060](#p060) | `HandRolledRetryLadder` | `warn` | `sdk` | `retry-policy` | — | 0.54.0 |
 | [P064](#p064) | `UncancellableOffloadedCursorStatement` | `warn` | `app` | `async-correctness` | — | 0.56.0 |
-| [P065](#p065) | `BatchedResultsIteratedOnLoop` | `warn` | `app` | `async-correctness` | yes | 0.56.0 |
+| [P065](#p065) | `BatchedResultsIteratedOnLoop` | `warn` | `app` | `async-correctness` | — | 0.56.0 |
 
 ---
 
@@ -3350,7 +3350,7 @@ Land as `WARN`: a justified inline `# conformance: ignore[P064] <reason>` on the
 
 ## P065 — `BatchedResultsIteratedOnLoop` {#p065}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `async-correctness` · **Autofixable:** yes · **Since:** 0.56.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.56.0
 
 > `get_batched_results(...)` iterated with a sync `for` inside an `async def`
 
@@ -3365,7 +3365,7 @@ to stop the read. `async for` reads each chunk with run_in_thread under a cancel
   `Writer._write_batched_dataframe` reads any async iterable with `async for`, which is
   how `write_batches(await client.get_batched_results(query))` reads each chunk off the
   event loop.
-- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 Inside an `async def`, the result of `await <client>.get_batched_results(...)` is
 iterated with a sync `for` — directly, or through a local name bound once from it — or
@@ -3385,6 +3385,12 @@ async for frame in batches:
 A comprehension becomes `[f async for f in batches]`.  The result is the same frames
 either way; only where they are read changes.  Handing the result to
 `write_batches(...)` is already correct and is not flagged.
+
+Not a mechanical rewrite: only a `BaseSQLClient` on a sync engine returns a result that
+supports `async for`.  An `AsyncBaseSQLClient` (an async SQLAlchemy engine) returns a
+plain sync iterator, and `async for` over it raises `TypeError`.  Check which client
+produced the result first; for an async-engine client, suppress with a reason that names
+it.
 
 Matching is exact: the iterable is the `await` itself, or a local name assigned exactly
 once in the function, from that `await`.  A result passed to a helper, stored, or

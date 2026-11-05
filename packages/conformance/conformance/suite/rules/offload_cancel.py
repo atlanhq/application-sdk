@@ -147,7 +147,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="async-correctness",
-        autofixable=True,
+        autofixable=False,
         orthogonal_gate="tests",
         since="0.56.0",
         rationale=(
@@ -180,6 +180,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "the result to ``write_batches(...)`` is already correct and is not\n"
             "flagged.\n"
             "\n"
+            "Not a mechanical rewrite: only a ``BaseSQLClient`` on a sync engine\n"
+            "returns a result that supports ``async for``.  An\n"
+            "``AsyncBaseSQLClient`` (an async SQLAlchemy engine) returns a plain\n"
+            "sync iterator, and ``async for`` over it raises ``TypeError``.  Check\n"
+            "which client produced the result first; for an async-engine client,\n"
+            "suppress with a reason that names it.\n"
+            "\n"
             "Matching is exact: the iterable is the ``await`` itself, or a local\n"
             "name assigned exactly once in the function, from that ``await``.  A\n"
             "result passed to a helper, stored, or rebound is not followed.  The\n"
@@ -193,7 +200,7 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p065",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
         ),
     ),

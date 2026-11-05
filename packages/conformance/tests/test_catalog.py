@@ -1602,11 +1602,6 @@ _SDK_ONLY_REFERENCE_EXEMPT = {
         "the rule was written for, so the SDK's BaseClient.close() is the only "
         "compliant shape to cite (FND-3778)"
     ),
-    "P065": (
-        "no reference app calls get_batched_results; the SDK's own "
-        "Writer._write_batched_dataframe, which reads that result with async for, "
-        "is the only compliant site to cite (FND-4707)"
-    ),
 }
 
 #: A positive citation: a reference-app name immediately followed by a path in
