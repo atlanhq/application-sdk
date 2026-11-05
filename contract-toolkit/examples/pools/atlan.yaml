@@ -18,6 +18,14 @@ entrypoints:
 deploy:
   execution_mode: native
   splitDeploymentEnabled: true
+  dapr:
+    objectstore: true
+    secretstore: false
+    statestore: false
+    eventstore: false
+    subscription: false
+    configurationstore: false
+    lock: false
   keda:
     enabled: true
     minReplicaCount: 1

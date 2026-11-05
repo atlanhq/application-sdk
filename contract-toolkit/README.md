@@ -236,7 +236,7 @@ The single entry point for all new native app contracts. Amend this module and d
 - Credential config: `credentialCommonFields`, `credentialAuthOptions`, `credentialConnectorType`
 - Workflow config: `uiConfig` (form steps and fields using `Widgets.*` types)
 - Pipeline: typed `pipeline` block (extract → parseQueries → popularity → lineage → publish)
-- Deployment: `deploy` (typed `DeployConfig?` — app-level `dapr` / `overrides` plus a named `pools` map; pool keys must match `@task(pool="…")` strings) — see `Deployment.pkl`
+- Deployment: `deploy` (typed `DeployConfig?` — app-level `dapr` / `overrides` plus a named `pools` map; pool keys must match `@task(pool="…")` strings) — see `Deployment.pkl`. `dapr.objectstore` defaults to `true` and must stay on: the SDK requires the deployment object store and fails at startup without it (conformance rule K029 flags `false`)
 
 All domain classes (`FieldSpec`, `AuthOption`, `UIConfig`, `UIRule`, `Entrypoint`, pipeline step classes, `Pool`, `DeployConfig`, `DaprComponents`, `KedaConfig`, `ResourceConfig`, `ErrorHandlingConfig`, `DependencyCondition`, `DAGNode`, etc.) are available directly in amending modules without additional imports. Deployment classes (`Pool`, `DeployConfig`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Deployment.pkl` and re-exported by `App.pkl`.
 
