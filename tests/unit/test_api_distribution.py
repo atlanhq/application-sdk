@@ -49,6 +49,37 @@ def test_the_api_core_dependencies_match_the_sdks_pins() -> None:
         assert sdk.get(name) == req, (name, sdk.get(name), req)
 
 
+def _python_classifiers(project: dict) -> list[str]:
+    prefix = "Programming Language :: Python :: 3."
+    return [
+        c.removeprefix("Programming Language :: Python :: ")
+        for c in project["classifiers"]
+        if c.startswith(prefix)
+    ]
+
+
+def test_the_three_packages_declare_the_python_versions_ci_tests() -> None:
+    """The SDK, api and conformance packages are released from one tree and
+    tested on one matrix, so they claim the same Python versions: that matrix.
+    They had drifted to 3.11 only (api), 3.11-3.13 (SDK) and 3.11-3.14
+    (conformance) while CI tested all three on 3.11-3.14."""
+    workflow = (ROOT / ".github/workflows/sdk-tests-reusable.yaml").read_text(
+        encoding="utf-8"
+    )
+    matrices = re.findall(r"^\s+python-version: \[([^\]]*)\]", workflow, re.MULTILINE)
+    assert len(matrices) == 1, matrices
+    tested = re.findall(r'"([^"]+)"', matrices[0])
+    assert tested, matrices[0]
+    for path in (
+        "pyproject.toml",
+        "packages/api/pyproject.toml",
+        "packages/conformance/pyproject.toml",
+    ):
+        project = _project(ROOT / path)
+        assert _python_classifiers(project) == tested, path
+        assert project["requires-python"] == f">={tested[0]}", path
+
+
 def _name(req: str) -> str:
     return re.split(r"[<>=!~;\[ ]", req, maxsplit=1)[0]
 
