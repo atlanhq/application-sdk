@@ -697,7 +697,11 @@ class ParquetFileWriter(Writer):
 
         try:
             # Phase 1: Accumulate DataFrames into temp folders
-            if inspect.isasyncgen(batched_dataframe):
+            # Any async iterable, not only an async generator: a source that
+            # offers both (get_batched_results) is read off the event loop.
+            if inspect.isasyncgen(batched_dataframe) or hasattr(
+                batched_dataframe, "__aiter__"
+            ):
                 async for dataframe in batched_dataframe:
                     if not is_empty_dataframe(dataframe):
                         await self._accumulate_dataframe(dataframe)

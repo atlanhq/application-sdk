@@ -18,12 +18,14 @@ from the fixed per-connection directory layout; use
 :class:`~application_sdk.common.incremental.state.store.RunStateDirs` instead.
 """
 
+import functools
 import os
 import shutil
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from typing_extensions import deprecated
 
@@ -52,6 +54,7 @@ from application_sdk.common.incremental.state.table_scope import (
 )
 from application_sdk.common.incremental.storage.duckdb_utils import (
     DuckDBConnectionManager,
+    interrupt_on_cancel,
 )
 from application_sdk.constants import (
     CURRENT_STATE_SUBPATH,
@@ -63,7 +66,12 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage._concurrency import _run_drained
 from application_sdk.storage.batch import download_prefix, upload_prefix
 
+if TYPE_CHECKING:
+    from duckdb import DuckDBPyConnection
+
 logger = get_logger(__name__)
+
+_T = TypeVar("_T")
 
 
 @dataclass
@@ -387,6 +395,27 @@ def prepare_current_state_directory(current_state_dir: Path) -> None:
     _reset_directory(current_state_dir)
 
 
+def _interruptible(
+    func: Callable[..., _T], conn: "DuckDBPyConnection"
+) -> Callable[..., _T]:
+    """*func*, registering ``conn.interrupt`` as its offload's driver cancel.
+
+    The snapshot's connection is opened on the event loop and shared by every
+    step, so no step's own manager can register it. Without this a step
+    abandoned by a cancel keeps scanning, and ``_run_drained`` gives up on it
+    after the no-progress allowance — after which the ``with`` block closes the
+    connection and deletes its directory under the still-running query.
+    ``functools.wraps`` keeps *func*'s name as the offload's site label.
+    """
+
+    @functools.wraps(func)
+    def _call(*args: Any, **kwargs: Any) -> _T:
+        with interrupt_on_cancel(conn):
+            return func(*args, **kwargs)
+
+    return _call
+
+
 def _reset_directory(directory: Path) -> None:
     """Remove *directory* if present and recreate it empty. Blocking."""
     if directory.exists():
@@ -487,7 +516,11 @@ async def create_current_state_snapshot(
             # and each hop is awaited before the next starts, so it is only
             # ever touched by one thread at a time.
             table_scope = await _run_drained(
-                run_in_thread(get_current_table_scope, transformed_dir, conn=conn)
+                run_in_thread(
+                    _interruptible(get_current_table_scope, conn),
+                    transformed_dir,
+                    conn=conn,
+                )
             )
             if not table_scope or get_scope_length(table_scope) == 0:
                 raise FileNotFoundError(
@@ -528,7 +561,7 @@ async def create_current_state_snapshot(
             tables_with_columns = (
                 await _run_drained(
                     run_in_thread(
-                        get_table_qns_from_columns,
+                        _interruptible(get_table_qns_from_columns, conn),
                         current_state_dir.joinpath(EntityType.COLUMN.value),
                         conn=conn,
                     )
@@ -568,7 +601,7 @@ async def create_current_state_snapshot(
 
                 diff_result = await _run_drained(
                     run_in_thread(
-                        create_incremental_diff,
+                        _interruptible(create_incremental_diff, conn),
                         transformed_dir=transformed_dir,
                         incremental_diff_dir=diff_dir,
                         table_scope=table_scope,

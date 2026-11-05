@@ -31,6 +31,9 @@ from typing import Any, Protocol
 
 from application_sdk._runtime.offload import (
     CancelHandle,
+    current_cancel_handle,
+    is_cancelled,
+    raise_if_cancelled,
     run_best_effort,
     run_fault_isolated,
     run_in_thread,
@@ -75,7 +78,10 @@ __all__ = [
     "ProgressWatchdogMode",
     "TemporalHeartbeatController",
     "auto_heartbeat_loop",
+    "current_cancel_handle",
     "current_progress_tracker",
+    "is_cancelled",
+    "raise_if_cancelled",
     "stop_heartbeat_task",
     "declared_hold_active",
     "record_no_progress_gap",

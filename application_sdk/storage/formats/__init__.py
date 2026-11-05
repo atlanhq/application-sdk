@@ -611,7 +611,11 @@ class Writer(ABC):
             If the DataFrame is empty, the method returns without writing.
         """
         try:
-            if inspect.isasyncgen(batched_dataframe):
+            # Any async iterable, not only an async generator: a source that
+            # offers both (get_batched_results) is read off the event loop.
+            if inspect.isasyncgen(batched_dataframe) or hasattr(
+                batched_dataframe, "__aiter__"
+            ):
                 async for dataframe in batched_dataframe:
                     if not is_empty_dataframe(dataframe):
                         await self._write_dataframe(dataframe)

@@ -234,6 +234,119 @@ def _invalidate_if_cancelled(connection: "Connection", handle: CancelHandle) -> 
         connection.invalidate()
 
 
+class _ChunksHoldingConnection(Iterator["pd.DataFrame"]):
+    """*frames*, keeping *connection* checked out until they are done.
+
+    A chunked ``read_sql_query`` reads each chunk lazily from the cursor, so the
+    connection must stay open until the last one. Closing it as soon as the
+    iterator was built (what a ``with`` around the call did) handed it back to
+    the pool while its cursor was still being read: a server-side cursor could
+    then share a connection with its next borrower, and a buffered one had
+    already loaded the whole result, so ``chunksize`` saved nothing.
+
+    Released on exhaustion, on a failed read, or on :meth:`close` — including a
+    close before the first chunk, which a generator's ``finally`` would skip.
+    Dropped instead of pooled when the read that closes it was cancelled.
+    """
+
+    def __init__(
+        self, connection: "Connection", frames: Iterator["pd.DataFrame"]
+    ) -> None:
+        self._connection = connection
+        self._frames = frames
+        self._closed = False
+
+    def __next__(self) -> "pd.DataFrame":
+        if self._closed:
+            raise StopIteration
+        try:
+            return next(self._frames)
+        except BaseException:
+            # StopIteration included: the last chunk is read, release now.
+            self.close()
+            raise
+
+    def close(self) -> None:
+        """Stop reading and release the connection; idempotent."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            close_frames = getattr(self._frames, "close", None)
+            if close_frames is not None:
+                close_frames()
+        finally:
+            read = _ACTIVE_READ.get()
+            if read is not None:
+                _invalidate_if_cancelled(self._connection, read.handle)
+            self._connection.close()
+
+
+#: What :meth:`_BatchedResults._next_frame` returns once the frames run out.
+#: ``StopIteration`` cannot cross a future, so the end travels as a value.
+_NO_MORE_FRAMES = object()
+
+
+class _BatchedResults(Iterator["pd.DataFrame"], AsyncIterator["pd.DataFrame"]):
+    """``get_batched_results``' return: the same frames, iterable either way.
+
+    ``for frame in results`` behaves exactly as the plain iterator did, which
+    is what every existing caller relies on. ``async for frame in results``
+    fetches each chunk with ``run_in_thread`` instead, so the cursor read and
+    the DataFrame build stay off the event loop. A cancel stops any further
+    chunk being read and closes (and drops) the connection once the fetch in
+    flight returns; that fetch itself is not interrupted, since the cursor's
+    cancel is registered only at execute. The SDK's writers take the async
+    path whenever it is offered.
+    """
+
+    def __init__(self, frames: Iterator["pd.DataFrame"], read: _CancellableRead):
+        self._frames = frames
+        self._read = read
+        # Held by every fetch and by close: a close handed to the pool after a
+        # cancel waits for the abandoned fetch instead of closing a generator
+        # that is still running.
+        self._in_use = threading.Lock()
+
+    def __iter__(self) -> "_BatchedResults":
+        return self
+
+    def __next__(self) -> "pd.DataFrame":
+        with self._in_use:
+            return next(self._frames)
+
+    def __aiter__(self) -> "_BatchedResults":
+        return self
+
+    def _next_frame(self) -> object:
+        with self._in_use, _reading(self._read):
+            return next(self._frames, _NO_MORE_FRAMES)
+
+    def close(self) -> None:
+        """Stop iterating and release the connection; idempotent."""
+        close = getattr(self._frames, "close", None)
+        if close is None:
+            return
+        with self._in_use, _reading(self._read):
+            close()
+
+    async def __anext__(self) -> "pd.DataFrame":
+        try:
+            frame = await run_in_thread(self._read.handle.bind(self._next_frame))
+        except BaseException:
+            # Cancelled or failed: release the connection once the fetch the
+            # thread may still be running returns.
+            submit_in_thread(self.close)
+            raise
+        if frame is _NO_MORE_FRAMES:
+            raise StopAsyncIteration
+        return cast("pd.DataFrame", frame)
+
+    async def aclose(self) -> None:
+        """Async counterpart of :meth:`close`, run off the event loop."""
+        await run_in_thread(self.close)
+
+
 #: The connect-timeout keyword of each driver that has no connect timeout by
 #: default, so a black-holed host holds the connect (and its worker thread)
 #: until the OS gives up. Drivers that already bound their connect (pymysql,
@@ -912,13 +1025,40 @@ class BaseSQLClient(ClientInterface):
         if not self.engine:
             raise EngineNotInitializedError()
 
-        with self.engine.connect() as conn:
-            try:
-                return self._execute_pandas_query(conn, query, chunksize)
-            finally:
-                read = _ACTIVE_READ.get()
-                if read is not None:
-                    _invalidate_if_cancelled(conn, read.handle)
+        if chunksize is None:
+            with self.engine.connect() as conn:
+                try:
+                    return self._execute_pandas_query(conn, query, chunksize)
+                finally:
+                    read = _ACTIVE_READ.get()
+                    if read is not None:
+                        _invalidate_if_cancelled(conn, read.handle)
+
+        # Chunked: the frames are read lazily from the cursor, so the
+        # connection stays checked out until they are done, not until this
+        # returns.
+        conn = self.engine.connect()
+        try:
+            frames = self._execute_pandas_query(conn, query, chunksize)
+        except BaseException:
+            read = _ACTIVE_READ.get()
+            if read is not None:
+                _invalidate_if_cancelled(conn, read.handle)
+            conn.close()
+            raise
+        read = _ACTIVE_READ.get()
+        if read is not None and read.handle.requested:
+            # The caller was cancelled during the execute and will never read
+            # or close the result: drop the connection now rather than leave it
+            # checked out until garbage collection pools it again.
+            _invalidate_if_cancelled(conn, read.handle)
+            conn.close()
+            raise asyncio.CancelledError
+        if not isinstance(frames, Iterator):
+            # An override that materialised the result: nothing left to read.
+            conn.close()
+            return frames
+        return _ChunksHoldingConnection(conn, frames)
 
     async def _execute_async_read_operation(
         self, query: str, chunksize: int | None
@@ -976,6 +1116,14 @@ class BaseSQLClient(ClientInterface):
     ) -> AsyncIterator["pd.DataFrame"] | Iterator["pd.DataFrame"]:  # type: ignore
         """Get query results as batched pandas DataFrames asynchronously.
 
+        The result is iterable both ways. ``async for frame in results`` reads
+        each chunk off the event loop, and a cancel stops further reads and
+        releases the connection once the chunk in flight returns; prefer it.
+        ``for frame in results`` still works as it always has, but every chunk
+        is then read on the iterating thread — the event loop, from async code.
+        The query's connection stays checked out until the chunks are read or
+        the result is closed (``close()`` / ``await aclose()``).
+
         Returns:
             AsyncIterator["pd.DataFrame"]: Async iterator yielding batches of query results.
 
@@ -986,7 +1134,18 @@ class BaseSQLClient(ClientInterface):
         try:
             # We cast to Iterator because passing chunk_size guarantees an Iterator return
             result = await self._execute_async_read_operation(query, self.chunk_size)
-            return cast(Iterator["pd.DataFrame"], result)
+            frames = cast(Iterator["pd.DataFrame"], result)
+            from sqlalchemy.ext.asyncio import (  # noqa: PLC0415 — optional dep: sqlalchemy
+                AsyncEngine,
+            )
+
+            if isinstance(self.engine, AsyncEngine) or not isinstance(frames, Iterator):
+                # An async engine's frames come off a greenlet-bound session;
+                # pulling them on a worker thread is not supported there.
+                return frames
+            return _BatchedResults(
+                frames, _CancellableRead(CancelHandle(), self.cancel_cursor)
+            )
         except AppError:
             raise
         # conformance: ignore[E004] exception re-raised immediately as typed SqlPandasResultError; cause chain preserved via `from e`
