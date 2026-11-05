@@ -180,12 +180,34 @@ Dapr component names are read at module-import time (not at runtime) because the
 |----------|---------|-------------|
 | `STATE_STORE_NAME` | `statestore` | Dapr state store component name. |
 | `SECRET_STORE_NAME` | `secretstore` | Dapr secret store component name. |
-| `DEPLOYMENT_OBJECT_STORE_NAME` | `objectstore` | Dapr object store for workflow outputs and artifacts. |
+| `DEPLOYMENT_OBJECT_STORE_NAME` | `objectstore` | Dapr object store for workflow outputs and artifacts. **Required** — see [The deployment object store is required](#the-deployment-object-store-is-required). |
 | `UPSTREAM_OBJECT_STORE_NAME` | `atlan-objectstore` | Dapr object store for uploading data to the Atlan platform (SDR deployments only). If the named component is absent, `upstream_storage` is `None` and `App.upload()`/`App.download()` fall back to the deployment store. If the name *equals* `DEPLOYMENT_OBJECT_STORE_NAME` (in-cluster charts point both at one component), `upstream_storage` is the deployment store itself — one write, no self-copy — and `ENABLE_ATLAN_UPLOAD` logs a `WARNING` because there is no boundary to hand off across. Ask `context.single_store`, not `upstream_storage is None`, for the topology. See [ADR-0014](adr/0014-two-store-storage-architecture.md). |
 | `EVENT_STORE_NAME` | `eventstore` | Dapr pub/sub component name. |
 | `ATLAN_EVENT_INGRESS_DIRECT_FALLBACK` | `true` | When the Dapr `EVENT_STORE_NAME` binding fails in a way that proves the event got no response (connection, TLS or DNS failure, missing binding), publish the lifecycle event (`worker_start`, `token_refresh`, workflow/activity start/end) directly to Event Ingress over HTTPS from the app process, reusing the same payload and bearer token and the `url` of the `bindings.http` component on disk. Errors that may already have been delivered (an upstream HTTP status) are not re-sent over direct HTTPS; the `publish_event` activity's Temporal retry re-sends `workflow_start` / `workflow_end` through Dapr, so those two are at-least-once. `activity_start` / `activity_end` and `worker_start` / `token_refresh` are published inline and not retried: after such an error they are logged and dropped, so they are at-most-once. Every event carries `metadata.event_id`, the same on every retry of one workflow event, so consumers can dedupe. Backs off 60 s after a failed direct publish. Logged at WARNING as `FALLBACK ACTIVE` / `Published event via direct HTTPS fallback`, `FALLBACK SKIPPED` / `FALLBACK SUSPENDED` when not attempted, `FALLBACK FAILED` / `FALLBACK UNAVAILABLE` at ERROR. Set `false` to disable. |
 | `DEPLOYMENT_SECRET_STORE_NAME` | `deployment-secret-store` | Dapr secret store holding deployment-scoped secrets (auth credentials, etc.). |
 | `DAPR_MAX_GRPC_MESSAGE_LENGTH` | `104857600` (100 MB) | Maximum gRPC message size in bytes for Dapr client calls. Increase for apps that move large payloads through Dapr state or bindings. |
+
+### The deployment object store is required
+
+Every app reads and writes artifacts, credential files and observability exports
+through the deployment object store, so worker, handler and combined startup build it
+unconditionally. When no Dapr component named `DEPLOYMENT_OBJECT_STORE_NAME` exists in
+`DAPR_COMPONENTS_PATH`, startup logs an `ERROR` and fails with
+`DeploymentObjectStoreMissingError` (a `StorageBindingNotFoundError`, so existing
+`except StorageBindingNotFoundError:` / `except StorageConfigError:` handlers still
+catch it; audience `APP_OWNER`). The component-diagnostics pass at startup also logs
+the missing object store at `ERROR`, never as "disabled by config (expected)".
+
+The usual cause is the app's contract: the atlan-app chart omits the component when
+`atlan.yaml` carries `deploy.dapr.objectstore: false`. Set it to `true`
+(`dapr { objectstore = true }` in `contract/app.pkl`), regenerate and redeploy.
+contract-toolkit defaults it to `true`, and conformance rule
+[K029](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/contract-toolkit.md#k029) flags a contract
+or `atlan.yaml` that sets it to `false`.
+
+The error does not depend on `ATLAN_ENABLE_OBJECTSTORE`: the chart sets that variable
+on the env-seeder init container, not the app container, so the app usually sees it
+unset. When it is visible and `false`, the error message says so.
 
 ### Dapr Sidecar Readiness / Cold-Start Retry
 

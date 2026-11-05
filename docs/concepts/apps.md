@@ -330,6 +330,15 @@ Both transfer tasks validate the bytes they move. An upload confirms the local f
 
 Both are called automatically by the default `on_complete()` implementation. Do not call them directly from `run()` — the cleanup contract is tied to workflow completion, not mid-run state.
 
+### The deployment object store is required
+
+`_create_infrastructure` builds the deployment store (binding `objectstore`, or
+`DEPLOYMENT_OBJECT_STORE_NAME`) in every Dapr run mode. If the component is absent it
+raises `DeploymentObjectStoreMissingError`, a `StorageBindingNotFoundError` subclass
+with audience `APP_OWNER` whose message names the fix: set `deploy.dapr.objectstore`
+to `true` in the app contract and redeploy. See
+[Configuration](../configuration.md#the-deployment-object-store-is-required).
+
 ### SDR: Object-Store Access Preflight
 
 When an app runs in **Self-Deployed Runtime (SDR) mode** (`ENABLE_ATLAN_UPLOAD=true`), the SDK

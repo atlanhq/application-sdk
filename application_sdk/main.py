@@ -153,6 +153,7 @@ if TYPE_CHECKING:
     from application_sdk.infrastructure._dapr.http import AsyncDaprClient
     from application_sdk.infrastructure.context import InfrastructureContext
     from application_sdk.infrastructure.secrets import SecretStore
+    from application_sdk.storage.errors import DeploymentObjectStoreMissingError
 
 
 logger = get_logger(__name__)
@@ -468,6 +469,11 @@ async def _log_dapr_components(
     * missing    + declared disabled        → INFO ("disabled by config")
     * missing    + declared unset           → INFO ("legacy/unknown intent")
 
+    The deployment object store is the exception: it is required, so a
+    missing one is an ERROR whatever ``ATLAN_ENABLE_OBJECTSTORE`` says, and
+    ``_create_infrastructure`` then fails with
+    ``DeploymentObjectStoreMissingError``.
+
     Every binding always produces a log line so operators can see, with a
     reason, how each one was handled. This is best-effort: any failure to
     query Dapr metadata is logged as a WARNING and never blocks startup.
@@ -539,7 +545,20 @@ async def _log_dapr_components(
         raw, declared = _read_enable_tri_state(enable_var)
         is_registered = comp_name in registered
 
-        if is_registered and declared is not False:
+        if comp_name == DEPLOYMENT_OBJECT_STORE_NAME and not is_registered:
+            # Required whatever the flag says. The chart sets ATLAN_ENABLE_* only
+            # on the env-seeder init container, so the app container usually
+            # sees it unset; an absent object store is never "expected".
+            logger.error(
+                "Dapr binding %s (role=%s) is not registered in sidecar (%s=%s) — "
+                "the deployment object store is required and startup will fail; "
+                "set deploy.dapr.objectstore to true in the app contract",
+                comp_name,
+                role,
+                enable_var,
+                raw if raw is not None else "<unset>",
+            )
+        elif is_registered and declared is not False:
             # conformance: ignore[L006] one-time startup validation over the fixed 4-element `expected` tuple, not a hot loop
             logger.info(
                 "Dapr binding %s (role=%s) accepted: registered in sidecar (%s=%s)",
@@ -660,6 +679,41 @@ async def _fetch_binding_secrets(
     return secrets
 
 
+def _deployment_object_store_missing(
+    name: str, components_dir: Path, cause: Exception
+) -> DeploymentObjectStoreMissingError:
+    """Log and build the startup error for an absent deployment object store.
+
+    Keyed on the missing component, never on ``ATLAN_ENABLE_OBJECTSTORE``: the
+    chart sets that flag only on the env-seeder init container, so the app
+    container usually sees it unset.  When it is visible and false, the
+    message says so, because then the contract itself disabled the store.
+    """
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: lazy access to env-var-derived constants
+        _read_enable_tri_state,
+    )
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — cold path: startup failure only
+        DeploymentObjectStoreMissingError,
+    )
+
+    _, declared = _read_enable_tri_state("ATLAN_ENABLE_OBJECTSTORE")
+    flag_note = (
+        " ATLAN_ENABLE_OBJECTSTORE=false is set in this container: the app's "
+        "contract disables the object store."
+        if declared is False
+        else ""
+    )
+    message = (
+        f"No Dapr component named '{name}' found in {components_dir}. The "
+        "deployment object store is required; the atlan-app chart omits it "
+        "when the app's contract sets deploy.dapr.objectstore to false. Set "
+        "deploy.dapr.objectstore to true (dapr {{ objectstore = true }} in "
+        f"contract/app.pkl), regenerate atlan.yaml and redeploy.{flag_note}"
+    )
+    logger.error("Deployment object store missing at startup: %s", message)
+    return DeploymentObjectStoreMissingError(message, binding_name=name, cause=cause)
+
+
 async def _create_infrastructure(
     credential_stores: Mapping[str, SecretStore] | None = None,
 ) -> InfrastructureContext:
@@ -677,7 +731,10 @@ async def _create_infrastructure(
         Configured InfrastructureContext.
 
     Raises:
-        RuntimeError: If DAPR_HTTP_PORT is not set (no Dapr sidecar).
+        DaprNotDetectedError: If DAPR_HTTP_PORT is not set (no Dapr sidecar).
+        DeploymentObjectStoreMissingError: If the deployment object-store
+            component is absent — the store is required (set
+            ``deploy.dapr.objectstore`` to true in the app contract).
     """
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         InfrastructureContext,
@@ -711,6 +768,9 @@ async def _create_infrastructure(
         from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: private helper used only inside _create_infrastructure
             _create_store_from_binding_optional_with_put_attrs,
         )
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — cold path: storage init only when Dapr is present
+            StorageBindingNotFoundError,
+        )
 
         await wait_for_dapr_sidecar()
         dapr_client = AsyncDaprClient()
@@ -735,13 +795,18 @@ async def _create_infrastructure(
             components_dir=components_dir,
         )
         set_fetched_binding_secrets(DEPLOYMENT_OBJECT_STORE_NAME, deployment_secrets)
-        deployment_store, deployment_put_attrs = (
-            create_store_from_binding_with_put_attrs(
-                DEPLOYMENT_OBJECT_STORE_NAME,
-                components_dir=components_dir,
-                secrets=deployment_secrets,
+        try:
+            deployment_store, deployment_put_attrs = (
+                create_store_from_binding_with_put_attrs(
+                    DEPLOYMENT_OBJECT_STORE_NAME,
+                    components_dir=components_dir,
+                    secrets=deployment_secrets,
+                )
             )
-        )
+        except StorageBindingNotFoundError as exc:
+            raise _deployment_object_store_missing(
+                DEPLOYMENT_OBJECT_STORE_NAME, components_dir, exc
+            ) from exc
 
         # The only place the two component *names* are compared: identity cannot
         # be tested before the second object exists, so this is the decision
