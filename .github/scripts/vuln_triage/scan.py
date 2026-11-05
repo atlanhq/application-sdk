@@ -90,13 +90,13 @@ def load_findings(scan_dir: Path) -> dict[str, Finding]:
     return findings
 
 
-def load_lock(path: Path) -> dict[str, dict]:
+def load_lock(path: Path) -> dict[str, dict[str, str]]:
     """uv.lock packages by normalised name: {"version": ..., "upload_time": ...}.
 
     The upload time is the sdist's (or the first wheel's) — what the cooldown check reads.
     """
     data = tomllib.loads(path.read_text())
-    out: dict[str, dict] = {}
+    out: dict[str, dict[str, str]] = {}
     for pkg in data.get("package", []):
         upload = (pkg.get("sdist") or {}).get("upload-time", "")
         if not upload and pkg.get("wheels"):

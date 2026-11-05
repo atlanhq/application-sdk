@@ -16,7 +16,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import vuln_triage.__main__ as cli  # noqa: E402
 from vuln_triage import allowlist, bump, classify, report, scan, selftest  # noqa: E402
 from vuln_triage.effects import newest_successful_run, parse_open_pr  # noqa: E402
-from vuln_triage.run import Context, Deps, _listing, _slug, _uv_cause, run  # noqa: E402
+from vuln_triage.run import (  # noqa: E402
+    CONFORMANCE_LOCK,
+    Context,
+    Deps,
+    _listing,
+    _slug,
+    _uv_cause,
+    run,
+)
 
 NOW = datetime(2026, 9, 28, 12, 0, tzinfo=UTC)
 
@@ -408,6 +416,48 @@ def test_verify_rejects_unmoved_target_new_host_and_lost_revision():
     ]
 
 
+def _follow(old, new, targets=None, new_text=LOCK):
+    return bump.verify_follower(
+        label=CONFORMANCE_LOCK,
+        old_lock=old,
+        new_lock=new,
+        old_text=LOCK,
+        new_text=new_text,
+        targets=targets or {"requests": "2.32.4"},
+        now=NOW,
+        cooldown_days=7,
+    )
+
+
+def test_verify_follower_skips_a_target_outside_its_closure():
+    assert _follow({}, {}) == ([], [])
+
+
+def test_verify_follower_accepts_a_target_already_at_the_fix():
+    # Unlike the root lock, "did not move" is fine when it was already fixed.
+    assert _follow(_lock("2.32.4"), _lock("2.32.4")) == ([], [])
+
+
+def test_verify_follower_flags_a_fresh_release_it_moved_to():
+    errors, fresh = _follow(_lock("2.32.3"), _lock("2.32.4", "2026-09-26T00:00:00Z"))
+    assert errors == [] and fresh and CONFORMANCE_LOCK in fresh[0]
+
+
+def test_verify_follower_rejects_below_fix_dropped_and_new_host():
+    new_text = LOCK.replace("pypi.org/simple", "factory.endorlabs.com/x")
+    errors, _ = _follow(
+        _lock("2.32.3") | {"other": {"version": "1"}},
+        _lock("2.32.3"),
+        targets={"requests": "2.32.4", "other": "2"},
+        new_text=new_text,
+    )
+    assert errors == [
+        f"{CONFORMANCE_LOCK} now points at new host(s): factory.endorlabs.com",
+        f"requests resolved to 2.32.3 in {CONFORMANCE_LOCK}, below the fix 2.32.4",
+        f"other disappeared from {CONFORMANCE_LOCK}",
+    ]
+
+
 # --------------------------------------------------------------------------- report
 
 
@@ -465,6 +515,7 @@ class FakeRunner:
         remote=(),
         uv_version="2.32.4",
         uv_rc=0,
+        follower_rc=0,
         close_rc=0,
         upgrade_plan="Update requests v2.32.3 -> v2.32.4\n",
     ):
@@ -473,6 +524,8 @@ class FakeRunner:
             open_prs = {b: ["vuln-auto-merge"] for b in open_prs}
         self.root, self.open_prs, self.remote = root, open_prs, set(remote)
         self.uv_version, self.uv_rc = uv_version, uv_rc
+        self.follower_rc = follower_rc
+        self.lock_cwds: list[Path] = []
         self.close_rc, self.upgrade_plan = close_rc, upgrade_plan
         self.calls: list[list[str]] = []
         self.pristine: dict[str, str] = {}
@@ -503,9 +556,11 @@ class FakeRunner:
                 cmd, 0, stdout="", stderr="Resolved 3 packages\n" + self.upgrade_plan
             )
         elif cmd[:2] == ["uv", "lock"]:
-            rc = self.uv_rc
+            cwd = Path(str(kw["cwd"])) if "cwd" in kw else self.root
+            self.lock_cwds.append(cwd)
+            rc = self.follower_rc if cwd != self.root else self.uv_rc
             if rc == 0:
-                p = self.root / "uv.lock"
+                p = cwd / "uv.lock"
                 p.write_text(
                     p.read_text().replace(
                         'version = "2.32.3"', f'version = "{self.uv_version}"'
@@ -534,6 +589,8 @@ def repo(tmp_path):
         )
     )
     (root / "uv.lock").write_text(LOCK)
+    (root / "packages/conformance").mkdir(parents=True)
+    (root / CONFORMANCE_LOCK).write_text(LOCK)
     (root / "pyproject.toml").write_text(PYPROJECT)
     write_scan(
         root / "scan",
@@ -556,7 +613,12 @@ def _run(repo, runner, cves=("CVE-1", "CVE-2", "CVE-3"), dry=False):
     comments = []
     runner.pristine = {
         n: (repo / n).read_text()
-        for n in ("uv.lock", "pyproject.toml", ".security/base-allowlist.json")
+        for n in (
+            "uv.lock",
+            CONFORMANCE_LOCK,
+            "pyproject.toml",
+            ".security/base-allowlist.json",
+        )
     }
     ctx = Context(
         repo="o/r",
@@ -582,7 +644,7 @@ def test_run_opens_allowlist_and_bump_prs_as_the_two_gate_shapes(repo):
     out, comments = _run(repo, r)
     adds = r.cmds("git", "add")
     assert adds[0][3:] == [".security/base-allowlist.json"]
-    assert adds[1][3:] == ["pyproject.toml", "uv.lock"]
+    assert adds[1][3:] == ["pyproject.toml", "uv.lock", CONFORMANCE_LOCK]
     branches = [c[c.index("--head") + 1] for c in r.cmds("gh", "pr", "create")]
     assert branches[0].startswith("chore/allowlist-") and branches[1].startswith(
         "fix/bump-"
@@ -733,7 +795,12 @@ def test_fixture_scan_without_an_upgrade_skips_case1():
 def _run_selftest(repo, runner, dry=False):
     runner.pristine = {
         n: (repo / n).read_text()
-        for n in ("uv.lock", "pyproject.toml", ".security/base-allowlist.json")
+        for n in (
+            "uv.lock",
+            CONFORMANCE_LOCK,
+            "pyproject.toml",
+            ".security/base-allowlist.json",
+        )
     }
     comments = []
     ctx = Context(
@@ -935,3 +1002,19 @@ def test_run_medium_ticket_is_tracked_only(repo):
     out, comments = _run(repo, r, cves=("CVE-M",))
     assert not r.cmds("gh", "pr", "create") and not out.allowlist_entries
     assert "tracked" in comments[0][1]
+
+
+def test_run_relocks_the_conformance_lock_in_its_own_directory(repo):
+    r = FakeRunner(repo)
+    out, _ = _run(repo, r)
+    assert r.lock_cwds[-1] == repo / "packages/conformance"
+    assert out.bump_pr.startswith("https://gh/pr/fix/bump-")
+
+
+def test_run_failed_conformance_relock_opens_no_bump_pr(repo):
+    r = FakeRunner(repo, follower_rc=1)
+    out, _ = _run(repo, r)
+    assert not out.bump_pr and "packages/conformance could not resolve" in (
+        out.bump_problem
+    )
+    assert len(r.cmds("gh", "pr", "create")) == 1  # the allowlist PR only
