@@ -99,6 +99,13 @@ class SnowflakeClient(BaseSQLClient):
 2. `cancel_cursor(dbapi_cursor)` is called on the `sdk-cancel-` pool with the DBAPI cursor the statement is running on. The cursor is registered by a SQLAlchemy `before_cursor_execute` listener the client attaches to its engine, from inside the worker thread.
 3. Once the driver call returns, the connection is **invalidated** instead of being returned to the pool, so a pool with `pool_pre_ping` or a connect listener never re-validates a connection left mid-statement.
 
+**`get_batched_results` (chunked) holds its connection while the chunks are read.** The connection stays checked out until the chunks are exhausted, a read fails, or the result is closed — including a close before the first chunk — so a batched read uses a pool slot for its whole iteration, as `run_query` does. Read each result before starting the next: with the default `QueuePool` (5 + 10 overflow), more than 15 unread results at once wait on `pool_timeout`.
+
+- `for frame in results` behaves as before.
+- `async for frame in results` reads each chunk with `run_in_thread`, off the event loop. A cancel stops further reads and drops the connection once the fetch in flight returns; that fetch is not interrupted.
+- The SDK's writers take the async path, so `write_batches(await client.get_batched_results(q))` reads off the loop with no app change. A write that fails or is cancelled closes the result, so the connection is not held until garbage collection.
+- A result from an `AsyncEngine` is returned unchanged.
+
 DBAPI has no standard cancel, so `cancel_cursor` is a no-op by default and the statement runs to completion on its thread. Override it with your driver's thread-safe cancel:
 
 ```python
@@ -109,7 +116,7 @@ class MyClient(BaseSQLClient):
 
 The override runs concurrently with the blocked driver call. A failure is logged at WARNING. Never stop or suspend a warehouse from it.
 
-Clients that override these read paths (or call a driver directly with `run_in_thread`) get none of this automatically; pass your own `CancelHandle` and `set()` the driver's cancel from inside the thread. `AsyncBaseSQLClient` reads run on the event loop, not a worker thread, so they are cancelled by the async driver directly.
+Clients that override these read paths (or call a driver directly with `run_in_thread`) get none of this automatically: `set()` the driver's cancel on `current_cancel_handle()` from inside the thread (see [Tasks](tasks.md#cancelling-a-blocking-call-at-the-driver)). `AsyncBaseSQLClient` reads run on the event loop, not a worker thread, so they are cancelled by the async driver directly.
 
 ## Base Client (`base.py`)
 

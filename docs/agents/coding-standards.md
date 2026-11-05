@@ -197,19 +197,41 @@ Breaking a contract silently corrupts in-flight Temporal workflows.
 
 ## Blocking Operations
 
-In `@task` methods, wrap blocking calls with `self.run_in_thread()`:
+Use an async-native library first (`httpx` not `requests`, `asyncpg` not `psycopg2`,
+`aioboto3` not `boto3`), then an SDK async helper (`self.context.storage`,
+`self.context.state`). `self.run_in_thread()` is the last resort, for a blocking call
+with no async alternative. Never call blocking code directly on the loop:
 
 ```python
 # Wrong — blocks event loop, kills heartbeats
 result = requests.get(url)
 
-# Right
-result = await self.run_in_thread(requests.get, url)
+# Right — async-native
+async with httpx.AsyncClient(timeout=30) as client:
+    result = await client.get(url)
+
+# Last resort — no async driver exists; the call has its own timeout
+rows = await self.run_in_thread(legacy_client.fetch, query, timeout=30)
 ```
 
+Python cannot stop a thread from outside. When the task is cancelled, the awaiting
+coroutine returns but the thread runs on, holding its memory, connection and pool
+slot, while the worker starts its next activity. So:
+
+- Give the blocking call its own driver-level timeout (see below).
+- If the driver can cancel the call from another thread, register its cancel on
+  `current_cancel_handle()` from inside the thread (or bind a `CancelHandle`), so a
+  cancel stops the call itself. See
+  [Tasks → Cancelling a blocking call at the driver](../concepts/tasks.md#cancelling-a-blocking-call-at-the-driver).
+- In blocking work that loops (batches, pages), check `self.is_cancelled()` between
+  steps and return when it is `True`, or call `raise_if_cancelled()`. Code with no
+  `self` imports both from `application_sdk.execution.heartbeat`.
+
 Give the blocking call its own driver-level timeout (connect, socket, statement). An
-`asyncio.wait_for` / `asyncio.timeout` around `run_in_thread` frees only the caller.
-The thread keeps its pool slot until the driver returns, and is reported as
+`asyncio.wait_for` / `asyncio.timeout` around `run_in_thread` cancels the call the
+same way a Temporal cancel does: it fires any registered driver cancel and makes
+`is_cancelled()` true inside the thread. A thread that neither registered a cancel
+nor checks keeps its pool slot until the driver returns, and is reported as
 *stranded* (a WARNING plus the `offload.stranded_threads` gauge, per app).
 
 When `ATLAN_OFFLOAD_MAX_THREADS_PER_APP` is set, an app with that many calls in flight

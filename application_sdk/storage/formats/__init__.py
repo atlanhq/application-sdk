@@ -59,6 +59,33 @@ class WriterResult(TaskStatistics):
 
 logger = get_logger(__name__)
 
+
+async def _close_batch_source(source: object) -> None:
+    """Release a batch source a write loop stopped reading early.
+
+    A loop that leaves on a failed or cancelled write never exhausts its source,
+    so a source that holds a resource until then (``get_batched_results`` keeps
+    its SQL connection checked out) would keep it until garbage collection.
+    Closes with ``aclose`` when the source has one, else ``close``. A failing
+    close is logged and swallowed, so it never replaces the write's own error.
+    """
+    try:
+        aclose = getattr(source, "aclose", None)
+        if aclose is not None:
+            await aclose()
+            return
+        close = getattr(source, "close", None)
+        if close is not None:
+            close()
+    # conformance: ignore[E004] cleanup on a path that is already raising; the write's own error propagates
+    except Exception as exc:
+        logger.warning(
+            "Could not close the batch source after a failed write: %s",
+            type(exc).__name__,
+            exc_info=True,
+        )
+
+
 #: Directory holding every writer's private staging tree. Created as a *sibling*
 #: of the writer's output directory, never inside it — see
 #: :meth:`Writer._ensure_staging_root`.
@@ -611,18 +638,26 @@ class Writer(ABC):
             If the DataFrame is empty, the method returns without writing.
         """
         try:
-            if inspect.isasyncgen(batched_dataframe):
-                async for dataframe in batched_dataframe:
-                    if not is_empty_dataframe(dataframe):
-                        await self._write_dataframe(dataframe)
-            else:
-                # Cast to Generator since we've confirmed it's not an AsyncGenerator
-                sync_generator = cast(
-                    Generator["pd.DataFrame", None, None], batched_dataframe
-                )
-                for dataframe in sync_generator:
-                    if not is_empty_dataframe(dataframe):
-                        await self._write_dataframe(dataframe)
+            try:
+                # Any async iterable, not only an async generator: a source that
+                # offers both (get_batched_results) is read off the event loop.
+                if inspect.isasyncgen(batched_dataframe) or hasattr(
+                    batched_dataframe, "__aiter__"
+                ):
+                    async for dataframe in batched_dataframe:
+                        if not is_empty_dataframe(dataframe):
+                            await self._write_dataframe(dataframe)
+                else:
+                    # Cast to Generator since we've confirmed it's not an AsyncGenerator
+                    sync_generator = cast(
+                        Generator["pd.DataFrame", None, None], batched_dataframe
+                    )
+                    for dataframe in sync_generator:
+                        if not is_empty_dataframe(dataframe):
+                            await self._write_dataframe(dataframe)
+            except BaseException:
+                await _close_batch_source(batched_dataframe)
+                raise
         # conformance: ignore[E004] re-raises as typed FormatWriteError; no information is discarded
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
