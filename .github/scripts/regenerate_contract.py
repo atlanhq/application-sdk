@@ -304,9 +304,8 @@ def main(argv: list[str] | None = None) -> int:
     # every failure path below simply leaves the committed artifacts in place —
     # no clean-then-restore, and a committed root atlan.yaml/app.yaml this
     # contract does not emit is never left deleted (swap_outputs only ever
-    # *copies* root files it was given). No override protection: this step
-    # regenerates exactly what certify checks.
-    result = regenerate_tree(contract_dir, run_cmd=run, protect_overrides=False)
+    # *copies* root files it was given).
+    result = regenerate_tree(contract_dir, run_cmd=run)
     if result.status == "eval-failed":
         if sdk_mode:
             print(

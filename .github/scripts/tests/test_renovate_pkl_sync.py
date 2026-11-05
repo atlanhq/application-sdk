@@ -528,23 +528,20 @@ def test_restore_tree_keeps_edits_made_before_the_snapshot(repo: Path) -> None:
 
 
 def _bump_pin(repo: Path) -> None:
-    """Commit a toolkit-pin bump, the way Renovate does on its branch. Gives
-    baseline_contract_ref a parent commit holding the pre-bump pin."""
+    """Commit a toolkit-pin bump, the way Renovate does on its branch."""
     pkl_project = repo / "contract" / "PklProject"
     pkl_project.write_text(pkl_project.read_text().replace("0.14.1", "0.14.2"))
     _git(repo, "commit", "-qam", "chore(deps): bump app-contract-toolkit")
 
 
-def test_app_overridden_file_survives_a_bump_with_no_app_level_config(
-    repo, monkeypatch, capsys
-):
-    """Centralized override protection, end to end: no post-generate.sh, no
-    workflow input, nothing app-side.
-
-    The committed connector config is hand-maintained (differs from what the
-    pre-bump toolkit emitted), so it must be preserved; the manifest matches the
-    pre-bump output exactly, so it must be refreshed. This is what stops a
-    now-working swap from reverting six apps' post-processing."""
+def test_a_bump_overwrites_a_hand_edited_generated_file(repo, monkeypatch):
+    """FND-4736 reversed this: a toolkit bump used to keep a committed
+    generated file that differed from the pre-bump toolkit's output, treating
+    it as app-maintained. Certify regenerates with no such protection and
+    checks the whole tree, so the kept file failed the next publish (seen on a
+    production app with a stale _e2e_credential.py). Regeneration now writes
+    exactly what the contract emits; an app that installs its own version does
+    it in contract/post-generate.sh."""
     _reshape_generated(
         repo,
         {
@@ -559,16 +556,12 @@ def test_app_overridden_file_survives_a_bump_with_no_app_level_config(
 
     gen = repo / "app" / "generated"
     assert (gen / "crawler" / "manifest.json").read_text() == FRESH_MANIFEST
-    assert (gen / "atlan-connectors-x.json").read_text() == CANONICAL_CONNECTOR_CONFIG
-    out = capsys.readouterr().out
-    assert "Preserved app-maintained generated file(s)" in out
-    assert "atlan-connectors-x.json" in out
+    assert (gen / "atlan-connectors-x.json").read_text() == TOOLKIT_CONNECTOR_CONFIG
 
 
-def test_no_baseline_without_a_pin_change_so_drift_stays_visible(repo, monkeypatch):
-    """With no bump in flight (an ordinary PR, or the freshness gate) there is no
-    baseline, so everything is overwritten and genuine staleness still shows up.
-    Protecting files here would freeze the tree and blind the gate."""
+def test_a_post_generate_override_survives_a_bump(repo, monkeypatch):
+    """The sanctioned way to keep a hand-maintained artifact: the app's
+    contract/post-generate.sh installs it over the toolkit's output."""
     _reshape_generated(
         repo,
         {
@@ -576,14 +569,20 @@ def test_no_baseline_without_a_pin_change_so_drift_stays_visible(repo, monkeypat
             "atlan-connectors-x.json": CANONICAL_CONNECTOR_CONFIG,
         },
     )
-    # No _bump_pin() — contract/PklProject is untouched.
+    (repo / "contract" / "canonical.json").write_text(CANONICAL_CONNECTOR_CONFIG)
+    (repo / "contract" / "post-generate.sh").write_text(
+        "cp contract/canonical.json app/generated/atlan-connectors-x.json\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "post-generate")
+    _bump_pin(repo)
     monkeypatch.setattr(mod, "run", _make_fake_run(repo, layout="native-bundle"))
 
     assert mod.main(["--regenerate", "true"]) == 0
 
     gen = repo / "app" / "generated"
     assert (gen / "crawler" / "manifest.json").read_text() == FRESH_MANIFEST
-    assert (gen / "atlan-connectors-x.json").read_text() == TOOLKIT_CONNECTOR_CONFIG
+    assert (gen / "atlan-connectors-x.json").read_text() == CANONICAL_CONNECTOR_CONFIG
 
 
 def test_no_post_generate_script_is_a_noop(repo, monkeypatch, capsys):
@@ -902,21 +901,16 @@ def test_no_roots_at_all_is_still_a_skip(repo):
     assert mod.regenerate("contract") is False
 
 
-def test_multi_root_swap_gets_a_per_root_baseline(repo, monkeypatch):
-    """Without a baseline the swap overwrites every app-maintained generated
-    file on a toolkit bump — protection the single-root path has always had.
-    Each root's baseline must be its OWN pre-bump eval, not app.pkl's."""
+def test_multi_root_swaps_each_root_into_its_own_target(repo, monkeypatch):
+    """Each root's output lands under <generated>/<root stem>, never a shared
+    base."""
     _multi_root_contract(repo)
-    seen: list[tuple[str, object]] = []
+    seen: list[str] = []
 
-    def fake_baseline(contract_dir, root_name):
-        return (Path("/tmp/base") / Path(root_name).stem, None)
-
-    def fake_swap(out_dir, generated_dir=mod.GENERATED_DIR, baseline_dir=None):
-        seen.append((generated_dir, baseline_dir))
+    def fake_swap(out_dir, generated_dir=mod.GENERATED_DIR):
+        seen.append(generated_dir)
         return True
 
-    monkeypatch.setattr(mod, "_baseline_output_for_root", fake_baseline)
     monkeypatch.setattr(mod, "swap_outputs", fake_swap)
     monkeypatch.setattr(
         mod,
@@ -927,20 +921,7 @@ def test_multi_root_swap_gets_a_per_root_baseline(repo, monkeypatch):
     monkeypatch.setattr(mod, "_format_generated", lambda run_cmd=None: True)
 
     assert mod.regenerate("contract") is True
-    assert seen == [
-        ("app/generated/crawler", Path("/tmp/base/crawler")),
-        ("app/generated/miner", Path("/tmp/base/miner")),
-    ]  # per-root target AND per-root baseline
-
-
-def test_multi_root_baseline_absent_root_is_not_a_failure(repo, monkeypatch):
-    """A root that is new in this revision has nothing committed from it, so
-    there is nothing to preserve — None baseline, no warning-worthy failure."""
-    _multi_root_contract(repo)
-    monkeypatch.setattr(mod, "baseline_contract_ref", lambda d: "abc123")
-    monkeypatch.setattr(mod, "export_contract_at", lambda ref, d, dest: True)
-    out, work = mod._baseline_output_for_root("contract", "crawler.pkl")
-    assert out is None and work is not None  # workdir returned for cleanup
+    assert seen == ["app/generated/crawler", "app/generated/miner"]
 
 
 # --- FND-4736: the bump commits everything regeneration changes ---------------
