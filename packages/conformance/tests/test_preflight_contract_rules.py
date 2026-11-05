@@ -299,7 +299,9 @@ def test_typed_failure_reraise(tmp_path, catch, raised):
     )
 
 
-@pytest.mark.parametrize("name", ["ObjectStoreReadError", "DiskFullError"])
+@pytest.mark.parametrize(
+    "name", ["ObjectStoreReadError", "DiskFullError", "SdrDiskFullError"]
+)
 def test_sdk_default_action_not_missing(tmp_path, name):
     assert "F007" not in check(
         tmp_path, f"raise {name}()", f"from application_sdk.errors import {name}\n"

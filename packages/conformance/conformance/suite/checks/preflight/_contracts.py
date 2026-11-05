@@ -44,6 +44,7 @@ _SDK_ERROR_BASES: dict[str, tuple[str, ...]] = {
     "ObjectStoreReadError": ("DependencyUnavailableError",),
     "ObjectStoreDownloadError": ("DependencyUnavailableError",),
     "DiskFullError": ("ResourceExhaustedError",),
+    "SdrDiskFullError": ("DiskFullError",),
     "LocalVolumeUnwritableError": ("ResourceExhaustedError",),
     "SourceWarmupExhaustedError": ("SourceUnavailableError",),
 }
@@ -61,6 +62,7 @@ _SDK_AUDIENCE: dict[str, str] = {
     "DependencyUnavailableError": "PLATFORM",
     "SourceUnavailableError": "USER",
     "ResourceExhaustedError": "PLATFORM",
+    "SdrDiskFullError": "USER",
     "DataIntegrityError": "APP_OWNER",
     "InternalError": "APP_OWNER",
     "UnimplementedError": "APP_OWNER",
@@ -96,6 +98,7 @@ _SDK_CATEGORY: dict[str, tuple[str, bool]] = {
     "SourceWarmupExhaustedError": ("SOURCE_UNAVAILABLE", True),
     "ResourceExhaustedError": ("RESOURCE_EXHAUSTED", True),
     "DiskFullError": ("RESOURCE_EXHAUSTED", True),
+    "SdrDiskFullError": ("RESOURCE_EXHAUSTED", True),
     "LocalVolumeUnwritableError": ("RESOURCE_EXHAUSTED", True),
     "DataIntegrityError": ("DATA_INTEGRITY", False),
     "InternalError": ("INTERNAL", False),
@@ -407,7 +410,11 @@ class _Checker:
     ) -> dict[str, ast.AST]:
         name = _qualified(src, node)
         if name.startswith("application_sdk.errors."):
-            if name.rsplit(".", 1)[-1] in {"ObjectStoreReadError", "DiskFullError"}:
+            if name.rsplit(".", 1)[-1] in {
+                "ObjectStoreReadError",
+                "DiskFullError",
+                "SdrDiskFullError",
+            }:
                 return {}
             return {"suggested_action": ast.Constant(value=None)}
         resolved = self.symbol(src, node)

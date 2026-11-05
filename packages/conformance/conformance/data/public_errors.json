@@ -21,6 +21,7 @@
     "PreconditionError",
     "RateLimitedError",
     "ResourceExhaustedError",
+    "SdrDiskFullError",
     "SourceUnavailableError",
     "SourceWarmupExhaustedError",
     "TaskStalledError",

@@ -451,6 +451,38 @@ class DiskFullError(ResourceExhaustedError):
     )
 
 
+#: What the operator of a Self-Deployed Runtime agent does about a full disk.
+#: Shared with the storage variant, whose constructor does not take it.
+SDR_DISK_FULL_ACTION = (
+    "Free space on, or expand, the agent host volume backing "
+    "ATLAN_TEMPORARY_PATH, or reduce the volume this step stages on local disk."
+)
+
+
+@dataclass(kw_only=True)
+class SdrDiskFullError(DiskFullError):
+    """A ``DiskFullError`` raised on a Self-Deployed Runtime (SDR) agent.
+
+    The full volume is on the customer's agent host, so the failure is theirs
+    to act on: no Atlan deployment can be resized to fix it. Ownership is a
+    property of the class, as for every other leaf, so readers that take
+    ``type(exc).audience`` (the Temporal failure log, the preflight outcome)
+    route it the same way as the failure envelope. The class is chosen where
+    the error is raised (:mod:`application_sdk.common.atomic`), from whether
+    the worker runs in SDR mode.
+
+    Same code (``RESOURCE_EXHAUSTED_DISK_FULL``) and retryability as its
+    parent, so callers that match on either keep working.
+    """
+
+    # Restated, not changed: the code stays the parent's so callers matching
+    # on ``RESOURCE_EXHAUSTED_DISK_FULL`` keep working (P003 wants each leaf to
+    # declare its own).
+    code: ClassVar[str] = "RESOURCE_EXHAUSTED_DISK_FULL"
+    audience: ClassVar[Audience] = Audience.USER
+    suggested_action: str | None = SDR_DISK_FULL_ACTION
+
+
 @dataclass(kw_only=True)
 class LocalVolumeUnwritableError(ResourceExhaustedError):
     """A local write failed because the volume is read-only or the path is unwritable.
