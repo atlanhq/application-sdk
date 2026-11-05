@@ -7,7 +7,7 @@ import pytest
 from obstore.store import MemoryStore
 
 from application_sdk.contracts.storage import VerifyRefsInput
-from application_sdk.contracts.types import StoreTarget
+from application_sdk.contracts.types import FileReference, StoreTarget
 from application_sdk.storage import ops
 from application_sdk.storage.errors import (
     StorageGatewayNoRouteError,
@@ -135,3 +135,49 @@ async def test_successful_head_does_not_list():
 
     assert out.verified_count == 1
     listing.assert_not_called()
+
+
+async def test_root_level_head_miss_lists_the_bucket_root():
+    """A key with no parent segment is confirmed under the empty prefix, not "/"."""
+    ref = FileReference(
+        local_path="/tmp/leaf.json",
+        storage_path="leaf.json",
+        is_durable=True,
+        file_count=1,
+    )
+    store = MemoryStore()
+    await _put(store, "leaf.json")
+
+    with _head_misses({"leaf.json"}):
+        out = await _make_app(upstream=store).verify_refs(
+            VerifyRefsInput(refs=[ref], prefix="", store=StoreTarget.UPSTREAM)
+        )
+
+    assert out.verified_count == 1
+
+
+async def test_sibling_head_misses_share_one_parent_listing():
+    """Every ref under one folder missing HEAD lists that folder once, not once per ref."""
+    refs = [
+        FileReference(
+            local_path=f"/tmp/transformed/table/chunk-{i}.json",
+            storage_path=f"{PREFIX}/table/chunk-{i}.json",
+            is_durable=True,
+            file_count=1,
+        )
+        for i in range(50)
+    ]
+    store = MemoryStore()
+    await _put(store, *(r.storage_path for r in refs))
+    real_list = obstore.list
+
+    with (
+        _head_misses({r.storage_path for r in refs}),
+        patch.object(ops.obstore, "list", side_effect=real_list) as listing,
+    ):
+        out = await _make_app(upstream=store).verify_refs(
+            VerifyRefsInput(refs=refs, prefix=PREFIX, store=StoreTarget.UPSTREAM)
+        )
+
+    assert out.verified_count == 50
+    assert listing.call_count == 1

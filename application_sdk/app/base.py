@@ -2034,6 +2034,11 @@ class App(ABC):
         missing: list[str] = []
         outside: list[str] = []
         verified_file_count = 0
+        # Parent listings taken to confirm a HEAD miss, keyed by listing
+        # prefix. Sibling refs share a parent, so during a gateway outage that
+        # fails many HEADs one listing answers all of them instead of
+        # re-enumerating the same folder once per ref.
+        parent_listings: dict[str, frozenset[str]] = {}
 
         for ref in input.refs:
             raw_key = ref.storage_path or ""
@@ -2120,10 +2125,18 @@ class App(ABC):
                 # body-bearing, so its gateway errors ride the storage layer's
                 # no-route retry. It lists the parent folder because a listing
                 # prefix matches whole path segments: listing the key itself
-                # never returns the key.
-                found = await list_data_keys(
-                    key.rpartition("/")[0] + "/", store=store, normalize=False
-                )
+                # never returns the key. A root-level key has no parent
+                # segment, so it lists the empty (bucket-root) prefix
+                # explicitly rather than "/", which only means the root
+                # because obstore's path parsing happens to strip it.
+                parent = key.rpartition("/")[0]
+                list_prefix = parent + "/" if parent else ""
+                found = parent_listings.get(list_prefix)
+                if found is None:
+                    found = frozenset(
+                        await list_data_keys(list_prefix, store=store, normalize=False)
+                    )
+                    parent_listings[list_prefix] = found
                 if key not in found:
                     missing.append(key)
                     continue
