@@ -123,7 +123,7 @@ def test_main_passes_when_every_step_passes(
     fake, result = _drive(monkeypatch, wheel_dir)
     assert result == 0
     assert fake.steps == [
-        "export", "venv", "install", "install-local", "check", "smoke", "pytest"
+        "export", "venv", "install", "install-local", "check", "smoke", "pytest",
     ]  # fmt: skip
     _, smoke, _ = fake.calls[5]
     assert smoke[smoke.index("--outside") + 1] == str(gate.REPO_ROOT)
@@ -193,6 +193,120 @@ def test_path_sourced_packages_are_installed_from_source_not_exported(
     # lock lacks must fail `uv pip check`, not install at a fresh version.
     assert "--no-deps" in local
     assert fake.steps[4] == "check"
+
+
+def test_a_stale_lock_fails_before_anything_is_exported(
+    monkeypatch: pytest.MonkeyPatch, wheel_dir: Path
+) -> None:
+    """`uv pip check` sees no extras, so a dependency added only to the SDK's
+    `[sql]` extra would slip past it. lock_drift runs first and stops the gate."""
+    monkeypatch.setattr(gate, "lock_drift", lambda: ["stale"])
+    fake, result = _drive(monkeypatch, wheel_dir)
+    assert result == 1
+    assert fake.steps == []
+
+
+def test_the_real_lock_parses_into_core_and_sql_requirements() -> None:
+    """The synthetic lock below must match the format uv really writes. Not a
+    freshness check: that is the gate's job at release, and asserting it here
+    would turn unrelated PRs red whenever a root dependency moves first."""
+    lock = gate.read_lock(gate.PACKAGE_DIR / "uv.lock")
+    core = gate.locked_requirements(lock, "atlan-application-sdk", ())
+    with_sql = gate.locked_requirements(lock, "atlan-application-sdk", ("sql",))
+    assert core and with_sql
+    assert "duckdb" not in {r[0] for r in core}
+    assert "duckdb" in {r[0] for r in with_sql}
+    api = gate.locked_requirements(lock, "atlan-application-sdk-api", ())
+    assert api and "fastapi" in {r[0] for r in api}
+
+
+_SDK_PYPROJECT = """\
+[project]
+name = "atlan-application-sdk"
+version = "{version}"
+dependencies = ["atlan-application-sdk-api=={version}", "httpx>=0.27,<0.29"]
+[project.optional-dependencies]
+sql = [{sql}]
+other = ["boto3>=1"]
+"""
+
+_API_PYPROJECT = """\
+[project]
+name = "atlan-application-sdk-api"
+version = "1.0.0"
+dependencies = ["Typing_Extensions >= 4.12 , < 5"]
+"""
+
+_LOCK = """\
+[[package]]
+name = "atlan-application-sdk"
+[package.metadata]
+requires-dist = [
+    { name = "atlan-application-sdk-api", editable = "../api" },
+    { name = "httpx", specifier = ">=0.27,<0.29" },
+    { name = "pandas", marker = "extra == 'sql'", specifier = ">=2.2.3,<4" },
+    { name = "boto3", marker = "extra == 'other'", specifier = ">=1" },
+]
+
+[[package]]
+name = "atlan-application-sdk-api"
+[package.metadata]
+requires-dist = [{ name = "typing-extensions", specifier = ">=4.12,<5" }]
+"""
+
+
+def _drift(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, sql: str, version: str = "1.0.0"
+) -> list[str]:
+    sdk, api = tmp_path / "sdk", tmp_path / "api"
+    sdk.mkdir()
+    api.mkdir()
+    (sdk / "pyproject.toml").write_text(_SDK_PYPROJECT.format(version=version, sql=sql))
+    (api / "pyproject.toml").write_text(_API_PYPROJECT)
+    (tmp_path / "uv.lock").write_text(_LOCK)
+    monkeypatch.setattr(
+        gate,
+        "LOCAL_PACKAGES",
+        {"atlan-application-sdk": sdk, "atlan-application-sdk-api": api},
+    )
+    return gate.lock_drift(tmp_path / "uv.lock")
+
+
+def test_lock_drift_accepts_a_matching_lock_and_a_version_bump(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Spelling, spacing and specifier order are normalised; the SDK's pin on
+    # its own api moves every release and is not a dependency change; an
+    # extra the test extra does not select (`other`) is out of scope.
+    assert (
+        _drift(monkeypatch, tmp_path, sql='"pandas<4,>=2.2.3"', version="9.9.9") == []
+    )
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        '"pandas>=2.2.3,<4", "tomli-w>=1"',  # a dependency added to [sql]
+        '"pandas>=2.3,<4"',  # a [sql] floor raised
+        "",  # a [sql] dependency dropped
+    ],
+)
+def test_lock_drift_reports_a_sql_extra_the_lock_has_not_seen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sql: str
+) -> None:
+    assert _drift(monkeypatch, tmp_path, sql=sql)
+
+
+def test_local_extras_are_the_ones_the_test_extra_selects() -> None:
+    project = tomllib.loads((gate.PACKAGE_DIR / "pyproject.toml").read_text())
+    test = project["project"]["optional-dependencies"]["test"]
+    sdk = [r for r in test if r.startswith("atlan-application-sdk[")]
+    assert len(sdk) == 1, test
+    extras = sdk[0].split("[", 1)[1].split("]", 1)[0].split(",")
+    assert (
+        tuple(e.strip() for e in extras) == gate.LOCAL_EXTRAS["atlan-application-sdk"]
+    )
+    assert set(gate.LOCAL_EXTRAS) == set(gate.LOCAL_PACKAGES)
 
 
 def test_local_packages_match_the_conformance_lock_sources() -> None:
