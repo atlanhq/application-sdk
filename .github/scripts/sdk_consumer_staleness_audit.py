@@ -117,10 +117,6 @@ def _is_rate_limited(stderr: str) -> bool:
     return "rate limit" in s or "abuse detection" in s
 
 
-def _is_not_found(stderr: str) -> bool:
-    return "HTTP 404" in stderr
-
-
 def _is_empty_repo(stderr: str) -> bool:
     # GET commits / git/trees on a repo with no commits answers 409.
     return "HTTP 409" in stderr or "Git Repository is empty" in stderr
@@ -486,7 +482,11 @@ def find_sdk_manifests(
         ]
     )
     if rc != 0:
-        if _is_empty_repo(err) or _is_not_found(err):
+        # Only GitHub's "repository is empty" answer means there is nothing
+        # to read. A 404 on a repo `gh repo list` just returned can mean the
+        # token sees repo metadata without Contents access; reading that as
+        # "no manifests" would drop a consumer from a run that still exits 0.
+        if _is_empty_repo(err):
             return [], False, []
         raise AuditError(f"{repo.name}: read tree: {err.strip()}")
     tree = _obj(json.loads(out))

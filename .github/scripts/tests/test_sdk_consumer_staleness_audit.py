@@ -719,3 +719,24 @@ def test_gh_timeout_becomes_a_failed_call(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(audit.subprocess, "run", fake_run)
     rc, out, err = audit._run_gh(["api", "repos/o/r"])
     assert rc != 0 and out == "" and "timed out" in err
+
+
+def test_tree_404_on_a_listed_repo_fails_instead_of_reading_as_empty():
+    # lens F-67245e: a token that lists a private repo but lacks Contents
+    # access gets 404 here; that must not silently drop a consumer.
+    repo = audit.RepoInfo("atlan-private-app", False, False, "main")
+
+    def run(args: list[str]) -> tuple[int, str, str]:
+        return 1, "", "gh: Not Found (HTTP 404)"
+
+    with pytest.raises(audit.AuditError, match="read tree"):
+        audit.find_sdk_manifests("o", repo, run)
+
+
+def test_empty_repo_has_no_manifests():
+    repo = audit.RepoInfo("atlan-new-app", False, False, "main")
+
+    def run(args: list[str]) -> tuple[int, str, str]:
+        return 1, "", "gh: Git Repository is empty. (HTTP 409)"
+
+    assert audit.find_sdk_manifests("o", repo, run) == ([], False, [])
