@@ -12,6 +12,8 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 import application_sdk
 from application_sdk._install import api_only_install
@@ -93,6 +95,118 @@ def _sdk_pins_for_extra(sdk: dict, extra: str) -> dict[str, str]:
         name = _name(req)
         assert pins.setdefault(name, req) == req, (extra, name, pins[name], req)
     return pins
+
+
+def _lower_bound(req: str) -> str | None:
+    """The version of ``req``'s one ``>=`` specifier; None if it has none or
+    several (which leave no single floor to compare)."""
+    floors = [s.version for s in Requirement(req).specifier if s.operator == ">="]
+    return floors[0] if len(floors) == 1 else None
+
+
+def _constraint_floor_mismatches(root: dict, api: dict) -> list[str]:
+    """Overlapping dependencies whose floor differs from their CVE constraint.
+
+    A package that both the SDK and the api package declare (core or any extra)
+    and that has a ``[tool.uv] constraint-dependencies`` line must carry exactly
+    that line's floor in every requirement on both sides. A missing or
+    ambiguous floor (no ``>=``, or more than one) on either side is a
+    mismatch: it carries no CVE floor to agree on.
+    """
+    sdk = root["project"]
+
+    def declared(project: dict) -> dict[str, list[str]]:
+        reqs: dict[str, list[str]] = {}
+        groups = [project["dependencies"]]
+        groups += (project.get("optional-dependencies") or {}).values()
+        for req in (r for group in groups for r in group):
+            reqs.setdefault(canonicalize_name(Requirement(req).name), []).append(req)
+        return reqs
+
+    sdk_reqs, api_reqs = declared(sdk), declared(api)
+    problems = []
+    for line in root["tool"]["uv"].get("constraint-dependencies", []):
+        name = canonicalize_name(Requirement(line).name)
+        if name not in sdk_reqs or name not in api_reqs:
+            continue
+        floor = _lower_bound(line)
+        if floor is None:
+            problems.append(f"constraint {line!r} has no single >= floor")
+            continue
+        for where, req in [("sdk", r) for r in sdk_reqs[name]] + [
+            ("api", r) for r in api_reqs[name]
+        ]:
+            if _lower_bound(req) != floor:
+                problems.append(f"{where} {req!r} != constraint {line!r}")
+    return problems
+
+
+def test_overlapping_dependencies_carry_their_constraint_floor() -> None:
+    """A CVE fix on a package the SDK and the api package share moves its
+    constraint, the SDK's pin and the api's pin together, to the same floor.
+
+    The tests above compare the api's pins with the SDK's and fall back to the
+    constraint only for a package the SDK does not publish, so a fix that raised
+    the constraint and left both pins behind (or the reverse) passed them. Fix a
+    failure by giving the constraint line and every SDK and api requirement for
+    that package the same ``>=`` floor.
+    """
+    root = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    api = _project(ROOT / "packages/api/pyproject.toml")
+    assert _constraint_floor_mismatches(root, api) == []
+
+
+def test_constraint_floor_mismatches_catches_a_one_sided_fix() -> None:
+    root = {
+        "project": {
+            "dependencies": ["authlib>=1.9.4,<2", "httpx>=0.27,<0.29"],
+            "optional-dependencies": {"sql": ["python-dotenv>=1.2.2,<2"]},
+        },
+        "tool": {
+            "uv": {
+                "constraint-dependencies": [
+                    "authlib>=1.9.4",
+                    "python-dotenv>=1.2.3",  # raised here only
+                    "filelock>=3.20.1",  # not shared: ignored
+                ]
+            }
+        },
+    }
+    api = {
+        "dependencies": ["httpx>=0.27,<0.29"],
+        "optional-dependencies": {
+            "pyatlan": ["authlib>=1.9.1,<2"],  # left behind
+            "sql": ["python-dotenv>=1.2.2,<2"],
+        },
+    }
+    assert _constraint_floor_mismatches(root, api) == [
+        "api 'authlib>=1.9.1,<2' != constraint 'authlib>=1.9.4'",
+        "sdk 'python-dotenv>=1.2.2,<2' != constraint 'python-dotenv>=1.2.3'",
+        "api 'python-dotenv>=1.2.2,<2' != constraint 'python-dotenv>=1.2.3'",
+    ]
+
+
+def test_constraint_floor_mismatches_rejects_missing_and_ambiguous_floors() -> None:
+    """Bare or doubly-floored requirements carry no single CVE floor. Before,
+    both sides collapsed to None and compared equal, so nothing was reported."""
+    root = {
+        "project": {
+            "dependencies": ["authlib", "httpx>=0.27,>=0.28,<0.29"],
+        },
+        "tool": {
+            "uv": {
+                "constraint-dependencies": [
+                    "authlib",  # no floor at all
+                    "httpx>=0.28",
+                ]
+            }
+        },
+    }
+    api = {"dependencies": ["authlib", "httpx>=0.28,<0.29"]}
+    assert _constraint_floor_mismatches(root, api) == [
+        "constraint 'authlib' has no single >= floor",
+        "sdk 'httpx>=0.27,>=0.28,<0.29' != constraint 'httpx>=0.28'",
+    ]
 
 
 def test_the_api_extras_match_the_sdks_pins() -> None:

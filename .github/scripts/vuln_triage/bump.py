@@ -111,8 +111,8 @@ def _raise_published(pyproject: str, floors: dict[str, tuple[str, list[str]]]) -
 
 def verify(
     *,
-    old_lock: dict[str, dict],
-    new_lock: dict[str, dict],
+    old_lock: dict[str, dict[str, str]],
+    new_lock: dict[str, dict[str, str]],
     old_text: str,
     new_text: str,
     targets: dict[str, str],
@@ -128,15 +128,8 @@ def verify(
     because the release patches the CVE, but without the auto-merge label so a human
     reviews it.
     """
-    errors: list[str] = []
+    errors = _shape_errors("uv.lock", old_text, new_text)
     fresh: list[str] = []
-    if not re.search(r"^revision = ", new_text, re.M):
-        errors.append("uv.lock lost its `revision` header")
-    new_hosts = lock_registry_hosts(new_text) - lock_registry_hosts(old_text)
-    if new_hosts:
-        errors.append(
-            f"uv.lock now points at new host(s): {', '.join(sorted(new_hosts))}"
-        )
     for pkg, target in targets.items():
         key = normalize(pkg)
         old = old_lock.get(key, {}).get("version", "")
@@ -153,4 +146,61 @@ def verify(
             ts = datetime.fromisoformat(upload.replace("Z", "+00:00"))
             if now - ts < timedelta(days=cooldown_days):
                 fresh.append(f"{pkg} {got} (published {ts.date().isoformat()})")
+    return errors, fresh
+
+
+def _shape_errors(label: str, old_text: str, new_text: str) -> list[str]:
+    """A lost `revision` header or a registry host the old lock never used."""
+    errors: list[str] = []
+    if not re.search(r"^revision = ", new_text, re.M):
+        errors.append(f"{label} lost its `revision` header")
+    new_hosts = lock_registry_hosts(new_text) - lock_registry_hosts(old_text)
+    if new_hosts:
+        errors.append(
+            f"{label} now points at new host(s): {', '.join(sorted(new_hosts))}"
+        )
+    return errors
+
+
+def verify_follower(
+    *,
+    label: str,
+    old_lock: dict[str, dict[str, str]],
+    new_lock: dict[str, dict[str, str]],
+    old_text: str,
+    new_text: str,
+    targets: dict[str, str],
+    now: datetime,
+    cooldown_days: int,
+) -> tuple[list[str], list[str]]:
+    """`verify` for a lock relocked alongside the root one (FND-4716).
+
+    packages/conformance/uv.lock path-sources the SDK, so it records the SDK's
+    dependencies: a raised `[project] dependencies` floor left unrelocked there
+    fails the PR's conformance lock check and, if it ever merged, the next
+    conformance release. Unlike the root lock, a target need not be in this lock's
+    closure: an absent one is not checked. One present must reach its fix, and a
+    release it moved to inside the cooldown is `fresh`, as for the root lock.
+    """
+    errors = _shape_errors(label, old_text, new_text)
+    fresh: list[str] = []
+    for pkg, target in targets.items():
+        key = normalize(pkg)
+        old = old_lock.get(key, {}).get("version", "")
+        new = new_lock.get(key, {})
+        got = new.get("version", "")
+        if not got:
+            if old:
+                errors.append(f"{pkg} disappeared from {label}")
+            continue
+        if version_key(got) < version_key(target):
+            errors.append(f"{pkg} resolved to {got} in {label}, below the fix {target}")
+            continue
+        upload = new.get("upload_time", "")
+        if got != old and upload:
+            ts = datetime.fromisoformat(upload.replace("Z", "+00:00"))
+            if now - ts < timedelta(days=cooldown_days):
+                fresh.append(
+                    f"{pkg} {got} in {label} (published {ts.date().isoformat()})"
+                )
     return errors, fresh

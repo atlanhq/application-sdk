@@ -32,6 +32,15 @@ def test_bump_subset_is_bump_shape():
     assert classify("uv.lock") == "bump"
     assert classify("pyproject.toml") == "bump"
     assert classify("pyproject.toml", "uv.lock") == "bump"
+    assert classify("pyproject.toml", "uv.lock", "packages/conformance/uv.lock") == (
+        "bump"
+    )
+
+
+def test_only_the_conformance_lock_rides_the_bump_shape():
+    # Full paths: another package's lock or pyproject is not a vuln bump.
+    assert classify("uv.lock", "packages/api/uv.lock") is None
+    assert classify("uv.lock", "packages/conformance/pyproject.toml") is None
 
 
 def test_empty_is_none():

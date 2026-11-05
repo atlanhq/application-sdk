@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 144,
-    "warning": 6184
+    "warning": 6127
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -877,26 +877,23 @@
     ".github/scripts/vuln_triage/allowlist.py": {
       "warning:reportUnknownMemberType": 2
     },
-    ".github/scripts/vuln_triage/bump.py": {
-      "warning:reportUnknownMemberType": 6
-    },
     ".github/scripts/vuln_triage/classify.py": {
       "warning:reportUnknownMemberType": 1
     },
     ".github/scripts/vuln_triage/effects.py": {
-      "warning:reportUnknownMemberType": 11
+      "warning:reportUnknownMemberType": 3
     },
     ".github/scripts/vuln_triage/report.py": {
       "warning:reportUnknownMemberType": 3
     },
     ".github/scripts/vuln_triage/run.py": {
-      "warning:reportUnknownMemberType": 58
+      "warning:reportUnknownMemberType": 17
     },
     ".github/scripts/vuln_triage/scan.py": {
       "warning:reportUnknownMemberType": 13
     },
     ".github/scripts/vuln_triage/selftest.py": {
-      "warning:reportUnknownMemberType": 13
+      "warning:reportUnknownMemberType": 11
     },
     ".github/scripts/wait_for_emulators.py": {
       "warning:reportUnknownMemberType": 10
