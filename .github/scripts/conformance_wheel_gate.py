@@ -21,7 +21,9 @@ path-sources the SDK and api packages from this checkout (FND-4256), which
 ``uv export`` writes as ``-e ../../`` lines: relative to a requirements file in
 the work dir they point nowhere, and an editable install would put the checkout
 back on ``sys.path``. So they are left out of the export (``LOCAL_PACKAGES``)
-and installed from their source directories as ordinary, non-editable builds.
+and installed from their source directories as ordinary, non-editable builds,
+with ``--no-deps`` and then ``uv pip check``: their dependencies come from the
+lock or the gate fails, never from a fresh resolve.
 
 Called by conformance-release.yml (after ``uv build``) and
 conformance-publish.yml (between ``uv build`` and ``uv publish``).
@@ -106,12 +108,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         )  # fmt: skip
         _run(["uv", "venv", "--python", sys.executable, str(venv)], cwd=work)
         _run(
+            ["uv", "pip", "install", "--python", str(python), "-r", str(requirements), str(wheel)],
+            cwd=work,
+        )  # fmt: skip
+        # --no-deps: built from source, these would otherwise resolve whatever
+        # their pyproject declares from the index, so a dependency the SDK or api
+        # gained before the conformance lock was refreshed would be installed at
+        # a fresh, unlocked version and the gate would pass. Their dependencies
+        # are already in the export; `uv pip check` then fails the gate if the
+        # lock is missing one.
+        _run(
             [
-                "uv", "pip", "install", "--python", str(python), "-r", str(requirements), str(wheel),
+                "uv", "pip", "install", "--python", str(python), "--no-deps",
                 *(str(path) for path in LOCAL_PACKAGES.values()),
             ],
             cwd=work,
         )  # fmt: skip
+        _run(["uv", "pip", "check", "--python", str(python)], cwd=work)
 
         smoke = subprocess.run(
             [

@@ -67,7 +67,9 @@ def _step(argv: Sequence[str]) -> str:
     if argv[:2] == ["uv", "venv"]:
         return "venv"
     if argv[:3] == ["uv", "pip", "install"]:
-        return "install"
+        return "install-local" if "--no-deps" in argv else "install"
+    if argv[:3] == ["uv", "pip", "check"]:
+        return "check"
     if str(gate.SMOKE) in argv:
         return "smoke"
     if "pytest" in argv:
@@ -120,10 +122,12 @@ def test_main_passes_when_every_step_passes(
 ) -> None:
     fake, result = _drive(monkeypatch, wheel_dir)
     assert result == 0
-    assert fake.steps == ["export", "venv", "install", "smoke", "pytest"]
-    _, smoke, _ = fake.calls[3]
+    assert fake.steps == [
+        "export", "venv", "install", "install-local", "check", "smoke", "pytest"
+    ]  # fmt: skip
+    _, smoke, _ = fake.calls[5]
     assert smoke[smoke.index("--outside") + 1] == str(gate.REPO_ROOT)
-    _, pytest_argv, pytest_cwd = fake.calls[4]
+    _, pytest_argv, pytest_cwd = fake.calls[6]
     assert [f"tests/{name}" for name in gate.SLICE] == pytest_argv[-len(gate.SLICE) :]
     assert not pytest_cwd.is_relative_to(gate.REPO_ROOT)
 
@@ -144,7 +148,9 @@ def test_main_fails_when_slice_fails(
     assert fake.steps[-1] == "pytest"
 
 
-@pytest.mark.parametrize("step", ["export", "venv", "install"])
+@pytest.mark.parametrize(
+    "step", ["export", "venv", "install", "install-local", "check"]
+)
 def test_main_fails_when_setup_fails(
     monkeypatch: pytest.MonkeyPatch, wheel_dir: Path, step: str
 ) -> None:
@@ -177,10 +183,16 @@ def test_path_sourced_packages_are_installed_from_source_not_exported(
     for name in gate.LOCAL_PACKAGES:
         assert f"--no-emit-package={name}" in export
     _, install, _ = fake.calls[2]
-    assert "-e" not in install
+    _, local, _ = fake.calls[3]
     for path in gate.LOCAL_PACKAGES.values():
-        assert str(path) in install
+        assert str(path) not in install
+        assert str(path) in local
         assert (path / "pyproject.toml").is_file()
+    assert "-e" not in local
+    # Never resolved from the index: a dependency the SDK declares but the
+    # lock lacks must fail `uv pip check`, not install at a fresh version.
+    assert "--no-deps" in local
+    assert fake.steps[4] == "check"
 
 
 def test_local_packages_match_the_conformance_lock_sources() -> None:
