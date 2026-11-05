@@ -2,6 +2,7 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import obstore
 import pytest
 from obstore.store import MemoryStore
 
@@ -18,69 +19,84 @@ HEAD_404 = "Server returned non-2xx status code: 404 Not Found"
 GATEWAY_404 = HEAD_404 + ': {"message":"no Route matched with those values"}'
 
 
+async def _put(store, *keys):
+    """Write each key with its sidecar, as the writer does."""
+    for key in keys:
+        await obstore.put_async(store, key, b"{}")
+        await obstore.put_async(store, key + ".sha256", b"{}")
+
+
+def _head_misses(missed: set[str]):
+    """Patch HEAD to 404 for *missed* keys and hit the real store for the rest."""
+    real_head = obstore.head_async
+
+    async def head(store, key):
+        if key in missed:
+            raise FileNotFoundError(f"Object at location {key} not found")
+        return await real_head(store, key)
+
+    return patch.object(ops.obstore, "head_async", side_effect=head)
+
+
 async def test_bodiless_head_misses_in_24_file_handoff_are_confirmed_by_listing():
-    """Replay 22 successful HEADs and two false misses, including a listing retry."""
+    """Two false HEAD misses are confirmed by a real listing, which retries once each."""
     store = MemoryStore()
-    app = _make_app(upstream=store)
     refs = [_ref(f"entity-{i}") for i in range(24)]
+    await _put(store, *(r.storage_path for r in refs))
     misses = {refs[3].storage_path, refs[17].storage_path}
-    attempts: dict[str, int] = {}
+    real_list = obstore.list
+    seen: set[str] = set()
+    calls = 0
 
-    async def head(_store, key):
-        assert _store is store
-        if key in misses:
-            raise RuntimeError(HEAD_404)
-        return {"size": 10}
+    def listing(_store, *, prefix, **kwargs):
+        nonlocal calls
+        calls += 1
+        if prefix in seen:
+            return real_list(_store, prefix=prefix, **kwargs)
+        seen.add(prefix)
 
-    async def listing(_store, *, prefix):
-        assert _store is store
-        assert prefix in misses
-        attempts[prefix] = attempts.get(prefix, 0) + 1
-        if attempts[prefix] == 1:
+        async def fail():
             raise RuntimeError(GATEWAY_404)
-        yield [{"path": prefix, "size": 10}]
+            yield []  # Make the stand-in an async listing stream.
+
+        return fail()
 
     sleep = AsyncMock()
     with (
-        patch.object(
-            ops.obstore, "head_async", new_callable=AsyncMock, side_effect=head
-        ) as heads,
+        _head_misses(misses),
         patch.object(ops.obstore, "list", side_effect=listing),
         patch.object(ops, "_retry_sleep", sleep),
     ):
-        out = await app.verify_refs(
+        out = await _make_app(upstream=store).verify_refs(
             VerifyRefsInput(refs=refs, prefix=PREFIX, store=StoreTarget.UPSTREAM)
         )
 
     assert out.verified_count == 24
     assert out.verified_file_count == 24
-    assert heads.await_count == 24
-    assert attempts == dict.fromkeys(misses, 2)
+    assert calls == 4  # one failed and one real listing per missed key
     assert sleep.await_count == 2
 
 
-@pytest.mark.parametrize("listed", [[], ["sibling"], ["sidecar"]])
-async def test_listing_must_confirm_the_exact_data_key(listed):
-    """An empty listing, similarly named key or sidecar cannot prove presence."""
+@pytest.mark.parametrize("extra", [None, ".backup", ".sha256"])
+async def test_listing_must_confirm_the_exact_data_key(extra):
+    """An empty folder, a similarly named key or a sidecar cannot prove presence."""
     ref = _ref("table")
     key = ref.storage_path
-    paths = {"sibling": f"{key}.backup", "sidecar": f"{key}.sha256"}
-
-    async def listing(_store, *, prefix):
-        assert prefix == key
-        yield [{"path": paths[item], "size": 10} for item in listed]
+    store = MemoryStore()
+    if extra:
+        await obstore.put_async(store, key + extra, b"{}")
 
     with (
-        patch.object(ops.obstore, "head_async", side_effect=RuntimeError(HEAD_404)),
-        patch.object(ops.obstore, "list", side_effect=listing) as lists,
+        _head_misses({key}),
         pytest.raises(StorageHandoffIncompleteError) as exc,
     ):
-        await _make_app().verify_refs(VerifyRefsInput(refs=[ref], prefix=PREFIX))
+        await _make_app(upstream=store).verify_refs(
+            VerifyRefsInput(refs=[ref], prefix=PREFIX, store=StoreTarget.UPSTREAM)
+        )
 
     assert exc.value.missing_keys == [key]
     assert exc.value.declared_count == 1
     assert exc.value.effective_retryable is False
-    lists.assert_called_once()
 
 
 async def test_persistent_listing_gateway_error_remains_retryable():

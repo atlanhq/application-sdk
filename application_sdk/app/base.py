@@ -2115,10 +2115,15 @@ class App(ABC):
                     missing.append(f"{key}/ ({len(found)}/{ref.file_count} objects)")
                     continue
             elif not await exists(key, store=store, normalize=False):
-                # A gateway without routes can return a bodiless HEAD 404 for
-                # an existing object. Confirm through a body-bearing listing,
-                # whose gateway errors use the storage layer's retry policy.
-                found = await list_data_keys(key, store=store, normalize=False)
+                # A gateway replica without routes can answer HEAD with a
+                # bodiless 404 for an existing object. A listing is
+                # body-bearing, so its gateway errors ride the storage layer's
+                # no-route retry. It lists the parent folder because a listing
+                # prefix matches whole path segments: listing the key itself
+                # never returns the key.
+                found = await list_data_keys(
+                    key.rpartition("/")[0] + "/", store=store, normalize=False
+                )
                 if key not in found:
                     missing.append(key)
                     continue
