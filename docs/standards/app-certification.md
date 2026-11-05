@@ -17,13 +17,14 @@ and runs:
 | Layer | Command | Skips when |
 |-------|---------|------------|
 | **v3 shape** | `tools.migrate_v3.check_migration` — no deprecated imports, `@task`-only, typed `Input`/`Output`, async clients, … | SDK install fails (annotated as incomplete) |
-| **Contract drift** | `poe generate` must leave the whole working tree clean — see [Contract drift: the whole-tree rule](#contract-drift-the-whole-tree-rule) | no `contract/app.pkl` (fails, not skips, when `contract/app.pkl` exists but `poe` is not installed) |
+| **Contract drift** | the SDK's contract regeneration must leave the whole working tree clean — see [Contract drift: the whole-tree rule](#contract-drift-the-whole-tree-rule) | no pkl contract under `contract/` (fails, not skips, when the contract does not regenerate) |
 | **Unit tests** | `pytest tests/unit --cov=app --cov-report=term` | no `tests/unit/` directory |
 | **Coverage threshold** | `coverage report --fail-under=85` | unit tests skipped or failed |
 
-Contract drift and unit tests need the app's dependencies installed
+Unit tests need the app's dependencies installed
 (`uv sync --all-extras --frozen`). If that install fails, they cannot run, and
-publish is blocked (see [Enforcement](#enforcement)).
+publish is blocked (see [Enforcement](#enforcement)). Contract drift needs only
+`pkl`, so it runs either way.
 
 These are the layers that are **identical for every app**. App-specific layers
 — integration, SDR, and e2e/Playwright — are **not** run here: they need the
@@ -32,8 +33,14 @@ the app's own CI (`tests.yaml`, the marketplace-releases e2e reusables, …).
 
 ## Contract drift: the whole-tree rule
 
-From the app checkout's root, after `uv sync --all-extras --frozen`, the step
-runs `poe generate` and then:
+From the app checkout's root, the step regenerates the contract with the SDK's
+own regeneration: the same function the generated-freshness check and
+Renovate's toolkit bump use (`renovate_pkl_sync.regenerate`). That is
+`pkl eval` of `contract/app.pkl` (or each per-entrypoint root), then the app's
+`contract/post-generate.sh` if it has one, then ruff on generated Python. It
+never runs the app's own `poe generate`: that is app-defined shell, and a
+second generator is how committed output drifted from what the gates expect.
+Then it runs:
 
 ```
 git status --porcelain --untracked-files=all
@@ -42,16 +49,20 @@ git status --porcelain --untracked-files=all
 Any output fails the step. Every path the generator touches counts, not just
 one directory:
 
-- a committed file that `poe generate` changes, wherever it is
+- a committed file that regeneration changes or removes, wherever it is
   (`app/generated/_input.py`, a root-level `atlan.yaml` or `app.yaml`, …);
-- a file `poe generate` creates that was never committed.
+- a file regeneration creates that was never committed.
 
 Files matched by the app's `.gitignore` don't count. The `::error::`
 annotation lists the offending paths (at most 50) and never their contents.
 
-To fix a failure, run `poe generate` locally and commit the result. If the
-output is genuinely build-time only and must not be committed, add it to
-`.gitignore`.
+To fix a failure, run `pkl eval --project-dir contract -m . contract/app.pkl`
+(then `contract/post-generate.sh`, if the app has one) and commit the result.
+Any post-processing an app does to generated output (moving a file, a second
+eval, installing a frontend bundle) must live in the contract's output paths or
+in `contract/post-generate.sh`; anything else is undone by regeneration and
+fails this check. If the output is genuinely build-time only and must not be
+committed, add it to `.gitignore`.
 
 ## Install environment
 

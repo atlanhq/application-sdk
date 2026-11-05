@@ -250,3 +250,28 @@ def test_apt_guard_executes_as_an_allowlist(
         env={"PATH": os.environ.get("PATH", ""), "APT_PACKAGES": value},
     )
     assert (proc.returncode == 0) is accepted, proc.stderr
+
+
+def _step_with_id(steps: list[Step], step_id: str) -> Step:
+    return next(s for s in steps if s.get("id") == step_id)
+
+
+def test_contract_drift_runs_the_sdk_regeneration_not_poe(workflow: Workflow) -> None:
+    """Drift is checked with the SDK's regeneration, never the app's `poe
+    generate` (app-defined shell in a job holding write tokens)."""
+    step = _step_with_id(_steps(workflow, "certify"), "contract_drift")
+    assert step["run"] == (
+        "python3 ../sdk/.github/scripts/build_and_publish/certify.py contract-drift"
+    )
+    for s in _steps(workflow, "certify"):
+        assert "poe" not in str(s.get("run", "")).split(), s.get("name")
+
+
+def test_contract_drift_does_not_wait_on_the_app_install(workflow: Workflow) -> None:
+    """Regeneration needs pkl, not the app's dependencies, so a failed app
+    install must not also hide drift."""
+    steps = _steps(workflow, "certify")
+    assert "if" not in _step_with_id(steps, "contract_drift")
+    pkl = next(s for s in steps if s.get("name") == "Install PKL")
+    assert "if" not in pkl
+    assert steps.index(pkl) < steps.index(_step_with_id(steps, "contract_drift"))

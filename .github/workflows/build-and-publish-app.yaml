@@ -626,39 +626,25 @@ jobs:
         working-directory: app
         run: uv sync --all-extras --frozen
 
-      # PKL is required by pkl-based apps' `poe generate` (run in the Contract
-      # drift step below, which does `rm -rf app/generated && pkl eval ...`).
-      # The contract-toolkit-* workflows install it but this Certify job did
-      # not, so for pkl apps `poe generate` failed with `pkl: not found` AFTER
-      # wiping app/generated — breaking the enforced unit-test step.
+      # The contract-drift step regenerates with `pkl eval`, so it needs pkl.
+      # It does not need the app's dependencies, so neither step waits on
+      # app_install: drift is checked even when the app does not install.
       # Absolute ref, not `./…`: this is a reusable workflow, so a relative
       # action path would resolve against the CONSUMER repo's workspace, which
       # has no copy of the SDK's actions.
       - name: Install PKL
-        if: steps.app_install.outcome == 'success'
         uses: atlanhq/application-sdk/.github/actions/install-pkl@main
 
-      # Most app `poe generate` tasks invoke `pkl eval --ca-certificates
-      # ~/.pkl-ca-bundle.pem ...` — that path is Atlan's local-dev convention
-      # (per atlan-cli's defaultCert and ~20 connector pyproject.toml files)
-      # for honoring the corporate proxy/VPN CA. GitHub runners have no such
-      # file, so pkl fails with "Cannot find CA certificate file" BEFORE it
-      # can resolve `@app-contract-toolkit/NativeApp.pkl` over HTTPS. Seed
-      # ~/.pkl-ca-bundle.pem from the runner's system trust store so every
-      # app's `--ca-certificates ~/.pkl-ca-bundle.pem` resolves to a valid
-      # bundle in CI without app-side changes.
-      - name: Seed pkl CA bundle from system trust store
-        if: steps.app_install.outcome == 'success'
-        run: python3 sdk/.github/scripts/build_and_publish/certify.py seed-pkl-ca
-
       # ── 3. Contract drift (enforced) ─────────────────────────────────────────
+      # Regenerates with the SDK's own regeneration (the function the
+      # generated-freshness check and Renovate's toolkit bump use), never the
+      # app's `poe generate`, and requires a clean working tree afterwards.
       # Failure here exits non-zero and (via the standard step-fail cascade)
       # also fails the job. The unit-test fan-in + coverage below use `always()`
       # so they still run and report — the user sees every signal in one pass —
       # even though the job's final status is already failed.
-      - name: "Contract drift — poe generate must be a no-op"
+      - name: "Contract drift — regenerating the contract must be a no-op"
         id: contract_drift
-        if: steps.app_install.outcome == 'success'
         working-directory: app
         run: python3 ../sdk/.github/scripts/build_and_publish/certify.py contract-drift
 

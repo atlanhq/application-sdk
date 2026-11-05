@@ -7,16 +7,17 @@ Subcommands (each one is a former inline ``run:`` block):
     v3 shape, warn-only. Runs ``tools.migrate_v3.check_migration`` from the SDK
     checkout (cwd ``sdk``) against ``../app``.
 
-``seed-pkl-ca``
-    Copy the runner's system CA bundle to ``~/.pkl-ca-bundle.pem``, the path
-    app ``poe generate`` tasks pass to ``pkl --ca-certificates``.
-
 ``contract-drift``
-    Enforced. In the app checkout, ``poe generate`` must leave the whole
-    working tree clean: no modified tracked file and no new untracked file,
-    anywhere (``app/generated/``, root ``atlan.yaml``, …). An app with
-    ``contract/app.pkl`` but no ``poe`` fails: the check cannot run, so it
-    must not pass.
+    Enforced. In the app checkout, regenerate the contract with the SDK's own
+    regeneration (``renovate_pkl_sync.regenerate``: ``pkl eval``, then
+    ``contract/post-generate.sh`` if present, then ruff on generated Python),
+    the same function the generated-freshness check and Renovate's toolkit
+    bump use. It must leave the whole working tree clean: no modified tracked
+    file and no new untracked file, anywhere (``app/generated/``, root
+    ``atlan.yaml``, …). The app's own ``poe generate`` task is never run: it
+    is app-defined shell, and a second generator is what let apps drift.
+    A contract that does not regenerate, or a regeneration that cannot run,
+    fails: the check must not pass when it could not check.
 
 ``verdict``
     Render the certification summary from the step outcomes and fail when an
@@ -31,14 +32,16 @@ See docs/standards/app-certification.md.
 from __future__ import annotations
 
 import argparse
-import os
-import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import _bap
 
-SYSTEM_CA = "/etc/ssl/certs/ca-certificates.crt"
+# .github/scripts, which holds renovate_pkl_sync.py (stdlib only).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import renovate_pkl_sync  # noqa: E402
+
 DOCS_URL = (
     "https://github.com/atlanhq/application-sdk/blob/main/docs/standards/"
     "app-certification.md"
@@ -66,33 +69,30 @@ def check_migration() -> int:
     return 1
 
 
-def seed_pkl_ca(system_ca: str = SYSTEM_CA) -> int:
-    if not Path(system_ca).is_file():
-        print(
-            f"::warning::System CA bundle {system_ca} not found; skipping pkl CA seed."
-        )
-        return 0
-    home = os.environ["HOME"]
-    shutil.copyfile(system_ca, f"{home}/.pkl-ca-bundle.pem")
-    print(f"Seeded {home}/.pkl-ca-bundle.pem from {system_ca}")
-    return 0
+def _sdk_regeneration() -> tuple[Callable[[str], list[Path]], Callable[[str], bool]]:
+    """``eval_roots`` and ``regenerate`` from ``renovate_pkl_sync``: the one
+    seam tests replace."""
+    return renovate_pkl_sync.eval_roots, renovate_pkl_sync.regenerate
 
 
-def contract_drift() -> int:
-    if not Path("contract/app.pkl").is_file():
-        print("No contract/app.pkl — skipping contract-drift check.")
+def contract_drift(contract_dir: str = "contract") -> int:
+    eval_roots, regenerate = _sdk_regeneration()
+    if not eval_roots(contract_dir):
+        print(f"No pkl contract in {contract_dir}/ — skipping contract-drift check.")
         return 0
-    if _bap.run(["uv", "run", "poe", "--help"], quiet=True).returncode != 0:
+    try:
+        regenerated = regenerate(contract_dir)
+    except OSError as exc:
         print(
-            "::error::contract/app.pkl exists but the 'poe' task runner is not "
-            "installed, so the drift check cannot run. Add 'poethepoet' to an "
-            "extra in [project.optional-dependencies] (certify installs with "
-            "'uv sync --all-extras', not dependency groups), define a "
-            "[tool.poe.tasks] 'generate' task, and re-lock."
+            f"::error::Could not run the contract regeneration ({exc}), so "
+            "contract drift could not be checked."
         )
         return 1
-    if _bap.run(["uv", "run", "poe", "generate"]).returncode != 0:
-        print("::error::'poe generate' failed")
+    if not regenerated:
+        print(
+            "::error::The committed contract does not regenerate (see the pkl "
+            "eval error above), so contract drift could not be checked."
+        )
         return 1
     status = _bap.run(
         ["git", "status", "--porcelain", "--untracked-files=all"], capture=True
@@ -105,9 +105,12 @@ def contract_drift() -> int:
         return 0
     # Paths only, never file contents: generated files can carry app config.
     print(
-        f"::error::'poe generate' left {len(changed)} changed or untracked "
-        "file(s) in the working tree — run 'poe generate' locally and commit "
-        "the result (or .gitignore output that is not meant to be committed)."
+        f"::error::Regenerating the contract left {len(changed)} changed or "
+        "untracked file(s) in the working tree. Run 'pkl eval --project-dir "
+        "contract -m . contract/app.pkl' (and contract/post-generate.sh if the "
+        "app has one), commit the result, and move any other post-processing "
+        "into contract/post-generate.sh. Gitignore output that is not meant to "
+        "be committed."
     )
     for line in changed[:_MAX_LISTED_PATHS]:
         print(f"  {line}")
@@ -134,7 +137,7 @@ def verdict() -> int:
         "### App certification",
         "",
         _render(cm_label, cm),
-        _render(f"Contract drift (poe generate) — enforced{app_label}", cd),
+        _render("Contract drift (SDK regeneration) — enforced", cd),
         _render(f"Unit tests — enforced{app_label}", ut),
         _render("Coverage (>=85%) — warn-only", cov),
         "",
@@ -162,8 +165,8 @@ def verdict() -> int:
             "",
             "### ❌ Publish blocked — contract drift",
             "",
-            "`poe generate` either failed or produced changes in `app/generated/`. "
-            "Run it locally and commit the diff.",
+            "Regenerating the contract failed or changed files in the working "
+            "tree. The failing step's log lists the paths and how to regenerate.",
         )
         print(
             "::error title=Publish blocked::Contract drift detected. Build and publish blocked."
@@ -187,13 +190,13 @@ def verdict() -> int:
             "",
             "### ❌ Publish blocked — app dependencies did not install",
             "",
-            "`uv sync --all-extras --frozen` failed, so contract drift and unit "
-            "tests could not run. Native build dependencies go in the "
+            "`uv sync --all-extras --frozen` failed, so unit tests could not "
+            "run. Native build dependencies go in the "
             "`apt_packages` input. See the install step's log.",
         )
         print(
             "::error title=Publish blocked::App dependencies did not install; "
-            "contract drift and unit tests did not run. Build and publish blocked."
+            "unit tests did not run. Build and publish blocked."
         )
     return 1 if install_failed or "failure" in (cd, ut) else 0
 
@@ -202,12 +205,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=("check-migration", "seed-pkl-ca", "contract-drift", "verdict"),
+        choices=("check-migration", "contract-drift", "verdict"),
     )
     args = parser.parse_args(argv)
     return {
         "check-migration": check_migration,
-        "seed-pkl-ca": seed_pkl_ca,
         "contract-drift": contract_drift,
         "verdict": verdict,
     }[args.command]()

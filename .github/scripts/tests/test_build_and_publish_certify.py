@@ -6,11 +6,15 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "build_and_publish"))
+
+import check_generated_freshness  # noqa: E402
+import renovate_pkl_sync  # noqa: E402
 
 # The scripts import each other as top-level modules (`import _bap`), so the
 # tests do too: that keeps one module object for monkeypatching. pyright
@@ -76,29 +80,6 @@ def test_check_migration(
     assert message in capsys.readouterr().out
 
 
-# ── seed-pkl-ca ───────────────────────────────────────────────────────────────
-
-
-def test_seed_copies_the_system_bundle(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    ca = tmp_path / "ca.crt"
-    ca.write_text("PEM")
-    monkeypatch.setenv("HOME", str(tmp_path))
-    assert certify.seed_pkl_ca(str(ca)) == 0
-    assert (tmp_path / ".pkl-ca-bundle.pem").read_text() == "PEM"
-    assert f"Seeded {tmp_path}/.pkl-ca-bundle.pem from {ca}" in capsys.readouterr().out
-
-
-def test_seed_without_a_system_bundle_warns_and_passes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    assert certify.seed_pkl_ca(str(tmp_path / "missing")) == 0
-    assert not (tmp_path / ".pkl-ca-bundle.pem").exists()
-    assert "skipping pkl CA seed" in capsys.readouterr().out
-
-
 # ── contract-drift ────────────────────────────────────────────────────────────
 
 
@@ -110,70 +91,91 @@ def app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+def _regeneration(
+    monkeypatch: pytest.MonkeyPatch,
+    regenerate: Callable[[str], bool],
+    roots: list[Path] | None = None,
+) -> list[str]:
+    """Replace the SDK regeneration seam; returns the contract dirs regenerated."""
+    calls: list[str] = []
+
+    def fake_regenerate(contract_dir: str) -> bool:
+        calls.append(contract_dir)
+        return regenerate(contract_dir)
+
+    def fake_roots(contract_dir: str) -> list[Path]:
+        return [Path(contract_dir) / "app.pkl"] if roots is None else roots
+
+    monkeypatch.setattr(
+        certify, "_sdk_regeneration", lambda: (fake_roots, fake_regenerate)
+    )
+    return calls
+
+
+def test_the_seam_is_the_freshness_checks_regeneration() -> None:
+    """Certify must regenerate with the exact function the generated-freshness
+    check and Renovate's toolkit bump use, not a copy and not the app's poe."""
+    eval_roots, regenerate = certify._sdk_regeneration()
+    assert regenerate is renovate_pkl_sync.regenerate
+    assert regenerate is check_generated_freshness.regenerate
+    assert eval_roots is renovate_pkl_sync.eval_roots
+
+
 def test_no_contract_skips(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    calls = _stub(monkeypatch, {})
+    calls = _regeneration(monkeypatch, lambda _: True, roots=[])
     assert certify.main(["contract-drift"]) == 0
     assert not calls
-    assert (
-        "No contract/app.pkl — skipping contract-drift check."
-        in capsys.readouterr().out
+    assert "No pkl contract in contract/ — skipping" in capsys.readouterr().out
+
+
+def test_a_contract_that_does_not_regenerate_fails_closed(
+    app: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _regeneration(monkeypatch, lambda _: False)
+    assert certify.main(["contract-drift"]) == 1
+    assert "::error::The committed contract does not regenerate" in (
+        capsys.readouterr().out
     )
 
 
-@pytest.mark.parametrize(
-    ("codes", "expected", "message"),
-    [
-        ({}, 0, ""),
-        (
-            {"uv run poe --help": 1},
-            1,
-            "::error::contract/app.pkl exists but the 'poe' task runner is not installed",
-        ),
-        ({"uv run poe generate": 1}, 1, "::error::'poe generate' failed"),
-        (
-            {"git status": 128},
-            1,
-            "::error::'git status' failed, so contract drift could not be checked",
-        ),
-    ],
-)
-def test_contract_drift(
-    app: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    codes: dict[str, int],
-    expected: int,
-    message: str,
-) -> None:
-    calls = _stub(monkeypatch, codes)
-    assert certify.main(["contract-drift"]) == expected
-    assert message in capsys.readouterr().out
-    if not codes:
-        assert calls == [
-            ["uv", "run", "poe", "--help"],
-            ["uv", "run", "poe", "generate"],
-            ["git", "status", "--porcelain", "--untracked-files=all"],
-        ]
-
-
-def test_contract_without_poe_fails_closed(
+def test_a_regeneration_that_cannot_run_fails_closed(
     app: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """An app with contract/app.pkl but no poe must block publish, not pass."""
-    calls = _stub(monkeypatch, {"uv run poe --help": 1})
+    def no_pkl(_: str) -> bool:
+        raise FileNotFoundError("pkl")
+
+    _regeneration(monkeypatch, no_pkl)
     assert certify.main(["contract-drift"]) == 1
-    assert calls == [["uv", "run", "poe", "--help"]]
-    out = capsys.readouterr().out
-    assert out.startswith("::error::")
-    assert "poethepoet" in out
-    assert "[project.optional-dependencies]" in out
+    assert "::error::Could not run the contract regeneration" in (
+        capsys.readouterr().out
+    )
 
 
-# The drift tests below run real git against a real repo; only the `uv run`
-# calls are faked, and `poe generate` is simulated by ``generate``.
+def test_git_status_failure_fails_closed(
+    app: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _regeneration(monkeypatch, lambda _: True)
+    _stub(monkeypatch, {"git status": 128})
+    assert certify.main(["contract-drift"]) == 1
+    assert "::error::'git status' failed, so contract drift could not be checked" in (
+        capsys.readouterr().out
+    )
+
+
+def test_poe_is_never_run(app: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An app's `poe generate` is app-defined shell; certify must not run it,
+    and an app without poe is not failed for lacking it."""
+    _regeneration(monkeypatch, lambda _: True)
+    calls = _stub(monkeypatch, {})
+    assert certify.main(["contract-drift"]) == 0
+    assert calls == [["git", "status", "--porcelain", "--untracked-files=all"]]
+
+
+# The drift tests below run real git against a real repo; only the
+# regeneration is faked, by ``generate``.
 
 _GIT = (
     "git",
@@ -198,26 +200,15 @@ def git_app(app: Path) -> Path:
     return app
 
 
-def _generate(
-    monkeypatch: pytest.MonkeyPatch, generate: Callable[[], object]
-) -> list[list[str]]:
-    """Fake only `uv run …`; `poe generate` runs ``generate``. git runs for real."""
-    real_run = _bap.run
-    calls: list[list[str]] = []
+def _generate(monkeypatch: pytest.MonkeyPatch, generate: Callable[[], object]) -> None:
+    def regenerate(_: str) -> bool:
+        generate()
+        return True
 
-    def fake(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        calls.append(list(cmd))
-        if cmd[:2] == ["uv", "run"]:
-            if cmd[3:] == ["generate"]:
-                generate()
-            return subprocess.CompletedProcess(cmd, 0, "", "")
-        return real_run(cmd, **kwargs)
-
-    monkeypatch.setattr(_bap, "run", fake)
-    return calls
+    _regeneration(monkeypatch, regenerate)
 
 
-def test_drift_passes_when_generate_is_a_no_op(
+def test_drift_passes_when_regeneration_is_a_no_op(
     git_app: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     def rewrite_identically() -> None:
@@ -233,8 +224,7 @@ def test_drift_passes_when_generate_is_a_no_op(
 @pytest.mark.parametrize(
     ("path", "content", "listed"),
     [
-        # A stale tracked file under app/generated/ (the old `-- generated/`
-        # pathspec only matched a top-level generated/ directory).
+        # A stale tracked file under app/generated/.
         (
             "app/generated/_input.py",
             "FIELDS = ['host', 'port']\n",
@@ -244,6 +234,8 @@ def test_drift_passes_when_generate_is_a_no_op(
         ("app/generated/_e2e_base.py", "BASE = 1\n", "?? app/generated/_e2e_base.py"),
         # A generated root-level file.
         ("atlan.yaml", "name: changed\n", " M atlan.yaml"),
+        # Output placed outside app/generated by the contract.
+        ("app/contracts/_input.py", "X = 1\n", "?? app/contracts/_input.py"),
     ],
 )
 def test_drift_fails_on_any_working_tree_change(
@@ -254,10 +246,17 @@ def test_drift_fails_on_any_working_tree_change(
     content: str,
     listed: str,
 ) -> None:
-    _generate(monkeypatch, lambda: (git_app / path).write_text(content))
+    def write() -> None:
+        (git_app / path).parent.mkdir(parents=True, exist_ok=True)
+        (git_app / path).write_text(content)
+
+    _generate(monkeypatch, write)
     assert certify.main(["contract-drift"]) == 1
     out = capsys.readouterr().out
-    assert "::error::'poe generate' left 1 changed or untracked file(s)" in out
+    assert (
+        "::error::Regenerating the contract left 1 changed or untracked file(s)" in out
+    )
+    assert "contract/post-generate.sh" in out
     assert f"\n  {listed}\n" in out
     assert content.strip() not in out  # paths only, never contents
 
@@ -300,7 +299,7 @@ def test_all_green(
     assert summary.read_text().startswith(
         "### App certification\n\n"
         "- ✅ **v3 shape (check_migration) — warn-only** — success\n"
-        "- ✅ **Contract drift (poe generate) — enforced** — success\n"
+        "- ✅ **Contract drift (SDK regeneration) — enforced** — success\n"
         "- ✅ **Unit tests — enforced** — success\n"
         "- ✅ **Coverage (>=85%) — warn-only** — success\n\n"
         "**Unit tests and contract drift block publish on ❌.**"
@@ -349,16 +348,16 @@ def test_enforced_failures_block(
 def test_install_failures_block_and_are_labelled(
     summary: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # The shape a run takes when the app's deps fail to install: drift is
-    # skipped and the unit fan-in reports install_failed — nothing failed, yet
-    # nothing was certified, so publish is blocked (FND-4538).
+    # The shape a run takes when the app's deps fail to install: drift still
+    # runs (it needs pkl, not the app's deps) and the unit fan-in reports
+    # install_failed, so publish is blocked (FND-4538).
     assert (
         _verdict(
             monkeypatch,
             SDK_INSTALL="failure",
             APP_INSTALL="failure",
             CM="skipped",
-            CD="skipped",
+            CD="success",
             UT="install_failed",
             COV="skipped",
         )
@@ -369,7 +368,7 @@ def test_install_failures_block_and_are_labelled(
         "**v3 shape (check_migration) — warn-only (sdk install failed)** — skipped"
         in text
     )
-    assert "**Contract drift (poe generate) — enforced (app install failed)**" in text
+    assert "- ✅ **Contract drift (SDK regeneration) — enforced** — success" in text
     assert (
         "- ❌ **Unit tests — enforced (app install failed)** — install_failed" in text
     )
