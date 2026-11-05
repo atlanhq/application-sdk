@@ -30,12 +30,11 @@ shape:
    base branch also makes "no rollback against what main ships" structural: the
    driver's rollback gate then compares against main by construction.
 
-2. **Two uv projects, with different exempt sets.** ``packages/conformance`` is a
-   separate uv project with its own lock, and unlike the root project it resolves
-   ``atlan-application-sdk`` from PyPI. It therefore HOLDS the SDK at main's
-   version, as the preset's ``lockFileMaintenance`` lane does fleet-wide
-   (FND-3481): the atlan framework dependencies lane is the only one that moves
-   a first-party package, so the two PRs never conflict on ``uv.lock``.
+2. **Two uv projects, one exempt set.** ``packages/conformance`` is a separate
+   uv project with its own lock. Like the root project it never resolves
+   ``atlan-application-sdk`` from PyPI: it path-sources this checkout through
+   ``[tool.uv.sources]`` (FND-4256), so there is no registry version for the
+   bound to hold or move.
 
 3. **One commit, not three.** Each push to the branch re-fires the PR's entire
    required-check suite. Bounding every lock in a single commit costs one CI wave
@@ -111,15 +110,11 @@ PROJECTS: tuple[Project, ...] = (
     # whose own `pyatlan>=N,<N+1` cap is what gates a pyatlan major reaching the
     # fleet at all.
     Project(directory=".", exempt=("pyatlan",)),
-    # The conformance package resolves atlan-application-sdk from PyPI (it declares
-    # it as a test extra). It is HELD, not exempt, mirroring the fleet preset
-    # (FND-3481): the atlan framework dependencies lane is the only one that moves
-    # it, so the two PRs never rewrite the same uv.lock entries.
-    Project(
-        directory="packages/conformance",
-        exempt=("pyatlan",),
-        hold=("atlan-application-sdk",),
-    ),
+    # The conformance package's `test` extra takes atlan-application-sdk from this
+    # checkout (path-sourced via its [tool.uv.sources], FND-4256), so like the
+    # root it has no registry SDK to hold. It used to hold one from PyPI, which
+    # left its tests running against an old release instead of this tree.
+    Project(directory="packages/conformance", exempt=("pyatlan",)),
 )
 
 # The one npm project the refresh lane rewrites: dev-only devDependencies for the

@@ -212,8 +212,7 @@ table_states = Rdict("/tmp/states.db")  # Disk-backed, handles millions
 ```toml
 [project]
 dependencies = [
-    "atlan-application-sdk[incremental,iam-auth,workflows]==X.Y.Z",
-    "rocksdict>=0.3.0",
+    "atlan-application-sdk[incremental]==X.Y.Z",
 ]
 
 [dependency-groups]

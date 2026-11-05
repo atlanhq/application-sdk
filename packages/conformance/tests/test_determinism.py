@@ -329,9 +329,14 @@ def test_p021_storage_names_cover_every_public_async_storage_function() -> None:
 
     from conformance.suite.checks.determinism._p021_io import _SDK_STORAGE_IO
 
+    # Private modules (``_local_marker.py``) are not public API: apps cannot
+    # import from them, so their helpers are not names P021 has to know.
+    # Before FND-4256 this ran against an SDK release from PyPI, which is why
+    # it never met the first one.
     module_level = {
         node.name
         for path in pathlib.Path(storage.__file__).parent.rglob("*.py")
+        if not (path.name.startswith("_") and path.name != "__init__.py")
         for node in ast.parse(path.read_text()).body
         if isinstance(node, ast.AsyncFunctionDef) and not node.name.startswith("_")
     }

@@ -287,10 +287,9 @@ const local function pyDoc(s: String): String = s.replaceAll("\"\"\"", "\\\"\\\"
 
 /// The field's annotation line(s), without indent or docstring.
 ///
-/// The layout is fixed, because existing `_input.py` files were generated with
-/// it: a `default_factory` line longer than 84 characters breaks the call
-/// across lines, and lifecycle kwargs are appended inside the final `)` (or
-/// wrap a plain default as `Field(default=...)`).
+/// Always one line: `PyFormat.format` wraps the rendered module as ruff
+/// would. Lifecycle kwargs are appended inside the final `)` (or wrap a plain
+/// default as `Field(default=...)`).
 function renderFieldLine(name: String, f: InputField): String =
   let (typ = if (f.nullable) "\(f.pyType) | None" else f.pyType)
   let (explicit = f.pyExplicitDefault)
@@ -303,10 +302,7 @@ function renderFieldLine(name: String, f: InputField): String =
   let (isFactory = dflt != null && dflt != "None" && f.pyDefaultIsFactory)
   let (constraints = f.pyConstraints.join(", "))
   let (base =
-    if (isFactory)
-      let (line = "\(name): \(typ) = Field(default_factory=\(dflt))")
-      if (line.length <= 84) line
-      else "\(name): \(typ) = Field(\n        default_factory=\(dflt)\n    )"
+    if (isFactory) "\(name): \(typ) = Field(default_factory=\(dflt))"
     else if (dflt == null)
       if (constraints.isEmpty) "\(name): \(typ)" else "\(name): \(typ) = Field(\(constraints))"
     else if (constraints.isEmpty) "\(name): \(typ) = \(dflt)"
@@ -324,9 +320,19 @@ function renderField(name: String, f: InputField, indent: String): String =
   "\(indent)\(renderFieldLine(name, f))\n" +
     (if (f.doc != "") "\(indent)\"\"\"\(pyDoc(f.doc))\"\"\"\n" else "")
 
+/// A class docstring's body as ruff writes it: the first line trimmed, every
+/// line's trailing whitespace dropped, and continuation lines re-indented to
+/// the class body (keeping their indentation relative to each other). A field
+/// docstring is not a docstring to ruff, so `renderField` keeps it as written.
+const local function classDoc(doc: String): String =
+  let (lines = pyDoc(doc).split("\n"))
+  let (rest = lines.drop(1).map((l) -> l.replaceFirstMapped(Regex(#"^\t+"#), (m) -> "        ".repeat(m.value.length)).trimEnd()))
+  let (margin = rest.filter((l) -> !l.isEmpty).map((l) -> l.length - l.trimStart().length).fold(1000, (a: Int, b: Int) -> if (a < b) a else b))
+  (List(lines.first.trim()) + rest.map((l) -> if (l.isEmpty) "" else "    " + l.drop(margin))).join("\n")
+
 /// One nested object's class definition.
 function renderClass(o: ObjectField): String =
   "class \(o.className)(BaseModel):\n" +
-    (if (o.doc != "") "    \"\"\"\(pyDoc(o.doc))\"\"\"\n\n" else "") +
+    (if (o.doc != "") "    \"\"\"\(classDoc(o.doc))\"\"\"\n\n" else "") +
     "    model_config = ConfigDict(extra=\(if (o.allowExtra) "\"ignore\"" else "\"forbid\""))\n\n" +
     o.fields.toMap().fold("", (acc, k, f) -> acc + renderField(k, f, "    "))

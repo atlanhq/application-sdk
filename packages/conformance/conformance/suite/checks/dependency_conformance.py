@@ -43,6 +43,10 @@ Rules in this check module:
   3.22–3.27) and is fixed at the root in 3.28.0, where ``[daft]`` aliases
   ``[sql]`` again.
 
+* **D017 DeprecatedSdkExtra** — an ``atlan-application-sdk[extra]``
+  reference names a deprecated shim extra: one that installs nothing core or
+  ``[sql]`` does not already provide, and that the SDK removes in v4.0.0.
+
 * **D012 UnpinnedPackageIndex** — the repo's root ``pyproject.toml`` must pin
   PyPI as the resolver's default index (``[[tool.uv.index]]`` with
   ``default = true``).  Without it a machine-wide default index — the Endor
@@ -56,8 +60,8 @@ Rules in this check module:
   been committed: CI holds no credential for the proxy and fails at
   dependency install with ``401 Unauthorized``.
 
-D004/D005 are metadata-based (need the SDK importable) like D002; D006/D007/D008/D009
-are pure-text.  D010 is cross-file (source imports + lock/pyproject) and runs in
+D004/D005 are metadata-based (need the SDK importable) like D002;
+D006/D007/D008/D009/D017 are pure-text.  D010 is cross-file (source imports + lock/pyproject) and runs in
 ``scan_all``.
 
 Self-check exemption: any pyproject whose ``[project].name`` starts with
@@ -113,6 +117,7 @@ RULE_D013 = "D013"
 RULE_D014 = "D014"
 RULE_D015 = "D015"
 RULE_D016 = "D016"
+RULE_D017 = "D017"
 
 SDK_PACKAGE = "atlan-application-sdk"
 # The conformance suite itself (D011).  Apps declare it in a dev group so
@@ -179,6 +184,35 @@ SDK_PYTHON_FLOOR: tuple[int, int] = (3, 11)
 # the golden base tag in the SDK's Dockerfile and fails if this drifts.
 RUNTIME_IMAGE_PYTHON: tuple[int, int] = (3, 13)
 
+
+@dataclass(frozen=True)
+class DeprecatedSdkExtra:
+    """One deprecated shim extra of ``atlan-application-sdk`` (D017)."""
+
+    removed_in: str
+    """SDK version whose release deletes the extra."""
+
+    replacement: str | None
+    """Extra to use instead, or ``None`` when the packages are core and the
+    extra is simply dropped."""
+
+
+# The SDK's deprecated shim extras (D017), keyed by PEP 503-normalised name.
+# Every one installs nothing core or [sql] does not already provide. Hardcoded
+# (an extra has no deprecation metadata to read) so D017 stays pure-text; kept
+# honest by ``test_d017_shim_table_matches_sdk_pyproject``, which re-reads the
+# SDK's real pyproject.toml and fails if an entry is no longer redundant, or if
+# an SDK extra installs nothing distinct without being listed here.
+DEPRECATED_SDK_EXTRAS: Mapping[str, DeprecatedSdkExtra] = {
+    "workflows": DeprecatedSdkExtra(removed_in="4.0.0", replacement=None),
+    "storage": DeprecatedSdkExtra(removed_in="4.0.0", replacement=None),
+    "iam-auth": DeprecatedSdkExtra(removed_in="4.0.0", replacement=None),
+    "azure": DeprecatedSdkExtra(removed_in="4.0.0", replacement=None),
+    "daft": DeprecatedSdkExtra(removed_in="4.0.0", replacement="sql"),
+    "sqlalchemy": DeprecatedSdkExtra(removed_in="4.0.0", replacement="sql"),
+    "pandas": DeprecatedSdkExtra(removed_in="4.0.0", replacement="sql"),
+}
+
 # A PEP 508 / requirement-string fragment. Captures the package *name*; the
 # rest of the line is treated as the version-specifier blob.
 _REQ_RE = re.compile(
@@ -192,6 +226,24 @@ _REQ_RE = re.compile(
     """,
     re.VERBOSE,
 )
+
+
+# A TOML string in a dependency array: a basic ``"..."`` string or a literal
+# ``'...'`` string. TOML allows both; reading only the double-quoted form let a
+# requirement spelt with single quotes skip every D-series check on it.
+_TOML_STRING_PATTERN = r'"(?P<dq>(?:[^"\\]|\\.)*)"' + r"|'(?P<sq>[^'\n]*)'"
+_TOML_STRING_RE = re.compile(_TOML_STRING_PATTERN)
+# A string entry on its own line inside an array: ``"requirement-spec",``
+# (optional comma, optional inline ``# comment``).
+_ARRAY_ENTRY_RE = re.compile(
+    r"^(?P<lead>\s*)(?:" + _TOML_STRING_PATTERN + r")\s*,?\s*(?:#.*)?$"
+)
+
+
+def _toml_string_value(match: re.Match[str]) -> str:
+    """The contents of a :data:`_TOML_STRING_RE` match, either quote style."""
+    dq = match.group("dq")
+    return dq if dq is not None else match.group("sq")
 
 
 # ---------------------------------------------------------------------------
@@ -407,11 +459,7 @@ def _iter_dep_entries(
         r"^\s*([A-Za-z0-9_-]+)\s*=\s*\[\s*(?P<body>.*?)\s*\]\s*(?:#.*)?$"
     )
     array_close_re = re.compile(r"^\s*\]\s*(?:#.*)?$")
-    # A string entry inside an array: ``"requirement-spec",`` (optional comma,
-    # optional inline ``# comment``).
-    entry_re = re.compile(
-        r'^(?P<lead>\s*)"(?P<value>(?:[^"\\]|\\.)*)"\s*,?\s*(?:#.*)?$'
-    )
+    entry_re = _ARRAY_ENTRY_RE
 
     current_table = ""
     for lineno, raw_line in enumerate(text.splitlines(), start=1):
@@ -438,8 +486,8 @@ def _iter_dep_entries(
             if inline and current_table == "project":
                 body = inline.group("body")
                 # Match each "string" entry within the inline body.
-                for sm in re.finditer(r'"([^"\\]*(?:\\.[^"\\]*)*)"', body):
-                    entry = sm.group(1)
+                for sm in _TOML_STRING_RE.finditer(body):
+                    entry = _toml_string_value(sm)
                     parsed = _parse_requirement(entry)
                     if parsed is None:
                         continue
@@ -468,8 +516,8 @@ def _iter_dep_entries(
                     extra_name = ei.group(1)
                     inline_path = f"{extras_table}.{extra_name}"
                     body = ei.group("body")
-                    for sm in re.finditer(r'"([^"\\]*(?:\\.[^"\\]*)*)"', body):
-                        entry = sm.group(1)
+                    for sm in _TOML_STRING_RE.finditer(body):
+                        entry = _toml_string_value(sm)
                         parsed = _parse_requirement(entry)
                         if parsed is None:
                             continue
@@ -500,7 +548,7 @@ def _iter_dep_entries(
         em = entry_re.match(raw_line)
         if em is None:
             continue
-        value = em.group("value")
+        value = _toml_string_value(em)
         parsed = _parse_requirement(value)
         if parsed is None:
             continue
@@ -542,9 +590,7 @@ def _iter_dependency_group_entries(
         r"^\s*([A-Za-z0-9_-]+)\s*=\s*\[\s*(?P<body>.*?)\s*\]\s*(?:#.*)?$"
     )
     array_close_re = re.compile(r"^\s*\]\s*(?:#.*)?$")
-    entry_re = re.compile(
-        r'^(?P<lead>\s*)"(?P<value>(?:[^"\\]|\\.)*)"\s*,?\s*(?:#.*)?$'
-    )
+    entry_re = _ARRAY_ENTRY_RE
 
     in_table = False
     in_array = False
@@ -562,14 +608,13 @@ def _iter_dependency_group_entries(
             inline = group_inline_re.match(raw_line)
             if inline is not None:
                 grp = inline.group(1)
-                for sm in re.finditer(
-                    r'"([^"\\]*(?:\\.[^"\\]*)*)"', inline.group("body")
-                ):
-                    parsed = _parse_requirement(sm.group(1))
+                for sm in _TOML_STRING_RE.finditer(inline.group("body")):
+                    value = _toml_string_value(sm)
+                    parsed = _parse_requirement(value)
                     if parsed is None:
                         continue
                     yield _DepEntry(
-                        raw=sm.group(1),
+                        raw=value,
                         name=parsed[0],
                         line=lineno,
                         column=inline.start("body") + sm.start() + 2,
@@ -590,11 +635,12 @@ def _iter_dependency_group_entries(
         em = entry_re.match(raw_line)
         if em is None:
             continue  # e.g. ``{include-group = "dev"}`` — not a requirement
-        parsed = _parse_requirement(em.group("value"))
+        value = _toml_string_value(em)
+        parsed = _parse_requirement(value)
         if parsed is None:
             continue
         yield _DepEntry(
-            raw=em.group("value"),
+            raw=value,
             name=parsed[0],
             line=lineno,
             column=len(em.group("lead")) + 2,
@@ -1112,6 +1158,42 @@ def scan_text(
                     )
                 )
 
+    # ── D017: deprecated shim extra reference (pure-text) ────────────────────
+    for entry in entries + group_entries:
+        if entry.name != sdk_norm:
+            continue
+        for extra in _sdk_extras_in(entry.raw):
+            shim = DEPRECATED_SDK_EXTRAS.get(_normalise_name(extra))
+            if shim is None:
+                continue
+            if shim.replacement is None:
+                action = (
+                    f"Its packages are core SDK dependencies, so remove "
+                    f"'{extra}' from the extras list (and the brackets if it "
+                    f"was the only one)."
+                )
+            else:
+                action = (
+                    f"Replace '{extra}' with '{shim.replacement}' (drop it if "
+                    f"'{shim.replacement}' is already listed)."
+                )
+            findings.append(
+                _make_finding(
+                    rule_id=RULE_D017,
+                    file=file,
+                    line=entry.line,
+                    column=entry.column,
+                    message=(
+                        f"'{SDK_PACKAGE}[{extra}]' in [{entry.array_path}] "
+                        f"names a deprecated shim extra that installs nothing "
+                        f"of its own and is removed in SDK v{shim.removed_in}. "
+                        f"{action} Then run `uv lock`."
+                    ),
+                    suppressions=suppressions,
+                    discriminator=_normalise_name(extra),
+                )
+            )
+
     # ── D005: invalid SDK extra reference (metadata) ────────────────────────
     if sdk_published_extras is None:
         published = _sdk_published_extras()
@@ -1219,8 +1301,9 @@ _QUERY_TRANSFORMER_MODULE = "application_sdk.transformers.query"
 #: query`` form.
 _TRANSFORMERS_PACKAGE = "application_sdk.transformers"
 
-#: SDK extras that provide duckdb (per the SDK's published extras; the
-#: ``[daft]`` extra is empty on SDK >= 3.22 and provides nothing).
+#: SDK extras that provide duckdb (per the SDK's published extras).  The
+#: deprecated ``[daft]`` alias is left out on purpose: it resolved empty over
+#: SDK 3.22–3.27, so only a lock can say whether it provides duckdb.
 _DUCKDB_PROVIDING_EXTRAS = frozenset({"sql", "incremental"})
 
 

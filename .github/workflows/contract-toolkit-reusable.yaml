@@ -1,7 +1,7 @@
 name: Contract Toolkit Validation (reusable)
 
 # Reusable workflow: contract-toolkit validation (generated-output freshness,
-# PKL tests/invariants, generated-Python lint + SDK-import, changelog guard,
+# PKL tests/invariants, generated-Python ruff stability + SDK-import, changelog guard,
 # docs reminder).
 #
 # Invoked only by sdk-gate.yaml, which gates the *whole call* on
@@ -99,15 +99,15 @@ jobs:
         with:
           version: "0.13.7"
 
-      - name: Check generated Python formatting
-        run: |
-          find contract-toolkit/examples -name "_input.py" -print0 \
-            | xargs -0 uvx ruff format --isolated --check
+      # No version: — install-pkl resolves the SDK pin from
+      # application_sdk/pkl_version.py, the one place it is declared.
+      - uses: ./.github/actions/install-pkl
 
-      - name: Check generated Python lint
-        run: |
-          find contract-toolkit/examples -name "_input.py" -print0 \
-            | xargs -0 uvx ruff check --isolated --per-file-ignores="contract-toolkit/examples/**/generated/*:F401"
+      # Generates every example outside the repo (so application_sdk is
+      # third-party, as in an app) and fails if ruff's default settings would
+      # change any generated .py file. ruff is the SDK's locked dev dependency.
+      - name: Check generated Python is ruff-stable
+        run: uv run python contract-toolkit/scripts/check-ruff-stable.py
 
       - name: Test generated input imports against local SDK
         run: uv run --extra workflows python contract-toolkit/scripts/test-sdk-import.py

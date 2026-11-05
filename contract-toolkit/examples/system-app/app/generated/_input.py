@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from application_sdk.contracts.base import Input
 from application_sdk.contracts.types import MaxItems
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ColumnMapping(BaseModel):

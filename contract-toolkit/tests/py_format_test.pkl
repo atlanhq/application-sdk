@@ -1,0 +1,38 @@
+/// `PyFormat.format` lays a module out exactly as ruff 0.17.3 does with its
+/// default settings.
+///
+/// `fixtures/py_format/expected.py.txt` is ruff's output for `input.py.txt`
+/// (`ruff check --select I --fix` then `ruff format`, both `--isolated`).
+/// `scripts/check-ruff-stable.py` re-runs ruff on the expected file, so a ruff
+/// upgrade that changes a layout fails there rather than here going stale.
+/// The input covers every shape the renderers emit: unsorted, mis-grouped
+/// imports; `Field(...)` calls whose arguments hug or go one per line; a lone
+/// argument that is too long; nested dict and list literals; an annotation
+/// split instead of the call; both split; a value wrapped in parentheses; a
+/// string too long to help; decorators; `class` lines; docstrings left alone.
+amends "pkl:test"
+
+import "../src/PyFormat.pkl"
+
+local input: String = read("fixtures/py_format/input.py.txt").text
+local expected: String = read("fixtures/py_format/expected.py.txt").text
+
+facts {
+  ["format matches ruff on every shape the renderers emit"] {
+    PyFormat.format(input) == expected
+  }
+  ["format is idempotent"] {
+    PyFormat.format(expected) == expected
+  }
+  ["short lines are left exactly as written"] {
+    PyFormat.wrapLine("    x: int = Field(default=1)") == List("    x: int = Field(default=1)")
+  }
+  ["a line that is part of a multi-line construct is left alone"] {
+    let (line = "        default=\"" + "x".repeat(90) + "\",")
+    PyFormat.wrapLine(line) == List(line)
+  }
+  ["a final newline is kept"] {
+    PyFormat.format("x = 1\n") == "x = 1\n"
+    PyFormat.format("x = 1") == "x = 1"
+  }
+}

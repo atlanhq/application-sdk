@@ -22,6 +22,8 @@ name: Bound the Renovate lock refresh
 # (SDK, conformance) also write uv.lock, but each moves a single named package
 # that is first-party and explicitly chosen — the cooldown has no business
 # delaying a deliberate pick, only the unattended upgrade-everything refresh.
+# Neither uv project resolves atlan-application-sdk from PyPI (packages/conformance
+# path-sources this checkout, FND-4256), so neither holds it.
 #
 # The lane rewrites four lock files, and the npm one is bounded by a different
 # mechanism from the three Python ones (FND-380): npm can express none of the
