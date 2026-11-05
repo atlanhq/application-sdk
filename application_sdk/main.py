@@ -465,8 +465,13 @@ async def _log_dapr_components(
     * registered + declared enabled / unset → INFO ("accepted")
     * registered + declared disabled        → INFO ("drift")
     * missing    + declared enabled         → WARNING ("declared but missing")
-    * missing    + declared disabled        → INFO ("disabled by config")
+    * missing    + declared disabled        → INFO ("disabled by config"),
+      except the deployment object store, which the SDK requires
     * missing    + declared unset           → INFO ("legacy/unknown intent")
+
+    A deployment object store declared disabled always produces an ERROR
+    explaining the required configuration, even if it is registered. A mounted
+    component still permits startup; the diagnostic does not reject it.
 
     Every binding always produces a log line so operators can see, with a
     reason, how each one was handled. This is best-effort: any failure to
@@ -539,7 +544,18 @@ async def _log_dapr_components(
         raw, declared = _read_enable_tri_state(enable_var)
         is_registered = comp_name in registered
 
-        if is_registered and declared is not False:
+        if role == "object_store" and declared is False:
+            logger.error(
+                "Dapr binding %s (role=%s): the SDK requires the deployment object store "
+                "despite %s=false; set deploy.dapr.%s: true in atlan.yaml "
+                "(registered in sidecar=%s)",
+                comp_name,
+                role,
+                enable_var,
+                yaml_key,
+                is_registered,
+            )
+        elif is_registered and declared is not False:
             # conformance: ignore[L006] one-time startup validation over the fixed 4-element `expected` tuple, not a hot loop
             logger.info(
                 "Dapr binding %s (role=%s) accepted: registered in sidecar (%s=%s)",
@@ -695,6 +711,7 @@ async def _create_infrastructure(
             SECRET_STORE_NAME,
             STATE_STORE_NAME,
             UPSTREAM_OBJECT_STORE_NAME,
+            _read_enable_tri_state,
         )
         from application_sdk.infrastructure._dapr.client import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
             DaprBinding,
@@ -710,6 +727,10 @@ async def _create_infrastructure(
         )
         from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: private helper used only inside _create_infrastructure
             _create_store_from_binding_optional_with_put_attrs,
+        )
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — cold path: startup configuration diagnostics
+            StorageBindingNotFoundError,
+            StorageConfigError,
         )
 
         await wait_for_dapr_sidecar()
@@ -735,13 +756,25 @@ async def _create_infrastructure(
             components_dir=components_dir,
         )
         set_fetched_binding_secrets(DEPLOYMENT_OBJECT_STORE_NAME, deployment_secrets)
-        deployment_store, deployment_put_attrs = (
-            create_store_from_binding_with_put_attrs(
-                DEPLOYMENT_OBJECT_STORE_NAME,
-                components_dir=components_dir,
-                secrets=deployment_secrets,
+        try:
+            deployment_store, deployment_put_attrs = (
+                create_store_from_binding_with_put_attrs(
+                    DEPLOYMENT_OBJECT_STORE_NAME,
+                    components_dir=components_dir,
+                    secrets=deployment_secrets,
+                )
             )
-        )
+        except StorageBindingNotFoundError as exc:
+            _, declared = _read_enable_tri_state("ATLAN_ENABLE_OBJECTSTORE")
+            if declared is False:
+                raise StorageConfigError(
+                    "The SDK requires the deployment object store, but its Dapr "
+                    "component is missing and ATLAN_ENABLE_OBJECTSTORE=false. "
+                    "Set deploy.dapr.objectstore: true in atlan.yaml and deploy "
+                    "with the objectstore component mounted.",
+                    cause=exc,
+                ) from exc
+            raise
 
         # The only place the two component *names* are compared: identity cannot
         # be tested before the second object exists, so this is the decision
