@@ -98,7 +98,8 @@ def _sdk_pins_for_extra(sdk: dict, extra: str) -> dict[str, str]:
 
 
 def _lower_bound(req: str) -> str | None:
-    """The version of ``req``'s ``>=`` specifier, or None if it has none."""
+    """The version of ``req``'s one ``>=`` specifier; None if it has none or
+    several (which leave no single floor to compare)."""
     floors = [s.version for s in Requirement(req).specifier if s.operator == ">="]
     return floors[0] if len(floors) == 1 else None
 
@@ -108,7 +109,9 @@ def _constraint_floor_mismatches(root: dict, api: dict) -> list[str]:
 
     A package that both the SDK and the api package declare (core or any extra)
     and that has a ``[tool.uv] constraint-dependencies`` line must carry exactly
-    that line's floor in every requirement on both sides.
+    that line's floor in every requirement on both sides. A missing or
+    ambiguous floor (no ``>=``, or more than one) on either side is a
+    mismatch: it carries no CVE floor to agree on.
     """
     sdk = root["project"]
 
@@ -127,6 +130,9 @@ def _constraint_floor_mismatches(root: dict, api: dict) -> list[str]:
         if name not in sdk_reqs or name not in api_reqs:
             continue
         floor = _lower_bound(line)
+        if floor is None:
+            problems.append(f"constraint {line!r} has no single >= floor")
+            continue
         for where, req in [("sdk", r) for r in sdk_reqs[name]] + [
             ("api", r) for r in api_reqs[name]
         ]:
@@ -177,6 +183,29 @@ def test_constraint_floor_mismatches_catches_a_one_sided_fix() -> None:
         "api 'authlib>=1.9.1,<2' != constraint 'authlib>=1.9.4'",
         "sdk 'python-dotenv>=1.2.2,<2' != constraint 'python-dotenv>=1.2.3'",
         "api 'python-dotenv>=1.2.2,<2' != constraint 'python-dotenv>=1.2.3'",
+    ]
+
+
+def test_constraint_floor_mismatches_rejects_missing_and_ambiguous_floors() -> None:
+    """Bare or doubly-floored requirements carry no single CVE floor. Before,
+    both sides collapsed to None and compared equal, so nothing was reported."""
+    root = {
+        "project": {
+            "dependencies": ["authlib", "httpx>=0.27,>=0.28,<0.29"],
+        },
+        "tool": {
+            "uv": {
+                "constraint-dependencies": [
+                    "authlib",  # no floor at all
+                    "httpx>=0.28",
+                ]
+            }
+        },
+    }
+    api = {"dependencies": ["authlib", "httpx>=0.28,<0.29"]}
+    assert _constraint_floor_mismatches(root, api) == [
+        "constraint 'authlib' has no single >= floor",
+        "sdk 'httpx>=0.27,>=0.28,<0.29' != constraint 'httpx>=0.28'",
     ]
 
 
