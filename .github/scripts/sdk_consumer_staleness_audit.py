@@ -754,6 +754,9 @@ def audit_repo(
     run: RunFn,
 ) -> Optional[AuditRow]:
     matches, truncated, paths = find_sdk_manifests(owner, repo, run)
+    # No match here is a complete answer even when ``truncated`` is set:
+    # find_sdk_manifests walks a truncated tree directory by directory and
+    # raises AuditError if any directory still can't be listed in full.
     if not matches:
         return None
     direct = [m for m in matches if m.kind == "direct"]
