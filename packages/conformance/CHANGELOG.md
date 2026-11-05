@@ -2,6 +2,18 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.56.0] - 2026-11-05
+
+### Features
+
+- P064/P065 flag offloaded work a cancel cannot stop [FND-4711] (#4770) ([2ed7a20](https://github.com/atlanhq/application-sdk/commit/2ed7a20))
+
+### Bug fixes
+
+- route SDR disk pressure to the host volume operator (#4755) ([b74ec61](https://github.com/atlanhq/application-sdk/commit/b74ec61))
+- require the deployment object store and fail startup with a named config error (#4780) ([d95a018](https://github.com/atlanhq/application-sdk/commit/d95a018))
+- D017 false positive on compliant code (1 repo) (#4769) ([4c8085a](https://github.com/atlanhq/application-sdk/commit/4c8085a))
+
 ## [0.55.0] - 2026-11-05
 
 ### Features
