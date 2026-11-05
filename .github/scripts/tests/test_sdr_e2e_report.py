@@ -7,6 +7,7 @@ caller's ``results/`` and ``integration-test-summary*.json`` relative to cwd.
 
 from __future__ import annotations
 
+import importlib
 import json
 import re
 import sys
@@ -16,7 +17,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "actions" / "sdr-e2e"))
 
-import sdr_report  # noqa: E402
+# .github/actions/sdr-e2e is not a package (the hyphen), so pyright cannot
+# resolve a plain import of it; load it by name instead.
+sdr_report = importlib.import_module("sdr_report")
 
 TENANT = "acme.atlan.com"
 
@@ -65,7 +68,9 @@ def _url(wf: str = "wf", run: str = "run") -> str:
     )
 
 
-def test_links_flat_for_a_single_suite(ws, monkeypatch) -> None:
+def test_links_flat_for_a_single_suite(
+    ws: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("SDR_TEST_TENANT", TENANT)
     (ws / "integration-test-summary.json").write_text(
         json.dumps(
@@ -86,7 +91,9 @@ def test_links_flat_for_a_single_suite(ws, monkeypatch) -> None:
     )
 
 
-def test_links_grouped_by_class_for_multiple_suites(ws, monkeypatch) -> None:
+def test_links_grouped_by_class_for_multiple_suites(
+    ws: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("SDR_TEST_TENANT", TENANT)
     # Per-class files are named after the class (application_sdk.testing.sdr.base
     # writes integration-test-summary-<cls.__name__>.json); that name wins.
@@ -109,7 +116,7 @@ def test_links_grouped_by_class_for_multiple_suites(ws, monkeypatch) -> None:
 
 
 def test_a_scenario_name_shared_by_two_classes_stays_with_each_class(
-    ws, monkeypatch
+    ws: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A name -> class map from JUnit keeps one class per name; the per-class
     file is the authority, so both `create` links land under their own class."""
@@ -133,7 +140,9 @@ def test_a_scenario_name_shared_by_two_classes_stays_with_each_class(
     ]
 
 
-def test_shared_summary_groups_by_junit_class(ws, monkeypatch) -> None:
+def test_shared_summary_groups_by_junit_class(
+    ws: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("SDR_TEST_TENANT", TENANT)
     _junit(
         ws,
@@ -152,7 +161,9 @@ def test_shared_summary_groups_by_junit_class(ws, monkeypatch) -> None:
     ]
 
 
-def test_links_empty_without_a_tenant(ws, monkeypatch, capsys) -> None:
+def test_links_empty_without_a_tenant(
+    ws: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.delenv("SDR_TEST_TENANT", raising=False)
     (ws / "integration-test-summary.json").write_text(
         json.dumps({"scenarios": [_scenario("a")]})
@@ -162,7 +173,9 @@ def test_links_empty_without_a_tenant(ws, monkeypatch, capsys) -> None:
     assert "(none)" in capsys.readouterr().out
 
 
-def test_links_empty_without_summary_files(ws, monkeypatch) -> None:
+def test_links_empty_without_summary_files(
+    ws: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("SDR_TEST_TENANT", TENANT)
     sdr_report.main(["workflow-links"])
     assert _output(ws, "links") == ""
@@ -180,11 +193,11 @@ def test_links_empty_without_summary_files(ws, monkeypatch) -> None:
         ("", "Tests"),
     ],
 )
-def test_title_from_test_path(path, title) -> None:
+def test_title_from_test_path(path: str, title: str) -> None:
     assert sdr_report.title_from_test_path(path) == title
 
 
-def test_step_summary_full_report(ws, monkeypatch) -> None:
+def test_step_summary_full_report(ws: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     summary = ws / "summary.md"
     summary.write_text("stale")  # the step overwrites, it does not append
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
@@ -217,7 +230,9 @@ def test_step_summary_full_report(ws, monkeypatch) -> None:
     assert "| 💥 | `workflow_run` — _err_ | 2.0s |" in text
 
 
-def test_step_summary_without_results_uses_the_override(ws, monkeypatch) -> None:
+def test_step_summary_without_results_uses_the_override(
+    ws: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     summary = ws / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     monkeypatch.setenv("OUTCOME", "failure")
@@ -244,19 +259,21 @@ LOG = "\n".join(
 )
 
 
-def test_asset_summary_without_a_container_log(ws, capsys) -> None:
+def test_asset_summary_without_a_container_log(
+    ws: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     assert sdr_report.main(["asset-summary"]) == 0
     assert (ws / "gh_output").read_text() == "markdown=\n"
     assert "No container log" in capsys.readouterr().out
 
 
-def test_asset_summary_without_asset_lines(ws) -> None:
+def test_asset_summary_without_asset_lines(ws: Path) -> None:
     (ws / "results/sdr-container.log").write_text("correlation_id=ab x - hello\n")
     sdr_report.main(["asset-summary"])
     assert (ws / "gh_output").read_text() == "markdown=\n"
 
 
-def test_asset_summary_tables(ws, monkeypatch) -> None:
+def test_asset_summary_tables(ws: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SDR_TEST_TENANT", TENANT)
     (ws / "results/sdr-container.log").write_text(LOG)
     sdr_report.main(["asset-summary"])
@@ -279,7 +296,9 @@ def test_asset_summary_tables(ws, monkeypatch) -> None:
     assert "Assets in Atlas" not in md
 
 
-def test_asset_summary_no_link_without_a_tenant(ws, monkeypatch) -> None:
+def test_asset_summary_no_link_without_a_tenant(
+    ws: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.delenv("SDR_TEST_TENANT", raising=False)
     (ws / "results/sdr-container.log").write_text(LOG)
     sdr_report.main(["asset-summary"])
@@ -295,7 +314,9 @@ def _with_inventory(ws: Path, atlas: str, lineage: str) -> None:
     )
 
 
-def test_asset_summary_full_dag_sections(ws, monkeypatch) -> None:
+def test_asset_summary_full_dag_sections(
+    ws: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("TWO_STORE", "false")
     _with_inventory(
         ws, "{'Table': 3, 'Column': 7}", "{'Process': 2} lineage_present=True"
@@ -311,7 +332,9 @@ def test_asset_summary_full_dag_sections(ws, monkeypatch) -> None:
     assert "No lineage assets observed" not in md
 
 
-def test_asset_summary_two_store_handoff_warning(ws, monkeypatch) -> None:
+def test_asset_summary_two_store_handoff_warning(
+    ws: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("TWO_STORE", "true")
     _with_inventory(ws, "{}", "{} lineage_present=False")
     sdr_report.main(["asset-summary"])
@@ -321,7 +344,9 @@ def test_asset_summary_two_store_handoff_warning(ws, monkeypatch) -> None:
     assert "**Total:** 0\n\n> ⚠️" in md
 
 
-def test_asset_summary_bad_literal_counts_as_empty(ws, monkeypatch) -> None:
+def test_asset_summary_bad_literal_counts_as_empty(
+    ws: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("TWO_STORE", "false")
     _with_inventory(ws, "{not python}", "{'Process': 1} lineage_present=True")
     sdr_report.main(["asset-summary"])

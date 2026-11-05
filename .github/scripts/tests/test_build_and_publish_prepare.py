@@ -12,14 +12,21 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "build_and_publish"))
 
-import _bap  # noqa: E402
-import manifest  # noqa: E402
-import prepare  # noqa: E402
+# The scripts import each other as top-level modules (`import _bap`), so the
+# tests do too: that keeps one module object for monkeypatching. pyright
+# resolves them through the package path instead.
+if TYPE_CHECKING:
+    from build_and_publish import _bap, manifest, prepare
+else:
+    import _bap
+    import manifest
+    import prepare
 
 SHA = "abcdef0123456789abcdef0123456789abcdef01"
 
@@ -42,12 +49,13 @@ def _outputs(path: Path) -> dict[str, str]:
         if not line:
             continue
         if match := re.fullmatch(r"(\w+)<<(\w+)", line):
-            key, delim, value = match.group(1), match.group(2), []
+            key, delim = match.group(1), match.group(2)
+            body: list[str] = []
             for inner in lines:
                 if inner == delim:
                     break
-                value.append(inner)
-            out[key] = "\n".join(value)
+                body.append(inner)
+            out[key] = "\n".join(body)
         else:
             key, _, value = line.partition("=")
             out[key] = value

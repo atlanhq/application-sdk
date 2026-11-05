@@ -6,13 +6,20 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "build_and_publish"))
 
-import _bap  # noqa: E402
-import publish  # noqa: E402
+# The scripts import each other as top-level modules (`import _bap`), so the
+# tests do too: that keeps one module object for monkeypatching. pyright
+# resolves them through the package path instead.
+if TYPE_CHECKING:
+    from build_and_publish import _bap, publish
+else:
+    import _bap
+    import publish
 
 
 @pytest.fixture

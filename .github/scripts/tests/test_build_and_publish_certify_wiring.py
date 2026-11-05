@@ -25,9 +25,14 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
+
+#: Parsed YAML: keys and values are whatever the file holds.
+Workflow = dict[Any, Any]
+Step = dict[str, Any]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "build-and-publish-app.yaml"
@@ -40,26 +45,26 @@ INSTALL_STEP = "Install app dependencies"
 
 
 @pytest.fixture(scope="module")
-def workflow() -> dict:  # type: ignore[type-arg]
+def workflow() -> Workflow:
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
 
 @pytest.fixture(scope="module")
-def tests_workflow() -> dict:  # type: ignore[type-arg]
+def tests_workflow() -> Workflow:
     return yaml.safe_load(TESTS_REUSABLE.read_text(encoding="utf-8"))
 
 
-def _steps(workflow: dict, job: str) -> list[dict]:  # type: ignore[type-arg]
+def _steps(workflow: Workflow, job: str) -> list[Step]:
     return workflow["jobs"][job]["steps"]
 
 
-def _index(steps: list[dict], name: str) -> int:  # type: ignore[type-arg]
+def _index(steps: list[Step], name: str) -> int:
     names = [step.get("name") for step in steps]
     assert name in names, f"missing step {name!r}"
     return names.index(name)
 
 
-def _uses_uv(step: dict) -> bool:  # type: ignore[type-arg]
+def _uses_uv(step: Step) -> bool:
     return "uv " in step.get("run", "") or "certify_unit_shards.py" in step.get(
         "run", ""
     )
@@ -69,7 +74,7 @@ def _uses_uv(step: dict) -> bool:  # type: ignore[type-arg]
 
 
 @pytest.mark.parametrize("job", CERTIFY_JOBS)
-def test_python_is_pinned_before_any_uv_command(workflow: dict, job: str) -> None:  # type: ignore[type-arg]
+def test_python_is_pinned_before_any_uv_command(workflow: Workflow, job: str) -> None:
     steps = _steps(workflow, job)
     pin = _index(steps, PIN_STEP)
     early = [step.get("name") for step in steps[:pin] if _uses_uv(step)]
@@ -77,7 +82,7 @@ def test_python_is_pinned_before_any_uv_command(workflow: dict, job: str) -> Non
 
 
 @pytest.mark.parametrize("job", CERTIFY_JOBS)
-def test_pin_runs_after_the_sdk_checkout_it_reads(workflow: dict, job: str) -> None:  # type: ignore[type-arg]
+def test_pin_runs_after_the_sdk_checkout_it_reads(workflow: Workflow, job: str) -> None:
     steps = _steps(workflow, job)
     sdk = [
         i
@@ -87,7 +92,7 @@ def test_pin_runs_after_the_sdk_checkout_it_reads(workflow: dict, job: str) -> N
     assert sdk and sdk[0] < _index(steps, PIN_STEP)
 
 
-def test_sparse_sdk_checkout_includes_the_dockerfile(workflow: dict) -> None:  # type: ignore[type-arg]
+def test_sparse_sdk_checkout_includes_the_dockerfile(workflow: Workflow) -> None:
     """certify-unit checks out only part of the SDK; print-version reads the
     golden tag from its root Dockerfile, so the sparse set must include it."""
     checkout = next(
@@ -102,7 +107,7 @@ def test_sparse_sdk_checkout_includes_the_dockerfile(workflow: dict) -> None:  #
 
 @pytest.mark.parametrize("job", CERTIFY_JOBS)
 def test_pin_exports_the_golden_version(
-    workflow: dict,  # type: ignore[type-arg]
+    workflow: Workflow,
     job: str,
     tmp_path: Path,
 ) -> None:
@@ -139,7 +144,7 @@ def test_pin_exports_the_golden_version(
 
 @pytest.mark.parametrize("job", CERTIFY_JOBS)
 def test_pin_fails_closed_without_a_golden_tag(
-    workflow: dict,  # type: ignore[type-arg]
+    workflow: Workflow,
     job: str,
     tmp_path: Path,
 ) -> None:
@@ -167,7 +172,7 @@ def test_pin_fails_closed_without_a_golden_tag(
 # ── apt_packages ──────────────────────────────────────────────────────────────
 
 
-def test_apt_packages_input_is_declared_and_off_by_default(workflow: dict) -> None:  # type: ignore[type-arg]
+def test_apt_packages_input_is_declared_and_off_by_default(workflow: Workflow) -> None:
     inputs = workflow[True]["workflow_call"]["inputs"]  # `on` parses as True
     assert inputs["apt_packages"]["type"] == "string"
     assert inputs["apt_packages"].get("default", "") == "", (
@@ -176,7 +181,7 @@ def test_apt_packages_input_is_declared_and_off_by_default(workflow: dict) -> No
 
 
 @pytest.mark.parametrize("job", CERTIFY_JOBS)
-def test_apt_step_precedes_the_app_install(workflow: dict, job: str) -> None:  # type: ignore[type-arg]
+def test_apt_step_precedes_the_app_install(workflow: Workflow, job: str) -> None:
     steps = _steps(workflow, job)
     apt = _index(steps, APT_STEP)
     assert apt < _index(steps, INSTALL_STEP)
@@ -188,7 +193,7 @@ def test_apt_step_precedes_the_app_install(workflow: dict, job: str) -> None:  #
 
 
 @pytest.mark.parametrize("job", CERTIFY_JOBS)
-def test_apt_step_routes_the_value_through_env(workflow: dict, job: str) -> None:  # type: ignore[type-arg]
+def test_apt_step_routes_the_value_through_env(workflow: Workflow, job: str) -> None:
     step = _steps(workflow, job)[_index(_steps(workflow, job), APT_STEP)]
     assert step["env"]["APT_PACKAGES"] == "${{ inputs.apt_packages }}"
     assert "${{" not in step["run"]
@@ -196,8 +201,8 @@ def test_apt_step_routes_the_value_through_env(workflow: dict, job: str) -> None
 
 @pytest.mark.parametrize("job", CERTIFY_JOBS)
 def test_apt_step_is_byte_identical_to_tests_reusable(
-    workflow: dict,  # type: ignore[type-arg]
-    tests_workflow: dict,  # type: ignore[type-arg]
+    workflow: Workflow,
+    tests_workflow: Workflow,
     job: str,
 ) -> None:
     """One guard, now in four places: pin these copies to tests-reusable's so
@@ -232,7 +237,7 @@ def _guard(script: str) -> str:
     ],
 )
 def test_apt_guard_executes_as_an_allowlist(
-    workflow: dict,  # type: ignore[type-arg]
+    workflow: Workflow,
     value: str,
     accepted: bool,
 ) -> None:

@@ -33,6 +33,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -84,24 +85,33 @@ def conditional_reason(script: str) -> str | None:
     return None
 
 
-def _step_label(step: dict, index: int) -> str:
+def _step_label(step: dict[str, Any], index: int) -> str:
     return str(step.get("id") or step.get("name") or f"#{index}")
+
+
+def _steps_of(node: object) -> list[object]:
+    """The ``steps:`` list of a job or ``runs:`` mapping (empty when absent)."""
+    if not isinstance(node, dict):
+        return []
+    steps = cast("dict[str, object]", node).get("steps")
+    return cast("list[object]", steps) if isinstance(steps, list) else []
 
 
 def _run_blocks(path: Path) -> Iterator[tuple[str, str]]:
     """Yield ``(location, script)`` for every ``run:`` step in ``path``."""
-    doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if "jobs" in doc:
-        groups = [
-            (f"jobs.{job_id}", (job or {}).get("steps") or [])
-            for job_id, job in doc["jobs"].items()
-        ]
+    doc: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    jobs: dict[str, Any] = doc.get("jobs") or {}
+    if jobs:
+        groups = [(f"jobs.{job_id}", _steps_of(job)) for job_id, job in jobs.items()]
     else:
-        groups = [("runs", (doc.get("runs") or {}).get("steps") or [])]
+        groups = [("runs", _steps_of(doc.get("runs")))]
     for prefix, steps in groups:
-        for index, step in enumerate(steps):
-            if isinstance(step, dict) and isinstance(step.get("run"), str):
-                yield f"{prefix}.{_step_label(step, index)}", step["run"]
+        for index, raw in enumerate(steps):
+            if not isinstance(raw, dict):
+                continue
+            step = cast("dict[str, Any]", raw)
+            if isinstance(run := step.get("run"), str):
+                yield f"{prefix}.{_step_label(step, index)}", run
 
 
 def _sources() -> list[Path]:

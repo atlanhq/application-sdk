@@ -34,6 +34,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
+from typing import cast
 
 import _bap
 
@@ -60,12 +61,24 @@ def _length(value: object) -> int:
     return abs(value) if isinstance(value, (int, float)) else 0  # type: ignore[return-value]
 
 
-def _gitleaks_findings(report: str) -> list[dict]:
+#: A JSON object as ``json.loads`` returns it.
+JsonObject = dict[str, object]
+
+
+def _objects(value: object) -> list[JsonObject]:
+    """The JSON objects in ``value`` when it is an array, else none."""
+    if not isinstance(value, list):
+        return []
+    items = cast("list[object]", value)
+    return [cast(JsonObject, f) for f in items if isinstance(f, dict)]
+
+
+def _gitleaks_findings(report: str) -> list[JsonObject]:
     try:
         data = _load(report)
     except (OSError, ValueError):
         return []
-    return [f for f in data if isinstance(f, dict)] if isinstance(data, list) else []
+    return _objects(data)
 
 
 def _gitleaks_count(report: str) -> int | None:
@@ -76,16 +89,12 @@ def _gitleaks_count(report: str) -> int | None:
         return None
 
 
-def _severe(verdict: object) -> list[dict]:
+def _severe(verdict: object) -> list[JsonObject]:
     """CRITICAL/HIGH creds-into-logs findings, as ``.findings[]? | select(...)``."""
-    findings = verdict.get("findings") if isinstance(verdict, dict) else None
-    if not isinstance(findings, list):
+    if not isinstance(verdict, dict):
         return []
-    return [
-        f
-        for f in findings
-        if isinstance(f, dict) and f.get("severity") in ("CRITICAL", "HIGH")
-    ]
+    findings = cast(JsonObject, verdict).get("findings")
+    return [f for f in _objects(findings) if f.get("severity") in ("CRITICAL", "HIGH")]
 
 
 def _curl_url_config(url: str) -> str:
@@ -245,7 +254,7 @@ def notify_gitleaks(report: str = GITLEAKS_REPORT) -> int:
 # ── Layer 2: creds-into-logs (warn-only) ──────────────────────────────────────
 
 
-def _summary_count(summary: dict, key: str) -> str:
+def _summary_count(summary: JsonObject, key: str) -> str:
     """``.summary.<key> // 0`` as ``jq -r`` prints it."""
     value = summary.get(key)
     return "0" if value is None or value is False else _bap.jq_str(value)
@@ -264,8 +273,8 @@ def credscan(verdict: str = VERDICT, root: str = "app") -> int:
         )
         _bap.output(findings=0, blocking=0)
         return 0
-    summary = data.get("summary") if isinstance(data, dict) else None
-    summary = summary if isinstance(summary, dict) else {}
+    raw = cast(JsonObject, data).get("summary") if isinstance(data, dict) else None
+    summary = cast(JsonObject, raw) if isinstance(raw, dict) else {}
     _bap.output(
         findings=_summary_count(summary, "total_findings"),
         blocking=_summary_count(summary, "blocking"),

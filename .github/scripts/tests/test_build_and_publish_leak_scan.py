@@ -7,13 +7,20 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "build_and_publish"))
 
-import _bap  # noqa: E402
-import leak_scan  # noqa: E402
+# The scripts import each other as top-level modules (`import _bap`), so the
+# tests do too: that keeps one module object for monkeypatching. pyright
+# resolves them through the package path instead.
+if TYPE_CHECKING:
+    from build_and_publish import _bap, leak_scan
+else:
+    import _bap
+    import leak_scan
 
 WEBHOOK_SECRET_PATH = "/services/T0SECRET/B0SECRET/x0secret"
 WEBHOOK = "https://hooks.slack.com" + WEBHOOK_SECRET_PATH
@@ -32,8 +39,10 @@ def gh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
 
 
 class Recorder:
-    def __init__(self, on_call: Callable[[list[str], dict], int] | None = None) -> None:
-        self.calls: list[tuple[list[str], dict]] = []
+    def __init__(
+        self, on_call: Callable[[list[str], dict[str, object]], int] | None = None
+    ) -> None:
+        self.calls: list[tuple[list[str], dict[str, object]]] = []
         self.on_call = on_call
 
     def __call__(
@@ -70,7 +79,7 @@ def app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _gitleaks_writing(
     report: Path, findings: object, rc: int
-) -> Callable[[list[str], dict], int]:
+) -> Callable[[list[str], dict[str, object]], int]:
     def on_call(cmd: list[str], kwargs: dict) -> int:
         report.write_text(json.dumps(findings))
         return rc

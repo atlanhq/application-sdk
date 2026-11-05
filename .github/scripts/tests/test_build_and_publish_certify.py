@@ -6,14 +6,20 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "build_and_publish"))
 
-import _bap  # noqa: E402
-import certify  # noqa: E402
+# The scripts import each other as top-level modules (`import _bap`), so the
+# tests do too: that keeps one module object for monkeypatching. pyright
+# resolves them through the package path instead.
+if TYPE_CHECKING:
+    from build_and_publish import _bap, certify
+else:
+    import _bap
+    import certify
 
 
 @pytest.fixture
@@ -193,7 +199,7 @@ def git_app(app: Path) -> Path:
 
 
 def _generate(
-    monkeypatch: pytest.MonkeyPatch, generate: Callable[[], None]
+    monkeypatch: pytest.MonkeyPatch, generate: Callable[[], object]
 ) -> list[list[str]]:
     """Fake only `uv run …`; `poe generate` runs ``generate``. git runs for real."""
     real_run = _bap.run

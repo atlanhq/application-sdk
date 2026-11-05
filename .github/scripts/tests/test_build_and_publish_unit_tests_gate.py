@@ -7,13 +7,20 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "build_and_publish"))
 
-import _bap  # noqa: E402
-import unit_tests_gate  # noqa: E402
+# The scripts import each other as top-level modules (`import _bap`), so the
+# tests do too: that keeps one module object for monkeypatching. pyright
+# resolves them through the package path instead.
+if TYPE_CHECKING:
+    from build_and_publish import _bap, unit_tests_gate
+else:
+    import _bap
+    import unit_tests_gate
 
 Responder = Callable[[list[str]], tuple[int, str]]
 
