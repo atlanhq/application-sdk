@@ -23,4 +23,3 @@ Apache License 2.0 Dependencies:
 - pyarrow (https://github.com/apache/arrow/tree/main/python)
 - dapr (https://github.com/dapr/python-sdk/)
 - boto3 (https://github.com/boto/boto3)
-- uvloop (https://github.com/MagicStack/uvloop)

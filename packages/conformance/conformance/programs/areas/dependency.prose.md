@@ -18,7 +18,7 @@ findings in the working tree, as reported by `suite.runner --series D`.
 
 The fingerprint-set of all unsuppressed FAILING D-series results.  Extends to
 include WARNING results in strict mode —
-D002/D003/D004/D006/D007/D008/D012/D013/D014/D015/D016 are WARN-tier, so they are
+D002/D003/D004/D006/D007/D008/D012/D013/D014/D015/D016/D017 are WARN-tier, so they are
 processed in strict mode; D001, D005, D009, D010 and D011 are BLOCK-tier and
 processed in both modes.
 
@@ -207,6 +207,27 @@ fix.  The re-detection gate is authoritative for this area — see
   `requires-python` and cp313 wheels must follow) and that the app's tests
   should be run on Python 3.13; a dependency that has no 3.13 build surfaces
   only there, and is the one legitimate reason to suppress instead.
+
+- **D017 DeprecatedSdkExtra** (`classification = "mechanical"`, except the
+  `[sql]`-widening case below) —
+  `finding.line` points at an `atlan-application-sdk[...]` reference whose
+  extras list names a deprecated shim; the finding message names the extra
+  and its fix.  Edit **that extras list only**, keeping the version
+  specifier, marker and every other extra as they are:
+  `workflows`, `storage`, `iam_auth`/`iam-auth` and `azure` are removed
+  outright; `daft`, `sqlalchemy` and `pandas` become `sql`, listed once
+  however many of them were present.  Remove the brackets when the list ends
+  up empty:
+  `"atlan-application-sdk[iam-auth,pandas,sql,workflows]>=3.33,<4"` →
+  `"atlan-application-sdk[sql]>=3.33,<4"`;
+  `"atlan-application-sdk[iam-auth,workflows]>=3.33,<4"` →
+  `"atlan-application-sdk>=3.33,<4"`.  Never touch `[incremental]` or any
+  other extra.  State in the edit description that `uv lock` must be re-run
+  and its diff reviewed.  Dropping a core shim changes only the lock's
+  metadata.  Replacing `pandas` or `sqlalchemy` with `sql` keeps every package
+  the shim installed but can add others (`[pandas]` alone gains `sqlalchemy`
+  and `duckdb`), so classify that edit `judgment` and route it to residue
+  when the SDK's other extras did not already include `sql`.
 
 - **D007 NonStandardBuildBackend** — set `build-backend` to `"hatchling.build"`
   in `[build-system]` and ensure `requires = ["hatchling"]`.  Build-affecting:
@@ -463,7 +484,9 @@ for human confirmation):
   extra resolved to nothing over SDK 3.22–3.27 and aliases `[sql]` again from
   3.28.0.  Propose raising the SDK floor to `>=3.28.0` and leave the extra
   alone — the bump is the whole fix, and rewriting the app's extras instead
-  pays per repo for a defect fixed once upstream.
+  pays per repo for a defect fixed once upstream.  (D017 separately asks for
+  `[daft]` to become `[sql]` before v4.0.0; that is its own WARN finding, not
+  part of the D010 fix.)
 
   Otherwise (a plain SDK pin with no extra — the shape the rule now describes),
   draft the edit that changes the SDK reference to `atlan-application-sdk[sql]`
@@ -495,7 +518,7 @@ When `mode == "strict"` and `finding.disposition == "warning"`, the model may
 propose an inline suppression instead of a fix if the deviation is a deliberate,
 justified exception for this app.  Applicable rules and notes:
 
-- **D002 / D004 / D005 / D006 / D007 / D008 / D010 / D016** — standard inline
+- **D002 / D004 / D005 / D006 / D007 / D008 / D010 / D016 / D017** — standard inline
   suppression.
   TOML uses `#` for comments, so the directive trails the entry or sits on the
   line above it:

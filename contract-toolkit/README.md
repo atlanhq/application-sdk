@@ -71,9 +71,14 @@ uiConfig = new UIConfig {
 Generate (run from the **app repo root** — not from inside `contract/`):
 
 ```bash
-cd contract && pkl project resolve && cd ..
-pkl eval -m . contract/app.pkl
+pkl project resolve contract
+pkl eval --project-dir contract -m . contract/app.pkl
 ```
+
+`--project-dir contract` is required: pkl looks for `PklProject` in the current
+directory, not next to the module, so without it the eval fails with "no project
+found" on the `@app-contract-toolkit` amend. Use the pkl version the SDK pins
+(`python -m application_sdk.dev.pkl check`).
 
 Output (emitted at the repo root):
 
@@ -691,12 +696,47 @@ The SDK v3 handler serves files from `ATLAN_CONTRACT_GENERATED_DIR` (default: `a
 ### Recommended poe task
 
 ```toml
+[project.optional-dependencies]
+dev = [
+    "poethepoet>=0.34.0",
+]
+
 [tool.poe.tasks]
-generate-contract.shell = """
-  cd contract && pkl project resolve && cd ..
-  pkl eval -m . contract/app.pkl
-"""
+generate.shell = "pkl project resolve contract && pkl eval --project-dir contract -m . contract/app.pkl"
+generate-contract.ref = "generate"
 ```
+
+The SDK certify gate runs `uv sync --all-extras --frozen`, then `uv run poe
+generate`, then checks the regenerated output for drift. So:
+
+- Name the task `generate`. Certify calls `poe generate`; `generate-contract` is
+  an optional alias.
+- Put `poethepoet` in an extra under `[project.optional-dependencies]`, not in a
+  `[dependency-groups]` group. `uv sync --all-extras` always installs every
+  extra. Of the dependency groups it installs only uv's default groups (just
+  `dev`, unless `[tool.uv] default-groups` changes that), so poe in any other
+  group is missing in CI and the drift check can't run. An extra doesn't depend
+  on that setting. Run `uv lock`
+  after adding it.
+- Commit everything `poe generate` writes, and check `git status --short` is
+  empty afterwards. The drift check may not cover every output (for example the
+  root `atlan.yaml` and `app.yaml`), so a stale file it doesn't check can still
+  ship.
+
+Avoid the older per-app variant that evals into a subfolder and copies `*.json`
+up: outputs it doesn't copy (`_input.py`, `atlan.yaml`, nested entrypoint dirs)
+go stale without a diff.
+
+**Generated Python is already ruff-clean.** Every `app/generated/*.py` file is
+written the way `ruff check --fix` and `ruff format` leave it under ruff's
+default settings (88 columns, default import sorting, `application_sdk` as a
+third-party package). So an app's pre-commit ruff hooks change nothing in them,
+and `poe generate` output matches what is committed. Don't add a formatting
+step to `generate`, and don't exclude `app/generated/` from ruff. If ruff does
+change a generated file, that is a toolkit bug: report it with the file and the
+diff. One limit: an app whose ruff config differs from the defaults
+(`line-length`, isort `known-first-party` / `known-third-party`, quote style)
+can still see ruff rewrite these files.
 
 ### App playground
 
@@ -728,7 +768,13 @@ After modifying any PKL module, regenerate all examples and verify no breakage:
 ./scripts/check-invariants.sh          # invariant checks on generated output
 pkl test tests/*.pkl                   # Pkl behavior tests
 python scripts/test-sdk-import.py      # imports every generated _input.py against SDK deps
+uv run python scripts/check-ruff-stable.py  # ruff (default settings) changes no generated .py
 ```
+
+`regenerate-all.sh` does not run ruff: the committed examples are exactly what
+the toolkit writes. `src/PyFormat.pkl` lays the Python out; when
+`check-ruff-stable.py` reports a diff, fix the renderer or `PyFormat.pkl`,
+never the output.
 
 Every PR that touches `src/` must pass generation for all examples.
 
@@ -761,7 +807,7 @@ Releases are **automatic** — no manual trigger required.
   your `PATH` with `python -m application_sdk.dev.pkl check`, or `brew install pkl` for
   exploration only.
 - Python 3 for invariant checks and SDK import validation
-- `ruff` or `uvx` for formatting generated `_input.py` files during `./scripts/regenerate-all.sh`
+- `uv` (the SDK's locked ruff) for `scripts/check-ruff-stable.py`
 - Application SDK import dependencies for `python scripts/test-sdk-import.py`
 - Atlan CLI for consuming app workflows (`atlan app contract validate`, `atlan app contract generate`, `atlan app run -p .`)
 - Node.js with `npm` / `npx` only when installing the app playground

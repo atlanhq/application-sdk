@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk-api"
-version = "3.54.0"
+version = "3.55.0"
 description = "Experimental: the handler surface of the Atlan Application SDK, for the consolidated API host"
 license = "Apache-2.0"
 authors = [
@@ -15,10 +15,15 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
     "fastapi>=0.162.0,<0.163.0",
     "pydantic>=2.10.6,<3.0.0",
+    # application_sdk/contracts/{base,types}.py import it; same pin as the SDK.
+    "typing-extensions>=4.12.2,<5",
     "orjson>=3.11.6,<4.0.0",
     # Form parsing for the file-upload route. Arrives on the worker through
     # fastapi[standard]; the floor is the SDK's CVE constraint.

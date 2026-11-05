@@ -1061,11 +1061,14 @@ and change nothing. Hence `--baseline-ref origin/<default-branch>`, which also
 makes "never roll back what main ships" structural: the driver's rollback gate
 then compares against main by construction.
 
-**Two uv projects, two exempt sets.** `packages/conformance` is a separate uv
-project, and unlike the root it resolves `atlan-application-sdk` from PyPI — so
-its exempt set carries the SDK *and* pyatlan. Exempting the SDK alone does not
-fail; a bounded resolve that cannot see a fresh pyatlan silently backtracks to an
-older SDK instead.
+**Two uv projects, one exempt set.** `packages/conformance` is a separate uv
+project with its own lock. Like the root it never resolves `atlan-application-sdk`
+from PyPI: its `[tool.uv.sources]` path-sources this checkout (FND-4256), so its
+tests run against the tree they ship beside and there is no registry SDK for the
+bound to hold. Both projects exempt only pyatlan. That source is not published
+metadata: the released conformance wheel still declares a plain
+`atlan-application-sdk[sql]` test extra. A change to the SDK's own dependencies
+therefore also re-resolves `packages/conformance/uv.lock`.
 
 **One commit, not one per lock.** Every push to the branch re-fires the PR's
 entire required-check suite, so the bound rewrites both uv locks and the npm lock
@@ -1241,6 +1244,30 @@ python -m application_sdk.dev.pkl check           # has my PATH pkl drifted?
    workflow, action or script spells a `pkl` version out, if a call site pins
    one, if the textual and imported reads disagree, or if the declaring file
    falls out of that path filter.
+
+### Connector test tiers run on the container Python (FND-4611)
+
+`setup-deps` used to default `python-version` to `"3.11"`, and so did
+`connector-unit-tests` and `connector-integration-tests`. `tests-reusable.yaml`
+passed nothing, so every connector's unit and integration tiers ran on 3.11
+while its image ran 3.13. A repo's `.python-version` could also move them,
+because `uv` reads it before the interpreter on `PATH`.
+
+Now all three default to `""`. When no version is named, `setup-deps` reads the
+golden tag from the SDK's own `Dockerfile` (beside the action, never the
+caller's) with `container_python_version.py print-version`. It then exports
+`UV_PYTHON`, which outranks `.python-version`, so every later `uv` command in
+the job uses it. The e2e tier already named the version
+(`sdr-e2e`'s `expected-python-version`). It now gets `UV_PYTHON` too, because
+it goes through `setup-deps`.
+
+This departs from the `resolve --requested` recipe above in one way. The empty
+check is a step-level `if:` plus an `||` expression, not a script subcommand.
+`setup-deps` also runs the SDK's Windows and macOS unit legs, which always name
+a version, and there the resolve step does not run at all. So no leg depends on
+a `python3` being on the runner before `setup-python`. There is still no
+conditional shell. `test_setup_deps_python_pin_wiring.py` runs both steps, and
+also fails if `tests-reusable.yaml` ever passes a `python-version` to a tier.
 
 ### The lint toolchain: three ruff pins that move as one
 

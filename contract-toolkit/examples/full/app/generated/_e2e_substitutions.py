@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import Field
-
 from application_sdk.testing.e2e.substitutions import SQLMustacheSubstitutions
+from pydantic import Field
 
 
 class FullFeaturedMustacheSubstitutions(SQLMustacheSubstitutions):

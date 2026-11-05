@@ -19,14 +19,12 @@ resolution-markers = [
 [manifest]
 constraints = [
     { name = "authlib", specifier = ">=1.9.1" },
-    { name = "black", specifier = ">=26.3.1" },
     { name = "certifi", specifier = ">=2026.10.19" },
     { name = "filelock", specifier = ">=4.2.1" },
     { name = "protobuf", specifier = ">=6.33.5" },
     { name = "pyjwt", specifier = ">=2.12.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "python-multipart", specifier = ">=0.0.26" },
-    { name = "simpleeval", specifier = ">=1.0.5" },
 ]
 
 [[package]]
@@ -295,11 +293,10 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "3.54.0"
+version = "3.55.0"
 source = { editable = "." }
 default-groups = ["dev", "test"]
 dependencies = [
-    { name = "aiohttp" },
     { name = "atlan-application-sdk-api" },
     { name = "authlib" },
     { name = "azure-identity" },
@@ -311,9 +308,11 @@ dependencies = [
     { name = "httpx-retries" },
     { name = "loguru" },
     { name = "obstore" },
-    { name = "opentelemetry-exporter-otlp" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc" },
     { name = "opentelemetry-exporter-prometheus" },
     { name = "opentelemetry-instrumentation-fastapi" },
+    { name = "opentelemetry-sdk" },
     { name = "orjson" },
     { name = "packaging" },
     { name = "prometheus-client" },
@@ -326,18 +325,15 @@ dependencies = [
     { name = "pyyaml" },
     { name = "rocksdict" },
     { name = "temporalio" },
-    { name = "uvloop", marker = "sys_platform != 'win32'" },
+    { name = "typing-extensions" },
 ]
 
 [package.optional-dependencies]
 azure = [
     { name = "azure-identity" },
-    { name = "azure-storage-blob" },
-    { name = "azure-storage-file-datalake" },
 ]
 daft = [
     { name = "duckdb" },
-    { name = "duckdb-engine" },
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "sqlalchemy", extra = ["asyncio"] },
@@ -353,7 +349,6 @@ iam-auth = [
 ]
 incremental = [
     { name = "duckdb" },
-    { name = "duckdb-engine" },
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "sqlalchemy", extra = ["asyncio"] },
@@ -367,12 +362,9 @@ pandas = [
 ]
 scale-data-generator = [
     { name = "faker" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
 sql = [
     { name = "duckdb" },
-    { name = "duckdb-engine" },
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "sqlalchemy", extra = ["asyncio"] },
@@ -386,7 +378,6 @@ storage = [
 tests = [
     { name = "httpx" },
     { name = "pandera", extra = ["io"] },
-    { name = "pytest-order" },
 ]
 workflows = [
     { name = "orjson" },
@@ -430,21 +421,16 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = ">=3.10.0,<4.0.0" },
     { name = "atlan-application-sdk", extras = ["sql"], marker = "extra == 'daft'" },
+    { name = "atlan-application-sdk", extras = ["sql"], marker = "extra == 'incremental'" },
     { name = "atlan-application-sdk-api", editable = "packages/api" },
     { name = "authlib", specifier = ">=1.9.1,<2" },
     { name = "azure-identity", specifier = ">=1.15.0" },
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.15.0" },
-    { name = "azure-storage-blob", marker = "extra == 'azure'", specifier = ">=12.19.0" },
-    { name = "azure-storage-file-datalake", marker = "extra == 'azure'", specifier = ">=12.19.0" },
     { name = "boto3", specifier = ">=1.38.6,<2.0.0" },
     { name = "boto3", marker = "extra == 'iam-auth'", specifier = ">=1.38.6,<2.0.0" },
     { name = "certifi", specifier = ">=2026.10.19" },
-    { name = "duckdb", marker = "extra == 'incremental'", specifier = ">=1.1.3,<1.6.0" },
     { name = "duckdb", marker = "extra == 'sql'", specifier = ">=1.1.3,<1.6.0" },
-    { name = "duckdb-engine", marker = "extra == 'incremental'", specifier = ">=0.17.0,<0.18.0" },
-    { name = "duckdb-engine", marker = "extra == 'sql'", specifier = ">=0.17.0,<0.18.0" },
     { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=40.44.0,<41.0.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.162.0,<0.163.0" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=3.2.0,<4.0.0" },
@@ -454,39 +440,36 @@ requires-dist = [
     { name = "httpx-retries", specifier = ">=0.6.0,<0.7.0" },
     { name = "kubernetes", marker = "extra == 'harness'", specifier = ">=36.0.3,<38.0.0" },
     { name = "loguru", specifier = ">=0.7.3,<0.8.0" },
-    { name = "numpy", marker = "extra == 'scale-data-generator'", specifier = ">=1.23.5,<3.0.0" },
     { name = "obstore", specifier = ">=0.12.0,<0.13.0" },
-    { name = "opentelemetry-exporter-otlp", specifier = ">=1.45.0,<2.0.0" },
+    { name = "opentelemetry-api", specifier = ">=1.45.0,<2.0.0" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.45.0,<2.0.0" },
     { name = "opentelemetry-exporter-prometheus", specifier = ">=0.66b0,<0.67" },
     { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.66b0,<0.67" },
+    { name = "opentelemetry-sdk", specifier = ">=1.45.0,<2.0.0" },
     { name = "orjson", specifier = ">=3.11.6,<4.0.0" },
     { name = "orjson", marker = "extra == 'workflows'", specifier = ">=3.11.6,<4.0.0" },
     { name = "packaging", specifier = ">=24.0" },
-    { name = "pandas", marker = "extra == 'incremental'", specifier = ">=2.2.3,<4.0.0" },
     { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2.3,<4.0.0" },
     { name = "pandas", marker = "extra == 'sql'", specifier = ">=2.2.3,<4.0.0" },
     { name = "pandera", extras = ["io"], marker = "extra == 'tests'", specifier = ">=0.35.0,<0.36.0" },
     { name = "prometheus-client", specifier = ">=0.20.0,<1.0" },
     { name = "protobuf", specifier = ">=6.33.5,<8" },
-    { name = "pyarrow", marker = "extra == 'incremental'", specifier = ">=23.0.1,<27.0.0" },
     { name = "pyarrow", marker = "extra == 'pandas'", specifier = ">=23.0.1,<27.0.0" },
     { name = "pyarrow", marker = "extra == 'sql'", specifier = ">=23.0.1,<27.0.0" },
     { name = "pyatlan", specifier = ">=11.7.0,<12" },
     { name = "pydantic", specifier = ">=2.10.6,<3.0.0" },
     { name = "pyjwt", specifier = ">=2.12.0,<3" },
-    { name = "pytest-order", marker = "extra == 'tests'", specifier = ">=1.3.0,<2.0.0" },
     { name = "python-dotenv", specifier = ">=1.2.2,<2.0.0" },
     { name = "python-multipart", specifier = ">=0.0.26" },
     { name = "pyyaml", specifier = ">=6.0.2,<7.0.0" },
     { name = "redis", extras = ["hiredis"], marker = "extra == 'distributed-lock'", specifier = ">=5.2.0,<9.0.0" },
     { name = "rocksdict", specifier = ">=0.3.0,<0.4.0" },
     { name = "rocksdict", marker = "extra == 'storage'", specifier = ">=0.3.0,<0.4.0" },
-    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'incremental'", specifier = ">=2.0.36,<3.0.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sql'", specifier = ">=2.0.36,<3.0.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sqlalchemy'", specifier = ">=2.0.36,<3.0.0" },
     { name = "temporalio", specifier = ">=1.35.0,<2.0.0" },
     { name = "temporalio", marker = "extra == 'workflows'", specifier = ">=1.35.0,<2.0.0" },
-    { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.23.0,<0.24.0" },
+    { name = "typing-extensions", specifier = ">=4.12.2,<5" },
 ]
 provides-extras = ["workflows", "sql", "daft", "storage", "incremental", "iam-auth", "azure", "distributed-lock", "mcp", "tests", "harness", "scale-data-generator", "sqlalchemy", "pandas"]
 
@@ -527,7 +510,7 @@ test = [
 
 [[package]]
 name = "atlan-application-sdk-api"
-version = "3.54.0"
+version = "3.55.0"
 source = { editable = "packages/api" }
 dependencies = [
     { name = "certifi" },
@@ -536,6 +519,7 @@ dependencies = [
     { name = "orjson" },
     { name = "pydantic" },
     { name = "python-multipart" },
+    { name = "typing-extensions" },
 ]
 
 [package.metadata]
@@ -555,12 +539,13 @@ requires-dist = [
     { name = "python-dotenv", marker = "extra == 'sql'", specifier = ">=1.2.2,<2.0.0" },
     { name = "python-multipart", specifier = ">=0.0.26" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sql'", specifier = ">=2.0.36,<3.0.0" },
+    { name = "typing-extensions", specifier = ">=4.12.2,<5" },
 ]
 provides-extras = ["sql", "pandas", "aws", "pyatlan"]
 
 [[package]]
 name = "atlan-application-sdk-conformance"
-version = "0.54.0"
+version = "0.55.0"
 source = { directory = "packages/conformance" }
 dependencies = [
     { name = "jinja2" },
@@ -571,7 +556,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "atlan-application-sdk", extras = ["sql"], marker = "extra == 'test'" },
+    { name = "atlan-application-sdk", extras = ["sql"], marker = "extra == 'test'", editable = "." },
     { name = "jinja2", specifier = ">=3.1.0,<4.0.0" },
     { name = "jsonschema", specifier = ">=4.23.0,<5.0.0" },
     { name = "packaging", specifier = ">=24.0" },
@@ -642,36 +627,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/cf/33/0b881d0093d64c965bb20fcf71b806c7097881b544a2a55d519cdcf3bab9/azure_identity-1.27.0.tar.gz", hash = "sha256:6a4c50e25e8e9a47b324a95ad024897e56cb3c6241e0094e93b126a2bf71edc5", size = 331360, upload-time = "2026-10-26T21:17:39.095Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/29/1e/6a2fe486576f41884a120ef7b2c3774f334f9143402fb73650c67db94ddd/azure_identity-1.27.0-py3-none-any.whl", hash = "sha256:92fd2a93c0d2f777dac6c04e5fd7d5734f6643582b983544ef66b4575844e46d", size = 203474, upload-time = "2026-10-26T21:17:40.92Z" },
-]
-
-[[package]]
-name = "azure-storage-blob"
-version = "12.31.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "azure-core" },
-    { name = "cryptography" },
-    { name = "isodate" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/6f/18/eb2ade6eede419d33493016ec3243ca9860f67d0bc71aa0461cda2cad0c4/azure_storage_blob-12.31.1.tar.gz", hash = "sha256:0d6e5b860a1357efc602db04cfa7c9950ac86126edcf7db89320cde281555fe5", size = 672417, upload-time = "2026-10-29T23:34:05.69Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/1a/93/b9f0dc477827887aef64012946bdba65e9aad67084ad38044661a72fe47d/azure_storage_blob-12.31.1-py3-none-any.whl", hash = "sha256:9e012d5f4ab658b7cb8a4581329d7a7aa2bf5f39b4d63baeefaae7f9e90fe6f0", size = 455904, upload-time = "2026-10-29T23:34:07.459Z" },
-]
-
-[[package]]
-name = "azure-storage-file-datalake"
-version = "12.26.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "azure-core" },
-    { name = "azure-storage-blob" },
-    { name = "isodate" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/07/98/9932fe78bed131e70033bee8c17de8239f6a27455b628701f4464f108d0f/azure_storage_file_datalake-12.26.1.tar.gz", hash = "sha256:81b9ad84ed8845219c3f642117b8508e95485ec3d8be8d3713f03785e4bdde75", size = 327132, upload-time = "2026-10-30T01:43:22.728Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/bd/ede2b0795444ab8abf8c1d203180ee6aab0de4633272242cf2aafa00bfcc/azure_storage_file_datalake-12.26.1-py3-none-any.whl", hash = "sha256:3a9b80851e9eb1375816051369b342097b7c7958906514a59dbc983e01d8b593", size = 297823, upload-time = "2026-10-30T01:43:24.396Z" },
 ]
 
 [[package]]
@@ -1426,20 +1381,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ef/a5/6f8099d9a5a02ddff89e5c85875df3465054845b0920fb0703fbdf8dd2ec/duckdb-1.5.6-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:19c5e485e59613b8878d1670bcaa7a010f53c5a4da5ae8e08863e5e529ca6182", size = 21575132, upload-time = "2026-09-28T13:38:31.231Z" },
     { url = "https://files.pythonhosted.org/packages/9f/58/762f7159662d7859e201fa05ca29f306795daeabf84f3e087215a966b001/duckdb-1.5.6-cp314-cp314-win_amd64.whl", hash = "sha256:ebcbd09cd8578ab1093393e9b16289cda0e8f1791ac595bf00eb5bad75c3cf00", size = 13713963, upload-time = "2026-09-28T13:38:33.543Z" },
     { url = "https://files.pythonhosted.org/packages/46/69/64d165db322de13f5c3e75d377b6b9694df1821155ad1fa4b14b04601abc/duckdb-1.5.6-cp314-cp314-win_arm64.whl", hash = "sha256:820a8384faef11cd86068ea48c5da57ce2d8f1c7b3d2bdb9be3398317a7c3728", size = 14514368, upload-time = "2026-09-28T13:38:35.676Z" },
-]
-
-[[package]]
-name = "duckdb-engine"
-version = "0.17.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "duckdb" },
-    { name = "packaging" },
-    { name = "sqlalchemy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/89/d5/c0d8d0a4ca3ffea92266f33d92a375e2794820ad89f9be97cf0c9a9697d0/duckdb_engine-0.17.0.tar.gz", hash = "sha256:396b23869754e536aa80881a92622b8b488015cf711c5a40032d05d2cf08f3cf", size = 48054, upload-time = "2025-03-29T09:49:17.663Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/a2/e90242f53f7ae41554419b1695b4820b364df87c8350aa420b60b20cab92/duckdb_engine-0.17.0-py3-none-any.whl", hash = "sha256:3aa72085e536b43faab635f487baf77ddc5750069c16a2f8d9c6c3cb6083e979", size = 49676, upload-time = "2025-03-29T09:49:15.564Z" },
 ]
 
 [[package]]
@@ -2532,15 +2473,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/cd/b5/e2d34bdeb088e3d28f5466c7c687126bba8337dcc0997c6c0ae40d4c4add/inversion-1.0.1.tar.gz", hash = "sha256:39b0d99da7924bcb21fc3e96ef2ac85dc83346461f74dd6a758ecaff3c75bb8e", size = 27028, upload-time = "2026-10-15T16:02:08.716Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/16/78/d1caf51e136f98eef9f45fd417a21f2389bf8042e8d8f3f1ed7832a500ca/inversion-1.0.1-py3-none-any.whl", hash = "sha256:a8b7b7bb1bef85318179421ef11e5222bd492f477373f0dcb80f323f8b0595d2", size = 19846, upload-time = "2026-10-15T16:02:07.701Z" },
-]
-
-[[package]]
-name = "isodate"
-version = "0.7.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/54/4d/e940025e2ce31a8ce1202635910747e5a87cc3a6a6bb2d00973375014749/isodate-0.7.2.tar.gz", hash = "sha256:4cd1aa0f43ca76f4a6c6c0292a85f40b35ec2e43e315b59f06e6d32171a953e6", size = 29705, upload-time = "2024-10-08T23:04:11.5Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/15/aa/0aca39a37d3c7eb941ba736ede56d689e7be91cab5d9ca846bde3999eba6/isodate-0.7.2-py3-none-any.whl", hash = "sha256:28009937d8031054830160fce6d409ed342816b543597cece116d966c6d99e15", size = 22320, upload-time = "2024-10-08T23:04:09.501Z" },
 ]
 
 [[package]]
@@ -3743,19 +3675,6 @@ requests = [
 ]
 
 [[package]]
-name = "opentelemetry-exporter-otlp"
-version = "1.45.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "opentelemetry-exporter-otlp-proto-grpc" },
-    { name = "opentelemetry-exporter-otlp-proto-http" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/1e/45/52e9ce585d825e14cc211871acc3bc46b6cd36cdb0c09255a7feea98322b/opentelemetry_exporter_otlp-1.45.2.tar.gz", hash = "sha256:879044ba65b8b1be7a0d9d904afb76700e96d2a4d36700918d9325c9ee3b8be4", size = 6093, upload-time = "2026-10-29T17:29:40.905Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/19/27/fcc3b725ddbfa274fbf6098c9583032557671d35aa8d5e08d7e7277fb126/opentelemetry_exporter_otlp-1.45.2-py3-none-any.whl", hash = "sha256:52c8b9f268289c92c08b3a97f48c63d6e5c037f25ca1f6f29ef162fb78974afc", size = 6732, upload-time = "2026-10-29T17:29:12.653Z" },
-]
-
-[[package]]
 name = "opentelemetry-exporter-otlp-common"
 version = "0.66b2"
 source = { registry = "https://pypi.org/simple" }
@@ -4902,18 +4821,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b1/51/a849f96e117386044471c8ec2bd6cfebacda285da9525c9106aeb28da671/pytest_cov-7.1.0.tar.gz", hash = "sha256:30674f2b5f6351aa09702a9c8c364f6a01c27aae0c1366ae8016160d1efc56b2", size = 55592, upload-time = "2026-03-21T20:11:16.284Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9d/7a/d968e294073affff457b041c2be9868a40c1c71f4a35fcc1e45e5493067b/pytest_cov-7.1.0-py3-none-any.whl", hash = "sha256:a0461110b7865f9a271aa1b51e516c9a95de9d696734a2f71e3e78f46e1d4678", size = 22876, upload-time = "2026-03-21T20:11:14.438Z" },
-]
-
-[[package]]
-name = "pytest-order"
-version = "1.5.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pytest" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/97/d8/82a5dc2aad3392f66c9741960fcbeeb45dd4d62eedb218aed6c52eea36eb/pytest_order-1.5.0.tar.gz", hash = "sha256:96acd7587b5a2855dcaa4a898288103d202894a61afd813adbc9b77aab04d90d", size = 54136, upload-time = "2026-06-13T05:39:41.636Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fd/5c/bd6a85b44beb8bd74c0e86ab699ef0e096e260dc90458b84fc54c28e4335/pytest_order-1.5.0-py3-none-any.whl", hash = "sha256:667ba2b7303fe2c529848663e0a41dfb0cc4d64f09f87272e4a9a1751efb52b2", size = 16634, upload-time = "2026-06-13T05:39:40.431Z" },
 ]
 
 [[package]]

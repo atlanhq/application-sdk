@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.54.0"
+version = "3.55.0"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -15,14 +15,20 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Operating System :: OS Independent",
     "Development Status :: 4 - Beta",
 ]
 keywords = ["atlan", "sdk", "platform", "app", "development"]
 dependencies = [
-    "atlan-application-sdk-api==3.54.0",
-    "aiohttp>=3.10.0,<4.0.0",
-    "opentelemetry-exporter-otlp>=1.45.0,<2.0.0",
+    "atlan-application-sdk-api==3.55.0",
+    # The OTLP gRPC exporters only, not the opentelemetry-exporter-otlp meta
+    # package: that also pulls the HTTP exporter, which nothing imports.
+    "opentelemetry-exporter-otlp-proto-grpc>=1.45.0,<2.0.0",
+    # Imported directly (opentelemetry.sdk / .trace / .metrics / ._logs), so
+    # declared directly rather than left to arrive through the exporter.
+    "opentelemetry-api>=1.45.0,<2.0.0",
+    "opentelemetry-sdk>=1.45.0,<2.0.0",
     "opentelemetry-exporter-prometheus>=0.66b0,<0.67",
     "opentelemetry-instrumentation-fastapi>=0.66b0,<0.67",
     "prometheus-client>=0.20.0,<1.0",
@@ -44,9 +50,11 @@ dependencies = [
     "pyjwt>=2.12.0,<3",  # CVE-2026-32597
     "python-multipart>=0.0.26",  # CVE-2026-24486, CVE-2026-40347
     "pydantic>=2.10.6,<3.0.0",
+    # `deprecated` (PEP 702) and `TypeAliasType`; arrives via pydantic today,
+    # but it is imported directly, so it is declared directly.
+    "typing-extensions>=4.12.2,<5",
     "packaging>=24.0",
     "loguru>=0.7.3,<0.8.0",
-    "uvloop>=0.23.0,<0.24.0; sys_platform != 'win32'",
     "python-dotenv>=1.2.2,<2.0.0",  # CVE-2026-28684 (symlink file overwrite)
     "pyyaml>=6.0.2,<7.0.0",
     "obstore>=0.12.0,<0.13.0",
@@ -79,7 +87,15 @@ Documentation = "https://github.com/atlanhq/application-sdk/README.md"
 
 # Optional dependencies for specific functionality
 [project.optional-dependencies]
-# Backwards-compatibility shims (dapr/temporalio/orjson promoted to core in v3.1)
+# Every extra below marked "Deprecated shim" installs nothing [sql] or core
+# does not already provide, and is removed in v4.0.0. An extra is resolved by
+# the installer, not imported, so there is no runtime warning: the removal is
+# carried here, in docs/upgrade-guide-v3.md, and by conformance rule D017,
+# which warns every app that still references one. The shim table D017 reads
+# is checked against this file by
+# packages/conformance/tests/test_dependency_conformance.py.
+# Deprecated shim, removed in v4.0.0: temporalio and orjson are core since
+# v3.1. Drop the extra.
 workflows = [
     "temporalio>=1.35.0,<2.0.0",
     "orjson>=3.11.6,<4.0.0",
@@ -90,9 +106,8 @@ sql = [
     "pyarrow>=23.0.1,<27.0.0",
     "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
     "duckdb>=1.1.3,<1.6.0",
-    "duckdb-engine>=0.17.0,<0.18.0",
 ]
-# Deprecated alias for [sql] — removed in v4.0.0. Install [sql] (or
+# Deprecated shim: alias for [sql], removed in v4.0.0. Install [sql] (or
 # [incremental]) instead; the daft transformer engine itself is gone.
 #
 # This aliases rather than resolving empty. Before v3.22 the extra pulled duckdb
@@ -108,35 +123,30 @@ sql = [
 #
 # There is no runtime deprecation signal available at this layer — an extra is
 # resolved by the installer, not imported — so the removal version is carried
-# here, in docs/upgrade-guide-v3.md, and by the D010 conformance rule.
+# here, in docs/upgrade-guide-v3.md, and by the D010 and D017 conformance rules.
 daft = ["atlan-application-sdk[sql]"]
-# Backwards-compatibility shim — rocksdict promoted to core (FND-3414); keeping
-# this extra means existing connector pyproject.toml files that specify
-# [storage] continue to install without error.
+# Deprecated shim, removed in v4.0.0: rocksdict is core (FND-3414). Kept so
+# a pyproject.toml that names [storage] still resolves until then. Drop the
+# extra.
 storage = [
     "rocksdict>=0.3.0,<0.4.0",
 ]
-# Incremental extraction: sql + RocksDB state store (rocksdict is core).
-incremental = [
-    "pandas>=2.2.3,<4.0.0",
-    "pyarrow>=23.0.1,<27.0.0",
-    "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
-    "duckdb>=1.1.3,<1.6.0",
-    "duckdb-engine>=0.17.0,<0.18.0",
-]
-# Backwards-compatibility shim — boto3 promoted to core in v3.14; keeping this
-# extra means existing connector pyproject.toml files that specify [iam_auth]
-# continue to install without error.
+# Incremental extraction: an alias for [sql], since the RocksDB state store
+# (rocksdict) is core. Kept as a supported name, not a shim: it states what the
+# app uses, and it can diverge from [sql] again without apps changing their pin.
+incremental = ["atlan-application-sdk[sql]"]
+# Deprecated shim, removed in v4.0.0: boto3 is core since v3.14. Kept so a
+# pyproject.toml that names [iam_auth] still resolves until then. Drop the
+# extra.
 iam_auth = [
     "boto3>=1.38.6,<2.0.0",
 ]
+# Deprecated shim, removed in v4.0.0: azure-identity is core since v3.14.
+# Drop the extra.
 azure = [
-    # azure-identity promoted to core in v3.14 (same reason as iam_auth above).
     "azure-identity>=1.15.0",
-    # azure-storage-{blob,file-datalake} remain optional: only needed by connectors
-    # that use the Azure SDK directly (outside of obstore).
-    "azure-storage-blob>=12.19.0",
-    "azure-storage-file-datalake>=12.19.0",
+    # azure-storage-{blob,file-datalake} were dropped (FND-4252): the SDK never
+    # imported them. A connector that uses the Azure SDK directly declares them.
 ]
 distributed_lock = [
     "redis[hiredis]>=5.2.0,<9.0.0",
@@ -145,7 +155,6 @@ mcp = [
     "fastmcp>=3.2.0,<4.0.0",
 ]
 tests = [
-    "pytest-order>=1.3.0,<2.0.0",
     "pandera[io]>=0.35.0,<0.36.0",
     "httpx>=0.27.0,<0.29.0",
 ]
@@ -166,13 +175,12 @@ harness = [
 ]
 scale_data_generator = [
     "faker>=40.44.0,<41.0.0",
-    "numpy>=1.23.5,<3.0.0",
 ]
-# Removed in v3.1 — use sql extra instead
+# Deprecated shim, removed in v4.0.0: a subset of [sql]. Use [sql] instead.
 sqlalchemy = [
     "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
 ]
-# Removed in v3.1 — use sql extra instead
+# Deprecated shim, removed in v4.0.0: a subset of [sql]. Use [sql] instead.
 pandas = [
     "pandas>=2.2.3,<4.0.0",
     "pyarrow>=23.0.1,<27.0.0",
@@ -541,7 +549,6 @@ extend-select = [
 "application_sdk/tools/**" = ["T201", "PLC0415"]
 "contract-toolkit/scripts/**" = ["T201", "PLC0415"]
 "local/**" = ["T201", "PLC0415"]
-"contract-toolkit/examples/**/generated/_input.py" = ["F401"]
 # Mid-file import required to break circular dependency between models.py and assertions.py
 "application_sdk/testing/integration/models.py" = ["E402"]
 # sys.path bootstrap required so the test module can import the sibling script it tests.
@@ -554,9 +561,7 @@ constraint-dependencies = [
     "python-multipart>=0.0.26",  # CVE-2026-24486, CVE-2026-40347
     "protobuf>=6.33.5",          # CVE-2026-0994
     "authlib>=1.9.1",            # CVE-2026-96760 (signature bypass), CVE-2026-28802, GHSA-jj8c-mmj3-mmgv
-    "black>=26.3.1",             # CVE-2026-32274
     "pyjwt>=2.12.0",             # CVE-2026-32597
-    "simpleeval>=1.0.5",         # CVE-2026-32640
     "python-dotenv>=1.2.2",      # CVE-2026-28684 (symlink file overwrite)
     "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2
     "filelock>=4.2.1",           # ReadWriteLock SQLite symlink/journal overwrite (dev/test only)

@@ -11,7 +11,7 @@ consuming app needs:
 amends "@app-contract-toolkit/App.pkl"
 ```
 
-Contracts generate — from one `pkl eval -m . contract/app.pkl` at repo root:
+Contracts generate — from one `pkl eval --project-dir contract -m . contract/app.pkl` at repo root:
 
 - `atlan.yaml` — marketplace deployment manifest (repo root)
 - `app.yaml` — SDR CI shim: `app_name`, `app_image`, `app_port` (repo root)
@@ -27,6 +27,7 @@ Contracts generate — from one `pkl eval -m . contract/app.pkl` at repo root:
 - `src/Widgets.pkl`: widget catalog re-exported from `App.pkl`.
 - `src/Inputs.pkl`: typed input field classes for `App.inputs` (system apps), re-exported from `App.pkl`.
 - `src/InputContract.pkl`: renders a system app's caller node (`contract/generated/input.pkl`) from its `inputs`.
+- `src/PyFormat.pkl`: lays every generated `.py` out as ruff does with default settings (import order, 88-column wrapping). Renderers emit plain one-line statements and pass the module through `format`. One exception: `fmtSubsField` keeps the one-argument-per-line layout (trailing comma) for long `_e2e_substitutions.py` fields, because ruff preserves it and apps already commit it; don't replace it with a one-line statement.
 - `src/Deployment.pkl`: deployment classes (`DeployConfig`, `Pool`, `KedaConfig`, `DaprComponents`, `ResourceConfig`, `VpaConfig`) re-exported from `App.pkl`.
 - `src/Connectors.pkl`: connector type registry (still imported explicitly by consumers).
 - Legacy modules (reference only, not for new apps):
@@ -42,6 +43,7 @@ Contracts generate — from one `pkl eval -m . contract/app.pkl` at repo root:
 ./scripts/check-invariants.sh
 pkl test tests/*.pkl
 python scripts/test-sdk-import.py
+uv run python scripts/check-ruff-stable.py
 ```
 
 Generate one example (example dir acts as the consuming app's repo root):
@@ -134,6 +136,7 @@ Before opening a PR that touches `src/`:
 ./scripts/check-invariants.sh
 pkl test tests/*.pkl
 python scripts/test-sdk-import.py
+uv run python scripts/check-ruff-stable.py
 ```
 
 Use conventional PR titles: `feat:`, `fix:`, `docs:`, `ci:`, `chore:`, or breaking-change syntax. Do not hand-edit `CHANGELOG.md`; release automation owns it.

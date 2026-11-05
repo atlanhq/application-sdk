@@ -48,7 +48,34 @@ Starting with v3.1.0, `duckdb`, `duckdb-engine`, `pandas`, and `pyarrow` (~300 M
 **removed from core** and moved to an optional `[sql]` extra. `dapr`, `temporalio`, and
 `orjson` are **promoted to core** (they were already eagerly imported by every app).
 
-The `[workflows]` extra is a backwards-compatibility shim — the packages it pins (`temporalio`, `orjson`) are already promoted to core in v3.1 so the extra is functionally redundant. Keep it only if your install tooling requires it.
+### Deprecated extras (removed in v4.0.0)
+
+These extras install nothing that core or `[sql]` does not already provide.
+Each is **deprecated and removed in v4.0.0**:
+
+| Extra | Why it is redundant | Do this |
+|-------|---------------------|---------|
+| `[workflows]` | `temporalio`, `orjson` are core since v3.1 | Remove it |
+| `[storage]` | `rocksdict` is core | Remove it |
+| `[iam_auth]` / `[iam-auth]` | `boto3` is core since v3.14 | Remove it |
+| `[azure]` | `azure-identity` is core since v3.14 | Remove it |
+| `[sqlalchemy]` | A subset of `[sql]` | Use `[sql]` |
+| `[pandas]` | A subset of `[sql]` | Use `[sql]` |
+| `[daft]` | An alias for `[sql]` (see below) | Use `[sql]` |
+
+For example, `atlan-application-sdk[iam-auth,pandas,sql,workflows]` becomes
+`atlan-application-sdk[sql]`. Then run `uv lock` and review the diff. Every
+package the shim installed stays installed. Dropping a core shim changes only
+the lock's metadata, but replacing `[pandas]` or `[sqlalchemy]` with `[sql]`
+can add packages: `[pandas]` alone gains `sqlalchemy` and `duckdb`.
+
+Do this before you move to v4. uv ignores an extra that no longer exists, so
+after the removal an app on `[pandas]` or `[sqlalchemy]` loses those packages
+without an error at install time. The D017 conformance rule warns on each of
+these extras now.
+
+`[incremental]` is not deprecated. It is an alias for `[sql]` and stays
+supported.
 
 ### The `[daft]` extra
 
@@ -66,9 +93,30 @@ transform, end-to-end. A version bump is the whole fix; no per-repo change is
 needed. The D010 conformance rule covers the residual case of an app on plain
 `atlan-application-sdk` with no extras at all.
 
+### Packages the SDK no longer declares
+
+The SDK declares only what it imports (a unit test holds this). These were
+declared but never imported, and are gone:
+
+| Package | Was in | Still arrives via |
+|---------|--------|-------------------|
+| `aiohttp` | core | the `[harness]` extra (kubernetes) only |
+| `uvloop` | core | `fastapi[standard]` (uvicorn) |
+| `opentelemetry-exporter-otlp` | core | — (the SDK now declares `opentelemetry-exporter-otlp-proto-grpc`) |
+| `duckdb-engine` | `[sql]`, `[incremental]` | — |
+| `azure-storage-blob`, `azure-storage-file-datalake` | `[azure]` (deprecated) | — |
+| `pytest-order` | `[tests]` | — |
+| `numpy` | `[scale_data_generator]` | pandas, where installed |
+
+If your app imports one of these, declare it in your own `pyproject.toml`; it
+was never a promise of the SDK's. The usual cases: `aiohttp` in app code,
+`create_engine("duckdb:///...")` (needs `duckdb-engine`), the Azure Storage SDK
+used directly, and `@pytest.mark.order` in tests. The SDK's own HTTP client is
+`httpx`.
+
 ### pandas 3 and pyarrow 26
 
-The `[sql]`, `[incremental]` and `[pandas]` extras accept `pandas>=2.2.3,<4`
+The `[sql]` and `[incremental]` extras (and the deprecated `[pandas]`) accept `pandas>=2.2.3,<4`
 and `pyarrow>=23.0.1,<27`. The SDK is tested against both pandas 2 and
 pandas 3. An app that pins `pandas<3` keeps resolving and needs no change.
 

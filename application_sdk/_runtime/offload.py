@@ -704,7 +704,7 @@ async def run_in_thread(
        =========================  ======================  ====================
        Need                       Use (async)             Avoid (blocking)
        =========================  ======================  ====================
-       HTTP requests              ``httpx``, ``aiohttp``  ``requests``
+       HTTP requests              ``httpx``               ``requests``
        AWS SDK                    ``aioboto3``,           ``boto3``
                                   ``aiobotocore``
        PostgreSQL                 ``asyncpg``             ``psycopg2``

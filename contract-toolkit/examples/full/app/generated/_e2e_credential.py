@@ -2,9 +2,8 @@
 # Regenerate with: pkl eval -m . contract/app.pkl
 from __future__ import annotations
 
-from pydantic import Field
-
 from application_sdk.testing.e2e.credential import CredentialBody
+from pydantic import Field
 
 
 class FullFeaturedCredentialBody(CredentialBody):

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "atlan-application-sdk-conformance"
-version = "0.54.0"
+version = "0.55.0"
 description = "Conformance suite, remediation programs, and CLI for the Atlan Application SDK"
 license = "Apache-2.0"
 authors = [
@@ -101,6 +101,16 @@ exclude = ["conformance/bootstrap/templates/renovate.json", "*.md"]
 # command. The rewrite is silent, changes no version or hash, and makes CI fail at dependency
 # install with `401 Unauthorized` once committed. See the longer note in the repo-root
 # pyproject.toml; D012/D013 in this very suite are what enforce it fleet-wide.
+# The `test` extra's atlan-application-sdk resolves from this checkout, not
+# PyPI (FND-4256). 19 test files import application_sdk, and the parity tests
+# (tests/test_app_name_alignment.py) compare conformance's copied helpers with
+# the SDK's: against a PyPI lock they checked whichever release that lock last
+# pinned, not the code beside them. Editable so a source change is seen without
+# a rebuild. [tool.uv.sources] is never published metadata, so the released
+# wheel still declares a plain `atlan-application-sdk[sql]` requirement.
+[tool.uv.sources]
+atlan-application-sdk = { path = "../..", editable = true }
+
 [[tool.uv.index]]
 name = "pypi"
 url = "https://pypi.org/simple"

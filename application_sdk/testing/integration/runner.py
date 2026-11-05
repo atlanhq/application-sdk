@@ -35,9 +35,9 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
+import httpx
 import orjson
 import pytest
-import requests as http_requests
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.harness._poll import until_deadline
@@ -174,15 +174,17 @@ def _check_server_health(server_url: str, timeout: int = 5) -> bool:
         bool: True if server is reachable, False otherwise.
     """
     try:
-        response = http_requests.get(f"{server_url}/server/health", timeout=timeout)
+        response = httpx.get(
+            f"{server_url}/server/health", timeout=timeout, follow_redirects=True
+        )
         return response.status_code == 200
-    except http_requests.ConnectionError:
+    except httpx.ConnectError:
         logger.warning(
             "Server health check failed with connection error; returning False",
             exc_info=True,
         )
         return False
-    except http_requests.RequestException:
+    except (httpx.HTTPError, httpx.InvalidURL):
         # Network error (timeout, too many redirects, etc.) — not healthy
         logger.warning(
             "Server health check failed with request error; returning False",
