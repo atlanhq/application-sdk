@@ -2,7 +2,12 @@
 
 This follows the repo's own pattern. `[tool.uv] constraint-dependencies` already carries
 one `"pkg>=fixed",  # CVE-...` line per past fix, so a later `uv lock` can never
-silently resolve back below the fix. Only the affected packages are upgraded
+silently resolve back below the fix. A constraint pins this repo's lock only, so when
+the package is also a published `[project] dependencies` entry its floor is raised there
+too: that is the floor connector apps inherit. A runtime package that is not published
+yet is left for a human (a new direct dependency needs approval), and
+tests/unit/test_security_floors.py fails the PR until it is. Only the affected packages
+are upgraded
 (`uv lock --upgrade-package`). A blanket `--upgrade` would also pull in unrelated
 releases that are too new for the org's 7-day cooldown.
 """
@@ -18,6 +23,13 @@ from .scan import lock_registry_hosts, normalize
 _BLOCK = re.compile(r"^constraint-dependencies = \[\n(?P<body>.*?)^\]", re.M | re.S)
 _ENTRY = re.compile(
     r'^(?P<indent>\s*)"(?P<name>[A-Za-z0-9_.\-]+)(?P<spec>[^"]*)",(?P<rest>.*)$'
+)
+# The `[project]` table's `dependencies = [...]`: the published requirements.
+_PROJECT = re.compile(r"^\[project\]\n(?P<table>.*?)(?=^\[|\Z)", re.M | re.S)
+_DEPS = re.compile(r"^dependencies = \[\n(?P<body>.*?)^\]", re.M | re.S)
+_PUBLISHED = re.compile(
+    r'^(?P<head>\s*"(?P<name>[A-Za-z0-9_.\-]+)(?:\[[^\]]*\])?)(?P<spec>[^";]*)'
+    r'(?P<tail>[^"]*",)(?P<rest>.*)$'
 )
 
 
@@ -50,7 +62,51 @@ def set_constraints(pyproject: str, floors: dict[str, tuple[str, list[str]]]) ->
     for name, (version, cves) in pending.values():
         lines.append(f'    "{name}>={version}",  # {", ".join(cves)}')
     body = "\n".join(lines) + "\n"
-    return pyproject[: m.start("body")] + body + pyproject[m.end("body") :]
+    out = pyproject[: m.start("body")] + body + pyproject[m.end("body") :]
+    return _raise_published(out, floors)
+
+
+def _tag(rest: str, cves: list[str]) -> str:
+    """`rest` (what follows the entry's comma) with `cves` added to its comment."""
+    code, _, comment = rest.partition("#")
+    tags = ", ".join([c for c in [comment.strip()] if c] + cves)
+    return f"{code.rstrip()}  # {tags}" if tags else code.rstrip()
+
+
+def _raise_published(pyproject: str, floors: dict[str, tuple[str, list[str]]]) -> str:
+    """Raise the `>=` floor of each published `[project] dependencies` entry in `floors`.
+
+    The upper bound, extras and marker are kept; an entry already at or above the floor
+    is untouched. An entry pinned another way (`==`, `~=`) is left alone: rewriting it
+    would change more than the floor, so the test fails the PR for a human to decide.
+    """
+    project = _PROJECT.search(pyproject)
+    deps = _DEPS.search(project.group("table")) if project else None
+    if not project or not deps:
+        return pyproject
+    wanted = {normalize(k): v for k, v in floors.items()}
+    lines = deps.group("body").splitlines()
+    for i, line in enumerate(lines):
+        e = _PUBLISHED.match(line)
+        if not e or normalize(e.group("name")) not in wanted:
+            continue
+        version, cves = wanted[normalize(e.group("name"))]
+        spec = e.group("spec")
+        if re.search(r"(==|~=)", spec):
+            continue
+        current = re.search(r">=\s*([^,;\s]+)", spec)
+        if current and version_key(current.group(1)) >= version_key(version):
+            continue
+        if current:
+            spec = spec[: current.start(1)] + version + spec[current.end(1) :]
+        else:
+            spec = f">={version}" + (f",{spec}" if spec.strip() else "")
+        lines[i] = (
+            e.group("head") + spec + e.group("tail") + _tag(e.group("rest"), cves)
+        )
+    start = project.start("table") + deps.start("body")
+    end = project.start("table") + deps.end("body")
+    return pyproject[:start] + "\n".join(lines) + "\n" + pyproject[end:]
 
 
 def verify(
