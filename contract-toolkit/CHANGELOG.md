@@ -6,6 +6,14 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.36.1] - 2026-11-04
+
+### Bug fixes
+
+- emit ruff-stable Python so generated files match what apps commit [FND-4703] (#4760) ([c8a7ec2](https://github.com/atlanhq/application-sdk/commit/c8a7ec2))
+- make the recommended generate wiring pass certify [FND-4701] (#4753) ([aa01c83](https://github.com/atlanhq/application-sdk/commit/aa01c83))
+- remove unused Python package renderers; drop daft leftovers and record the golden base policy [FND-4258] (#4748) ([37f6a6e](https://github.com/atlanhq/application-sdk/commit/37f6a6e))
+
 ## [0.36.0] - 2026-11-01
 
 ### Features
