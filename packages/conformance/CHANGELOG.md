@@ -2,6 +2,21 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.55.0] - 2026-11-05
+
+### Features
+
+- deprecate the SDK's shim extras for v4.0.0 and warn on them with D017 [FND-4255] (#4756) ([ce11eb2](https://github.com/atlanhq/application-sdk/commit/ce11eb2))
+
+### Bug fixes
+
+- resync drops a redundant `enable-e2e: true` instead of refusing tests.yaml [FND-4540] (#4735) ([32921b7](https://github.com/atlanhq/application-sdk/commit/32921b7))
+
+### Other changes
+
+- build: test conformance against this tree's SDK and declare Python 3.11-3.14 on all three packages [FND-4256] (#4763) ([4ee8480](https://github.com/atlanhq/application-sdk/commit/4ee8480))
+- chore(ci): replace isort with ruff import sorting and track pre-commit hooks with Renovate (#4727) ([d8a2e5c](https://github.com/atlanhq/application-sdk/commit/d8a2e5c))
+
 ## [0.54.0] - 2026-11-03
 
 ### Features
