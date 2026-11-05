@@ -230,6 +230,8 @@ async with self.holding_progress("full table scan", timeout=7200):
 
 **Inside a `holding_progress` block the automatic holds stand down**, so the allowance you declared is what governs. The example above lapses at 7200s rather than inheriting an unbounded auto-hold that would outlive it — the SDK never adds a vouch that outlives the one you asked for. (An offload running concurrently in a task that never entered the block is still auto-held.)
 
+**A cancel does not stop the thread.** When Temporal cancels the activity, the awaiting coroutine raises `CancelledError`, but Python cannot kill the thread doing the blocking work: it runs on, holding its memory and CPU, while the worker starts its next activity. Long blocking work should check `self.is_cancelled()` every few seconds and return when it is `True`; it reports the activity's cancel from inside the offloaded thread too. Business code that must not import the SDK can take `self.is_cancelled` as a callable.
+
 For opaque *async* calls (the connector's own async client) there is no SDK-owned seam to auto-hold, so wrap those in `holding_progress` directly. Expect to need it: interleaved streaming reads (fetch a page, write a batch, repeat) are already covered by the SDK's own writer and transfer loops, but almost every connector makes at least one genuinely opaque single call — one large metadata query, one slow list/export that returns everything at once.
 
 See [Progress and Stalls](progress-and-stalls.md) for the whole picture — what counts as

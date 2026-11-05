@@ -10,6 +10,7 @@ from uuid import uuid4
 
 # Low-level loguru import used only as the activity-context fallback below.
 from loguru import logger as _loguru_logger
+from temporalio import activity as _activity
 from temporalio import workflow as _workflow
 
 from application_sdk._runtime.offload import run_in_thread
@@ -283,10 +284,15 @@ class AppContext:
     def is_cancelled(self) -> bool:
         """Check if execution has been cancelled.
 
+        True once the current Temporal activity has been asked to cancel, including
+        from a thread started with ``run_in_thread``. That is where it matters most:
+        a cancel interrupts only the awaiting coroutine, Python cannot kill the
+        thread, and the thread keeps its memory and CPU until it checks this.
+
         Apps should check this periodically during long-running operations
         and exit gracefully if True.
         """
-        return self._cancelled
+        return self._cancelled or (_activity.in_activity() and _activity.is_cancelled())
 
     async def save_state(self, key: str, value: dict[str, Any]) -> None:
         """Save state to the state store.

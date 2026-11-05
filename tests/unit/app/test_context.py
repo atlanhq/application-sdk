@@ -12,12 +12,17 @@ are exercised directly except where the public surface delegates to them.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
+import time
 from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
 import pytest
+from temporalio.testing import ActivityEnvironment
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.app.base_errors import (
     SecretStoreNotConfiguredError,
     StateStoreNotConfiguredError,
@@ -119,6 +124,35 @@ class TestAppContextIdentity:
     def test_is_cancelled_reflects_internal_flag(self) -> None:
         ctx = AppContext(app_name="a", app_version="1", _cancelled=True)
         assert ctx.is_cancelled() is True
+
+    async def test_is_cancelled_reaches_the_offloaded_thread_when_its_activity_is_cancelled(
+        self,
+    ) -> None:
+        ctx = AppContext(app_name="a", app_version="1")
+        environment = ActivityEnvironment()
+        started = threading.Event()
+        stopped_on_cancel = threading.Event()
+
+        def blocking_work() -> None:
+            started.set()
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if ctx.is_cancelled():
+                    stopped_on_cancel.set()
+                    return
+                time.sleep(0.01)
+
+        async def activity_body() -> None:
+            await run_in_thread(blocking_work)
+
+        running = asyncio.ensure_future(environment.run(activity_body))
+        assert await asyncio.to_thread(started.wait, 30)
+        assert ctx.is_cancelled() is False
+        environment.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+
+        assert await asyncio.to_thread(stopped_on_cancel.wait, 30)
 
     def test_storage_returns_configured_store(self) -> None:
         sentinel = object()
