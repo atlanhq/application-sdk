@@ -293,8 +293,10 @@ class _BatchedResults(Iterator["pd.DataFrame"], AsyncIterator["pd.DataFrame"]):
     ``for frame in results`` behaves exactly as the plain iterator did, which
     is what every existing caller relies on. ``async for frame in results``
     fetches each chunk with ``run_in_thread`` instead, so the cursor read and
-    the DataFrame build stay off the event loop, and a cancel stops the read
-    and closes (and drops) its connection. The SDK's writers take the async
+    the DataFrame build stay off the event loop. A cancel stops any further
+    chunk being read and closes (and drops) the connection once the fetch in
+    flight returns; that fetch itself is not interrupted, since the cursor's
+    cancel is registered only at execute. The SDK's writers take the async
     path whenever it is offered.
     """
 
@@ -1044,6 +1046,14 @@ class BaseSQLClient(ClientInterface):
                 _invalidate_if_cancelled(conn, read.handle)
             conn.close()
             raise
+        read = _ACTIVE_READ.get()
+        if read is not None and read.handle.requested:
+            # The caller was cancelled during the execute and will never read
+            # or close the result: drop the connection now rather than leave it
+            # checked out until garbage collection pools it again.
+            _invalidate_if_cancelled(conn, read.handle)
+            conn.close()
+            raise concurrent.futures.CancelledError
         if not isinstance(frames, Iterator):
             # An override that materialised the result: nothing left to read.
             conn.close()
@@ -1107,7 +1117,8 @@ class BaseSQLClient(ClientInterface):
         """Get query results as batched pandas DataFrames asynchronously.
 
         The result is iterable both ways. ``async for frame in results`` reads
-        each chunk off the event loop and stops the read on cancel; prefer it.
+        each chunk off the event loop, and a cancel stops further reads and
+        releases the connection once the chunk in flight returns; prefer it.
         ``for frame in results`` still works as it always has, but every chunk
         is then read on the iterating thread — the event loop, from async code.
         The query's connection stays checked out until the chunks are read or
@@ -1132,7 +1143,6 @@ class BaseSQLClient(ClientInterface):
                 # An async engine's frames come off a greenlet-bound session;
                 # pulling them on a worker thread is not supported there.
                 return frames
-            _install_cursor_cancel_listener(self.engine)
             return _BatchedResults(
                 frames, _CancellableRead(CancelHandle(), self.cancel_cursor)
             )

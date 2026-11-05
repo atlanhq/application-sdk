@@ -165,3 +165,42 @@ async def test_closing_before_the_first_chunk_releases_the_connection(
     batches.close()  # type: ignore[union-attr]
     assert _checked_out(client) == 0
     assert list(batches) == []
+
+
+async def test_a_cancelled_execute_drops_its_connection(
+    client: BaseSQLClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nobody will read or close the result of an execute whose caller is gone."""
+    in_execute = threading.Event()
+    release = threading.Event()
+    connections: list[sa.engine.Connection] = []
+    real_execute = client._execute_pandas_query
+
+    def slow_execute(conn: sa.engine.Connection, query: str, chunksize: int) -> object:
+        connections.append(conn)
+        in_execute.set()
+        release.wait(30)
+        return real_execute(conn, query, chunksize)
+
+    monkeypatch.setattr(client, "_execute_pandas_query", slow_execute)
+    invalidated: list[sa.engine.Connection] = []
+    real_invalidate = sa.engine.Connection.invalidate
+
+    def spy_invalidate(self: sa.engine.Connection, *args: object) -> None:
+        invalidated.append(self)
+        real_invalidate(self, *args)
+
+    monkeypatch.setattr(sa.engine.Connection, "invalidate", spy_invalidate)
+    task = asyncio.ensure_future(client.get_batched_results("SELECT a FROM t"))
+    assert await asyncio.to_thread(in_execute.wait, 30)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    release.set()
+    for _ in range(300):
+        if _checked_out(client) == 0:
+            break
+        await asyncio.sleep(0.01)
+    assert _checked_out(client) == 0
+    # Dropped, not pooled: it was cancelled mid-execute.
+    assert invalidated == connections
