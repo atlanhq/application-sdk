@@ -134,6 +134,75 @@ def test_p064_is_silent_when_cancel_is_registered_or_not_matched(source: str) ->
     assert _ids(source, "P064") == []
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        # handle looked up, never set: nothing is registered
+        """
+        from application_sdk.execution.heartbeat import current_cancel_handle
+
+        async def fetch(self, sql):
+            def _q():
+                cursor = self.conn.cursor()
+                handle = current_cancel_handle()
+                cursor.execute(sql)
+            return await self.run_in_thread(_q)
+        """,
+        # handle only checked for None
+        """
+        from application_sdk.execution import heartbeat
+
+        async def fetch(self, sql):
+            def _q():
+                cursor = self.conn.cursor()
+                if heartbeat.current_cancel_handle() is None:
+                    raise RuntimeError("no handle")
+                cursor.execute(sql)
+            return await self.run_in_thread(_q)
+        """,
+        # .set on something that is not the call's handle
+        """
+        async def fetch(self, sql):
+            def _q():
+                cursor = self.conn.cursor()
+                self.flags.set(cursor.cancel)
+                cursor.execute(sql)
+            return await self.run_in_thread(_q)
+        """,
+    ],
+)
+def test_p064_fires_when_the_handle_is_looked_up_but_not_set(source: str) -> None:
+    assert len(_ids(source, "P064")) == 1
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # set directly on the lookup
+        """
+        async def fetch(self, sql):
+            def _q():
+                cursor = self.conn.cursor()
+                current_cancel_handle().set(cursor.cancel)
+                cursor.execute(sql)
+            return await self.run_in_thread(_q)
+        """,
+        # walrus-bound handle
+        """
+        async def fetch(self, sql):
+            def _q():
+                cursor = self.conn.cursor()
+                if (handle := heartbeat.current_cancel_handle()) is not None:
+                    handle.set(cursor.cancel)
+                cursor.execute(sql)
+            return await self.run_in_thread(_q)
+        """,
+    ],
+)
+def test_p064_is_silent_for_other_handle_registration_shapes(source: str) -> None:
+    assert _ids(source, "P064") == []
+
+
 def test_p064_reports_the_run_in_thread_line_and_honours_suppression() -> None:
     source = """
     async def fetch(self, sql):
@@ -225,6 +294,28 @@ def test_p065_fires_on_a_sync_loop_over_batched_results(source: str) -> None:
 )
 def test_p065_is_silent_for_async_iteration_and_unmatched_shapes(source: str) -> None:
     assert _ids(source, "P065") == []
+
+
+def test_p065_honours_suppression_on_loops_and_comprehensions() -> None:
+    source = """
+    async def run(client, q):
+        batches = await client.get_batched_results(q)
+        for frame in batches:
+            pass
+        # conformance: ignore[P065] async engine: the result is a sync iterator
+        for frame in await client.get_batched_results(q):
+            pass
+        # conformance: ignore[P065] frames are already materialised
+        return [len(f) for f in batches]
+    """
+    findings = [
+        f for f in scan_text(textwrap.dedent(source), "app/x.py") if f.rule_id == "P065"
+    ]
+    assert sorted((f.line, f.suppressed) for f in findings) == [
+        (4, False),
+        (7, True),
+        (10, True),
+    ]
 
 
 # --------------------------------------------------------------------- gate

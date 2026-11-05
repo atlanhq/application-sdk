@@ -17,10 +17,8 @@ from conformance.suite.schema.findings import Finding
 #: DB-API cursor methods that send a statement to the source.
 _CURSOR_STATEMENT_METHODS = frozenset({"execute", "executemany"})
 
-#: Names whose presence in the offloaded function means a driver cancel is
-#: registered for the call (``current_cancel_handle().set(cursor.cancel)``, or a
-#: ``CancelHandle`` the function binds or sets).
-_CANCEL_REGISTRATION_NAMES = frozenset({"current_cancel_handle", "CancelHandle"})
+#: The SDK accessor for the running ``run_in_thread`` call's cancel handle.
+_CANCEL_HANDLE_ACCESSOR = "current_cancel_handle"
 
 _SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
 
@@ -61,9 +59,7 @@ def _cursor_names(scope: ast.AST) -> set[str]:
 
 def _is_cursor_statement(node: ast.AST, cursors: set[str]) -> bool:
     """``<cursor>.execute`` / ``executemany`` on a cursor this scope opened."""
-    if not (
-        isinstance(node, ast.Attribute) and node.attr in _CURSOR_STATEMENT_METHODS
-    ):
+    if not (isinstance(node, ast.Attribute) and node.attr in _CURSOR_STATEMENT_METHODS):
         return False
     receiver = node.value
     return (isinstance(receiver, ast.Name) and receiver.id in cursors) or (
@@ -71,12 +67,44 @@ def _is_cursor_statement(node: ast.AST, cursors: set[str]) -> bool:
     )
 
 
+def _is_handle_lookup(node: ast.AST | None) -> bool:
+    """``current_cancel_handle()`` or ``<module>.current_cancel_handle()``."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    return (isinstance(func, ast.Name) and func.id == _CANCEL_HANDLE_ACCESSOR) or (
+        isinstance(func, ast.Attribute) and func.attr == _CANCEL_HANDLE_ACCESSOR
+    )
+
+
 def _registers_cancel(scope: ast.AST) -> bool:
-    """Whether *scope* (nested functions included) names a cancel registration."""
+    """Whether *scope* (nested functions included) registers a driver cancel.
+
+    Only a ``.set(...)`` call on the call's handle registers one — on
+    ``current_cancel_handle()`` itself, or on a name bound from it (``=`` or
+    ``:=``).  Looking the handle up without setting it registers nothing.
+    """
+    handles: set[str] = set()
     for node in ast.walk(scope):
-        if isinstance(node, ast.Name) and node.id in _CANCEL_REGISTRATION_NAMES:
-            return True
-        if isinstance(node, ast.Attribute) and node.attr in _CANCEL_REGISTRATION_NAMES:
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and _is_handle_lookup(
+            node.value
+        ):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            handles.update(t.id for t in targets if isinstance(t, ast.Name))
+        elif isinstance(node, ast.NamedExpr) and _is_handle_lookup(node.value):
+            handles.add(node.target.id)
+    for node in ast.walk(scope):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "set"
+            and node.args
+        ):
+            continue
+        receiver = node.func.value
+        if _is_handle_lookup(receiver) or (
+            isinstance(receiver, ast.Name) and receiver.id in handles
+        ):
             return True
     return False
 
@@ -280,7 +308,9 @@ def check_p065(
             sites: list[tuple[ast.AST, ast.AST]] = []
             if isinstance(node, ast.For):
                 sites.append((node, node.iter))
-            elif isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            elif isinstance(
+                node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+            ):
                 sites.extend(
                     (node, gen.iter) for gen in node.generators if not gen.is_async
                 )

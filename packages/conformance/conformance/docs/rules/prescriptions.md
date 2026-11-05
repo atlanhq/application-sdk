@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**56 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015, P059), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.retry_ladder` (P060), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK) (all AST-based / cross-artifact)
+**56 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015, P059), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.retry_ladder` (P060), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK), `suite.checks.offload_cancel` (P064/P065, gated on the app's locked SDK) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -3337,9 +3337,10 @@ https://github.com/atlanhq/application-sdk/blob/main/docs/concepts/apps.md.
 
 Matching is exact and module-local: the offloaded function must be a `def` or `lambda`
 in the same module (a nested `def`, a module-level `def` or a method on `self`), seen
-through `functools.partial`.  `<handle>.bind(fn)` counts as registered, and so does any
-use of `current_cancel_handle` or `CancelHandle` in the function.  A cursor received as
-an argument, or a function from another module, is not followed.  The check is silent
+through `functools.partial`.  `<handle>.bind(fn)` counts as registered, and so does a
+`.set(...)` call in the function on `current_cancel_handle()` or on a name bound from
+it; looking the handle up without setting it does not.  A cursor received as an
+argument, or a function from another module, is not followed.  The check is silent
 unless the app's `uv.lock` resolves an SDK that has `current_cancel_handle`.
 
 Land as `WARN`: a justified inline `# conformance: ignore[P064] <reason>` on the
