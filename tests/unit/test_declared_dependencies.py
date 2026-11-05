@@ -59,7 +59,6 @@ NAMESPACE_ROOTS = frozenset({"opentelemetry", "google", "azure"})
 #: not part of pydantic's API.
 PROVIDED_BY: dict[str, str] = {
     "starlette": "fastapi",  # fastapi re-exports and subclasses starlette
-    "uvicorn": "fastapi",  # fastapi[standard] declares uvicorn[standard]
     "pydantic-core": "pydantic",  # pydantic's own core (PydanticCustomError, ...)
     "botocore": "boto3",  # boto3's exceptions and config types are botocore's
     "azure-core": "azure-identity",  # azure-identity credentials are azure-core types
@@ -82,7 +81,7 @@ NO_IMPORT_SITE: dict[str, str] = {
     "authlib": "published CVE floor on a pyatlan dependency",
     "protobuf": "published CVE floor on a temporalio / opentelemetry dependency",
     "pyjwt": "published CVE floor on an azure-identity dependency",
-    "python-multipart": "published CVE floor on a fastapi[standard] dependency",
+    "python-multipart": "fastapi imports it for File/Form parsing; carries a CVE floor",
 }
 
 
