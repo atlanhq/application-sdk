@@ -285,9 +285,18 @@ class AppContext:
         """Check if execution has been cancelled.
 
         True once the current Temporal activity has been asked to cancel, including
-        from a thread started with ``run_in_thread``. That is where it matters most:
-        a cancel interrupts only the awaiting coroutine, Python cannot kill the
-        thread, and the thread keeps its memory and CPU until it checks this.
+        when called from a thread started with ``run_in_thread``. It reports a
+        request to stop, not that anything has stopped.
+
+        That thread is where it matters most. A cancel interrupts only the awaiting
+        coroutine; Python cannot stop the thread from outside, so it keeps its
+        memory and CPU until its own code checks this and returns. The stop is
+        cooperative: a single blocking call that never reaches a check still runs
+        to completion.
+
+        Temporal delivers a server-side cancel to the worker in a heartbeat
+        response, so a task declared with ``heartbeat_timeout_seconds=None``
+        does not see it here until its start-to-close timeout.
 
         Apps should check this periodically during long-running operations
         and exit gracefully if True.
