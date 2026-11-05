@@ -460,6 +460,27 @@ def _restore_reserved_subdirs(target: Path, backups: dict[str, Path]) -> None:
         shutil.rmtree(backup.parent, ignore_errors=True)
 
 
+def root_files_not_emitted(out_dir: Path) -> list[str]:
+    """Root YAMLs the working tree carries that this eval did not emit.
+
+    Not a broken tree — ``swap_outputs`` only ever copies root files, so the
+    committed one is still in place — but it *may* mean the contract (or the
+    toolkit under test) stopped producing an artifact the app ships. Worth
+    failing on in SDK-level mode: a later sdr-e2e step hard-errors on a missing
+    root ``app.yaml``, resolves it *after* this step, and SDK-level mode skips
+    the drift check, so nothing else would explain it. Informational in
+    app-level mode.
+
+    "May", because a contract can also *ask* the toolkit not to emit the file.
+    That is a sanctioned configuration, not a regression, so callers split this
+    list with ``opted_out_root_files`` before reporting — see FND-1723."""
+    return [
+        name
+        for name in ROOT_FILES
+        if Path(name).exists() and not (out_dir / name).exists()
+    ]
+
+
 def swap_outputs(
     out_dir: Path,
     generated_dir: str = GENERATED_DIR,

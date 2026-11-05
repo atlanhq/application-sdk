@@ -17,6 +17,7 @@ tmp_path, so the staging/commit decisions are exercised end to end.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -890,7 +891,7 @@ def test_multi_root_swap_gets_a_per_root_baseline(repo, monkeypatch):
         lambda cmd, *, check=False: subprocess.CompletedProcess(cmd, 0, "", ""),
     )
     monkeypatch.setattr(mod, "run_post_generate", lambda d: None)
-    monkeypatch.setattr(mod, "_format_generated", lambda: None)
+    monkeypatch.setattr(mod, "_format_generated", lambda run_cmd=None: True)
 
     assert mod.regenerate("contract") is True
     assert seen == [
@@ -907,3 +908,101 @@ def test_multi_root_baseline_absent_root_is_not_a_failure(repo, monkeypatch):
     monkeypatch.setattr(mod, "export_contract_at", lambda ref, d, dest: True)
     out, work = mod._baseline_output_for_root("contract", "crawler.pkl")
     assert out is None and work is not None  # workdir returned for cleanup
+
+
+# --- FND-4736: the bump commits everything regeneration changes ---------------
+#
+# Certify checks the whole tree after regenerating, so a file regeneration
+# writes outside app/generated (an app's post-generate.sh placing _input.py next
+# to its code) must land in the toolkit-bump PR too.
+
+POST_GENERATE_OUTSIDE = """\
+mkdir -p app/contracts tests/e2e docs
+echo 'X = 1' > app/contracts/_input.py
+echo 'Y = 2' > tests/e2e/_subs.py
+echo 'stray' > docs/generated.md
+"""
+
+
+def _with_post_generate(repo: Path, script: str = POST_GENERATE_OUTSIDE) -> None:
+    (repo / "contract" / "post-generate.sh").write_text(script)
+    (repo / "uv.lock").write_text("version = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "post-generate")
+
+
+def test_file_filters_match_the_renovate_preset() -> None:
+    preset = json.loads(
+        (Path(__file__).parents[3] / "renovate-config" / "default.json").read_text()
+    )
+    rules = [
+        r
+        for r in preset["packageRules"]
+        if r.get("matchDepNames") == ["app-contract-toolkit"]
+    ]
+    assert len(rules) == 1
+    assert rules[0]["postUpgradeTasks"]["fileFilters"] == mod.renovate_file_filters()
+
+
+@pytest.mark.parametrize(
+    ("path", "committed"),
+    [
+        ("app/generated/_input.py", True),
+        ("app/contracts/_input.py", True),
+        ("contract/PklProject.deps.json", True),
+        ("contract/generated/x/input.pkl", True),
+        ("tests/e2e/_subs.py", True),
+        ("atlan.yaml", True),
+        ("app.yaml", True),
+        ("uv.lock", False),
+        ("pyproject.toml", False),
+        ("app", False),
+        ("apps/x.py", False),
+        ("docs/x.md", False),
+    ],
+)
+def test_committable(path: str, committed: bool) -> None:
+    assert mod.committable(path) is committed
+
+
+def test_commit_mode_stages_regenerated_files_outside_generated(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _with_post_generate(repo)
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo))
+
+    assert mod.main(["--regenerate", "true"]) == 0
+
+    assert _tracked(repo, "app/contracts/_input.py")
+    assert _tracked(repo, "tests/e2e/_subs.py")
+    assert not _tracked(repo, "docs/generated.md")
+    out = capsys.readouterr().out
+    assert "docs/generated.md" in out and "outside what this PR commits" in out
+
+
+def test_edits_made_before_the_sync_are_not_attributed_to_it(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Renovate writes its own edits (uv.lock, contract/PklProject) before the
+    post-upgrade task runs. Those are Renovate's to commit, not drift."""
+    _with_post_generate(repo, "true\n")
+    (repo / "uv.lock").write_text("version = 2\n")
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo))
+
+    assert mod.main(["--regenerate", "true", "--no-commit"]) == 0
+
+    assert "outside what this PR commits" not in capsys.readouterr().out
+
+
+def test_changed_since_sees_new_modified_deleted_and_restored(repo: Path) -> None:
+    (repo / "app" / "generated" / "_input.py").write_text("dirty before\n")
+    before = mod.dirty_tree()
+    (repo / "app" / "generated" / "_input.py").write_text("import os\n")  # restored
+    (repo / "app" / "generated" / "manifest.json").unlink()  # deleted
+    (repo / "app" / "new.py").write_text("new\n")  # untracked
+
+    assert mod.changed_since(before) == [
+        "app/generated/_input.py",
+        "app/generated/manifest.json",
+        "app/new.py",
+    ]

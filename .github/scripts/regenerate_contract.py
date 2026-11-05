@@ -47,7 +47,9 @@ warns when an app looks like it post-processes elsewhere, and the drift
 comparison is now formatting-insensitive so it can also run on the image-build
 path, which is the one that bakes the artifacts. See FND-1777.
 
-Eval writes into a temp dir and is placed by ``pkl_contract_layout.swap_outputs``,
+Regeneration is ``renovate_pkl_sync.regenerate_tree``, the SDK's single shared
+regeneration (FND-4736). Eval writes into a temp dir and is placed by
+``pkl_contract_layout.swap_outputs``,
 which handles both contract families: ``App.pkl`` (output keys prefixed
 ``app/generated/``) and ``NativeApp.pkl`` / ``NativeAppBundle.pkl`` (unprefixed
 keys relative to the generated dir). This used to eval ``-m .`` straight into the
@@ -63,10 +65,8 @@ from __future__ import annotations
 
 import argparse
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 # Placement of eval output is family-dependent and shared with
@@ -77,9 +77,10 @@ from pkl_contract_layout import (  # noqa: E402
     GENERATED_DIR,
     ROOT_FILES,
     format_generated_python,
-    run_post_generate,
-    swap_outputs,
 )
+
+# The regeneration itself is the SDK's single shared one (FND-4736).
+from renovate_pkl_sync import regenerate_tree  # noqa: E402
 
 # Everything a contract can emit, relative to the repo root, as git pathspecs.
 # Mirrors the cleanup/stage list in contract-toolkit/scripts/regenerate-all.sh
@@ -142,46 +143,6 @@ def resolve(contract_dir: str) -> None:
     """Re-resolve the Pkl lock. Fatal on failure: with a changed (local-override)
     dependency, an unresolved lock means eval would resolve the wrong toolkit."""
     run(["pkl", "project", "resolve", f"{contract_dir}/"], check=True)
-
-
-def evaluate(contract_dir: str, out_dir: Path) -> bool:
-    """Evaluate the contract into ``out_dir``. Returns True on success.
-
-    ``--project-dir``: the contract is a Pkl project declaring
-    app-contract-toolkit as a dependency, so eval must load that project to
-    resolve the ``@app-contract-toolkit`` import. ``-m out_dir`` writes each
-    output key relative to that base; ``swap_outputs`` then places it in the
-    working tree, where the Docker build COPYs from and the tests read.
-
-    Evaluating into a temp dir rather than in place means the committed artifacts
-    are untouched unless the output is usable — the safety contract above holds
-    without needing to clean-then-restore around a failure."""
-    app_pkl = str(Path(contract_dir) / "app.pkl")
-    proc = run(
-        ["pkl", "eval", "--project-dir", contract_dir, "-m", str(out_dir), app_pkl]
-    )
-    return proc.returncode == 0
-
-
-def root_files_not_emitted(out_dir: Path) -> list[str]:
-    """Root YAMLs the working tree carries that this eval did not emit.
-
-    Not a broken tree — ``swap_outputs`` only ever copies root files, so the
-    committed one is still in place — but it *may* mean the contract (or the
-    toolkit under test) stopped producing an artifact the app ships. Worth
-    failing on in SDK-level mode: a later sdr-e2e step hard-errors on a missing
-    root ``app.yaml``, resolves it *after* this step, and SDK-level mode skips
-    the drift check, so nothing else would explain it. Informational in
-    app-level mode.
-
-    "May", because a contract can also *ask* the toolkit not to emit the file.
-    That is a sanctioned configuration, not a regression, so callers split this
-    list with ``opted_out_root_files`` before reporting — see FND-1723."""
-    return [
-        name
-        for name in ROOT_FILES
-        if Path(name).exists() and not (out_dir / name).exists()
-    ]
 
 
 def opted_out_root_files(contract_dir: str, names: list[str]) -> set[str]:
@@ -343,78 +304,72 @@ def main(argv: list[str] | None = None) -> int:
     # every failure path below simply leaves the committed artifacts in place —
     # no clean-then-restore, and a committed root atlan.yaml/app.yaml this
     # contract does not emit is never left deleted (swap_outputs only ever
-    # *copies* root files it was given).
-    tmp = Path(tempfile.mkdtemp())
-    try:
-        if not evaluate(contract_dir, tmp):
-            if sdk_mode:
-                print(
-                    "::error::pkl eval failed using the SDK PR's contract-toolkit — "
-                    "the toolkit change does not generate valid artifacts for this "
-                    "connector contract."
-                )
-                return 1
+    # *copies* root files it was given). No override protection: this step
+    # regenerates exactly what certify checks.
+    result = regenerate_tree(contract_dir, run_cmd=run, protect_overrides=False)
+    if result.status == "eval-failed":
+        if sdk_mode:
             print(
-                "::warning::pkl eval failed — committed contract artifacts left "
-                "unchanged; tests will run against the committed manifest (prior "
-                "behaviour)."
+                "::error::pkl eval failed using the SDK PR's contract-toolkit — "
+                "the toolkit change does not generate valid artifacts for this "
+                "connector contract."
             )
-            return 0
-
+            return 1
+        print(
+            "::warning::pkl eval failed — committed contract artifacts left "
+            "unchanged; tests will run against the committed manifest (prior "
+            "behaviour)."
+        )
+        return 0
+    if result.status != "ok":
         # swap_outputs warns with the specific reason (no generated artifacts in
         # the output, or a generated dir it declined to write to).
-        if not swap_outputs(tmp):
-            if sdk_mode:
-                print(
-                    "::error::pkl eval with the SDK PR's contract-toolkit produced "
-                    "no usable contract artifacts for this connector contract."
-                )
-                return 1
+        if sdk_mode:
             print(
-                "::warning::Committed contract artifacts left unchanged; tests will "
-                "run against the committed manifest (prior behaviour)."
+                "::error::pkl eval with the SDK PR's contract-toolkit produced "
+                "no usable contract artifacts for this connector contract."
             )
-            return 0
+            return 1
+        print(
+            "::warning::Committed contract artifacts left unchanged; tests will "
+            "run against the committed manifest (prior behaviour)."
+        )
+        return 0
 
-        # Committed-but-not-emitted splits two ways: the toolkit stopped
-        # producing a file the app ships (the regression this check exists for)
-        # and the app told the toolkit not to produce it (a sanctioned config).
-        # The probe only runs when there is something to explain.
-        missing_roots = root_files_not_emitted(tmp)
-        opted_out = opted_out_root_files(contract_dir, missing_roots)
-        if opted_out:
+    # Committed-but-not-emitted splits two ways: the toolkit stopped
+    # producing a file the app ships (the regression this check exists for)
+    # and the app told the toolkit not to produce it (a sanctioned config).
+    # The probe only runs when there is something to explain.
+    missing_roots = list(result.missing_root_files)
+    opted_out = opted_out_root_files(contract_dir, missing_roots)
+    if opted_out:
+        print(
+            "::notice::"
+            + ", ".join(
+                f"{name} not emitted because this contract sets "
+                f"{ROOT_FILE_EMIT_FLAGS[name]} = false"
+                for name in sorted(opted_out)
+            )
+            + " — the committed file(s) are hand-maintained and left in "
+            "place, not a lost artifact."
+        )
+    stale_roots = [name for name in missing_roots if name not in opted_out]
+    if stale_roots:
+        if sdk_mode:
             print(
-                "::notice::"
-                + ", ".join(
-                    f"{name} not emitted because this contract sets "
-                    f"{ROOT_FILE_EMIT_FLAGS[name]} = false"
-                    for name in sorted(opted_out)
-                )
-                + " — the committed file(s) are hand-maintained and left in "
-                "place, not a lost artifact."
+                "::error::pkl eval with the SDK PR's contract-toolkit did not "
+                "emit " + ", ".join(stale_roots) + " for this connector "
+                "contract — the committed file(s) are left in place, but the "
+                "toolkit no longer produces them."
             )
-        stale_roots = [name for name in missing_roots if name not in opted_out]
-        if stale_roots:
-            if sdk_mode:
-                print(
-                    "::error::pkl eval with the SDK PR's contract-toolkit did not "
-                    "emit " + ", ".join(stale_roots) + " for this connector "
-                    "contract — the committed file(s) are left in place, but the "
-                    "toolkit no longer produces them."
-                )
-                return 1
-            print(
-                "::warning::pkl eval did not re-emit "
-                + ", ".join(stale_roots)
-                + " — the committed file(s) are left in place (this contract does "
-                "not emit them)."
-            )
-
-        run_post_generate(contract_dir)
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
-    formatted = _format_generated(Path("."))
+            return 1
+        print(
+            "::warning::pkl eval did not re-emit "
+            + ", ".join(stale_roots)
+            + " — the committed file(s) are left in place (this contract does "
+            "not emit them)."
+        )
+    formatted = result.formatted
 
     # Still skipped in SDK-level mode: a toolkit change legitimately changes the
     # output, so every SDK-dispatched run would warn and the signal would mean
