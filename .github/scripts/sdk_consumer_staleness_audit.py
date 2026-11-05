@@ -30,11 +30,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import configparser
 import json
 import re
 import subprocess
 import sys
 import time
+import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
@@ -46,17 +48,10 @@ RunFn = Callable[[list[str]], tuple[int, str, str]]
 
 REPO_LIST_LIMIT = 5000
 
-# PEP 503 normalisation treats -, _ and . alike. The lookarounds stop
-# atlan-application-sdk-conformance / -api (distinct packages) from matching.
-_NAME = (
-    r"(?<![A-Za-z0-9._-])atlan[-_.]application[-_.]sdk(?![A-Za-z0-9_-]|\.[A-Za-z0-9])"
-)
-_NAME_RE = re.compile(_NAME, re.IGNORECASE)
-# The project's own name line (application-sdk declaring itself).
-_OWN_NAME_RE = re.compile(r"^\s*name\s*=\s*[\"']" + _NAME + r"[\"']\s*$", re.I)
-# What follows the name in a requirement: extras, version spec, url. Stops at a
-# quote, comment, marker separator or end of line.
-_SPEC_AFTER_RE = re.compile(r"([^\"'#;\n]*)")
+# Per-call deadline for `gh`. Generous: the slowest call is `gh repo list` over
+# the whole org, which takes seconds, not minutes.
+GH_TIMEOUT_SECONDS = 180
+
 
 MANIFEST_BASENAMES = ("pyproject.toml", "uv.lock", "setup.py", "setup.cfg")
 _REQUIREMENTS_RE = re.compile(r"^requirements[^/]*\.(txt|in)$")
@@ -104,7 +99,16 @@ class AuditError(RuntimeError):
 
 
 def _run_gh(args: list[str]) -> tuple[int, str, str]:
-    result = subprocess.run(["gh", *args], capture_output=True, text=True)
+    """Run `gh` with a deadline. A stalled request would otherwise block its
+    pool worker, and with it the whole audit, forever. A timeout comes back as
+    an ordinary failure, which every caller already turns into an AuditError.
+    Rate-limit waits happen in make_retrying_run, outside this deadline."""
+    try:
+        result = subprocess.run(
+            ["gh", *args], capture_output=True, text=True, timeout=GH_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired:
+        return 124, "", f"gh {' '.join(args[:2])} timed out after {GH_TIMEOUT_SECONDS}s"
     return result.returncode, result.stdout, result.stderr
 
 
@@ -212,6 +216,8 @@ class AuditRow:
     # The subset of those that are not org-wide sweeps.
     active_own_prs: int = 0
     fleet_preset: bool = False
+    # The recursive tree listing was truncated, so the tree was walked
+    # directory by directory instead (complete, just slower).
     tree_truncated: bool = False
     proposed_action: str = ""
     action_reason: str = ""
@@ -282,21 +288,6 @@ def manifest_blobs(tree: dict) -> list[tuple[str, str]]:
 # ---------------------------------------------------------------- matching
 
 
-# TOML key form, as in poetry `atlan-application-sdk = "^3"` or uv sources
-# `atlan-application-sdk = { git = "...", tag = "v3" }`. A single `=` (not
-# `==`) after the closing quote/name is an assignment, not a version operator.
-_KEY_FORM_RE = re.compile(r"[\"']?\s*=(?!=)\s*(.*)$")
-
-
-def _spec_after(line: str, end: int) -> str:
-    key = _KEY_FORM_RE.match(line, end)
-    if key:
-        value = key.group(1).split("#", 1)[0].strip().rstrip(",").strip()
-        return value.strip("\"'")
-    tail = _SPEC_AFTER_RE.match(line, end)
-    return (tail.group(1) if tail else "").strip().rstrip(",").strip()
-
-
 def parse_uv_lock(text: str) -> Optional[ManifestMatch]:
     """The resolved SDK entry in a uv.lock, or None.
 
@@ -304,7 +295,7 @@ def parse_uv_lock(text: str) -> Optional[ManifestMatch]:
     itself (application-sdk's own lock), not a consumer."""
     for block in re.split(r"^\[\[package\]\]\s*$", text, flags=re.M)[1:]:
         m = re.search(r'^name\s*=\s*"([^"]+)"', block, re.M)
-        if not m or not _NAME_RE.fullmatch(m.group(1)):
+        if not m or _canonical(m.group(1)) != SDK_DIST_NAME:
             continue
         src = re.search(r"^source\s*=\s*(\{[^\n]*\})", block, re.M)
         if src and re.search(r'(editable|virtual)\s*=\s*"\."', src.group(1)):
@@ -316,18 +307,126 @@ def parse_uv_lock(text: str) -> Optional[ManifestMatch]:
     return None
 
 
+# PEP 508 distribution name at the start of a requirement string.
+_REQ_NAME_RE = re.compile(r"^\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)")
+# Any single-line quoted string literal (setup.py, and unparseable TOML).
+_STR_LITERAL_RE = re.compile(r"[\"']([^\"'\n]+)[\"']")
+SDK_DIST_NAME = "atlan-application-sdk"
+
+
+def _canonical(name: str) -> str:
+    """PEP 503 normalised distribution name."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def sdk_requirement(req: str) -> Optional[str]:
+    """The spec after the name if ``req`` is a requirement on the SDK, else None.
+
+    Matches on the requirement's own distribution name, so a sibling package
+    (``atlan-application-sdk-conformance``) or prose that merely mentions the
+    SDK never counts."""
+    m = _REQ_NAME_RE.match(req)
+    if not m or _canonical(m.group(1)) != SDK_DIST_NAME:
+        return None
+    return req[m.end() :].split(";", 1)[0].strip()
+
+
+def _poetry_requirements(table: object) -> list[str]:
+    """Poetry's `name = spec` tables, rendered as `name spec` strings."""
+    if not isinstance(table, dict):
+        return []
+    out = []
+    for name, spec in table.items():
+        if isinstance(spec, dict):
+            spec = spec.get("version") or (
+                f"git+{spec['git']}" if "git" in spec else ""
+            )
+        out.append(f"{name} {spec if isinstance(spec, str) else ''}".strip())
+    return out
+
+
+def pyproject_requirements(doc: dict) -> list[str]:
+    """Every dependency declaration in a parsed pyproject.toml: PEP 621
+    dependencies and extras, PEP 735 dependency groups, uv's legacy
+    dev-dependencies, and Poetry's dependency tables. Metadata such as
+    ``description`` or the project's own ``name`` is never read."""
+    reqs: list[object] = []
+    project = doc.get("project") or {}
+    reqs += project.get("dependencies") or []
+    for extra in (project.get("optional-dependencies") or {}).values():
+        reqs += extra or []
+    for group in (doc.get("dependency-groups") or {}).values():
+        reqs += group or []
+    tool = doc.get("tool") or {}
+    reqs += (tool.get("uv") or {}).get("dev-dependencies") or []
+    poetry = tool.get("poetry") or {}
+    reqs += _poetry_requirements(poetry.get("dependencies"))
+    reqs += _poetry_requirements(poetry.get("dev-dependencies"))
+    for group in (poetry.get("group") or {}).values():
+        reqs += _poetry_requirements((group or {}).get("dependencies"))
+    # Group includes ({include-group = ...}) and other non-strings are skipped.
+    return [r for r in reqs if isinstance(r, str)]
+
+
+def setup_cfg_requirements(text: str) -> list[str]:
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read_string(text)
+    values = []
+    if parser.has_option("options", "install_requires"):
+        values.append(parser.get("options", "install_requires"))
+    if parser.has_section("options.extras_require"):
+        values += [v for _, v in parser.items("options.extras_require")]
+    return [line for v in values for line in v.splitlines()]
+
+
+def requirements_txt_requirements(text: str) -> list[str]:
+    out = []
+    for raw in text.splitlines():
+        line = re.split(r"\s+#", raw, maxsplit=1)[0].strip()
+        if not line or line.startswith("#"):
+            continue
+        egg = re.search(r"[#&]egg=([A-Za-z0-9._-]+)", line)
+        if line.startswith("-"):
+            # Options; only an editable/VCS install names a package, via egg=.
+            if egg:
+                out.append(egg.group(1))
+            continue
+        out.append(line)
+    return out
+
+
+def literal_requirements(text: str) -> list[str]:
+    """String literals, each a candidate requirement. Used for setup.py, which
+    cannot be evaluated safely, and as the fallback for a manifest that does not
+    parse. A literal only counts if it *starts* with the SDK's name."""
+    return _STR_LITERAL_RE.findall(text)
+
+
+def declared_requirements(path: str, text: str) -> list[str]:
+    base = path.rsplit("/", 1)[-1]
+    try:
+        if base == "pyproject.toml":
+            return pyproject_requirements(tomllib.loads(text))
+        if base == "setup.cfg":
+            return setup_cfg_requirements(text)
+    except (tomllib.TOMLDecodeError, configparser.Error) as exc:
+        print(
+            f"warning: {path} does not parse ({exc}); matching its string "
+            "literals instead",
+            file=sys.stderr,
+        )
+        return literal_requirements(text)
+    if base == "setup.py":
+        return literal_requirements(text)
+    return requirements_txt_requirements(text)
+
+
 def parse_declaration(path: str, text: str) -> Optional[ManifestMatch]:
     """A direct SDK requirement in pyproject / requirements / setup files."""
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if _OWN_NAME_RE.match(line):
-            continue
-        m = _NAME_RE.search(line)
-        if not m:
-            continue
-        return ManifestMatch(path=path, kind="direct", spec=_spec_after(line, m.end()))
+    for req in declared_requirements(path, text):
+        spec = sdk_requirement(req)
+        if spec is not None:
+            return ManifestMatch(path=path, kind="direct", spec=spec)
     return None
 
 
@@ -367,13 +466,43 @@ def find_sdk_manifests(
             return [], False, []
         raise AuditError(f"{repo.name}: read tree: {err.strip()}")
     tree = json.loads(out)
+    truncated = bool(tree.get("truncated"))
+    if truncated:
+        # The recursive listing caps out on very large repos and drops entries
+        # without saying which. Walk it directory by directory instead, so a
+        # manifest in the dropped part cannot silently take a consumer with it.
+        tree = {"tree": walk_tree(owner, repo.name, tree["sha"], run)}
     matches = []
     for path, sha in manifest_blobs(tree):
         m = match_manifest(path, read_blob(owner, repo.name, sha, run))
         if m:
             matches.append(m)
     paths = [e["path"] for e in tree.get("tree", [])]
-    return matches, bool(tree.get("truncated")), paths
+    return matches, truncated, paths
+
+
+def walk_tree(
+    owner: str, repo: str, sha: str, run: RunFn, prefix: str = ""
+) -> list[dict]:
+    """Every entry under tree ``sha``, one non-recursive read per directory.
+
+    Vendored directories are not descended into (their manifests would be
+    skipped anyway). A single directory too large to list is still truncated;
+    that is an AuditError, never a partial answer."""
+    data = _gh_json(
+        run,
+        ["api", f"repos/{owner}/{repo}/git/trees/{sha}"],
+        f"{repo}: read tree {sha}",
+    )
+    if data.get("truncated"):
+        raise AuditError(f"{repo}: directory {prefix or '/'} too large to list")
+    entries: list[dict] = []
+    for e in data.get("tree", []):
+        path = prefix + e["path"]
+        entries.append({**e, "path": path})
+        if e.get("type") == "tree" and not _SKIP_DIR_RE.search(path + "/"):
+            entries += walk_tree(owner, repo, e["sha"], run, path + "/")
+    return entries
 
 
 # --------------------------------------------------------------- staleness
@@ -458,28 +587,51 @@ def open_prs(
     A bare count would read a pile of stale Renovate/Dependabot PRs as pending
     work, which is the opposite of what it means."""
     q = (
-        "query($o:String!,$n:String!){repository(owner:$o,name:$n)"
-        "{pullRequests(states:OPEN,first:100,"
+        "query($o:String!,$n:String!,$after:String){repository(owner:$o,name:$n)"
+        "{pullRequests(states:OPEN,first:100,after:$after,"
         "orderBy:{field:UPDATED_AT,direction:DESC})"
-        "{totalCount nodes{title updatedAt author{__typename login}}}}}"
+        "{totalCount pageInfo{hasNextPage endCursor}"
+        " nodes{title updatedAt author{__typename login}}}}}"
     )
-    data = _gh_json(
-        run,
-        ["api", "graphql", "-f", f"query={q}", "-f", f"o={owner}", "-f", f"n={repo}"],
-        f"{repo}: open PRs",
-    )
-    prs = data["data"]["repository"]["pullRequests"]
-    active = []
-    for pr in prs.get("nodes") or []:
-        author = pr.get("author") or {}
-        if author.get("__typename") == "Bot" or bot_re.search(
-            author.get("login") or ""
-        ):
-            continue
-        days = days_between(pr.get("updatedAt"), as_of)
-        if days is not None and days < ACTIVE_PR_DAYS:
+    total: Optional[int] = None
+    active: list[str] = []
+    after: Optional[str] = None
+    while True:
+        args = [
+            "api",
+            "graphql",
+            "-f",
+            f"query={q}",
+            "-f",
+            f"o={owner}",
+            "-f",
+            f"n={repo}",
+        ]
+        if after:
+            args += ["-f", f"after={after}"]
+        data = _gh_json(run, args, f"{repo}: open PRs")
+        prs = data["data"]["repository"]["pullRequests"]
+        if total is None:
+            total = int(prs["totalCount"])
+        window_passed = False
+        for pr in prs.get("nodes") or []:
+            days = days_between(pr.get("updatedAt"), as_of)
+            if days is None or days >= ACTIVE_PR_DAYS:
+                # Ordered newest-update first: nothing after this is active.
+                window_passed = True
+                break
+            author = pr.get("author") or {}
+            if author.get("__typename") == "Bot" or bot_re.search(
+                author.get("login") or ""
+            ):
+                continue
             active.append(pr.get("title") or "")
-    return int(prs["totalCount"]), active
+        page = prs.get("pageInfo") or {}
+        # Bot PRs can fill a whole page inside the window, so keep paging until
+        # the window is behind us; stopping at 100 could hide a human PR.
+        if window_passed or not page.get("hasNextPage"):
+            return total, active
+        after = page["endCursor"]
 
 
 def extends_fleet_preset(owner: str, repo: str, paths: list[str], run: RunFn) -> bool:
@@ -675,6 +827,10 @@ def run_audit(
     """(rows sorted stalest first, number of repos scanned)."""
     bot_re = re.compile(bot_pattern, re.I)
     repos = [r for r in list_repos(owner, run) if r.name not in exclude]
+    if not repos:
+        # A token that sees no repos answers with an empty list, not an error.
+        # Reporting "0 consumers" for that would read as a clean audit.
+        raise AuditError(f"no repos to scan in {owner} (check the token's org access)")
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         results = list(
             pool.map(lambda r: audit_repo(owner, r, as_of, bot_re, run), repos)
@@ -774,7 +930,8 @@ def render_markdown(rows: list[AuditRow], owner: str, as_of: date, scanned: int)
     if truncated:
         lines += [
             "",
-            f"Tree listing truncated (manifests may be missed): {', '.join(truncated)}",
+            "Recursive tree listing truncated; walked directory by directory "
+            f"instead: {', '.join(truncated)}",
         ]
     return "\n".join(lines) + "\n"
 

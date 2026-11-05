@@ -27,36 +27,99 @@ BOT_RE = re.compile(audit.DEFAULT_BOT_PATTERN, re.I)
 
 
 @pytest.mark.parametrize(
-    "line,spec",
+    "path,text,spec",
     [
-        ('  "atlan-application-sdk[workflows]>=3.50.0",', "[workflows]>=3.50.0"),
-        ('  "atlan_application_sdk==3.1.0",', "==3.1.0"),
-        ('    "Atlan.Application.SDK>=1"', ">=1"),
-        ("atlan-application-sdk==3.54.0  # pinned", "==3.54.0"),
-        ('atlan-application-sdk = "^3.2"', "^3.2"),
+        (
+            "pyproject.toml",
+            '[project]\ndependencies = ["atlan-application-sdk[workflows]>=3.50.0"]\n',
+            "[workflows]>=3.50.0",
+        ),
+        (
+            "pyproject.toml",
+            '[project]\noptional-dependencies = {x = ["atlan_application_sdk==3.1.0"]}\n',
+            "==3.1.0",
+        ),
+        (
+            "pyproject.toml",
+            "[dependency-groups]\ndev = [\"Atlan.Application.SDK>=1; python_version>'3.10'\"]\n",
+            ">=1",
+        ),
+        (
+            "pyproject.toml",
+            '[tool.poetry.dependencies]\natlan-application-sdk = "^3.2"\n',
+            "^3.2",
+        ),
+        (
+            "pyproject.toml",
+            "[tool.poetry.group.dev.dependencies]\n"
+            'atlan-application-sdk = {version = "^3.4", extras = ["x"]}\n',
+            "^3.4",
+        ),
+        ("requirements.txt", "atlan-application-sdk==3.54.0  # pinned\n", "==3.54.0"),
+        (
+            "requirements.txt",
+            "-e git+https://example.invalid/sdk.git#egg=atlan-application-sdk\n",
+            "",
+        ),
+        (
+            "setup.cfg",
+            "[options]\ninstall_requires =\n    requests\n    atlan-application-sdk>=2\n",
+            ">=2",
+        ),
+        (
+            "setup.py",
+            'setup(install_requires=["atlan-application-sdk~=3.0"])\n',
+            "~=3.0",
+        ),
     ],
 )
-def test_declaration_matches_requirement_forms(line, spec):
-    m = audit.parse_declaration(
-        "pyproject.toml", f"[project]\ndependencies = [\n{line}\n]\n"
-    )
+def test_declaration_matches_requirement_forms(path, text, spec):
+    m = audit.parse_declaration(path, text)
     assert m is not None
     assert m.kind == "direct"
     assert m.spec == spec
 
 
 @pytest.mark.parametrize(
-    "text",
+    "path,text",
     [
-        '"atlan-application-sdk-conformance>=1.0"',
-        '"atlan-application-sdk-api==3.0"',
-        '"my-atlan-application-sdk>=1"',
-        "# atlan-application-sdk>=3 is commented out",
-        'name = "atlan-application-sdk"',
+        (
+            "pyproject.toml",
+            '[project]\ndependencies = ["atlan-application-sdk-conformance>=1.0"]\n',
+        ),
+        (
+            "pyproject.toml",
+            '[project]\ndependencies = ["atlan-application-sdk-api==3.0"]\n',
+        ),
+        (
+            "pyproject.toml",
+            '[project]\ndependencies = ["my-atlan-application-sdk>=1"]\n',
+        ),
+        ("pyproject.toml", '[project]\nname = "atlan-application-sdk"\n'),
+        # Metadata that mentions the SDK is not a dependency (lens F-8571dd).
+        ("pyproject.toml", '[project]\ndescription = "wraps atlan-application-sdk"\n'),
+        (
+            "pyproject.toml",
+            '[project]\ndescription = "atlan-application-sdk based app"\n',
+        ),
+        ("pyproject.toml", '# "atlan-application-sdk>=3" is commented out\n'),
+        (
+            "requirements.txt",
+            "# atlan-application-sdk>=3\nrequests  # not atlan-application-sdk\n",
+        ),
+        ("setup.cfg", "[metadata]\ndescription = atlan-application-sdk app\n"),
+        ("setup.py", 'setup(description="An app on atlan-application-sdk")\n'),
     ],
 )
-def test_declaration_ignores_sibling_packages_comments_and_own_name(text):
-    assert audit.parse_declaration("pyproject.toml", text + "\n") is None
+def test_declaration_ignores_mentions_siblings_and_own_name(path, text):
+    assert audit.parse_declaration(path, text) is None
+
+
+def test_unparseable_pyproject_falls_back_to_literal_requirements(capsys):
+    text = '[project\ndependencies = ["atlan-application-sdk>=3"]\n'
+    m = audit.parse_declaration("pyproject.toml", text)
+    assert m is not None and m.spec == ">=3"
+    assert "does not parse" in capsys.readouterr().err
 
 
 UV_LOCK_CONSUMER = """version = 1
@@ -276,14 +339,14 @@ OPEN_PRS = {
     "totalCount": 3,
     "nodes": [
         {
-            "title": "fix: own work",
-            "updatedAt": "2026-10-30T00:00:00Z",
-            "author": {"__typename": "User", "login": "dev"},
-        },
-        {
             "title": "chore(deps): bump",
             "updatedAt": "2026-11-01T00:00:00Z",
             "author": {"__typename": "Bot", "login": "renovate"},
+        },
+        {
+            "title": "fix: own work",
+            "updatedAt": "2026-10-30T00:00:00Z",
+            "author": {"__typename": "User", "login": "dev"},
         },
         {
             "title": "feat: abandoned",
@@ -299,6 +362,68 @@ def test_open_prs_counts_only_recent_human_prs():
         return 0, json.dumps({"data": {"repository": {"pullRequests": OPEN_PRS}}}), ""
 
     assert audit.open_prs("o", "r", AS_OF, BOT_RE, run) == (3, ["fix: own work"])
+
+
+def _pr(title: str, updated: str, login: str = "dev", kind: str = "User") -> dict:
+    return {
+        "title": title,
+        "updatedAt": updated,
+        "author": {"__typename": kind, "login": login},
+    }
+
+
+def test_open_prs_pages_past_a_window_full_of_bot_prs():
+    # lens F-d75e56: 100 in-window bot PRs must not hide the human PR behind them.
+    bots = [
+        _pr(f"bump {i}", "2026-11-02T00:00:00Z", "renovate", "Bot") for i in range(100)
+    ]
+    pages = {
+        None: {
+            "totalCount": 102,
+            "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+            "nodes": bots,
+        },
+        "c1": {
+            "totalCount": 102,
+            "pageInfo": {"hasNextPage": False, "endCursor": "c2"},
+            "nodes": [
+                _pr("fix: human", "2026-10-20T00:00:00Z"),
+                _pr("old", "2026-01-01T00:00:00Z"),
+            ],
+        },
+    }
+    seen: list = []
+
+    def run(args):
+        after = next((a.split("=", 1)[1] for a in args if a.startswith("after=")), None)
+        seen.append(after)
+        return (
+            0,
+            json.dumps({"data": {"repository": {"pullRequests": pages[after]}}}),
+            "",
+        )
+
+    assert audit.open_prs("o", "r", AS_OF, BOT_RE, run) == (102, ["fix: human"])
+    assert seen == [None, "c1"]
+
+
+def test_open_prs_stops_paging_once_past_the_active_window():
+    page = {
+        "totalCount": 500,
+        "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+        "nodes": [
+            _pr("fix: human", "2026-10-20T00:00:00Z"),
+            _pr("stale", "2026-01-01T00:00:00Z"),
+        ],
+    }
+    calls: list = []
+
+    def run(args):
+        calls.append(args)
+        return 0, json.dumps({"data": {"repository": {"pullRequests": page}}}), ""
+
+    assert audit.open_prs("o", "r", AS_OF, BOT_RE, run) == (500, ["fix: human"])
+    assert len(calls) == 1
 
 
 def test_mark_sweeps_discounts_org_wide_commits_and_prs():
@@ -515,3 +640,76 @@ def test_retrying_run_passes_other_errors_through():
 
     wrapped = audit.make_retrying_run(run, sleep=lambda s: pytest.fail("slept"))
     assert wrapped(["api", "x"]) == (1, "", "gh: Not Found (HTTP 404)")
+
+
+def test_truncated_tree_is_walked_so_a_hidden_consumer_is_found():
+    # lens F-6ef78c / F-2ca620: the only SDK manifest sits in the part the
+    # recursive listing dropped.
+    repo = audit.RepoInfo("atlan-big-app", False, False, "main")
+    trees = {
+        "root": [
+            {"path": "README.md", "sha": "b0", "type": "blob"},
+            {"path": "svc", "sha": "t1", "type": "tree"},
+            {"path": "node_modules", "sha": "t2", "type": "tree"},
+        ],
+        "t1": [{"path": "pyproject.toml", "sha": "p1", "type": "blob"}],
+    }
+
+    def run(args):
+        path = args[1]
+        if path.endswith("?recursive=1"):
+            partial = [{"path": "README.md", "sha": "b0", "type": "blob"}]
+            return (
+                0,
+                json.dumps({"sha": "root", "tree": partial, "truncated": True}),
+                "",
+            )
+        if "/git/trees/" in path:
+            sha = path.rsplit("/", 1)[-1]
+            assert sha != "t2", "walked into a vendored directory"
+            return (
+                0,
+                json.dumps({"sha": sha, "tree": trees[sha], "truncated": False}),
+                "",
+            )
+        if path.endswith("/git/blobs/p1"):
+            body = '[project]\ndependencies = ["atlan-application-sdk>=3"]\n'
+            return 0, json.dumps({"content": _b64(body)}), ""
+        raise AssertionError(f"unexpected gh call: {args}")
+
+    matches, truncated, paths = audit.find_sdk_manifests("o", repo, run)
+    assert truncated is True
+    assert [m.path for m in matches] == ["svc/pyproject.toml"]
+    assert "svc/pyproject.toml" in paths
+
+
+def test_a_directory_too_large_to_list_fails_the_audit():
+    def run(args):
+        return 0, json.dumps({"sha": "x", "tree": [], "truncated": True}), ""
+
+    with pytest.raises(audit.AuditError, match="too large"):
+        audit.walk_tree("o", "r", "x", run)
+
+
+@pytest.mark.parametrize(
+    "listing", [[], [{"name": "application-sdk", "isArchived": False, "isFork": False}]]
+)
+def test_empty_enumeration_fails_instead_of_reporting_zero_consumers(listing):
+    # lens F-1adebe: a token that sees no repos must not produce a clean audit.
+    def run(args):
+        assert args[:2] == ["repo", "list"], args
+        return 0, json.dumps(listing), ""
+
+    with pytest.raises(audit.AuditError, match="no repos"):
+        audit.run_audit("o", AS_OF, {"application-sdk"}, workers=1, run=run)
+
+
+def test_gh_timeout_becomes_a_failed_call(monkeypatch):
+    # lens F-a3e817: a stalled gh must not block the audit forever.
+    def fake_run(cmd, **kw):
+        assert kw["timeout"] == audit.GH_TIMEOUT_SECONDS
+        raise audit.subprocess.TimeoutExpired(cmd, kw["timeout"])
+
+    monkeypatch.setattr(audit.subprocess, "run", fake_run)
+    rc, out, err = audit._run_gh(["api", "repos/o/r"])
+    assert rc != 0 and out == "" and "timed out" in err
