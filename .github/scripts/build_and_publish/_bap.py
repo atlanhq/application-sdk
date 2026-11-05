@@ -19,7 +19,7 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 
 def run(
@@ -29,11 +29,13 @@ def run(
     capture: bool = False,
     quiet: bool = False,
     input: str | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``cmd`` and return the completed process; never raises on exit code.
 
     ``capture`` collects stdout (stderr still reaches the job log, as it did
     inside ``$(...)``). ``quiet`` discards both streams, like ``>/dev/null 2>&1``.
+    ``env`` replaces the child's whole environment (``None`` inherits ours).
     """
     stdout = subprocess.PIPE if capture else (subprocess.DEVNULL if quiet else None)
     stderr = subprocess.DEVNULL if quiet else None
@@ -43,6 +45,7 @@ def run(
         stdout=stdout,
         stderr=stderr,
         input=input,
+        env=None if env is None else dict(env),
         text=True,
         check=False,
     )

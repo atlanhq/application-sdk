@@ -59,7 +59,9 @@ Runner = Callable[[Sequence[str]], int]
 
 def pytest_command(shard: int, total: int, coverage_source: str) -> list[str]:
     """The pytest invocation for one shard, run from the app checkout."""
-    command = ["uv", "run", "--all-groups", "--with", "pytest-cov"]
+    # --frozen: never re-lock. The install step synced every group, and it is
+    # the only step with git auth for an app's private atlanhq deps.
+    command = ["uv", "run", "--frozen", "--all-groups", "--with", "pytest-cov"]
     if total > 1:
         command += ["--with", "pytest-split"]
     command += [

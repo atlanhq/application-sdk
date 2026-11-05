@@ -33,9 +33,10 @@ def test_single_shard_command_has_no_split_flags() -> None:
 
 def test_multi_shard_command_selects_its_group() -> None:
     command = pytest_command(2, 4, "my_pkg")
-    assert command[:7] == [
+    assert command[:8] == [
         "uv",
         "run",
+        "--frozen",
         "--all-groups",
         "--with",
         "pytest-cov",
@@ -263,3 +264,10 @@ def test_verdict_reports_install_failure_distinct_from_no_tests(
         assert annotation in out
     else:
         assert "::error::" not in out and "::warning::" not in out
+
+
+def test_pytest_command_never_relocks() -> None:
+    """The shard has no git auth (FND-4739): it must use what the install
+    step synced, never re-lock and fetch."""
+    for total in (1, 3):
+        assert pytest_command(1, total, "app")[:3] == ["uv", "run", "--frozen"]
