@@ -315,6 +315,55 @@ def test_set_constraints_never_lowers_a_floor():
     assert out == PYPROJECT
 
 
+PUBLISHED = """\
+[project]
+name = "x"
+dependencies = [
+    "fastapi[standard]>=0.162.0,<0.163.0",
+    # a comment line
+    "python-dotenv>=1.2.2,<2.0.0",  # CVE-OLD
+    "authlib~=1.9.1",
+    "packaging",
+]
+
+[project.optional-dependencies]
+sql = ["python-dotenv>=1.0"]
+
+[tool.uv]
+constraint-dependencies = [
+]
+"""
+
+
+def test_set_constraints_raises_the_published_floor_too():
+    # The constraint pins only this repo's lock; consumers inherit the published
+    # requirement, so its floor moves with the constraint (FND-4253).
+    out = bump.set_constraints(
+        PUBLISHED,
+        {
+            "python-dotenv": ("1.3.0", ["CVE-1"]),
+            "fastapi": ("0.162.5", ["CVE-2"]),
+            "packaging": ("25.0", ["CVE-3"]),
+        },
+    )
+    assert '    "python-dotenv>=1.3.0,<2.0.0",  # CVE-OLD, CVE-1\n' in out
+    assert '    "fastapi[standard]>=0.162.5,<0.163.0",  # CVE-2\n' in out
+    assert '    "packaging>=25.0",  # CVE-3\n' in out
+    assert 'sql = ["python-dotenv>=1.0"]' in out  # extras are not the core floor
+
+
+def test_set_constraints_leaves_other_published_pins_alone():
+    out = bump.set_constraints(
+        PUBLISHED,
+        {
+            "authlib": ("1.9.5", ["CVE-1"]),  # `~=` pin: left for a human
+            "python-dotenv": ("1.0.0", ["CVE-2"]),  # already above: never lowered
+        },
+    )
+    project = out.split("[tool.uv]")[0]
+    assert project == PUBLISHED.split("[tool.uv]")[0]
+
+
 def test_set_constraints_without_block_raises():
     with pytest.raises(bump.BumpError):
         bump.set_constraints("[project]\n", {"a": ("1", [])})
