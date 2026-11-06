@@ -19,7 +19,12 @@ from application_sdk._runtime.offload import current_cancel_handle
 from application_sdk.constants import (
     DUCKDB_COMMON_TEMP_FOLDER,
     DUCKDB_DEFAULT_MEMORY_LIMIT,
+    DUCKDB_MAX_MEMORY_LIMIT_BYTES,
+    DUCKDB_MEMORY_LIMIT_FRACTION,
+    DUCKDB_MEMORY_LIMIT_OVERRIDE,
+    DUCKDB_MIN_MEMORY_LIMIT_BYTES,
 )
+from application_sdk.observability import cgroup as _cgroup
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -93,6 +98,34 @@ def interrupt_on_cancel(conn: DuckDBPyConnection) -> AbstractContextManager[None
     return handle.registered(conn.interrupt)
 
 
+def default_duckdb_memory_limit() -> str:
+    """DuckDB memory limit for a connection opened without an explicit one.
+
+    ``ATLAN_DUCKDB_MEMORY_LIMIT`` wins when set. Otherwise the limit is
+    ``DUCKDB_MEMORY_LIMIT_FRACTION`` of the container memory limit, clamped to
+    ``[DUCKDB_MIN_MEMORY_LIMIT_BYTES, DUCKDB_MAX_MEMORY_LIMIT_BYTES]``, so a
+    scan spills to disk before it can push the container past its limit. With
+    no container limit known it is ``DUCKDB_DEFAULT_MEMORY_LIMIT``.
+
+    A fixed 2GB limit is larger than a 2 GiB container that is already
+    holding the worker's own state, so DuckDB never spilled and the kernel
+    OOM-killed the worker mid-scan instead.
+
+    Returns:
+        A DuckDB size string, e.g. ``"798MiB"``.
+    """
+    if DUCKDB_MEMORY_LIMIT_OVERRIDE:
+        return DUCKDB_MEMORY_LIMIT_OVERRIDE
+    container_limit = _cgroup.memory_limit_bytes()
+    if container_limit is None:
+        return DUCKDB_DEFAULT_MEMORY_LIMIT
+    share = int(container_limit * DUCKDB_MEMORY_LIMIT_FRACTION)
+    limit = min(
+        DUCKDB_MAX_MEMORY_LIMIT_BYTES, max(DUCKDB_MIN_MEMORY_LIMIT_BYTES, share)
+    )
+    return f"{limit // (1024 * 1024)}MiB"
+
+
 class DuckDBConnectionManager:
     """File-backed DuckDB connection with automatic cleanup.
 
@@ -104,7 +137,7 @@ class DuckDBConnectionManager:
     def __init__(
         self,
         base_path: str = DUCKDB_COMMON_TEMP_FOLDER,
-        memory_limit: str = DUCKDB_DEFAULT_MEMORY_LIMIT,
+        memory_limit: str | None = None,
         threads: str = "1",
         auto_cleanup: bool = True,
     ):
@@ -112,12 +145,17 @@ class DuckDBConnectionManager:
 
         Args:
             base_path: Parent directory for DuckDB instances
-            memory_limit: DuckDB memory limit (default: 2GB)
+            memory_limit: DuckDB memory limit. Default: sized from the
+                container memory limit by
+                :func:`default_duckdb_memory_limit` (at most 2GB).
             threads: Number of threads (default: 1)
             auto_cleanup: Remove temp files on close (default: True)
         """
         if duckdb is None:
             raise ImportError("duckdb is required for DuckDBConnectionManager")
+
+        if memory_limit is None:
+            memory_limit = default_duckdb_memory_limit()
 
         self._instance_id = _generate_random_uuid()
         self._base_path = base_path
