@@ -1,0 +1,17 @@
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+name: ae-activities
+display_name: AE Activities Example
+type: connector
+execution_mode: native
+icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
+visibility: public
+build_tag: v1
+self_deployed_runtime: true
+entrypoints:
+- name: ae-activities
+  display_name: AE Activities Example
+  icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
+  type: connector
+  package_id: '@atlan/ae-activities'
+  marketplace_card: true

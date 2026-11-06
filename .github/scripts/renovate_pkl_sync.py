@@ -76,7 +76,10 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 # Placement of eval output is family-dependent and shared with
 # regenerate_contract.py / check_generated_freshness.py — see that module.
@@ -85,9 +88,8 @@ from pkl_contract_layout import (  # noqa: E402
     CALLER_NODE_PATHSPEC,
     GENERATED_DIR,
     ROOT_FILES,
-    baseline_contract_ref,
-    export_contract_at,
     format_generated_python,
+    root_files_not_emitted,
     run_post_generate,
     swap_outputs,
 )
@@ -110,6 +112,18 @@ OUTPUT_PATHS = [GENERATED_DIR, CALLER_NODE_PATHSPEC, *ROOT_FILES]
 EVAL_MAX_ATTEMPTS = 3
 EVAL_RETRY_SLEEP_S = 5.0
 
+# What Renovate commits from the post-upgrade working tree: the toolkit rule's
+# ``fileFilters`` in renovate-config/default.json, which must equal
+# ``renovate_file_filters()`` (pinned by test_renovate_pkl_sync.py). Regeneration
+# writes under app/ (the generated dir, plus whatever contract/post-generate.sh
+# places beside the app code), contract/ (the lock, caller nodes) and tests/,
+# and the root YAMLs. A fixed list rather than ``**/*`` keeps unrelated churn
+# such as uv.lock out; a change regeneration makes anywhere else is warned about
+# (``warn_uncommitted_changes``).
+COMMIT_DIRS = ("app", "contract", "tests")
+COMMIT_FILES = ROOT_FILES
+_MAX_LISTED_PATHS = 20
+
 COMMIT_MESSAGE_REGEN = (
     "chore: sync Pkl deps and regenerate contract artifacts for app-contract-toolkit"
 )
@@ -118,10 +132,19 @@ COMMIT_MESSAGE_LOCK_ONLY = (
 )
 
 
-def run(cmd: list[str], *, check: bool = False) -> subprocess.CompletedProcess:
+def run(cmd: list[str], *, check: bool = False) -> "subprocess.CompletedProcess[str]":
     """Run a subprocess. Single seam so tests can stub pkl/ruff and let git run
     for real against a throwaway repo."""
     return subprocess.run(cmd, check=check, text=True)
+
+
+def run_capture(
+    cmd: list[str], *, check: bool = False
+) -> "subprocess.CompletedProcess[str]":
+    """Run a subprocess and capture its output: the seam for the git queries
+    whose stdout or exit code the sync reads (snapshot, rollback, staging), so
+    tests can stub or fault-inject them the same way they stub ``run``."""
+    return subprocess.run(cmd, capture_output=True, text=True, check=check)
 
 
 def resolve(contract_dir: str) -> None:
@@ -157,10 +180,16 @@ def eval_roots(contract_dir: str) -> list[Path]:
     return roots
 
 
-def _eval_root(root: Path, contract_dir: str, out: Path) -> bool:
+Runner = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
+
+
+def _eval_root(
+    root: Path, contract_dir: str, out: Path, run_cmd: Runner | None = None
+) -> bool:
     """One `pkl eval -m` with the shared retry. True iff it produced output."""
+    run_cmd = run_cmd or run
     cmd = ["pkl", "eval", "--project-dir", contract_dir, "-m", str(out), str(root)]
-    result = run(cmd)
+    result = run_cmd(cmd)
     attempt = 1
     while result.returncode != 0 and attempt < EVAL_MAX_ATTEMPTS:
         print(
@@ -171,11 +200,15 @@ def _eval_root(root: Path, contract_dir: str, out: Path) -> bool:
         )
         time.sleep(EVAL_RETRY_SLEEP_S)
         attempt += 1
-        result = run(cmd)
+        result = run_cmd(cmd)
     return result.returncode == 0
 
 
-def regenerate_multi_root(contract_dir: str, roots: list[Path]) -> bool:
+def regenerate_multi_root(
+    contract_dir: str,
+    roots: list[Path],
+    run_cmd: Runner | None = None,
+) -> RegenerationStatus:
     """Regenerate an app whose contract has ONE ROOT PER ENTRYPOINT.
 
     Some apps (synapse: ``crawler.pkl`` + ``miner.pkl``) have no single
@@ -191,223 +224,159 @@ def regenerate_multi_root(contract_dir: str, roots: list[Path]) -> bool:
     here: no per-entrypoint root emits them, so anything at the repo root is
     hand-authored and must survive (a prior incident clobbered exactly that).
 
-    Returns True iff at least one root regenerated. A root that fails eval or
+    Returns "ok" iff at least one root regenerated. A root that fails eval or
     whose swap refuses the layout is warned about and skipped — a partial
     regeneration is still better than none, and the caller diffs the result.
+    A failed ``contract/post-generate.sh`` rolls every root back.
     """
+    snapshot = dirty_tree()
     placed = False
     for root in roots:
         tmp = Path(tempfile.mkdtemp())
-        base_work: Path | None = None
         try:
-            if not _eval_root(root, contract_dir, tmp):
+            if not _eval_root(root, contract_dir, tmp, run_cmd):
                 print(
                     f"::warning::pkl eval failed after {EVAL_MAX_ATTEMPTS} attempts "
                     f"for {root.name} — its artifacts are left unchanged."
                 )
                 continue
             target = f"{GENERATED_DIR}/{root.stem}"
-            base_out, base_work = _baseline_output_for_root(contract_dir, root.name)
-            if swap_outputs(tmp, generated_dir=target, baseline_dir=base_out):
+            if swap_outputs(tmp, generated_dir=target):
                 placed = True
                 print(f"Regenerated {target} from {root.name}.")
             else:
                 print(f"::warning::swap refused the output layout for {root.name}.")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
-            if base_work is not None:
-                shutil.rmtree(base_work, ignore_errors=True)
-    if placed:
-        run_post_generate(contract_dir)
-        _format_generated()
-    return placed
+    if not placed:
+        return "eval-failed"
+    if not run_post_generate(contract_dir):
+        restore_tree(snapshot)
+        return "post-generate-failed"
+    _format_generated(run_cmd)
+    return "ok"
 
 
-def regenerate(contract_dir: str) -> bool:
-    """Regenerate contract artifacts; swap gated on eval+format success.
+RegenerationStatus = Literal[
+    "ok", "no-contract", "eval-failed", "swap-refused", "post-generate-failed"
+]
 
-    Eval runs into a temp dir; the working tree is only touched once eval (and
-    formatting) succeed. The swap itself is best-effort (rmtree + copytree), not
-    crash-safe — but the caller commits only after this returns, so a failed or
-    killed run commits nothing and never publishes a half-regenerated tree.
 
-    An app shipping ``contract/post-generate.sh`` gets it run after the swap and
-    before formatting — see ``pkl_contract_layout.run_post_generate``.
+@dataclass(frozen=True)
+class Regeneration:
+    """Outcome of one ``regenerate_tree`` call.
 
-    Returns True only when the working tree was actually updated with fresh
-    artifacts. Returns False when there is no contract to generate from, when
-    ``pkl eval`` still fails after ``EVAL_MAX_ATTEMPTS`` attempts, or when the
-    swap refused the output layout — never raises on any of those, so a bad
-    regen cannot fail the job. How to degrade (lock-only sync, red gate) is the
-    caller's decision, not this function's.
+    ``placed`` is True only when fresh artifacts are in the working tree.
+    ``missing_root_files`` lists the root YAMLs the tree carries but this eval
+    did not emit (single-root contracts only; see
+    ``pkl_contract_layout.root_files_not_emitted``). ``formatted`` is False when
+    no ruff was available, so the generated Python is raw pkl output."""
+
+    status: RegenerationStatus
+    missing_root_files: tuple[str, ...] = ()
+    formatted: bool = True
+
+    @property
+    def placed(self) -> bool:
+        return self.status == "ok"
+
+
+def regenerate_tree(
+    contract_dir: str,
+    *,
+    run_cmd: Runner | None = None,
+) -> Regeneration:
+    """THE contract regeneration, shared by every SDK entry point.
+
+    Renovate's toolkit bump (``main`` here), the freshness gate
+    (``check_generated_freshness``), pre-test regeneration
+    (``regenerate_contract``) all regenerate through this function, so none
+    of them can disagree about what a regenerated tree looks like (FND-4736).
+    Certify's contract-drift check still runs the app's ``poe generate``;
+    FND-4244 moves it onto this function.
+    ``.github/scripts/tests/test_regeneration_parity.py`` pins that every
+    caller reaches it.
+
+    Steps: ``pkl eval`` into a temp dir (with ``EVAL_MAX_ATTEMPTS`` retries),
+    ``swap_outputs`` into the working tree, ``contract/post-generate.sh`` if the
+    app ships one, then ruff on generated Python. The working tree is touched
+    only once eval succeeds, and a failed post-generate step rolls the swap
+    back (``restore_tree``), so a regeneration is either the app's complete
+    output or nothing. The swap itself is best-effort (rmtree +
+    copytree), not crash-safe, so a caller that commits must commit only after
+    this returns.
+
+    *run_cmd* is the caller's subprocess seam (each script's tests stub their
+    own module's ``run``); None means this module's ``run``.
+
+    There is deliberately no override protection: an app that installs its own
+    version of a generated file does it in ``contract/post-generate.sh``, which
+    runs here, so the result is exactly what certify checks once it
+    regenerates through this function (FND-4244).
+
+    Never raises on a bad contract: a missing contract, a failed eval and a
+    refused swap are all reported in the result. How to degrade (lock-only sync,
+    a red gate, tests on the committed manifest) is the caller's decision.
     """
+    run_cmd = run_cmd or run
     app_pkl = Path(contract_dir) / "app.pkl"
     if not app_pkl.exists():
         roots = eval_roots(contract_dir)
-        if roots:
+        if not roots:
             print(
-                f"::notice::No {app_pkl}; regenerating {len(roots)} per-entrypoint "
-                f"root(s): {', '.join(r.name for r in roots)}."
+                f"::notice::No {app_pkl} — skipping artifact regeneration "
+                "(re-resolve only)."
             )
-            return regenerate_multi_root(contract_dir, roots)
+            return Regeneration("no-contract")
         print(
-            f"::notice::No {app_pkl} — skipping artifact regeneration (re-resolve only)."
+            f"::notice::No {app_pkl}; regenerating {len(roots)} per-entrypoint "
+            f"root(s): {', '.join(r.name for r in roots)}."
         )
-        return False
+        return Regeneration(regenerate_multi_root(contract_dir, roots, run_cmd))
 
     tmp = Path(tempfile.mkdtemp())
-    baseline_work: Path | None = None
     try:
         # --project-dir: the contract is a Pkl project declaring
         # app-contract-toolkit as a *remote package*, so eval must load that
-        # project to resolve the `@app-contract-toolkit` import. The bare
-        # `pkl eval contract/app.pkl` from the repo root finds no project and
-        # fails. -m writes each output key relative to the output base.
-        eval_cmd = [
-            "pkl",
-            "eval",
-            "--project-dir",
-            contract_dir,
-            "-m",
-            str(tmp),
-            str(app_pkl),
-        ]
-        result = run(eval_cmd)
-        attempt = 1
-        while result.returncode != 0 and attempt < EVAL_MAX_ATTEMPTS:
-            print(
-                f"::warning::pkl eval failed (attempt {attempt}/{EVAL_MAX_ATTEMPTS}); "
-                f"retrying in {EVAL_RETRY_SLEEP_S:g}s — a cold runner may still be "
-                "fetching the remote @app-contract-toolkit package."
-            )
-            time.sleep(EVAL_RETRY_SLEEP_S)
-            attempt += 1
-            result = run(eval_cmd)
-        if result.returncode != 0:
+        # project to resolve the `@app-contract-toolkit` import. -m writes each
+        # output key relative to the output base.
+        if not _eval_root(app_pkl, contract_dir, tmp, run_cmd):
             print(
                 f"::warning::pkl eval failed after {EVAL_MAX_ATTEMPTS} attempts "
                 "— generated artifacts left unchanged."
             )
-            return False
+            return Regeneration("eval-failed")
 
-        baseline_out, baseline_work = _baseline_output(contract_dir)
-        if not swap_outputs(tmp, baseline_dir=baseline_out):
+        snapshot = dirty_tree()
+        if not swap_outputs(tmp):
             # swap_outputs already warned with the specific reason.
-            return False
-        run_post_generate(contract_dir)
-        _format_generated()
-        print("Regenerated contract artifacts.")
-        return True
+            return Regeneration("swap-refused")
+        missing = tuple(root_files_not_emitted(tmp))
+        if not run_post_generate(contract_dir):
+            # Fail closed: raw output without the app's step is not its real
+            # output, so put the tree back exactly as it was.
+            restore_tree(snapshot)
+            print(
+                "::warning::contract/post-generate.sh failed — regeneration rolled "
+                "back; the working tree is as it was before regenerating."
+            )
+            return Regeneration("post-generate-failed")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-        if baseline_work is not None:
-            shutil.rmtree(baseline_work, ignore_errors=True)
+    formatted = _format_generated(run_cmd)
+    print("Regenerated contract artifacts.")
+    return Regeneration("ok", missing_root_files=missing, formatted=formatted)
 
 
-def _baseline_output_for_root(
-    contract_dir: str, root_name: str
-) -> tuple[Path | None, Path | None]:
-    """``_baseline_output`` for ONE root of a multi-root contract.
-
-    Same contract and the same failure semantics: ``(eval_output, workdir)``,
-    output None whenever there is no baseline or producing one failed, never
-    raises. Without this the multi-root swap ran with ``baseline_dir=None``
-    and overwrote every app-maintained generated file on a toolkit bump —
-    the single-root path has protected those since it was written.
-    """
-    ref = baseline_contract_ref(contract_dir)
-    if ref is None:
-        return (None, None)  # no pin change in flight — nothing to protect
-    work = Path(tempfile.mkdtemp())
-    if not export_contract_at(ref, contract_dir, work):
-        print(
-            f"::warning::Could not export {contract_dir}/ at {ref[:12]} — "
-            f"app-maintained files under {GENERATED_DIR}/{Path(root_name).stem} "
-            "cannot be detected, so regeneration will overwrite them."
-        )
-        return (None, work)
-    base_root = work / contract_dir / root_name
-    if not base_root.exists():
-        # The root is new in this revision: nothing committed came from it, so
-        # there is nothing to preserve. Not a failure.
-        return (None, work)
-    out = work / "out"
-    out.mkdir()
-    result = run(
-        [
-            "pkl",
-            "eval",
-            "--project-dir",
-            str(work / contract_dir),
-            "-m",
-            str(out),
-            str(base_root),
-        ]
-    )
-    if result.returncode != 0:
-        print(
-            f"::warning::Baseline pkl eval (pre-bump toolkit pin) failed for "
-            f"{root_name} — app-maintained generated files cannot be detected, "
-            "so regeneration will overwrite them."
-        )
-        return (None, work)
-    return (out, work)
+def regenerate(contract_dir: str) -> bool:
+    """``regenerate_tree`` with Renovate's settings, as a bool: True only when
+    the working tree was actually updated with fresh artifacts. Kept as the
+    stable entry point that the freshness gate imports, and that certify's
+    contract-drift check imports from FND-4244."""
+    return regenerate_tree(contract_dir).placed
 
 
-def _baseline_output(contract_dir: str) -> tuple[Path | None, Path | None]:
-    """Evaluate the contract at its pre-bump pin, for override detection.
-
-    Returns ``(eval_output_dir, workdir_to_clean)``; the output is None whenever
-    there is no baseline to compute or producing it failed, which turns override
-    detection off and makes the swap overwrite everything the eval emitted (the
-    behaviour without this function). Never raises and never fails the sync — a
-    missing baseline must not block a dependency bump.
-
-    The baseline eval is a *second* `pkl eval`, against the toolkit version the
-    committed artifacts came from, so it fetches an older package (a few seconds
-    on a cold runner). Worth it: comparing committed content against it is what
-    lets every app's post-processed artifacts survive regeneration with no per-app
-    declaration at all.
-    """
-    ref = baseline_contract_ref(contract_dir)
-    if ref is None:
-        # Common and fine: no pin change in flight, so nothing to protect.
-        return (None, None)
-
-    work = Path(tempfile.mkdtemp())
-    if not export_contract_at(ref, contract_dir, work):
-        print(
-            f"::warning::Could not export {contract_dir}/ at {ref[:12]} — "
-            "app-maintained generated files cannot be detected, so regeneration "
-            "will overwrite them. Check the diff for reverted post-processing."
-        )
-        return (None, work)
-
-    out = work / "out"
-    out.mkdir()
-    base_contract = work / contract_dir
-    result = run(
-        [
-            "pkl",
-            "eval",
-            "--project-dir",
-            str(base_contract),
-            "-m",
-            str(out),
-            str(base_contract / "app.pkl"),
-        ]
-    )
-    if result.returncode != 0:
-        print(
-            "::warning::Baseline pkl eval (pre-bump toolkit pin) failed — "
-            "app-maintained generated files cannot be detected, so regeneration "
-            "will overwrite them. Check the diff for reverted post-processing."
-        )
-        return (None, work)
-    return (out, work)
-
-
-def _format_generated() -> None:
+def _format_generated(run_cmd: Runner | None = None) -> bool:
     """ruff-fix + format every generated *.py in the working tree (post-swap).
     The contract emits more than _input.py (e.g. _e2e_base.py,
     _e2e_credential.py); every one must match what pre-commit's ruff would
@@ -419,8 +388,110 @@ def _format_generated() -> None:
     calls live in ``pkl_contract_layout.format_generated_python``, shared with
     ``regenerate_contract.py`` so the freshness gate and local regeneration
     cannot disagree about formatting (FND-3560). Best-effort: a ruff hiccup or
-    a missing ruff must not fail the sync."""
-    format_generated_python(run)
+    a missing ruff must not fail the sync. Returns False when no ruff was
+    available (the Python is raw pkl output)."""
+    return format_generated_python(run_cmd or run)
+
+
+def renovate_file_filters() -> list[str]:
+    """The toolkit rule's ``fileFilters``, in the order default.json lists them."""
+    return [*(f"{d}/**" for d in COMMIT_DIRS), *COMMIT_FILES]
+
+
+def committable(path: str) -> bool:
+    """Whether Renovate commits *path* (repo-relative, POSIX) from this task."""
+    return path in COMMIT_FILES or (
+        "/" in path and path.split("/", 1)[0] in COMMIT_DIRS
+    )
+
+
+FileState = tuple[bytes, int]
+"""A file's content and ``st_mode``: a rollback restores both, so a swap that
+changed only a file's mode (say, dropped its executable bit) is undone too."""
+
+TreeState = dict[str, FileState | None]
+
+
+def dirty_tree() -> TreeState:
+    """Every path ``git status --untracked-files=all`` reports, with its
+    content and mode (None when deleted). Snapshot before regeneration and compare with
+    ``changed_since`` to get what regeneration changed, so edits Renovate made
+    first (uv.lock, contract/PklProject) are not attributed to it."""
+    proc = run_capture(
+        ["git", "status", "--porcelain", "-z", "--untracked-files=all"],
+        check=True,
+    )
+    entries = proc.stdout.split("\0")
+    state: TreeState = {}
+    i = 0
+    while i < len(entries):
+        entry = entries[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        code, path = entry[:2], entry[3:]
+        if "R" in code or "C" in code:
+            i += 1  # the rename source follows as its own field
+        p = Path(path)
+        state[path] = (p.read_bytes(), p.stat().st_mode) if p.is_file() else None
+    return state
+
+
+def changed_since(before: TreeState) -> list[str]:
+    """Paths whose state differs from *before* (now dirty, or newly clean)."""
+    after = dirty_tree()
+    changed = {
+        path
+        for path, content in after.items()
+        if before.get(path, b"\0clean") != content
+    }
+    # A path dirty before and clean now was also changed (restored).
+    changed |= {path for path in before if path not in after}
+    return sorted(changed)
+
+
+def restore_tree(before: TreeState) -> None:
+    """Put every path changed since *before* back the way it was.
+
+    A path dirty before gets its old content and mode back (or is removed
+    again if it was deleted). A path clean before is restored from HEAD when HEAD has it,
+    and removed when it is new. Used to undo a regeneration whose
+    post-generate step failed."""
+    for path in changed_since(before):
+        target = Path(path)
+        if path in before:
+            saved = before[path]
+            if saved is None:
+                target.unlink(missing_ok=True)
+            else:
+                content, mode = saved
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+                target.chmod(mode)
+            continue
+        in_head = run_capture(["git", "cat-file", "-e", f"HEAD:{path}"]).returncode == 0
+        if in_head:
+            run(["git", "checkout", "HEAD", "--", path], check=True)
+        else:
+            target.unlink(missing_ok=True)
+
+
+def warn_uncommitted_changes(changed: list[str]) -> None:
+    """Name every regenerated path Renovate will not commit. Those land in the
+    working tree but not in the PR, so certify's whole-tree drift check fails
+    on the app's next publish until someone commits them."""
+    skipped = [p for p in changed if not committable(p)]
+    if not skipped:
+        return
+    more = len(skipped) - _MAX_LISTED_PATHS
+    print(
+        f"::warning::Regeneration changed {len(skipped)} path(s) outside what "
+        f"this PR commits ({', '.join(renovate_file_filters())}): "
+        f"{', '.join(skipped[:_MAX_LISTED_PATHS])}"
+        f"{f' (+{more} more)' if more > 0 else ''}. They are not in this PR, so "
+        "certify's contract-drift check will fail on publish until they are "
+        "committed."
+    )
 
 
 def _git_matches(pathspec: str) -> bool:
@@ -431,7 +502,7 @@ def _git_matches(pathspec: str) -> bool:
     along with its directory, and ``git add`` fails on a pathspec that matches
     nothing. ``--cached`` keeps a deleted tracked file in the answer, so its
     deletion is staged."""
-    proc = subprocess.run(
+    proc = run_capture(
         [
             "git",
             "ls-files",
@@ -440,26 +511,28 @@ def _git_matches(pathspec: str) -> bool:
             "--exclude-standard",
             "--",
             pathspec,
-        ],
-        capture_output=True,
-        text=True,
+        ]
     )
     return proc.returncode == 0 and bool(proc.stdout.strip())
 
 
-def stage_and_commit(message: str) -> bool:
+def stage_and_commit(message: str, changed: list[str] | None = None) -> bool:
     """Stage the known sync outputs and commit iff something changed.
 
     Returns True when a commit was made. Stages only the re-resolve /
     generation outputs (``-A`` also captures deletions of orphaned generated
     files) so incidental working-tree noise (e.g. a ruff cache) is never
-    committed."""
+    committed. *changed* is what this run changed (``changed_since``); its
+    paths that Renovate would commit are staged too, so a file
+    ``contract/post-generate.sh`` writes outside ``OUTPUT_PATHS`` lands here
+    exactly as it does in a Renovate PR."""
     run(["git", "config", "user.name", "github-actions[bot]"], check=True)
     run(
         ["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"],
         check=True,
     )
-    for path in [LOCK_PATH, *OUTPUT_PATHS]:
+    regenerated = [p for p in (changed or []) if committable(p)]
+    for path in [LOCK_PATH, *OUTPUT_PATHS, *regenerated]:
         if os.path.exists(path) or _git_matches(path):
             run(["git", "add", "-A", "--", path], check=True)
 
@@ -508,8 +581,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"::notice::No {pkl_project} — nothing to sync (skipped).")
         return 0
 
+    before = dirty_tree()
     resolve(args.contract_dir)
     regenerated = regenerate(args.contract_dir) if regenerate_enabled else False
+    changed = changed_since(before)
+    warn_uncommitted_changes(changed)
     if args.no_commit:
         # Renovate commits the fileFilters matches itself; the driver only
         # generates. Leaving git untouched here also keeps the git identity /
@@ -517,7 +593,7 @@ def main(argv: list[str] | None = None) -> int:
         print("--no-commit: staging and commit left to the caller.")
         return 0
     message = COMMIT_MESSAGE_REGEN if regenerated else COMMIT_MESSAGE_LOCK_ONLY
-    stage_and_commit(message)
+    stage_and_commit(message, changed)
     return 0
 
 

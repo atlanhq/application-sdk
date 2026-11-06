@@ -35,6 +35,7 @@ tmp_path so the drift comparison is exercised end to end.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import types
@@ -45,6 +46,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import regenerate_contract as mod
+import renovate_pkl_sync
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The shared regeneration retries a failed eval; don't wait between tries."""
+    monkeypatch.setattr(renovate_pkl_sync, "EVAL_RETRY_SLEEP_S", 0)
+
 
 STALE_MANIFEST = '{"app_name": "{{app_name}}"}\n'
 FRESH_MANIFEST = '{"app_name": "metabase"}\n'
@@ -530,7 +539,7 @@ def _fake_run_emitting_py(repo: Path, py_source: str, *, manifest: str):
 def test_drift_ignores_generated_py_content_when_formatting_skipped(
     repo, monkeypatch, capsys
 ):
-    monkeypatch.setattr(mod.shutil, "which", lambda name: None)  # no uvx, no ruff
+    monkeypatch.setattr(shutil, "which", lambda name: None)  # no uvx, no ruff
     monkeypatch.setattr(
         mod,
         "run",
@@ -549,7 +558,7 @@ def test_drift_reports_generated_py_content_when_formatting_ran(
     repo, monkeypatch, capsys
 ):
     """Same difference, with ruff available: nothing is suppressed."""
-    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/uvx")
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/uvx")
     monkeypatch.setattr(
         mod,
         "run",
@@ -566,7 +575,7 @@ def test_drift_reports_generated_py_content_when_formatting_ran(
 def test_drift_reports_manifest_when_formatting_skipped(repo, monkeypatch, capsys):
     """The signal that was missing on the image-build path: a stale manifest.json
     (what a dropped post-processing step produces) is reported even with no ruff."""
-    monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
     monkeypatch.setattr(
         mod,
         "run",
@@ -585,7 +594,7 @@ def test_drift_reports_new_generated_py_when_formatting_skipped(
 ):
     """Formatting rewrites existing files; it cannot create one. A newly emitted
     *.py is real drift on every path."""
-    monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
     inner = _make_fake_run(repo, fresh_manifest=STALE_MANIFEST)
 
     def fake_run(cmd, *, check=False):
@@ -609,7 +618,7 @@ def test_drift_reports_deleted_generated_py_when_formatting_skipped(
 ):
     """A generated *.py the contract stopped emitting is a deletion, which
     formatting also cannot produce."""
-    monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
     inner = _make_fake_run(repo, fresh_manifest=STALE_MANIFEST)
 
     def fake_run(cmd, *, check=False):
@@ -637,16 +646,16 @@ def test_format_generated_reports_whether_it_formatted(tmp_path, monkeypatch):
     (gen / "_input.py").write_text("import os\n")
     monkeypatch.setattr(mod, "run", lambda cmd, check=False: None)
 
-    monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
     assert mod._format_generated(tmp_path) is False
 
-    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/uvx")
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/uvx")
     assert mod._format_generated(tmp_path) is True
 
     # No generated Python at all: formatting is vacuously complete, so drift
     # must NOT be narrowed.
     (gen / "_input.py").unlink()
-    monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
     assert mod._format_generated(tmp_path) is True
 
 
@@ -700,7 +709,7 @@ def test_format_generated_covers_all_py(tmp_path, monkeypatch):
             formatted.extend(a for a in cmd[3:] if not a.startswith("-"))
         return types.SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/uvx")
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/uvx")
     monkeypatch.setattr(mod, "run", spy_run)
     mod._format_generated(tmp_path)
 
@@ -709,3 +718,28 @@ def test_format_generated_covers_all_py(tmp_path, monkeypatch):
         "_e2e_base.py",
         "_e2e_substitutions.py",
     }
+
+
+def test_post_generate_failure_leaves_committed_artifacts(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """FND-4736: a failed post-generate step rolls the regeneration back, so
+    tests run against the committed manifest rather than raw `pkl eval` output
+    missing what the step installs."""
+    committed = {
+        p.relative_to(repo).as_posix(): p.read_bytes()
+        for p in (repo / "app" / "generated").rglob("*")
+        if p.is_file()
+    }
+    (repo / "contract" / "post-generate.sh").write_text("exit 4\n")
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo))
+
+    assert mod.main(["--check-drift", "false"]) == 0
+
+    after = {
+        p.relative_to(repo).as_posix(): p.read_bytes()
+        for p in (repo / "app" / "generated").rglob("*")
+        if p.is_file()
+    }
+    assert after == committed
+    assert "Regeneration rolled back" in capsys.readouterr().out

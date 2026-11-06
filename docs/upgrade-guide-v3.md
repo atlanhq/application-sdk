@@ -101,17 +101,20 @@ declared but never imported, and are gone:
 | Package | Was in | Still arrives via |
 |---------|--------|-------------------|
 | `aiohttp` | core | the `[harness]` extra (kubernetes) only |
-| `uvloop` | core | `fastapi[standard]` (uvicorn) |
+| `uvloop` | core | `uvicorn[standard]` |
 | `opentelemetry-exporter-otlp` | core | — (the SDK now declares `opentelemetry-exporter-otlp-proto-grpc`) |
 | `duckdb-engine` | `[sql]`, `[incremental]` | — |
 | `azure-storage-blob`, `azure-storage-file-datalake` | `[azure]` (deprecated) | — |
 | `pytest-order` | `[tests]` | — |
 | `numpy` | `[scale_data_generator]` | pandas, where installed |
+| `fastapi[standard]`: `fastapi-cli` (and `typer`, `rich`, `sentry-sdk`), `email-validator`, `pydantic-settings`, `pydantic-extra-types`, `opentelemetry-exporter-otlp-proto-http` | core (the extra) | — (the SDK now declares `fastapi`, `uvicorn[standard]` and `python-multipart`) |
 
 If your app imports one of these, declare it in your own `pyproject.toml`; it
 was never a promise of the SDK's. The usual cases: `aiohttp` in app code,
 `create_engine("duckdb:///...")` (needs `duckdb-engine`), the Azure Storage SDK
-used directly, and `@pytest.mark.order` in tests. The SDK's own HTTP client is
+used directly, `@pytest.mark.order` in tests, pydantic's `EmailStr` (needs
+`email-validator`), `pydantic_settings.BaseSettings`, and the `fastapi` CLI
+(`fastapi run` / `fastapi dev`; use `uvicorn`). The SDK's own HTTP client is
 `httpx`.
 
 ### pandas 3 and pyarrow 26

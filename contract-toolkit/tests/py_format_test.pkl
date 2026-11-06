@@ -31,8 +31,10 @@ facts {
     let (line = "        default=\"" + "x".repeat(90) + "\",")
     PyFormat.wrapLine(line) == List(line)
   }
-  ["a final newline is kept"] {
+  ["a module ends with exactly one newline, as ruff leaves it"] {
     PyFormat.format("x = 1\n") == "x = 1\n"
-    PyFormat.format("x = 1") == "x = 1"
+    PyFormat.format("x = 1\n\n") == "x = 1\n"
+    PyFormat.format("x = 1") == "x = 1\n"
+    PyFormat.format("") == ""
   }
 }

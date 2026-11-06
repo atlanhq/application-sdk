@@ -56,6 +56,7 @@ scripts/
 |-- check-ruff-stable.py  # ruff changes no generated .py (default settings)
 `-- test-sdk-import.py
 examples/
+|-- ae-activities/         # AE activity nodes (FetchEntitiesNode, MergeNode)
 |-- connection-ref/        # ConnectionRefInput typed output
 |-- fanin/                 # DependencyCondition and fan-in
 |-- openapi/               # OpenAPI loader with extra object-store credential

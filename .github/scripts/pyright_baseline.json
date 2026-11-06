@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 144,
-    "warning": 6184
+    "warning": 6072
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -200,7 +200,7 @@
       "warning:reportUnknownMemberType": 4
     },
     ".github/scripts/pkl_contract_layout.py": {
-      "warning:reportUnknownMemberType": 10
+      "warning:reportUnknownMemberType": 3
     },
     ".github/scripts/poll_check_runs_gate.py": {
       "warning:reportAttributeAccessIssue": 1,
@@ -580,7 +580,7 @@
       "warning:reportUnknownMemberType": 15
     },
     ".github/scripts/tests/test_pkl_contract_layout.py": {
-      "warning:reportUnknownMemberType": 115
+      "warning:reportUnknownMemberType": 81
     },
     ".github/scripts/tests/test_pkl_version.py": {
       "warning:reportUnknownMemberType": 1
@@ -669,7 +669,7 @@
       "warning:reportUnknownMemberType": 20
     },
     ".github/scripts/tests/test_renovate_pkl_sync.py": {
-      "warning:reportUnknownMemberType": 123
+      "warning:reportUnknownMemberType": 109
     },
     ".github/scripts/tests/test_renovate_pyatlan_sync.py": {
       "warning:reportUnknownMemberType": 20
@@ -877,26 +877,23 @@
     ".github/scripts/vuln_triage/allowlist.py": {
       "warning:reportUnknownMemberType": 2
     },
-    ".github/scripts/vuln_triage/bump.py": {
-      "warning:reportUnknownMemberType": 6
-    },
     ".github/scripts/vuln_triage/classify.py": {
       "warning:reportUnknownMemberType": 1
     },
     ".github/scripts/vuln_triage/effects.py": {
-      "warning:reportUnknownMemberType": 11
+      "warning:reportUnknownMemberType": 3
     },
     ".github/scripts/vuln_triage/report.py": {
       "warning:reportUnknownMemberType": 3
     },
     ".github/scripts/vuln_triage/run.py": {
-      "warning:reportUnknownMemberType": 58
+      "warning:reportUnknownMemberType": 17
     },
     ".github/scripts/vuln_triage/scan.py": {
       "warning:reportUnknownMemberType": 13
     },
     ".github/scripts/vuln_triage/selftest.py": {
-      "warning:reportUnknownMemberType": 13
+      "warning:reportUnknownMemberType": 11
     },
     ".github/scripts/wait_for_emulators.py": {
       "warning:reportUnknownMemberType": 10

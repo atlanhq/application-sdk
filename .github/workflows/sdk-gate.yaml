@@ -302,6 +302,13 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: python3 .github/scripts/check_uv_lock.py
 
+      # The conformance lock path-sources the SDK and api, so an SDK dependency
+      # change that relocks only the root leaves it stale. That used to pass
+      # here and then fail the next conformance release at its wheel gate
+      # (FND-4716). Same comparison as that gate, run before merge instead.
+      - name: Check that packages/conformance/uv.lock matches the SDK
+        run: python3 .github/scripts/check_conformance_lock.py
+
   sdk-tests:
     name: SDK Tests
     needs: changes
@@ -372,6 +379,8 @@ jobs:
   # forgets skipped it entirely on `pull_request` and was evicted from the merge
   # queue instead (FND-921). The job is ~30s and runs parallel to the ~10min
   # Windows unit-test legs, so covering every SDK PR costs no wall-clock.
+  # The package also imports application_sdk from this checkout (path-sourced,
+  # FND-4256), so its parity tests are a check on every SDK change too.
   conformance-suite-tests:
     name: Conformance Suite Tests
     needs: changes

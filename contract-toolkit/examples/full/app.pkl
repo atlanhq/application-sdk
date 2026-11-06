@@ -320,6 +320,7 @@ uiConfig = new UIConfig {
           sqlQuery = "show atlan schemas"
           credentialType = "atlan-connectors-full-featured"
           excludePatterns = List("information_schema")
+          placeholderText = "Select schemas"
         }
         // Preflight checks; keep the SageV2 widget last in the final step.
         // warmup = true declares that the app's handler overrides

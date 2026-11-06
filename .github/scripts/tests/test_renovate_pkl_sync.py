@@ -17,6 +17,7 @@ tmp_path, so the staging/commit decisions are exercised end to end.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -143,16 +144,10 @@ def _make_fake_run(
             return types.SimpleNamespace(returncode=0)
         if prog == "pkl" and cmd[1] == "eval":
             if eval_rc == 0:
-                # The driver evaluates twice: the app's contract (bumped pin) and
-                # the same contract exported at the pre-bump pin, for override
-                # detection. Distinguish by --project-dir, and give the baseline
-                # the OLD manifest so a real refresh is visible.
-                project_dir = cmd[cmd.index("--project-dir") + 1]
-                is_baseline = Path(project_dir).is_absolute()
                 _write_eval_output(
                     Path(cmd[cmd.index("-m") + 1]),
                     layout,
-                    manifest=STALE_MANIFEST if is_baseline else FRESH_MANIFEST,
+                    manifest=FRESH_MANIFEST,
                     connector=TOOLKIT_CONNECTOR_CONFIG,
                 )
             return types.SimpleNamespace(returncode=eval_rc)
@@ -317,30 +312,43 @@ def _last_commit_subject(repo: Path) -> str:
     ).stdout
 
 
-def test_regenerate_root_only_output_degrades_to_lock_only(repo, monkeypatch, capsys):
-    """Partial eval (rc=0, only atlan.yaml, no generated artifacts at all): the
-    committed generated dir is left untouched (not deleted), the emitted
-    atlan.yaml is still swapped in, and — because no generated artifact was
-    placed — the commit degrades to the lock-only message and says why.
+def test_regenerate_root_only_output_is_a_regeneration(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A contract that emits only atlan.yaml (rc=0) and has no generated dir:
+    the emitted atlan.yaml is swapped in and committed as a regeneration.
 
-    This used to be the *only* non-prefixed case the driver handled, and it
-    handled it by silently claiming success; the whole native family fell in
-    here. See test_native_* below."""
+    FND-4736 reversed the outcome: this used to degrade to the lock-only
+    message, which made certify report two active root-only apps as "does not
+    regenerate". pkl -m writes every output or fails, so rc=0 with only root
+    files is a complete eval, not a partial one. The native family that used to
+    fall in here is handled separately (see test_native_* below)."""
+    _reshape_generated(repo, {})
     monkeypatch.setattr(mod, "run", _make_fake_run(repo, layout="root-only"))
     before = _commit_count(repo)
 
     assert mod.main(["--regenerate", "true"]) == 0
 
-    # Existing generated preserved (not destroyed because eval emitted none).
-    assert (repo / "app" / "generated" / "manifest.json").read_text() == STALE_MANIFEST
-    # The artifact eval did emit is swapped in and committed.
     assert (repo / "atlan.yaml").read_text() == "deploy: true\n"
     assert _commit_count(repo) == before + 1
+    assert mod.COMMIT_MESSAGE_REGEN in _last_commit_subject(repo)
+    assert "emitted only root files" in capsys.readouterr().out
+
+
+def test_regenerate_root_only_with_a_stale_generated_dir_is_lock_only(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Root-only output while app/generated still holds a committed manifest the
+    contract no longer emits: not a regeneration. The stale manifest is left
+    for the app to delete, and the bump degrades to lock-only."""
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo, layout="root-only"))
+
+    assert mod.main(["--regenerate", "true"]) == 0
+
+    assert (repo / "app" / "generated" / "manifest.json").read_text() == STALE_MANIFEST
+    assert not (repo / "atlan.yaml").exists()
     assert mod.COMMIT_MESSAGE_LOCK_ONLY in _last_commit_subject(repo)
-    assert (
-        "::warning::pkl eval produced no generated contract artifacts"
-        in capsys.readouterr().out
-    )
+    assert "does not emit" in capsys.readouterr().out
 
 
 def test_native_bundle_layout_regenerates_and_commits(repo, monkeypatch):
@@ -480,37 +488,106 @@ def test_post_generate_script_runs_after_swap(repo, monkeypatch):
     assert (gen / "atlan-connectors-x.json").read_text() == CANONICAL_CONNECTOR_CONFIG
 
 
-def test_post_generate_failure_warns_but_still_commits(repo, monkeypatch, capsys):
-    """The script runs after the swap, so a failure must not fail the sync —
-    fresh toolkit output in a visible diff beats failing a dependency bump."""
-    (repo / "contract" / "post-generate.sh").write_text("exit 3\n")
-    monkeypatch.setattr(mod, "run", _make_fake_run(repo, layout="native"))
+@pytest.mark.parametrize("layout", ["native", "prefixed"])
+def test_post_generate_failure_rolls_back_to_a_lock_only_sync(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    layout: str,
+) -> None:
+    """FND-4736 reversed this: a failed step used to leave raw `pkl eval`
+    output and commit it. Raw output drops what the step installs (e.g. keys a
+    merge.py adds to a manifest), so the swap is rolled back, including
+    anything the script wrote before failing, and the sync degrades to
+    lock-only. The sync itself still succeeds."""
+    (repo / "contract" / "post-generate.sh").write_text(
+        "echo half > app/generated/half.py\nexit 3\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "post-generate")
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo, layout=layout))
 
     assert mod.main(["--regenerate", "true"]) == 0
 
-    assert (repo / "app" / "generated" / "manifest.json").read_text() == FRESH_MANIFEST
-    assert mod.COMMIT_MESSAGE_REGEN in _last_commit_subject(repo)
-    assert "post-generate.sh failed" in capsys.readouterr().out
+    gen = repo / "app" / "generated"
+    assert (gen / "manifest.json").read_text() == STALE_MANIFEST
+    assert (gen / "_input.py").read_text() == "import os\n"
+    assert not (gen / "half.py").exists()
+    assert not (repo / "atlan.yaml").exists()
+    assert mod.COMMIT_MESSAGE_LOCK_ONLY in _last_commit_subject(repo)
+    assert _tracked(repo, "contract/PklProject.deps.json")
+    assert "regeneration rolled back" in capsys.readouterr().out
+
+
+def test_restore_tree_keeps_edits_made_before_the_snapshot(repo: Path) -> None:
+    (repo / "app" / "generated" / "_input.py").write_text("work in progress\n")
+    (repo / "notes.txt").write_text("untracked before\n")
+    before = mod.dirty_tree()
+    (repo / "app" / "generated" / "_input.py").write_text("regenerated\n")
+    (repo / "app" / "generated" / "manifest.json").unlink()
+    (repo / "notes.txt").unlink()
+    (repo / "app" / "new.py").write_text("new\n")
+
+    mod.restore_tree(before)
+
+    gen = repo / "app" / "generated"
+    assert (gen / "_input.py").read_text() == "work in progress\n"
+    assert (gen / "manifest.json").read_text() == STALE_MANIFEST
+    assert (repo / "notes.txt").read_text() == "untracked before\n"
+    assert not (repo / "app" / "new.py").exists()
+
+
+def test_restore_tree_restores_the_mode_of_a_file_dirty_before(repo: Path) -> None:
+    """The snapshot keeps each dirty file's mode with its content: a swap that
+    replaced an executable file with a non-executable one is fully undone."""
+    script = repo / "app" / "generated" / "run.sh"
+    script.write_text("#!/bin/sh\n")
+    script.chmod(0o755)
+    before = mod.dirty_tree()
+    script.write_text("regenerated\n")
+    script.chmod(0o644)
+
+    mod.restore_tree(before)
+
+    assert script.read_text() == "#!/bin/sh\n"
+    assert script.stat().st_mode & 0o777 == 0o755
+
+
+def test_git_queries_go_through_the_run_capture_seam(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Snapshot, rollback and staging read git through ``run_capture``, so a git
+    failure can be injected without a real broken repo."""
+    seen: list[list[str]] = []
+
+    def failing(
+        cmd: list[str], *, check: bool = False
+    ) -> "subprocess.CompletedProcess[str]":
+        seen.append(cmd)
+        raise subprocess.CalledProcessError(128, cmd)
+
+    monkeypatch.setattr(mod, "run_capture", failing)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        mod.dirty_tree()
+    assert seen[0][:2] == ["git", "status"]
 
 
 def _bump_pin(repo: Path) -> None:
-    """Commit a toolkit-pin bump, the way Renovate does on its branch. Gives
-    baseline_contract_ref a parent commit holding the pre-bump pin."""
+    """Commit a toolkit-pin bump, the way Renovate does on its branch."""
     pkl_project = repo / "contract" / "PklProject"
     pkl_project.write_text(pkl_project.read_text().replace("0.14.1", "0.14.2"))
     _git(repo, "commit", "-qam", "chore(deps): bump app-contract-toolkit")
 
 
-def test_app_overridden_file_survives_a_bump_with_no_app_level_config(
-    repo, monkeypatch, capsys
-):
-    """Centralized override protection, end to end: no post-generate.sh, no
-    workflow input, nothing app-side.
-
-    The committed connector config is hand-maintained (differs from what the
-    pre-bump toolkit emitted), so it must be preserved; the manifest matches the
-    pre-bump output exactly, so it must be refreshed. This is what stops a
-    now-working swap from reverting six apps' post-processing."""
+def test_a_bump_overwrites_a_hand_edited_generated_file(repo, monkeypatch):
+    """FND-4736 reversed this: a toolkit bump used to keep a committed
+    generated file that differed from the pre-bump toolkit's output, treating
+    it as app-maintained. Certify regenerates with no such protection and
+    checks the whole tree, so the kept file failed the next publish (seen on a
+    production app with a stale _e2e_credential.py). Regeneration now writes
+    exactly what the contract emits; an app that installs its own version does
+    it in contract/post-generate.sh."""
     _reshape_generated(
         repo,
         {
@@ -525,16 +602,12 @@ def test_app_overridden_file_survives_a_bump_with_no_app_level_config(
 
     gen = repo / "app" / "generated"
     assert (gen / "crawler" / "manifest.json").read_text() == FRESH_MANIFEST
-    assert (gen / "atlan-connectors-x.json").read_text() == CANONICAL_CONNECTOR_CONFIG
-    out = capsys.readouterr().out
-    assert "Preserved app-maintained generated file(s)" in out
-    assert "atlan-connectors-x.json" in out
+    assert (gen / "atlan-connectors-x.json").read_text() == TOOLKIT_CONNECTOR_CONFIG
 
 
-def test_no_baseline_without_a_pin_change_so_drift_stays_visible(repo, monkeypatch):
-    """With no bump in flight (an ordinary PR, or the freshness gate) there is no
-    baseline, so everything is overwritten and genuine staleness still shows up.
-    Protecting files here would freeze the tree and blind the gate."""
+def test_a_post_generate_override_survives_a_bump(repo, monkeypatch):
+    """The sanctioned way to keep a hand-maintained artifact: the app's
+    contract/post-generate.sh installs it over the toolkit's output."""
     _reshape_generated(
         repo,
         {
@@ -542,14 +615,20 @@ def test_no_baseline_without_a_pin_change_so_drift_stays_visible(repo, monkeypat
             "atlan-connectors-x.json": CANONICAL_CONNECTOR_CONFIG,
         },
     )
-    # No _bump_pin() — contract/PklProject is untouched.
+    (repo / "contract" / "canonical.json").write_text(CANONICAL_CONNECTOR_CONFIG)
+    (repo / "contract" / "post-generate.sh").write_text(
+        "cp contract/canonical.json app/generated/atlan-connectors-x.json\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "post-generate")
+    _bump_pin(repo)
     monkeypatch.setattr(mod, "run", _make_fake_run(repo, layout="native-bundle"))
 
     assert mod.main(["--regenerate", "true"]) == 0
 
     gen = repo / "app" / "generated"
     assert (gen / "crawler" / "manifest.json").read_text() == FRESH_MANIFEST
-    assert (gen / "atlan-connectors-x.json").read_text() == TOOLKIT_CONNECTOR_CONFIG
+    assert (gen / "atlan-connectors-x.json").read_text() == CANONICAL_CONNECTOR_CONFIG
 
 
 def test_no_post_generate_script_is_a_noop(repo, monkeypatch, capsys):
@@ -868,42 +947,122 @@ def test_no_roots_at_all_is_still_a_skip(repo):
     assert mod.regenerate("contract") is False
 
 
-def test_multi_root_swap_gets_a_per_root_baseline(repo, monkeypatch):
-    """Without a baseline the swap overwrites every app-maintained generated
-    file on a toolkit bump — protection the single-root path has always had.
-    Each root's baseline must be its OWN pre-bump eval, not app.pkl's."""
+def test_multi_root_swaps_each_root_into_its_own_target(repo, monkeypatch):
+    """Each root's output lands under <generated>/<root stem>, never a shared
+    base."""
     _multi_root_contract(repo)
-    seen: list[tuple[str, object]] = []
+    seen: list[str] = []
 
-    def fake_baseline(contract_dir, root_name):
-        return (Path("/tmp/base") / Path(root_name).stem, None)
-
-    def fake_swap(out_dir, generated_dir=mod.GENERATED_DIR, baseline_dir=None):
-        seen.append((generated_dir, baseline_dir))
+    def fake_swap(out_dir, generated_dir=mod.GENERATED_DIR):
+        seen.append(generated_dir)
         return True
 
-    monkeypatch.setattr(mod, "_baseline_output_for_root", fake_baseline)
     monkeypatch.setattr(mod, "swap_outputs", fake_swap)
     monkeypatch.setattr(
         mod,
         "run",
         lambda cmd, *, check=False: subprocess.CompletedProcess(cmd, 0, "", ""),
     )
-    monkeypatch.setattr(mod, "run_post_generate", lambda d: None)
-    monkeypatch.setattr(mod, "_format_generated", lambda: None)
+    monkeypatch.setattr(mod, "run_post_generate", lambda d: True)
+    monkeypatch.setattr(mod, "_format_generated", lambda run_cmd=None: True)
 
     assert mod.regenerate("contract") is True
-    assert seen == [
-        ("app/generated/crawler", Path("/tmp/base/crawler")),
-        ("app/generated/miner", Path("/tmp/base/miner")),
-    ]  # per-root target AND per-root baseline
+    assert seen == ["app/generated/crawler", "app/generated/miner"]
 
 
-def test_multi_root_baseline_absent_root_is_not_a_failure(repo, monkeypatch):
-    """A root that is new in this revision has nothing committed from it, so
-    there is nothing to preserve — None baseline, no warning-worthy failure."""
-    _multi_root_contract(repo)
-    monkeypatch.setattr(mod, "baseline_contract_ref", lambda d: "abc123")
-    monkeypatch.setattr(mod, "export_contract_at", lambda ref, d, dest: True)
-    out, work = mod._baseline_output_for_root("contract", "crawler.pkl")
-    assert out is None and work is not None  # workdir returned for cleanup
+# --- FND-4736: the bump commits everything regeneration changes ---------------
+#
+# Certify checks the whole tree after regenerating, so a file regeneration
+# writes outside app/generated (an app's post-generate.sh placing _input.py next
+# to its code) must land in the toolkit-bump PR too.
+
+POST_GENERATE_OUTSIDE = """\
+mkdir -p app/contracts tests/e2e docs
+echo 'X = 1' > app/contracts/_input.py
+echo 'Y = 2' > tests/e2e/_subs.py
+echo 'stray' > docs/generated.md
+"""
+
+
+def _with_post_generate(repo: Path, script: str = POST_GENERATE_OUTSIDE) -> None:
+    (repo / "contract" / "post-generate.sh").write_text(script)
+    (repo / "uv.lock").write_text("version = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "post-generate")
+
+
+def test_file_filters_match_the_renovate_preset() -> None:
+    preset = json.loads(
+        (Path(__file__).parents[3] / "renovate-config" / "default.json").read_text()
+    )
+    rules = [
+        r
+        for r in preset["packageRules"]
+        if r.get("matchDepNames") == ["app-contract-toolkit"]
+    ]
+    assert len(rules) == 1
+    assert rules[0]["postUpgradeTasks"]["fileFilters"] == mod.renovate_file_filters()
+
+
+@pytest.mark.parametrize(
+    ("path", "committed"),
+    [
+        ("app/generated/_input.py", True),
+        ("app/contracts/_input.py", True),
+        ("contract/PklProject.deps.json", True),
+        ("contract/generated/x/input.pkl", True),
+        ("tests/e2e/_subs.py", True),
+        ("atlan.yaml", True),
+        ("app.yaml", True),
+        ("uv.lock", False),
+        ("pyproject.toml", False),
+        ("app", False),
+        ("apps/x.py", False),
+        ("docs/x.md", False),
+    ],
+)
+def test_committable(path: str, committed: bool) -> None:
+    assert mod.committable(path) is committed
+
+
+def test_commit_mode_stages_regenerated_files_outside_generated(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _with_post_generate(repo)
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo))
+
+    assert mod.main(["--regenerate", "true"]) == 0
+
+    assert _tracked(repo, "app/contracts/_input.py")
+    assert _tracked(repo, "tests/e2e/_subs.py")
+    assert not _tracked(repo, "docs/generated.md")
+    out = capsys.readouterr().out
+    assert "docs/generated.md" in out and "outside what this PR commits" in out
+
+
+def test_edits_made_before_the_sync_are_not_attributed_to_it(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Renovate writes its own edits (uv.lock, contract/PklProject) before the
+    post-upgrade task runs. Those are Renovate's to commit, not drift."""
+    _with_post_generate(repo, "true\n")
+    (repo / "uv.lock").write_text("version = 2\n")
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo))
+
+    assert mod.main(["--regenerate", "true", "--no-commit"]) == 0
+
+    assert "outside what this PR commits" not in capsys.readouterr().out
+
+
+def test_changed_since_sees_new_modified_deleted_and_restored(repo: Path) -> None:
+    (repo / "app" / "generated" / "_input.py").write_text("dirty before\n")
+    before = mod.dirty_tree()
+    (repo / "app" / "generated" / "_input.py").write_text("import os\n")  # restored
+    (repo / "app" / "generated" / "manifest.json").unlink()  # deleted
+    (repo / "app" / "new.py").write_text("new\n")  # untracked
+
+    assert mod.changed_since(before) == [
+        "app/generated/_input.py",
+        "app/generated/manifest.json",
+        "app/new.py",
+    ]

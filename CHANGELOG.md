@@ -1,5 +1,44 @@
 # Changelog
 
+## v3.55.0 (November 05, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.54.0...v3.55.0
+
+### Features
+
+- run_fault_isolated(fresh_child=True) runs on a single-use child [FND-4561] (#4739) (by @cmgrote in [6573eb3](https://github.com/atlanhq/application-sdk/commit/6573eb3))
+- accept pandas 3 and pyarrow 26; Parquet text columns stay `string` [FND-4254] (#4742) (by @cmgrote in [b10ffd4](https://github.com/atlanhq/application-sdk/commit/b10ffd4))
+
+### Bug Fixes
+
+- make entrypoint.sh fall back to the Dockerfile's DAPR defaults (FND-4250) (#4723) (by @cmgrote in [3f5a3e0](https://github.com/atlanhq/application-sdk/commit/3f5a3e0))
+- treat an empty JSON-list filter as no filter [FND-4559] (#4740) (by @cmgrote in [b59f7a3](https://github.com/atlanhq/application-sdk/commit/b59f7a3))
+- drop aiohttp and never-imported packages; declare what the SDK imports [FND-4252] (#4752) (by @cmgrote in [d96f75f](https://github.com/atlanhq/application-sdk/commit/d96f75f))
+
+### Performance
+
+- importing the handler no longer loads temporalio or grpc [FND-4257] (#4741) (by @cmgrote in [f218e9a](https://github.com/atlanhq/application-sdk/commit/f218e9a))
+
+### Chores
+
+- delete the retired sdk-review and sdk-resolve scripts (#4722) (by @cmgrote in [65116dd](https://github.com/atlanhq/application-sdk/commit/65116dd))
+- drop polyfill.io and unused MathJax from mkdocs.yml (#4720) (by @cmgrote in [9adc93f](https://github.com/atlanhq/application-sdk/commit/9adc93f))
+- pin every self-reference @main and delete superseded reusables (#4725) (by @cmgrote in [4fdbb9c](https://github.com/atlanhq/application-sdk/commit/4fdbb9c))
+- replace isort with ruff import sorting and track pre-commit hooks with Renovate (#4727) (by @cmgrote in [d8a2e5c](https://github.com/atlanhq/application-sdk/commit/d8a2e5c))
+- update pre-commit hook robertcraigie/pyright-python to v1.1.414 (#4729) (by @renovate[bot] in [7a1dec1](https://github.com/atlanhq/application-sdk/commit/7a1dec1))
+- update pre-commit hook compilerla/conventional-pre-commit to v4.5.0 (#4730) (by @renovate[bot] in [048ab17](https://github.com/atlanhq/application-sdk/commit/048ab17))
+- update pre-commit hook pre-commit/pre-commit-hooks to v6 (#4733) (by @renovate[bot] in [3b73ba4](https://github.com/atlanhq/application-sdk/commit/3b73ba4))
+- test_hung_connection_string_is_typed_timeout (FND-4555) (#4737) (by @cmgrote in [c91e559](https://github.com/atlanhq/application-sdk/commit/c91e559))
+- update dependency ubuntu to v26 (#4747) (by @renovate[bot] in [bea4425](https://github.com/atlanhq/application-sdk/commit/bea4425))
+- guard that AppError routing identity stays on the class (#4759) (by @cmgrote in [13010e9](https://github.com/atlanhq/application-sdk/commit/13010e9))
+- add a rerunnable staleness audit of atlan-application-sdk consumer repos [FND-4704] (#4762) (by @cmgrote in [5a5c897](https://github.com/atlanhq/application-sdk/commit/5a5c897))
+- test conformance against this tree's SDK and declare Python 3.11-3.14 on all three packages [FND-4256] (#4763) (by @cmgrote in [4ee8480](https://github.com/atlanhq/application-sdk/commit/4ee8480))
+
+### Other Changes
+
+- revert: "treat an empty JSON-list filter as no filter" [FND-4559] (#4740) (#4743) (by @cmgrote in [9b6785e](https://github.com/atlanhq/application-sdk/commit/9b6785e))
+
+
 ## v3.54.0 (November 03, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.53.2...v3.54.0

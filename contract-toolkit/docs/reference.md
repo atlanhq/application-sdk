@@ -884,8 +884,9 @@ class LineagePublishStep {               // wraps LineagePublishNode
 | `credentialAuthHiddenEnumListForCreating` | Listing<String>? | null | Auth-type enum values hidden during credential creation. |
 | `credentialNamePlaceholder` | String | `"Host Name"` | Placeholder for hidden credential `name` field. |
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. Requires all `credentialAuthOptions` to be `JDBCUrlAuthOption`. |
+| `additionalCredentialConfigs` | Listing<CredentialConfig> | `[]` | Extra credential configmaps beyond `<connectorConfigName>.json`; `wrapper` / `identityProperties` reproduce legacy shapes. See [CredentialConfig](#credentialconfig--additional-credential-configmaps). |
 
-The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.length == 1` — when the connector declares a single auth option, the radio is hidden and the default value is still emitted. No manual flag is required.
+The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.length == 1` — when the connector declares a single auth option, the radio is hidden and the default value is still emitted. No manual flag is required. An additional `CredentialConfig` can override this per config with `authHidden` (see [CredentialConfig](#credentialconfig--additional-credential-configmaps)).
 
 ### Workflow Config
 
@@ -931,7 +932,7 @@ Generated `deploy` blocks are validated in CI against the platform's infra ceili
 |---|---|---|---|
 | `deploy.executionMode` | String | `"native"` | Emitted as `execution_mode`. |
 | `deploy.splitDeployment` | Boolean | `true` | Emitted as `splitDeploymentEnabled`. |
-| `deploy.dapr` | DaprComponents | `new DaprComponents {}` | Dapr sidecar toggles — app-wide, not per-pool. Emitted under `dapr:` when any component is enabled. |
+| `deploy.dapr` | DaprComponents | `new DaprComponents {}` | Dapr sidecar toggles — app-wide, not per-pool. Emitted under `dapr:` when any component is enabled (or `customComponents` is non-empty). `objectstore` defaults to `true`, so every `deploy` block emits one by default. |
 | `deploy.overrides` | Mapping<String, Any> | `{}` | Global escape hatch. Deep-merged on top of the rendered `deploy:` block after first-pool `overrides`. |
 | `deploy.pools` | Mapping<KebabCase, Pool> | `{}` | Named worker-pool map. Pool keys must be lowercase kebab-case and match `@task(pool="…")` in Python. When non-empty, emits `deploy:` (synthesised from the first pool), one `deploy.workerPools[]` entry per pool after the first, and the top-level `pools:` mirror. See [What `deploy.pools` generates](#what-deploypools-generates). |
 
@@ -955,7 +956,7 @@ There is deliberately no `taskQueue` field — see [What `deploy.pools` generate
 
 ```pkl
 class DaprComponents {
-  objectstore: Boolean = false
+  objectstore: Boolean = true   // required by the SDK — keep it on
   secretstore: Boolean = false
   statestore: Boolean = false
   eventstore: Boolean = false
@@ -965,6 +966,29 @@ class DaprComponents {
   customComponents: Mapping<String, Any> = new Mapping {}
 }
 ```
+
+`objectstore` is the deployment object store, and the SDK requires it: worker and
+handler startup fails with `DeploymentObjectStoreMissingError` when the atlan-app
+chart omits the component, which it does when `atlan.yaml` carries
+`deploy.dapr.objectstore: false`. It therefore defaults to `true`, and conformance
+rule K029 flags a contract or `atlan.yaml` that sets it to `false`.
+
+What changes in the generated `atlan.yaml`:
+
+- Every contract with a `deploy` block now emits a `dapr:` block with
+  `objectstore: true`, even when it sets no Dapr toggle. The atlan-app chart
+  enables no Dapr component unless `atlan.yaml` asks for it, so a contract that
+  emitted no block got no object store. The other components render as `false`,
+  which is also the chart's default for them.
+- `dapr { secretstore = true }` (any other component enabled) emits
+  `objectstore: true`. Earlier toolkit releases emitted `objectstore: false`
+  here, which left the app unable to start.
+- An explicit `objectstore = false` is rendered as written when another Dapr
+  component is enabled (or `customComponents` is non-empty), and conformance
+  rule K029 flags it in `atlan.yaml`. With all other Dapr fields at their
+  defaults, no `dapr:` block is emitted, so `objectstore = false` does not
+  appear in `atlan.yaml`; K029 still flags the explicit value in the source
+  contract.
 
 **KedaConfig:**
 
@@ -1415,8 +1439,9 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | `credentialNamePlaceholder` | String | `"Host Name"` | Placeholder for the hidden credential `name` field. |
 | `credentialConnectorDefault` | String? | null | Optional default for the hidden credential `connector` field. |
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. When set, every `credentialAuthOptions` entry must be a `JDBCUrlAuthOption`. See [AdvancedJDBCUrlGroup](#advancedjdbcurlgroup--hostrlarrowurl-jdbc-credential-form). |
+| `additionalCredentialConfigs` | Listing<CredentialConfig> | `[]` | Extra credential configmaps beyond `<connectorConfigName>.json`; `wrapper` / `identityProperties` reproduce legacy shapes. See [CredentialConfig](#credentialconfig--additional-credential-configmaps). |
 
-The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.length == 1` — when the connector declares a single auth option, the radio is hidden and the default value is still emitted. No manual flag is required.
+The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.length == 1` — when the connector declares a single auth option, the radio is hidden and the default value is still emitted. No manual flag is required. An additional `CredentialConfig` can override this per config with `authHidden` (see [CredentialConfig](#credentialconfig--additional-credential-configmaps)).
 
 ### Workflow Config
 
@@ -1804,6 +1829,8 @@ open class AuthOption {
   nestedLabel: String = ""                                        // Custom label for nested section wrapper
   nestedPlaceholder: String?                                      // Custom placeholder for nested section wrapper
   nestedHidden: Boolean = true                                    // Hide nested auth pane by default
+  nestedHelp: String?                                             // `ui.help` on the nested pane; omitted when null
+  nestedWidth: Int?                                               // `ui.grid` on the nested pane; omitted when null
   nestedExtraLabel: String = ""                                   // Label on the per-option `extra` nested section
   nestedExtraHeader: String? = "Advanced"                         // Header on `extra`; null omits it
 }
@@ -1906,6 +1933,103 @@ credentialAuthOptions {
   }
 }
 ```
+
+---
+
+## CredentialConfig — Additional Credential Configmaps
+
+Each contract emits at most one primary credential configmap,
+`<connectorConfigName>.json`, built from the top-level `credential*` properties.
+List further configmaps in `additionalCredentialConfigs` when one entrypoint's
+form selects more than one credential type (`CredentialInput { credType = "<name>" }`),
+or selects one that is not its own connection credential, such as an
+object-store delivery target.
+
+```pkl
+class CredentialConfig {
+  name: String                                  // Configmap name = file stem = credType: (atlan|csa)-connectors-<kebab-case>
+  wrapper: Boolean = true                       // false: no icon/helpdeskLink/logo/connector/defaultConnectorType
+  identityProperties: Boolean = true            // false: no hidden name/connector/connectorType properties
+  connector: String?                            // Envelope `connector`; defaults to the app's. Refused when !wrapper
+  connectorType: String?                        // Envelope `defaultConnectorType` (default "rest"). Refused when !wrapper
+  icon: String?; logo: String?; helpdeskLink: String?   // Wrapper keys; default to the app's
+  authOptions: Mapping<String, AuthOption>      // Radio options + nested panes + anyOf rules
+  commonFields: Listing<CredentialFieldEntry> = []
+  sharedExtraFields: Listing<CredentialFieldEntry> = []
+  authTitle: String = "Authentication"
+  authDefault: String?                          // Defaults to the first authOptions key
+  authRules: Listing<Dynamic>?; authPlaceholder: String?; authWidth: Int?
+  authHiddenEnumListForCreating: Listing<String>?
+  authHidden: Boolean?                          // Radio ui.hidden; null = hidden iff one authOption
+  namePlaceholder: String?                      // Hidden `name` placeholder (default "Host Name"). Refused when !identityProperties
+  connectorDefault: String?                     // Hidden `connector` default; refused when !identityProperties
+}
+```
+
+Each entry renders through the same renderer as the primary config, so the
+auth-type radio, panes and `anyOf` rules have the same shape. The knobs mirror the
+top-level properties of the same name. `credentialUrlGroup` (JDBC Host↔URL) applies
+only to the primary config.
+
+**`authHidden`.** The auth-type radio's `ui.hidden`. Default `null`: auto-derived
+as for the primary, hidden exactly when `authOptions` has a single entry. Set
+`false` to keep a one-option radio visible, or `true` to hide a multi-option one,
+only to reproduce a legacy credential form. Only `ui.hidden` changes: `enum`,
+`default` and the `anyOf` rules are emitted either way, so the submitted
+credential body is the same. The primary config has no such override.
+
+**`wrapper` and `identityProperties`.** By default an entry carries what the
+primary carries:
+
+- the envelope: top-level `icon`, `helpdeskLink`, `logo`, `connector`,
+  `defaultConnectorType`;
+- hidden `name` / `connector` / `connectorType` form properties.
+
+Turn either off only to reproduce a legacy credential type whose form never had
+it. Neither is neutral for such a type:
+
+- the SDK configmap route returns `defaultConnectorType` as
+  `data.defaultConnectorType`;
+- the hidden properties are submitted in every credential body the form creates.
+
+| Legacy shape | `wrapper` | `identityProperties` |
+|---|---|---|
+| `@atlan/connectors` `csa-connectors-objectstore` (bare `{"config": ...}`) | `false` | `false` |
+| Credential.pkl configs, e.g. generic-miner's object-store form (envelope, no identity properties) | `true` | `false` |
+
+A field that a flag turns off is refused rather than ignored: `connector` /
+`connectorType` / `icon` / `logo` / `helpdeskLink` with `wrapper = false`, and
+`connectorDefault` / `namePlaceholder` with `identityProperties = false`.
+
+**Output.** A single-entrypoint contract writes `app/generated/<name>.json` per
+entry. A bundle hoists these files to `app/generated/` and dedupes them by name,
+as it does the primary. Two entrypoints may declare the same name only if the
+rendered content is identical; otherwise generation fails.
+
+**Unchanged.** The primary config, `credentialFieldName`, `_input.py` and the e2e
+credential codegen (`_e2e_credential.py`) describe only the primary credential.
+`hasCredentialConfig = false` suppresses only the primary, so a contract whose only
+credentials are additional ones still emits them.
+
+**Refused at generation:**
+
+- a multi-entrypoint bundle root, which emits no form or credential of its own:
+  declare the entry on each entrypoint's `contract`;
+- no `uiConfig`, since nothing could select the config;
+- a name that is not `atlan-connectors-` / `csa-connectors-` plus lowercase
+  kebab-case (the SDK treats only those stems as credential templates, so any other
+  stem can be served as the setup form; `/` or `..` would write outside
+  `app/generated/`);
+- duplicate names, or a name that collides with the primary, workflow config or
+  manifest;
+- an entry with `wrapper = true` and no connector on the entry or the app;
+- a field the entry's flags make unused (see above).
+
+Example: `examples/credential-configs/` is a bundle. Its `export` entrypoint emits
+a primary, a wrapped delivery config and a shared bare object-store config
+(`wrapper = false`, `identityProperties = false`). Its
+`report` entrypoint has no primary, only the shared object-store config, which the
+bundle writes once.
 
 ---
 
@@ -2229,7 +2353,7 @@ them.
 | `ConnectionSelector` | `connectionSelector` | `str` | `multiSelect`, `connectorFilter` (single), `connectorFilters` (multi — emits `connectorName` as list), `connectionCategories`, `selectedConnectorName`, `selectedCredentialGuid`, `emitMode`, `emitStart` |
 | `ConnectionRefInput` | `connectionSelector` | `ConnectionRef \| None` or `list[ConnectionRef]` | Emits `ui.shouldIncludeConnectionInfo = true`. Use when the workflow needs both `attributes.qualifiedName` and `attributes.defaultCredentialGuid` from the selected connection. Supports `multiSelect`, `connectorFilter`, `connectorFilters`, `connectionCategories`, `selectedConnectorName`, `selectedCredentialGuid`, `displayOnlyMultiConnections`, `emitMode`, `emitStart` |
 | `CredentialInput` | `credential` | `str` | `credType` (required), `placeholderText`, `authTypeVsLabel`, `hiddenFields`, `additionalDisplayFields` — triggers credential form fetch |
-| `APITokenSelector` | `apiTokenSelect` | `str` | Select existing API token |
+| `APITokenSelector` | `apiTokenSelect` | `str` | Select existing API token. `placeholderText` |
 
 `ConnectionRefInput` uses the same frontend widget as `ConnectionSelector`, but
 sets `ui.shouldIncludeConnectionInfo = true`. The submitted form value is the
@@ -2267,14 +2391,47 @@ Generated `_input.py`:
 connections: Annotated[list[ConnectionRef], MaxItems(1000)] = Field(default_factory=list)
 ```
 
+#### Users & Groups
+
+| Class | Widget | Python Type | Notes |
+|---|---|---|---|
+| `MultipleUsers` | `userMultiple` | `str` | Pick several users. `placeholderText` (frontend default: "Users") |
+| `SingleUser` | `users` | `str` | Pick one user. `placeholderText` |
+| `MultipleGroups` | `groupMultiple` | `str` | Pick several groups. `placeholderText` (frontend default: "Groups") |
+| `SingleGroup` | `groups` | `str` | Pick one group. `placeholderText` |
+
+##### `placeholderText` on pickers
+
+`MultipleUsers`, `SingleUser`, `MultipleGroups`, `SingleGroup`,
+`APITokenSelector`, `KeygenInput`, `ApiTreeSelect`, `SqlTree` and `DsnTreeMap`
+take an optional `placeholderText: String?`. It renders as `ui.placeholder`:
+text the frontend shows while the field is empty. It is display only, so the
+submitted value, manifest args and `_input.py` do not change.
+
+Unset (the default) emits no `ui.placeholder` key, so generated output is
+byte-identical to before and the frontend shows its own default text. Set it
+when migrating a legacy form that had a custom placeholder, so the migrated
+form looks the same:
+
+```pkl
+["owner_users"] = new MultipleUsers {
+  title = "Owner users"
+  placeholderText = "Select an owner user"
+}
+```
+
+`APITree`, `DateInput`, `ConnectorTypeSelector` and `SQLExecutor` have no
+`placeholderText`: their frontend components ignore or override
+`ui.placeholder`, so the value would never be shown.
+
 #### Trees & Filters
 
 | Class | Widget | Python Type | Notes |
 |---|---|---|---|
-| `SqlTree` | `sqltree` | `dict[str, Any]` | `sqlQuery`, `cred`, `excludePatterns`, `databaseExcludePatterns`, `desc`, `multiSelect` (emits `ui.multiple`), `dependsOn` (scope to sibling field), `databasesUnselectable` (lock DB-level selection), `additionalPropertiesToIncludeInCredentialBody`, `validationRules`, `includeDefault` |
+| `SqlTree` | `sqltree` | `dict[str, Any]` | `sqlQuery`, `cred`, `excludePatterns`, `databaseExcludePatterns`, `desc`, `multiSelect` (emits `ui.multiple`), `dependsOn` (scope to sibling field), `databasesUnselectable` (lock DB-level selection), `additionalPropertiesToIncludeInCredentialBody`, `validationRules`, `includeDefault`, `placeholderText` |
 | `APITree` | `apitree` | `dict[str, Any]`, or `TreeSelection` with `treeSelection = true` | Legacy API tree. Emits `{}` as the config default; generated input also accepts JSON object strings such as `"{}"` and coerces them to dicts. `credentialType`, `metadataTemplate`, `desc`, `treeSelection` (see [Payload-safe tree selections](#payload-safe-tree-selections-treeselection)) |
-| `ApiTreeSelect` | `apiTreeSelect` | `dict[str, Any]` | Workflows-v2 API tree selector used by Power BI-style metadata pickers. Emits `{}` as the config default; generated input also accepts JSON object strings. `credentialType`, `cred`, `metadataTemplate`, `metadataTransformer`, `strict`, `multiSelect`, `desc` |
-| `DsnTreeMap` | `dsnTreeMap` | `dict[str, Any]` | Maps DSN names to connection qualified names. `mapConfig` carries heading/content/input/connection labels. |
+| `ApiTreeSelect` | `apiTreeSelect` | `dict[str, Any]` | Workflows-v2 API tree selector used by Power BI-style metadata pickers. Emits `{}` as the config default; generated input also accepts JSON object strings. `credentialType`, `cred`, `metadataTemplate`, `metadataTransformer`, `strict`, `multiSelect`, `desc`, `placeholderText` |
+| `DsnTreeMap` | `dsnTreeMap` | `dict[str, Any]` | Maps DSN names to connection qualified names. `mapConfig` carries heading/content/input/connection labels. `placeholderText` applies to the input on every DSN row. |
 | `GlossarySelector` | `GlossarySelector` | `str` | Glossary picker. `selectorMode = "multiple"`, `showGlossaryIcon`, `showGlossaryCount`, `placeholderText` |
 
 #### Complex
@@ -2346,7 +2503,7 @@ the frontend renderer shape.
 | Class | Widget | Python Type | Notes |
 |---|---|---|---|
 | `DateInput` | `date` | `int` | Epoch seconds. `past`, `future`, `defaultDay` |
-| `KeygenInput` | `keygen` | `str` | Generates unique key |
+| `KeygenInput` | `keygen` | `str` | Generates unique key. `placeholderText` |
 | `Schedule` | `schedule` | `str` | Cron schedule picker |
 | `CloudProvider` | `CloudProvider` | `str` | AWS/GCP/Azure |
 
@@ -3364,6 +3521,77 @@ non-standard node ids. Use `waitForAssetPublish = false` when the Lineage app
 node already depends on asset publish. Use `dependsOn = new Listing { ... }`
 when replacing the default fan-in entirely.
 
+### AE Activity Nodes (`FetchEntitiesNode`, `MergeNode`, `ActivityNode`)
+
+A `DAGNode` always renders `activity_name = "execute_workflow"` and starts a child
+workflow. To call an Automation Engine activity directly, such as `fetch_entities` or
+`merge`, add an `AEActivityNode` to `extraNodes` instead. `extraNodes` is typed
+`Mapping<String, DAGNode|AEActivityNode>`, so both kinds mix in one DAG.
+
+```pkl
+abstract class AEActivityNode {
+  displayName: String
+  appName: String = "automation-engine"     // the app that registers the activity
+  dependsOn: Listing<String>?               // same as DAGNode.dependsOn
+  dependsOnCondition: DependencyCondition?  // same as DAGNode.dependsOnCondition
+  errorHandling: ErrorHandlingConfig?       // default null → AE's per-activity defaults
+}
+
+class FetchEntitiesNode extends AEActivityNode {   // activity_name = "fetch_entities"
+  sqlInput: String?                    // exactly one of sqlInput / sqlInputFile
+  sqlInputFile: String?
+  engine: ("daft"|"duckdb")?           // AE default: "daft"
+  extraInput: Mapping<String, Any>     // other FetchEntitiesInput fields (sql_config, incremental)
+}
+
+class MergeNode extends AEActivityNode {           // activity_name = "merge"
+  inputPrefixes: Listing<String>(!isEmpty)  // input_0, input_1, … in the SQL
+  sql: String?                         // exactly one of sql / sqlFile
+  sqlFile: String?
+  declaredTier: ("s"|"m"|"l")?
+  extraInputs: Mapping<String, Any>    // other MergeInput fields
+}
+
+class ActivityNode extends AEActivityNode {        // any other AE activity
+  activityName: String
+  inputs: Mapping<String, Any>         // rendered verbatim; not checked by the toolkit
+}
+```
+
+Rendered shape (`FetchEntitiesNode { displayName = "Fetch Assets"; sqlInputFile = ""; engine = "duckdb" }`):
+
+```json
+{
+  "node_type": "activity",
+  "activity_name": "fetch_entities",
+  "activity_display_name": "Fetch Assets",
+  "app_name": "automation-engine",
+  "inputs": { "input": { "sql_input_file": "", "engine": "duckdb" } }
+}
+```
+
+What changes compared with a `DAGNode`:
+
+- `node_type: "activity"` is rendered. `DAGNode` output does not change and still omits it.
+- `inputs` is the activity's own shape. There is no `workflow_type`, `task_queue` or `args`
+  envelope, and the toolkit stamps no `app_name` arg (CNCT-93 applies to `args` only).
+- `errorHandling` defaults to `null`, not the 1-day `DAGNode` default, so AE applies the
+  activity's registered timeouts. `heartbeatTimeoutSeconds` is allowed. It must still be
+  less than `startToCloseTimeoutSeconds`.
+- `depends_on` renders exactly as on a `DAGNode`.
+
+Caveats:
+
+- The SQL-source checks treat an empty string as set. An app that fills `sql_input_file` or
+  `sql` in at submission time can render `""`. AE rejects an empty value at run time, so
+  something must fill it.
+- `extraInput` / `extraInputs` cannot set a typed field. Use the typed property.
+- `ActivityNode.inputs` is not validated by the toolkit. AE validates it on submission.
+- Downstream nodes read a fetch or merge result from `$.<node>.outputs.output_path`.
+
+See `examples/ae-activities/` for three fetch → merge branches fanning in to an app
+workflow.
+
 ### Custom Pipeline Example
 
 Insert QI and enrichment nodes between extract and publish:
@@ -4156,6 +4384,12 @@ deploy = new DeployConfig {
 
 For Argo-era apps only. Do not use for new native apps (use `FieldSpec` instead). Still used
 by CSA connector credential configs.
+
+An App.pkl contract that needs a second credential configmap, the job a
+`NativeApp.pkl` `additionalOutputFiles` + Credential.pkl pairing used to do, lists it in
+`additionalCredentialConfigs` instead. Set `identityProperties = false` to keep
+Credential.pkl's output shape (envelope, no hidden identity properties). See
+[CredentialConfig](#credentialconfig--additional-credential-configmaps).
 
 Widget classes come from the modern `Widgets.pkl` module (not the older `Config.pkl`), and
 Credential.pkl re-exports them as unqualified typealiases — mirroring App.pkl — so a credential

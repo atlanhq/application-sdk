@@ -25,6 +25,7 @@ Key Test Areas:
 • Registry integration and lookup
 """
 
+from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 import pandas as pd
@@ -359,94 +360,60 @@ class TestFileConverterIntegration:
     """Integration tests using actual files created during test setup."""
 
     @pytest.mark.asyncio
-    async def test_convert_real_json_to_parquet(self):
-        """Test converting an actual JSON file to Parquet format."""
-        import tempfile
-        from pathlib import Path
+    async def test_convert_real_json_to_parquet(self, tmp_path):
+        """Test converting an actual JSON file to Parquet format.
 
-        # Arrange - Create a temporary JSON file with test data
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            # Write line-delimited JSON as expected by the converter
-            f.write(
-                '{"id": 1, "name": "Alice", "age": 30, "city": "New York", "active": true}\n'
-            )
-            f.write(
-                '{"id": 2, "name": "Bob", "age": 25, "city": "San Francisco", "active": false}\n'
-            )
-            f.write(
-                '{"id": 3, "name": "Charlie", "age": 35, "city": "Chicago", "active": true}\n'
-            )
-            json_file_path = f.name
+        Files live under ``tmp_path`` and are not unlinked here: on Windows an
+        immediate ``unlink()`` of the just-read parquet file can fail with
+        WinError 32 while another handle on it is still closing. pytest's own
+        tmp_path cleanup tolerates that.
+        """
+        json_file_path = tmp_path / "input.json"
+        # Line-delimited JSON, as the converter expects.
+        json_file_path.write_text(
+            '{"id": 1, "name": "Alice", "age": 30, "city": "New York", "active": true}\n'
+            '{"id": 2, "name": "Bob", "age": 25, "city": "San Francisco", "active": false}\n'
+            '{"id": 3, "name": "Charlie", "age": 35, "city": "Chicago", "active": true}\n'
+        )
 
-        try:
-            # Act - Convert JSON to Parquet
-            result = await convert_data_files([json_file_path], FileType.PARQUET)
+        result = await convert_data_files([str(json_file_path)], FileType.PARQUET)
 
-            # Assert - Check conversion succeeded
-            assert len(result) == 1
-            parquet_file = Path(result[0])
-            assert parquet_file.exists()
-            assert parquet_file.suffix == ".parquet"
+        assert len(result) == 1
+        parquet_file = Path(result[0])
+        assert parquet_file == tmp_path / "input.parquet"
+        assert parquet_file.exists()
 
-            # Verify parquet file has data by reading it back
-            df = pd.read_parquet(parquet_file)
-            assert len(df) == 3  # Should have 3 rows from JSON
-            assert "id" in df.columns
-            assert "name" in df.columns
-            expected_names = {"Alice", "Bob", "Charlie"}
-            actual_names = set(df["name"].values)
-            assert actual_names == expected_names
-
-            # Cleanup converted file
-            parquet_file.unlink()
-
-        finally:
-            # Cleanup original file
-            Path(json_file_path).unlink()
+        df = pd.read_parquet(parquet_file)
+        assert len(df) == 3
+        assert "id" in df.columns
+        assert "name" in df.columns
+        assert set(df["name"].values) == {"Alice", "Bob", "Charlie"}
 
     @pytest.mark.asyncio
-    async def test_convert_real_parquet_to_json(self):
-        """Test converting an actual Parquet file to JSON format."""
-        import tempfile
-        from pathlib import Path
+    async def test_convert_real_parquet_to_json(self, tmp_path):
+        """Test converting an actual Parquet file to JSON format.
 
-        # Arrange - Create a temporary Parquet file with test data
+        Uses ``tmp_path`` with no manual cleanup, for the same reason as
+        ``test_convert_real_json_to_parquet``.
+        """
         data = {
             "id": [10, 20, 30],
             "product": ["Laptop", "Mouse", "Keyboard"],
             "price": [999.99, 29.99, 79.99],
             "in_stock": [True, False, True],
         }
-        df = pd.DataFrame(data)
+        parquet_file_path = tmp_path / "input.parquet"
+        pd.DataFrame(data).to_parquet(parquet_file_path, index=False)
 
-        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
-            parquet_file_path = f.name
+        result = await convert_data_files([str(parquet_file_path)], FileType.JSON)
 
-        # Save DataFrame to the temporary parquet file
-        df.to_parquet(parquet_file_path, index=False)
+        assert len(result) == 1
+        json_file = Path(result[0])
+        assert json_file == tmp_path / "input.json"
+        assert json_file.exists()
 
-        try:
-            # Act - Convert Parquet to JSON
-            result = await convert_data_files([parquet_file_path], FileType.JSON)
-
-            # Assert - Check conversion succeeded
-            assert len(result) == 1
-            json_file = Path(result[0])
-            assert json_file.exists()
-            assert json_file.suffix == ".json"
-
-            # Verify JSON file has data by reading it back
-            df_result = pd.read_json(json_file, orient="records", lines=True)
-            assert len(df_result) == 3  # Should have 3 rows from Parquet
-            assert "id" in df_result.columns
-            assert "product" in df_result.columns
-            expected_products = {"Laptop", "Mouse", "Keyboard"}
-            actual_products = set(df_result["product"].values)
-            assert actual_products == expected_products
-
-            # Cleanup converted file
-            json_file.unlink()
-
-        finally:
-            # Cleanup original file
-            Path(parquet_file_path).unlink()
+        df_result = pd.read_json(json_file, orient="records", lines=True)
+        assert len(df_result) == 3
+        assert "id" in df_result.columns
+        assert "product" in df_result.columns
+        assert set(df_result["product"].values) == {"Laptop", "Mouse", "Keyboard"}

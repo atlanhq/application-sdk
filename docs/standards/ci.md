@@ -928,7 +928,7 @@ and all declared in `renovate-config/default.json`:
 
 | command | lane | what it does |
 |---|---|---|
-| `renovate-pkl-sync` | `app-contract-toolkit` | re-resolves the Pkl lock and regenerates contract artifacts |
+| `renovate-pkl-sync` | `app-contract-toolkit` | re-resolves the Pkl lock and regenerates contract artifacts with `regenerate_tree`, the one regeneration the freshness gate and `regenerate_contract.py` also use (certify's contract-drift check still runs `poe generate` until FND-4244 moves it onto `regenerate_tree`); commits everything it changes under `fileFilters` and warns about anything outside them (FND-4736) |
 | `renovate-uv-lock-bounded` | `lockFileMaintenance` | re-resolves `uv.lock` under the org §5 release-age bound, then strips uv's `[options]` block; `--hold` keeps the first-party packages, and every transitive the framework lane would move, at the base branch's version (FND-3481) |
 | `renovate-contract-ledger` | conformance package | regenerates `contract_schema.lock.json` at the conformance version the branch locked |
 
@@ -1139,11 +1139,14 @@ and change nothing. Hence `--baseline-ref origin/<default-branch>`, which also
 makes "never roll back what main ships" structural: the driver's rollback gate
 then compares against main by construction.
 
-**Two uv projects, two exempt sets.** `packages/conformance` is a separate uv
-project, and unlike the root it resolves `atlan-application-sdk` from PyPI — so
-its exempt set carries the SDK *and* pyatlan. Exempting the SDK alone does not
-fail; a bounded resolve that cannot see a fresh pyatlan silently backtracks to an
-older SDK instead.
+**Two uv projects, one exempt set.** `packages/conformance` is a separate uv
+project with its own lock. Like the root it never resolves `atlan-application-sdk`
+from PyPI: its `[tool.uv.sources]` path-sources this checkout (FND-4256), so its
+tests run against the tree they ship beside and there is no registry SDK for the
+bound to hold. Both projects exempt only pyatlan. That source is not published
+metadata: the released conformance wheel still declares a plain
+`atlan-application-sdk[sql]` test extra. A change to the SDK's own dependencies
+therefore also re-resolves `packages/conformance/uv.lock`.
 
 **One commit, not one per lock.** Every push to the branch re-fires the PR's
 entire required-check suite, so the bound rewrites both uv locks and the npm lock

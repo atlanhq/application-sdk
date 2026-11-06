@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.52.0
-source-sha:    ceb8a22d9d759347423105132ab8c83faa44127d
-source-date:   2026-10-27T15:56:40+05:30
+sdk-version:   3.55.0
+source-sha:    c5f8977a074ffe2af0ad8777e7e015b6527626d9
+source-date:   2026-11-05T12:07:15Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -24,8 +24,8 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 46 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 75 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 48 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 76 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 51 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 28 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 40 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
@@ -1821,6 +1821,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
 
+#### `SdrDiskFullError`
+
+- **Import:** `from application_sdk.errors import SdrDiskFullError`
+- **Signature:** `class SdrDiskFullError(*, ...)`
+- **Summary:** A ``DiskFullError`` raised on a Self-Deployed Runtime (SDR) agent.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
 #### `SourceUnavailableError`
 
 - **Import:** `from application_sdk.errors import SourceUnavailableError`
@@ -2393,6 +2400,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Create a Temporal worker for registered Apps.
 - **Defined in:** `application_sdk/execution/_temporal/worker.py`
 
+#### `current_cancel_handle`
+
+- **Import:** `from application_sdk.execution.heartbeat import current_cancel_handle`
+- **Signature:** `current_cancel_handle()`
+- **Summary:** The :class:`CancelHandle` of the ``run_in_thread`` call running on this thread.
+- **Defined in:** `application_sdk/_runtime/offload.py`
+
 #### `current_progress_tracker`
 
 - **Import:** `from application_sdk.execution.heartbeat import current_progress_tracker`
@@ -2423,12 +2437,26 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Vouch for one opaque operation for as long as you would let it run.
 - **Defined in:** `application_sdk/_runtime/progress.py`
 
+#### `is_cancelled`
+
+- **Import:** `from application_sdk.execution.heartbeat import is_cancelled`
+- **Signature:** `is_cancelled()`
+- **Summary:** Whether the work running here has been asked to stop.
+- **Defined in:** `application_sdk/_runtime/offload.py`
+
 #### `needs_lock`
 
 - **Import:** `from application_sdk.execution import needs_lock`
 - **Signature:** `needs_lock(max_locks: int = 5, lock_name: Optional[str] = None)`
 - **Summary:** Decorator to mark activities that require distributed locking.
 - **Defined in:** `application_sdk/execution/decorators.py`
+
+#### `raise_if_cancelled`
+
+- **Import:** `from application_sdk.execution.heartbeat import raise_if_cancelled`
+- **Signature:** `raise_if_cancelled()`
+- **Summary:** Raise ``CancelledError`` if :func:`is_cancelled` is true; else return.
+- **Defined in:** `application_sdk/_runtime/offload.py`
 
 #### `record_no_progress_gap`
 

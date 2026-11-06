@@ -36,6 +36,7 @@ from conformance.suite.checks import (
     client_seam,
     coverage_config,
     credential_seam,
+    dapr_objectstore,
     dependency_conformance,
     deprecation,
     determinism,
@@ -59,6 +60,7 @@ from conformance.suite.checks import (
     legacy_contract,
     manifest_app_name,
     manifest_contract,
+    offload_cancel,
     optimizations,
     orchestration,
     persistence_seam,
@@ -122,6 +124,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=client_lifecycle.discover,
         scan_path=client_lifecycle.scan_path,
         scan_all=client_lifecycle.scan_all,
+    ),
+    CheckRegistration(
+        series=offload_cancel.SERIES,
+        discover=offload_cancel.discover,
+        scan_path=offload_cancel.scan_path,
+        scan_all=offload_cancel.scan_all,
     ),
     CheckRegistration(
         series=persistence_seam.SERIES,
@@ -324,6 +332,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=release_contract.discover,
         scan_path=release_contract.scan_path,
         scan_all=release_contract.scan_all,
+    ),
+    CheckRegistration(
+        series=dapr_objectstore.SERIES,
+        discover=dapr_objectstore.discover,
+        scan_path=dapr_objectstore.scan_path,
+        scan_all=dapr_objectstore.scan_all,
     ),
     CheckRegistration(
         series=sdr_checks.SERIES,
@@ -679,6 +693,13 @@ def main(argv: list[str] | None = None) -> int:
         else:
             for p in paths:
                 all_findings.extend(check.scan_path(p, root))
+
+    # --exclude also applies at the finding level: a check that discovers the
+    # repo root (e.g. K029) reads files beneath it that _drop_excluded never
+    # saw, so filtering paths alone would not keep the "all checks" promise.
+    all_findings = [
+        f for f in all_findings if not _is_excluded(f.file, excluded_prefixes)
+    ]
 
     selected_rules = {
         rid

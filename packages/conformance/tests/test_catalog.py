@@ -428,6 +428,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # app's contract/ + app/generated/ tree, which the SDK does not have.
     # K027: entrypoint contract classes sharing one bare class name — the SDK
     # declares no @entrypoint contracts of its own, so nothing can collide (FND-3140).
+    # K029: deploy.dapr.objectstore disabled — reads an app's contract/ and
+    # atlan.yaml; the SDK has neither.
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -478,6 +480,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # BaseClient; the SDK defines it and constructs no subclass in product code,
     # and the version gate reads a consumed SDK version the SDK repo does not
     # have (FND-3778).
+    # P064/P065: offload cancel — they describe consumer code that offloads raw
+    # cursor statements or iterates batched results, and the version gate reads
+    # a consumed SDK version the SDK repo does not have (FND-4707).
     assert app_scoped == {
         "B001",
         "B007",
@@ -499,6 +504,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P057",
         "P058",
         "P059",
+        "P064",
+        "P065",
         "C002",
         "D001",
         "D002",
@@ -534,6 +541,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K020",
         "K021",
         "K027",
+        "K029",
         "P004",
         "P005",
         "P008",
@@ -798,6 +806,10 @@ def test_catalog_p_series_present() -> None:
     never calls ``super().close()``); gated on an app SDK >= 3.46.0 (FND-3778).
     P060 is HandRolledRetryLadder — a sleep in a loop that also catches
     exceptions, outside application_sdk.common.backoff (FND-4284).
+    P064/P065 are the offload-cancel rules — UncancellableOffloadedCursorStatement
+    (a run_in_thread cursor statement with no driver cancel registered) and
+    BatchedResultsIteratedOnLoop (get_batched_results read with a sync for in an
+    async def); gated on the SDK release that ships FND-4707.
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -858,6 +870,8 @@ def test_catalog_p_series_present() -> None:
         "P058",
         "P059",
         "P060",
+        "P064",
+        "P065",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -947,7 +961,8 @@ def test_catalog_k_series_present() -> None:
     the SDK App declaration) (CONNECT-1081), plus the artifact-schema pair K016
     (a public hand-off with no declaration) and K017 (a declaration its own
     writer contradicts) (ADR-0020), and K027 (two entrypoints binding different
-    contract classes under one bare class name) (FND-3140)."""
+    contract classes under one bare class name) (FND-3140), and K029 (the
+    deployment object store disabled in deploy.dapr)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
     expected = {
@@ -973,6 +988,7 @@ def test_catalog_k_series_present() -> None:
         "K020",
         "K021",
         "K027",
+        "K029",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"

@@ -163,3 +163,30 @@ jobs:
             --title "chore(conformance): release v${new_version}" \
             --body-file "$body_file" \
             --label "${RELEASE_LABEL}"
+
+  # A failed release run opens no bump PR, and before FND-4716 nobody heard
+  # about it: the gap surfaced only when an expected bump PR never appeared.
+  # Its own job, so a failure in any step above (token mint and checkout
+  # included) still gets reported. A manual dispatch has no PR to comment on.
+  notify-failure:
+    name: Report a failed release run on the merged PR
+    needs: open-release-pr
+    if: failure() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts/notify_release_failure.py
+          sparse-checkout-cone-mode: false
+
+      - name: Comment on the merged PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 .github/scripts/notify_release_failure.py --package "conformance" --workflow conformance-release.yml

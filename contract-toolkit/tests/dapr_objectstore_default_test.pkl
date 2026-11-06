@@ -1,0 +1,63 @@
+/// `deploy.dapr.objectstore` defaults to true.
+///
+/// The SDK requires the deployment object store and fails worker and handler
+/// startup when the atlan-app chart omits it. The chart omits it when
+/// `atlan.yaml` says `deploy.dapr.objectstore: false`, so enabling any other
+/// Dapr component must not switch the object store off.
+///
+/// The chart enables no Dapr component unless `atlan.yaml` asks for it, so an
+/// app with a `deploy` block and every component at its default must still emit
+/// `objectstore: true`.
+amends "pkl:test"
+
+import "../src/App.pkl" as App
+
+local function appWith(deployCfg: App.DeployConfig?) = (App) {
+  name = "dapr-test"
+  displayName = "Dapr Test"
+  icon = "https://assets.atlan.com/assets/dummy.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  deploy = deployCfg
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Settings"] {
+        inputs {
+          ["target"] = new App.TextInput { title = "Target" }
+        }
+      }
+    }
+  }
+}
+
+local function deployOf(a) = a.output.files["atlan.yaml"].value["deploy"]
+
+local secretstoreOnly = appWith(new App.DeployConfig {
+  dapr { secretstore = true }
+})
+
+local defaults = appWith(new App.DeployConfig {})
+
+local explicitFalse = appWith(new App.DeployConfig {
+  dapr { objectstore = false; secretstore = true }
+})
+
+facts {
+  ["DaprComponents.objectstore defaults to true"] {
+    new App.DaprComponents {}.objectstore == true
+  }
+
+  ["enabling another component keeps the object store on"] {
+    deployOf(secretstoreOnly)["dapr"]["objectstore"] == true
+    deployOf(secretstoreOnly)["dapr"]["secretstore"] == true
+  }
+
+  ["an all-default deploy block emits objectstore: true"] {
+    deployOf(defaults)["dapr"]["objectstore"] == true
+    deployOf(defaults)["dapr"]["secretstore"] == false
+  }
+
+  ["an explicit false is rendered as written"] {
+    deployOf(explicitFalse)["dapr"]["objectstore"] == false
+  }
+}

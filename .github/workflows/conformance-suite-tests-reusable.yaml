@@ -12,6 +12,12 @@ name: Conformance suite tests (reusable)
 # dependency bump within range pins) re-runs these tests. Previously they were
 # only exercised on merge/publish (conformance-publish.yml), never on PRs.
 #
+# Runs against THIS tree's SDK, not a release: packages/conformance
+# path-sources atlan-application-sdk (editable) in its [tool.uv.sources]
+# (FND-4256), and tests/test_app_name_alignment.py fails if application_sdk is
+# imported from anywhere else. Its parity tests compare conformance's copies of
+# SDK helpers against that import, so a PyPI pin would check an old release.
+#
 # SDK-private: no consumer app references this workflow.
 
 on:
