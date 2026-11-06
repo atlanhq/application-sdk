@@ -62,6 +62,9 @@ to skip-with-warning when the extra is absent. A JSON-only caller must never loa
 parquet reader, and pandera stays test-only.
 """
 
+from typing import TYPE_CHECKING, Any
+
+from application_sdk._install import lazy_getattr
 from application_sdk.validation.artifacts import (
     ARTIFACT_CLASSIFICATIONS,
     ARTIFACT_ENFORCEMENTS,
@@ -97,21 +100,6 @@ from application_sdk.validation.artifacts import (
     artifact_validation_matrix_json,
     artifact_validation_mode,
 )
-from application_sdk.validation.asset_rules import AssetCreationRules
-from application_sdk.validation.assets import (
-    AssetArtifactReport,
-    AssetBatchScope,
-    AssetValidationFailure,
-    AssetValidationReport,
-    ReferentialFailure,
-    asset_validation_event_fields,
-    asset_validation_matrix_json,
-    asset_validation_summary_json,
-    supports_asset_model,
-    validate_asset,
-    validate_assets_as_artifact,
-    validate_transformed_dir,
-)
 from application_sdk.validation.interceptor import (
     ARTIFACT_SIDE_HANDOFF,
     ARTIFACT_SIDE_INGEST,
@@ -138,6 +126,67 @@ from application_sdk.validation.wrapper import (
     builtin_format_validators,
     validate_artifact,
 )
+
+if TYPE_CHECKING:
+    from application_sdk.validation.asset_rules import AssetCreationRules
+    from application_sdk.validation.assets import (
+        AssetArtifactReport,
+        AssetBatchScope,
+        AssetValidationFailure,
+        AssetValidationReport,
+        ReferentialFailure,
+        asset_validation_event_fields,
+        asset_validation_matrix_json,
+        asset_validation_summary_json,
+        supports_asset_model,
+        validate_asset,
+        validate_assets_as_artifact,
+        validate_transformed_dir,
+    )
+
+_LAZY: dict[str, tuple[str, str]] = {
+    "AssetCreationRules": (
+        "application_sdk.validation.asset_rules",
+        "AssetCreationRules",
+    ),
+    "AssetArtifactReport": ("application_sdk.validation.assets", "AssetArtifactReport"),
+    "AssetBatchScope": ("application_sdk.validation.assets", "AssetBatchScope"),
+    "AssetValidationFailure": (
+        "application_sdk.validation.assets",
+        "AssetValidationFailure",
+    ),
+    "AssetValidationReport": (
+        "application_sdk.validation.assets",
+        "AssetValidationReport",
+    ),
+    "ReferentialFailure": ("application_sdk.validation.assets", "ReferentialFailure"),
+    "asset_validation_event_fields": (
+        "application_sdk.validation.assets",
+        "asset_validation_event_fields",
+    ),
+    "asset_validation_matrix_json": (
+        "application_sdk.validation.assets",
+        "asset_validation_matrix_json",
+    ),
+    "asset_validation_summary_json": (
+        "application_sdk.validation.assets",
+        "asset_validation_summary_json",
+    ),
+    "supports_asset_model": (
+        "application_sdk.validation.assets",
+        "supports_asset_model",
+    ),
+    "validate_asset": ("application_sdk.validation.assets", "validate_asset"),
+    "validate_assets_as_artifact": (
+        "application_sdk.validation.assets",
+        "validate_assets_as_artifact",
+    ),
+    "validate_transformed_dir": (
+        "application_sdk.validation.assets",
+        "validate_transformed_dir",
+    ),
+}
+
 
 __all__ = [
     # Artifact validation (ADR-0020)
@@ -211,3 +260,11 @@ __all__ = [
     "validate_assets_as_artifact",
     "validate_transformed_dir",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    return lazy_getattr(__name__, name, _LAZY, globals())
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY))
