@@ -103,6 +103,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/tree-filters/`](examples/tree-filters/) — extraction app whose include/exclude filters are tree pickers with `treeSelection = true`; `AppInputContract` extends `TreeSelectionExtractionInput`.
 - [`examples/full/`](examples/full/) — every overridable feature: JDBC URL auth, all pipeline steps, diverse widgets, UIRules, extraNodes.
 - [`examples/bundle/`](examples/bundle/) — multi-entrypoint app (crawler + miner); shared credential configmap; per-entrypoint artifact subfolders.
+- [`examples/credential-configs/`](examples/credential-configs/) — `additionalCredentialConfigs`: an entrypoint that emits more than one credential configmap (primary + wrapped delivery + bare object-store), and one whose only credential is the shared bare config. The bundle hoists and dedupes them. See [CredentialConfig](docs/reference.md#credentialconfig--additional-credential-configmaps).
 - [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`packageId` on the card entrypoint; route-only entrypoint has none).
 - [`examples/behind-the-scenes/`](examples/behind-the-scenes/) — single-entrypoint app with `marketplaceCard = false`; routable but no marketplace card or `package_id` emitted.
 - [`examples/system-app/`](examples/system-app/) — `type = "system"`: an in-tenant app started by other apps' DAG nodes. No `entrypoints` block, no card, no credential config, no manifest. Typed `inputs` (string, number, enum, bounded list/map, nested object) render `_input.py` without a `uiConfig`. They also render `contract/generated/input.pkl`, the typed DAG node that is synced into the toolkit as `src/system/<name>.pkl` for callers to import.
@@ -234,7 +235,7 @@ The single entry point for all new native app contracts. Amend this module and d
 
 - App metadata: `name`, `displayName`, `connector`, `icon`
 - Marketplace metadata: `shortDescription`, `longDescription`, `tags` (emitted top-level into `atlan.yaml`; Build & Publish syncs `tags` to the Global Marketplace App row after each publish, where marketplace search reads them as keywords; `atlan app register` sends all three when it creates the app); `docsUrl` (emitted top-level into `atlan.yaml`)
-- Credential config: `credentialCommonFields`, `credentialAuthOptions`, `credentialConnectorType`
+- Credential config: `credentialCommonFields`, `credentialAuthOptions`, `credentialConnectorType`; extra or bare (wrapper-less) credential configmaps via `additionalCredentialConfigs`
 - Workflow config: `uiConfig` (form steps and fields using `Widgets.*` types)
 - Pipeline: typed `pipeline` block (extract → parseQueries → popularity → lineage → publish)
 - Deployment: `deploy` (typed `DeployConfig?` — app-level `dapr` / `overrides` plus a named `pools` map; pool keys must match `@task(pool="…")` strings) — see `Deployment.pkl`. `dapr.objectstore` defaults to `true` and must stay on: the SDK requires the deployment object store and fails at startup without it (conformance rule K029 flags `false`)

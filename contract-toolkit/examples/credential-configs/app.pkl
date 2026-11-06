@@ -1,0 +1,41 @@
+/// Credential-configs example: entrypoints that emit more than one credential
+/// configmap, including a bare (wrapper-less) one, via `additionalCredentialConfigs`.
+///
+/// - `export` owns a primary credential (`atlan-connectors-credential-configs`)
+///   and also emits two additional ones: the shared bare object-store config and
+///   a wrapped delivery config.
+/// - `report` has no primary credential (`hasCredentialConfig = false`). Its only
+///   credential config is the shared bare object-store one.
+///
+/// Credential configmaps are hoisted to `app/generated/` and deduped by name, so
+/// the object-store config both entrypoints declare is written once.
+///
+/// Generated layout:
+///   app/generated/atlan-connectors-credential-configs.json            ← export primary
+///   app/generated/atlan-connectors-credential-configs-delivery.json   ← export, wrapped
+///   app/generated/csa-connectors-objectstore.json                     ← both, bare, deduped
+///   app/generated/export/{export.json,manifest.json,_input.py,...}
+///   app/generated/report/{report.json,manifest.json,_input.py,...}
+amends "../../src/App.pkl"
+
+import "export.pkl" as Export
+import "report.pkl" as Report
+
+name = "credential-configs"
+displayName = "Credential Configs Example"
+icon = "https://assets.atlan.com/assets/download.svg"
+// The bundle root owns no credential config; its entrypoints do.
+hasCredentialConfig = false
+
+entrypoints {
+  new Entrypoint {
+    name = "export"
+    displayName = "Export"
+    contract = Export
+  }
+  new Entrypoint {
+    name = "report"
+    displayName = "Report"
+    contract = Report
+  }
+}

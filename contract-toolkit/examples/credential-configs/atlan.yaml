@@ -1,0 +1,19 @@
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+name: credential-configs
+display_name: Credential Configs Example
+type: connector
+execution_mode: native
+icon_url: https://assets.atlan.com/assets/download.svg
+visibility: public
+build_tag: v1
+self_deployed_runtime: true
+entrypoints:
+- name: export
+  display_name: Export
+  icon_url: https://assets.atlan.com/assets/download.svg
+  type: connector
+- name: report
+  display_name: Report
+  icon_url: https://assets.atlan.com/assets/download.svg
+  type: connector

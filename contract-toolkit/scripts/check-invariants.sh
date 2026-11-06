@@ -277,7 +277,7 @@ check_eval_fails() {
   rm -f "$contract"
   rm -rf "$out_dir"
   if ! echo "$err" | grep -q "$expect"; then
-    echo "FAIL: streaming refusal did not fire for $label (expected: $expect)"
+    echo "FAIL: eval-time refusal did not fire for $label (expected: $expect)"
     echo "  Got: $err"
     fail=1
   fi
@@ -1014,6 +1014,60 @@ elif ! grep -q '"default": "\[\\"S3Bucket\\",\\"S3Object\\"\]"' \
 fi
 rm -f "$DD_CTRL_CONTRACT"
 rm -rf "$DD_CTRL_OUT"
+
+# --------------------------------------------------------------------------
+# 12. FND-4755: additionalCredentialConfigs must be refused, not emitted or
+#     dropped, when the name would escape app/generated/ (or be served as a
+#     setup form), or when an entry sets a field its own flags turn off.
+#     tests/additional_credential_configs_test.pkl covers the rest of the guard.
+# --------------------------------------------------------------------------
+# $1 = CredentialConfig body
+extra_credential_body() {
+  cat <<PKLEOF
+amends "src/App.pkl"
+
+name = "extra-cred-app"
+displayName = "Extra Cred"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+
+additionalCredentialConfigs {
+  new CredentialConfig {
+    $1
+    authOptions { ["basic"] = new AuthOption { label = "Basic"; fields {} } }
+  }
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Credential"] {
+      inputs { ["c"] = new CredentialInput { credType = "csa-connectors-extra" } }
+    }
+  }
+}
+PKLEOF
+}
+
+echo ":: Checking additionalCredentialConfigs refusals..."
+check_eval_fails "path-traversal name" "lowercase kebab-case" \
+  "$(extra_credential_body 'name = "csa-connectors-x/../../evil"; wrapper = false; identityProperties = false')"
+check_eval_fails "connectorType with wrapper = false" "only the envelope carries" \
+  "$(extra_credential_body 'name = "csa-connectors-extra"; wrapper = false; identityProperties = false; connectorType = "jdbc"')"
+check_eval_fails "namePlaceholder with identityProperties = false" "only the hidden identity properties" \
+  "$(extra_credential_body 'name = "csa-connectors-extra"; wrapper = false; identityProperties = false; namePlaceholder = "Host"')"
+
+# Control: the same bare entry, with nothing the flags turn off, generates.
+XC_CONTRACT="$(mktemp "$REPO_ROOT/test-extra-cred-XXXXXX.pkl")"
+XC_OUT="$(mktemp -d "$REPO_ROOT/test-extra-cred-out-XXXXXX")"
+extra_credential_body 'name = "csa-connectors-extra"; wrapper = false; identityProperties = false' > "$XC_CONTRACT"
+XC_ERR="$(pkl eval -m "$XC_OUT" "$XC_CONTRACT" 2>&1 || true)"
+if [ ! -f "$XC_OUT/app/generated/csa-connectors-extra.json" ]; then
+  echo "FAIL: control bare additional credential config did not generate"
+  echo "  Got: $XC_ERR"
+  fail=1
+fi
+rm -f "$XC_CONTRACT"
+rm -rf "$XC_OUT"
 
 # --------------------------------------------------------------------------
 # Done
