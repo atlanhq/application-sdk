@@ -94,10 +94,10 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: true
-        description: "Org PAT for GHCR auth, the git_token BuildKit secret, and Install Trivy's release lookup -- the build/trivy-scan jobs already need it for GHCR (App tokens only have repo-level Packages permission; these packages are org-level), so everything else in those jobs uses it uniformly too rather than minting a redundant App token."
+        description: "Org PAT for GHCR auth and Install Trivy's release lookup -- the build/trivy-scan jobs need it for GHCR (App tokens only have repo-level Packages permission; these packages are org-level). Not the git_token BuildKit secret: that is a read-only fleet App token, because every build backend the Dockerfile's `uv sync` runs can read it (FND-4744)."
       FLEET_APP_ID:
         required: false
-        description: "atlan-app-fleet App ID (org secret), used only by security-gate's cross-repo SDK checkout (that job never touches GHCR). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+        description: "atlan-app-fleet App ID (org secret), used by security-gate's cross-repo SDK checkout and to mint the build job's read-only git_token BuildKit secret. Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
       FLEET_APP_PRIVATE_KEY:
         required: false
         description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
@@ -333,6 +333,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
+      # The `git_token` build secret for both build attempts below (FND-4744):
+      # a read-only fleet App token, not ORG_PAT_GITHUB, because every build
+      # backend the Dockerfile's `uv sync` runs can read it. No opt-in gate
+      # (this workflow has no flag for it, and a Dockerfile without the secret
+      # mount ignores it), only "is there a build". `continue-on-error` and no
+      # PAT fallback: an empty secret is skipped with a warning by
+      # build-push-action, so only a build that needs it fails, at its clone.
+      - name: Mint read-only token for the image build
+        id: image-git-token
+        if: inputs.image == ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          permission-contents: read
+
       # buildx resolves the Dockerfile's `# syntax=docker/dockerfile:1`
       # frontend from Docker Hub ANONYMOUSLY on every build, before it looks at
       # the base image, and `uv sync` reaches the package index from inside the
@@ -372,7 +390,7 @@ jobs:
           # the required check on a change that never touched the image.
           cache-to: type=gha,mode=max,scope=scan,ignore-error=true
           provenance: false
-          # The org PAT reaches the build ONLY as a BuildKit secret, never as a
+          # The git token reaches the build ONLY as a BuildKit secret, never as a
           # build arg. Build args are recorded in image config and are readable
           # via `docker history` by anyone who can pull the image, so the
           # `ACCESS_TOKEN_USR`/`ACCESS_TOKEN_PWD` args this step used to pass
@@ -382,12 +400,10 @@ jobs:
           # Dockerfiles that clone a private git dependency (e.g. apps pulling
           # atlan-query-redaction) read it via `--mount=type=secret,id=git_token`.
           # Ignored by Dockerfiles that don't mount it, so it's a no-op for every
-          # other app. Mirrors the token the deploy/publish workflow provides.
-          # This job already logs into GHCR with the PAT above, so there's no
-          # benefit to minting a separate App token just for this -- the PAT is
-          # already in play.
+          # other app. The read-only App token minted above, as in the
+          # deploy/publish workflow; GHCR login alone stays on the PAT.
           secrets: |
-            git_token=${{ secrets.ORG_PAT_GITHUB }}
+            git_token=${{ steps.image-git-token.outputs.token }}
 
       # Long enough for a registry or index having a moment to have passed, short
       # enough that a genuinely broken build still leaves the scans their budget.
@@ -417,7 +433,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=scan,ignore-error=true
           provenance: false
           secrets: |
-            git_token=${{ secrets.ORG_PAT_GITHUB }}
+            git_token=${{ steps.image-git-token.outputs.token }}
 
       # Trivy reads `scan-target:<sha>` from this daemon, exactly as it did when
       # it ran in its own job after downloading the tarball — only the transit

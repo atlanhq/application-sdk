@@ -23,8 +23,8 @@ name: tests-reusable
 #     by default; used when source systems need CI-level startup rather than
 #     pytest fixtures — see openapi's .github/test/setup-services.sh)
 #   - Optional read-only App token for private atlanhq git dependencies
-#     (`private-git-deps`), scoped to the `uv sync` that needs it, plus
-#     `git-token` forwarded to the e2e image build
+#     (`private-git-deps`), scoped to the `uv sync` that needs it, plus a
+#     read-only App token always forwarded to the e2e image build as `git-token`
 #   - Label/dispatch-gated full-DAG e2e job (inlined here — see the `e2e` job;
 #     it was previously delegated to e2e-full-reusable.yaml, now folded in so
 #     the whole suite is one reusable + one Tests Gate)
@@ -445,8 +445,9 @@ on:
           token (FLEET_APP_ID / FLEET_APP_PRIVATE_KEY, via `secrets: inherit`
           or an explicit mapping naming both) and hands it to that `uv sync`
           alone; no git config is written, so the tests never see it
-          (FND-4740).  The Docker build is covered separately: `git-token` is
-          always forwarded to sdr-e2e.
+          (FND-4740).  The Docker build is covered separately: a read-only App
+          token is always forwarded to it as `git-token`, flag or not
+          (FND-4744).
           Leave false for connectors with only public dependencies.
       git-lfs-skip-smudge:
         required: false
@@ -1912,6 +1913,22 @@ jobs:
           # image-building path, and the only one that lacked it.
           lfs: ${{ inputs.lfs }}
 
+      # The `git_token` build secret for a Dockerfile whose `uv sync` clones a
+      # private atlanhq dependency (FND-4744). A read-only fleet App token, not
+      # ORG_PAT_GITHUB: every build backend that `uv sync` runs can read it.
+      # Minted on every build, not on `private-git-deps`: a Dockerfile without
+      # the secret mount ignores it. `continue-on-error` and no PAT fallback: a
+      # missing token only fails a build that needs it, at its clone.
+      - name: Mint read-only token for the image build
+        id: image-git-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          permission-contents: read
+
       - id: build
         uses: atlanhq/application-sdk/.github/actions/build-app-image@main
         with:
@@ -1919,7 +1936,9 @@ jobs:
           app-image-name: ${{ inputs.app-image-name }}
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
           base-image-ref: ${{ inputs.base-image-ref }}
-          git-token: ${{ secrets.ORG_PAT_GITHUB }}
+          git-token: ${{ steps.image-git-token.outputs.token }}
+          # GHCR stays on the PAT: fleet packages are org-level, and the App
+          # only has repo-level Packages permission.
           ghcr-token: ${{ secrets.ORG_PAT_GITHUB }}
           platforms: ${{ matrix.platform }}
           # Suffixes the tag AND the buildx cache scope. The cache half is the
@@ -2899,6 +2918,20 @@ jobs:
           version: "0.13.7"
           enable-cache: true
 
+      # The image build's `git_token` secret (FND-4744). Separate from the
+      # opt-in `git-deps-token` above, which is for the host-side `uv sync`:
+      # this one is minted on every run, because a Dockerfile without the
+      # secret mount ignores it. Same read-only App token, no PAT fallback.
+      - name: Mint read-only token for the image build
+        id: image-git-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          permission-contents: read
+
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
         with:
           app-name: ${{ inputs.app-name }}
@@ -2976,9 +3009,9 @@ jobs:
           ghcr-token: ${{ secrets.ORG_PAT_GITHUB }}
           # Forwarded to the image build as the `git_token` build secret so a
           # Dockerfile whose `uv sync` clones a private atlanhq dependency can
-          # authenticate. Same identity/availability rationale as ghcr-token; a
-          # Dockerfile that declares no such secret mount simply ignores it.
-          git-token: ${{ secrets.ORG_PAT_GITHUB }}
+          # authenticate. A read-only App token, not the PAT above; a Dockerfile
+          # that declares no such secret mount simply ignores it.
+          git-token: ${{ steps.image-git-token.outputs.token }}
 
   # ── Hand the tenant to whoever is next in the queue ──────────────────────
   # Prompt release, not the mechanism that makes the lease safe. GitHub cancels

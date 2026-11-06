@@ -789,8 +789,14 @@ build-args: |
 
 # RIGHT — the value is available during the RUN and nowhere after it
 secrets: |
-  git_token=${{ secrets.ORG_PAT_GITHUB }}
+  git_token=${{ steps.image-git-token.outputs.token }}
 ```
+
+The token itself is a read-only fleet App token minted in the same job
+(`actions/create-github-app-token` with `permission-contents: read`), never
+`ORG_PAT_GITHUB`. A secret mount keeps it out of the image, but not out of the
+`RUN`: every build backend that `uv sync` runs can read it.
+`test_image_build_git_token.py` pins this.
 
 ```dockerfile
 RUN --mount=type=secret,id=git_token,uid=1000 \
