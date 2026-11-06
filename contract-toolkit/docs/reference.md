@@ -886,7 +886,7 @@ class LineagePublishStep {               // wraps LineagePublishNode
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. Requires all `credentialAuthOptions` to be `JDBCUrlAuthOption`. |
 | `additionalCredentialConfigs` | Listing<CredentialConfig> | `[]` | Extra credential configmaps beyond `<connectorConfigName>.json`; `wrapper` / `identityProperties` reproduce legacy shapes. See [CredentialConfig](#credentialconfig--additional-credential-configmaps). |
 
-The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.length == 1` — when the connector declares a single auth option, the radio is hidden and the default value is still emitted. No manual flag is required.
+The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.length == 1` — when the connector declares a single auth option, the radio is hidden and the default value is still emitted. No manual flag is required. An additional `CredentialConfig` can override this per config with `authHidden` (see [CredentialConfig](#credentialconfig--additional-credential-configmaps)).
 
 ### Workflow Config
 
@@ -1441,7 +1441,7 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. When set, every `credentialAuthOptions` entry must be a `JDBCUrlAuthOption`. See [AdvancedJDBCUrlGroup](#advancedjdbcurlgroup--hostrlarrowurl-jdbc-credential-form). |
 | `additionalCredentialConfigs` | Listing<CredentialConfig> | `[]` | Extra credential configmaps beyond `<connectorConfigName>.json`; `wrapper` / `identityProperties` reproduce legacy shapes. See [CredentialConfig](#credentialconfig--additional-credential-configmaps). |
 
-The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.length == 1` — when the connector declares a single auth option, the radio is hidden and the default value is still emitted. No manual flag is required.
+The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.length == 1` — when the connector declares a single auth option, the radio is hidden and the default value is still emitted. No manual flag is required. An additional `CredentialConfig` can override this per config with `authHidden` (see [CredentialConfig](#credentialconfig--additional-credential-configmaps)).
 
 ### Workflow Config
 
@@ -1960,6 +1960,7 @@ class CredentialConfig {
   authDefault: String?                          // Defaults to the first authOptions key
   authRules: Listing<Dynamic>?; authPlaceholder: String?; authWidth: Int?
   authHiddenEnumListForCreating: Listing<String>?
+  authHidden: Boolean?                          // Radio ui.hidden; null = hidden iff one authOption
   namePlaceholder: String?                      // Hidden `name` placeholder (default "Host Name"). Refused when !identityProperties
   connectorDefault: String?                     // Hidden `connector` default; refused when !identityProperties
 }
@@ -1969,6 +1970,13 @@ Each entry renders through the same renderer as the primary config, so the
 auth-type radio, panes and `anyOf` rules have the same shape. The knobs mirror the
 top-level properties of the same name. `credentialUrlGroup` (JDBC Host↔URL) applies
 only to the primary config.
+
+**`authHidden`.** The auth-type radio's `ui.hidden`. Default `null`: auto-derived
+as for the primary, hidden exactly when `authOptions` has a single entry. Set
+`false` to keep a one-option radio visible, or `true` to hide a multi-option one,
+only to reproduce a legacy credential form. Only `ui.hidden` changes: `enum`,
+`default` and the `anyOf` rules are emitted either way, so the submitted
+credential body is the same. The primary config has no such override.
 
 **`wrapper` and `identityProperties`.** By default an entry carries what the
 primary carries:

@@ -1038,6 +1038,18 @@ class CredentialConfig {
   /// Auth-type options hidden during credential creation.
   authHiddenEnumListForCreating: Listing<String>?
 
+  /// Hide the auth-type radio (`auth-type.ui.hidden`). Default `null`: hidden
+  /// exactly when `authOptions` has a single entry, the same rule as the
+  /// primary config.
+  ///
+  /// `false` keeps a one-option radio visible; `true` hides a multi-option one.
+  /// Use it only to reproduce a legacy credential form, e.g. one whose single
+  /// "Authentication" option was shown. Only `ui.hidden` changes: the radio's
+  /// `enum`, `default` and the `anyOf` rules are emitted either way, so the
+  /// submitted credential body is the same. The primary config is not
+  /// affected; it always uses the auto-derived rule.
+  authHidden: Boolean?
+
   /// Placeholder for the hidden `name` property. Default `"Host Name"`.
   /// Refused when `!identityProperties`.
   namePlaceholder: String?
@@ -3129,8 +3141,9 @@ local primaryCredentialConfig: CredentialConfig = new CredentialConfig {
 /// Render one credential configmap. `urlGroup` is the primary's JDBC Host↔URL
 /// form (`credentialUrlGroup`); additional configs pass null.
 local function renderCredentialConfig(c: CredentialConfig, urlGroup: AdvancedJDBCUrlGroup?): Mapping<String, Any> =
-  // Same rule as `credentialAuthHidden`: a one-option radio adds nothing.
-  let (authHidden = c.authOptions.length == 1)
+  // Same rule as `credentialAuthHidden` (a one-option radio adds nothing),
+  // unless the config forces it.
+  let (authHidden = c.authHidden ?? (c.authOptions.length == 1))
   new Mapping {
   when (c.wrapper) {
     ["icon"] = c.icon ?? icon
