@@ -26,6 +26,8 @@ than against whether some import happened to be warm.
 from __future__ import annotations
 
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -125,3 +127,38 @@ def test_only_the_allowlisted_modules_name_pyarrow(module: Path) -> None:
         f"{module.name} imports pyarrow; only {sorted(LAZY_PYARROW_MODULES)} may, "
         f"and then only inside a function (ADR-0020)"
     )
+
+
+def test_importing_the_package_does_not_load_pyatlan() -> None:
+    """The asset model is paid for by asset callers, not by importing the package.
+
+    ``assets.py`` and ``asset_rules.py`` import ``pyatlan_v9`` at module scope and
+    must — they are the typed-model check. The floor is that the package
+    ``__init__`` serves their names lazily (PEP 562), so a caller that only wants
+    the artifact wrapper or the interceptor never loads the asset model. That is
+    ~140 MiB of resident memory on every worker that registers activities, because
+    ``create_activity_from_task`` imports ``validation.interceptor``.
+
+    Run in a subprocess: whether ``pyatlan_v9`` is warm in this interpreter depends
+    on what an earlier test imported, and this must assert the import path itself.
+    """
+    probe = (
+        "import sys;"
+        "import application_sdk.validation;"
+        "print('pyatlan_v9' in sys.modules or 'pyatlan' in sys.modules)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+    )
+    assert result.stdout.strip() == "False", (
+        "importing application_sdk.validation loaded the pyatlan asset model; "
+        "something in the package __init__ reaches assets/asset_rules eagerly"
+    )
+
+
+def test_every_lazy_name_still_resolves() -> None:
+    """Deferral must not quietly drop a name from the package's public surface."""
+    missing = [
+        name for name in validation_pkg.__all__ if not hasattr(validation_pkg, name)
+    ]
+    assert not missing, f"{missing} are in __all__ but not reachable"

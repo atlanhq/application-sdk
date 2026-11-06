@@ -46,9 +46,9 @@ reached. :meth:`NdjsonValidator.validate` splits them.
   **deferred import, and only circularity requires it**: ``assets.py`` imports
   :func:`iter_ndjson_lines` from this module at module scope, so a module-level
   import back would cycle (measured: ``ImportError``, partially initialized
-  module). It buys no dependency-floor benefit — this package's ``__init__``
-  imports ``assets`` at module scope, so ``pyatlan_v9`` is already loaded by the
-  time anything can import this module.
+  module). It now also keeps the floor low: this package's ``__init__``
+  serves the ``assets`` names lazily (PEP 562), so ``pyatlan_v9`` loads only for a
+  caller that actually validates assets.
 """
 
 from __future__ import annotations
