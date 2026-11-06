@@ -6,6 +6,20 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.37.0] - 2026-11-06
+
+### Features
+
+- add placeholderText to the 9 widgets the frontend renders a placeholder for [FND-4758] (#4797) ([e56a532](https://github.com/atlanhq/application-sdk/commit/e56a532))
+- let a CredentialConfig override the auto-hidden single-option auth radio [FND-4757] (#4796) ([803e8e7](https://github.com/atlanhq/application-sdk/commit/803e8e7))
+- let a contract emit additional and legacy-shaped credential configs [FND-4755] (#4794) ([ceff3a7](https://github.com/atlanhq/application-sdk/commit/ceff3a7))
+- express Automation Engine activity nodes in the manifest DAG [FND-4754] (#4793) ([468e2b1](https://github.com/atlanhq/application-sdk/commit/468e2b1))
+
+### Bug fixes
+
+- end generated Python with exactly one newline [FND-4737] (#4785) ([db39a43](https://github.com/atlanhq/application-sdk/commit/db39a43))
+- require the deployment object store and fail startup with a named config error (#4780) ([d95a018](https://github.com/atlanhq/application-sdk/commit/d95a018))
+
 ## [0.36.1] - 2026-11-04
 
 ### Bug fixes
