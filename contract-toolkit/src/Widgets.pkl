@@ -987,8 +987,15 @@ class MultipleGroups extends UIElement {
   fixed type = "string"
   required: Boolean? = false
 
+  /// Text shown in the field while it is empty. Display only; never submitted.
+  ///
+  /// Unset (default) emits no `ui.placeholder` key, so output is unchanged and the
+  /// frontend shows its own default text ("Groups").
+  hidden placeholderText: String?
+
   fixed ui {
     widget = "groupMultiple"
+    placeholder = placeholderText
   }
 }
 
@@ -997,8 +1004,15 @@ class SingleGroup extends UIElement {
   fixed type = "string"
   required: Boolean? = false
 
+  /// Text shown in the field while it is empty. Display only; never submitted.
+  ///
+  /// Unset (default) emits no `ui.placeholder` key, so output is unchanged and the
+  /// frontend shows its own default text.
+  hidden placeholderText: String?
+
   fixed ui {
     widget = "groups"
+    placeholder = placeholderText
   }
 }
 
@@ -1007,8 +1021,15 @@ class MultipleUsers extends UIElement {
   fixed type = "string"
   required: Boolean? = false
 
+  /// Text shown in the field while it is empty. Display only; never submitted.
+  ///
+  /// Unset (default) emits no `ui.placeholder` key, so output is unchanged and the
+  /// frontend shows its own default text ("Users").
+  hidden placeholderText: String?
+
   fixed ui {
     widget = "userMultiple"
+    placeholder = placeholderText
   }
 }
 
@@ -1017,8 +1038,15 @@ class SingleUser extends UIElement {
   fixed type = "string"
   required: Boolean? = false
 
+  /// Text shown in the field while it is empty. Display only; never submitted.
+  ///
+  /// Unset (default) emits no `ui.placeholder` key, so output is unchanged and the
+  /// frontend shows its own default text.
+  hidden placeholderText: String?
+
   fixed ui {
     widget = "users"
+    placeholder = placeholderText
   }
 }
 
@@ -1040,8 +1068,15 @@ class APITokenSelector extends UIElement {
   fixed type = "string"
   required: Boolean? = false
 
+  /// Text shown in the field while it is empty. Display only; never submitted.
+  ///
+  /// Unset (default) emits no `ui.placeholder` key, so output is unchanged and the
+  /// frontend shows its own default text.
+  hidden placeholderText: String?
+
   fixed ui {
     widget = "apiTokenSelect"
+    placeholder = placeholderText
   }
 }
 
@@ -1050,8 +1085,15 @@ class KeygenInput extends UIElement {
   fixed type = "string"
   required: Boolean? = false
 
+  /// Text shown in the field while it is empty. Display only; never submitted.
+  ///
+  /// Unset (default) emits no `ui.placeholder` key, so output is unchanged and the
+  /// frontend shows its own default text.
+  hidden placeholderText: String?
+
   fixed ui {
     widget = "keygen"
+    placeholder = placeholderText
   }
 }
 
@@ -1221,6 +1263,12 @@ class ApiTreeSelect extends UIElement {
 
   hidden cred: String = "credential-guid"
 
+  /// Text shown in the field while it is empty. Display only; never submitted.
+  ///
+  /// Unset (default) emits no `ui.placeholder` key, so output is unchanged and the
+  /// frontend shows its own default text.
+  hidden placeholderText: String?
+
   fixed ui {
     widget = "apiTreeSelect"
     treeCheckStrictly = strict
@@ -1230,6 +1278,7 @@ class ApiTreeSelect extends UIElement {
     description = outer.desc
     metadataTransformerTemplateKey = metadataTransformer
     metadataTemplateKey = metadataTemplate
+    placeholder = placeholderText
   }
 }
 
@@ -1274,9 +1323,16 @@ class DsnTreeMap extends UIElement {
 
   fixed default = "{}"
 
+  /// Text shown in the field while it is empty. Display only; never submitted.
+  ///
+  /// Unset (default) emits no `ui.placeholder` key, so output is unchanged and the
+  /// frontend shows its own default text. Applies to the input on every DSN row.
+  hidden placeholderText: String?
+
   fixed ui {
     widget = widgetName
     config = outer.mapConfig
+    placeholder = placeholderText
   }
 }
 
@@ -1459,6 +1515,12 @@ class SqlTree extends UIElement {
 
   fixed default: String? = if (includeDefault) "{}" else null
 
+  /// Text shown in the field while it is empty. Display only; never submitted.
+  ///
+  /// Unset (default) emits no `ui.placeholder` key, so output is unchanged and the
+  /// frontend shows its own default text.
+  hidden placeholderText: String?
+
   fixed ui {
     widget = "sqltree"
     sql = sqlQuery
@@ -1472,6 +1534,7 @@ class SqlTree extends UIElement {
     areDatabasesUnselectable = databasesUnselectable
     additionalPropertiesToIncludeInCredentialBody = outer.additionalPropertiesToIncludeInCredentialBody
     rules = validationRules
+    placeholder = placeholderText
   }
 }
 

@@ -257,6 +257,7 @@
           "label": "Schemas to include",
           "hidden": false,
           "help": "",
+          "placeholder": "Select schemas",
           "grid": 8,
           "connectorConfigName": "atlan-connectors-full-featured",
           "credential": "credential-guid",

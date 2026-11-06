@@ -2353,7 +2353,7 @@ them.
 | `ConnectionSelector` | `connectionSelector` | `str` | `multiSelect`, `connectorFilter` (single), `connectorFilters` (multi — emits `connectorName` as list), `connectionCategories`, `selectedConnectorName`, `selectedCredentialGuid`, `emitMode`, `emitStart` |
 | `ConnectionRefInput` | `connectionSelector` | `ConnectionRef \| None` or `list[ConnectionRef]` | Emits `ui.shouldIncludeConnectionInfo = true`. Use when the workflow needs both `attributes.qualifiedName` and `attributes.defaultCredentialGuid` from the selected connection. Supports `multiSelect`, `connectorFilter`, `connectorFilters`, `connectionCategories`, `selectedConnectorName`, `selectedCredentialGuid`, `displayOnlyMultiConnections`, `emitMode`, `emitStart` |
 | `CredentialInput` | `credential` | `str` | `credType` (required), `placeholderText`, `authTypeVsLabel`, `hiddenFields`, `additionalDisplayFields` — triggers credential form fetch |
-| `APITokenSelector` | `apiTokenSelect` | `str` | Select existing API token |
+| `APITokenSelector` | `apiTokenSelect` | `str` | Select existing API token. `placeholderText` |
 
 `ConnectionRefInput` uses the same frontend widget as `ConnectionSelector`, but
 sets `ui.shouldIncludeConnectionInfo = true`. The submitted form value is the
@@ -2391,14 +2391,47 @@ Generated `_input.py`:
 connections: Annotated[list[ConnectionRef], MaxItems(1000)] = Field(default_factory=list)
 ```
 
+#### Users & Groups
+
+| Class | Widget | Python Type | Notes |
+|---|---|---|---|
+| `MultipleUsers` | `userMultiple` | `str` | Pick several users. `placeholderText` (frontend default: "Users") |
+| `SingleUser` | `users` | `str` | Pick one user. `placeholderText` |
+| `MultipleGroups` | `groupMultiple` | `str` | Pick several groups. `placeholderText` (frontend default: "Groups") |
+| `SingleGroup` | `groups` | `str` | Pick one group. `placeholderText` |
+
+##### `placeholderText` on pickers
+
+`MultipleUsers`, `SingleUser`, `MultipleGroups`, `SingleGroup`,
+`APITokenSelector`, `KeygenInput`, `ApiTreeSelect`, `SqlTree` and `DsnTreeMap`
+take an optional `placeholderText: String?`. It renders as `ui.placeholder`:
+text the frontend shows while the field is empty. It is display only, so the
+submitted value, manifest args and `_input.py` do not change.
+
+Unset (the default) emits no `ui.placeholder` key, so generated output is
+byte-identical to before and the frontend shows its own default text. Set it
+when migrating a legacy form that had a custom placeholder, so the migrated
+form looks the same:
+
+```pkl
+["owner_users"] = new MultipleUsers {
+  title = "Owner users"
+  placeholderText = "Select an owner user"
+}
+```
+
+`APITree`, `DateInput`, `ConnectorTypeSelector` and `SQLExecutor` have no
+`placeholderText`: their frontend components ignore or override
+`ui.placeholder`, so the value would never be shown.
+
 #### Trees & Filters
 
 | Class | Widget | Python Type | Notes |
 |---|---|---|---|
-| `SqlTree` | `sqltree` | `dict[str, Any]` | `sqlQuery`, `cred`, `excludePatterns`, `databaseExcludePatterns`, `desc`, `multiSelect` (emits `ui.multiple`), `dependsOn` (scope to sibling field), `databasesUnselectable` (lock DB-level selection), `additionalPropertiesToIncludeInCredentialBody`, `validationRules`, `includeDefault` |
+| `SqlTree` | `sqltree` | `dict[str, Any]` | `sqlQuery`, `cred`, `excludePatterns`, `databaseExcludePatterns`, `desc`, `multiSelect` (emits `ui.multiple`), `dependsOn` (scope to sibling field), `databasesUnselectable` (lock DB-level selection), `additionalPropertiesToIncludeInCredentialBody`, `validationRules`, `includeDefault`, `placeholderText` |
 | `APITree` | `apitree` | `dict[str, Any]`, or `TreeSelection` with `treeSelection = true` | Legacy API tree. Emits `{}` as the config default; generated input also accepts JSON object strings such as `"{}"` and coerces them to dicts. `credentialType`, `metadataTemplate`, `desc`, `treeSelection` (see [Payload-safe tree selections](#payload-safe-tree-selections-treeselection)) |
-| `ApiTreeSelect` | `apiTreeSelect` | `dict[str, Any]` | Workflows-v2 API tree selector used by Power BI-style metadata pickers. Emits `{}` as the config default; generated input also accepts JSON object strings. `credentialType`, `cred`, `metadataTemplate`, `metadataTransformer`, `strict`, `multiSelect`, `desc` |
-| `DsnTreeMap` | `dsnTreeMap` | `dict[str, Any]` | Maps DSN names to connection qualified names. `mapConfig` carries heading/content/input/connection labels. |
+| `ApiTreeSelect` | `apiTreeSelect` | `dict[str, Any]` | Workflows-v2 API tree selector used by Power BI-style metadata pickers. Emits `{}` as the config default; generated input also accepts JSON object strings. `credentialType`, `cred`, `metadataTemplate`, `metadataTransformer`, `strict`, `multiSelect`, `desc`, `placeholderText` |
+| `DsnTreeMap` | `dsnTreeMap` | `dict[str, Any]` | Maps DSN names to connection qualified names. `mapConfig` carries heading/content/input/connection labels. `placeholderText` applies to the input on every DSN row. |
 | `GlossarySelector` | `GlossarySelector` | `str` | Glossary picker. `selectorMode = "multiple"`, `showGlossaryIcon`, `showGlossaryCount`, `placeholderText` |
 
 #### Complex
@@ -2470,7 +2503,7 @@ the frontend renderer shape.
 | Class | Widget | Python Type | Notes |
 |---|---|---|---|
 | `DateInput` | `date` | `int` | Epoch seconds. `past`, `future`, `defaultDay` |
-| `KeygenInput` | `keygen` | `str` | Generates unique key |
+| `KeygenInput` | `keygen` | `str` | Generates unique key. `placeholderText` |
 | `Schedule` | `schedule` | `str` | Cron schedule picker |
 | `CloudProvider` | `CloudProvider` | `str` | AWS/GCP/Azure |
 
