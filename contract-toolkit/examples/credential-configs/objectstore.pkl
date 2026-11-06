@@ -1,0 +1,100 @@
+// Shared object-store credential config for the credential-configs example.
+//
+// A bare (`bare = true`) config: only `{"config": {properties, anyOf}}`, with no
+// credential wrapper and no hidden name/connector/connectorType properties. This
+// is the shape of a legacy marketplace credential type such as
+// `csa-connectors-objectstore`, whose existing credentials were created from a
+// form without those properties.
+//
+// Both entrypoints list it in `additionalCredentialConfigs`. The bundle hoists it
+// to `app/generated/csa-connectors-objectstore.json` once, because both copies
+// render identically.
+import "../../src/App.pkl"
+import "../../src/Widgets.pkl"
+
+local function input(label: String, help: String, ph: String, w: Int): App.TextInput = new {
+  title = label
+  helpText = help
+  placeholderText = ph
+  width = w
+}
+
+local function secret(label: String, help: String, w: Int): App.PasswordInput = new {
+  title = label
+  helpText = help
+  width = w
+}
+
+local function details(label: String, inputs_: Mapping<String, App.UIElement>): App.NamedWidget = new {
+  name = "extra"
+  widget = new App.NestedInput {
+    title = label
+    inputs = inputs_
+  }
+}
+
+local function field(n: String, w: App.UIElement): App.NamedWidget = new { name = n; widget = w }
+
+config: App.CredentialConfig = new {
+  name = "csa-connectors-objectstore"
+  bare = true
+  authTitle = "Cloud object store"
+  authDefault = "s3"
+  authWidth = 8
+  authOptions {
+    ["s3"] = new App.AuthOption {
+      label = "S3"
+      nestedLabel = "S3"
+      nestedHidden = false
+      nestedHelp = "Details for accessing information from Amazon S3."
+      nestedGrid = 8
+      fields {
+        field("username", input("AWS access key", "Enter your AWS access key.", "", 4))
+        field("password", secret("AWS secret key", "Enter your AWS secret key.", 4))
+        details("S3 details", new Mapping {
+          ["aws_role_arn"] = (input("AWS Role ARN", "ARN of the AWS role to assume", "arn:aws:iam::123456789012:role/roleName", 8)) {
+            validationRules {
+              new Widgets.ValidationRule {
+                pattern = #"^arn:aws:iam::\d{12}:role/.+"#
+                message = "Please enter a valid role ARN"
+                trigger = "blur"
+              }
+            }
+          }
+          ["region"] = input("Region", "Enter your AWS region.", "us-west-1", 4)
+          ["s3_bucket"] = input("Bucket", "Enter the bucket from which to retrieve the object store object(s).", "bucket-name", 4)
+        })
+      }
+    }
+    ["gcs"] = new App.AuthOption {
+      label = "GCS"
+      nestedLabel = "GCS"
+      nestedHidden = false
+      nestedHelp = "Details for accessing information from Google Cloud Storage (GCS)."
+      nestedGrid = 8
+      fields {
+        field("username", input("Project ID", "Enter the ID of the GCP project.", "", 4))
+        field("password", secret("Service account JSON", "Enter the JSON for your service account credentials.", 8))
+        details("GCS details", new Mapping {
+          ["gcs_bucket"] = input("Bucket", "Enter the bucket from which to retrieve the object store object(s).", "bucket-name", 4)
+        })
+      }
+    }
+    ["adls"] = new App.AuthOption {
+      label = "ADLS"
+      nestedLabel = "ADLS"
+      nestedHidden = false
+      nestedHelp = "Details for access information from Azure Data Lake Storage (ADLS)."
+      nestedGrid = 8
+      fields {
+        field("username", input("Azure client ID", "Enter the unique application (client) ID assigned to your app by Azure AD when the app was registered.", "", 4))
+        field("password", secret("Azure client secret", "Enter your client secret.", 4))
+        details("ADLS details", new Mapping {
+          ["azure_tenant_id"] = secret("Azure tenant ID", "Enter the unique identifier of the Azure Active Directory instance.", 4)
+          ["storage_account_name"] = input("Storage account name", "Enter the name of your storage account.", "", 4)
+          ["adls_container"] = input("Container", "Enter the container from which to retrieve the object store object(s).", "container-name", 4)
+        })
+      }
+    }
+  }
+}

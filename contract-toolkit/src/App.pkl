@@ -437,6 +437,30 @@ credentialConnectorDefault: String?
 /// Field name for the app's credential reference in the generated Input class.
 credentialFieldName: String? = if (hasCredentialConfig) "\(name.replaceAll("-", "_"))_credential" else null
 
+/// Credential configmaps this contract emits besides the primary
+/// `<connectorConfigName>.json`. Default: none.
+///
+/// Use it when one entrypoint's form selects more than one credential type, or
+/// selects a type that is not its own connection credential. An example is an
+/// object-store delivery target (`CredentialInput { credType = "<name>" }`).
+/// Each entry is a [CredentialConfig], rendered by the same renderer as the
+/// primary config. `bare = true` reproduces a legacy config with no wrapper.
+///
+/// Output: one `app/generated/<name>.json` per entry. In a multi-entrypoint
+/// bundle these are hoisted to `app/generated/` and deduped by name, like the
+/// primary config. Two entrypoints may emit the same name only if the content
+/// is identical.
+///
+/// Unchanged: the primary config, `credentialFieldName`, `_input.py` and the
+/// e2e credential codegen still describe only the primary credential. Works with
+/// `hasCredentialConfig = false`, for an app whose only credentials are these.
+///
+/// Refused at generation when `uiConfig` is null (nothing could select it), when
+/// a name lacks the `atlan-connectors-` / `csa-connectors-` prefix, when names
+/// collide with each other or with the primary / workflow config, and when a
+/// non-bare entry has no connector.
+additionalCredentialConfigs: Listing<CredentialConfig> = new Listing {}
+
 // ── WORKFLOW / UI CONFIG ──────────────────────────────────────────────────────
 
 /// The workflow configmap name (e.g., "redshift").
@@ -922,9 +946,88 @@ open class AuthOption {
 
   nestedHidden: Boolean = true
 
+  /// Help text on the nested pane (`ui.help`). Omitted when null.
+  nestedHelp: String?
+
+  /// Grid width of the nested pane (`ui.grid`). Omitted when null.
+  nestedGrid: Int?
+
   nestedExtraLabel: String = ""
 
   nestedExtraHeader: String? = "Advanced"
+}
+
+/// One credential configmap a contract emits besides its primary
+/// `<connectorConfigName>.json`. Listed in [additionalCredentialConfigs].
+///
+/// Renders through the same renderer as the primary config, so the auth-type
+/// radio, the per-option panes and the `anyOf` rules have the same shape. The
+/// knobs mirror the top-level `credential*` properties of the same name.
+///
+/// Written to `app/generated/<name>.json` and served at
+/// `/api/service/configmaps/<name>`. A `CredentialInput` selects it with
+/// `credType = "<name>"`.
+class CredentialConfig {
+  /// Configmap name, which is also the file stem and the `credentialType`.
+  /// Must start with `atlan-connectors-` or `csa-connectors-`: the SDK treats
+  /// only those stems as credential templates, so it never serves one as a
+  /// setup form.
+  name: String
+
+  /// Emit only `{"config": {properties, anyOf}}`.
+  ///
+  /// Default `false` emits the full credential wrapper: top-level `icon`,
+  /// `helpdeskLink`, `logo`, `connector`, `defaultConnectorType`, plus the
+  /// hidden `name` / `connector` / `connectorType` form properties.
+  ///
+  /// Set `true` only to reproduce a legacy configmap that never had them, e.g.
+  /// the `@atlan/connectors` `csa-connectors-objectstore` form. Adding the
+  /// hidden properties would change the body the frontend submits for every
+  /// credential of that type. A bare config ignores `connector`,
+  /// `connectorType`, `icon`, `logo`, `helpdeskLink`, `namePlaceholder` and
+  /// `connectorDefault`.
+  bare: Boolean = false
+
+  /// Top-level `connector`. Defaults to the app's `connector`. Required (here
+  /// or on the app) unless `bare`.
+  connector: String?
+
+  /// Top-level `defaultConnectorType`.
+  connectorType: String = "rest"
+
+  /// Top-level `icon` / `logo` / `helpdeskLink`. Default to the app's.
+  icon: String?
+  logo: String?
+  helpdeskLink: String?
+
+  /// Auth-type options. Each key becomes a radio option and a nested pane.
+  authOptions: Mapping<String, AuthOption>
+
+  /// Fields shared across all auth types, rendered before the radio.
+  commonFields: Listing<CredentialFieldEntry> = new Listing {}
+
+  /// Fields nested under a shared top-level `extra` object.
+  sharedExtraFields: Listing<CredentialFieldEntry> = new Listing {}
+
+  /// Label of the auth-type radio.
+  authTitle: String = "Authentication"
+
+  /// Default auth type. Defaults to the first `authOptions` key.
+  authDefault: String?
+
+  /// Validation rules, placeholder and grid width of the auth-type radio.
+  authRules: Listing<Dynamic>?
+  authPlaceholder: String?
+  authWidth: Int?
+
+  /// Auth-type options hidden during credential creation.
+  authHiddenEnumListForCreating: Listing<String>?
+
+  /// Placeholder for the hidden `name` property. Ignored when `bare`.
+  namePlaceholder: String = "Host Name"
+
+  /// Default for the hidden `connector` property. Ignored when `bare`.
+  connectorDefault: String?
 }
 
 // ── JDBC URL credential types ─────────────────────────────────────────────────
@@ -2313,6 +2416,8 @@ local function renderAuthOption(opt: AuthOption): Mapping<String, Any> = new Map
     ["label"] = opt.nestedLabel
     when (opt.nestedPlaceholder != null) { ["placeholder"] = opt.nestedPlaceholder }
     ["hidden"] = opt.nestedHidden
+    when (opt.nestedHelp != null) { ["help"] = opt.nestedHelp }
+    when (opt.nestedGrid != null) { ["grid"] = opt.nestedGrid }
     ["nestedValue"] = false
   }
   when (!opt.fields.isEmpty || !opt.extraFields.isEmpty || !opt.postExtraFields.isEmpty) {
@@ -2372,6 +2477,8 @@ local function renderJdbcAuthOption(opt: AuthOption): Mapping<String, Any> = new
     ["label"] = opt.nestedLabel
     when (opt.nestedPlaceholder != null) { ["placeholder"] = opt.nestedPlaceholder }
     ["hidden"] = opt.nestedHidden
+    when (opt.nestedHelp != null) { ["help"] = opt.nestedHelp }
+    when (opt.nestedGrid != null) { ["grid"] = opt.nestedGrid }
     ["nestedValue"] = false
   }
   when (!opt.fields.isEmpty || !opt.extraFields.isEmpty || !opt.postExtraFields.isEmpty) {
@@ -2808,70 +2915,97 @@ local streamingReservedUiFieldInvariant: Any =
 local credentialAuthHidden: Boolean =
   credentialAuthOptions != null && credentialAuthOptions!!.length == 1
 
-local function generateCredentialConfig(): Mapping<String, Any> =
-  let (_ = jdbcInvariant)
+/// The primary credential config, as a [CredentialConfig] built from the
+/// top-level `credential*` properties. Read only when the primary is emitted
+/// (`hasCredentialConfig && credentialAuthOptions != null`).
+local primaryCredentialConfig: CredentialConfig = new CredentialConfig {
+  name = connectorConfigName
+  connector = module.connector?.value
+  connectorType = credentialConnectorType
+  authOptions = credentialAuthOptions!!
+  commonFields = credentialCommonFields
+  sharedExtraFields = credentialSharedExtraFields
+  authTitle = credentialAuthTitle
+  authDefault = credentialAuthDefault
+  authRules = credentialAuthRules
+  authPlaceholder = credentialAuthPlaceholder
+  authWidth = credentialAuthWidth
+  authHiddenEnumListForCreating = credentialAuthHiddenEnumListForCreating
+  namePlaceholder = credentialNamePlaceholder
+  connectorDefault = credentialConnectorDefault
+}
+
+/// Render one credential configmap. `urlGroup` is the primary's JDBC Host↔URL
+/// form (`credentialUrlGroup`); additional configs pass null.
+local function renderCredentialConfig(c: CredentialConfig, urlGroup: AdvancedJDBCUrlGroup?): Mapping<String, Any> =
+  // Same rule as `credentialAuthHidden`: a one-option radio adds nothing.
+  let (authHidden = c.authOptions.length == 1)
   new Mapping {
-  ["icon"] = icon
-  ["helpdeskLink"] = helpdeskLink
-  ["logo"] = logo
-  ["connector"] = connector?.value
-  ["defaultConnectorType"] = credentialConnectorType
+  when (!c.bare) {
+    ["icon"] = c.icon ?? icon
+    ["helpdeskLink"] = c.helpdeskLink ?? helpdeskLink
+    ["logo"] = c.logo ?? logo
+    ["connector"] = c.connector ?? connector?.value
+    ["defaultConnectorType"] = c.connectorType
+  }
   ["config"] = new Mapping {
     ["properties"] = new Mapping {
-      ["name"] = new Mapping {
-        ["type"] = "string"
-        ["required"] = false
-        ["ui"] = new Mapping { ["label"] = "Name"; ["hidden"] = true; ["placeholder"] = credentialNamePlaceholder }
+      when (!c.bare) {
+        ["name"] = new Mapping {
+          ["type"] = "string"
+          ["required"] = false
+          ["ui"] = new Mapping { ["label"] = "Name"; ["hidden"] = true; ["placeholder"] = c.namePlaceholder }
+        }
+        ["connector"] = new Mapping {
+          ["type"] = "string"
+          when (c.connectorDefault != null) { ["default"] = c.connectorDefault }
+          ["required"] = false
+          ["ui"] = new Mapping { ["label"] = "Connector"; ["hidden"] = true; ["placeholder"] = "Connector" }
+        }
+        ["connectorType"] = new Mapping {
+          ["type"] = "string"
+          ["required"] = false
+          ["ui"] = new Mapping { ["key"] = "_host"; ["label"] = "connectorType"; ["placeholder"] = "connectorType"; ["hidden"] = true }
+        }
       }
-      ["connector"] = new Mapping {
-        ["type"] = "string"
-        when (credentialConnectorDefault != null) { ["default"] = credentialConnectorDefault }
-        ["required"] = false
-        ["ui"] = new Mapping { ["label"] = "Connector"; ["hidden"] = true; ["placeholder"] = "Connector" }
-      }
-      ["connectorType"] = new Mapping {
-        ["type"] = "string"
-        ["required"] = false
-        ["ui"] = new Mapping { ["key"] = "_host"; ["label"] = "connectorType"; ["placeholder"] = "connectorType"; ["hidden"] = true }
-      }
-      when (credentialUrlGroup == null) {
-        for (f in credentialCommonFields) {
+      when (urlGroup == null) {
+        for (f in c.commonFields) {
           [f.name] = renderAnyField(f)
         }
       }
-      when (credentialUrlGroup != null && credentialAuthOptions != null) {
-        ["connectBy"] = renderConnectByRadio(credentialUrlGroup!!)
-        ["jdbcUrl"] = renderJdbcUrlField(credentialUrlGroup!!, credentialAuthOptions!!)
+      when (urlGroup != null) {
+        ["connectBy"] = renderConnectByRadio(urlGroup!!)
+        ["jdbcUrl"] = renderJdbcUrlField(urlGroup!!, c.authOptions)
         // Top-level copies are agent merge targets only. The visible JDBC auth
         // panes live inside jdbcUrl.properties.
-        for (k, opt in credentialAuthOptions!!) {
+        for (k, opt in c.authOptions) {
           [k] = renderJdbcAuthMergeTargetOption(opt)
         }
       }
-      when (credentialUrlGroup == null && credentialAuthOptions != null) {
+      when (urlGroup == null) {
         ["auth-type"] = new Mapping {
           ["type"] = "string"
-          ["enum"] = new Listing { for (k, _ in credentialAuthOptions!!) { k } }
-          ["default"] = credentialAuthDefault ?? credentialAuthOptions!!.keys.first
+          ["enum"] = new Listing { for (k, _ in c.authOptions) { k } }
+          ["default"] = c.authDefault ?? c.authOptions.keys.first
           ["required"] = true
-          ["enumNames"] = new Listing { for (_, v in credentialAuthOptions!!) { v.label } }
-          when (credentialAuthHiddenEnumListForCreating != null) {
-            ["hiddenEnumListForCreating"] = credentialAuthHiddenEnumListForCreating
+          ["enumNames"] = new Listing { for (_, v in c.authOptions) { v.label } }
+          when (c.authHiddenEnumListForCreating != null) {
+            ["hiddenEnumListForCreating"] = c.authHiddenEnumListForCreating
           }
           ["ui"] = new Mapping {
             ["widget"] = "radio"
-            ["hidden"] = credentialAuthHidden
-            ["label"] = credentialAuthTitle
-            when (credentialAuthRules != null) { ["rules"] = credentialAuthRules }
-            when (credentialAuthPlaceholder != null) { ["placeholder"] = credentialAuthPlaceholder }
-            when (credentialAuthWidth != null) { ["grid"] = credentialAuthWidth }
+            ["hidden"] = authHidden
+            ["label"] = c.authTitle
+            when (c.authRules != null) { ["rules"] = c.authRules }
+            when (c.authPlaceholder != null) { ["placeholder"] = c.authPlaceholder }
+            when (c.authWidth != null) { ["grid"] = c.authWidth }
           }
         }
-        for (k, opt in credentialAuthOptions!!) {
+        for (k, opt in c.authOptions) {
           [k] = renderAuthOption(opt)
         }
       }
-      when (!credentialSharedExtraFields.isEmpty && credentialUrlGroup == null) {
+      when (!c.sharedExtraFields.isEmpty && urlGroup == null) {
         ["extra"] = new Mapping {
           ["type"] = "object"
           ["ui"] = new Mapping {
@@ -2881,16 +3015,16 @@ local function generateCredentialConfig(): Mapping<String, Any> =
             ["hidden"] = false
           }
           ["properties"] = new Mapping {
-            for (f in credentialSharedExtraFields) {
+            for (f in c.sharedExtraFields) {
               [f.name] = renderAnyField(f)
             }
           }
         }
       }
     }
-    when (credentialUrlGroup == null && credentialAuthOptions != null) {
+    when (urlGroup == null) {
       ["anyOf"] = new Listing {
-        for (k, opt in credentialAuthOptions!!) {
+        for (k, opt in c.authOptions) {
           new Mapping {
             ["properties"] = new Mapping {
               ["auth-type"] = new Mapping { ["const"] = k }
@@ -2907,6 +3041,10 @@ local function generateCredentialConfig(): Mapping<String, Any> =
     }
   }
 }
+
+local function generateCredentialConfig(): Mapping<String, Any> =
+  let (_ = jdbcInvariant)
+  renderCredentialConfig(primaryCredentialConfig, credentialUrlGroup)
 
 // ── Manifest / DAG generation ─────────────────────────────────────────────────
 
@@ -5132,8 +5270,10 @@ local function isCredentialFile(entrypoint: Entrypoint, rawFileName: String): Bo
   let (normalized = normalizeContractFileName(rawFileName))
   normalized != "" &&
   entrypoint.contract != null &&
-  entrypoint.contract!!.hasCredentialConfig &&
-  normalized == "\(entrypoint.contract!!.connectorConfigName).json"
+  ((entrypoint.contract!!.hasCredentialConfig &&
+    normalized == "\(entrypoint.contract!!.connectorConfigName).json") ||
+   entrypoint.contract!!.additionalCredentialConfigs.toList()
+     .any((c) -> normalized == "\(c.name).json"))
 
 local credentialFiles: Listing<ContractFile> = new Listing {
   for (entrypoint in entrypoints) {
@@ -5207,6 +5347,48 @@ local _legacyWorkflowTypesPlacementCheck: Any =
       + "keep App.legacy_workflow_types as the app's only declaration site.")
   else null
 
+/// Rendered additional credential configs, keyed by configmap name.
+local additionalCredentialConfigOutputs: Map<String, FileOutput> =
+  additionalCredentialConfigs.toList().toMap((c) -> c.name, (c) -> new FileOutput {
+    value = renderCredentialConfig(c, null)
+    renderer = new JsonRenderer {}
+  })
+
+/// The SDK's credential-template stems (`CREDENTIAL_TEMPLATE_PREFIXES` in
+/// `application_sdk/common/_generated_tree.py`). Any other stem is a setup-form
+/// candidate, so a credential config named otherwise could be served as a form.
+local credentialTemplatePrefixes: List<String> = List("atlan-connectors-", "csa-connectors-")
+
+/// Refuse an additional credential config that would be silently dropped,
+/// overwritten, mistaken for a setup form, or rendered without a connector.
+local _additionalCredentialConfigsCheck: Any =
+  let (cs = additionalCredentialConfigs.toList())
+  let (names = cs.map((c) -> c.name))
+  let (badPrefix = names.filter((n) -> !credentialTemplatePrefixes.any((p) -> n.startsWith(p))))
+  let (dupes = names.filter((n) -> names.filter((m) -> m == n).length > 1).distinct)
+  let (reserved = List(workflowConfigName, "manifest")
+    + (if (hasCredentialConfig && credentialAuthOptions != null) List(connectorConfigName) else List()))
+  let (clashes = names.filter((n) -> reserved.contains(n)))
+  let (noConnector = cs.filter((c) -> !c.bare && c.connector == null && connector == null).map((c) -> c.name))
+  if (cs.isEmpty) null
+  else if (uiConfig == null)
+    throw("additionalCredentialConfigs \(names) are declared on a contract with no uiConfig. "
+      + "Credential configs are emitted only alongside a setup form, so they would be dropped. "
+      + "Declare a uiConfig with a CredentialInput that selects them, or remove them.")
+  else if (!badPrefix.isEmpty)
+    throw("additionalCredentialConfigs name(s) \(badPrefix.join(", ")) must start with "
+      + "`atlan-connectors-` or `csa-connectors-`. The SDK treats only those stems as credential "
+      + "templates; any other stem can be served as the entrypoint's setup form.")
+  else if (!dupes.isEmpty)
+    throw("additionalCredentialConfigs declares \(dupes.join(", ")) more than once. Each name is one file.")
+  else if (!clashes.isEmpty)
+    throw("additionalCredentialConfigs name(s) \(clashes.join(", ")) collide with a file this contract "
+      + "already emits (the primary credential config, the workflow config or manifest). Rename them.")
+  else if (!noConnector.isEmpty)
+    throw("additionalCredentialConfigs \(noConnector.join(", ")) render the credential wrapper but have no "
+      + "connector. Set `connector` on the entry or the app, or set `bare = true` for a wrapper-less legacy config.")
+  else null
+
 hidden _credentialConflictCheck: Any =
   if (!credentialConflictNames.isEmpty)
     throw("App.pkl found credential config filename(s) generated with different content: \(credentialConflictNames.join(", ")). "
@@ -5221,6 +5403,7 @@ output =
   let (_jdbcCheck = jdbcInvariant)
   let (_connectorCheck = connectorInvariant)
   let (_credCheck = _credentialConflictCheck)
+  let (_addCredCheck = _additionalCredentialConfigsCheck)
   // Forced here because nothing that renders atlan.yaml reads it, so it would
   // otherwise never be evaluated.
   let (_sysAppCheck = _systemAppCheck)
@@ -5268,6 +5451,9 @@ output =
           ["app/generated/\(workflowConfigName).json"] = workflowConfigOutput
           when (hasCredentialConfig && credentialAuthOptions != null) {
             ["app/generated/\(connectorConfigName).json"] = credentialConfigOutput
+          }
+          for (c in additionalCredentialConfigs) {
+            ["app/generated/\(c.name).json"] = additionalCredentialConfigOutputs[c.name]
           }
           ["app/generated/manifest.json"] = manifestOutput
         }
