@@ -170,7 +170,7 @@ jobs:
           path: .sdk-git-auth
           persist-credentials: false
 
-      - name: List the private atlanhq repos the app names
+      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
         id: git-deps-repos
         if: inputs.private_git_auth
         run: |
@@ -190,6 +190,10 @@ jobs:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
+          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
+          # workflow's own commit, never the PR's tree: the repos step above
+          # fails the job for any private repo not on it, so a PR's
+          # pyproject.toml / uv.lock cannot widen this scope.
           repositories: ${{ steps.git-deps-repos.outputs.repositories }}
           permission-contents: read
 
