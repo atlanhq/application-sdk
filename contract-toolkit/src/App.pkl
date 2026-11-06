@@ -634,7 +634,12 @@ local _inputsCheck: Any =
 /// If key "publish" is defined here, it replaces the auto-generated publish node.
 /// If key "notifications" is defined here, it replaces the auto-generated
 /// completion notification node.
-extraNodes: Mapping<String, DAGNode> = new Mapping {}
+///
+/// A `DAGNode` (or a typed subclass) starts a child workflow through
+/// `execute_workflow`. An `AEActivityNode` (`FetchEntitiesNode`, `MergeNode`,
+/// or the generic `ActivityNode`) calls an Automation Engine activity directly
+/// with that activity's own inputs.
+extraNodes: Mapping<String, DAGNode|AEActivityNode> = new Mapping {}
 
 /// Background-job schedules (DISTR-815). When non-empty, the toolkit renders a
 /// `triggers.schedules` block into `manifest.json` (AE ScheduleTrigger shape) so a
@@ -1200,6 +1205,181 @@ open class DAGNode {
   /// generated caller node overrides it to refuse args the app does not
   /// declare.
   hidden _nodeArgsCheck: Any = null
+}
+
+/// A DAG node that calls an Automation Engine activity directly, such as
+/// `fetch_entities` or `merge`, rather than starting a child workflow.
+///
+/// `DAGNode` always renders `activity_name = "execute_workflow"` with the
+/// `workflow_type` / `app_name` / `task_queue` / `args` envelope. An AE activity
+/// takes its own input shape instead, so it needs this node family. Add one to
+/// `extraNodes`:
+///
+/// ```pkl
+/// extraNodes {
+///   ["fetch_assets"] = new FetchEntitiesNode {
+///     displayName = "Fetch Assets"
+///     sqlInputFile = "artifacts/queries/assets.sql"
+///     engine = "duckdb"
+///   }
+///   ["merge"] = new MergeNode {
+///     displayName = "Aggregate Assets"
+///     inputPrefixes { "$.fetch_assets.outputs.output_path" }
+///     sql = "SELECT * FROM input_0"
+///     dependsOn { "fetch_assets" }
+///   }
+/// }
+/// ```
+///
+/// Use `FetchEntitiesNode` or `MergeNode` when one fits, so their inputs are
+/// type-checked. Use `ActivityNode` for any other AE activity.
+///
+/// Renders `node_type: "activity"`, `activity_name`, `activity_display_name`,
+/// `app_name` and the activity's own `inputs`, plus `depends_on` and
+/// `error_handling` exactly as `DAGNode` renders them. Nothing is stamped into
+/// `inputs`: there is no `args`, so no `app_name` arg (CNCT-93) and no
+/// `task_queue`. AE routes the activity by `app_name`.
+abstract class AEActivityNode {
+  displayName: String
+
+  /// The app that registers the activity. Defaults to `"automation-engine"`,
+  /// which owns `fetch_entities`, `merge` and the other built-in activities.
+  appName: String = "automation-engine"
+
+  /// Upstream dependencies. Same semantics as `DAGNode.dependsOn`: gates on the
+  /// parent(s) succeeding.
+  dependsOn: Listing<String>?
+
+  /// Explicit AE dependency condition. Same semantics as
+  /// `DAGNode.dependsOnCondition`. Cannot be combined with `dependsOn`.
+  dependsOnCondition: DependencyCondition?
+
+  /// Retry and timeout settings. Defaults to `null`, so AE applies the
+  /// activity's own registered defaults (for example a 60s heartbeat on
+  /// `fetch_entities` and `merge`). Unlike a `DAGNode`,
+  /// `heartbeatTimeoutSeconds` is allowed here, because these are activity
+  /// nodes.
+  errorHandling: ErrorHandlingConfig?
+
+  hidden _dependencyConfigCheck: Any =
+    if (dependsOn != null && dependsOnCondition != null)
+      throw("\(this.getClass().simpleName) cannot set both dependsOn and dependsOnCondition. Use dependsOn for shorthand or dependsOnCondition for explicit AE conditions.")
+    else null
+
+  /// The AE activity this node calls, rendered as `activity_name`.
+  abstract function activityNameResolved(): String
+
+  /// The activity's inputs, rendered verbatim as `inputs`.
+  abstract function inputsResolved(): Mapping<String, Any>
+}
+
+/// Generic `AEActivityNode`: calls any AE activity with a free-form `inputs`
+/// mapping. Prefer a typed node (`FetchEntitiesNode`, `MergeNode`) when one
+/// exists. The toolkit does not check `inputs` against the activity's
+/// contract; AE validates them when the workflow is submitted.
+class ActivityNode extends AEActivityNode {
+  /// The AE activity name, such as `"fetch_entities"`.
+  activityName: String(!isEmpty)
+
+  /// The activity's inputs, rendered verbatim as the node's `inputs`. Values
+  /// may be literals, upstream refs (`$.<node>.outputs.<field>`) or workflow
+  /// parameter placeholders (`{{field}}`).
+  inputs: Mapping<String, Any> = new Mapping {}
+
+  function activityNameResolved(): String = activityName
+  function inputsResolved(): Mapping<String, Any> = inputs
+}
+
+/// Typed node for AE's `fetch_entities` activity: runs a SQL query against the
+/// metadata lakehouse and writes the rows as Parquet. Downstream nodes read the
+/// result from `$.<node>.outputs.output_path`.
+///
+/// Renders `inputs.input = { sql_input | sql_input_file, engine, ...extraInput }`,
+/// matching AE's `FetchInput` envelope. Set exactly one of `sqlInput` and
+/// `sqlInputFile`. An empty string counts as set, for apps that fill the value
+/// in at submission time.
+class FetchEntitiesNode extends AEActivityNode {
+  /// Inline SQL. Rendered as `sql_input`.
+  sqlInput: String?
+
+  /// Object-store key of an uploaded `.sql` / `.txt` file. Rendered as
+  /// `sql_input_file`.
+  sqlInputFile: String?
+
+  /// In-process SQL engine. AE uses `"daft"` when unset.
+  engine: ("daft"|"duckdb")?
+
+  /// Other `FetchEntitiesInput` fields the toolkit does not model, such as
+  /// `sql_config` or `incremental`. Merged into `inputs.input`. Cannot set a
+  /// typed field (`sql_input`, `sql_input_file`, `engine`).
+  extraInput: Mapping<String, Any> = new Mapping {}
+
+  hidden _inputCheck: Any =
+    let (conflicts = extraInput.keys.toList().filter((k) -> Set("sql_input", "sql_input_file", "engine").contains(k)))
+    if ((sqlInput == null) == (sqlInputFile == null))
+      throw("FetchEntitiesNode: set exactly one of sqlInput and sqlInputFile.")
+    else if (!conflicts.isEmpty)
+      throw("FetchEntitiesNode.extraInput cannot set typed field(s): \(conflicts.join(", ")). Use the FetchEntitiesNode property instead.")
+    else null
+
+  function activityNameResolved(): String = "fetch_entities"
+  function inputsResolved(): Mapping<String, Any> =
+    let (_check = _inputCheck)
+    new Mapping {
+      ["input"] = new Mapping {
+        when (sqlInput != null) { ["sql_input"] = sqlInput }
+        when (sqlInputFile != null) { ["sql_input_file"] = sqlInputFile }
+        when (engine != null) { ["engine"] = engine }
+        ...extraInput
+      }
+    }
+}
+
+/// Typed node for AE's `merge` activity: runs SQL over one or more inputs and
+/// writes the result as Parquet. Each `inputPrefixes` entry is available to the
+/// SQL as `input_0`, `input_1`, and so on.
+///
+/// Renders `inputs = { input_prefixes, sql | sql_file, declared_tier,
+/// ...extraInputs }`, matching AE's `MergeInput`. Set exactly one of `sql` and
+/// `sqlFile`. An empty string counts as set, for apps that fill the value in
+/// at submission time.
+class MergeNode extends AEActivityNode {
+  /// Ordered inputs: upstream refs such as `"$.fetch.outputs.output_path"`, or
+  /// object-store keys of uploaded files.
+  inputPrefixes: Listing<String(!isEmpty)>(!isEmpty)
+
+  /// Inline SQL. Rendered as `sql`.
+  sql: String?
+
+  /// Object-store key of an uploaded SQL file. Rendered as `sql_file`.
+  sqlFile: String?
+
+  /// Resource tier. AE sizes the node itself when unset.
+  declaredTier: ("s"|"m"|"l")?
+
+  /// Other `MergeInput` fields the toolkit does not model. Merged into
+  /// `inputs`. Cannot set a typed field (`input_prefixes`, `sql`, `sql_file`,
+  /// `declared_tier`).
+  extraInputs: Mapping<String, Any> = new Mapping {}
+
+  hidden _inputCheck: Any =
+    let (conflicts = extraInputs.keys.toList().filter((k) -> Set("input_prefixes", "sql", "sql_file", "declared_tier").contains(k)))
+    if ((sql == null) == (sqlFile == null))
+      throw("MergeNode: set exactly one of sql and sqlFile.")
+    else if (!conflicts.isEmpty)
+      throw("MergeNode.extraInputs cannot set typed field(s): \(conflicts.join(", ")). Use the MergeNode property instead.")
+    else null
+
+  function activityNameResolved(): String = "merge"
+  function inputsResolved(): Mapping<String, Any> =
+    let (_check = _inputCheck)
+    new Mapping {
+      ["input_prefixes"] = inputPrefixes
+      when (sql != null) { ["sql"] = sql }
+      when (sqlFile != null) { ["sql_file"] = sqlFile }
+      when (declaredTier != null) { ["declared_tier"] = declaredTier }
+      ...extraInputs
+    }
 }
 
 /// A value an AE DAG resolves at run time: an upstream node's output
@@ -3350,7 +3530,7 @@ local function generateDAG(): Mapping<String, Any> = new Mapping {
     // diff that hurts reviewability of override PRs.
     ["publish"] =
       if (extraNodes.toMap().containsKey("publish"))
-        renderNode(extraNodes["publish"])
+        renderExtraNode(extraNodes["publish"])
       else
         let (ps = pipeline.publish!!)
         let (_publishEhCheck = validateWorkflowNodeErrorHandling(ps.errorHandling, "pipeline.publish.errorHandling"))
@@ -3375,7 +3555,7 @@ local function generateDAG(): Mapping<String, Any> = new Mapping {
     // overridden via `extraNodes["publish"]`; skip it here to avoid emitting
     // a duplicate trailing entry.
     when (nodeId != "publish") {
-      [nodeId] = renderNode(node)
+      [nodeId] = renderExtraNode(node)
     }
   }
   when (notifications && !extraNodes.toMap().containsKey("notifications")) {
@@ -3429,29 +3609,55 @@ local function renderNode(node: DAGNode): Mapping<String, Any> =
     ["task_queue"] = node.taskQueue ?? "atlan-\(node.appName)-{deployment_name}"
     ["args"] = renderNodeArgs(node)
   }
+  ...renderDependsOnAndErrorHandling(node.dependsOn, node.dependsOnCondition, node.errorHandling)
+}
+
+/// Renders an `extraNodes` entry: an `AEActivityNode` as a direct AE activity
+/// call, anything else as an `execute_workflow` node.
+local function renderExtraNode(node: DAGNode|AEActivityNode): Mapping<String, Any> =
+  if (node is AEActivityNode) renderActivityNode(node) else renderNode(node as DAGNode)
+
+local function renderActivityNode(node: AEActivityNode): Mapping<String, Any> =
+  let (_depCheck = node._dependencyConfigCheck)
+  let (_ehCheck = if (node.errorHandling != null) node.errorHandling._timeoutOrderingCheck else null)
+  new Mapping {
+  ["node_type"] = "activity"
+  ["activity_name"] = node.activityNameResolved()
+  ["activity_display_name"] = node.displayName
+  ["app_name"] = node.appName
+  ["inputs"] = node.inputsResolved()
+  ...renderDependsOnAndErrorHandling(node.dependsOn, node.dependsOnCondition, node.errorHandling)
+}
+
+/// `depends_on` and `error_handling`, shared by every node kind.
+local function renderDependsOnAndErrorHandling(
+  dependsOn: Listing<String>?,
+  dependsOnCondition: DependencyCondition?,
+  errorHandling: ErrorHandlingConfig?
+): Mapping<String, Any> = new Mapping {
   // Single parent → depends_on: {node_id, tag: "success"}. Multi-parent →
   // depends_on: {and_conditions: [...]}. Both forms gate on the parent(s)
   // succeeding — a failed/skipped parent must not schedule this node.
-  when (node.dependsOn != null && node.dependsOn.length == 1) {
+  when (dependsOn != null && dependsOn.length == 1) {
     ["depends_on"] = new Mapping {
-      ["node_id"] = node.dependsOn.first
+      ["node_id"] = dependsOn.first
       ["tag"] = "success"
     }
   }
-  when (node.dependsOn != null && node.dependsOn.length > 1) {
+  when (dependsOn != null && dependsOn.length > 1) {
     ["depends_on"] = new Mapping {
-      ["and_conditions"] = node.dependsOn.toList()
+      ["and_conditions"] = dependsOn.toList()
         .map((n) -> new Mapping {
           ["node_id"] = n
           ["tag"] = "success"
         })
     }
   }
-  when (node.dependsOnCondition != null) {
-    ["depends_on"] = renderDependencyCondition(node.dependsOnCondition)
+  when (dependsOnCondition != null) {
+    ["depends_on"] = renderDependencyCondition(dependsOnCondition)
   }
-  when (node.errorHandling != null) {
-    ["error_handling"] = renderErrorHandling(node.errorHandling)
+  when (errorHandling != null) {
+    ["error_handling"] = renderErrorHandling(errorHandling)
   }
 }
 

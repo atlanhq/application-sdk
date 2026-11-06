@@ -3480,6 +3480,77 @@ non-standard node ids. Use `waitForAssetPublish = false` when the Lineage app
 node already depends on asset publish. Use `dependsOn = new Listing { ... }`
 when replacing the default fan-in entirely.
 
+### AE Activity Nodes (`FetchEntitiesNode`, `MergeNode`, `ActivityNode`)
+
+A `DAGNode` always renders `activity_name = "execute_workflow"` and starts a child
+workflow. To call an Automation Engine activity directly, such as `fetch_entities` or
+`merge`, add an `AEActivityNode` to `extraNodes` instead. `extraNodes` is typed
+`Mapping<String, DAGNode|AEActivityNode>`, so both kinds mix in one DAG.
+
+```pkl
+abstract class AEActivityNode {
+  displayName: String
+  appName: String = "automation-engine"     // the app that registers the activity
+  dependsOn: Listing<String>?               // same as DAGNode.dependsOn
+  dependsOnCondition: DependencyCondition?  // same as DAGNode.dependsOnCondition
+  errorHandling: ErrorHandlingConfig?       // default null → AE's per-activity defaults
+}
+
+class FetchEntitiesNode extends AEActivityNode {   // activity_name = "fetch_entities"
+  sqlInput: String?                    // exactly one of sqlInput / sqlInputFile
+  sqlInputFile: String?
+  engine: ("daft"|"duckdb")?           // AE default: "daft"
+  extraInput: Mapping<String, Any>     // other FetchEntitiesInput fields (sql_config, incremental)
+}
+
+class MergeNode extends AEActivityNode {           // activity_name = "merge"
+  inputPrefixes: Listing<String>(!isEmpty)  // input_0, input_1, … in the SQL
+  sql: String?                         // exactly one of sql / sqlFile
+  sqlFile: String?
+  declaredTier: ("s"|"m"|"l")?
+  extraInputs: Mapping<String, Any>    // other MergeInput fields
+}
+
+class ActivityNode extends AEActivityNode {        // any other AE activity
+  activityName: String
+  inputs: Mapping<String, Any>         // rendered verbatim; not checked by the toolkit
+}
+```
+
+Rendered shape (`FetchEntitiesNode { displayName = "Fetch Assets"; sqlInputFile = ""; engine = "duckdb" }`):
+
+```json
+{
+  "node_type": "activity",
+  "activity_name": "fetch_entities",
+  "activity_display_name": "Fetch Assets",
+  "app_name": "automation-engine",
+  "inputs": { "input": { "sql_input_file": "", "engine": "duckdb" } }
+}
+```
+
+What changes compared with a `DAGNode`:
+
+- `node_type: "activity"` is rendered. `DAGNode` output does not change and still omits it.
+- `inputs` is the activity's own shape. There is no `workflow_type`, `task_queue` or `args`
+  envelope, and the toolkit stamps no `app_name` arg (CNCT-93 applies to `args` only).
+- `errorHandling` defaults to `null`, not the 1-day `DAGNode` default, so AE applies the
+  activity's registered timeouts. `heartbeatTimeoutSeconds` is allowed. It must still be
+  less than `startToCloseTimeoutSeconds`.
+- `depends_on` renders exactly as on a `DAGNode`.
+
+Caveats:
+
+- The SQL-source checks treat an empty string as set. An app that fills `sql_input_file` or
+  `sql` in at submission time can render `""`. AE rejects an empty value at run time, so
+  something must fill it.
+- `extraInput` / `extraInputs` cannot set a typed field. Use the typed property.
+- `ActivityNode.inputs` is not validated by the toolkit. AE validates it on submission.
+- Downstream nodes read a fetch or merge result from `$.<node>.outputs.output_path`.
+
+See `examples/ae-activities/` for three fetch → merge branches fanning in to an app
+workflow.
+
 ### Custom Pipeline Example
 
 Insert QI and enrichment nodes between extract and publish:
