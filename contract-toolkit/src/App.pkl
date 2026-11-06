@@ -989,7 +989,7 @@ class CredentialConfig {
   /// configmap that never had them, e.g. the `@atlan/connectors`
   /// `csa-connectors-objectstore` form: the SDK configmap route returns
   /// `defaultConnectorType` to the frontend. With `false`, setting `connector`,
-  /// `icon`, `logo` or `helpdeskLink` is refused, since nothing would read them.
+  /// `connectorType`, `icon`, `logo` or `helpdeskLink` is refused, since nothing would read them.
   wrapper: Boolean = true
 
   /// Emit the hidden `name` / `connector` / `connectorType` form properties.
@@ -1000,15 +1000,15 @@ class CredentialConfig {
   /// configs such as generic-miner's object-store form): the frontend submits
   /// these properties in every credential body, so adding them changes what
   /// existing credentials of that type look like. With `false`, setting
-  /// `connectorDefault` is refused.
+  /// `connectorDefault` or `namePlaceholder` is refused.
   identityProperties: Boolean = true
 
   /// Top-level `connector`. Defaults to the app's `connector`. Required (here
   /// or on the app) when `wrapper`.
   connector: String?
 
-  /// Top-level `defaultConnectorType`.
-  connectorType: String = "rest"
+  /// Top-level `defaultConnectorType`. Default `"rest"`. Refused when `!wrapper`.
+  connectorType: String?
 
   /// Top-level `icon` / `logo` / `helpdeskLink`. Default to the app's.
   icon: String?
@@ -1038,8 +1038,9 @@ class CredentialConfig {
   /// Auth-type options hidden during credential creation.
   authHiddenEnumListForCreating: Listing<String>?
 
-  /// Placeholder for the hidden `name` property. Unused when `!identityProperties`.
-  namePlaceholder: String = "Host Name"
+  /// Placeholder for the hidden `name` property. Default `"Host Name"`.
+  /// Refused when `!identityProperties`.
+  namePlaceholder: String?
 
   /// Default for the hidden `connector` property. Requires `identityProperties`.
   connectorDefault: String?
@@ -3136,7 +3137,7 @@ local function renderCredentialConfig(c: CredentialConfig, urlGroup: AdvancedJDB
     ["helpdeskLink"] = c.helpdeskLink ?? helpdeskLink
     ["logo"] = c.logo ?? logo
     ["connector"] = c.connector ?? connector?.value
-    ["defaultConnectorType"] = c.connectorType
+    ["defaultConnectorType"] = c.connectorType ?? "rest"
   }
   ["config"] = new Mapping {
     ["properties"] = new Mapping {
@@ -3144,7 +3145,7 @@ local function renderCredentialConfig(c: CredentialConfig, urlGroup: AdvancedJDB
         ["name"] = new Mapping {
           ["type"] = "string"
           ["required"] = false
-          ["ui"] = new Mapping { ["label"] = "Name"; ["hidden"] = true; ["placeholder"] = c.namePlaceholder }
+          ["ui"] = new Mapping { ["label"] = "Name"; ["hidden"] = true; ["placeholder"] = c.namePlaceholder ?? "Host Name" }
         }
         ["connector"] = new Mapping {
           ["type"] = "string"
@@ -5584,8 +5585,10 @@ local _additionalCredentialConfigsCheck: Any =
   let (clashes = names.filter((n) -> reserved.contains(n)))
   let (noConnector = cs.filter((c) -> c.wrapper && c.connector == null && connector == null).map((c) -> c.name))
   let (unusedWrapperKeys = cs.filter((c) -> !c.wrapper
-    && (c.connector != null || c.icon != null || c.logo != null || c.helpdeskLink != null)).map((c) -> c.name))
-  let (unusedIdentityKeys = cs.filter((c) -> !c.identityProperties && c.connectorDefault != null).map((c) -> c.name))
+    && (c.connector != null || c.connectorType != null || c.icon != null || c.logo != null
+      || c.helpdeskLink != null)).map((c) -> c.name))
+  let (unusedIdentityKeys = cs.filter((c) -> !c.identityProperties
+    && (c.connectorDefault != null || c.namePlaceholder != null)).map((c) -> c.name))
   if (cs.isEmpty) null
   else if (!entrypoints.isEmpty)
     throw("additionalCredentialConfigs \(names) are declared on a multi-entrypoint bundle root, which "
@@ -5610,10 +5613,10 @@ local _additionalCredentialConfigsCheck: Any =
       + "connector. Set `connector` on the entry or the app, or set `wrapper = false` for a legacy config with no envelope.")
   else if (!unusedWrapperKeys.isEmpty)
     throw("additionalCredentialConfigs \(unusedWrapperKeys.join(", ")) set `wrapper = false` but also set "
-      + "`connector`, `icon`, `logo` or `helpdeskLink`, which only the envelope carries. Remove them.")
+      + "`connector`, `connectorType`, `icon`, `logo` or `helpdeskLink`, which only the envelope carries. Remove them.")
   else if (!unusedIdentityKeys.isEmpty)
     throw("additionalCredentialConfigs \(unusedIdentityKeys.join(", ")) set `identityProperties = false` but also set "
-      + "`connectorDefault`, which only the hidden `connector` property carries. Remove it.")
+      + "`connectorDefault` or `namePlaceholder`, which only the hidden identity properties carry. Remove them.")
   else null
 
 hidden _credentialConflictCheck: Any =

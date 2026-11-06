@@ -1951,7 +1951,7 @@ class CredentialConfig {
   wrapper: Boolean = true                       // false: no icon/helpdeskLink/logo/connector/defaultConnectorType
   identityProperties: Boolean = true            // false: no hidden name/connector/connectorType properties
   connector: String?                            // Envelope `connector`; defaults to the app's. Refused when !wrapper
-  connectorType: String = "rest"                // Wrapper `defaultConnectorType`
+  connectorType: String?                        // Envelope `defaultConnectorType` (default "rest"). Refused when !wrapper
   icon: String?; logo: String?; helpdeskLink: String?   // Wrapper keys; default to the app's
   authOptions: Mapping<String, AuthOption>      // Radio options + nested panes + anyOf rules
   commonFields: Listing<CredentialFieldEntry> = []
@@ -1960,7 +1960,7 @@ class CredentialConfig {
   authDefault: String?                          // Defaults to the first authOptions key
   authRules: Listing<Dynamic>?; authPlaceholder: String?; authWidth: Int?
   authHiddenEnumListForCreating: Listing<String>?
-  namePlaceholder: String = "Host Name"         // Hidden `name` property
+  namePlaceholder: String?                      // Hidden `name` placeholder (default "Host Name"). Refused when !identityProperties
   connectorDefault: String?                     // Hidden `connector` default; refused when !identityProperties
 }
 ```
@@ -1989,9 +1989,9 @@ it. Neither is neutral for such a type:
 | `@atlan/connectors` `csa-connectors-objectstore` (bare `{"config": ...}`) | `false` | `false` |
 | Credential.pkl configs, e.g. generic-miner's object-store form (envelope, no identity properties) | `true` | `false` |
 
-A field that a flag turns off is refused rather than ignored: `connector` / `icon` /
-`logo` / `helpdeskLink` with `wrapper = false`, `connectorDefault` with
-`identityProperties = false`.
+A field that a flag turns off is refused rather than ignored: `connector` /
+`connectorType` / `icon` / `logo` / `helpdeskLink` with `wrapper = false`, and
+`connectorDefault` / `namePlaceholder` with `identityProperties = false`.
 
 **Output.** A single-entrypoint contract writes `app/generated/<name>.json` per
 entry. A bundle hoists these files to `app/generated/` and dedupes them by name,
