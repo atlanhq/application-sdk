@@ -1,0 +1,63 @@
+// Tests for `placeholderText` on the widgets that gained it in FND-4758: each
+// one renders `ui.placeholder` when set and emits no key when unset.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "../examples/full/app.pkl" as fullApp
+import "../src/App.pkl" as App
+
+local fullConfig = new json.Parser { useMapping = true }.parse(
+  fullApp.output.files["app/generated/full-featured.json"].text
+)["config"]["properties"]
+
+// One unset and one set instance per widget, keyed by its `ui.widget`.
+local unset: Mapping<String, App.UIElement> = new {
+  ["groupMultiple"] = new App.MultipleGroups { title = "x" }
+  ["groups"] = new App.SingleGroup { title = "x" }
+  ["userMultiple"] = new App.MultipleUsers { title = "x" }
+  ["users"] = new App.SingleUser { title = "x" }
+  ["apiTokenSelect"] = new App.APITokenSelector { title = "x" }
+  ["keygen"] = new App.KeygenInput { title = "x" }
+  ["apiTreeSelect"] = new App.ApiTreeSelect { title = "x"; credentialType = "c" }
+  ["sqltree"] = new App.SqlTree { title = "x" }
+  ["dsnTreeMap"] = new App.DsnTreeMap { title = "x"; mapConfig = new Mapping {} }
+}
+
+local set: Mapping<String, App.UIElement> = new {
+  ["groupMultiple"] = new App.MultipleGroups { title = "x"; placeholderText = "Select an owner group" }
+  ["groups"] = new App.SingleGroup { title = "x"; placeholderText = "Select an owner group" }
+  ["userMultiple"] = new App.MultipleUsers { title = "x"; placeholderText = "Select an owner user" }
+  ["users"] = new App.SingleUser { title = "x"; placeholderText = "Select an owner user" }
+  ["apiTokenSelect"] = new App.APITokenSelector { title = "x"; placeholderText = "Select a token" }
+  ["keygen"] = new App.KeygenInput { title = "x"; placeholderText = "Generate a key" }
+  ["apiTreeSelect"] = new App.ApiTreeSelect { title = "x"; credentialType = "c"; placeholderText = "Select reports" }
+  ["sqltree"] = new App.SqlTree { title = "x"; placeholderText = "Select schemas" }
+  ["dsnTreeMap"] = new App.DsnTreeMap { title = "x"; mapConfig = new Mapping {}; placeholderText = "Select a connection" }
+}
+
+// Rendered as the configmap renders a widget, so a null `placeholder` is
+// checked against the real output rather than the Pkl object.
+local function rendered(el: App.UIElement): Map<String, Any> =
+  new json.Parser { useMapping = true }.parse(
+    new JsonRenderer { omitNullProperties = true }.renderValue(el)
+  )["ui"].toMap()
+
+facts {
+  ["Each widget renders its own ui.widget (the test table is keyed correctly)"] {
+    unset.toMap().every((w, el) -> rendered(el)["widget"] == w)
+    set.toMap().every((w, el) -> rendered(el)["widget"] == w)
+  }
+
+  ["placeholderText renders ui.placeholder on all 9 widgets"] {
+    set.toMap().every((_, el) -> rendered(el)["placeholder"] == el.placeholderText)
+  }
+
+  ["Unset placeholderText emits no ui.placeholder key on all 9 widgets"] {
+    unset.toMap().every((_, el) -> !rendered(el).containsKey("placeholder"))
+  }
+
+  ["SqlTree placeholderText reaches the generated configmap"] {
+    fullConfig["schemas"]["ui"]["placeholder"] == "Select schemas"
+  }
+}

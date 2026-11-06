@@ -1,0 +1,32 @@
+{
+  "id": "report",
+  "name": "Report",
+  "logo": "https://assets.atlan.com/assets/download.svg",
+  "config": {
+    "properties": {
+      "objectstore-credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "credentialType": "csa-connectors-objectstore",
+          "isTestAuthenticationDisabled": false
+        }
+      }
+    },
+    "steps": [
+      {
+        "title": "Delivery",
+        "description": "",
+        "id": "delivery",
+        "properties": [
+          "objectstore-credential-guid"
+        ]
+      }
+    ]
+  }
+}

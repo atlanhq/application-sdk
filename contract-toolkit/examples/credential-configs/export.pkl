@@ -1,0 +1,79 @@
+/// Export entrypoint for the credential-configs example.
+///
+/// Emits three credential configmaps: its primary credential, plus two listed in
+/// `additionalCredentialConfigs`, a wrapped delivery config and the shared bare
+/// object-store config.
+amends "../../src/App.pkl"
+
+import "../../src/Connectors.pkl"
+import "objectstore.pkl" as ObjectStore
+
+name = "export"
+displayName = "Export"
+icon = "https://assets.atlan.com/assets/download.svg"
+connector = Connectors.S3
+// Named after the bundle so every entrypoint can share the credType.
+connectorConfigName = "atlan-connectors-credential-configs"
+
+credentialAuthOptions {
+  ["api"] = new AuthOption {
+    label = "API token"
+    fields {
+      new FieldSpec { name = "password"; displayName = "Atlan API token"; sensitive = true; width = 6 }
+    }
+  }
+}
+
+additionalCredentialConfigs {
+  // Wrapped: carries the full credential wrapper and hidden identity properties.
+  // `connector` falls back to the app's.
+  new CredentialConfig {
+    name = "atlan-connectors-credential-configs-delivery"
+    authTitle = "Output destination"
+    authOptions {
+      ["s3"] = new AuthOption {
+        label = "S3"
+        nestedLabel = "S3 bucket"
+        nestedHidden = false
+        fields {
+          new FieldSpec { name = "username"; displayName = "AWS access key"; required = false; width = 6 }
+          new FieldSpec { name = "password"; displayName = "AWS secret key"; sensitive = true; required = false; width = 6 }
+        }
+        extraFields {
+          new FieldSpec { name = "s3-bucket-name"; displayName = "S3 bucket name"; placeholder = "my-bucket"; width = 4 }
+        }
+      }
+      ["email"] = new AuthOption {
+        label = "Email"
+        nestedLabel = "Email"
+        nestedHidden = false
+        extraFields {
+          new FieldSpec { name = "recipients"; displayName = "Recipients"; placeholder = "a@example.com"; width = 8 }
+        }
+      }
+    }
+  }
+  ObjectStore.config
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["credential-guid"] = new CredentialInput {
+          credType = "atlan-connectors-credential-configs"
+        }
+      }
+    }
+    ["Delivery"] {
+      inputs {
+        ["delivery-credential-guid"] = new CredentialInput {
+          credType = "atlan-connectors-credential-configs-delivery"
+        }
+        ["objectstore-credential-guid"] = new CredentialInput {
+          credType = "csa-connectors-objectstore"
+        }
+      }
+    }
+  }
+}
