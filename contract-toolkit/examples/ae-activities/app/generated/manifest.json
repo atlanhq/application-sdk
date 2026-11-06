@@ -1,0 +1,164 @@
+{
+  "execution_mode": "automation-engine",
+  "dag": {
+    "fetch_asset": {
+      "node_type": "activity",
+      "activity_name": "fetch_entities",
+      "activity_display_name": "Fetch Assets",
+      "app_name": "automation-engine",
+      "inputs": {
+        "input": {
+          "sql_input_file": "artifacts/apps/ae-activities/queries/asset.sql",
+          "engine": "duckdb"
+        }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 3600,
+        "heartbeat_timeout_seconds": 60
+      }
+    },
+    "merge_asset": {
+      "node_type": "activity",
+      "activity_name": "merge",
+      "activity_display_name": "Aggregate Assets",
+      "app_name": "automation-engine",
+      "inputs": {
+        "input_prefixes": [
+          "$.fetch_asset.outputs.output_path"
+        ],
+        "sql": "SELECT * FROM input_0"
+      },
+      "depends_on": {
+        "node_id": "fetch_asset",
+        "tag": "success"
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 3600,
+        "heartbeat_timeout_seconds": 60
+      }
+    },
+    "fetch_glossary": {
+      "node_type": "activity",
+      "activity_name": "fetch_entities",
+      "activity_display_name": "Fetch Glossaries",
+      "app_name": "automation-engine",
+      "inputs": {
+        "input": {
+          "sql_input_file": "artifacts/apps/ae-activities/queries/glossary.sql",
+          "engine": "duckdb"
+        }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 3600,
+        "heartbeat_timeout_seconds": 60
+      }
+    },
+    "merge_glossary": {
+      "node_type": "activity",
+      "activity_name": "merge",
+      "activity_display_name": "Aggregate Glossaries",
+      "app_name": "automation-engine",
+      "inputs": {
+        "input_prefixes": [
+          "$.fetch_glossary.outputs.output_path"
+        ],
+        "sql": "SELECT * FROM input_0"
+      },
+      "depends_on": {
+        "node_id": "fetch_glossary",
+        "tag": "success"
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 3600,
+        "heartbeat_timeout_seconds": 60
+      }
+    },
+    "fetch_product": {
+      "node_type": "activity",
+      "activity_name": "fetch_entities",
+      "activity_display_name": "Fetch Products",
+      "app_name": "automation-engine",
+      "inputs": {
+        "input": {
+          "sql_input_file": "artifacts/apps/ae-activities/queries/product.sql",
+          "engine": "duckdb"
+        }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 3600,
+        "heartbeat_timeout_seconds": 60
+      }
+    },
+    "merge_product": {
+      "node_type": "activity",
+      "activity_name": "merge",
+      "activity_display_name": "Aggregate Products",
+      "app_name": "automation-engine",
+      "inputs": {
+        "input_prefixes": [
+          "$.fetch_product.outputs.output_path"
+        ],
+        "sql": "SELECT * FROM input_0"
+      },
+      "depends_on": {
+        "node_id": "fetch_product",
+        "tag": "success"
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 3600,
+        "heartbeat_timeout_seconds": 60
+      }
+    },
+    "post_fetch": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Enrich and Export",
+      "app_name": "ae-activities",
+      "inputs": {
+        "workflow_type": "ae-activities:post-fetch",
+        "app_name": "ae-activities",
+        "task_queue": "atlan-ae-activities-{deployment_name}",
+        "args": {
+          "asset_path": "$.merge_asset.outputs.output_path",
+          "glossary_path": "$.merge_glossary.outputs.output_path",
+          "product_path": "$.merge_product.outputs.output_path",
+          "metadata": {
+            "qn-prefix": "{{qn-prefix}}"
+          },
+          "app_name": "ae-activities"
+        }
+      },
+      "depends_on": {
+        "and_conditions": [
+          {
+            "node_id": "merge_asset",
+            "tag": "success"
+          },
+          {
+            "node_id": "merge_glossary",
+            "tag": "success"
+          },
+          {
+            "node_id": "merge_product",
+            "tag": "success"
+          }
+        ]
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 43200
+      }
+    },
+    "upload": {
+      "node_type": "activity",
+      "activity_name": "object_store_upload",
+      "activity_display_name": "Upload Export",
+      "app_name": "automation-engine",
+      "inputs": {
+        "source_path": "$.post_fetch.outputs.export_path"
+      },
+      "depends_on": {
+        "node_id": "post_fetch",
+        "tag": "success"
+      }
+    }
+  }
+}

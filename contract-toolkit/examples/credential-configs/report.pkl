@@ -1,0 +1,29 @@
+/// Report entrypoint for the credential-configs example.
+///
+/// Has no primary credential (`hasCredentialConfig = false`). Its only
+/// credential configmap is the shared bare object-store config, which the bundle
+/// dedupes with the copy `export` declares.
+amends "../../src/App.pkl"
+
+import "objectstore.pkl" as ObjectStore
+
+name = "report"
+displayName = "Report"
+icon = "https://assets.atlan.com/assets/download.svg"
+hasCredentialConfig = false
+
+additionalCredentialConfigs {
+  ObjectStore.config
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Delivery"] {
+      inputs {
+        ["objectstore-credential-guid"] = new CredentialInput {
+          credType = "csa-connectors-objectstore"
+        }
+      }
+    }
+  }
+}

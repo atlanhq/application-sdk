@@ -64,6 +64,8 @@ demonstrates distinct feature surface, verified by `tests/*.pkl`.
   diverse widgets, UIRules, extraNodes.
 - `bundle`: multi-entrypoint app (crawler + miner); shared credential configmap;
   per-entrypoint artifact subfolders.
+- `credential-configs`: `additionalCredentialConfigs` — more than one credential
+  configmap per entrypoint, including a bare (wrapper-less) one; hoisted and deduped.
 - `deploy`: single-pool migration example — KEDA, resources, env, pool-level `overrides`; shows v0.16.x → v0.17.0 migration path.
 - `pools`: `pools` map (preferred) — named hot/cold worker pools with per-pool `cooldownPeriod` and resources.
 - `system-app`: `type = "system"` — no `entrypoints` block or card, no credential config, no `uiConfig`; typed `inputs` render `_input.py` with no manifest, and `contract/generated/input.pkl`, synced into the toolkit as `src/system/<name>.pkl` for callers.
@@ -71,6 +73,8 @@ demonstrates distinct feature surface, verified by `tests/*.pkl`.
 - `connection-ref`: `ConnectionRefInput` widget, `pipeline.publish = null`.
 - `publish-controls`: publish toggles, `includeInputFields`, `errorHandling`, `zeroOutConfig`.
 - `fanin`: multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
+- `ae-activities`: `FetchEntitiesNode`, `MergeNode` and generic `ActivityNode` in
+  `extraNodes`; AE activity nodes mixed with a `DAGNode`, no `extract` step.
 - `artifact-schemas`: `artifactSchemas` data hand-off declarations — parquet + NDJSON, nested paths, arrays of structs (`[]` element step), an input artifact.
 
 ## Editing Rules

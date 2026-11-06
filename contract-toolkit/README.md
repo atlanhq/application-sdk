@@ -103,6 +103,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/tree-filters/`](examples/tree-filters/) — extraction app whose include/exclude filters are tree pickers with `treeSelection = true`; `AppInputContract` extends `TreeSelectionExtractionInput`.
 - [`examples/full/`](examples/full/) — every overridable feature: JDBC URL auth, all pipeline steps, diverse widgets, UIRules, extraNodes.
 - [`examples/bundle/`](examples/bundle/) — multi-entrypoint app (crawler + miner); shared credential configmap; per-entrypoint artifact subfolders.
+- [`examples/credential-configs/`](examples/credential-configs/) — `additionalCredentialConfigs`: an entrypoint that emits more than one credential configmap (primary + wrapped delivery + bare object-store), and one whose only credential is the shared bare config. The bundle hoists and dedupes them. See [CredentialConfig](docs/reference.md#credentialconfig--additional-credential-configmaps).
 - [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`packageId` on the card entrypoint; route-only entrypoint has none).
 - [`examples/behind-the-scenes/`](examples/behind-the-scenes/) — single-entrypoint app with `marketplaceCard = false`; routable but no marketplace card or `package_id` emitted.
 - [`examples/system-app/`](examples/system-app/) — `type = "system"`: an in-tenant app started by other apps' DAG nodes. No `entrypoints` block, no card, no credential config, no manifest. Typed `inputs` (string, number, enum, bounded list/map, nested object) render `_input.py` without a `uiConfig`. They also render `contract/generated/input.pkl`, the typed DAG node that is synced into the toolkit as `src/system/<name>.pkl` for callers to import.
@@ -112,6 +113,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/connection-ref/`](examples/connection-ref/) — `ConnectionRefInput` widget, `pipeline.publish = null`.
 - [`examples/publish-controls/`](examples/publish-controls/) — publish toggles, `includeInputFields`, `errorHandling`, `zeroOutConfig`.
 - [`examples/fanin/`](examples/fanin/) — multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
+- [`examples/ae-activities/`](examples/ae-activities/) — Automation Engine activity nodes in `extraNodes`: `FetchEntitiesNode` → `MergeNode` branches fanning in to an app workflow, plus a generic `ActivityNode`.
 - [`examples/agent-e2e/`](examples/agent-e2e/) — agent/SDR e2e codegen: `_e2e_credential.py` emits both `<Name>CredentialBody` (direct) and `<Name>AgentCredentialBody` (lightweight), plus an `extraction-method` ConditionalInput whose `overrideEnum` widens the substitutions `Literal` to `["direct", "agent"]`.
 - [`examples/scheduled/`](examples/scheduled/) — cron background job via `schedules`; renders `triggers.schedules` into `manifest.json` (multiple schedules, non-UTC timezone, a `PAUSED` one). See [Schedules](docs/reference.md#schedules-background-jobs).
 - [`examples/streaming/`](examples/streaming/) — streaming dispatch via `streaming.enabled`: AE starts one short run per Kafka micro-batch and hands it the batch (the generated input model reads it from `batch_key`), instead of a per-batch run that reads the Iceberg events table. Two streaming triggers and `streamingWorkflowType` on the entrypoint. Its own app because a streaming entrypoint cannot also carry schedules or batch triggers — one extract node cannot serve both shells. See [Streaming Dispatch](docs/reference.md#streaming-dispatch-on-event-triggers).
@@ -233,7 +235,7 @@ The single entry point for all new native app contracts. Amend this module and d
 
 - App metadata: `name`, `displayName`, `connector`, `icon`
 - Marketplace metadata: `shortDescription`, `longDescription`, `tags` (emitted top-level into `atlan.yaml`; Build & Publish syncs `tags` to the Global Marketplace App row after each publish, where marketplace search reads them as keywords; `atlan app register` sends all three when it creates the app); `docsUrl` (emitted top-level into `atlan.yaml`)
-- Credential config: `credentialCommonFields`, `credentialAuthOptions`, `credentialConnectorType`
+- Credential config: `credentialCommonFields`, `credentialAuthOptions`, `credentialConnectorType`; extra or bare (wrapper-less) credential configmaps via `additionalCredentialConfigs`
 - Workflow config: `uiConfig` (form steps and fields using `Widgets.*` types)
 - Pipeline: typed `pipeline` block (extract → parseQueries → popularity → lineage → publish)
 - Deployment: `deploy` (typed `DeployConfig?` — app-level `dapr` / `overrides` plus a named `pools` map; pool keys must match `@task(pool="…")` strings) — see `Deployment.pkl`. `dapr.objectstore` defaults to `true` and must stay on: the SDK requires the deployment object store and fails at startup without it (conformance rule K029 flags `false`)
@@ -401,6 +403,24 @@ To replace the generated node, define `extraNodes["notifications"]`.
 | `extraNodes { ["lineage-publish"] = new LineagePublishNode { ... } }` | `pipeline.publish.lineagePublish = new LineagePublishStep { ... }` |
 
 `extraNodes` is still available as an escape hatch for nodes that fall outside the canonical pipeline (e.g. custom fan-in steps).
+
+**AE activity nodes.** A `DAGNode` always starts a child workflow (`execute_workflow`). To call an Automation Engine activity directly, put a `FetchEntitiesNode`, a `MergeNode`, or the generic `ActivityNode` in `extraNodes`. These render `node_type: "activity"` with the activity's own `inputs`, and allow `errorHandling.heartbeatTimeoutSeconds`. Their `errorHandling` defaults to `null`, so AE's per-activity timeouts apply. See [AE Activity Nodes](docs/reference.md#ae-activity-nodes-fetchentitiesnode-mergenode-activitynode) and [`examples/ae-activities/`](examples/ae-activities/).
+
+```pkl
+extraNodes {
+  ["fetch_assets"] = new FetchEntitiesNode {
+    displayName = "Fetch Assets"
+    sqlInputFile = "artifacts/queries/assets.sql"
+    engine = "duckdb"
+  }
+  ["merge"] = new MergeNode {
+    displayName = "Aggregate Assets"
+    inputPrefixes { "$.fetch_assets.outputs.output_path" }
+    sql = "SELECT * FROM input_0"
+    dependsOn { "fetch_assets" }
+  }
+}
+```
 
 ## Pools Map
 

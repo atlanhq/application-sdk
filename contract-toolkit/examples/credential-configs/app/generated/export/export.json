@@ -1,0 +1,67 @@
+{
+  "id": "export",
+  "name": "Export",
+  "logo": "https://assets.atlan.com/assets/download.svg",
+  "config": {
+    "properties": {
+      "credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "credentialType": "atlan-connectors-credential-configs",
+          "isTestAuthenticationDisabled": false
+        }
+      },
+      "delivery-credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "credentialType": "atlan-connectors-credential-configs-delivery",
+          "isTestAuthenticationDisabled": false
+        }
+      },
+      "objectstore-credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "credentialType": "csa-connectors-objectstore",
+          "isTestAuthenticationDisabled": false
+        }
+      }
+    },
+    "steps": [
+      {
+        "title": "Credential",
+        "description": "",
+        "id": "credential",
+        "properties": [
+          "credential-guid"
+        ]
+      },
+      {
+        "title": "Delivery",
+        "description": "",
+        "id": "delivery",
+        "properties": [
+          "delivery-credential-guid",
+          "objectstore-credential-guid"
+        ]
+      }
+    ]
+  }
+}
