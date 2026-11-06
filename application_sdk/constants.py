@@ -1132,17 +1132,19 @@ DUCKDB_COMMON_TEMP_FOLDER = "/tmp/incremental_duckdb"
 
 #: Upper bound on DuckDB's memory limit. A connection opened without an
 #: explicit ``memory_limit`` gets this when the container has no memory limit;
-#: otherwise it gets the smaller of this and a share of the container limit
-#: (see ``duckdb_utils.default_duckdb_memory_limit``).
+#: otherwise it gets the smaller of this and a share of the container's free
+#: memory (see ``duckdb_utils.default_duckdb_memory_limit``).
 DUCKDB_DEFAULT_MEMORY_LIMIT = "2GB"
 
 #: ``DUCKDB_DEFAULT_MEMORY_LIMIT`` in bytes (DuckDB's ``GB`` is 1000^3).
 DUCKDB_MAX_MEMORY_LIMIT_BYTES = 2 * 1000**3
 
-#: Share of the container memory limit a default DuckDB connection may use.
-#: The rest stays with the worker process itself, so a scan spills to
-#: ``temp_directory`` instead of pushing the container into an OOM kill.
-DUCKDB_MEMORY_LIMIT_FRACTION = 0.4
+#: Share of the container's free memory (limit minus current usage) that the
+#: DuckDB connections opened without an explicit ``memory_limit`` may use
+#: between them. The rest is a reserve for the worker's own growth and for
+#: DuckDB's allocations outside its buffer manager, so a scan spills to
+#: ``temp_directory`` rather than pushing the container toward an OOM kill.
+DUCKDB_MEMORY_LIMIT_FRACTION = 0.5
 
 #: Lower bound, in bytes, on a container-derived DuckDB memory limit.
 DUCKDB_MIN_MEMORY_LIMIT_BYTES = 256 * 1024 * 1024

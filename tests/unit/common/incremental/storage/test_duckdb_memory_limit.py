@@ -34,6 +34,8 @@ def _effective_limit_bytes(manager: DuckDBConnectionManager) -> int:
 @pytest.fixture
 def no_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(duckdb_utils, "DUCKDB_MEMORY_LIMIT_OVERRIDE", "", raising=False)
+    # Usage unknown unless a test says otherwise: the whole limit counts as free.
+    monkeypatch.setattr(cgroup, "memory_usage_bytes", lambda: None)
 
 
 def test_default_limit_fits_small_container(
@@ -42,7 +44,56 @@ def test_default_limit_fits_small_container(
     monkeypatch.setattr(cgroup, "memory_limit_bytes", lambda: _SMALL_CONTAINER)
     with DuckDBConnectionManager(base_path=str(tmp_path)) as manager:
         limit = _effective_limit_bytes(manager)
-    assert limit <= 0.4 * _SMALL_CONTAINER + 1024**2
+    assert limit <= 0.5 * _SMALL_CONTAINER + 1024**2
+
+
+def test_default_limit_is_sized_from_free_memory_not_the_whole_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, no_override
+) -> None:
+    """The motivating case: the worker already holds 80% of a 1.95 GiB
+    container, so ~399 MiB is free. DuckDB must get less than that, not 40%
+    of the whole limit (~798 MiB), or it OOMs the container before spilling."""
+    used = int(0.8 * _SMALL_CONTAINER)
+    monkeypatch.setattr(cgroup, "memory_limit_bytes", lambda: _SMALL_CONTAINER)
+    monkeypatch.setattr(cgroup, "memory_usage_bytes", lambda: used)
+    with DuckDBConnectionManager(base_path=str(tmp_path)) as manager:
+        limit = _effective_limit_bytes(manager)
+    assert limit < _SMALL_CONTAINER - used
+
+
+def test_concurrent_managers_share_the_free_memory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, no_override
+) -> None:
+    """Each open manager may still grow, so a second one gets a share, not
+    its own full budget, and the two together stay inside the free memory."""
+    container = 8 * 1024**3
+    used = 4 * 1024**3
+    monkeypatch.setattr(cgroup, "memory_limit_bytes", lambda: container)
+    monkeypatch.setattr(cgroup, "memory_usage_bytes", lambda: used)
+    with DuckDBConnectionManager(base_path=str(tmp_path / "a")) as first:
+        with DuckDBConnectionManager(base_path=str(tmp_path / "b")) as second:
+            a = _effective_limit_bytes(first)
+            b = _effective_limit_bytes(second)
+    assert b < a
+    assert a + b <= container - used
+    # Both closed: the next one gets the whole share again.
+    assert duckdb_utils.default_duckdb_memory_limit(duckdb_utils._open_managers) == (
+        f"{min(2 * 1000**3, (container - used) // 2) // 1024**2}MiB"
+    )
+
+
+def test_a_manager_that_fails_to_open_releases_its_slot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, no_override
+) -> None:
+    before = duckdb_utils._open_managers
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("cannot open")
+
+    monkeypatch.setattr(duckdb_utils.duckdb, "connect", boom)
+    with pytest.raises(RuntimeError):
+        DuckDBConnectionManager(base_path=str(tmp_path))
+    assert duckdb_utils._open_managers == before
 
 
 def test_default_limit_without_container_limit_is_2gb(
