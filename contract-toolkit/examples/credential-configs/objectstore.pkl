@@ -1,7 +1,8 @@
 // Shared object-store credential config for the credential-configs example.
 //
-// A bare (`bare = true`) config: only `{"config": {properties, anyOf}}`, with no
-// credential wrapper and no hidden name/connector/connectorType properties. This
+// A bare config (`wrapper = false`, `identityProperties = false`): only
+// `{"config": {properties, anyOf}}`, with no credential envelope and no hidden
+// name/connector/connectorType properties. This
 // is the shape of a legacy marketplace credential type such as
 // `csa-connectors-objectstore`, whose existing credentials were created from a
 // form without those properties.
@@ -37,7 +38,8 @@ local function field(n: String, w: App.UIElement): App.NamedWidget = new { name 
 
 config: App.CredentialConfig = new {
   name = "csa-connectors-objectstore"
-  bare = true
+  wrapper = false
+  identityProperties = false
   authTitle = "Cloud object store"
   authDefault = "s3"
   authWidth = 8
@@ -47,7 +49,7 @@ config: App.CredentialConfig = new {
       nestedLabel = "S3"
       nestedHidden = false
       nestedHelp = "Details for accessing information from Amazon S3."
-      nestedGrid = 8
+      nestedWidth = 8
       fields {
         field("username", input("AWS access key", "Enter your AWS access key.", "", 4))
         field("password", secret("AWS secret key", "Enter your AWS secret key.", 4))
@@ -71,7 +73,7 @@ config: App.CredentialConfig = new {
       nestedLabel = "GCS"
       nestedHidden = false
       nestedHelp = "Details for accessing information from Google Cloud Storage (GCS)."
-      nestedGrid = 8
+      nestedWidth = 8
       fields {
         field("username", input("Project ID", "Enter the ID of the GCP project.", "", 4))
         field("password", secret("Service account JSON", "Enter the JSON for your service account credentials.", 8))
@@ -85,7 +87,7 @@ config: App.CredentialConfig = new {
       nestedLabel = "ADLS"
       nestedHidden = false
       nestedHelp = "Details for access information from Azure Data Lake Storage (ADLS)."
-      nestedGrid = 8
+      nestedWidth = 8
       fields {
         field("username", input("Azure client ID", "Enter the unique application (client) ID assigned to your app by Azure AD when the app was registered.", "", 4))
         field("password", secret("Azure client secret", "Enter your client secret.", 4))

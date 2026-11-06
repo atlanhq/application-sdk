@@ -884,7 +884,7 @@ class LineagePublishStep {               // wraps LineagePublishNode
 | `credentialAuthHiddenEnumListForCreating` | Listing<String>? | null | Auth-type enum values hidden during credential creation. |
 | `credentialNamePlaceholder` | String | `"Host Name"` | Placeholder for hidden credential `name` field. |
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. Requires all `credentialAuthOptions` to be `JDBCUrlAuthOption`. |
-| `additionalCredentialConfigs` | Listing<CredentialConfig> | `[]` | Extra credential configmaps beyond `<connectorConfigName>.json`, optionally bare. See [CredentialConfig](#credentialconfig--additional-credential-configmaps). |
+| `additionalCredentialConfigs` | Listing<CredentialConfig> | `[]` | Extra credential configmaps beyond `<connectorConfigName>.json`; `wrapper` / `identityProperties` reproduce legacy shapes. See [CredentialConfig](#credentialconfig--additional-credential-configmaps). |
 
 The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.length == 1` — when the connector declares a single auth option, the radio is hidden and the default value is still emitted. No manual flag is required.
 
@@ -1439,7 +1439,7 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | `credentialNamePlaceholder` | String | `"Host Name"` | Placeholder for the hidden credential `name` field. |
 | `credentialConnectorDefault` | String? | null | Optional default for the hidden credential `connector` field. |
 | `credentialUrlGroup` | AdvancedJDBCUrlGroup? | null | Opt-in JDBC Host↔URL credential form. When set, every `credentialAuthOptions` entry must be a `JDBCUrlAuthOption`. See [AdvancedJDBCUrlGroup](#advancedjdbcurlgroup--hostrlarrowurl-jdbc-credential-form). |
-| `additionalCredentialConfigs` | Listing<CredentialConfig> | `[]` | Extra credential configmaps beyond `<connectorConfigName>.json`, optionally bare. See [CredentialConfig](#credentialconfig--additional-credential-configmaps). |
+| `additionalCredentialConfigs` | Listing<CredentialConfig> | `[]` | Extra credential configmaps beyond `<connectorConfigName>.json`; `wrapper` / `identityProperties` reproduce legacy shapes. See [CredentialConfig](#credentialconfig--additional-credential-configmaps). |
 
 The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.length == 1` — when the connector declares a single auth option, the radio is hidden and the default value is still emitted. No manual flag is required.
 
@@ -1830,7 +1830,7 @@ open class AuthOption {
   nestedPlaceholder: String?                                      // Custom placeholder for nested section wrapper
   nestedHidden: Boolean = true                                    // Hide nested auth pane by default
   nestedHelp: String?                                             // `ui.help` on the nested pane; omitted when null
-  nestedGrid: Int?                                                // `ui.grid` on the nested pane; omitted when null
+  nestedWidth: Int?                                               // `ui.grid` on the nested pane; omitted when null
   nestedExtraLabel: String = ""                                   // Label on the per-option `extra` nested section
   nestedExtraHeader: String? = "Advanced"                         // Header on `extra`; null omits it
 }
@@ -1947,9 +1947,10 @@ object-store delivery target.
 
 ```pkl
 class CredentialConfig {
-  name: String                                  // Configmap name = file stem = credType. Must start with atlan-connectors- or csa-connectors-
-  bare: Boolean = false                         // true: emit only {"config": {properties, anyOf}}
-  connector: String?                            // Wrapper `connector`; defaults to the app's connector
+  name: String                                  // Configmap name = file stem = credType: (atlan|csa)-connectors-<kebab-case>
+  wrapper: Boolean = true                       // false: no icon/helpdeskLink/logo/connector/defaultConnectorType
+  identityProperties: Boolean = true            // false: no hidden name/connector/connectorType properties
+  connector: String?                            // Envelope `connector`; defaults to the app's. Refused when !wrapper
   connectorType: String = "rest"                // Wrapper `defaultConnectorType`
   icon: String?; logo: String?; helpdeskLink: String?   // Wrapper keys; default to the app's
   authOptions: Mapping<String, AuthOption>      // Radio options + nested panes + anyOf rules
@@ -1959,8 +1960,8 @@ class CredentialConfig {
   authDefault: String?                          // Defaults to the first authOptions key
   authRules: Listing<Dynamic>?; authPlaceholder: String?; authWidth: Int?
   authHiddenEnumListForCreating: Listing<String>?
-  namePlaceholder: String = "Host Name"         // Hidden `name` property; ignored when bare
-  connectorDefault: String?                     // Hidden `connector` default; ignored when bare
+  namePlaceholder: String = "Host Name"         // Hidden `name` property
+  connectorDefault: String?                     // Hidden `connector` default; refused when !identityProperties
 }
 ```
 
@@ -1969,16 +1970,28 @@ auth-type radio, panes and `anyOf` rules have the same shape. The knobs mirror t
 top-level properties of the same name. `credentialUrlGroup` (JDBC Host↔URL) applies
 only to the primary config.
 
-**`bare`.** By default an entry carries the full credential wrapper: top-level
-`icon`, `helpdeskLink`, `logo`, `connector`, `defaultConnectorType`, plus hidden
-`name` / `connector` / `connectorType` form properties. `bare = true` drops all of
-them. Use it only to reproduce a legacy configmap that never had them, such as the
-`@atlan/connectors` `csa-connectors-objectstore` form. The wrapper is not neutral
-for such a type:
+**`wrapper` and `identityProperties`.** By default an entry carries what the
+primary carries:
+
+- the envelope: top-level `icon`, `helpdeskLink`, `logo`, `connector`,
+  `defaultConnectorType`;
+- hidden `name` / `connector` / `connectorType` form properties.
+
+Turn either off only to reproduce a legacy credential type whose form never had
+it. Neither is neutral for such a type:
 
 - the SDK configmap route returns `defaultConnectorType` as
   `data.defaultConnectorType`;
 - the hidden properties are submitted in every credential body the form creates.
+
+| Legacy shape | `wrapper` | `identityProperties` |
+|---|---|---|
+| `@atlan/connectors` `csa-connectors-objectstore` (bare `{"config": ...}`) | `false` | `false` |
+| Credential.pkl configs, e.g. generic-miner's object-store form (envelope, no identity properties) | `true` | `false` |
+
+A field that a flag turns off is refused rather than ignored: `connector` / `icon` /
+`logo` / `helpdeskLink` with `wrapper = false`, `connectorDefault` with
+`identityProperties = false`.
 
 **Output.** A single-entrypoint contract writes `app/generated/<name>.json` per
 entry. A bundle hoists these files to `app/generated/` and dedupes them by name,
@@ -1992,16 +2005,21 @@ credentials are additional ones still emits them.
 
 **Refused at generation:**
 
+- a multi-entrypoint bundle root, which emits no form or credential of its own:
+  declare the entry on each entrypoint's `contract`;
 - no `uiConfig`, since nothing could select the config;
-- a name without the `atlan-connectors-` / `csa-connectors-` prefix (the SDK treats
-  only those stems as credential templates, so any other stem can be served as the
-  setup form);
+- a name that is not `atlan-connectors-` / `csa-connectors-` plus lowercase
+  kebab-case (the SDK treats only those stems as credential templates, so any other
+  stem can be served as the setup form; `/` or `..` would write outside
+  `app/generated/`);
 - duplicate names, or a name that collides with the primary, workflow config or
   manifest;
-- a non-bare entry with no connector on the entry or the app.
+- an entry with `wrapper = true` and no connector on the entry or the app;
+- a field the entry's flags make unused (see above).
 
 Example: `examples/credential-configs/` is a bundle. Its `export` entrypoint emits
-a primary, a wrapped delivery config and a shared bare object-store config. Its
+a primary, a wrapped delivery config and a shared bare object-store config
+(`wrapper = false`, `identityProperties = false`). Its
 `report` entrypoint has no primary, only the shared object-store config, which the
 bundle writes once.
 
@@ -4254,6 +4272,12 @@ deploy = new DeployConfig {
 
 For Argo-era apps only. Do not use for new native apps (use `FieldSpec` instead). Still used
 by CSA connector credential configs.
+
+An App.pkl contract that needs a second credential configmap, the job a
+`NativeApp.pkl` `additionalOutputFiles` + Credential.pkl pairing used to do, lists it in
+`additionalCredentialConfigs` instead. Set `identityProperties = false` to keep
+Credential.pkl's output shape (envelope, no hidden identity properties). See
+[CredentialConfig](#credentialconfig--additional-credential-configmaps).
 
 Widget classes come from the modern `Widgets.pkl` module (not the older `Config.pkl`), and
 Credential.pkl re-exports them as unqualified typealiases — mirroring App.pkl — so a credential

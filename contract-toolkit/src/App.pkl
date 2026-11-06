@@ -444,7 +444,8 @@ credentialFieldName: String? = if (hasCredentialConfig) "\(name.replaceAll("-", 
 /// selects a type that is not its own connection credential. An example is an
 /// object-store delivery target (`CredentialInput { credType = "<name>" }`).
 /// Each entry is a [CredentialConfig], rendered by the same renderer as the
-/// primary config. `bare = true` reproduces a legacy config with no wrapper.
+/// primary config. `wrapper` / `identityProperties` reproduce legacy configs
+/// that lack the envelope keys or the hidden identity properties.
 ///
 /// Output: one `app/generated/<name>.json` per entry. In a multi-entrypoint
 /// bundle these are hoisted to `app/generated/` and deduped by name, like the
@@ -455,10 +456,12 @@ credentialFieldName: String? = if (hasCredentialConfig) "\(name.replaceAll("-", 
 /// e2e credential codegen still describe only the primary credential. Works with
 /// `hasCredentialConfig = false`, for an app whose only credentials are these.
 ///
-/// Refused at generation when `uiConfig` is null (nothing could select it), when
-/// a name lacks the `atlan-connectors-` / `csa-connectors-` prefix, when names
-/// collide with each other or with the primary / workflow config, and when a
-/// non-bare entry has no connector.
+/// Refused at generation on a bundle root (declare it on each entrypoint's
+/// contract), when `uiConfig` is null (nothing could select it), when a name is
+/// not `atlan-connectors-` / `csa-connectors-` plus kebab-case, when names
+/// collide with each other or with the primary / workflow config, when an entry
+/// with `wrapper = true` has no connector, and when an entry sets a field its
+/// flags make it ignore.
 additionalCredentialConfigs: Listing<CredentialConfig> = new Listing {}
 
 // ── WORKFLOW / UI CONFIG ──────────────────────────────────────────────────────
@@ -949,8 +952,8 @@ open class AuthOption {
   /// Help text on the nested pane (`ui.help`). Omitted when null.
   nestedHelp: String?
 
-  /// Grid width of the nested pane (`ui.grid`). Omitted when null.
-  nestedGrid: Int?
+  /// Width of the nested pane (`ui.grid`; 8 is full width). Omitted when null.
+  nestedWidth: Int?
 
   nestedExtraLabel: String = ""
 
@@ -969,27 +972,34 @@ open class AuthOption {
 /// `credType = "<name>"`.
 class CredentialConfig {
   /// Configmap name, which is also the file stem and the `credentialType`.
-  /// Must start with `atlan-connectors-` or `csa-connectors-`: the SDK treats
-  /// only those stems as credential templates, so it never serves one as a
-  /// setup form.
+  /// Must be `atlan-connectors-` or `csa-connectors-` plus lowercase
+  /// kebab-case: the SDK treats only those stems as credential templates, so
+  /// it never serves one as a setup form.
   name: String
 
-  /// Emit only `{"config": {properties, anyOf}}`.
+  /// Emit the top-level envelope keys: `icon`, `helpdeskLink`, `logo`,
+  /// `connector`, `defaultConnectorType`. Default `true`, as for the primary.
   ///
-  /// Default `false` emits the full credential wrapper: top-level `icon`,
-  /// `helpdeskLink`, `logo`, `connector`, `defaultConnectorType`, plus the
-  /// hidden `name` / `connector` / `connectorType` form properties.
+  /// `false` emits only `{"config": ...}`. Use it only to reproduce a legacy
+  /// configmap that never had them, e.g. the `@atlan/connectors`
+  /// `csa-connectors-objectstore` form: the SDK configmap route returns
+  /// `defaultConnectorType` to the frontend. With `false`, setting `connector`,
+  /// `icon`, `logo` or `helpdeskLink` is refused, since nothing would read them.
+  wrapper: Boolean = true
+
+  /// Emit the hidden `name` / `connector` / `connectorType` form properties.
+  /// Default `true`, as for the primary.
   ///
-  /// Set `true` only to reproduce a legacy configmap that never had them, e.g.
-  /// the `@atlan/connectors` `csa-connectors-objectstore` form. Adding the
-  /// hidden properties would change the body the frontend submits for every
-  /// credential of that type. A bare config ignores `connector`,
-  /// `connectorType`, `icon`, `logo`, `helpdeskLink`, `namePlaceholder` and
-  /// `connectorDefault`.
-  bare: Boolean = false
+  /// `false` leaves them out. Use it only for a legacy credential type whose
+  /// form never had them (both `csa-connectors-objectstore` and Credential.pkl
+  /// configs such as generic-miner's object-store form): the frontend submits
+  /// these properties in every credential body, so adding them changes what
+  /// existing credentials of that type look like. With `false`, setting
+  /// `connectorDefault` is refused.
+  identityProperties: Boolean = true
 
   /// Top-level `connector`. Defaults to the app's `connector`. Required (here
-  /// or on the app) unless `bare`.
+  /// or on the app) when `wrapper`.
   connector: String?
 
   /// Top-level `defaultConnectorType`.
@@ -1023,10 +1033,10 @@ class CredentialConfig {
   /// Auth-type options hidden during credential creation.
   authHiddenEnumListForCreating: Listing<String>?
 
-  /// Placeholder for the hidden `name` property. Ignored when `bare`.
+  /// Placeholder for the hidden `name` property. Unused when `!identityProperties`.
   namePlaceholder: String = "Host Name"
 
-  /// Default for the hidden `connector` property. Ignored when `bare`.
+  /// Default for the hidden `connector` property. Requires `identityProperties`.
   connectorDefault: String?
 }
 
@@ -2417,7 +2427,7 @@ local function renderAuthOption(opt: AuthOption): Mapping<String, Any> = new Map
     when (opt.nestedPlaceholder != null) { ["placeholder"] = opt.nestedPlaceholder }
     ["hidden"] = opt.nestedHidden
     when (opt.nestedHelp != null) { ["help"] = opt.nestedHelp }
-    when (opt.nestedGrid != null) { ["grid"] = opt.nestedGrid }
+    when (opt.nestedWidth != null) { ["grid"] = opt.nestedWidth }
     ["nestedValue"] = false
   }
   when (!opt.fields.isEmpty || !opt.extraFields.isEmpty || !opt.postExtraFields.isEmpty) {
@@ -2478,7 +2488,7 @@ local function renderJdbcAuthOption(opt: AuthOption): Mapping<String, Any> = new
     when (opt.nestedPlaceholder != null) { ["placeholder"] = opt.nestedPlaceholder }
     ["hidden"] = opt.nestedHidden
     when (opt.nestedHelp != null) { ["help"] = opt.nestedHelp }
-    when (opt.nestedGrid != null) { ["grid"] = opt.nestedGrid }
+    when (opt.nestedWidth != null) { ["grid"] = opt.nestedWidth }
     ["nestedValue"] = false
   }
   when (!opt.fields.isEmpty || !opt.extraFields.isEmpty || !opt.postExtraFields.isEmpty) {
@@ -2941,7 +2951,7 @@ local function renderCredentialConfig(c: CredentialConfig, urlGroup: AdvancedJDB
   // Same rule as `credentialAuthHidden`: a one-option radio adds nothing.
   let (authHidden = c.authOptions.length == 1)
   new Mapping {
-  when (!c.bare) {
+  when (c.wrapper) {
     ["icon"] = c.icon ?? icon
     ["helpdeskLink"] = c.helpdeskLink ?? helpdeskLink
     ["logo"] = c.logo ?? logo
@@ -2950,7 +2960,7 @@ local function renderCredentialConfig(c: CredentialConfig, urlGroup: AdvancedJDB
   }
   ["config"] = new Mapping {
     ["properties"] = new Mapping {
-      when (!c.bare) {
+      when (c.identityProperties) {
         ["name"] = new Mapping {
           ["type"] = "string"
           ["required"] = false
@@ -5354,31 +5364,36 @@ local additionalCredentialConfigOutputs: Map<String, FileOutput> =
     renderer = new JsonRenderer {}
   })
 
-/// The SDK's credential-template stems (`CREDENTIAL_TEMPLATE_PREFIXES` in
-/// `application_sdk/common/_generated_tree.py`). Any other stem is a setup-form
-/// candidate, so a credential config named otherwise could be served as a form.
-local credentialTemplatePrefixes: List<String> = List("atlan-connectors-", "csa-connectors-")
-
 /// Refuse an additional credential config that would be silently dropped,
 /// overwritten, mistaken for a setup form, or rendered without a connector.
 local _additionalCredentialConfigsCheck: Any =
   let (cs = additionalCredentialConfigs.toList())
   let (names = cs.map((c) -> c.name))
-  let (badPrefix = names.filter((n) -> !credentialTemplatePrefixes.any((p) -> n.startsWith(p))))
+  // Prefix plus kebab-case only: the name is a file stem under app/generated/,
+  // so `/` or `..` would write outside it or alias another output file.
+  let (badPrefix = names.filter((n) -> !n.matches(Regex(#"(atlan|csa)-connectors-[a-z0-9]+(-[a-z0-9]+)*"#))))
   let (dupes = names.filter((n) -> names.filter((m) -> m == n).length > 1).distinct)
-  let (reserved = List(workflowConfigName, "manifest")
+  let (reserved = List(workflowConfigName)
     + (if (hasCredentialConfig && credentialAuthOptions != null) List(connectorConfigName) else List()))
   let (clashes = names.filter((n) -> reserved.contains(n)))
-  let (noConnector = cs.filter((c) -> !c.bare && c.connector == null && connector == null).map((c) -> c.name))
+  let (noConnector = cs.filter((c) -> c.wrapper && c.connector == null && connector == null).map((c) -> c.name))
+  let (unusedWrapperKeys = cs.filter((c) -> !c.wrapper
+    && (c.connector != null || c.icon != null || c.logo != null || c.helpdeskLink != null)).map((c) -> c.name))
+  let (unusedIdentityKeys = cs.filter((c) -> !c.identityProperties && c.connectorDefault != null).map((c) -> c.name))
   if (cs.isEmpty) null
+  else if (!entrypoints.isEmpty)
+    throw("additionalCredentialConfigs \(names) are declared on a multi-entrypoint bundle root, which "
+      + "renders no setup form or credential config of its own, so they would be dropped. Declare them on "
+      + "the `contract` of each entrypoint whose form selects them; the bundle hoists and dedupes them.")
   else if (uiConfig == null)
     throw("additionalCredentialConfigs \(names) are declared on a contract with no uiConfig. "
       + "Credential configs are emitted only alongside a setup form, so they would be dropped. "
       + "Declare a uiConfig with a CredentialInput that selects them, or remove them.")
   else if (!badPrefix.isEmpty)
-    throw("additionalCredentialConfigs name(s) \(badPrefix.join(", ")) must start with "
-      + "`atlan-connectors-` or `csa-connectors-`. The SDK treats only those stems as credential "
-      + "templates; any other stem can be served as the entrypoint's setup form.")
+    throw("additionalCredentialConfigs name(s) \(badPrefix.join(", ")) must be `atlan-connectors-` or "
+      + "`csa-connectors-` followed by lowercase kebab-case (a-z, 0-9, single hyphens). The SDK treats only "
+      + "those stems as credential templates, so any other stem can be served as the setup form; and the "
+      + "name is a file stem under app/generated/, so `/` or `..` would write outside it.")
   else if (!dupes.isEmpty)
     throw("additionalCredentialConfigs declares \(dupes.join(", ")) more than once. Each name is one file.")
   else if (!clashes.isEmpty)
@@ -5386,7 +5401,13 @@ local _additionalCredentialConfigsCheck: Any =
       + "already emits (the primary credential config, the workflow config or manifest). Rename them.")
   else if (!noConnector.isEmpty)
     throw("additionalCredentialConfigs \(noConnector.join(", ")) render the credential wrapper but have no "
-      + "connector. Set `connector` on the entry or the app, or set `bare = true` for a wrapper-less legacy config.")
+      + "connector. Set `connector` on the entry or the app, or set `wrapper = false` for a legacy config with no envelope.")
+  else if (!unusedWrapperKeys.isEmpty)
+    throw("additionalCredentialConfigs \(unusedWrapperKeys.join(", ")) set `wrapper = false` but also set "
+      + "`connector`, `icon`, `logo` or `helpdeskLink`, which only the envelope carries. Remove them.")
+  else if (!unusedIdentityKeys.isEmpty)
+    throw("additionalCredentialConfigs \(unusedIdentityKeys.join(", ")) set `identityProperties = false` but also set "
+      + "`connectorDefault`, which only the hidden `connector` property carries. Remove it.")
   else null
 
 hidden _credentialConflictCheck: Any =
