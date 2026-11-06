@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -114,6 +115,18 @@ def test_referenced_repos_reads_every_git_source_form(tmp_path: Path) -> None:
     ]
 
 
+def test_referenced_repos_ignores_commented_out_sources(tmp_path: Path) -> None:
+    """A commented-out source is not a dependency and must not widen the
+    token's scope (9 fleet apps carry such a block for experimental-app-sdk)."""
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.uv.sources]\n"
+        '# x = { git = "https://github.com/atlanhq/commented-dep.git" }\n'
+        '    #  y = { git = "ssh://git@github.com/atlanhq/indented-commented" }\n'
+        'z = { git = "https://github.com/atlanhq/live-dep" }\n'
+    )
+    assert git_auth.referenced_repos(tmp_path) == ["live-dep"]
+
+
 def test_private_repos_drops_the_public_ones(tmp_path: Path) -> None:
     (tmp_path / "uv.lock").write_text(
         'source = { git = "https://github.com/atlanhq/application-sdk?tag=v3#a" }\n'
@@ -154,6 +167,85 @@ def test_is_public_asks_git_with_no_credential_at_all(
     assert env["GIT_CONFIG_NOSYSTEM"] == "1"
     assert env["GIT_TERMINAL_PROMPT"] == "0"
     assert not any(k.startswith("GIT_CONFIG_KEY") for k in env)
+
+
+# ── the allowlist: a PR cannot widen the token's scope ──────────────────────
+
+
+def test_the_allowlist_is_the_reviewed_set() -> None:
+    """Widening it is an SDK change, and shows up here in review."""
+    assert git_auth.ALLOWED_PRIVATE_DEPS == {
+        "atlan-query-intelligence-app",
+        "sqlglot-for-lorien",
+        "server-sdk",
+        "ai-application-sdk",
+    }
+    assert git_auth.AGGREGATOR_REPOS == {"atlanhq/common-app-server"}
+
+
+def _names_unlisted(tmp_path: Path) -> Path:
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "uv.lock").write_text(
+        'source = { git = "ssh://git@github.com/atlanhq/atlan-query-intelligence-app?tag=v1#a" }\n'
+        'source = { git = "https://github.com/atlanhq/some-other-private-repo?tag=v1#b" }\n'
+    )
+    return app
+
+
+def test_repos_refuses_an_unlisted_private_repo_before_any_mint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    app = _names_unlisted(tmp_path)
+    output = tmp_path / "out"
+    monkeypatch.setattr(git_auth, "is_public", lambda name: False)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setenv("GITHUB_REPOSITORY", "atlanhq/atlan-some-app")
+    assert git_auth.main(["repos", "--project-dir", str(app)]) == 1
+    out = capsys.readouterr().out
+    assert "::error title=Private git dependency not allowed::" in out
+    assert "some-other-private-repo" in out
+    # No scope written, so the mint step (gated on a non-empty list) is skipped.
+    assert not output.exists()
+
+
+def test_mirror_refuses_an_unlisted_private_repo(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    app = _names_unlisted(tmp_path)
+    rc = git_auth.prepare_mirrors(
+        {
+            "GIT_TOKEN": TOKEN,
+            "PRIVATE_GIT_DEPS": "true",
+            "GITHUB_REPOSITORY": "atlanhq/atlan-some-app",
+        },
+        project_dir=app,
+        dest=tmp_path / "git-mirrors",
+        public=lambda name: False,
+        clone_rewrite={r: "file:///nonexistent/" for r in git_auth.ATLANHQ_REMOTES},
+    )
+    assert rc == 1
+    assert "some-other-private-repo" in capsys.readouterr().out
+    assert not (tmp_path / "git-mirrors").exists()
+
+
+def test_an_aggregator_may_name_any_private_repo() -> None:
+    private = ["atlan-query-intelligence-app", "atlan-redshift-app"]
+    assert git_auth.refused_repos(
+        private, {"GITHUB_REPOSITORY": "atlanhq/atlan-some-app"}
+    ) == ["atlan-redshift-app"]
+    assert (
+        git_auth.refused_repos(
+            private, {"GITHUB_REPOSITORY": "atlanhq/common-app-server"}
+        )
+        == []
+    )
+    # Never by name lookalike: the full owner/repo must match.
+    assert git_auth.refused_repos(
+        private, {"GITHUB_REPOSITORY": "someone/common-app-server"}
+    ) == ["atlan-redshift-app"]
 
 
 # ── mirror, then run: the token never reaches uv or its ancestors ─────────
@@ -235,16 +327,19 @@ def _mirror(
     tmp_path: Path,
     **env: str,
 ) -> tuple[int, str]:
-    """The mirror step: the only one given the token."""
-    rc = git_auth.prepare_mirrors(
-        {"PATH": os.environ.get("PATH", ""), **env},
-        project_dir=project,
-        dest=tmp_path / _MIRRORS,
-        public=lambda name: False,
-        clone_rewrite={
-            remote: f"file://{remotes}/" for remote in git_auth.ATLANHQ_REMOTES
-        },
-    )
+    """The mirror step: the only one given the token. The synthetic
+    ``private-dep`` stands in for a listed repository."""
+    allowed = git_auth.ALLOWED_PRIVATE_DEPS | {"private-dep"}
+    with mock.patch.object(git_auth, "ALLOWED_PRIVATE_DEPS", allowed):
+        rc = git_auth.prepare_mirrors(
+            {"PATH": os.environ.get("PATH", ""), **env},
+            project_dir=project,
+            dest=tmp_path / _MIRRORS,
+            public=lambda name: False,
+            clone_rewrite={
+                remote: f"file://{remotes}/" for remote in git_auth.ATLANHQ_REMOTES
+            },
+        )
     return rc, capfd.readouterr().out
 
 

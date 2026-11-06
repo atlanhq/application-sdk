@@ -854,7 +854,12 @@ Instead:
    then `rm -rf .sdk-git-auth`; and mint a read-only fleet App token
    (`continue-on-error: true`) scoped to exactly that list. When the list is
    empty, skip the mint: `create-github-app-token` with no `repositories`
-   grants the whole installation. Never fall back to `ORG_PAT_GITHUB`. Inline,
+   grants the whole installation. The list is also capped by
+   `ALLOWED_PRIVATE_DEPS` in `git_auth.py`: a PR controls its own
+   `pyproject.toml` and `uv.lock`, so an app naming any other private repo
+   fails closed (`repos` and `mirror` both refuse it). Only aggregator repos in
+   `AGGREGATOR_REPOS` (common-app-server), matched on `GITHUB_REPOSITORY`, may
+   name any. Never fall back to `ORG_PAT_GITHUB`. Inline,
    not a composite: callers pin composites `@main`, so a new one cannot run
    before it merges, and composite steps cannot `continue-on-error`.
    `.github/scripts/tests/_scoped_mint.py` pins the shape.

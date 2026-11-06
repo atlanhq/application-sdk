@@ -44,8 +44,9 @@ Environment for ``mirror``:
     got no token would otherwise fail later, inside uv, on an unauthenticated
     clone that says nothing about why.
 
-``repos`` prints the private atlanhq repositories the project names, comma
-separated, and writes ``repositories=<list>`` to ``$GITHUB_OUTPUT`` when it is
+``repos`` prints the private atlanhq repositories the project names (and
+fails when one is not in ``ALLOWED_PRIVATE_DEPS``, unless the repository is an
+``AGGREGATOR_REPOS`` entry), comma separated, and writes ``repositories=<list>`` to ``$GITHUB_OUTPUT`` when it is
 set. Workflows mint the fleet App token scoped to exactly that list
 (``actions/create-github-app-token``'s ``repositories``), and skip the mint
 when it is empty: an empty ``repositories`` would grant every repository in
@@ -100,6 +101,43 @@ _GIT_SOURCE = re.compile(
     r"""(?:\bgit\s*=\s*["']|\bgit\+)"""
     r"(?:https://|ssh://git@)github\.com/atlanhq/([A-Za-z0-9._-]+)"
 )
+
+#: The private atlanhq repositories an app may name as a git dependency, and so
+#: the most a private-dependency token is ever scoped to. A PR controls its own
+#: pyproject.toml / uv.lock, so the scope cannot come from them alone: an app
+#: naming a private repository not listed here fails closed, in both ``repos``
+#: (before any token is minted) and ``mirror``. This file is read from the
+#: workflow's own commit (``job.workflow_sha``), never from the PR's tree, so
+#: only an SDK change can widen it (lens F-6e4829 on #4731).
+#:
+#: Private git dependencies are an anti-pattern (there is no private package
+#: registry); this list is the existing debt, not an invitation. Do not add to
+#: it without a plan to remove the entry.
+ALLOWED_PRIVATE_DEPS = frozenset(
+    {
+        # The query redactors (query-redaction), used by 9 SQL connectors.
+        "atlan-query-intelligence-app",
+        # Atlan's SQLGlot fork, installed in place of upstream sqlglot.
+        # Only atlan-query-intelligence-app depends on it.
+        "sqlglot-for-lorien",
+        # MIGRATE (near-term): consumers (atlan-enrichment-studio-app,
+        # atlan-memory-app) move to the atlan-application-sdk-api package this
+        # repo publishes, then this entry is removed.
+        "server-sdk",
+        # MIGRATE (near-term): the usage-metering client
+        # (ai_application_sdk.metering), pinned to a different raw commit by
+        # each consumer (atlan-automation-engine-app,
+        # atlan-enrichment-studio-app, wisdom). Move it to a published package,
+        # then remove this entry.
+        "ai-application-sdk",
+    }
+)
+
+#: Repositories that may name ANY private atlanhq repository: aggregators that
+#: bundle other apps. Matched against ``GITHUB_REPOSITORY``, which GitHub sets
+#: for the run and a PR cannot change. Their own PRs can widen their token's
+#: scope; that is the accepted cost of an aggregator.
+AGGREGATOR_REPOS = frozenset({"atlanhq/common-app-server"})
 
 GIT_TIMEOUT_SECONDS = 600
 LS_REMOTE_TIMEOUT_SECONDS = 60
@@ -157,7 +195,14 @@ def referenced_repos(project_dir: str | os.PathLike[str] = ".") -> list[str]:
         for name in files:
             if name in SCANNED_FILES:
                 text = Path(root, name).read_text(encoding="utf-8", errors="replace")
-                names.update(_repo_name(m) for m in _GIT_SOURCE.findall(text))
+                # A commented-out source (`# x = { git = "..." }`) is not a
+                # dependency, and must not widen the token's scope.
+                live = "\n".join(
+                    line
+                    for line in text.splitlines()
+                    if not line.lstrip().startswith("#")
+                )
+                names.update(_repo_name(m) for m in _GIT_SOURCE.findall(live))
     return sorted(n for n in names if n)
 
 
@@ -204,6 +249,28 @@ def private_repos(
     """The private atlanhq repositories the project names."""
     public = is_public if public is None else public
     return [n for n in referenced_repos(project_dir) if not public(n)]
+
+
+def refused_repos(
+    private: Sequence[str], environ: Mapping[str, str] | None = None
+) -> list[str]:
+    """The private repos in *private* this repository may not fetch."""
+    environ = os.environ if environ is None else environ
+    if environ.get("GITHUB_REPOSITORY", "") in AGGREGATOR_REPOS:
+        return []
+    return sorted(set(private) - ALLOWED_PRIVATE_DEPS)
+
+
+def _refuse(refused: Sequence[str]) -> None:
+    print(
+        "::error title=Private git dependency not allowed::"
+        f"This app names private atlanhq repositories that are not on the "
+        f"application-sdk allowlist: {', '.join(refused)}. The fleet token is "
+        "never scoped to them. Private git dependencies are being removed "
+        "from the fleet: depend on a published package instead "
+        "(ALLOWED_PRIVATE_DEPS in application-sdk's .github/scripts/git_auth.py).",
+        flush=True,
+    )
 
 
 def mirror_set(private: Sequence[str], referenced: Sequence[str]) -> list[str]:
@@ -304,6 +371,10 @@ def prepare_mirrors(
     private = [n for n in referenced if not public(n)]
     if not private:
         return 0
+    refused = refused_repos(private, environ)
+    if refused:
+        _refuse(refused)
+        return 1
     if not token:
         print(MISSING_TOKEN_ERROR, flush=True)
         return 1
@@ -398,7 +469,12 @@ def main(argv: list[str] | None = None) -> int:
     repos_parser.add_argument("--project-dir", default=".")
     args = parser.parse_args(argv)
     if args.mode == "repos":
-        write_repos_output(private_repos(args.project_dir))
+        private = private_repos(args.project_dir)
+        refused = refused_repos(private)
+        if refused:
+            _refuse(refused)
+            return 1
+        write_repos_output(private)
         return 0
     if args.mode == "mirror":
         return prepare_mirrors(project_dir=args.project_dir)
