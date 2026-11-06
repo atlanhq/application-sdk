@@ -47,7 +47,7 @@ on:
         type: string
         default: "1.0.0"
       private_git_auth:
-        description: "Set true if the app has a private-org (atlanhq) git dependency that `uv lock` must resolve during the version bump. When true, atlanhq GitHub remotes are rewritten to token auth (via ORG_PAT_GITHUB) before `uv lock` runs, so resolution of the private git source succeeds. Default false — apps with only PyPI deps are unaffected. Mirrors the `private_git_auth` input in build-and-publish-app.yaml."
+        description: "Set true if the app has a private-org (atlanhq) git dependency that `uv lock` must resolve during the version bump. When true, a read-only fleet App token scoped to the app's private atlanhq repos is used by git_auth.py to mirror-clone them, and `uv lock` resolves from the local mirrors with no token in its env (FND-4740), so resolution of the private git source succeeds. Default false — apps with only PyPI deps are unaffected. Mirrors the `private_git_auth` input in build-and-publish-app.yaml."
         required: false
         type: boolean
         default: false
@@ -92,15 +92,6 @@ jobs:
       new: ${{ steps.bump.outputs.new }}
       base_sha: ${{ steps.base.outputs.sha }}
       lease: ${{ steps.base.outputs.lease }}
-
-    env:
-      # Referenced from step-level `if:` guards below, which cannot read
-      # `secrets` directly. Deliberately ORG_PAT_GITHUB and never the fleet App
-      # token minted below: that token is scoped to `repositories:
-      # <caller repo>`, so it cannot clone a *different* private atlanhq repo
-      # (e.g. a query-redaction dep living in another repo) and would fail the
-      # same way the unauthenticated runner does today.
-      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
 
     steps:
       - name: Mint fleet App token
@@ -153,33 +144,65 @@ jobs:
           CURRENT=$(uvx --from=toml-cli toml get --toml-path=pyproject.toml project.version)
           echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
 
-      # The flag promises a token, but `secrets: inherit` resolves an unset org
-      # secret to an empty string rather than failing — so without this guard
-      # the rewrite below installs a redirect of every atlanhq URL to an
-      # *unauthenticated* token URL, and the job dies far from the cause.
-      # Condition stays in `if:`, never in the shell (docs/standards/ci.md).
-      - name: Require ORG_PAT_GITHUB when private_git_auth is set
-        if: inputs.private_git_auth && env.GIT_TOKEN == ''
-        run: |
-          echo "::error::private_git_auth is true but ORG_PAT_GITHUB is unset"
-          exit 1
+      # `uv lock` (in the re-lock steps below) re-resolves the dependency
+      # graph, which for a private atlanhq git source clones that repo. A
+      # second token, not the one minted above: that one is scoped to this
+      # repo and can write; this one can only read the dependency repos.
+      # Private atlanhq git deps: a read-only fleet App token scoped to the
+      # private repos the app names (none named: no mint). It only reaches
+      # git_auth.py's mirror clones: uv, and every build backend it runs,
+      # install from local mirrors with no token in their env (FND-4740,
+      # lens round 5). A failed mint gets the named error below.
+      # Scoped to the private atlanhq repos the app names (git_auth.py
+      # repos: its pyproject.toml / uv.lock files, public repos dropped).
+      # No mint when it names none: create-github-app-token with no
+      # `repositories` would grant the whole installation. The script comes
+      # from this workflow's own commit (job.workflow_sha), so it is the
+      # version that matches the workflow running it.
+      - name: Checkout SDK git_auth.py (private git deps)
+        if: inputs.private_git_auth
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/git_auth.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-git-auth
+          persist-credentials: false
 
-      # `uv lock` (in "Bump version" below) re-resolves the full dependency
-      # graph after the version bump, which for a private-org git source
-      # requires cloning that repo. The default checkout has no auth for other
-      # atlanhq repos, so rewrite atlanhq remotes to token auth first.
-      # ORG_PAT_GITHUB (not the repo-scoped fleet App token minted above) is
-      # used because the dependency lives in a *different* repo. Mirrors
-      # build-and-publish-app.yaml.
-      #
-      # Torn down again after the changelog step, before the push: the checkout
-      # above authenticates via git's `extraheader`, and leaving a userinfo
-      # rewrite in place would hand the push a second, different credential.
-      - name: Configure git auth for private dependencies
-        if: inputs.private_git_auth && env.GIT_TOKEN != ''
+      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
+        id: git-deps-repos
+        if: inputs.private_git_auth
         run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+          set -euo pipefail
+          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
+          # Out of the workspace: it is the image build context and the tree
+          # conformance and pre-commit look at.
+          rm -rf .sdk-git-auth
+
+      - name: Mint read-only token for private git dependencies
+        id: git-deps-token
+        if: inputs.private_git_auth && steps.git-deps-repos.outputs.repositories != ''
+        # A failed mint leaves the token empty; see the guard below.
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
+          # workflow's own commit, never the PR's tree: the repos step above
+          # fails the job for any private repo not on it, so a PR's
+          # pyproject.toml / uv.lock cannot widen this scope.
+          repositories: ${{ steps.git-deps-repos.outputs.repositories }}
+          permission-contents: read
+
+      # Condition stays in `if:`, never in the shell (docs/standards/ci.md).
+      - name: Require the token when private_git_auth is set
+        if: inputs.private_git_auth && steps.git-deps-repos.outputs.repositories != '' && steps.git-deps-token.outputs.token == ''
+        run: |
+          echo "::error title=No token for private git dependencies::private_git_auth is true but the fleet App token did not mint. Pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (secrets: inherit, or name both in an explicit secrets: mapping)."
+          exit 1
 
       - name: Bump version
         id: bump
@@ -201,15 +224,38 @@ jobs:
             "${{ inputs.target_branch }}" \
             "${{ steps.versions.outputs.current }}" \
             --first-release-version "${{ inputs.first_release_version }}"
-          uv lock
           NEW=$(uvx --from=toml-cli toml get --toml-path=pyproject.toml project.version)
           echo "new=${NEW}" >> "$GITHUB_OUTPUT"
+
+      # The re-lock is a no-op when the version did not change. Two steps, so
+      # an app without private git deps runs plain `uv lock` exactly as before
+      # and never needs git_auth.py: a caller pinning `sdk_scripts_ref` to a
+      # revision older than that script keeps working.
+      - name: Re-lock after the version bump
+        if: ${{ !inputs.private_git_auth }}
+        run: uv lock
+
+      # The only step that holds the token: it mirror-clones the app's private
+      # atlanhq deps into $RUNNER_TEMP/git-mirrors and exits, so neither uv nor
+      # any ancestor of it has the token when a build backend runs (lens
+      # rounds 5-6).
+      - name: Mirror private git dependencies
+        if: inputs.private_git_auth
+        env:
+          GIT_TOKEN: ${{ steps.git-deps-token.outputs.token }}
+          PRIVATE_GIT_DEPS: "true"
+        run: python3 .sdk-scripts/.github/scripts/git_auth.py mirror
+
+      # No token here: `uv lock` resolves the private deps from the mirrors.
+      - name: Re-lock after the version bump (private git deps)
+        if: inputs.private_git_auth
+        run: python3 .sdk-scripts/.github/scripts/git_auth.py run -- uv lock
 
       # release.py sets skip=true when the target branch already carries the
       # version it computed — this run is looking at a frozen merge ref that
       # predates a release which has already merged and published, so bumping
       # again would open a duplicate release PR (application-sdk#3570).
-      # Guarding the two mutating steps is enough: `uv lock` above is a no-op
+      # Guarding the two mutating steps is enough: the re-lock above is a no-op
       # when the version did not change, and the job then ends green having
       # done nothing. A caller pinned to an older sdk_scripts_ref never sets
       # this output, and an unset output is empty, so it behaves as before.
@@ -223,12 +269,6 @@ jobs:
         # the old Features/Bug Fixes notes, so Renovate merges keep not moving
         # the bump PR and its still-ungated CI does not re-run on each one.
         run: python3 .sdk-scripts/.github/scripts/update_changelog.py "${{ steps.versions.outputs.current }}" "${{ steps.bump.outputs.new }}" --sections auto
-
-      # Restore the pristine push path — see the rewrite step above. Runs on the
-      # same guard so it is a no-op for every caller that did not opt in.
-      - name: Drop private-dependency git rewrite before push
-        if: inputs.private_git_auth && env.GIT_TOKEN != ''
-        run: git config --global --unset-all url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf
 
       # Every force-push of the bump branch is a `synchronize` that re-runs all
       # PR CI on the open bump PR. Most merges — every Renovate one, since its

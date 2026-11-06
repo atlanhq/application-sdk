@@ -154,17 +154,15 @@ def test_no_step_reads_the_build_output_directly() -> None:
 
 
 def test_resolver_prefers_prebuilt_over_built() -> None:
+    """The precedence and the both-empty failure live in sdr_steps.py image-ref
+    (test_sdr_e2e_steps.py); this pins the wiring that feeds it."""
     step = _step(_SDR_ACTION, "Resolve effective image reference")
-    assert "${PREBUILT:-$BUILT}" in step["run"], (
-        "the resolver must prefer the caller-supplied prebuilt-image and fall "
-        "back to the built image"
-    )
-    # Both empty is a bug, not a degraded mode: an empty app_image reaches the
-    # configurator and surfaces as an opaque compose pull failure.
-    assert "exit 1" in step["run"], (
-        "the resolver must fail when neither an image was built nor one was "
-        "supplied, rather than emitting an empty reference"
-    )
+    assert step["env"]["PREBUILT"] == "${{ inputs.prebuilt-image }}"
+    assert step["env"]["BUILT"] == "${{ steps.build.outputs.image }}"
+    assert re.search(
+        r'sdr_steps\.py" image-ref\s*\\?\s*--prebuilt "\$PREBUILT" --built "\$BUILT"',
+        step["run"],
+    ), "the resolver must hand prebuilt-image and the built image to image-ref"
 
 
 # ── 4. Multi-arch on the install path ────────────────────────────────────────

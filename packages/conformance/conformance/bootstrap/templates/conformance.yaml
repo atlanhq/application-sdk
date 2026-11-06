@@ -63,7 +63,7 @@ jobs:
     # required checks. No `labeled` trigger: a label add on the same commit
     # started a second run that evicted the first (FND-3839).
     uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
-<% if conformance_private_git_deps %>    # private-git-deps needs ORG_PAT_GITHUB from the reusable's declared secrets.
+<% if conformance_private_git_deps %>    # private-git-deps needs FLEET_APP_ID / FLEET_APP_PRIVATE_KEY (read-only token).
     secrets: inherit
 <% endif %>    with:
       event_name: ${{ github.event_name }}

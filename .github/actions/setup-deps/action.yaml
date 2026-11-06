@@ -28,6 +28,18 @@ inputs:
       hit nothing is installed; on a miss the venv is built and saved as usual.
       For jobs that only seed the cache (warm-caches.yaml).
     default: "false"
+  git-auth-token:
+    required: false
+    description: |
+      A read-only GitHub token for an app that pins a PRIVATE atlanhq git
+      dependency. Empty (the default) installs without one. When set, the
+      install runs through `.github/scripts/git_auth.py`: only git sees the
+      token, to mirror-clone the private deps, and `uv sync` installs from the
+      local mirrors with no token in its env, so no build backend and no later
+      step (tests, hooks, app code) can read it (FND-4740). Never pass
+      ORG_PAT_GITHUB here; the reusables mint a read-only fleet App token
+      scoped to the app's private deps.
+    default: ""
 
 runs:
   using: "composite"
@@ -122,7 +134,7 @@ runs:
         lookup-only: ${{ inputs.lookup-only }}
 
     - name: Install dependencies
-      if: steps.cache-venv.outputs.cache-hit != 'true'
+      if: steps.cache-venv.outputs.cache-hit != 'true' && inputs.git-auth-token == ''
       shell: bash
       # Compile bytecode into the venv so the saved entry carries it. Without
       # it, every leg's xdist workers compile the same ~6,500 modules at once
@@ -141,3 +153,33 @@ runs:
         else
           "${{ github.action_path }}/../../scripts/with-retry.sh" uv sync --all-extras --all-groups
         fi
+
+    # An app with a private atlanhq git dependency: the ONLY step that holds the
+    # token. git_auth.py mirror-clones the private deps into
+    # $RUNNER_TEMP/git-mirrors and exits; the install below, and any later
+    # `git_auth.py run` in the job (the SDK repins), fetch from those mirrors
+    # with no token in their env or in any ancestor's, so no build backend
+    # can read it (lens rounds 5-6). Runs on a venv-cache hit too, for those
+    # later repins.
+    - name: Mirror private git dependencies
+      if: inputs.git-auth-token != ''
+      shell: bash
+      env:
+        GIT_TOKEN: ${{ inputs.git-auth-token }}
+        PRIVATE_GIT_DEPS: "true"
+      run: python3 "${{ github.action_path }}/../../scripts/git_auth.py" mirror
+
+    # The same install for that app, from the mirrors. A separate step, not a
+    # wrapper on the one above, so a caller with no token never needs
+    # `python3` (the SDK's Windows legs). No 3.14 dev-group carve-out: it
+    # exists for the SDK's own unit matrix, which never passes a token. A
+    # venv-cache hit already holds the dependency, so this, like the plain
+    # install, runs only on a miss.
+    - name: Install dependencies (private git dependencies)
+      if: steps.cache-venv.outputs.cache-hit != 'true' && inputs.git-auth-token != ''
+      shell: bash
+      env:
+        UV_COMPILE_BYTECODE: "1"
+      run: |
+        python3 "${{ github.action_path }}/../../scripts/git_auth.py" run -- \
+          "${{ github.action_path }}/../../scripts/with-retry.sh" uv sync --all-extras --all-groups
