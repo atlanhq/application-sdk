@@ -850,7 +850,7 @@ and all declared in `renovate-config/default.json`:
 
 | command | lane | what it does |
 |---|---|---|
-| `renovate-pkl-sync` | `app-contract-toolkit` | re-resolves the Pkl lock and regenerates contract artifacts |
+| `renovate-pkl-sync` | `app-contract-toolkit` | re-resolves the Pkl lock and regenerates contract artifacts with `regenerate_tree`, the one regeneration the freshness gate and `regenerate_contract.py` also use (certify's contract-drift check still runs `poe generate` until FND-4244 moves it onto `regenerate_tree`); commits everything it changes under `fileFilters` and warns about anything outside them (FND-4736) |
 | `renovate-uv-lock-bounded` | `lockFileMaintenance` | re-resolves `uv.lock` under the org §5 release-age bound, then strips uv's `[options]` block; `--hold` keeps the first-party packages, and every transitive the framework lane would move, at the base branch's version (FND-3481) |
 | `renovate-contract-ledger` | conformance package | regenerates `contract_schema.lock.json` at the conformance version the branch locked |
 

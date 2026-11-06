@@ -12,7 +12,6 @@ test_renovate_pkl_sync.py; this file pins the placement rules themselves.
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -102,25 +101,6 @@ def test_prefixed_preserves_reserved_frontend_subdir(tree):
     ).read_text() == "ui\n"
 
 
-def test_prefixed_reserved_subdir_survives_alongside_override_protection(tree):
-    """Reserved-subdir preservation and baseline override protection are
-    independent mechanisms that must not interfere with each other."""
-    _write(tree / "app" / "generated" / "frontend" / "static" / "index.html", "ui\n")
-    _write(tree / "app" / "generated" / "manifest.json", "old-toolkit\n")
-    _write(tree / "app" / "generated" / "connector.json", "hand-maintained\n")
-    _write(tree / "base" / "app" / "generated" / "manifest.json", "old-toolkit\n")
-    _write(tree / "base" / "app" / "generated" / "connector.json", "toolkit-default\n")
-    _write(tree / "out" / "app" / "generated" / "manifest.json", "new-toolkit\n")
-    _write(tree / "out" / "app" / "generated" / "connector.json", "toolkit-v2\n")
-
-    assert mod.swap_outputs(tree / "out", baseline_dir=tree / "base") is True
-
-    gen = tree / "app" / "generated"
-    assert gen.joinpath("manifest.json").read_text() == "new-toolkit\n"
-    assert gen.joinpath("connector.json").read_text() == "hand-maintained\n"
-    assert gen.joinpath("frontend", "static", "index.html").read_text() == "ui\n"
-
-
 def test_prefixed_reserved_subdir_absent_is_a_noop(tree):
     """No `frontend/` to preserve is the common case — must not error."""
     _write(tree / "out" / "app" / "generated" / "manifest.json", "fresh\n")
@@ -202,22 +182,6 @@ def test_prefixed_prunes_the_last_caller_node_but_not_contract(tree):
 
     assert not (tree / "contract" / "generated").exists()
     assert (tree / "contract" / "app.pkl").read_text() == "app\n"
-
-
-def test_prefixed_keeps_a_preserved_caller_node(tree):
-    """A caller node the app post-processes (it differs from what the previous
-    pin emitted) is preserved by override detection, never pruned."""
-    _write(tree / "contract" / "generated" / "input.pkl", "app-patched\n")
-    _write(tree / "base" / "app" / "generated" / "_input.py", "x\n")
-    _write(tree / "base" / "contract" / "generated" / "input.pkl", "old-toolkit\n")
-    _write(tree / "out" / "app" / "generated" / "_input.py", "x\n")
-    _write(tree / "out" / "contract" / "generated" / "input.pkl", "new-toolkit\n")
-
-    assert mod.swap_outputs(tree / "out", baseline_dir=tree / "base") is True
-
-    assert (
-        tree / "contract" / "generated" / "input.pkl"
-    ).read_text() == "app-patched\n"
 
 
 def test_native_never_prunes_caller_nodes(tree):
@@ -327,20 +291,39 @@ def test_native_honours_explicit_generated_dir(tree):
 # ── swap_outputs: nothing to place ───────────────────────────────────────────
 
 
-def test_root_only_copies_root_files_but_returns_false(tree, capsys):
-    """Root files are unambiguous in every layout so they are still copied, but
-    no generated artifact was placed — the caller must not report success."""
+def test_root_only_places_root_files_and_succeeds(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """FND-4736 reversed this: it used to return False. A contract that emits
+    only root files (two active apps ship exactly that) regenerates by placing
+    them, and returning False made every gate report it as not regenerating.
+    A reserved subdir (frontend/) is not a contract output, so it may stay."""
+    _write(tree / "app" / "generated" / "frontend" / "index.html", "<html/>\n")
+    _write(tree / "app" / "generated" / "__pycache__" / "x.pyc", "bytecode")
+    _write(tree / "out" / "atlan.yaml", "deploy: true\n")
+
+    assert mod.swap_outputs(tree / "out") is True
+
+    assert (tree / "atlan.yaml").read_text() == "deploy: true\n"
+    assert (tree / "app" / "generated" / "frontend" / "index.html").exists()
+    assert "emitted only root files" in capsys.readouterr().out
+
+
+def test_root_only_with_unemitted_generated_files_returns_false(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A root-only contract cannot vouch for generated files it does not emit.
+    Reporting success here let a gate that checks only what regeneration
+    changed pass a stale manifest, so it refuses and touches nothing."""
     _write(tree / "app" / "generated" / "manifest.json", "stale\n")
     _write(tree / "out" / "atlan.yaml", "deploy: true\n")
 
     assert mod.swap_outputs(tree / "out") is False
 
-    assert (tree / "atlan.yaml").read_text() == "deploy: true\n"
+    assert not (tree / "atlan.yaml").exists()
     assert (tree / "app" / "generated" / "manifest.json").read_text() == "stale\n"
-    assert (
-        "produced no generated contract artifacts (root-only)"
-        in capsys.readouterr().out
-    )
+    out = capsys.readouterr().out
+    assert "does not emit: manifest.json" in out
 
 
 def test_empty_output_returns_false(tree, capsys):
@@ -373,14 +356,20 @@ def test_post_generate_runs_from_repo_root_without_exec_bit(tree):
     assert (tree / "marker.txt").read_text().strip() == "patched"
 
 
-def test_post_generate_failure_warns_and_returns(tree, capsys):
-    """Best-effort: a failing step must not raise — it runs after the swap, so
-    the caller's fresh output stands and the diff is left for a human."""
+def test_post_generate_failure_warns_and_returns_false(tree, capsys):
+    """A failing step does not raise; it returns False so the caller can roll
+    the regeneration back (FND-4736)."""
     _write(tree / "contract" / mod.POST_GENERATE_SCRIPT, "exit 7\n")
 
-    mod.run_post_generate("contract")
+    assert mod.run_post_generate("contract") is False
 
-    assert "post-generate.sh failed" in capsys.readouterr().out
+    assert "post-generate.sh failed (exit 7)" in capsys.readouterr().out
+
+
+def test_post_generate_success_and_absence_return_true(tree):
+    assert mod.run_post_generate("contract") is True
+    _write(tree / "contract" / mod.POST_GENERATE_SCRIPT, "true\n")
+    assert mod.run_post_generate("contract") is True
 
 
 # ── unwired post-processing (FND-1777) ───────────────────────────────────────
@@ -526,210 +515,6 @@ def test_unwired_survives_an_unparseable_pyproject(tree, capsys):
     mod.run_post_generate("contract")
 
     assert capsys.readouterr().out == ""
-
-
-# ── override detection (app-post-processed files) ────────────────────────────
-
-
-def test_baseline_preserves_overridden_file_and_refreshes_the_rest(tree, capsys):
-    """The core of centralized override protection. `connector.json` is committed
-    with hand-maintained content that differs from what the old pin emitted, so
-    the app post-processes it -> preserve. `manifest.json` matches the old pin's
-    output exactly, so the toolkit owns it -> refresh."""
-    _write(tree / "app" / "generated" / "manifest.json", "old-toolkit\n")
-    _write(tree / "app" / "generated" / "connector.json", "hand-maintained\n")
-    # Baseline = what the PREVIOUS toolkit pin emitted.
-    _write(tree / "base" / "manifest.json", "old-toolkit\n")
-    _write(tree / "base" / "connector.json", "toolkit-default\n")
-    # New eval at the bumped pin.
-    _write(tree / "out" / "manifest.json", "new-toolkit\n")
-    _write(tree / "out" / "connector.json", "toolkit-default-v2\n")
-
-    assert mod.swap_outputs(tree / "out", baseline_dir=tree / "base") is True
-
-    gen = tree / "app" / "generated"
-    assert gen.joinpath("manifest.json").read_text() == "new-toolkit\n"
-    assert gen.joinpath("connector.json").read_text() == "hand-maintained\n"
-    assert "Preserved app-maintained generated file(s)" in capsys.readouterr().out
-
-
-def test_baseline_protection_also_covers_the_prefixed_wholesale_replace(tree):
-    """The prefixed family rmtree's the whole dir, so preserved content has to be
-    read out and written back — not just skipped."""
-    _write(tree / "app" / "generated" / "manifest.json", "old-toolkit\n")
-    _write(tree / "app" / "generated" / "connector.json", "hand-maintained\n")
-    _write(tree / "base" / "app" / "generated" / "manifest.json", "old-toolkit\n")
-    _write(tree / "base" / "app" / "generated" / "connector.json", "toolkit-default\n")
-    _write(tree / "out" / "app" / "generated" / "manifest.json", "new-toolkit\n")
-    _write(tree / "out" / "app" / "generated" / "connector.json", "toolkit-v2\n")
-
-    assert mod.swap_outputs(tree / "out", baseline_dir=tree / "base") is True
-
-    gen = tree / "app" / "generated"
-    assert gen.joinpath("manifest.json").read_text() == "new-toolkit\n"
-    assert gen.joinpath("connector.json").read_text() == "hand-maintained\n"
-
-
-def test_baseline_does_not_protect_a_newly_emitted_file(tree):
-    """A file absent from the baseline is new, not overridden — it must land."""
-    _write(tree / "app" / "generated" / "manifest.json", "old\n")
-    _write(tree / "base" / "manifest.json", "old\n")
-    _write(tree / "out" / "manifest.json", "new\n")
-    _write(tree / "out" / "brand-new.json", "new\n")
-
-    assert mod.swap_outputs(tree / "out", baseline_dir=tree / "base") is True
-
-    assert (tree / "app" / "generated" / "brand-new.json").exists()
-
-
-def test_without_baseline_everything_is_overwritten(tree):
-    """No baseline (no pin change in flight, or it could not be produced) keeps
-    the plain behaviour — overwrite, so regeneration is never a silent no-op."""
-    _write(tree / "app" / "generated" / "connector.json", "hand-maintained\n")
-    _write(tree / "out" / "connector.json", "toolkit-default\n")
-
-    assert mod.swap_outputs(tree / "out") is True
-
-    assert (
-        tree / "app" / "generated" / "connector.json"
-    ).read_text() == "toolkit-default\n"
-
-
-# ── baseline_contract_ref ────────────────────────────────────────────────────
-
-
-def _repo(tree: Path) -> None:
-    for args in (
-        ["init", "-q"],
-        ["config", "user.email", "t@e.com"],
-        ["config", "user.name", "t"],
-    ):
-        subprocess.run(["git", *args], cwd=tree, check=True, capture_output=True)
-
-
-def _commit(tree: Path, message: str) -> None:
-    subprocess.run(["git", "add", "-A"], cwd=tree, check=True, capture_output=True)
-    subprocess.run(
-        ["git", "commit", "-qm", message], cwd=tree, check=True, capture_output=True
-    )
-
-
-def test_baseline_ref_is_head_for_an_uncommitted_bump(tree):
-    """Renovate's postUpgradeTasks path: the pin is rewritten in the working tree
-    but not committed, so HEAD still holds the pre-bump pin."""
-    _repo(tree)
-    _write(tree / "contract" / "PklProject", "toolkit@1.0.0\n")
-    _commit(tree, "pin 1.0.0")
-    (tree / "contract" / "PklProject").write_text("toolkit@1.0.1\n")
-
-    assert mod.baseline_contract_ref("contract") == "HEAD"
-
-
-def test_baseline_ref_is_the_bump_commits_parent_when_committed(tree):
-    """The workflow-shim path: Renovate already committed the bump."""
-    _repo(tree)
-    _write(tree / "contract" / "PklProject", "toolkit@1.0.0\n")
-    _commit(tree, "pin 1.0.0")
-    parent = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=tree,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    (tree / "contract" / "PklProject").write_text("toolkit@1.0.1\n")
-    _commit(tree, "bump to 1.0.1")
-
-    assert mod.baseline_contract_ref("contract") == parent
-
-
-def test_baseline_ref_is_none_when_the_pin_is_unchanged(tree):
-    """No bump in flight — an ordinary PR. Protection must stay OFF here, or an
-    arbitrarily old baseline would freeze the tree and blind the freshness gate."""
-    _repo(tree)
-    _write(tree / "contract" / "PklProject", "toolkit@1.0.0\n")
-    _commit(tree, "pin 1.0.0")
-    _write(tree / "app" / "generated" / "manifest.json", "x\n")
-    _commit(tree, "unrelated change")
-
-    assert mod.baseline_contract_ref("contract") is None
-
-
-def test_baseline_ref_is_none_without_a_parent_commit(tree):
-    """Root commit (or a shallow clone that lacks the parent): no baseline, so the
-    caller overwrites and says so rather than preserving everything."""
-    _repo(tree)
-    _write(tree / "contract" / "PklProject", "toolkit@1.0.0\n")
-    _commit(tree, "initial, pin arrives in the root commit")
-
-    assert mod.baseline_contract_ref("contract") is None
-
-
-def test_baseline_ref_is_none_outside_a_repo(tree):
-    _write(tree / "contract" / "PklProject", "toolkit@1.0.0\n")
-
-    assert mod.baseline_contract_ref("contract") is None
-
-
-def test_export_contract_at_materialises_the_old_pin(tree):
-    _repo(tree)
-    _write(tree / "contract" / "PklProject", "toolkit@1.0.0\n")
-    _write(tree / "contract" / "app.pkl", "amends x\n")
-    _commit(tree, "pin 1.0.0")
-    (tree / "contract" / "PklProject").write_text("toolkit@1.0.1\n")
-    _commit(tree, "bump")
-
-    dest = tree / "exported"
-    assert mod.export_contract_at("HEAD~1", "contract", dest) is True
-    assert (dest / "contract" / "PklProject").read_text() == "toolkit@1.0.0\n"
-
-
-def test_export_contract_at_returns_false_for_a_bad_ref(tree):
-    _repo(tree)
-    _write(tree / "contract" / "PklProject", "x\n")
-    _commit(tree, "init")
-
-    assert mod.export_contract_at("nope-not-a-ref", "contract", tree / "e") is False
-
-
-def test_export_contract_at_accepts_a_multi_root_archive(tmp_path, monkeypatch):
-    """Validity is "the archive holds an evaluable contract", not "it holds
-    app.pkl". Requiring app.pkl meant a one-root-per-entrypoint app never got
-    a baseline, silently disabling override detection for exactly the apps
-    whose generated trees are most likely to be post-processed."""
-    src = tmp_path / "src"
-    (src / "contract").mkdir(parents=True)
-    (src / "contract" / "crawler.pkl").write_text(
-        'amends "@app-contract-toolkit/NativeApp.pkl"\n'
-    )
-    (src / "contract" / "credentials.pkl").write_text('name = "creds"\n')
-    for args in (
-        ["init", "-q"],
-        ["config", "user.email", "t@t"],
-        ["config", "user.name", "t"],
-        ["add", "-A"],
-        ["commit", "-qm", "c"],
-    ):
-        subprocess.run(["git", *args], cwd=src, check=True, capture_output=True)
-
-    monkeypatch.chdir(src)
-    dest = tmp_path / "dest"
-    assert mod.export_contract_at("HEAD", "contract", dest) is True
-
-    # an archive with only imported modules is NOT evaluable
-    src2 = tmp_path / "src2"
-    (src2 / "contract").mkdir(parents=True)
-    (src2 / "contract" / "credentials.pkl").write_text('name = "creds"\n')
-    for args in (
-        ["init", "-q"],
-        ["config", "user.email", "t@t"],
-        ["config", "user.name", "t"],
-        ["add", "-A"],
-        ["commit", "-qm", "c"],
-    ):
-        subprocess.run(["git", *args], cwd=src2, check=True, capture_output=True)
-    monkeypatch.chdir(src2)
-    assert mod.export_contract_at("HEAD", "contract", tmp_path / "dest2") is False
 
 
 @pytest.mark.parametrize(
