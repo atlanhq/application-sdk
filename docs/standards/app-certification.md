@@ -29,11 +29,12 @@ drift needs only `pkl`, so it runs either way.
 ### Private dependencies and GitHub tokens
 
 An app with a private atlanhq git dependency sets `private_git_auth: true`.
-The install step then authenticates atlanhq GitHub remotes with the fleet App
-token, minted with `contents: read` only. The token reaches git as
-`GIT_CONFIG_*` environment on the `uv sync` process alone. Nothing is written
-to git config, so the unit-test and coverage steps, which run app code, have no
-token to read. Those steps use `uv run --frozen` against what the install
+The install step then fetches the app's private atlanhq git dependencies with
+a fleet App token, minted with `contents: read` and scoped to those
+repositories. Only git sees it: the dependencies are mirror-cloned with the
+token, and `uv sync` installs from the local mirrors with no token in its
+environment. So no build backend `uv sync` runs, and none of the unit-test and
+coverage steps, which run app code, have a token to read. Those steps use `uv run --frozen` against what the install
 synced, so they never fetch.
 
 There is no `ORG_PAT_GITHUB` fallback for this credential. If the App token

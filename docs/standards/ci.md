@@ -792,11 +792,13 @@ secrets: |
   git_token=${{ steps.image-git-token.outputs.token }}
 ```
 
-The token itself is a read-only fleet App token minted in the same job
-(`actions/create-github-app-token` with `permission-contents: read`), never
-`ORG_PAT_GITHUB`. A secret mount keeps it out of the image, but not out of the
-`RUN`: every build backend that `uv sync` runs can read it.
-`test_image_build_git_token.py` pins this.
+The token itself is a read-only fleet App token minted in the same job by
+`.github/actions/private-deps-token`, scoped to the private atlanhq
+repositories the app names as git dependencies, never `ORG_PAT_GITHUB`. When
+the app names none, nothing is minted and no secret is passed. A secret mount
+keeps the token out of the image, but not out of the `RUN`: every build backend
+that `uv sync` runs can read it, which is why it is scoped to what the build
+needs. `test_image_build_git_token.py` pins this.
 
 ```dockerfile
 RUN --mount=type=secret,id=git_token,uid=1000 \
@@ -830,7 +832,7 @@ against a private git dependency fails on the next build rather than at merge.
 version string, a target arch, a base-image reference — are what `build-args`
 are for, and recording those in image history is a feature.
 
-## Never write a GitHub token into git config
+## Never let a GitHub token reach uv or app code
 
 An app with a private atlanhq git dependency needs a GitHub token for the
 `uv sync` or `uv lock` that clones it. Do not hand it over with
@@ -838,13 +840,22 @@ An app with a private atlanhq git dependency needs a GitHub token for the
 `env:`. Both leave the token readable by every later step: tests, pre-commit
 hooks, conformance series and anything else that imports app code.
 
+Do not put it in uv's environment either, not even as a `GIT_CONFIG_*`
+rewrite on the `uv` process alone. `uv sync` and `uv lock` run PEP 517 build
+backends and build hooks, and they inherit uv's environment.
+
 Instead:
 
-1. Mint a read-only fleet App token (`actions/create-github-app-token` with
-   `owner: atlanhq` and `permission-contents: read`), `continue-on-error: true`,
-   gated on the caller's opt-in input. Never fall back to `ORG_PAT_GITHUB`.
+1. Mint the token with `.github/actions/private-deps-token`, gated on the
+   caller's opt-in input. It runs `git_auth.py repos` to list the private
+   atlanhq repositories the app names as git dependencies (every
+   `pyproject.toml` and `uv.lock` in the checkout), and mints a read-only fleet
+   App token scoped to exactly those. When the app names none, it skips the
+   mint: `create-github-app-token` with no `repositories` grants the whole
+   installation. Never fall back to `ORG_PAT_GITHUB`.
 2. Follow it with a guard step that fails, naming `FLEET_APP_ID` and
-   `FLEET_APP_PRIVATE_KEY`, when the opt-in is set and the token is empty.
+   `FLEET_APP_PRIVATE_KEY`, when the opt-in is set, the app names a private
+   repository (`outputs.repositories != ''`) and the token is empty.
 3. Run the fetching command through `.github/scripts/git_auth.py`, with the
    token in that step's `env: GIT_TOKEN` only:
 
@@ -855,10 +866,18 @@ Instead:
    run: python3 path/to/git_auth.py run -- uv sync
    ```
 
-   The script removes `GIT_TOKEN` from the child's env and passes the rewrite
-   as `GIT_CONFIG_*` variables, which git reads like `-c` options. Nothing is
-   persisted. A composite takes the token as its `git-auth-token` input and
-   does the same inside.
+   The script mirror-clones each private repository with the token (a bare
+   `git clone --mirror` runs no repository code, and git keeps the remote URL
+   as written, so the token is not stored in the mirror). It then runs the
+   command with `GIT_TOKEN` removed and a token-free rewrite pointing those
+   remotes at the local mirrors, and deletes the mirrors afterwards. uv and
+   every build backend it runs see no credential. A composite takes the token
+   as its `git-auth-token` input and does the same inside.
+
+An image build is the one place the token reaches caller code: the app's
+Dockerfile reads the `git_token` BuildKit secret. That token comes from the
+same composite, so it is scoped to the repositories the app names, and absent
+when it names none.
 
 Only the first install needs the token. Once it has populated the uv cache and
 venv, later `uv sync`, `uv run`, `uv lock --check` and even a re-lock of a

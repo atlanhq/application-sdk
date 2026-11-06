@@ -400,17 +400,18 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Mint fleet App token
-        # Same as certify's: authenticates the app's private atlanhq deps.
-        id: app-token
-        continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+      - name: Mint read-only token for private git dependencies
+        # Scoped to the private atlanhq repos the app names (none named: no
+        # mint). It only reaches git_auth.py's mirror clones: uv, and every
+        # build backend it runs, install from local mirrors with no token in
+        # their env (FND-4739, lens round 5).
+        id: git-deps-token
+        if: inputs.private_git_auth
+        uses: atlanhq/application-sdk/.github/actions/private-deps-token@main
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          # Read is all a clone needs; the install step runs build backends.
-          permission-contents: read
+          project-dir: app
 
       - name: Checkout SDK helper scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -461,18 +462,18 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
-      # The only step that sees a GitHub token after the checkouts. The script
-      # hands it to git as GIT_CONFIG_* env on the `uv sync` process alone:
-      # nothing lands in ~/.gitconfig, so the unit tests and coverage steps
-      # (app code) have no token to read. App token only, no ORG_PAT_GITHUB
-      # fallback: build backends run in this step, and the PAT is org-admin.
+      # The only step that sees a GitHub token after the checkouts, and only
+      # git sees it: the script mirror-clones the app's private atlanhq deps
+      # with it, then runs `uv sync` against the local mirrors with no token
+      # in uv's env, so no build backend, and no later test or coverage step,
+      # can read it. App token only, no ORG_PAT_GITHUB fallback.
       - name: Install app dependencies
         id: app_install
         continue-on-error: true
         working-directory: app
         env:
           PRIVATE_GIT_AUTH: ${{ inputs.private_git_auth }}
-          GIT_TOKEN: ${{ inputs.private_git_auth && steps.app-token.outputs.token || '' }}
+          GIT_TOKEN: ${{ inputs.private_git_auth && steps.git-deps-token.outputs.token || '' }}
         run: python3 ../sdk/.github/scripts/build_and_publish/certify.py install-deps
 
       # --all-groups (inside the script) so the app's test dependency group
@@ -540,13 +541,12 @@ jobs:
           persist-credentials: false
 
       - name: Mint fleet App token
-        # Not scoped to a single repo: also used below to authenticate the
-        # consumer app's own (arbitrary) private atlanhq deps at install.
-        # continue-on-error + the `|| secrets.ORG_PAT_GITHUB` fallback on the
-        # SDK checkout: FLEET_APP_ID/FLEET_APP_PRIVATE_KEY are declared
-        # optional (every real caller uses secrets: inherit), so a caller
-        # without them still checks out the SDK. The private-deps install has
-        # no such fallback (see Install app dependencies): it fails instead.
+        # For the SDK checkout only. continue-on-error + the
+        # `|| secrets.ORG_PAT_GITHUB` fallback on that checkout:
+        # FLEET_APP_ID/FLEET_APP_PRIVATE_KEY are declared optional (every real
+        # caller uses secrets: inherit), so a caller without them still checks
+        # out the SDK. The private-deps install uses its own scoped token below
+        # and has no such fallback: it fails instead.
         id: app-token
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
@@ -554,8 +554,21 @@ jobs:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
-          # Read is all a clone needs; the install step runs build backends.
+          repositories: application-sdk
           permission-contents: read
+
+      - name: Mint read-only token for private git dependencies
+        # Scoped to the private atlanhq repos the app names (none named: no
+        # mint). It only reaches git_auth.py's mirror clones: uv, and every
+        # build backend it runs, install from local mirrors with no token in
+        # their env (FND-4739, lens round 5).
+        id: git-deps-token
+        if: inputs.private_git_auth
+        uses: atlanhq/application-sdk/.github/actions/private-deps-token@main
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          project-dir: app
 
       - name: Checkout application-sdk (migration tooling)
         # tools.migrate_v3 ships in the SDK repo, not the published package —
@@ -623,18 +636,18 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
-      # The only step that sees a GitHub token after the checkouts. The script
-      # hands it to git as GIT_CONFIG_* env on the `uv sync` process alone:
-      # nothing lands in ~/.gitconfig, so the unit tests and coverage steps
-      # (app code) have no token to read. App token only, no ORG_PAT_GITHUB
-      # fallback: build backends run in this step, and the PAT is org-admin.
+      # The only step that sees a GitHub token after the checkouts, and only
+      # git sees it: the script mirror-clones the app's private atlanhq deps
+      # with it, then runs `uv sync` against the local mirrors with no token
+      # in uv's env, so no build backend, and no later test or coverage step,
+      # can read it. App token only, no ORG_PAT_GITHUB fallback.
       - name: Install app dependencies
         id: app_install
         continue-on-error: true
         working-directory: app
         env:
           PRIVATE_GIT_AUTH: ${{ inputs.private_git_auth }}
-          GIT_TOKEN: ${{ inputs.private_git_auth && steps.app-token.outputs.token || '' }}
+          GIT_TOKEN: ${{ inputs.private_git_auth && steps.git-deps-token.outputs.token || '' }}
         run: python3 ../sdk/.github/scripts/build_and_publish/certify.py install-deps
 
       # The contract-drift step regenerates with `pkl eval`, so it needs pkl.
@@ -1165,13 +1178,12 @@ jobs:
       # build that needs the token fails, at its clone.
       - name: Mint read-only token for the image build
         id: image-git-token
-        continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        # Scoped to the private atlanhq repos the app names; no mint (and no
+        # git_token secret) when it names none.
+        uses: atlanhq/application-sdk/.github/actions/private-deps-token@main
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          permission-contents: read
 
       - name: Build and push arch image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7

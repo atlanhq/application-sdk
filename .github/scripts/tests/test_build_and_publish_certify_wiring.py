@@ -284,9 +284,10 @@ def test_contract_drift_does_not_wait_on_the_app_install(workflow: Workflow) -> 
 # and the job token cannot write.
 
 APP_TOKEN = "steps.app-token.outputs.token"
+DEPS_TOKEN = "steps.git-deps-token.outputs.token"
 INSTALL_ENV = {
     "PRIVATE_GIT_AUTH": "${{ inputs.private_git_auth }}",
-    "GIT_TOKEN": "${{ inputs.private_git_auth && steps.app-token.outputs.token || '' }}",
+    "GIT_TOKEN": "${{ inputs.private_git_auth && steps.git-deps-token.outputs.token || '' }}",
 }
 
 
@@ -317,9 +318,24 @@ def test_no_step_writes_git_config(workflow: Workflow, job: str) -> None:
 
 
 @pytest.mark.parametrize("job", CERTIFY_JOBS)
-def test_app_token_is_minted_read_only(workflow: Workflow, job: str) -> None:
-    mint = next(s for s in _steps(workflow, job) if s.get("id") == "app-token")
+def test_deps_token_is_the_scoped_mint(workflow: Workflow, job: str) -> None:
+    """Scoped to the private repos the app (checked out at app/) names; the
+    composite never mints unscoped (test_private_git_deps_wiring.py)."""
+    mint = next(s for s in _steps(workflow, job) if s.get("id") == "git-deps-token")
+    assert mint["uses"] == (
+        "atlanhq/application-sdk/.github/actions/private-deps-token@main"
+    )
+    assert mint["if"] == "inputs.private_git_auth"
+    assert mint["with"]["project-dir"] == "app"
+
+
+def test_sdk_checkout_token_is_scoped_to_the_sdk(workflow: Workflow) -> None:
+    """certify's other App token only checks out the SDK, so it reaches no
+    other repository."""
+    mint = next(s for s in _steps(workflow, "certify") if s.get("id") == "app-token")
+    assert mint["with"]["repositories"] == "application-sdk"
     assert mint["with"]["permission-contents"] == "read"
+    assert not any(s.get("id") == "app-token" for s in _steps(workflow, "certify-unit"))
 
 
 @pytest.mark.parametrize("job", CERTIFY_JOBS)
@@ -337,6 +353,7 @@ def test_install_alone_carries_the_token(workflow: Workflow, job: str) -> None:
         if step is install:
             continue
         text = yaml.safe_dump(step)
+        assert DEPS_TOKEN not in text, step.get("name")
         if APP_TOKEN in text or "ORG_PAT_GITHUB" in text:
             # Only a checkout's `token:`, which is not persisted (above).
             assert _is_checkout(step), step.get("name")

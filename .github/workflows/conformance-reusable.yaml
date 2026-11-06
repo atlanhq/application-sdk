@@ -261,9 +261,10 @@ on:
           materialises the environment (`uv sync`, via the detect action's
           needs-env step), and an unauthenticated clone of a private atlanhq repo
           fails there — so with this flag the suite job mints a read-only fleet
-          App token and runs that sync (and the uv.lock check) through
-          git_auth.py, which hands the token to those commands alone; no git
-          config is written, so the series never see it (FND-4740).  Requires
+          App token scoped to the app's private repos and runs that sync (and
+          the uv.lock check) through git_auth.py: only git sees the token, to
+          mirror-clone those repos, and uv installs from the local mirrors with
+          no token in its env, so the series never see it (FND-4740).  Requires
           FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (`secrets: inherit`, or an
           explicit mapping naming both).  Leave false for apps with only public
           deps.
@@ -484,27 +485,22 @@ jobs:
         with:
           version: "0.13.7"
 
-      # Private atlanhq git deps (FND-4740): a read-only fleet App token, handed
-      # only to the commands that resolve them (the uv.lock check and the D
-      # pre-sync below) through git_auth.py's scoped GIT_CONFIG_* env.  No git
-      # config is written, so no series, and no app code a series imports, can
-      # read it.  `continue-on-error` so a caller that did not pass the App
-      # secrets gets the named error below, not a bare action failure.
+      # Private atlanhq git deps: a read-only fleet App token scoped to the
+      # private repos the app names (none named: no mint). It only reaches
+      # git_auth.py's mirror clones: uv, and every build backend it runs,
+      # install from local mirrors with no token in their env (FND-4740,
+      # lens round 5). A failed mint gets the named error below.
       - name: "Mint read-only token for private git dependencies"
         id: git-deps-token
         if: inputs.private-git-deps
-        continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: atlanhq/application-sdk/.github/actions/private-deps-token@main
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          # Read is all a clone needs; the sync runs build backends.
-          permission-contents: read
 
       # Condition stays in `if:`, never in the shell (docs/standards/ci.md).
       - name: "Require the token when private-git-deps is set"
-        if: inputs.private-git-deps && steps.git-deps-token.outputs.token == ''
+        if: inputs.private-git-deps && steps.git-deps-token.outputs.repositories != '' && steps.git-deps-token.outputs.token == ''
         shell: bash
         run: |
           echo "::error title=No token for private git dependencies::private-git-deps is true but the fleet App token did not mint. Pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (secrets: inherit, or name both in an explicit secrets: mapping)."

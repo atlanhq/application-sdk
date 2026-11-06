@@ -6,13 +6,16 @@ An app that pins a PRIVATE atlanhq git dependency needs a GitHub token for the
 env, so every later step, including the tests, pre-commit hooks and
 conformance series that import app code, could read it.
 
-They now mint a read-only fleet App token and hand it to the fetching command
-alone, through ``.github/scripts/git_auth.py`` (scoped ``GIT_CONFIG_*`` env,
-nothing persisted). These tests pin that shape, so a later edit cannot
-quietly put the token back in reach of app code:
+They now mint a read-only fleet App token scoped to the app's private repos
+(``.github/actions/private-deps-token``) and hand it to
+``.github/scripts/git_auth.py`` alone, which uses it only to mirror-clone those
+repos: uv, and every build backend it runs, install from the local mirrors
+with no token in their env (lens round 5). These tests pin that shape, so a
+later edit cannot quietly put the token back in reach of app code:
 
 * no step writes git config, and no job exposes a token as job-level env;
-* the token is minted read-only, from the App, never from ORG_PAT_GITHUB;
+* the token is minted read-only, from the App, scoped to the repos the app
+  names, never unscoped and never from ORG_PAT_GITHUB;
 * it is read only by the guard and by steps that run it through git_auth.py
   (directly, or via a composite's ``git-auth-token`` input), and inside the
   composites only by git_auth.py steps;
@@ -59,7 +62,9 @@ COMPOSITES = [
 
 MINT_ID = "git-deps-token"
 TOKEN_REF = f"steps.{MINT_ID}.outputs.token"
+REPOS_REF = f"steps.{MINT_ID}.outputs.repositories"
 APP_TOKEN_ACTION = "actions/create-github-app-token@"
+SCOPED_MINT = "atlanhq/application-sdk/.github/actions/private-deps-token@main"
 #: ``python3 <path>/git_auth.py run -- <cmd>``; the path may be quoted and hold
 #: an expression (``"${{ github.action_path }}/../../scripts/git_auth.py"``).
 GIT_AUTH_RUN = re.compile(r'python3 "?[^\n"]*/git_auth\.py"? run -- \S')
@@ -121,23 +126,63 @@ def test_no_job_level_token(workflow_file: str, job: str, flag: str) -> None:
 
 
 @pytest.mark.parametrize(("workflow_file", "job", "flag"), JOBS, ids=JOB_IDS)
-def test_token_is_a_read_only_app_token(
+def test_token_comes_from_the_scoped_mint(
     workflow_file: str, job: str, flag: str
 ) -> None:
     mint = _mint(_steps(workflow_file, job))
-    assert mint["uses"].startswith(APP_TOKEN_ACTION)
+    assert mint["uses"] == SCOPED_MINT
     assert mint["if"] == f"inputs.{flag}"
-    # A missing secret must reach the named guard below, not fail bare here.
-    assert mint.get("continue-on-error") is True
     with_ = mint["with"]
-    assert with_["permission-contents"] == "read"
-    assert with_["owner"] == "atlanhq"
-    # Org-wide: the dependency lives in another repo.
-    assert "repositories" not in with_
     assert (
         "FLEET_APP_ID" in with_["app-id"]
         and "FLEET_APP_PRIVATE_KEY" in with_["private-key"]
     )
+
+
+@pytest.mark.parametrize(("workflow_file", "job", "flag"), JOBS, ids=JOB_IDS)
+def test_the_app_is_checked_out_before_the_mint_reads_it(
+    workflow_file: str, job: str, flag: str
+) -> None:
+    """The mint lists the repos from the app's pyproject/uv.lock files."""
+    steps = _steps(workflow_file, job)
+    mint = steps.index(_mint(steps))
+    project = _mint(steps)["with"].get("project-dir", ".")
+    app_checkouts: list[Step] = []
+    for s in steps[:mint]:
+        with_: dict[str, Any] = s.get("with") or {}
+        if (
+            str(s.get("uses", "")).startswith("actions/checkout@")
+            and "repository" not in with_
+            and with_.get("path", ".") == project
+        ):
+            app_checkouts.append(s)
+    assert app_checkouts, f"no checkout of the app at {project!r} before the mint"
+
+
+def test_the_scoped_mint_never_mints_unscoped() -> None:
+    """``create-github-app-token`` with no ``repositories`` grants every repo in
+    the installation, so the composite mints only for a non-empty list."""
+    steps = _load(ACTIONS / "private-deps-token" / "action.yaml")["runs"]["steps"]
+    repos = [s for s in steps if s.get("id") == "repos"]
+    mints = [s for s in steps if APP_TOKEN_ACTION in str(s.get("uses", ""))]
+    assert len(repos) == 1 and len(mints) == 1
+    assert repos[0]["run"] == 'python3 "$GIT_AUTH" repos --project-dir "$PROJECT_DIR"'
+    assert repos[0]["env"]["GIT_AUTH"].endswith("/../../scripts/git_auth.py")
+    mint = mints[0]
+    assert mint["if"] == "steps.repos.outputs.repositories != ''"
+    # A missing secret must reach the caller's named guard, not fail bare here.
+    assert mint.get("continue-on-error") is True
+    with_ = mint["with"]
+    assert with_["repositories"] == "${{ steps.repos.outputs.repositories }}"
+    assert with_["permission-contents"] == "read"
+    assert with_["owner"] == "atlanhq"
+    assert set(with_) == {
+        "app-id",
+        "private-key",
+        "owner",
+        "repositories",
+        "permission-contents",
+    }
 
 
 @pytest.mark.parametrize(("workflow_file", "job", "flag"), JOBS, ids=JOB_IDS)
@@ -149,7 +194,7 @@ def test_missing_token_fails_naming_the_secrets(
     guards = [
         (i, s)
         for i, s in enumerate(steps)
-        if s.get("if") == f"inputs.{flag} && {TOKEN_REF} == ''"
+        if s.get("if") == f"inputs.{flag} && {REPOS_REF} != '' && {TOKEN_REF} == ''"
     ]
     assert len(guards) == 1
     i, guard = guards[0]
@@ -268,6 +313,24 @@ def test_setup_deps_tokenless_install_is_unchanged() -> None:
         == "steps.cache-venv.outputs.cache-hit != 'true' && inputs.git-auth-token != ''"
     )
     assert "uv sync --all-extras --all-groups" in authed["run"]
+
+
+# ── Release bump: callers pinned to an older sdk_scripts_ref ─────────────────
+
+
+def test_release_bump_relocks_without_git_auth_when_not_opted_in() -> None:
+    """A caller pinning ``sdk_scripts_ref`` to a revision without git_auth.py
+    must still bump: the no-private-deps path never runs it."""
+    steps = _steps("release-version-bump.yaml", "bump-version")
+    relocks = [s for s in steps if "uv lock" in s.get("run", "")]
+    assert [s["if"] for s in relocks] == [
+        "${{ !inputs.private_git_auth }}",
+        "inputs.private_git_auth",
+    ]
+    plain, authed = relocks
+    assert plain["run"].strip() == "uv lock"
+    assert "env" not in plain
+    assert _runs_git_auth(authed)
 
 
 # ── Conformance: the vendored detect action never sees the token ─────────────

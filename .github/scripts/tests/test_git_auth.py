@@ -1,8 +1,10 @@
-"""Tests for .github/scripts/git_auth.py (FND-4740).
+"""Tests for .github/scripts/git_auth.py (FND-4740, lens round 5).
 
-The rewrite is checked against git itself, and ``run`` against a real child
-process, because what matters is what the child (uv, and the git it starts)
-actually sees.
+What matters is what the command (uv, the git it starts, and every build
+backend it runs) actually sees, so ``run`` is exercised against real git and a
+real child process, with local repositories standing in for GitHub: the
+mirror clones are pointed at them through ``clone_rewrite``, the same seam the
+token rewrite uses in production.
 """
 
 from __future__ import annotations
@@ -21,21 +23,10 @@ import git_auth  # noqa: E402
 #: A synthetic value; never a real token.
 TOKEN = "ghs_SENTINEL_git_auth_token"
 AUTHED = f"https://x-access-token:{TOKEN}@github.com/atlanhq/private-dep.git"
-
-#: A child that prints ONLY the git-auth variables it was given, as JSON. Never
-#: dump the whole env: a developer's shell can hold real credentials.
-DUMP_ENV = [
-    sys.executable,
-    "-c",
-    "import json, os; print(json.dumps({k: v for k, v in os.environ.items()"
-    " if k == 'GIT_TOKEN' or k.startswith('GIT_CONFIG_')}))",
-]
-
-#: The only env the child runs with in these tests: synthetic, no real secrets.
-_BASE_ENV = {"PATH": os.environ.get("PATH", "")}
+SSH_REMOTE = "ssh://git@github.com/atlanhq/private-dep"
 
 
-def _git(args: list[str], home: Path, extra: dict[str, str]) -> str:
+def _git(args: list[str], home: Path, extra: dict[str, str] | None = None) -> str:
     return subprocess.run(
         ["git", *args],
         capture_output=True,
@@ -45,32 +36,33 @@ def _git(args: list[str], home: Path, extra: dict[str, str]) -> str:
             "PATH": os.environ.get("PATH", ""),
             "HOME": str(home),
             "GIT_CONFIG_NOSYSTEM": "1",
-            **extra,
+            **(extra or {}),
         },
     ).stdout
+
+
+# ── the token rewrite, given only to the mirror clones ──────────────────────
 
 
 @pytest.mark.parametrize(
     "remote",
     [
         "https://github.com/atlanhq/private-dep.git",
-        # The fleet's private deps are all written in this form.
         "ssh://git@github.com/atlanhq/private-dep.git",
     ],
 )
-def test_rewrites_both_atlanhq_remote_forms_in_real_git(
+def test_token_rewrite_covers_both_atlanhq_remote_forms_in_real_git(
     tmp_path: Path, remote: str
 ) -> None:
     got = _git(
         ["ls-remote", "--get-url", remote], tmp_path, git_auth.git_auth_env(TOKEN)
     )
     assert got.strip() == AUTHED
-    # Nothing written: a later process without the env has no credential.
-    assert _git(["ls-remote", "--get-url", remote], tmp_path, {}).strip() == remote
+    assert _git(["ls-remote", "--get-url", remote], tmp_path).strip() == remote
     assert not (tmp_path / ".gitconfig").exists()
 
 
-def test_leaves_other_remotes_alone(tmp_path: Path) -> None:
+def test_token_rewrite_leaves_other_remotes_alone(tmp_path: Path) -> None:
     remote = "https://github.com/someone-else/dep.git"
     got = _git(
         ["ls-remote", "--get-url", remote], tmp_path, git_auth.git_auth_env(TOKEN)
@@ -78,8 +70,7 @@ def test_leaves_other_remotes_alone(tmp_path: Path) -> None:
     assert got.strip() == remote
 
 
-def test_keeps_config_entries_the_env_already_carries(tmp_path: Path) -> None:
-    """A job that sets its own GIT_CONFIG_COUNT keeps it: ours are appended."""
+def test_rewrite_keeps_config_entries_the_env_already_carries(tmp_path: Path) -> None:
     base = {
         "GIT_CONFIG_COUNT": "1",
         "GIT_CONFIG_KEY_0": "user.name",
@@ -88,67 +79,270 @@ def test_keeps_config_entries_the_env_already_carries(tmp_path: Path) -> None:
     env = {**base, **git_auth.git_auth_env(TOKEN, base)}
     assert env["GIT_CONFIG_COUNT"] == "3"
     assert _git(["config", "user.name"], tmp_path, env).strip() == "kept"
-    remote = "ssh://git@github.com/atlanhq/private-dep.git"
-    assert _git(["ls-remote", "--get-url", remote], tmp_path, env).strip() == AUTHED
 
 
-def test_child_env_never_carries_the_token_variable() -> None:
-    env = git_auth.child_env({"GIT_TOKEN": TOKEN, "PATH": "/bin"}, required=True)
-    assert env is not None
-    assert "GIT_TOKEN" not in env
-    assert env["PATH"] == "/bin"
-    assert env["GIT_CONFIG_COUNT"] == "2"
+# ── which repositories the project names ────────────────────────────────────
 
 
-def test_no_token_and_not_required_runs_plain() -> None:
-    """The wrapper is a no-op for a caller with no private deps."""
-    env = git_auth.child_env({"GIT_TOKEN": "", "PATH": "/bin"}, required=False)
-    assert env == {"PATH": "/bin"}
+def test_referenced_repos_reads_every_git_source_form(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\n"
+        'dependencies = ["a @ git+https://github.com/atlanhq/pep508-dep.git@v1"]\n'
+        "[tool.uv.sources]\n"
+        'b = { git = "ssh://git@github.com/atlanhq/ssh-dep", tag = "v1" }\n'
+        "# a comment naming https://github.com/atlanhq/not-a-dep is not a source\n"
+    )
+    (tmp_path / "uv.lock").write_text(
+        'source = { git = "https://github.com/atlanhq/locked-dep?tag=v2#abc" }\n'
+        'source = { git = "https://github.com/someone-else/other?tag=v1#abc" }\n'
+    )
+    sub = tmp_path / "server"
+    sub.mkdir()
+    (sub / "pyproject.toml").write_text(
+        'c = { git = "https://github.com/atlanhq/sub-package-dep.git" }\n'
+    )
+    for skipped in (".venv", "node_modules"):
+        (tmp_path / skipped).mkdir()
+        (tmp_path / skipped / "pyproject.toml").write_text(
+            'd = { git = "https://github.com/atlanhq/vendored-dep" }\n'
+        )
+    assert git_auth.referenced_repos(tmp_path) == [
+        "locked-dep",
+        "pep508-dep",
+        "ssh-dep",
+        "sub-package-dep",
+    ]
 
 
-def test_no_token_when_required_refuses() -> None:
-    assert git_auth.child_env({"PATH": "/bin"}, required=True) is None
+def test_private_repos_drops_the_public_ones(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text(
+        'source = { git = "https://github.com/atlanhq/application-sdk?tag=v3#a" }\n'
+        'source = { git = "ssh://git@github.com/atlanhq/private-dep?tag=v1#b" }\n'
+    )
+    public = {"application-sdk"}
+    assert git_auth.private_repos(tmp_path, lambda n: n in public) == ["private-dep"]
 
 
-def _run(
-    capfd: pytest.CaptureFixture[str], **env: str
-) -> tuple[int, dict[str, str] | None, str]:
-    """Run the wrapper against a synthetic env; the child's output is read from
-    the real fd (it is a separate process), and is only ever the filtered dump."""
-    rc = git_auth.run(DUMP_ENV, {**_BASE_ENV, **env})
+def test_mirror_set_adds_a_public_repo_a_private_prefix_would_capture() -> None:
+    """insteadOf matches by prefix: the rewrite for ``dep`` also catches
+    ``dep-extra``, so that one is mirrored too."""
+    assert git_auth.mirror_set(["dep"], ["dep", "dep-extra", "other"]) == [
+        "dep",
+        "dep-extra",
+    ]
+
+
+def test_is_public_asks_git_with_no_credential_at_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cmds: list[list[str]] = []
+    envs: list[dict[str, str]] = []
+
+    def fake(
+        cmd: list[str], *, env: dict[str, str], **_: object
+    ) -> subprocess.CompletedProcess[str]:
+        cmds.append(cmd)
+        envs.append(env)
+        return subprocess.CompletedProcess(cmd, 128, "", "")
+
+    monkeypatch.setattr(git_auth.subprocess, "run", fake)
+    assert git_auth.is_public("private-dep") is False
+    (cmd,) = cmds
+    (env,) = envs
+    assert cmd[:3] == ["git", "-c", "credential.helper="]
+    assert env["GIT_CONFIG_GLOBAL"] == os.devnull
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert not any(k.startswith("GIT_CONFIG_KEY") for k in env)
+
+
+# ── run: the command never sees the token ───────────────────────────────────
+
+
+@pytest.fixture
+def remotes(tmp_path: Path) -> Path:
+    """A local stand-in for github.com/atlanhq, holding ``private-dep``.
+
+    git runs with an empty HOME and no system config, so no developer config
+    (signing, hooks, credential helpers) applies to these throwaway repos.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(home),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.com",
+    }
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "README").write_text("dep\n")
+    for args in (
+        ["init", "-q", "-b", "main"],
+        ["add", "-A"],
+        ["commit", "-q", "-m", "init"],
+    ):
+        subprocess.run(["git", "-C", str(src), *args], check=True, env=env)
+    root = tmp_path / "remotes"
+    root.mkdir()
+    subprocess.run(
+        ["git", "clone", "-q", "--bare", str(src), str(root / "private-dep")],
+        check=True,
+        env=env,
+    )
+    return root
+
+
+@pytest.fixture
+def project(tmp_path: Path) -> Path:
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "pyproject.toml").write_text(
+        f'[tool.uv.sources]\nprivate-dep = {{ git = "{SSH_REMOTE}", branch = "main" }}\n'
+    )
+    return app
+
+
+#: A child standing in for uv: it fetches the dependency through whatever
+#: rewrite it was given (as uv's git would) and reports, without ever printing
+#: a value, whether the token reached it anywhere.
+_CHILD = f"""
+import json, os, subprocess, sys
+token = {TOKEN!r}
+url = subprocess.run(["git", "ls-remote", "--get-url", {SSH_REMOTE!r}],
+                     capture_output=True, text=True).stdout.strip()
+heads = subprocess.run(["git", "ls-remote", {SSH_REMOTE!r}],
+                       capture_output=True, text=True).stdout
+print(json.dumps({{
+    "token_in_env": any(token in v for v in os.environ.values()),
+    "git_token_var": "GIT_TOKEN" in os.environ,
+    "url": url,
+    "fetched_main": "refs/heads/main" in heads,
+}}))
+"""
+
+
+def _run_child(
+    capfd: pytest.CaptureFixture[str],
+    project: Path,
+    remotes: Path,
+    tmp_path: Path,
+    **env: str,
+) -> tuple[int, dict[str, object] | None, str]:
+    environ = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(tmp_path),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "RUNNER_TEMP": str(tmp_path),
+        **env,
+    }
+    rc = git_auth.run(
+        [sys.executable, "-c", _CHILD],
+        environ,
+        project_dir=project,
+        public=lambda name: False,
+        clone_rewrite={
+            remote: f"file://{remotes}/" for remote in git_auth.ATLANHQ_REMOTES
+        },
+    )
     out = capfd.readouterr().out
-    lines = out.strip().splitlines()
-    seen = json.loads(lines[-1]) if lines and lines[-1].startswith("{") else None
-    return rc, seen, out
+    lines = [line for line in out.strip().splitlines() if line.startswith("{")]
+    return rc, (json.loads(lines[-1]) if lines else None), out
 
 
-def test_run_scopes_the_token_to_the_child(capfd: pytest.CaptureFixture[str]) -> None:
-    rc, seen, _ = _run(capfd, GIT_TOKEN=TOKEN, PRIVATE_GIT_DEPS="true")
+def test_run_fetches_from_a_mirror_with_no_token_in_the_commands_env(
+    capfd: pytest.CaptureFixture[str], project: Path, remotes: Path, tmp_path: Path
+) -> None:
+    rc, seen, _ = _run_child(
+        capfd, project, remotes, tmp_path, GIT_TOKEN=TOKEN, PRIVATE_GIT_DEPS="true"
+    )
     assert rc == 0
     assert seen is not None
-    assert "GIT_TOKEN" not in seen
-    for key, value in git_auth.git_auth_env(TOKEN).items():
-        assert seen[key] == value
-    # The wrapper's own process env is untouched: the next step sees nothing.
+    assert seen["token_in_env"] is False
+    assert seen["git_token_var"] is False
+    assert str(seen["url"]).startswith(f"file://{tmp_path}/git-mirrors-")
+    assert seen["fetched_main"] is True
+    # The mirrors are gone with the command, and nothing is persisted.
+    assert not list(tmp_path.glob("git-mirrors-*"))
     assert "GIT_CONFIG_COUNT" not in os.environ
 
 
-def test_run_without_token_or_flag_passes_through(
-    capfd: pytest.CaptureFixture[str],
+def test_the_mirror_does_not_store_the_rewritten_url(
+    tmp_path: Path, remotes: Path
 ) -> None:
-    rc, seen, _ = _run(capfd)
-    assert rc == 0
-    assert seen == {}
+    """git keeps the URL as written, not the insteadOf target, so a token in
+    the clone's rewrite is not left in the mirror's config."""
+    dest = tmp_path / "mirrors"
+    dest.mkdir()
+    rewrite = {remote: f"file://{remotes}/" for remote in git_auth.ATLANHQ_REMOTES}
+    assert git_auth.mirror(["private-dep"], dest, rewrite) is None
+    config = (dest / "private-dep" / "config").read_text()
+    assert "url = https://github.com/atlanhq/private-dep" in config
+    assert str(remotes) not in config
+    assert (dest / "private-dep.git").resolve() == (dest / "private-dep").resolve()
+
+
+def test_run_fails_closed_when_a_mirror_clone_fails(
+    capfd: pytest.CaptureFixture[str], project: Path, tmp_path: Path
+) -> None:
+    empty = tmp_path / "no-remotes"
+    empty.mkdir()
+    rc, seen, out = _run_child(
+        capfd, project, empty, tmp_path, GIT_TOKEN=TOKEN, PRIVATE_GIT_DEPS="true"
+    )
+    assert rc == 1
+    assert seen is None  # the command never ran
+    assert "atlanhq/private-dep could not be cloned" in out
+    assert not list(tmp_path.glob("git-mirrors-*"))
 
 
 def test_run_fails_closed_naming_the_missing_secrets(
-    capfd: pytest.CaptureFixture[str],
+    capfd: pytest.CaptureFixture[str], project: Path, remotes: Path, tmp_path: Path
 ) -> None:
-    rc, seen, out = _run(capfd, GIT_TOKEN="", PRIVATE_GIT_DEPS="true")
+    rc, seen, out = _run_child(
+        capfd, project, remotes, tmp_path, GIT_TOKEN="", PRIVATE_GIT_DEPS="true"
+    )
     assert rc == 1
-    assert seen is None  # the command never ran
+    assert seen is None
     assert "::error title=No token for private git dependencies::" in out
     assert "FLEET_APP_ID" in out and "FLEET_APP_PRIVATE_KEY" in out
+
+
+def test_run_with_no_private_repo_named_needs_no_token(
+    capfd: pytest.CaptureFixture[str], remotes: Path, tmp_path: Path
+) -> None:
+    """The scoped mint is skipped for such a project, so no token arrives."""
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "pyproject.toml").write_text("[project]\nname = 'plain'\n")
+    rc, seen, _ = _run_child(
+        capfd, plain, remotes, tmp_path, GIT_TOKEN="", PRIVATE_GIT_DEPS="true"
+    )
+    assert rc == 0
+    assert seen is not None
+    assert seen["url"] == SSH_REMOTE
+
+
+def test_run_without_token_or_flag_passes_through_without_looking(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[str] = []
+
+    def public(name: str) -> bool:
+        calls.append(name)
+        return False
+
+    rc = git_auth.run(
+        [sys.executable, "-c", "print('ran')"],
+        {"PATH": os.environ.get("PATH", "")},
+        public=public,
+    )
+    assert rc == 0
+    assert "ran" in capfd.readouterr().out
+    assert calls == []
 
 
 def test_run_returns_the_commands_exit_code() -> None:
@@ -163,3 +357,21 @@ def test_run_returns_the_commands_exit_code() -> None:
 def test_run_needs_a_command() -> None:
     with pytest.raises(SystemExit):
         git_auth.main(["run", "--"])
+
+
+# ── repos: the list a scoped mint uses ──────────────────────────────────────
+
+
+def test_repos_writes_the_scope_to_github_output(tmp_path: Path) -> None:
+    output = tmp_path / "out"
+    joined = git_auth.write_repos_output(
+        ["ai-dep", "private-dep"], {"GITHUB_OUTPUT": str(output)}
+    )
+    assert joined == "ai-dep,private-dep"
+    assert output.read_text() == "repositories=ai-dep,private-dep\n"
+
+
+def test_repos_writes_an_empty_scope_so_the_mint_is_skipped(tmp_path: Path) -> None:
+    output = tmp_path / "out"
+    git_auth.write_repos_output([], {"GITHUB_OUTPUT": str(output)})
+    assert output.read_text() == "repositories=\n"

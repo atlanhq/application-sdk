@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from collections.abc import Callable
@@ -416,15 +415,39 @@ def test_an_app_without_unit_tests_still_passes(
 
 #: A synthetic value; never a real token.
 _TOKEN = "ghs_SENTINEL_install_token"
+_PRIVATE_DEP = (
+    'private-dep = { git = "ssh://git@github.com/atlanhq/private-dep", tag = "v1" }\n'
+)
 
 
 def _install(
-    monkeypatch: pytest.MonkeyPatch, **env: str
-) -> tuple[int, list[tuple[list[str], dict[str, str] | None]]]:
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    names_private_dep: bool = True,
+    **env: str,
+) -> tuple[int, list[tuple[list[str], dict[str, str] | None]], list[list[str]]]:
+    """Run install-deps in a synthetic app checkout. Nothing is fetched: the
+    public check and the mirror clone are faked, and so is uv."""
     for name in ("PRIVATE_GIT_AUTH", "GIT_TOKEN", "GIT_CONFIG_COUNT"):
         monkeypatch.delenv(name, raising=False)
     for name, value in env.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "pyproject.toml").write_text(
+        "[tool.uv.sources]\n" + (_PRIVATE_DEP if names_private_dep else "")
+    )
+    monkeypatch.chdir(app)
+    monkeypatch.setattr(certify.git_auth, "is_public", lambda name: False)
+    mirrored: list[list[str]] = []
+
+    def fake_mirror(names: list[str], dest: Path, rewrite: dict[str, str]) -> None:
+        mirrored.append(list(names))
+        return None
+
+    monkeypatch.setattr(certify.git_auth, "mirror", fake_mirror)
     calls: list[tuple[list[str], dict[str, str] | None]] = []
 
     def fake(
@@ -434,50 +457,86 @@ def _install(
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(_bap, "run", fake)
-    return certify.install_deps(), calls
+    return certify.install_deps(), calls, mirrored
 
 
-def test_install_syncs_every_group_frozen(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_install_syncs_every_group_frozen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """All groups at install: the later `uv run --frozen` of tests and
     coverage has no git auth, so it must find nothing left to fetch."""
-    rc, calls = _install(monkeypatch, PRIVATE_GIT_AUTH="false")
+    rc, calls, _ = _install(monkeypatch, tmp_path, PRIVATE_GIT_AUTH="false")
     assert rc == 0
     assert calls[0][0] == ["uv", "sync", "--all-extras", "--all-groups", "--frozen"]
 
 
 def test_install_without_private_git_auth_adds_no_credential(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    rc, calls = _install(monkeypatch, PRIVATE_GIT_AUTH="false", GIT_TOKEN=_TOKEN)
+    rc, calls, mirrored = _install(
+        monkeypatch, tmp_path, PRIVATE_GIT_AUTH="false", GIT_TOKEN=_TOKEN
+    )
     assert rc == 0
     env = calls[0][1]
     assert env is not None
     assert "GIT_CONFIG_COUNT" not in env
     assert _TOKEN not in "".join(env.values())
+    assert mirrored == []
 
 
-def test_install_with_private_git_auth_scopes_the_token_to_uv(
-    monkeypatch: pytest.MonkeyPatch,
+def test_install_with_private_git_auth_keeps_the_token_out_of_uv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    rc, calls = _install(monkeypatch, PRIVATE_GIT_AUTH="true", GIT_TOKEN=_TOKEN)
+    """uv runs build backends, so the token must not be anywhere in its env:
+    uv fetches the private dep from a local mirror, through a token-free
+    rewrite."""
+    rc, calls, mirrored = _install(
+        monkeypatch, tmp_path, PRIVATE_GIT_AUTH="true", GIT_TOKEN=_TOKEN
+    )
     assert rc == 0
+    assert mirrored == [["private-dep"]]
     env = calls[0][1]
     assert env is not None
     assert "GIT_TOKEN" not in env
-    for key, value in certify.git_auth_env(_TOKEN).items():
-        assert env[key] == value
+    assert _TOKEN not in "".join(env.values())
+    rewrites = {
+        env[f"GIT_CONFIG_VALUE_{i}"]: env[f"GIT_CONFIG_KEY_{i}"]
+        for i in range(int(env["GIT_CONFIG_COUNT"]))
+    }
+    target = rewrites["ssh://git@github.com/atlanhq/private-dep"]
+    assert target.startswith(f"url.file://{tmp_path}/")
+    assert target.endswith("/private-dep.insteadOf")
 
 
 def test_install_with_private_git_auth_but_no_token_fails_closed(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """No App token means no install, not a fallback credential."""
-    rc, calls = _install(monkeypatch, PRIVATE_GIT_AUTH="true", GIT_TOKEN="")
+    rc, calls, _ = _install(
+        monkeypatch, tmp_path, PRIVATE_GIT_AUTH="true", GIT_TOKEN=""
+    )
     assert rc == 1
     assert calls == []
-    assert (
-        "::error title=No token for private dependencies::" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "::error title=No token for private git dependencies::" in out
+    assert "FLEET_APP_ID" in out
+
+
+def test_install_with_private_git_auth_and_no_private_dep_needs_no_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The scoped mint is skipped when the app names no private repository,
+    so there is no token, and nothing needs one."""
+    rc, calls, mirrored = _install(
+        monkeypatch,
+        tmp_path,
+        names_private_dep=False,
+        PRIVATE_GIT_AUTH="true",
+        GIT_TOKEN="",
     )
+    assert rc == 0
+    assert mirrored == []
+    assert calls[0][0][:2] == ["uv", "sync"]
 
 
 def test_install_returns_uvs_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -489,50 +548,3 @@ def test_install_returns_uvs_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda cmd, **_: subprocess.CompletedProcess(cmd, 2, "", ""),
     )
     assert certify.install_deps() == 2
-
-
-def _git(args: list[str], home: Path, extra: dict[str, str]) -> str:
-    return subprocess.run(
-        ["git", *args],
-        capture_output=True,
-        text=True,
-        check=False,
-        env={
-            "PATH": os.environ.get("PATH", ""),
-            "HOME": str(home),
-            "GIT_CONFIG_NOSYSTEM": "1",
-            **extra,
-        },
-    ).stdout
-
-
-@pytest.mark.parametrize(
-    "remote",
-    [
-        "https://github.com/atlanhq/private-dep.git",
-        "ssh://git@github.com/atlanhq/private-dep.git",
-    ],
-)
-def test_git_auth_env_rewrites_atlanhq_remotes_in_real_git(
-    tmp_path: Path, remote: str
-) -> None:
-    """Executed against git itself: the env rewrites both remote forms, so a
-    dependency fetch authenticates without anything in git config."""
-    rewritten = _git(
-        ["ls-remote", "--get-url", remote], tmp_path, certify.git_auth_env(_TOKEN)
-    ).strip()
-    assert rewritten == (
-        f"https://x-access-token:{_TOKEN}@github.com/atlanhq/private-dep.git"
-    )
-    # Without the env (every step after the install) git has no credential.
-    assert _git(["ls-remote", "--get-url", remote], tmp_path, {}).strip() == remote
-    assert _git(["config", "--global", "--list"], tmp_path, {}) == ""
-    assert not (tmp_path / ".gitconfig").exists()
-
-
-def test_git_auth_env_leaves_other_remotes_alone(tmp_path: Path) -> None:
-    remote = "https://github.com/someone-else/dep.git"
-    got = _git(
-        ["ls-remote", "--get-url", remote], tmp_path, certify.git_auth_env(_TOKEN)
-    ).strip()
-    assert got == remote

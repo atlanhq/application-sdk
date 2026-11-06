@@ -5,14 +5,17 @@ GitHub token from the ``git_token`` build secret. The image builds used to pass
 the org-admin ORG_PAT_GITHUB there. Inside the build that token is readable by
 every build backend the ``uv sync`` runs, including third-party setup scripts.
 
-The builds now mint a read-only fleet App token for it. These tests pin that
+The builds now mint a read-only fleet App token for it, scoped to the private
+atlanhq repos the app names (lens round 5): the Dockerfile is caller code, so
+the token must reach no repo the build does not need. These tests pin that
 shape:
 
 * no ``git_token=`` secret or ``git-token:`` input under ``.github/`` reads
   ORG_PAT_GITHUB, and every one in a workflow reads the job's image mint;
-* the mint is a read-only, org-wide App token from the FLEET secrets, with no
-  opt-in gate (a Dockerfile without the mount ignores the secret, and several
-  callers of these builds set no opt-in flag);
+* the mint is ``.github/actions/private-deps-token`` (read-only, scoped, never
+  unscoped, nothing minted when the app names no private repo), after the app
+  checkout it reads, with no opt-in gate (a Dockerfile without the mount
+  ignores the secret, and several callers of these builds set no opt-in flag);
 * the minted token reaches nothing but the build secret;
 * GHCR login and push stay on ORG_PAT_GITHUB, because fleet packages are
   org-level and the App only has repo-level Packages permission.
@@ -39,7 +42,6 @@ WORKFLOWS = GITHUB / "workflows"
 MINT_ID = "image-git-token"
 TOKEN_REF = f"steps.{MINT_ID}.outputs.token"
 TOKEN_EXPR = f"${{{{ {TOKEN_REF} }}}}"
-APP_TOKEN_ACTION = "actions/create-github-app-token@"
 
 #: (workflow file, job id, step locator) for every step that hands a token to
 #: an image build. The locator is the step's id, else its name.
@@ -140,25 +142,35 @@ def test_site_reads_the_app_mint(workflow_file: str, job: str, locator: str) -> 
 
 
 @pytest.mark.parametrize(("workflow_file", "job"), JOBS, ids=JOB_IDS)
-def test_mint_is_read_only_app_token(workflow_file: str, job: str) -> None:
-    mints = [s for s in _steps(workflow_file, job) if s.get("id") == MINT_ID]
+def test_mint_is_scoped_to_the_apps_private_deps(workflow_file: str, job: str) -> None:
+    """The Dockerfile (caller code) reads this token, so it is scoped to the
+    private repos the app names; the composite never mints unscoped
+    (test_private_git_deps_wiring.py pins its inside), and mints nothing when
+    the app names none."""
+    steps = _steps(workflow_file, job)
+    mints = [s for s in steps if s.get("id") == MINT_ID]
     assert len(mints) == 1
     mint = mints[0]
-    assert mint["uses"].startswith(APP_TOKEN_ACTION)
-    # A failed mint leaves the secret empty: build-push-action warns and builds
-    # without it, so only a Dockerfile that needs it fails, at its clone.
-    assert mint.get("continue-on-error") is True
+    assert (
+        mint["uses"]
+        == "atlanhq/application-sdk/.github/actions/private-deps-token@main"
+    )
     # Not gated on an opt-in flag: build-and-scan has none, and callers of the
     # others build private-dep images without setting it. Only "is there a
     # build at all" may gate it.
     assert mint.get("if") in (None, "inputs.image == ''")
     with_ = mint["with"]
-    assert with_["permission-contents"] == "read"
-    assert with_["owner"] == "atlanhq"
-    # Org-wide: the dependency repo varies per app.
-    assert "repositories" not in with_
     assert "FLEET_APP_ID" in with_["app-id"]
     assert "FLEET_APP_PRIVATE_KEY" in with_["private-key"]
+    # The build context is the app checkout at the workspace root.
+    assert with_.get("project-dir", ".") == "."
+    checkout = [
+        i
+        for i, s in enumerate(steps)
+        if str(s.get("uses", "")).startswith("actions/checkout@")
+        and "repository" not in _map(s.get("with"))
+    ]
+    assert checkout and checkout[0] < steps.index(mint)
 
 
 @pytest.mark.parametrize(("workflow_file", "job"), JOBS, ids=JOB_IDS)

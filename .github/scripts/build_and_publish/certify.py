@@ -8,12 +8,13 @@ Subcommands (each one is a former inline ``run:`` block):
     --all-extras --all-groups --frozen``), used by ``certify`` and every
     ``certify-unit`` leg. All groups now, so the later ``uv run --frozen``
     of tests and coverage has nothing to fetch. When ``PRIVATE_GIT_AUTH`` is
-    ``true``, atlanhq GitHub remotes are authenticated with ``GIT_TOKEN`` (the
-    fleet App token) through git's ``GIT_CONFIG_COUNT`` environment, set on
-    the ``uv`` process only. Nothing is written to git config, so no later
-    step, and no app code it runs, can read the token. ``PRIVATE_GIT_AUTH``
-    without a token fails: the App token did not mint, and there is no
-    fallback credential.
+    ``true``, the install runs through ``git_auth.run``: the app's private
+    atlanhq git dependencies are mirror-cloned with ``GIT_TOKEN`` (the fleet
+    App token, scoped to those repositories), and ``uv`` runs against the
+    local mirrors with no token in its environment, so no build backend it
+    starts, and no later step, can read the token. ``PRIVATE_GIT_AUTH``
+    without a token fails when the app names a private repository: the App
+    token did not mint, and there is no fallback credential.
 
 ``check-migration``
     v3 shape, warn-only. Runs ``tools.migrate_v3.check_migration`` from the SDK
@@ -53,8 +54,8 @@ import _bap
 
 # .github/scripts, which holds renovate_pkl_sync.py (stdlib only).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import git_auth  # noqa: E402
 import renovate_pkl_sync  # noqa: E402
-from git_auth import git_auth_env  # noqa: E402
 
 DOCS_URL = (
     "https://github.com/atlanhq/application-sdk/blob/main/docs/standards/"
@@ -69,20 +70,15 @@ INSTALL_COMMAND = ("uv", "sync", "--all-extras", "--all-groups", "--frozen")
 
 def install_deps() -> int:
     private_git_auth = _bap.env("PRIVATE_GIT_AUTH") == "true"
-    token = _bap.env("GIT_TOKEN")
-    # GIT_TOKEN is consumed here and never passed on as itself.
-    child_env = {k: v for k, v in os.environ.items() if k != "GIT_TOKEN"}
+    environ = {k: v for k, v in os.environ.items() if k != "GIT_TOKEN"}
     if private_git_auth:
-        if not token:
-            print(
-                "::error title=No token for private dependencies::"
-                "private_git_auth is set but the fleet App token did not mint "
-                "(FLEET_APP_ID / FLEET_APP_PRIVATE_KEY). Pass them with "
-                "`secrets: inherit`. App dependencies were not installed."
-            )
-            return 1
-        child_env.update(git_auth_env(token))
-    return _bap.run(INSTALL_COMMAND, env=child_env).returncode
+        environ[git_auth.TOKEN_VAR] = _bap.env("GIT_TOKEN")
+        environ[git_auth.REQUIRED_VAR] = "true"
+    return git_auth.run(
+        INSTALL_COMMAND,
+        environ,
+        execute=lambda command, env: _bap.run(command, env=env).returncode,
+    )
 
 
 def check_migration() -> int:

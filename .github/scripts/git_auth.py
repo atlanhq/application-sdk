@@ -1,53 +1,104 @@
-"""Authenticate atlanhq git remotes for one command, through its env alone.
+"""Install an app's private atlanhq git dependencies without handing the token to uv.
 
 An app with a PRIVATE atlanhq git dependency needs a GitHub token for the
-commands that fetch it: ``uv sync`` / ``uv lock`` on a cold cache. Writing the
-token into git config (``git config --global url.<authed>.insteadOf``) leaves
-it readable by every later step of the job, including tests, hooks and
-anything else that runs app code. This hands it to git as ``GIT_CONFIG_*``
-environment variables on the one child process instead: git reads them as if
-they were ``-c`` options, every git process the child starts inherits them,
-and nothing is persisted.
+commands that fetch it: ``uv sync`` / ``uv lock`` on a cold cache. Those
+commands also run PEP 517 build backends and build hooks, which are app or
+dependency code. Anything in uv's environment (``GIT_TOKEN``, or a
+``GIT_CONFIG_*`` rewrite carrying the token) is readable by them, so the token
+must never be in uv's environment at all.
+
+``run`` therefore works in two phases:
+
+1. **Mirror.** Each private atlanhq repository the project names is cloned
+   with ``git clone --mirror``, the only process that ever sees the token (as
+   a ``GIT_CONFIG_*`` rewrite on that git process alone). A bare mirror clone
+   runs no repository code: no checkout, no hooks, no filters. git stores the
+   remote URL as written, not the rewritten one, so the token is not left in
+   the mirror's config either.
+2. **Run.** The command runs with ``GIT_TOKEN`` removed and a token-free
+   rewrite pointing each private remote at its local mirror
+   (``url.file://<mirror>.insteadOf``). uv fetches from the mirrors, and the
+   lock keeps the original URLs.
+
+The mirrors are removed when the command exits. Public atlanhq repositories
+are not mirrored: uv fetches them from GitHub, unauthenticated, as before.
 
 Usage, from a workflow ``run:`` step::
 
     python3 .github/scripts/git_auth.py run -- uv sync --all-extras --all-groups
+    python3 .github/scripts/git_auth.py repos   # the private repos, for a scoped mint
 
-Environment:
+Environment for ``run``:
 
 ``GIT_TOKEN``
-    The token. Removed from the child's env: it only reaches the child inside
-    the rewrite. Empty or unset runs the command without authentication,
-    exactly as if this wrapper were not there.
+    The token. Never passed to the command. Empty or unset runs the command
+    without mirrors, exactly as if this wrapper were not there.
 ``PRIVATE_GIT_DEPS``
-    ``true`` makes a missing token an error. A caller that declared private
-    git dependencies but got no token would otherwise fail later, inside uv,
-    on an unauthenticated clone that says nothing about why.
+    ``true`` makes a missing token an error when the project names a private
+    atlanhq repository. A caller that declared private git dependencies but
+    got no token would otherwise fail later, inside uv, on an unauthenticated
+    clone that says nothing about why.
 
-Once one authenticated sync has populated the job's uv cache and venv, later
-``uv sync`` / ``uv run`` / ``uv lock --check`` calls, and even a re-lock of a
-stale lock, do not fetch again (verified against a blocked github.com for
-FND-4740), so only the first install needs this wrapper.
+``repos`` prints the private atlanhq repositories the project names, comma
+separated, and writes ``repositories=<list>`` to ``$GITHUB_OUTPUT`` when it is
+set. Workflows mint the fleet App token scoped to exactly that list
+(``actions/create-github-app-token``'s ``repositories``), and skip the mint
+when it is empty: an empty ``repositories`` would grant every repository in
+the installation.
+
+A repository counts as private when an unauthenticated ``git ls-remote`` of it
+fails. The project's references are read from every ``pyproject.toml`` and
+``uv.lock`` under the project directory (git sources: ``git = "..."`` and
+``git+https://`` / ``git+ssh://`` requirements), so a sub-package's private
+dependency is found too.
+
+Once one sync has populated the job's uv cache and venv, later ``uv sync`` /
+``uv run`` / ``uv lock --check`` calls, and even a re-lock of a stale lock, do
+not fetch again (verified against a blocked github.com for FND-4740), so only
+the first install needs this wrapper.
 
 Shared by the certify gate (``build_and_publish/certify.py install-deps``), the
-tests / checks / conformance reusables and the composite actions they call, and
-release-version-bump.yaml. See docs/standards/ci.md.
+tests / checks / conformance reusables and the composite actions they call,
+release-version-bump.yaml, and the image builds' scoped token mint
+(``.github/actions/private-deps-token``). See docs/standards/ci.md.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
+import shutil
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+import tempfile
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 
-#: Rewritten to carry the token: an app's lock may name either form, and the
-#: fleet's private deps are written ``ssh://git@github.com/atlanhq/...``.
-ATLANHQ_REMOTES = ("https://github.com/atlanhq/", "ssh://git@github.com/atlanhq/")
+GITHUB_ATLANHQ = "https://github.com/atlanhq/"
+
+#: Remote forms a lock or pyproject may name an atlanhq dependency by. Both are
+#: pointed at the local mirror; the fleet's private deps are mostly written
+#: ``ssh://git@github.com/atlanhq/...``.
+ATLANHQ_REMOTES = (GITHUB_ATLANHQ, "ssh://git@github.com/atlanhq/")
 
 TOKEN_VAR = "GIT_TOKEN"
 REQUIRED_VAR = "PRIVATE_GIT_DEPS"
+
+#: Files that name a project's git dependencies.
+SCANNED_FILES = frozenset({"pyproject.toml", "uv.lock"})
+#: Never descended into, besides any dot-directory (.git, .venv, ...).
+SKIPPED_DIRS = frozenset({"node_modules", "__pycache__", "venv"})
+
+#: A git source of an atlanhq repository: ``git = "<url>"`` (uv.lock sources,
+#: ``[tool.uv.sources]``) or a ``git+<url>`` requirement.
+_GIT_SOURCE = re.compile(
+    r"""(?:\bgit\s*=\s*["']|\bgit\+)"""
+    r"(?:https://|ssh://git@)github\.com/atlanhq/([A-Za-z0-9._-]+)"
+)
+
+GIT_TIMEOUT_SECONDS = 600
+LS_REMOTE_TIMEOUT_SECONDS = 60
 
 MISSING_TOKEN_ERROR = (
     "::error title=No token for private git dependencies::"
@@ -57,61 +108,256 @@ MISSING_TOKEN_ERROR = (
     "Dependencies were not installed."
 )
 
+Execute = Callable[[Sequence[str], dict[str, str]], int]
+IsPublic = Callable[[str], bool]
 
-def git_auth_env(token: str, base: Mapping[str, str] | None = None) -> dict[str, str]:
-    """``GIT_CONFIG_*`` entries that point atlanhq remotes at an authed URL.
 
-    Equivalent to ``git -c url.<authed>.insteadOf=<remote>`` for each remote.
-    Entries already in *base* (an env that sets its own ``GIT_CONFIG_COUNT``)
-    are kept: the new ones are numbered after them.
+def rewrite_env(
+    rewrites: Mapping[str, str], base: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """``GIT_CONFIG_*`` entries for ``url.<target>.insteadOf=<remote>``.
+
+    *rewrites* maps each remote prefix to its target. Entries already in
+    *base* (an env that sets its own ``GIT_CONFIG_COUNT``) are kept: the new
+    ones are numbered after them.
     """
     base = base or {}
     start = int(base.get("GIT_CONFIG_COUNT", "0") or "0")
-    authed = f"https://x-access-token:{token}@github.com/atlanhq/"
-    env = {"GIT_CONFIG_COUNT": str(start + len(ATLANHQ_REMOTES))}
-    for i, remote in enumerate(ATLANHQ_REMOTES, start=start):
-        env[f"GIT_CONFIG_KEY_{i}"] = f"url.{authed}.insteadOf"
+    env = {"GIT_CONFIG_COUNT": str(start + len(rewrites))}
+    for i, (remote, target) in enumerate(rewrites.items(), start=start):
+        env[f"GIT_CONFIG_KEY_{i}"] = f"url.{target}.insteadOf"
         env[f"GIT_CONFIG_VALUE_{i}"] = remote
     return env
 
 
-def child_env(environ: Mapping[str, str], *, required: bool) -> dict[str, str] | None:
-    """The env to run the command with, or ``None`` when a required token is missing.
+def git_auth_env(token: str, base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """``GIT_CONFIG_*`` entries pointing atlanhq remotes at an authed URL.
 
-    The token variable itself never reaches the child.
+    Only ever given to the ``git clone --mirror`` processes, never to uv.
     """
-    token = environ.get(TOKEN_VAR, "")
-    env = {k: v for k, v in environ.items() if k != TOKEN_VAR}
-    if not token:
-        return None if required else env
-    env.update(git_auth_env(token, env))
-    return env
+    authed = f"https://x-access-token:{token}@github.com/atlanhq/"
+    return rewrite_env(dict.fromkeys(ATLANHQ_REMOTES, authed), base)
 
 
-def run(command: Sequence[str], environ: Mapping[str, str] | None = None) -> int:
-    """Run *command* with atlanhq remotes authenticated; return its exit code."""
+def _repo_name(match: str) -> str:
+    return match.removesuffix(".git")
+
+
+def referenced_repos(project_dir: str | os.PathLike[str] = ".") -> list[str]:
+    """The atlanhq repositories the project names as git sources."""
+    names: set[str] = set()
+    for root, dirs, files in os.walk(project_dir):
+        dirs[:] = sorted(
+            d for d in dirs if not d.startswith(".") and d not in SKIPPED_DIRS
+        )
+        for name in files:
+            if name in SCANNED_FILES:
+                text = Path(root, name).read_text(encoding="utf-8", errors="replace")
+                names.update(_repo_name(m) for m in _GIT_SOURCE.findall(text))
+    return sorted(n for n in names if n)
+
+
+def _anonymous_git_env() -> dict[str, str]:
+    """An env in which git has no credential at all: no global or system
+    config (so no credential helper, no persisted checkout auth) and no
+    prompt."""
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": tempfile.gettempdir(),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+
+def is_public(name: str) -> bool:
+    """True when the repository is readable without credentials."""
+    try:
+        proc = subprocess.run(  # noqa: S603
+            [
+                "git",
+                "-c",
+                "credential.helper=",
+                "ls-remote",
+                f"{GITHUB_ATLANHQ}{name}",
+                "HEAD",
+            ],
+            env=_anonymous_git_env(),
+            cwd=tempfile.gettempdir(),
+            capture_output=True,
+            check=False,
+            timeout=LS_REMOTE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        # Unknown: treat as private, so it is fetched with the token.
+        return False
+    return proc.returncode == 0
+
+
+def private_repos(
+    project_dir: str | os.PathLike[str] = ".", public: IsPublic | None = None
+) -> list[str]:
+    """The private atlanhq repositories the project names."""
+    public = is_public if public is None else public
+    return [n for n in referenced_repos(project_dir) if not public(n)]
+
+
+def mirror_set(private: Sequence[str], referenced: Sequence[str]) -> list[str]:
+    """The repositories to mirror: the private ones, plus any referenced one
+    whose name starts with a private one's. ``insteadOf`` matches by prefix,
+    so the rewrite for ``foo`` would otherwise also catch ``foo-bar``."""
+    chosen = set(private)
+    for name in referenced:
+        if any(name != p and name.startswith(p) for p in private):
+            chosen.add(name)
+    return sorted(chosen)
+
+
+def mirror(
+    names: Sequence[str], dest: Path, clone_rewrite: Mapping[str, str]
+) -> str | None:
+    """Mirror-clone each repository into *dest*; return the first that failed.
+
+    *clone_rewrite* is the rewrite the clones run under (the token's, in
+    production). Each mirror is ``dest/<name>``, with ``dest/<name>.git``
+    linked to it so a remote written with ``.git`` resolves too.
+    """
+    env = {**_anonymous_git_env(), **rewrite_env(clone_rewrite)}
+    for name in names:
+        target = dest / name
+        try:
+            proc = subprocess.run(  # noqa: S603
+                [
+                    "git",
+                    "-c",
+                    "credential.helper=",
+                    "clone",
+                    "--mirror",
+                    "--quiet",
+                    f"{GITHUB_ATLANHQ}{name}",
+                    str(target),
+                ],
+                env=env,
+                cwd=dest,
+                capture_output=True,
+                check=False,
+                timeout=GIT_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            return name
+        if proc.returncode != 0:
+            return name
+        (dest / f"{name}.git").symlink_to(name)
+    return None
+
+
+def mirror_env(
+    dest: Path, names: Sequence[str], base: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """Token-free ``GIT_CONFIG_*`` entries pointing each repository's remotes
+    at its mirror in *dest*."""
+    rewrites = {
+        f"{remote}{name}": f"file://{dest / name}"
+        for name in names
+        for remote in ATLANHQ_REMOTES
+    }
+    return rewrite_env(rewrites, base)
+
+
+def _execute(command: Sequence[str], env: dict[str, str]) -> int:
+    return subprocess.run(list(command), env=env, check=False).returncode  # noqa: S603
+
+
+def run(
+    command: Sequence[str],
+    environ: Mapping[str, str] | None = None,
+    *,
+    project_dir: str | os.PathLike[str] = ".",
+    public: IsPublic | None = None,
+    execute: Execute = _execute,
+    clone_rewrite: Mapping[str, str] | None = None,
+) -> int:
+    """Run *command* able to fetch the project's private atlanhq deps, with no
+    token in its environment; return its exit code.
+
+    *public* defaults to :func:`is_public`. *clone_rewrite* replaces the token
+    rewrite the mirror clones use (tests point it at local repositories).
+    """
     environ = os.environ if environ is None else environ
-    env = child_env(environ, required=environ.get(REQUIRED_VAR, "") == "true")
-    if env is None:
+    public = is_public if public is None else public
+    token = environ.get(TOKEN_VAR, "")
+    required = environ.get(REQUIRED_VAR, "") == "true"
+    env = {k: v for k, v in environ.items() if k != TOKEN_VAR}
+    if not token and not required:
+        return execute(command, env)
+    referenced = referenced_repos(project_dir)
+    private = [n for n in referenced if not public(n)]
+    if not private:
+        return execute(command, env)
+    if not token:
         print(MISSING_TOKEN_ERROR, flush=True)
         return 1
-    return subprocess.run(list(command), env=env, check=False).returncode  # noqa: S603
+    names = mirror_set(private, referenced)
+    dest = Path(
+        tempfile.mkdtemp(prefix="git-mirrors-", dir=environ.get("RUNNER_TEMP") or None)
+    )
+    try:
+        rewrite = clone_rewrite or {
+            remote: f"https://x-access-token:{token}@github.com/atlanhq/"
+            for remote in ATLANHQ_REMOTES
+        }
+        failed = mirror(names, dest, rewrite)
+        if failed is not None:
+            print(
+                "::error title=Could not fetch a private git dependency::"
+                f"atlanhq/{failed} could not be cloned with the fleet App token. "
+                "Check that the atlan-app-fleet App is installed on it. "
+                "Dependencies were not installed.",
+                flush=True,
+            )
+            return 1
+        env.update(mirror_env(dest, names, env))
+        return execute(command, env)
+    finally:
+        shutil.rmtree(dest, ignore_errors=True)
+
+
+def write_repos_output(
+    repos: Sequence[str], environ: Mapping[str, str] | None = None
+) -> str:
+    """Print the comma-separated list; append it to ``$GITHUB_OUTPUT`` if set."""
+    environ = os.environ if environ is None else environ
+    joined = ",".join(repos)
+    print(joined or "(no private atlanhq git dependencies)")
+    output = environ.get("GITHUB_OUTPUT", "")
+    if output:
+        with open(output, "a", encoding="utf-8") as fh:
+            fh.write(f"repositories={joined}\n")
+    return joined
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Run a command with atlanhq git remotes authenticated."
+        description="Install private atlanhq git dependencies without exposing the token."
     )
     sub = parser.add_subparsers(dest="mode", required=True)
     run_parser = sub.add_parser(
-        "run", help="run a command with atlanhq remotes authenticated"
+        "run", help="run a command able to fetch the private atlanhq deps"
     )
+    run_parser.add_argument("--project-dir", default=".")
     run_parser.add_argument("command", nargs=argparse.REMAINDER)
+    repos_parser = sub.add_parser(
+        "repos", help="list the private atlanhq repos the project names"
+    )
+    repos_parser.add_argument("--project-dir", default=".")
     args = parser.parse_args(argv)
+    if args.mode == "repos":
+        write_repos_output(private_repos(args.project_dir))
+        return 0
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         parser.error("run needs a command after --")
-    return run(command)
+    return run(command, project_dir=args.project_dir)
 
 
 if __name__ == "__main__":

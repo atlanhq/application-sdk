@@ -343,13 +343,12 @@ jobs:
       - name: Mint read-only token for the image build
         id: image-git-token
         if: inputs.image == ''
-        continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        # Scoped to the private atlanhq repos the app names; no mint (and no
+        # git_token secret) when it names none.
+        uses: atlanhq/application-sdk/.github/actions/private-deps-token@main
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          permission-contents: read
 
       # buildx resolves the Dockerfile's `# syntax=docker/dockerfile:1`
       # frontend from Docker Hub ANONYMOUSLY on every build, before it looks at

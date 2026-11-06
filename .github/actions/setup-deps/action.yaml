@@ -33,11 +33,12 @@ inputs:
     description: |
       A read-only GitHub token for an app that pins a PRIVATE atlanhq git
       dependency. Empty (the default) installs without one. When set, the
-      install runs through `.github/scripts/git_auth.py`, which hands the token
-      to that one `uv sync` as `GIT_CONFIG_*` env and nothing else: no git
-      config is written, so no later step (tests, hooks, app code) can read it
-      (FND-4740). Never pass ORG_PAT_GITHUB here; the reusables mint a fleet
-      App token with `contents: read`.
+      install runs through `.github/scripts/git_auth.py`: only git sees the
+      token, to mirror-clone the private deps, and `uv sync` installs from the
+      local mirrors with no token in its env, so no build backend and no later
+      step (tests, hooks, app code) can read it (FND-4740). Never pass
+      ORG_PAT_GITHUB here; the reusables mint a read-only fleet App token
+      scoped to the app's private deps (`private-deps-token`).
     default: ""
 
 runs:
