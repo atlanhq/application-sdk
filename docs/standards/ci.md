@@ -792,9 +792,9 @@ secrets: |
   git_token=${{ steps.image-git-token.outputs.token }}
 ```
 
-The token itself is a read-only fleet App token minted in the same job by
-`.github/actions/private-deps-token`, scoped to the private atlanhq
-repositories the app names as git dependencies, never `ORG_PAT_GITHUB`. When
+The token itself is a read-only fleet App token minted in the same job,
+scoped to the private atlanhq repositories the app names as git dependencies
+(the mint steps below), never `ORG_PAT_GITHUB`. When
 the app names none, nothing is minted and no secret is passed. A secret mount
 keeps the token out of the image, but not out of the `RUN`: every build backend
 that `uv sync` runs can read it, which is why it is scoped to what the build
@@ -846,33 +846,46 @@ backends and build hooks, and they inherit uv's environment.
 
 Instead:
 
-1. Mint the token with `.github/actions/private-deps-token`, gated on the
-   caller's opt-in input. It runs `git_auth.py repos` to list the private
-   atlanhq repositories the app names as git dependencies (every
-   `pyproject.toml` and `uv.lock` in the checkout), and mints a read-only fleet
-   App token scoped to exactly those. When the app names none, it skips the
-   mint: `create-github-app-token` with no `repositories` grants the whole
-   installation. Never fall back to `ORG_PAT_GITHUB`.
+1. Mint the token in four inline steps, gated on the caller's opt-in input:
+   check out the app; sparse-check-out `.github/scripts/git_auth.py` from
+   `ref: ${{ job.workflow_sha }}` at `.sdk-git-auth`; run
+   `git_auth.py repos` to list the private atlanhq repositories the app names
+   as git dependencies (every `pyproject.toml` and `uv.lock` in the checkout),
+   then `rm -rf .sdk-git-auth`; and mint a read-only fleet App token
+   (`continue-on-error: true`) scoped to exactly that list. When the list is
+   empty, skip the mint: `create-github-app-token` with no `repositories`
+   grants the whole installation. Never fall back to `ORG_PAT_GITHUB`. Inline,
+   not a composite: callers pin composites `@main`, so a new one cannot run
+   before it merges, and composite steps cannot `continue-on-error`.
+   `.github/scripts/tests/_scoped_mint.py` pins the shape.
 2. Follow it with a guard step that fails, naming `FLEET_APP_ID` and
    `FLEET_APP_PRIVATE_KEY`, when the opt-in is set, the app names a private
    repository (`outputs.repositories != ''`) and the token is empty.
-3. Run the fetching command through `.github/scripts/git_auth.py`, with the
-   token in that step's `env: GIT_TOKEN` only:
+3. Hand the token to a step of its own that runs `git_auth.py mirror`, and
+   run the fetching command through `git_auth.py run` in a later step with no
+   token:
 
    ```yaml
-   env:
-     GIT_TOKEN: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
-     PRIVATE_GIT_DEPS: ${{ inputs.private-git-deps }}
-   run: python3 path/to/git_auth.py run -- uv sync
+   - name: Mirror private git dependencies
+     if: inputs.private-git-deps
+     env:
+       GIT_TOKEN: ${{ steps.git-deps-token.outputs.token }}
+       PRIVATE_GIT_DEPS: "true"
+     run: python3 path/to/git_auth.py mirror
+
+   - run: python3 path/to/git_auth.py run -- uv sync
    ```
 
-   The script mirror-clones each private repository with the token (a bare
-   `git clone --mirror` runs no repository code, and git keeps the remote URL
-   as written, so the token is not stored in the mirror). It then runs the
-   command with `GIT_TOKEN` removed and a token-free rewrite pointing those
-   remotes at the local mirrors, and deletes the mirrors afterwards. uv and
-   every build backend it runs see no credential. A composite takes the token
-   as its `git-auth-token` input and does the same inside.
+   `mirror` mirror-clones each private repository into
+   `$RUNNER_TEMP/git-mirrors` (a bare `git clone --mirror` runs no repository
+   code, and git keeps the remote URL as written, so the token is not stored
+   in the mirror) and exits. `run` points those remotes at the mirrors with a
+   token-free rewrite. The split is the point: a build backend can read the
+   environment of every ancestor process (`/proc/<pid>/environ`), so the token
+   must not be in the env of the step that starts uv, not only out of uv's own
+   env. `run` refuses to start when `GIT_TOKEN` is set. A composite takes the
+   token as its `git-auth-token` input and does the same inside (`setup-deps`
+   mirrors; later `git_auth.py run` steps in the job reuse the mirrors).
 
 An image build is the one place the token reaches caller code: the app's
 Dockerfile reads the `git_token` BuildKit secret. That token comes from the

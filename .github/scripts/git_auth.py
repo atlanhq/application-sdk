@@ -1,38 +1,43 @@
-"""Install an app's private atlanhq git dependencies without handing the token to uv.
+"""Install an app's private atlanhq git dependencies without the token reaching uv.
 
 An app with a PRIVATE atlanhq git dependency needs a GitHub token for the
 commands that fetch it: ``uv sync`` / ``uv lock`` on a cold cache. Those
 commands also run PEP 517 build backends and build hooks, which are app or
-dependency code. Anything in uv's environment (``GIT_TOKEN``, or a
-``GIT_CONFIG_*`` rewrite carrying the token) is readable by them, so the token
-must never be in uv's environment at all.
+dependency code running as the job's user. They can read uv's environment, and
+the environment of every ancestor process (``/proc/<pid>/environ``), so the
+token must be in neither: not in uv's env, and not in the env of the step
+shell or wrapper that starts uv.
 
-``run`` therefore works in two phases:
+So the token is used in its own workflow step, which exits before uv runs:
 
-1. **Mirror.** Each private atlanhq repository the project names is cloned
-   with ``git clone --mirror``, the only process that ever sees the token (as
-   a ``GIT_CONFIG_*`` rewrite on that git process alone). A bare mirror clone
-   runs no repository code: no checkout, no hooks, no filters. git stores the
-   remote URL as written, not the rewritten one, so the token is not left in
-   the mirror's config either.
-2. **Run.** The command runs with ``GIT_TOKEN`` removed and a token-free
-   rewrite pointing each private remote at its local mirror
-   (``url.file://<mirror>.insteadOf``). uv fetches from the mirrors, and the
-   lock keeps the original URLs.
+1. ``git_auth.py mirror`` (the step whose ``env:`` holds ``GIT_TOKEN``) clones
+   each private atlanhq repository the project names with
+   ``git clone --mirror`` into ``$RUNNER_TEMP/git-mirrors``. Only git sees the
+   token, as a ``GIT_CONFIG_*`` rewrite on that git process. A bare mirror
+   clone runs no repository code (no checkout, no hooks, no filters), and git
+   stores the remote URL as written, so the token is not left in the mirror.
+2. ``git_auth.py run -- <cmd>`` (a later step with no token in its env) runs
+   the command with a token-free rewrite pointing each mirrored remote at its
+   mirror (``url.file://<mirror>.insteadOf``). uv fetches from the mirrors and
+   the lock keeps the original URLs. ``run`` refuses to start if ``GIT_TOKEN``
+   is set: the token in that step's env is exactly what this split prevents.
 
-The mirrors are removed when the command exits. Public atlanhq repositories
-are not mirrored: uv fetches them from GitHub, unauthenticated, as before.
+Public atlanhq repositories are not mirrored: uv fetches them from GitHub,
+unauthenticated, as before. With no mirrors, ``run`` runs the command plain.
 
-Usage, from a workflow ``run:`` step::
+Usage, from workflow ``run:`` steps::
 
+    # step 1: env GIT_TOKEN, PRIVATE_GIT_DEPS
+    python3 .github/scripts/git_auth.py mirror
+    # step 2: no token
     python3 .github/scripts/git_auth.py run -- uv sync --all-extras --all-groups
-    python3 .github/scripts/git_auth.py repos   # the private repos, for a scoped mint
+    # before the mint: the private repos, for a scoped token
+    python3 .github/scripts/git_auth.py repos
 
-Environment for ``run``:
+Environment for ``mirror``:
 
 ``GIT_TOKEN``
-    The token. Never passed to the command. Empty or unset runs the command
-    without mirrors, exactly as if this wrapper were not there.
+    The token. Empty or unset with ``PRIVATE_GIT_DEPS`` unset mirrors nothing.
 ``PRIVATE_GIT_DEPS``
     ``true`` makes a missing token an error when the project names a private
     atlanhq repository. A caller that declared private git dependencies but
@@ -54,13 +59,12 @@ dependency is found too.
 
 Once one sync has populated the job's uv cache and venv, later ``uv sync`` /
 ``uv run`` / ``uv lock --check`` calls, and even a re-lock of a stale lock, do
-not fetch again (verified against a blocked github.com for FND-4740), so only
-the first install needs this wrapper.
+not fetch again (verified against a blocked github.com for FND-4740).
 
 Shared by the certify gate (``build_and_publish/certify.py install-deps``), the
 tests / checks / conformance reusables and the composite actions they call,
-release-version-bump.yaml, and the image builds' scoped token mint
-(``.github/actions/private-deps-token``). See docs/standards/ci.md.
+release-version-bump.yaml, and the ``repos`` step every scoped token mint runs
+before minting. See docs/standards/ci.md.
 """
 
 from __future__ import annotations
@@ -268,58 +272,97 @@ def _execute(command: Sequence[str], env: dict[str, str]) -> int:
     return subprocess.run(list(command), env=env, check=False).returncode  # noqa: S603
 
 
+def mirror_dest(environ: Mapping[str, str] | None = None) -> Path:
+    """Where ``mirror`` writes and ``run`` reads: ``$RUNNER_TEMP/git-mirrors``."""
+    environ = os.environ if environ is None else environ
+    return Path(environ.get("RUNNER_TEMP") or tempfile.gettempdir()) / "git-mirrors"
+
+
+def prepare_mirrors(
+    environ: Mapping[str, str] | None = None,
+    *,
+    project_dir: str | os.PathLike[str] = ".",
+    dest: Path | None = None,
+    public: IsPublic | None = None,
+    clone_rewrite: Mapping[str, str] | None = None,
+) -> int:
+    """Mirror the project's private atlanhq deps into *dest*; return 0 or 1.
+
+    *dest* is emptied first, so a stale mirror never survives. *public*
+    defaults to :func:`is_public`; *clone_rewrite* replaces the token rewrite
+    the clones use (tests point it at local repositories).
+    """
+    environ = os.environ if environ is None else environ
+    dest = mirror_dest(environ) if dest is None else dest
+    public = is_public if public is None else public
+    shutil.rmtree(dest, ignore_errors=True)
+    token = environ.get(TOKEN_VAR, "")
+    required = environ.get(REQUIRED_VAR, "") == "true"
+    if not token and not required:
+        return 0
+    referenced = referenced_repos(project_dir)
+    private = [n for n in referenced if not public(n)]
+    if not private:
+        return 0
+    if not token:
+        print(MISSING_TOKEN_ERROR, flush=True)
+        return 1
+    dest.mkdir(parents=True)
+    rewrite = clone_rewrite or {
+        remote: f"https://x-access-token:{token}@github.com/atlanhq/"
+        for remote in ATLANHQ_REMOTES
+    }
+    failed = mirror(mirror_set(private, referenced), dest, rewrite)
+    if failed is not None:
+        shutil.rmtree(dest, ignore_errors=True)
+        print(
+            "::error title=Could not fetch a private git dependency::"
+            f"atlanhq/{failed} could not be cloned with the fleet App token. "
+            "Check that the atlan-app-fleet App is installed on it. "
+            "Dependencies were not installed.",
+            flush=True,
+        )
+        return 1
+    return 0
+
+
+def mirrored_names(dest: Path) -> list[str]:
+    """The repositories mirrored in *dest* (the ``.git`` links excluded)."""
+    if not dest.is_dir():
+        return []
+    return sorted(p.name for p in dest.iterdir() if p.is_dir() and not p.is_symlink())
+
+
+TOKEN_IN_RUN_ERROR = (
+    "::error title=Token in the step that runs uv::"
+    "GIT_TOKEN is set in the step that runs the install. Build backends can read "
+    "the environment of every ancestor process, so pass the token only to the "
+    "earlier `git_auth.py mirror` step. Dependencies were not installed."
+)
+
+
 def run(
     command: Sequence[str],
     environ: Mapping[str, str] | None = None,
     *,
-    project_dir: str | os.PathLike[str] = ".",
-    public: IsPublic | None = None,
+    dest: Path | None = None,
     execute: Execute = _execute,
-    clone_rewrite: Mapping[str, str] | None = None,
 ) -> int:
-    """Run *command* able to fetch the project's private atlanhq deps, with no
-    token in its environment; return its exit code.
+    """Run *command* against the mirrors in *dest*; return its exit code.
 
-    *public* defaults to :func:`is_public`. *clone_rewrite* replaces the token
-    rewrite the mirror clones use (tests point it at local repositories).
+    Refuses when ``GIT_TOKEN`` is set: then the token is in this process's
+    environment, and so readable by any build backend *command* starts.
     """
     environ = os.environ if environ is None else environ
-    public = is_public if public is None else public
-    token = environ.get(TOKEN_VAR, "")
-    required = environ.get(REQUIRED_VAR, "") == "true"
-    env = {k: v for k, v in environ.items() if k != TOKEN_VAR}
-    if not token and not required:
-        return execute(command, env)
-    referenced = referenced_repos(project_dir)
-    private = [n for n in referenced if not public(n)]
-    if not private:
-        return execute(command, env)
-    if not token:
-        print(MISSING_TOKEN_ERROR, flush=True)
+    if environ.get(TOKEN_VAR, ""):
+        print(TOKEN_IN_RUN_ERROR, flush=True)
         return 1
-    names = mirror_set(private, referenced)
-    dest = Path(
-        tempfile.mkdtemp(prefix="git-mirrors-", dir=environ.get("RUNNER_TEMP") or None)
-    )
-    try:
-        rewrite = clone_rewrite or {
-            remote: f"https://x-access-token:{token}@github.com/atlanhq/"
-            for remote in ATLANHQ_REMOTES
-        }
-        failed = mirror(names, dest, rewrite)
-        if failed is not None:
-            print(
-                "::error title=Could not fetch a private git dependency::"
-                f"atlanhq/{failed} could not be cloned with the fleet App token. "
-                "Check that the atlan-app-fleet App is installed on it. "
-                "Dependencies were not installed.",
-                flush=True,
-            )
-            return 1
+    dest = mirror_dest(environ) if dest is None else dest
+    env = {k: v for k, v in environ.items() if k != TOKEN_VAR}
+    names = mirrored_names(dest)
+    if names:
         env.update(mirror_env(dest, names, env))
-        return execute(command, env)
-    finally:
-        shutil.rmtree(dest, ignore_errors=True)
+    return execute(command, env)
 
 
 def write_repos_output(
@@ -341,10 +384,13 @@ def main(argv: list[str] | None = None) -> int:
         description="Install private atlanhq git dependencies without exposing the token."
     )
     sub = parser.add_subparsers(dest="mode", required=True)
-    run_parser = sub.add_parser(
-        "run", help="run a command able to fetch the private atlanhq deps"
+    mirror_parser = sub.add_parser(
+        "mirror", help="mirror the private atlanhq deps (the only step with the token)"
     )
-    run_parser.add_argument("--project-dir", default=".")
+    mirror_parser.add_argument("--project-dir", default=".")
+    run_parser = sub.add_parser(
+        "run", help="run a command against the mirrors, with no token"
+    )
     run_parser.add_argument("command", nargs=argparse.REMAINDER)
     repos_parser = sub.add_parser(
         "repos", help="list the private atlanhq repos the project names"
@@ -354,10 +400,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode == "repos":
         write_repos_output(private_repos(args.project_dir))
         return 0
+    if args.mode == "mirror":
+        return prepare_mirrors(project_dir=args.project_dir)
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         parser.error("run needs a command after --")
-    return run(command, project_dir=args.project_dir)
+    return run(command)
 
 
 if __name__ == "__main__":

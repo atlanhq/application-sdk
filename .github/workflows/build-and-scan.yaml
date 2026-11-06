@@ -340,15 +340,45 @@ jobs:
       # mount ignores it), only "is there a build". `continue-on-error` and no
       # PAT fallback: an empty secret is skipped with a warning by
       # build-push-action, so only a build that needs it fails, at its clone.
+      # Scoped to the private atlanhq repos the app names (git_auth.py
+      # repos: its pyproject.toml / uv.lock files, public repos dropped).
+      # No mint when it names none: create-github-app-token with no
+      # `repositories` would grant the whole installation. The script comes
+      # from this workflow's own commit (job.workflow_sha), so it is the
+      # version that matches the workflow running it.
+      - name: Checkout SDK git_auth.py (image build)
+        if: inputs.image == ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/git_auth.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-git-auth
+          persist-credentials: false
+
+      - name: List the private atlanhq repos the app names
+        id: image-git-repos
+        if: inputs.image == ''
+        run: |
+          set -euo pipefail
+          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
+          # Out of the workspace: it is the image build context and the tree
+          # conformance and pre-commit look at.
+          rm -rf .sdk-git-auth
+
       - name: Mint read-only token for the image build
         id: image-git-token
-        if: inputs.image == ''
-        # Scoped to the private atlanhq repos the app names; no mint (and no
-        # git_token secret) when it names none.
-        uses: atlanhq/application-sdk/.github/actions/private-deps-token@main
+        if: inputs.image == '' && steps.image-git-repos.outputs.repositories != ''
+        # A failed mint leaves the token empty; see the guard below.
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ steps.image-git-repos.outputs.repositories }}
+          permission-contents: read
 
       # buildx resolves the Dockerfile's `# syntax=docker/dockerfile:1`
       # frontend from Docker Hub ANONYMOUSLY on every build, before it looks at

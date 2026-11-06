@@ -156,7 +156,7 @@ def test_is_public_asks_git_with_no_credential_at_all(
     assert not any(k.startswith("GIT_CONFIG_KEY") for k in env)
 
 
-# ── run: the command never sees the token ───────────────────────────────────
+# ── mirror, then run: the token never reaches uv or its ancestors ─────────
 
 
 @pytest.fixture
@@ -225,49 +225,75 @@ print(json.dumps({{
 """
 
 
-def _run_child(
+_MIRRORS = "git-mirrors"
+
+
+def _mirror(
     capfd: pytest.CaptureFixture[str],
     project: Path,
     remotes: Path,
     tmp_path: Path,
     **env: str,
-) -> tuple[int, dict[str, object] | None, str]:
-    environ = {
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": str(tmp_path),
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "RUNNER_TEMP": str(tmp_path),
-        **env,
-    }
-    rc = git_auth.run(
-        [sys.executable, "-c", _CHILD],
-        environ,
+) -> tuple[int, str]:
+    """The mirror step: the only one given the token."""
+    rc = git_auth.prepare_mirrors(
+        {"PATH": os.environ.get("PATH", ""), **env},
         project_dir=project,
+        dest=tmp_path / _MIRRORS,
         public=lambda name: False,
         clone_rewrite={
             remote: f"file://{remotes}/" for remote in git_auth.ATLANHQ_REMOTES
         },
     )
+    return rc, capfd.readouterr().out
+
+
+def _run_child(
+    capfd: pytest.CaptureFixture[str], tmp_path: Path, **env: str
+) -> tuple[int, dict[str, object] | None, str]:
+    """The run step: a later step, with no token in its env."""
+    environ = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(tmp_path),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        **env,
+    }
+    rc = git_auth.run([sys.executable, "-c", _CHILD], environ, dest=tmp_path / _MIRRORS)
     out = capfd.readouterr().out
     lines = [line for line in out.strip().splitlines() if line.startswith("{")]
     return rc, (json.loads(lines[-1]) if lines else None), out
 
 
-def test_run_fetches_from_a_mirror_with_no_token_in_the_commands_env(
+def test_the_run_step_fetches_from_the_mirror_with_no_token_anywhere(
     capfd: pytest.CaptureFixture[str], project: Path, remotes: Path, tmp_path: Path
 ) -> None:
-    rc, seen, _ = _run_child(
+    rc, _ = _mirror(
         capfd, project, remotes, tmp_path, GIT_TOKEN=TOKEN, PRIVATE_GIT_DEPS="true"
     )
+    assert rc == 0
+    rc, seen, _ = _run_child(capfd, tmp_path)
     assert rc == 0
     assert seen is not None
     assert seen["token_in_env"] is False
     assert seen["git_token_var"] is False
-    assert str(seen["url"]).startswith(f"file://{tmp_path}/git-mirrors-")
+    assert seen["url"] == f"file://{tmp_path / _MIRRORS / 'private-dep'}"
     assert seen["fetched_main"] is True
-    # The mirrors are gone with the command, and nothing is persisted.
-    assert not list(tmp_path.glob("git-mirrors-*"))
+    # Nothing the run step can reach holds the token: not the mirror.
+    for path in (tmp_path / _MIRRORS).rglob("*"):
+        if path.is_file():
+            assert TOKEN.encode() not in path.read_bytes(), path
     assert "GIT_CONFIG_COUNT" not in os.environ
+
+
+def test_the_run_step_refuses_a_token_in_its_env(
+    capfd: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """A token in the step that runs uv is readable by every build backend
+    through /proc/<ancestor>/environ, so the run step must not have one."""
+    rc, seen, out = _run_child(capfd, tmp_path, GIT_TOKEN=TOKEN)
+    assert rc == 1
+    assert seen is None  # the command never ran
+    assert "::error title=Token in the step that runs uv::" in out
 
 
 def test_the_mirror_does_not_store_the_rewritten_url(
@@ -283,72 +309,83 @@ def test_the_mirror_does_not_store_the_rewritten_url(
     assert "url = https://github.com/atlanhq/private-dep" in config
     assert str(remotes) not in config
     assert (dest / "private-dep.git").resolve() == (dest / "private-dep").resolve()
+    assert git_auth.mirrored_names(dest) == ["private-dep"]
 
 
-def test_run_fails_closed_when_a_mirror_clone_fails(
+def test_the_mirror_step_fails_closed_when_a_clone_fails(
     capfd: pytest.CaptureFixture[str], project: Path, tmp_path: Path
 ) -> None:
     empty = tmp_path / "no-remotes"
     empty.mkdir()
-    rc, seen, out = _run_child(
+    rc, out = _mirror(
         capfd, project, empty, tmp_path, GIT_TOKEN=TOKEN, PRIVATE_GIT_DEPS="true"
     )
     assert rc == 1
-    assert seen is None  # the command never ran
     assert "atlanhq/private-dep could not be cloned" in out
-    assert not list(tmp_path.glob("git-mirrors-*"))
+    assert not (tmp_path / _MIRRORS).exists()
 
 
-def test_run_fails_closed_naming_the_missing_secrets(
+def test_the_mirror_step_fails_closed_naming_the_missing_secrets(
     capfd: pytest.CaptureFixture[str], project: Path, remotes: Path, tmp_path: Path
 ) -> None:
-    rc, seen, out = _run_child(
+    rc, out = _mirror(
         capfd, project, remotes, tmp_path, GIT_TOKEN="", PRIVATE_GIT_DEPS="true"
     )
     assert rc == 1
-    assert seen is None
     assert "::error title=No token for private git dependencies::" in out
     assert "FLEET_APP_ID" in out and "FLEET_APP_PRIVATE_KEY" in out
 
 
-def test_run_with_no_private_repo_named_needs_no_token(
+def test_the_mirror_step_replaces_a_stale_mirror(
+    capfd: pytest.CaptureFixture[str], project: Path, remotes: Path, tmp_path: Path
+) -> None:
+    stale = tmp_path / _MIRRORS / "gone-dep"
+    stale.mkdir(parents=True)
+    rc, _ = _mirror(
+        capfd, project, remotes, tmp_path, GIT_TOKEN=TOKEN, PRIVATE_GIT_DEPS="true"
+    )
+    assert rc == 0
+    assert git_auth.mirrored_names(tmp_path / _MIRRORS) == ["private-dep"]
+
+
+def test_no_private_repo_named_needs_no_token_and_runs_plain(
     capfd: pytest.CaptureFixture[str], remotes: Path, tmp_path: Path
 ) -> None:
     """The scoped mint is skipped for such a project, so no token arrives."""
     plain = tmp_path / "plain"
     plain.mkdir()
     (plain / "pyproject.toml").write_text("[project]\nname = 'plain'\n")
-    rc, seen, _ = _run_child(
+    rc, _ = _mirror(
         capfd, plain, remotes, tmp_path, GIT_TOKEN="", PRIVATE_GIT_DEPS="true"
     )
+    assert rc == 0
+    assert not (tmp_path / _MIRRORS).exists()
+    rc, seen, _ = _run_child(capfd, tmp_path)
     assert rc == 0
     assert seen is not None
     assert seen["url"] == SSH_REMOTE
 
 
-def test_run_without_token_or_flag_passes_through_without_looking(
-    capfd: pytest.CaptureFixture[str],
-) -> None:
+def test_the_mirror_step_without_token_or_flag_does_not_look(tmp_path: Path) -> None:
     calls: list[str] = []
 
     def public(name: str) -> bool:
         calls.append(name)
         return False
 
-    rc = git_auth.run(
-        [sys.executable, "-c", "print('ran')"],
-        {"PATH": os.environ.get("PATH", "")},
-        public=public,
+    rc = git_auth.prepare_mirrors(
+        {"PATH": os.environ.get("PATH", "")}, dest=tmp_path / _MIRRORS, public=public
     )
     assert rc == 0
-    assert "ran" in capfd.readouterr().out
     assert calls == []
 
 
-def test_run_returns_the_commands_exit_code() -> None:
+def test_run_returns_the_commands_exit_code(tmp_path: Path) -> None:
     assert (
         git_auth.run(
-            [sys.executable, "-c", "raise SystemExit(3)"], {"PATH": os.environ["PATH"]}
+            [sys.executable, "-c", "raise SystemExit(3)"],
+            {"PATH": os.environ["PATH"]},
+            dest=tmp_path / _MIRRORS,
         )
         == 3
     )
@@ -357,6 +394,10 @@ def test_run_returns_the_commands_exit_code() -> None:
 def test_run_needs_a_command() -> None:
     with pytest.raises(SystemExit):
         git_auth.main(["run", "--"])
+
+
+def test_mirror_dest_is_under_runner_temp(tmp_path: Path) -> None:
+    assert git_auth.mirror_dest({"RUNNER_TEMP": str(tmp_path)}) == tmp_path / _MIRRORS
 
 
 # ── repos: the list a scoped mint uses ──────────────────────────────────────

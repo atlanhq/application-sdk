@@ -7,7 +7,7 @@ env, so every later step, including the tests, pre-commit hooks and
 conformance series that import app code, could read it.
 
 They now mint a read-only fleet App token scoped to the app's private repos
-(``.github/actions/private-deps-token``) and hand it to
+(the inline shape pinned by ``_scoped_mint.py``) and hand it to
 ``.github/scripts/git_auth.py`` alone, which uses it only to mirror-clone those
 repos: uv, and every build backend it runs, install from the local mirrors
 with no token in their env (lens round 5). These tests pin that shape, so a
@@ -28,11 +28,15 @@ git's own; git_auth.py itself is executed in test_git_auth.py.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _scoped_mint import assert_scoped_mint  # noqa: E402
 
 Workflow = dict[Any, Any]
 Step = dict[str, Any]
@@ -62,12 +66,14 @@ COMPOSITES = [
 
 MINT_ID = "git-deps-token"
 TOKEN_REF = f"steps.{MINT_ID}.outputs.token"
-REPOS_REF = f"steps.{MINT_ID}.outputs.repositories"
-APP_TOKEN_ACTION = "actions/create-github-app-token@"
-SCOPED_MINT = "atlanhq/application-sdk/.github/actions/private-deps-token@main"
+REPOS_ID = "git-deps-repos"
+REPOS_REF = f"steps.{REPOS_ID}.outputs.repositories"
 #: ``python3 <path>/git_auth.py run -- <cmd>``; the path may be quoted and hold
 #: an expression (``"${{ github.action_path }}/../../scripts/git_auth.py"``).
 GIT_AUTH_RUN = re.compile(r'python3 "?[^\n"]*/git_auth\.py"? run -- \S')
+#: ``python3 <path>/git_auth.py mirror``: the only kind of step that may hold the
+#: token. It exits before uv runs, so no ancestor of a build backend has it.
+GIT_AUTH_MIRROR = re.compile(r'python3 "?[^\n"]*/git_auth\.py"? mirror\s*$')
 GIT_CONFIG_WRITE = re.compile(
     r"git config\b.*(insteadOf|--global|extraheader)|insteadOf"
 )
@@ -93,6 +99,10 @@ def _mint(steps: list[Step]) -> Step:
 
 def _runs_git_auth(step: Step) -> bool:
     return bool(GIT_AUTH_RUN.search(step.get("run", "")))
+
+
+def _mirrors(step: Step) -> bool:
+    return bool(GIT_AUTH_MIRROR.search(step.get("run", "")))
 
 
 # ── No persisted credential, no job-wide token ────────────────────────────────
@@ -126,63 +136,15 @@ def test_no_job_level_token(workflow_file: str, job: str, flag: str) -> None:
 
 
 @pytest.mark.parametrize(("workflow_file", "job", "flag"), JOBS, ids=JOB_IDS)
-def test_token_comes_from_the_scoped_mint(
+def test_token_is_minted_scoped_to_the_apps_private_repos(
     workflow_file: str, job: str, flag: str
 ) -> None:
-    mint = _mint(_steps(workflow_file, job))
-    assert mint["uses"] == SCOPED_MINT
-    assert mint["if"] == f"inputs.{flag}"
-    with_ = mint["with"]
-    assert (
-        "FLEET_APP_ID" in with_["app-id"]
-        and "FLEET_APP_PRIVATE_KEY" in with_["private-key"]
+    assert_scoped_mint(
+        _steps(workflow_file, job),
+        mint_id=MINT_ID,
+        repos_id=REPOS_ID,
+        cond=f"inputs.{flag}",
     )
-
-
-@pytest.mark.parametrize(("workflow_file", "job", "flag"), JOBS, ids=JOB_IDS)
-def test_the_app_is_checked_out_before_the_mint_reads_it(
-    workflow_file: str, job: str, flag: str
-) -> None:
-    """The mint lists the repos from the app's pyproject/uv.lock files."""
-    steps = _steps(workflow_file, job)
-    mint = steps.index(_mint(steps))
-    project = _mint(steps)["with"].get("project-dir", ".")
-    app_checkouts: list[Step] = []
-    for s in steps[:mint]:
-        with_: dict[str, Any] = s.get("with") or {}
-        if (
-            str(s.get("uses", "")).startswith("actions/checkout@")
-            and "repository" not in with_
-            and with_.get("path", ".") == project
-        ):
-            app_checkouts.append(s)
-    assert app_checkouts, f"no checkout of the app at {project!r} before the mint"
-
-
-def test_the_scoped_mint_never_mints_unscoped() -> None:
-    """``create-github-app-token`` with no ``repositories`` grants every repo in
-    the installation, so the composite mints only for a non-empty list."""
-    steps = _load(ACTIONS / "private-deps-token" / "action.yaml")["runs"]["steps"]
-    repos = [s for s in steps if s.get("id") == "repos"]
-    mints = [s for s in steps if APP_TOKEN_ACTION in str(s.get("uses", ""))]
-    assert len(repos) == 1 and len(mints) == 1
-    assert repos[0]["run"] == 'python3 "$GIT_AUTH" repos --project-dir "$PROJECT_DIR"'
-    assert repos[0]["env"]["GIT_AUTH"].endswith("/../../scripts/git_auth.py")
-    mint = mints[0]
-    assert mint["if"] == "steps.repos.outputs.repositories != ''"
-    # A missing secret must reach the caller's named guard, not fail bare here.
-    assert mint.get("continue-on-error") is True
-    with_ = mint["with"]
-    assert with_["repositories"] == "${{ steps.repos.outputs.repositories }}"
-    assert with_["permission-contents"] == "read"
-    assert with_["owner"] == "atlanhq"
-    assert set(with_) == {
-        "app-id",
-        "private-key",
-        "owner",
-        "repositories",
-        "permission-contents",
-    }
 
 
 @pytest.mark.parametrize(("workflow_file", "job", "flag"), JOBS, ids=JOB_IDS)
@@ -228,8 +190,8 @@ def test_token_reaches_only_git_auth(workflow_file: str, job: str, flag: str) ->
     for step, where in readers:
         name = step.get("name") or step.get("uses")
         if where == "env.GIT_TOKEN":
-            assert _runs_git_auth(step), (
-                f"{name}: GIT_TOKEN on a step that does not run git_auth.py"
+            assert _mirrors(step), (
+                f"{name}: GIT_TOKEN on a step other than `git_auth.py mirror`"
             )
         elif where == "with.git-auth-token":
             assert step["uses"].startswith(
@@ -286,7 +248,7 @@ def test_composite_hands_the_token_only_to_git_auth(action: str) -> None:
             assert list(
                 k for k, v in env.items() if "inputs.git-auth-token" in str(v)
             ) == ["GIT_TOKEN"]
-            assert _runs_git_auth(step), step.get("name")
+            assert _mirrors(step), step.get("name")
             readers += 1
         if "inputs.git-auth-token" in str(with_):
             assert step["uses"].startswith(
@@ -331,6 +293,52 @@ def test_release_bump_relocks_without_git_auth_when_not_opted_in() -> None:
     assert plain["run"].strip() == "uv lock"
     assert "env" not in plain
     assert _runs_git_auth(authed)
+
+
+# ── The token never shares a step with uv (lens round 6) ─────────────────────
+
+
+def _all_steps() -> list[tuple[str, Step]]:
+    found: list[tuple[str, Step]] = []
+    for path in sorted(WORKFLOWS.glob("*.y*ml")):
+        jobs: dict[str, dict[str, Any]] = _load(path).get("jobs") or {}
+        for job_id, job in jobs.items():
+            for step in job.get("steps") or []:
+                found.append((f"{path.name}:{job_id}", step))
+    for path in sorted(ACTIONS.glob("*/action.y*ml")):
+        runs: dict[str, Any] = _load(path).get("runs") or {}
+        for step in runs.get("steps") or []:
+            found.append((path.parent.name, step))
+    return found
+
+
+def test_no_step_that_runs_uv_through_git_auth_holds_a_token() -> None:
+    """A build backend can read /proc/<pid>/environ of every ancestor, so the
+    step that starts uv (``git_auth.py run``, certify's ``install-deps``) must
+    have no token in its env; ``git_auth.py run`` refuses one too."""
+    offenders = [
+        f"{where}: {step.get('name')}"
+        for where, step in _all_steps()
+        if (_runs_git_auth(step) or "certify.py install-deps" in step.get("run", ""))
+        and (
+            "GIT_TOKEN" in (step.get("env") or {})
+            or "token" in str(step.get("env") or {}).lower()
+        )
+    ]
+    assert offenders == []
+
+
+def test_every_token_holding_step_only_mirrors() -> None:
+    """Wherever GIT_TOKEN is set, the step runs ``git_auth.py mirror`` and
+    nothing else, or is an image build handing it to BuildKit."""
+    for where, step in _all_steps():
+        if "GIT_TOKEN" not in (step.get("env") or {}):
+            continue
+        run = step.get("run", "")
+        if "--secret" in run or "build-app-image" in where:
+            continue  # BuildKit secret (test_image_build_git_token.py)
+        assert _mirrors(step), f"{where}: {step.get('name')}"
+        assert run.strip().count("\n") == 0, f"{where}: mirror step does more"
 
 
 # ── Conformance: the vendored detect action never sees the token ─────────────

@@ -73,7 +73,6 @@ runs:
       shell: bash
       env:
         SDK_REF: ${{ inputs.application-sdk-ref }}
-        GIT_TOKEN: ${{ inputs.git-auth-token }}
       # Reuse the integration action's repin script (a generic pyproject
       # [tool.uv.sources] rewriter, not integration-specific) rather than
       # keeping a third copy. Both actions are checked out together from the

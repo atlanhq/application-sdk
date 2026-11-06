@@ -512,7 +512,6 @@ runs:
       shell: bash
       env:
         SDK_REF: ${{ steps.sdk_refs.outputs.harness_ref }}
-        GIT_TOKEN: ${{ inputs.git-auth-token }}
       run: |
         /tmp/sdr-e2e/repin-application-sdk.sh
         python3 /tmp/sdr-e2e/git_auth.py run -- uv lock

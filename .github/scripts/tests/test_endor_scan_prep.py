@@ -394,6 +394,9 @@ def test_endor_scan_script_checkout_is_provenance_pinned():
         for s in steps
         if "actions/checkout@" in str(s.get("uses", ""))
         and (s.get("with") or {}).get("repository") == "atlanhq/application-sdk"
+        # The scoped token mint's git_auth.py checkout (.sdk-git-auth) is pinned,
+        # and removed before the build, in _scoped_mint.py.
+        and (s.get("with") or {}).get("path") != ".sdk-git-auth"
     ]
     assert len(checkouts) == 1
     with_block = checkouts[0]["with"]

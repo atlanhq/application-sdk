@@ -7,14 +7,13 @@ Subcommands (each one is a former inline ``run:`` block):
     Install the app's dependencies in the app checkout (``uv sync
     --all-extras --all-groups --frozen``), used by ``certify`` and every
     ``certify-unit`` leg. All groups now, so the later ``uv run --frozen``
-    of tests and coverage has nothing to fetch. When ``PRIVATE_GIT_AUTH`` is
-    ``true``, the install runs through ``git_auth.run``: the app's private
-    atlanhq git dependencies are mirror-cloned with ``GIT_TOKEN`` (the fleet
-    App token, scoped to those repositories), and ``uv`` runs against the
-    local mirrors with no token in its environment, so no build backend it
-    starts, and no later step, can read the token. ``PRIVATE_GIT_AUTH``
-    without a token fails when the app names a private repository: the App
-    token did not mint, and there is no fallback credential.
+    of tests and coverage has nothing to fetch. It runs through
+    ``git_auth.run``: when the app has private atlanhq git dependencies, the
+    earlier workflow step ``git_auth.py mirror`` (the only step that holds the
+    fleet App token) has mirror-cloned them, and ``uv`` installs from those
+    local mirrors. This step has no token in its environment, nor does any
+    ancestor of ``uv``, so no build backend it starts can read one;
+    ``git_auth.run`` refuses to start if ``GIT_TOKEN`` is set.
 
 ``check-migration``
     v3 shape, warn-only. Runs ``tools.migrate_v3.check_migration`` from the SDK
@@ -45,7 +44,6 @@ See docs/standards/app-certification.md.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -69,14 +67,8 @@ INSTALL_COMMAND = ("uv", "sync", "--all-extras", "--all-groups", "--frozen")
 
 
 def install_deps() -> int:
-    private_git_auth = _bap.env("PRIVATE_GIT_AUTH") == "true"
-    environ = {k: v for k, v in os.environ.items() if k != "GIT_TOKEN"}
-    if private_git_auth:
-        environ[git_auth.TOKEN_VAR] = _bap.env("GIT_TOKEN")
-        environ[git_auth.REQUIRED_VAR] = "true"
     return git_auth.run(
         INSTALL_COMMAND,
-        environ,
         execute=lambda command, env: _bap.run(command, env=env).returncode,
     )
 

@@ -237,7 +237,6 @@ runs:
       shell: bash
       env:
         SDK_REF: ${{ inputs.application-sdk-ref }}
-        GIT_TOKEN: ${{ inputs.git-auth-token }}
       run: |
         chmod +x "${{ github.action_path }}/repin-application-sdk.sh"
         "${{ github.action_path }}/repin-application-sdk.sh"

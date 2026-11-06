@@ -31,9 +31,10 @@ drift needs only `pkl`, so it runs either way.
 An app with a private atlanhq git dependency sets `private_git_auth: true`.
 The install step then fetches the app's private atlanhq git dependencies with
 a fleet App token, minted with `contents: read` and scoped to those
-repositories. Only git sees it: the dependencies are mirror-cloned with the
-token, and `uv sync` installs from the local mirrors with no token in its
-environment. So no build backend `uv sync` runs, and none of the unit-test and
+repositories. Only git sees it, in a step of its own: the dependencies are
+mirror-cloned with the token and that step exits. The install step then runs
+`uv sync` against the local mirrors with no token in its environment or in
+any ancestor process's. So no build backend `uv sync` runs, and none of the unit-test and
 coverage steps, which run app code, have a token to read. Those steps use `uv run --frozen` against what the install
 synced, so they never fetch.
 

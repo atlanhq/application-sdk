@@ -66,7 +66,6 @@ SLIM_ACTIONS = frozenset(
         "softprops/action-gh-release",
         "atlanhq/application-sdk/.github/actions/discover-e2e-suites",
         "atlanhq/application-sdk/.github/actions/e2e-dispatch-recheck",
-        "atlanhq/application-sdk/.github/actions/private-deps-token",
         "atlanhq/application-sdk/.github/actions/sign-bot-commits",
         "atlanhq/application-sdk/.github/actions/verify-test-gate",
     }

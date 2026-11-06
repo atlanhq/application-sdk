@@ -24,11 +24,15 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _scoped_mint import assert_scoped_mint  # noqa: E402
 
 #: Parsed YAML: keys and values are whatever the file holds.
 Workflow = dict[Any, Any]
@@ -99,6 +103,7 @@ def test_sparse_sdk_checkout_includes_the_dockerfile(workflow: Workflow) -> None
         step
         for step in _steps(workflow, "certify-unit")
         if step.get("with", {}).get("repository") == "atlanhq/application-sdk"
+        and step.get("with", {}).get("path") == "sdk"
     )
     patterns = checkout["with"]["sparse-checkout"].split()
     assert "/Dockerfile" in patterns
@@ -285,9 +290,10 @@ def test_contract_drift_does_not_wait_on_the_app_install(workflow: Workflow) -> 
 
 APP_TOKEN = "steps.app-token.outputs.token"
 DEPS_TOKEN = "steps.git-deps-token.outputs.token"
-INSTALL_ENV = {
-    "PRIVATE_GIT_AUTH": "${{ inputs.private_git_auth }}",
-    "GIT_TOKEN": "${{ inputs.private_git_auth && steps.git-deps-token.outputs.token || '' }}",
+INSTALL_ENV = {"PRIVATE_GIT_AUTH": "${{ inputs.private_git_auth }}"}
+MIRROR_ENV = {
+    "GIT_TOKEN": "${{ steps.git-deps-token.outputs.token }}",
+    "PRIVATE_GIT_DEPS": "true",
 }
 
 
@@ -319,14 +325,27 @@ def test_no_step_writes_git_config(workflow: Workflow, job: str) -> None:
 
 @pytest.mark.parametrize("job", CERTIFY_JOBS)
 def test_deps_token_is_the_scoped_mint(workflow: Workflow, job: str) -> None:
-    """Scoped to the private repos the app (checked out at app/) names; the
-    composite never mints unscoped (test_private_git_deps_wiring.py)."""
-    mint = next(s for s in _steps(workflow, job) if s.get("id") == "git-deps-token")
-    assert mint["uses"] == (
-        "atlanhq/application-sdk/.github/actions/private-deps-token@main"
+    """Scoped to the private repos the app (checked out at app/) names."""
+    assert_scoped_mint(
+        _steps(workflow, job),
+        mint_id="git-deps-token",
+        repos_id="git-deps-repos",
+        cond="inputs.private_git_auth",
+        project_dir="app",
     )
-    assert mint["if"] == "inputs.private_git_auth"
-    assert mint["with"]["project-dir"] == "app"
+
+
+@pytest.mark.parametrize("job", CERTIFY_JOBS)
+def test_no_token_leaks_out_of_the_job(workflow: Workflow, job: str) -> None:
+    """certify-unit has no other App token; certify's other one is for the
+    SDK checkout only (below)."""
+    others = [
+        s
+        for s in _steps(workflow, job)
+        if "create-github-app-token" in str(s.get("uses", ""))
+        and s.get("id") != "git-deps-token"
+    ]
+    assert [s.get("id") for s in others] == (["app-token"] if job == "certify" else [])
 
 
 def test_sdk_checkout_token_is_scoped_to_the_sdk(workflow: Workflow) -> None:
@@ -339,21 +358,29 @@ def test_sdk_checkout_token_is_scoped_to_the_sdk(workflow: Workflow) -> None:
 
 
 @pytest.mark.parametrize("job", CERTIFY_JOBS)
-def test_install_alone_carries_the_token(workflow: Workflow, job: str) -> None:
-    """The install step's env is the token's only route to a `run:` step, and
-    it is the App token alone: no ORG_PAT_GITHUB fallback reaches the build
-    backends that run there."""
+def test_only_the_mirror_step_carries_the_token(workflow: Workflow, job: str) -> None:
+    """The mirror step is the token's only route to a `run:` step, and it is
+    the App token alone: no ORG_PAT_GITHUB fallback. The install that runs
+    uv (and the build backends uv starts) comes after it, with no token, so
+    no ancestor of a build backend holds one (lens round 6)."""
     steps = _steps(workflow, job)
+    mirror = _step_with_id(steps, "app_mirror")
     install = _step_with_id(steps, "app_install")
+    assert steps.index(mirror) < steps.index(install)
+    assert mirror["env"] == MIRROR_ENV
+    assert mirror["if"] == "inputs.private_git_auth"
+    assert mirror["working-directory"] == "app"
+    assert mirror["run"] == "python3 ../sdk/.github/scripts/git_auth.py mirror"
     assert install["env"] == INSTALL_ENV
     assert install["run"] == (
         "python3 ../sdk/.github/scripts/build_and_publish/certify.py install-deps"
     )
     for step in steps:
-        if step is install:
+        if step is mirror:
             continue
         text = yaml.safe_dump(step)
-        assert DEPS_TOKEN not in text, step.get("name")
+        if step.get("id") != "git-deps-token":
+            assert DEPS_TOKEN not in text, step.get("name")
         if APP_TOKEN in text or "ORG_PAT_GITHUB" in text:
             # Only a checkout's `token:`, which is not persisted (above).
             assert _is_checkout(step), step.get("name")
