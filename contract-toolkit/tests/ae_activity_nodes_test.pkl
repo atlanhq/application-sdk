@@ -1,0 +1,108 @@
+// Tests for AE activity nodes (`FetchEntitiesNode`, `MergeNode`,
+// `ActivityNode`) in `extraNodes`: they render `node_type: "activity"` with the
+// activity's own inputs, not the `execute_workflow` envelope.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "../src/App.pkl" as App
+import "../examples/ae-activities/app.pkl" as aeApp
+import "../examples/fanin/app.pkl" as faninApp
+
+local dag = new json.Parser { useMapping = true }
+  .parse(aeApp.output.files["app/generated/manifest.json"].text)["dag"]
+local faninDag = new json.Parser { useMapping = true }
+  .parse(faninApp.output.files["app/generated/manifest.json"].text)["dag"]
+
+
+facts {
+  ["fetch_entities node renders the AE FetchInput envelope"] {
+    dag["fetch_asset"]["node_type"] == "activity"
+    dag["fetch_asset"]["activity_name"] == "fetch_entities"
+    dag["fetch_asset"]["app_name"] == "automation-engine"
+    dag["fetch_asset"]["activity_display_name"] == "Fetch Assets"
+    dag["fetch_asset"]["inputs"].toMap() == Map("input", dag["fetch_asset"]["inputs"]["input"])
+    dag["fetch_asset"]["inputs"]["input"].toMap() == Map("sql_input_file", "", "engine", "duckdb")
+  }
+
+  ["activity nodes render heartbeat_timeout_seconds"] {
+    dag["fetch_asset"]["error_handling"]["heartbeat_timeout_seconds"] == 60
+    dag["fetch_asset"]["error_handling"]["start_to_close_timeout_seconds"] == 3600
+  }
+
+  ["merge node renders input_prefixes and sql, with a success-gated dependency"] {
+    dag["merge_asset"]["node_type"] == "activity"
+    dag["merge_asset"]["activity_name"] == "merge"
+    dag["merge_asset"]["inputs"]["input_prefixes"].toList() == List("$.fetch_asset.outputs.output_path")
+    dag["merge_asset"]["inputs"]["sql"] == ""
+    dag["merge_asset"]["inputs"].keys == Set("input_prefixes", "sql")
+    dag["merge_asset"]["depends_on"]["node_id"] == "fetch_asset"
+    dag["merge_asset"]["depends_on"]["tag"] == "success"
+  }
+
+  ["activity nodes get no execute_workflow envelope and no stamped app_name"] {
+    !dag["fetch_asset"]["inputs"].containsKey("args")
+    !dag["fetch_asset"]["inputs"].containsKey("task_queue")
+    !dag["merge_asset"]["inputs"].containsKey("app_name")
+  }
+
+  ["error_handling defaults to null on activity nodes"] {
+    !dag["upload"].containsKey("error_handling")
+  }
+
+  ["generic ActivityNode renders any activity_name with free-form inputs"] {
+    dag["upload"]["activity_name"] == "object_store_upload"
+    dag["upload"]["inputs"].toMap() == Map("source_path", "$.post_fetch.outputs.export_path")
+  }
+
+  ["DAGNode in the same mapping still renders execute_workflow without node_type"] {
+    dag["post_fetch"]["activity_name"] == "execute_workflow"
+    !dag["post_fetch"].containsKey("node_type")
+    dag["post_fetch"]["depends_on"]["and_conditions"].length == 3
+  }
+
+  ["existing DAGNode-only extraNodes render unchanged"] {
+    !faninDag["left"].containsKey("node_type")
+    faninDag["left"]["activity_name"] == "execute_workflow"
+  }
+
+  ["FetchEntitiesNode requires exactly one SQL source"] {
+    module.catchOrNull(() -> new App.FetchEntitiesNode { displayName = "f" }.inputsResolved()) != null
+    module.catchOrNull(() -> new App.FetchEntitiesNode { displayName = "f"; sqlInput = "a"; sqlInputFile = "b" }.inputsResolved()) != null
+    module.catchOrNull(() -> new App.FetchEntitiesNode { displayName = "f"; sqlInput = "select 1" }.inputsResolved()) == null
+  }
+
+  ["FetchEntitiesNode passes extraInput through but refuses typed keys"] {
+    new App.FetchEntitiesNode { displayName = "f"; sqlInput = "q"; extraInput { ["incremental"] = new Mapping { ["marker_column"] = "t" } } }
+      .inputsResolved()["input"]["incremental"]["marker_column"] == "t"
+    module.catchOrNull(() -> new App.FetchEntitiesNode { displayName = "f"; sqlInput = "q"; extraInput { ["engine"] = "daft" } }.inputsResolved()) != null
+  }
+
+  ["FetchEntitiesNode rejects an unknown engine"] {
+    module.catchOrNull(() -> new App.FetchEntitiesNode { displayName = "f"; sqlInput = "q"; engine = "spark" }.engine) != null
+  }
+
+  ["MergeNode requires exactly one SQL source and a non-empty inputPrefixes"] {
+    module.catchOrNull(() -> new App.MergeNode { displayName = "m"; inputPrefixes { "p" } }.inputsResolved()) != null
+    module.catchOrNull(() -> new App.MergeNode { displayName = "m"; inputPrefixes { "p" }; sql = "a"; sqlFile = "b" }.inputsResolved()) != null
+    module.catchOrNull(() -> new App.MergeNode { displayName = "m"; inputPrefixes {}; sql = "a" }.inputPrefixes) != null
+  }
+
+  ["MergeNode renders sql_file and declared_tier, and refuses typed keys in extraInputs"] {
+    new App.MergeNode { displayName = "m"; inputPrefixes { "p" }; sqlFile = "k.sql"; declaredTier = "l" }
+      .inputsResolved().toMap() == Map("input_prefixes", new Listing { "p" }, "sql_file", "k.sql", "declared_tier", "l")
+    module.catchOrNull(() -> new App.MergeNode { displayName = "m"; inputPrefixes { "p" }; sql = "a"; extraInputs { ["sql"] = "b" } }.inputsResolved()) != null
+  }
+
+  ["activity nodes refuse dependsOn together with dependsOnCondition"] {
+    module.catchOrNull(() -> new App.ActivityNode {
+      displayName = "a"; activityName = "x"
+      dependsOn { "p" }
+      dependsOnCondition = new App.DependencyCondition { nodeId = "p" }
+    }._dependencyConfigCheck) != null
+  }
+
+  ["activity nodes enforce heartbeat < startToClose"] {
+    module.catchOrNull(() -> new App.ErrorHandlingConfig { startToCloseTimeoutSeconds = 60; heartbeatTimeoutSeconds = 60 }._timeoutOrderingCheck) != null
+  }
+}

@@ -112,6 +112,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/connection-ref/`](examples/connection-ref/) — `ConnectionRefInput` widget, `pipeline.publish = null`.
 - [`examples/publish-controls/`](examples/publish-controls/) — publish toggles, `includeInputFields`, `errorHandling`, `zeroOutConfig`.
 - [`examples/fanin/`](examples/fanin/) — multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
+- [`examples/ae-activities/`](examples/ae-activities/) — Automation Engine activity nodes in `extraNodes`: `FetchEntitiesNode` → `MergeNode` branches fanning in to an app workflow, plus a generic `ActivityNode`.
 - [`examples/agent-e2e/`](examples/agent-e2e/) — agent/SDR e2e codegen: `_e2e_credential.py` emits both `<Name>CredentialBody` (direct) and `<Name>AgentCredentialBody` (lightweight), plus an `extraction-method` ConditionalInput whose `overrideEnum` widens the substitutions `Literal` to `["direct", "agent"]`.
 - [`examples/scheduled/`](examples/scheduled/) — cron background job via `schedules`; renders `triggers.schedules` into `manifest.json` (multiple schedules, non-UTC timezone, a `PAUSED` one). See [Schedules](docs/reference.md#schedules-background-jobs).
 - [`examples/streaming/`](examples/streaming/) — streaming dispatch via `streaming.enabled`: AE starts one short run per Kafka micro-batch and hands it the batch (the generated input model reads it from `batch_key`), instead of a per-batch run that reads the Iceberg events table. Two streaming triggers and `streamingWorkflowType` on the entrypoint. Its own app because a streaming entrypoint cannot also carry schedules or batch triggers — one extract node cannot serve both shells. See [Streaming Dispatch](docs/reference.md#streaming-dispatch-on-event-triggers).
@@ -401,6 +402,24 @@ To replace the generated node, define `extraNodes["notifications"]`.
 | `extraNodes { ["lineage-publish"] = new LineagePublishNode { ... } }` | `pipeline.publish.lineagePublish = new LineagePublishStep { ... }` |
 
 `extraNodes` is still available as an escape hatch for nodes that fall outside the canonical pipeline (e.g. custom fan-in steps).
+
+**AE activity nodes.** A `DAGNode` always starts a child workflow (`execute_workflow`). To call an Automation Engine activity directly, put a `FetchEntitiesNode`, a `MergeNode`, or the generic `ActivityNode` in `extraNodes`. These render `node_type: "activity"` with the activity's own `inputs`, and allow `errorHandling.heartbeatTimeoutSeconds`. Their `errorHandling` defaults to `null`, so AE's per-activity timeouts apply. See [AE Activity Nodes](docs/reference.md#ae-activity-nodes-fetchentitiesnode-mergenode-activitynode) and [`examples/ae-activities/`](examples/ae-activities/).
+
+```pkl
+extraNodes {
+  ["fetch_assets"] = new FetchEntitiesNode {
+    displayName = "Fetch Assets"
+    sqlInputFile = "artifacts/queries/assets.sql"
+    engine = "duckdb"
+  }
+  ["merge"] = new MergeNode {
+    displayName = "Aggregate Assets"
+    inputPrefixes { "$.fetch_assets.outputs.output_path" }
+    sql = "SELECT * FROM input_0"
+    dependsOn { "fetch_assets" }
+  }
+}
+```
 
 ## Pools Map
 

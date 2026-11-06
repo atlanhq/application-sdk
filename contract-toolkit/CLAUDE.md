@@ -71,6 +71,8 @@ demonstrates distinct feature surface, verified by `tests/*.pkl`.
 - `connection-ref`: `ConnectionRefInput` widget, `pipeline.publish = null`.
 - `publish-controls`: publish toggles, `includeInputFields`, `errorHandling`, `zeroOutConfig`.
 - `fanin`: multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
+- `ae-activities`: `FetchEntitiesNode`, `MergeNode` and generic `ActivityNode` in
+  `extraNodes`; AE activity nodes mixed with a `DAGNode`, no `extract` step.
 - `artifact-schemas`: `artifactSchemas` data hand-off declarations — parquet + NDJSON, nested paths, arrays of structs (`[]` element step), an input artifact.
 
 ## Editing Rules

@@ -1,0 +1,84 @@
+/// AE activity nodes — a DAG that calls Automation Engine activities directly.
+///
+/// `FetchEntitiesNode` and `MergeNode` render `node_type: "activity"` with the
+/// activity's own `inputs` instead of the `execute_workflow` envelope a
+/// `DAGNode` renders. Here three fetch → merge branches fan in to an app
+/// workflow (`post_fetch`), which a notification node follows. There is no
+/// `extract` step: the fetch nodes read the metadata lakehouse.
+///
+/// `sqlInputFile` and `sql` are empty strings: an app that fills them in at
+/// submission time still renders the key. `ActivityNode` covers any AE
+/// activity without a typed node.
+amends "../../src/App.pkl"
+
+name = "ae-activities"
+displayName = "AE Activities Example"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+notifications = false
+
+pipeline {
+  extract = null
+  publish = null
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["qn-prefix"] = new TextInput {
+          title = "Qualified name prefix"
+          helpText = "Export assets under this prefix."
+          placeholderText = "default"
+        }
+      }
+    }
+  }
+}
+
+local fetchErrorHandling = new ErrorHandlingConfig {
+  startToCloseTimeoutSeconds = 3600
+  heartbeatTimeoutSeconds = 60
+}
+
+extraNodes {
+  for (kind, label in Map("asset", "Assets", "glossary", "Glossaries", "product", "Products")) {
+    ["fetch_\(kind)"] = new FetchEntitiesNode {
+      displayName = "Fetch \(label)"
+      sqlInputFile = ""
+      engine = "duckdb"
+      errorHandling = fetchErrorHandling
+    }
+    ["merge_\(kind)"] = new MergeNode {
+      displayName = "Aggregate \(label)"
+      inputPrefixes { "$.fetch_\(kind).outputs.output_path" }
+      sql = ""
+      errorHandling = fetchErrorHandling
+      dependsOn { "fetch_\(kind)" }
+    }
+  }
+  ["post_fetch"] = new DAGNode {
+    displayName = "Enrich and Export"
+    appName = name
+    workflowType = "ae-activities:post-fetch"
+    args {
+      ["asset_path"] = "$.merge_asset.outputs.output_path"
+      ["glossary_path"] = "$.merge_glossary.outputs.output_path"
+      ["product_path"] = "$.merge_product.outputs.output_path"
+      ["metadata"] = new Mapping {
+        ["qn-prefix"] = "{{qn-prefix}}"
+      }
+    }
+    errorHandling { startToCloseTimeoutSeconds = 43200 }
+    dependsOn { "merge_asset"; "merge_glossary"; "merge_product" }
+  }
+  // Generic form, for an AE activity with no typed node.
+  ["upload"] = new ActivityNode {
+    displayName = "Upload Export"
+    activityName = "object_store_upload"
+    inputs {
+      ["source_path"] = "$.post_fetch.outputs.export_path"
+    }
+    dependsOn { "post_fetch" }
+  }
+}
