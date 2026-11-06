@@ -137,7 +137,7 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: true
-        description: "Org-level PAT for GHCR login (the fleet App only has repo-level Packages permission; these packages are org-level) and, in the build job specifically, everything else that job needs too (the private-dependency git_token BuildKit secret) since it's already using the PAT for GHCR anyway. Also a fallback if the App token can't be minted elsewhere. Cross-repo checkout/dispatch steps in jobs that never touch GHCR (certify, leak-scan, app-deployment-dispatcher) use a minted atlan-app-fleet token instead — see the 'Mint fleet App token' steps."
+        description: "Org-level PAT for GHCR login and push (the fleet App only has repo-level Packages permission; these packages are org-level). Not the private-dependency git_token BuildKit secret: the build job mints a read-only fleet App token for that, because every build backend the Dockerfile's `uv sync` runs can read it (FND-4744). Also a fallback if the App token can't be minted elsewhere. Cross-repo checkout/dispatch steps in jobs that never touch GHCR (certify, leak-scan, app-deployment-dispatcher) use a minted atlan-app-fleet token instead — see the 'Mint fleet App token' steps."
       FLEET_APP_ID:
         required: false
         description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit', which every caller already uses. Declared here so the contract is self-documenting; a caller using explicit named secrets instead of inherit would need to list this too."
@@ -1156,6 +1156,23 @@ jobs:
           print(json.dumps(info))
           PYEOF
 
+      # The `git_token` build secret below (FND-4744): a read-only fleet App
+      # token, not ORG_PAT_GITHUB. Minted on every build, not on
+      # `private_git_auth`: that flag gates certify, several callers build
+      # private-dependency images without it, and a Dockerfile without the
+      # secret mount ignores it. `continue-on-error` and no PAT fallback: an
+      # empty secret is skipped with a warning by build-push-action, so only a
+      # build that needs the token fails, at its clone.
+      - name: Mint read-only token for the image build
+        id: image-git-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          permission-contents: read
+
       - name: Build and push arch image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
@@ -1201,7 +1218,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.prepare.outputs.commit_sha }}
-          # The org PAT reaches the build ONLY as a BuildKit secret, never as a
+          # The git token reaches the build ONLY as a BuildKit secret, never as a
           # build arg. Build args are recorded in image config and are readable
           # via `docker history` by anyone who can pull the image, so the
           # `ACCESS_TOKEN_USR`/`ACCESS_TOKEN_PWD` args this step used to pass
@@ -1209,12 +1226,11 @@ jobs:
           # `--mount=type=secret` is never written to a layer or to history.
           #
           # Dockerfiles cloning a private git dependency (e.g. atlan-query-redaction)
-          # read it via `--mount=type=secret,id=git_token`. This job already logs
-          # into GHCR with the PAT above, so there's no benefit to minting a
-          # separate App token just for this -- the PAT is already in play either
-          # way.
+          # read it via `--mount=type=secret,id=git_token`. It is the read-only
+          # App token minted above, not the PAT this job logs into GHCR with:
+          # every build backend the Dockerfile's `uv sync` runs can read it.
           secrets: |
-            git_token=${{ secrets.ORG_PAT_GITHUB }}
+            git_token=${{ steps.image-git-token.outputs.token }}
 
   # ── Job 3: Merge arch digests into a single multi-arch manifest ───────────────
   merge:
