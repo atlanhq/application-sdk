@@ -144,16 +144,10 @@ def _make_fake_run(
             return types.SimpleNamespace(returncode=0)
         if prog == "pkl" and cmd[1] == "eval":
             if eval_rc == 0:
-                # The driver evaluates twice: the app's contract (bumped pin) and
-                # the same contract exported at the pre-bump pin, for override
-                # detection. Distinguish by --project-dir, and give the baseline
-                # the OLD manifest so a real refresh is visible.
-                project_dir = cmd[cmd.index("--project-dir") + 1]
-                is_baseline = Path(project_dir).is_absolute()
                 _write_eval_output(
                     Path(cmd[cmd.index("-m") + 1]),
                     layout,
-                    manifest=STALE_MANIFEST if is_baseline else FRESH_MANIFEST,
+                    manifest=FRESH_MANIFEST,
                     connector=TOOLKIT_CONNECTOR_CONFIG,
                 )
             return types.SimpleNamespace(returncode=eval_rc)
@@ -318,27 +312,43 @@ def _last_commit_subject(repo: Path) -> str:
     ).stdout
 
 
-def test_regenerate_root_only_output_is_a_regeneration(repo, monkeypatch, capsys):
-    """A contract that emits only atlan.yaml (rc=0): the committed generated dir
-    is left untouched (not deleted) and the emitted atlan.yaml is swapped in.
+def test_regenerate_root_only_output_is_a_regeneration(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A contract that emits only atlan.yaml (rc=0) and has no generated dir:
+    the emitted atlan.yaml is swapped in and committed as a regeneration.
 
     FND-4736 reversed the outcome: this used to degrade to the lock-only
     message, which made certify report two active root-only apps as "does not
     regenerate". pkl -m writes every output or fails, so rc=0 with only root
     files is a complete eval, not a partial one. The native family that used to
     fall in here is handled separately (see test_native_* below)."""
+    _reshape_generated(repo, {})
     monkeypatch.setattr(mod, "run", _make_fake_run(repo, layout="root-only"))
     before = _commit_count(repo)
 
     assert mod.main(["--regenerate", "true"]) == 0
 
-    # Existing generated preserved (not destroyed because eval emitted none).
-    assert (repo / "app" / "generated" / "manifest.json").read_text() == STALE_MANIFEST
-    # The artifact eval did emit is swapped in and committed.
     assert (repo / "atlan.yaml").read_text() == "deploy: true\n"
     assert _commit_count(repo) == before + 1
     assert mod.COMMIT_MESSAGE_REGEN in _last_commit_subject(repo)
     assert "emitted only root files" in capsys.readouterr().out
+
+
+def test_regenerate_root_only_with_a_stale_generated_dir_is_lock_only(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Root-only output while app/generated still holds a committed manifest the
+    contract no longer emits: not a regeneration. The stale manifest is left
+    for the app to delete, and the bump degrades to lock-only."""
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo, layout="root-only"))
+
+    assert mod.main(["--regenerate", "true"]) == 0
+
+    assert (repo / "app" / "generated" / "manifest.json").read_text() == STALE_MANIFEST
+    assert not (repo / "atlan.yaml").exists()
+    assert mod.COMMIT_MESSAGE_LOCK_ONLY in _last_commit_subject(repo)
+    assert "does not emit" in capsys.readouterr().out
 
 
 def test_native_bundle_layout_regenerates_and_commits(repo, monkeypatch):
@@ -525,6 +535,42 @@ def test_restore_tree_keeps_edits_made_before_the_snapshot(repo: Path) -> None:
     assert (gen / "manifest.json").read_text() == STALE_MANIFEST
     assert (repo / "notes.txt").read_text() == "untracked before\n"
     assert not (repo / "app" / "new.py").exists()
+
+
+def test_restore_tree_restores_the_mode_of_a_file_dirty_before(repo: Path) -> None:
+    """The snapshot keeps each dirty file's mode with its content: a swap that
+    replaced an executable file with a non-executable one is fully undone."""
+    script = repo / "app" / "generated" / "run.sh"
+    script.write_text("#!/bin/sh\n")
+    script.chmod(0o755)
+    before = mod.dirty_tree()
+    script.write_text("regenerated\n")
+    script.chmod(0o644)
+
+    mod.restore_tree(before)
+
+    assert script.read_text() == "#!/bin/sh\n"
+    assert script.stat().st_mode & 0o777 == 0o755
+
+
+def test_git_queries_go_through_the_run_capture_seam(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Snapshot, rollback and staging read git through ``run_capture``, so a git
+    failure can be injected without a real broken repo."""
+    seen: list[list[str]] = []
+
+    def failing(
+        cmd: list[str], *, check: bool = False
+    ) -> "subprocess.CompletedProcess[str]":
+        seen.append(cmd)
+        raise subprocess.CalledProcessError(128, cmd)
+
+    monkeypatch.setattr(mod, "run_capture", failing)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        mod.dirty_tree()
+    assert seen[0][:2] == ["git", "status"]
 
 
 def _bump_pin(repo: Path) -> None:

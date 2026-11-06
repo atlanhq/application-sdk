@@ -138,6 +138,15 @@ def run(cmd: list[str], *, check: bool = False) -> "subprocess.CompletedProcess[
     return subprocess.run(cmd, check=check, text=True)
 
 
+def run_capture(
+    cmd: list[str], *, check: bool = False
+) -> "subprocess.CompletedProcess[str]":
+    """Run a subprocess and capture its output: the seam for the git queries
+    whose stdout or exit code the sync reads (snapshot, rollback, staging), so
+    tests can stub or fault-inject them the same way they stub ``run``."""
+    return subprocess.run(cmd, capture_output=True, text=True, check=check)
+
+
 def resolve(contract_dir: str) -> None:
     """Re-resolve the Pkl lock. Fatal on failure (same as the pre-script
     behaviour): without a lock the whole sync is moot."""
@@ -281,9 +290,10 @@ def regenerate_tree(
 
     Renovate's toolkit bump (``main`` here), the freshness gate
     (``check_generated_freshness``), pre-test regeneration
-    (``regenerate_contract``) and certify's contract-drift check all regenerate
-    through this function, so none of them can disagree about what a
-    regenerated tree looks like (FND-4736).
+    (``regenerate_contract``) all regenerate through this function, so none
+    of them can disagree about what a regenerated tree looks like (FND-4736).
+    Certify's contract-drift check still runs the app's ``poe generate``;
+    FND-4244 moves it onto this function.
     ``.github/scripts/tests/test_regeneration_parity.py`` pins that every
     caller reaches it.
 
@@ -301,7 +311,8 @@ def regenerate_tree(
 
     There is deliberately no override protection: an app that installs its own
     version of a generated file does it in ``contract/post-generate.sh``, which
-    runs here, so the result is exactly what certify checks.
+    runs here, so the result is exactly what certify checks once it
+    regenerates through this function (FND-4244).
 
     Never raises on a bad contract: a missing contract, a failed eval and a
     refused swap are all reported in the result. How to degrade (lock-only sync,
@@ -360,7 +371,8 @@ def regenerate_tree(
 def regenerate(contract_dir: str) -> bool:
     """``regenerate_tree`` with Renovate's settings, as a bool: True only when
     the working tree was actually updated with fresh artifacts. Kept as the
-    stable entry point that certify and the freshness gate import."""
+    stable entry point that the freshness gate imports, and that certify's
+    contract-drift check imports from FND-4244."""
     return regenerate_tree(contract_dir).placed
 
 
@@ -393,18 +405,20 @@ def committable(path: str) -> bool:
     )
 
 
-TreeState = dict[str, bytes | None]
+FileState = tuple[bytes, int]
+"""A file's content and ``st_mode``: a rollback restores both, so a swap that
+changed only a file's mode (say, dropped its executable bit) is undone too."""
+
+TreeState = dict[str, FileState | None]
 
 
 def dirty_tree() -> TreeState:
     """Every path ``git status --untracked-files=all`` reports, with its
-    content (None when deleted). Snapshot before regeneration and compare with
+    content and mode (None when deleted). Snapshot before regeneration and compare with
     ``changed_since`` to get what regeneration changed, so edits Renovate made
     first (uv.lock, contract/PklProject) are not attributed to it."""
-    proc = subprocess.run(
+    proc = run_capture(
         ["git", "status", "--porcelain", "-z", "--untracked-files=all"],
-        capture_output=True,
-        text=True,
         check=True,
     )
     entries = proc.stdout.split("\0")
@@ -419,7 +433,7 @@ def dirty_tree() -> TreeState:
         if "R" in code or "C" in code:
             i += 1  # the rename source follows as its own field
         p = Path(path)
-        state[path] = p.read_bytes() if p.is_file() else None
+        state[path] = (p.read_bytes(), p.stat().st_mode) if p.is_file() else None
     return state
 
 
@@ -439,28 +453,25 @@ def changed_since(before: TreeState) -> list[str]:
 def restore_tree(before: TreeState) -> None:
     """Put every path changed since *before* back the way it was.
 
-    A path dirty before gets its old content back (or is removed again if it
-    was deleted). A path clean before is restored from HEAD when HEAD has it,
+    A path dirty before gets its old content and mode back (or is removed
+    again if it was deleted). A path clean before is restored from HEAD when HEAD has it,
     and removed when it is new. Used to undo a regeneration whose
     post-generate step failed."""
     for path in changed_since(before):
         target = Path(path)
         if path in before:
-            content = before[path]
-            if content is None:
+            saved = before[path]
+            if saved is None:
                 target.unlink(missing_ok=True)
             else:
+                content, mode = saved
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(content)
+                target.chmod(mode)
             continue
-        in_head = (
-            subprocess.run(
-                ["git", "cat-file", "-e", f"HEAD:{path}"], capture_output=True
-            ).returncode
-            == 0
-        )
+        in_head = run_capture(["git", "cat-file", "-e", f"HEAD:{path}"]).returncode == 0
         if in_head:
-            subprocess.run(["git", "checkout", "HEAD", "--", path], check=True)
+            run(["git", "checkout", "HEAD", "--", path], check=True)
         else:
             target.unlink(missing_ok=True)
 
@@ -491,7 +502,7 @@ def _git_matches(pathspec: str) -> bool:
     along with its directory, and ``git add`` fails on a pathspec that matches
     nothing. ``--cached`` keeps a deleted tracked file in the answer, so its
     deletion is staged."""
-    proc = subprocess.run(
+    proc = run_capture(
         [
             "git",
             "ls-files",
@@ -500,9 +511,7 @@ def _git_matches(pathspec: str) -> bool:
             "--exclude-standard",
             "--",
             pathspec,
-        ],
-        capture_output=True,
-        text=True,
+        ]
     )
     return proc.returncode == 0 and bool(proc.stdout.strip())
 

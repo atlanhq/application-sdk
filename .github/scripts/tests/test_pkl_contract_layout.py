@@ -291,19 +291,39 @@ def test_native_honours_explicit_generated_dir(tree):
 # ── swap_outputs: nothing to place ───────────────────────────────────────────
 
 
-def test_root_only_places_root_files_and_succeeds(tree, capsys):
+def test_root_only_places_root_files_and_succeeds(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """FND-4736 reversed this: it used to return False. A contract that emits
     only root files (two active apps ship exactly that) regenerates by placing
     them, and returning False made every gate report it as not regenerating.
-    The generated dir is still left alone."""
-    _write(tree / "app" / "generated" / "manifest.json", "stale\n")
+    A reserved subdir (frontend/) is not a contract output, so it may stay."""
+    _write(tree / "app" / "generated" / "frontend" / "index.html", "<html/>\n")
+    _write(tree / "app" / "generated" / "__pycache__" / "x.pyc", "bytecode")
     _write(tree / "out" / "atlan.yaml", "deploy: true\n")
 
     assert mod.swap_outputs(tree / "out") is True
 
     assert (tree / "atlan.yaml").read_text() == "deploy: true\n"
-    assert (tree / "app" / "generated" / "manifest.json").read_text() == "stale\n"
+    assert (tree / "app" / "generated" / "frontend" / "index.html").exists()
     assert "emitted only root files" in capsys.readouterr().out
+
+
+def test_root_only_with_unemitted_generated_files_returns_false(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A root-only contract cannot vouch for generated files it does not emit.
+    Reporting success here let a gate that checks only what regeneration
+    changed pass a stale manifest, so it refuses and touches nothing."""
+    _write(tree / "app" / "generated" / "manifest.json", "stale\n")
+    _write(tree / "out" / "atlan.yaml", "deploy: true\n")
+
+    assert mod.swap_outputs(tree / "out") is False
+
+    assert not (tree / "atlan.yaml").exists()
+    assert (tree / "app" / "generated" / "manifest.json").read_text() == "stale\n"
+    out = capsys.readouterr().out
+    assert "does not emit: manifest.json" in out
 
 
 def test_empty_output_returns_false(tree, capsys):

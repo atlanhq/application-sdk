@@ -284,6 +284,20 @@ def warn_unwired_post_generate(
     return True
 
 
+def _unemitted_generated_files(target: Path) -> list[str]:
+    """Files under *target* outside ``RESERVED_GENERATED_SUBDIRS``, sorted and
+    relative to *target*. For root-only output, every one of them is a file
+    the contract does not emit."""
+    if not target.is_dir():
+        return []
+    return sorted(
+        rel.as_posix()
+        for rel in (p.relative_to(target) for p in target.rglob("*") if p.is_file())
+        if rel.parts[0] not in RESERVED_GENERATED_SUBDIRS
+        and "__pycache__" not in rel.parts
+    )
+
+
 def detect_layout(out_dir: Path) -> str:
     """Classify what ``pkl eval -m <out_dir>`` produced.
 
@@ -460,8 +474,12 @@ def swap_outputs(
     since pkl never emits into it in the first place.
 
     ``root-only`` output (the contract emits only ``atlan.yaml``/``app.yaml``)
-    places the root files, leaves ``generated_dir`` alone and returns True: for
-    such a contract that is the whole regeneration (FND-4736).
+    places the root files and returns True: for such a contract that is the
+    whole regeneration (FND-4736). Only when ``generated_dir`` holds nothing
+    outside ``RESERVED_GENERATED_SUBDIRS``, though: files there that the
+    contract no longer emits are stale, and a gate that only checks what
+    regeneration changed would never see them. That case returns False and
+    touches nothing.
 
     Returns False — touching nothing under ``generated_dir`` — when the output
     is ``empty`` or when the native target looks implausible. Callers treat
@@ -474,7 +492,19 @@ def swap_outputs(
     if layout == "root-only":
         # A complete eval (pkl -m writes every output or fails) whose contract
         # emits only root files, e.g. an app that ships no generated Python.
-        # Placing those files IS the whole regeneration (FND-4736).
+        # Placing those files IS the whole regeneration (FND-4736), unless
+        # generated files the contract no longer emits are still there.
+        leftover = _unemitted_generated_files(target)
+        if leftover:
+            listed = ", ".join(leftover[:5])
+            more = f" (+{len(leftover) - 5} more)" if len(leftover) > 5 else ""
+            print(
+                f"::warning::pkl eval emitted only root files, but {generated_dir}/ "
+                f"has {len(leftover)} file(s) the contract does not emit: "
+                f"{listed}{more}. Delete them, or emit them from the contract — "
+                "nothing was placed."
+            )
+            return False
         _copy_planned(plan)
         print(
             f"::notice::pkl eval emitted only root files — placed them; "
