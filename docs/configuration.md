@@ -252,6 +252,14 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 
 ---
 
+## DuckDB (incremental extraction, query transformer)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAN_DUCKDB_MEMORY_LIMIT` | _(derived)_ | Memory limit for a `DuckDBConnectionManager` opened without an explicit `memory_limit`, as a DuckDB size string (e.g. `1GB`, `768MiB`). When unset it is half of the container's free memory (limit minus current usage) at open time, split evenly with the other DuckDB connections open in the process, between 256 MiB and 2 GB; 2 GB when no container limit is known. Above the limit DuckDB spills to its temp directory, which lowers the risk of growing the worker into an OOM kill. |
+
+---
+
 ## Storage
 
 | Variable | Default | Description |
