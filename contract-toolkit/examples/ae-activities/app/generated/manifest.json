@@ -8,7 +8,7 @@
       "app_name": "automation-engine",
       "inputs": {
         "input": {
-          "sql_input_file": "",
+          "sql_input_file": "artifacts/apps/ae-activities/queries/asset.sql",
           "engine": "duckdb"
         }
       },
@@ -26,7 +26,7 @@
         "input_prefixes": [
           "$.fetch_asset.outputs.output_path"
         ],
-        "sql": ""
+        "sql": "SELECT * FROM input_0"
       },
       "depends_on": {
         "node_id": "fetch_asset",
@@ -44,7 +44,7 @@
       "app_name": "automation-engine",
       "inputs": {
         "input": {
-          "sql_input_file": "",
+          "sql_input_file": "artifacts/apps/ae-activities/queries/glossary.sql",
           "engine": "duckdb"
         }
       },
@@ -62,7 +62,7 @@
         "input_prefixes": [
           "$.fetch_glossary.outputs.output_path"
         ],
-        "sql": ""
+        "sql": "SELECT * FROM input_0"
       },
       "depends_on": {
         "node_id": "fetch_glossary",
@@ -80,7 +80,7 @@
       "app_name": "automation-engine",
       "inputs": {
         "input": {
-          "sql_input_file": "",
+          "sql_input_file": "artifacts/apps/ae-activities/queries/product.sql",
           "engine": "duckdb"
         }
       },
@@ -98,7 +98,7 @@
         "input_prefixes": [
           "$.fetch_product.outputs.output_path"
         ],
-        "sql": ""
+        "sql": "SELECT * FROM input_0"
       },
       "depends_on": {
         "node_id": "fetch_product",

@@ -22,7 +22,7 @@ facts {
     dag["fetch_asset"]["app_name"] == "automation-engine"
     dag["fetch_asset"]["activity_display_name"] == "Fetch Assets"
     dag["fetch_asset"]["inputs"].toMap() == Map("input", dag["fetch_asset"]["inputs"]["input"])
-    dag["fetch_asset"]["inputs"]["input"].toMap() == Map("sql_input_file", "", "engine", "duckdb")
+    dag["fetch_asset"]["inputs"]["input"].toMap() == Map("sql_input_file", "artifacts/apps/ae-activities/queries/asset.sql", "engine", "duckdb")
   }
 
   ["activity nodes render heartbeat_timeout_seconds"] {
@@ -34,7 +34,7 @@ facts {
     dag["merge_asset"]["node_type"] == "activity"
     dag["merge_asset"]["activity_name"] == "merge"
     dag["merge_asset"]["inputs"]["input_prefixes"].toList() == List("$.fetch_asset.outputs.output_path")
-    dag["merge_asset"]["inputs"]["sql"] == ""
+    dag["merge_asset"]["inputs"]["sql"] == "SELECT * FROM input_0"
     dag["merge_asset"]["inputs"].keys == Set("input_prefixes", "sql")
     dag["merge_asset"]["depends_on"]["node_id"] == "fetch_asset"
     dag["merge_asset"]["depends_on"]["tag"] == "success"
@@ -70,6 +70,14 @@ facts {
     module.catchOrNull(() -> new App.FetchEntitiesNode { displayName = "f" }.inputsResolved()) != null
     module.catchOrNull(() -> new App.FetchEntitiesNode { displayName = "f"; sqlInput = "a"; sqlInputFile = "b" }.inputsResolved()) != null
     module.catchOrNull(() -> new App.FetchEntitiesNode { displayName = "f"; sqlInput = "select 1" }.inputsResolved()) == null
+  }
+
+  ["an empty-string SQL source counts as set and still renders its key"] {
+    // For apps that fill the SQL source in at submission time.
+    new App.FetchEntitiesNode { displayName = "f"; sqlInputFile = "" }
+      .inputsResolved()["input"].toMap() == Map("sql_input_file", "")
+    new App.MergeNode { displayName = "m"; inputPrefixes { "p" }; sql = "" }
+      .inputsResolved()["sql"] == ""
   }
 
   ["FetchEntitiesNode passes extraInput through but refuses typed keys"] {

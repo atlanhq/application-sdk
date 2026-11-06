@@ -3,12 +3,12 @@
 /// `FetchEntitiesNode` and `MergeNode` render `node_type: "activity"` with the
 /// activity's own `inputs` instead of the `execute_workflow` envelope a
 /// `DAGNode` renders. Here three fetch → merge branches fan in to an app
-/// workflow (`post_fetch`), which a notification node follows. There is no
-/// `extract` step: the fetch nodes read the metadata lakehouse.
+/// workflow (`post_fetch`), which a generic `ActivityNode` (`upload`) follows.
+/// There is no `extract` step: the fetch nodes read the metadata lakehouse.
 ///
-/// `sqlInputFile` and `sql` are empty strings: an app that fills them in at
-/// submission time still renders the key. `ActivityNode` covers any AE
-/// activity without a typed node.
+/// Each fetch reads its query from an uploaded `.sql` file (`sqlInputFile`, an
+/// object-store key); each merge runs inline `sql` over `input_0`.
+/// `ActivityNode` covers any AE activity without a typed node.
 amends "../../src/App.pkl"
 
 name = "ae-activities"
@@ -45,14 +45,14 @@ extraNodes {
   for (kind, label in Map("asset", "Assets", "glossary", "Glossaries", "product", "Products")) {
     ["fetch_\(kind)"] = new FetchEntitiesNode {
       displayName = "Fetch \(label)"
-      sqlInputFile = ""
+      sqlInputFile = "artifacts/apps/ae-activities/queries/\(kind).sql"
       engine = "duckdb"
       errorHandling = fetchErrorHandling
     }
     ["merge_\(kind)"] = new MergeNode {
       displayName = "Aggregate \(label)"
       inputPrefixes { "$.fetch_\(kind).outputs.output_path" }
-      sql = ""
+      sql = "SELECT * FROM input_0"
       errorHandling = fetchErrorHandling
       dependsOn { "fetch_\(kind)" }
     }
