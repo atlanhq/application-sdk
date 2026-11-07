@@ -40,8 +40,8 @@ reassigned.
 
 **Rationale:** orjson is already a core SDK dependency — zero incremental cost — and on hot paths the
 ~10x throughput advantage compounds at fleet scale. WARN (not block) because orjson
-returns bytes not str and has a different option API, so each site needs human judgment
-before migrating.
+returns bytes not str and has a different option API, and rejects deeply nested values
+and integers above 64 bits, so each site needs human judgment before migrating.
 
 ### What correct looks like
 
@@ -51,9 +51,10 @@ before migrating.
   speed.
 - **Fix by:** [`programs/areas/optimizations.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/optimizations.prose.md)
 - **Already correct when:** A justified inline `# conformance: ignore[O001] <reason>` IS the correct end state for a
-  `json.dumps` only when all three hold. (1) orjson cannot reproduce the call's output:
-  the call does not already pass both `separators=(",", ":")` and `ensure_ascii=False`,
-  or its input can hold an integer above 64 bits. A call that passes both on 64-bit-safe
+  `json.dumps` in exactly two cases. Case A, the hash or byte-compare case, applies only
+  when all three of (1) to (3) hold. (1) orjson cannot reproduce the call's output: the
+  call does not already pass both `separators=(",", ":")` and `ensure_ascii=False`, or
+  its input can hold an integer above 64 bits. A call that passes both on 64-bit-safe
   input is byte-identical to `orjson.dumps(...).decode()` and makes the swap. (2) The
   encoded string is stored as one attribute or field value, and a consumer outside the
   app hashes or byte-compares that value as text. (3) The reason names the attribute key
@@ -62,8 +63,12 @@ before migrating.
   even when the document is later hashed: the publish app parses the document before it
   diffs it, and there is no single attribute key to cite, so that site makes the swap. A
   directive whose reason names no attribute key or no comparison location, or names a
-  consumer that only parses the JSON or sits inside the app, is unremediated: make the
-  swap.
+  consumer that only parses the JSON or sits inside the app is not case A. Case B, the
+  orjson-limit fallback: the `json.dumps` is the fallback inside an `except TypeError`
+  handler directly after an `orjson.dumps` attempt on the same value, and the reason
+  names the orjson limit it covers (nesting depth of 254 or more, or integers above 64
+  bits). Removing that fallback reintroduces the failure, so keep it. A directive that
+  fits neither case is unremediated: make the swap.
 
 `orjson` is already a core dependency of the application SDK, so it is available to
 every app, and it is generally *at least* 10x faster than the stdlib `json` module.
@@ -78,13 +83,22 @@ APIs orjson does not provide), and custom `JSONEncoder` subclasses are out of sc
 Autofixable per-site, not mechanically: `orjson` is not a drop-in replacement.
 `orjson.dumps` returns `bytes` (not `str`) and has no `indent=` / `sort_keys=` keyword
 surface (use `option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS` for those); `default=`
-may be passed by keyword or positionally.  It rejects some inputs stdlib accepts.  A
-blind `json.`→`orjson.` swap silently changes `str`→`bytes` and breaks callers — each
-site needs human judgement. The encoded bytes also change on any call that does not
-already pass `separators=(",", ":")` and `ensure_ascii=False`: orjson is always compact
-and always writes non-ASCII as UTF-8, with no option for either.  The parsed value is
-identical, so tests that compare parsed JSON pass; a consumer that hashes, commits or
-byte-compares the output sees the difference.
+may be passed by keyword or positionally.  It rejects some inputs stdlib accepts, and
+unit tests with small values rarely reach them: a value nested 254 or more levels deep
+raises `TypeError: Recursion limit reached`, and an integer above 64 bits cannot be
+serialized.  A blind `json.`→`orjson.` swap silently changes `str`→`bytes` and breaks
+callers — each site needs human judgement. The encoded bytes also change on any call
+that does not already pass `separators=(",", ":")` and `ensure_ascii=False`: orjson is
+always compact and always writes non-ASCII as UTF-8, with no option for either.  The
+parsed value is identical, so tests that compare parsed JSON pass; a consumer that
+hashes, commits or byte-compares the output sees the difference.
+
+Code that serializes source-system or API payloads, whose nesting depth or integer range
+the app does not control, should try `orjson.dumps` first and fall back to stdlib
+`json.dumps` on `TypeError`.  Normal values keep orjson's output and only inputs orjson
+rejects take the stdlib path.  A bare swap on such a path turned a successful extract
+into a failure on every retry (CONAT-7331:
+https://linear.app/atlan-epd/issue/CONAT-7331).
 
 No orjson call reproduces stdlib's default bytes: there is no separators option, no
 `ensure_ascii` option, `orjson.dumps` cannot serialize an integer above 64 bits, and
