@@ -39,7 +39,8 @@ RULES: tuple[RuleDefinition, ...] = (
         rationale=(
             "orjson is already a core SDK dependency — zero incremental cost — and on hot "
             "paths the ~10x throughput advantage compounds at fleet scale. WARN (not block) "
-            "because orjson returns bytes not str and has a different option API, so each "
+            "because orjson returns bytes not str and has a different option API, and rejects "
+            "deeply nested values and integers above 64 bits, so each "
             "site needs human judgment before migrating."
         ),
         short_description="json.dumps()/json.loads() — prefer orjson (a core SDK dependency, ~10x faster)",
@@ -62,7 +63,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "returns ``bytes`` (not ``str``) and has no ``indent=`` / ``sort_keys=``\n"
             "keyword surface (use ``option=orjson.OPT_INDENT_2 |\n"
             "orjson.OPT_SORT_KEYS`` for those); ``default=`` may be passed by keyword\n"
-            "or positionally.  It rejects some inputs stdlib accepts.  A blind\n"
+            "or positionally.  It rejects some inputs stdlib accepts, and unit tests\n"
+            "with small values rarely reach them: a value nested 254 or more levels\n"
+            "deep raises ``TypeError: Recursion limit reached``, and an integer above\n"
+            "64 bits cannot be serialized.  A blind\n"
             "``json.``→``orjson.`` swap silently changes\n"
             "``str``→``bytes`` and breaks callers — each site needs human judgement.\n"
             "The encoded bytes also change on any call that does not already pass\n"
@@ -71,6 +75,14 @@ RULES: tuple[RuleDefinition, ...] = (
             "either.  The parsed value is identical, so tests that compare parsed\n"
             "JSON pass; a consumer that hashes, commits or byte-compares the output\n"
             "sees the difference.\n"
+            "\n"
+            "Code that serializes source-system or API payloads, whose nesting depth\n"
+            "or integer range the app does not control, should try ``orjson.dumps``\n"
+            "first and fall back to stdlib ``json.dumps`` on ``TypeError``.  Normal\n"
+            "values keep orjson's output and only inputs orjson rejects take the\n"
+            "stdlib path.  A bare swap on such a path turned a successful extract\n"
+            "into a failure on every retry (CONAT-7331:\n"
+            "https://linear.app/atlan-epd/issue/CONAT-7331).\n"
             "\n"
             "No orjson call reproduces stdlib's default bytes: there is no separators\n"
             "option, no ``ensure_ascii`` option, ``orjson.dumps`` cannot serialize an\n"
@@ -85,7 +97,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         terminal_state=(
             "A justified inline `# conformance: ignore[O001] <reason>` IS the correct "
-            "end state for a `json.dumps` only when all three hold. (1) orjson cannot "
+            "end state for a `json.dumps` in exactly two cases. Case A, the hash or "
+            "byte-compare case, applies only when all three of (1) to (3) hold. (1) orjson cannot "
             "reproduce the call's output: the call does not already pass both "
             '`separators=(",", ":")` and `ensure_ascii=False`, or its input can hold an '
             "integer above 64 bits. A call that passes both on 64-bit-safe input is "
@@ -99,7 +112,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "diffs it, and there is no single attribute key to cite, so that site makes "
             "the swap. A directive whose reason names no attribute key or no comparison "
             "location, or names a consumer that only parses the JSON or sits inside the "
-            "app, is unremediated: make the swap."
+            "app is not case A. Case B, the orjson-limit fallback: the `json.dumps` is "
+            "the fallback inside an `except TypeError` handler directly after an "
+            "`orjson.dumps` attempt on the same value, and the reason names the orjson "
+            "limit it covers (nesting depth of 254 or more, or integers above 64 bits). "
+            "Removing that fallback reintroduces the failure, so keep it. A directive "
+            "that fits neither case is unremediated: make the swap."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o001",
         remediation_reference=RemediationReference(
