@@ -6,9 +6,14 @@ automatically manages collectors and merges their contents into the workflow's
 return dict.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Mapping, Optional
 
+from pydantic import ValidationError
+
+from application_sdk._logging import get_logger
 from application_sdk.outputs.models import Artifact, Metric
+
+_logger = get_logger(__name__)
 
 
 class OutputCollector:
@@ -20,8 +25,9 @@ class OutputCollector:
 
     The SDK's output interceptor handles:
     - Creating fresh collectors for each activity/workflow execution
-    - Stashing activity collectors for later merge
-    - Merging all collected outputs into the workflow's return dict
+    - Carrying each activity's outputs back to the workflow on the
+      activity's own result
+    - Merging all collected outputs into the workflow's return value
 
     Example:
         >>> from application_sdk.outputs import get_outputs, Metric
@@ -117,6 +123,59 @@ class OutputCollector:
                 else:
                     result["artifacts"][a.name] = a.path
         return result
+
+    @classmethod
+    def from_dict(
+        cls,
+        metrics: Optional[Mapping[str, Any]],
+        artifacts: Optional[Mapping[str, Any]],
+    ) -> "OutputCollector":
+        """Rebuild a collector from the namespaces ``to_dict()`` produces.
+
+        The output interceptor uses this on the workflow side to read back the
+        ``metrics`` / ``artifacts`` an activity carried on its result. Entries
+        are either a plain value / path, or ``{"value"|"path": ...,
+        "display_name": ...}`` when a display name was set. Entries in any
+        other shape are skipped with a warning rather than raised, so one
+        malformed entry never costs the rest.
+
+        Args:
+            metrics: The ``metrics`` namespace, or None.
+            artifacts: The ``artifacts`` namespace, or None.
+
+        Returns:
+            A collector holding the parsed metrics and artifacts.
+        """
+        collector = cls()
+        for name, raw in (metrics or {}).items():
+            try:
+                if isinstance(raw, Mapping):
+                    metric = Metric(
+                        name=name,
+                        value=raw["value"],
+                        display_name=raw.get("display_name"),
+                    )
+                else:
+                    metric = Metric(name=name, value=raw)
+            except (KeyError, ValidationError):
+                _logger.warning("Skipping malformed carried metric %s", name)
+                continue
+            collector.add_metric(metric)
+        for name, raw in (artifacts or {}).items():
+            try:
+                if isinstance(raw, Mapping):
+                    artifact = Artifact(
+                        name=name,
+                        path=raw["path"],
+                        display_name=raw.get("display_name"),
+                    )
+                else:
+                    artifact = Artifact(name=name, path=raw)
+            except (KeyError, ValidationError):
+                _logger.warning("Skipping malformed carried artifact %s", name)
+                continue
+            collector.add_artifact(artifact)
+        return collector
 
     def merge_with(self, base: Dict[str, Any]) -> Dict[str, Any]:
         """Merge collected outputs into an existing return dict.

@@ -4,25 +4,33 @@ Tests the OutputInterceptor and its components for collecting and merging
 workflow outputs from activities.
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 from unittest import mock
 
 import pytest
 
+import application_sdk.outputs as outputs_module
+from application_sdk.contracts.base import Output
 from application_sdk.execution._temporal.interceptors.outputs import (
     OutputActivityInboundInterceptor,
     OutputInterceptor,
     OutputWorkflowInboundInterceptor,
 )
 from application_sdk.outputs import (
+    Artifact,
     Metric,
     OutputCollector,
-    _collected_outputs,
     _current_outputs,
-    _lock,
     get_outputs,
 )
+
+
+class _TaskOutput(Output):
+    """A task-style typed result."""
+
+    rows: int = 0
 
 
 @dataclass
@@ -52,15 +60,6 @@ class MockActivityInfo:
     activity_id: str = "activity-123"
 
 
-@dataclass
-class MockWorkflowInfo:
-    """Mock workflow.info() return value."""
-
-    run_id: str = "test-workflow-run-id"
-    workflow_id: str = "test-workflow-id"
-    workflow_type: str = "TestWorkflow"
-
-
 class TestOutputActivityInboundInterceptor:
     """Tests for OutputActivityInboundInterceptor."""
 
@@ -78,14 +77,10 @@ class TestOutputActivityInboundInterceptor:
 
     @pytest.fixture(autouse=True)
     def cleanup_state(self):
-        """Clean up global state before and after each test."""
+        """Clean up ContextVar state before and after each test."""
         _current_outputs.set(None)
-        with _lock:
-            _collected_outputs.clear()
         yield
         _current_outputs.set(None)
-        with _lock:
-            _collected_outputs.clear()
 
     @pytest.mark.asyncio
     async def test_creates_fresh_collector_for_activity(
@@ -137,53 +132,111 @@ class TestOutputActivityInboundInterceptor:
         assert result == expected_result
 
     @pytest.mark.asyncio
-    async def test_stashes_collector_when_has_data(
-        self, interceptor, mock_next_inbound
-    ):
-        """Test that collector is stashed when it has data."""
-        workflow_run_id = "test-run-id-123"
+    async def test_dict_result_carries_outputs(self, interceptor, mock_next_inbound):
+        """Collected outputs are added to a dict result under their namespaces."""
 
         async def activity_with_outputs(input):
             outputs = get_outputs()
             outputs.add_metric(Metric(name="count", value=42))
+            outputs.add_artifact(Artifact(name="dump", path="s3://b/dump"))
             return {"status": "ok"}
 
         mock_next_inbound.execute_activity.side_effect = activity_with_outputs
-        input_data = MockExecuteActivityInput()
 
-        with mock.patch(
-            "application_sdk.execution._temporal.interceptors.outputs.activity"
-        ) as mock_activity:
-            mock_activity.info.return_value = MockActivityInfo(
-                workflow_run_id=workflow_run_id
-            )
-            await interceptor.execute_activity(input_data)
+        result = await interceptor.execute_activity(MockExecuteActivityInput())
 
-        with _lock:
-            stashed = _collected_outputs.get(workflow_run_id, [])
-        assert len(stashed) == 1
-        assert stashed[0].has_data()
+        assert result == {
+            "status": "ok",
+            "metrics": {"count": 42},
+            "artifacts": {"dump": "s3://b/dump"},
+        }
 
     @pytest.mark.asyncio
-    async def test_does_not_stash_empty_collector(self, interceptor, mock_next_inbound):
-        """Test that empty collectors are not stashed."""
-        workflow_run_id = "test-run-id-empty"
+    async def test_output_model_carries_outputs(self, interceptor, mock_next_inbound):
+        """An Output result carries outputs on its metrics/artifacts fields."""
+        returned = _TaskOutput(rows=3)
 
-        with mock.patch(
-            "application_sdk.execution._temporal.interceptors.outputs.activity"
-        ) as mock_activity:
-            mock_activity.info.return_value = MockActivityInfo(
-                workflow_run_id=workflow_run_id
-            )
-            await interceptor.execute_activity(MockExecuteActivityInput())
+        async def activity_with_outputs(input):
+            get_outputs().add_metric(Metric(name="rows", value=3, display_name="Rows"))
+            return returned
 
-        with _lock:
-            stashed = _collected_outputs.get(workflow_run_id, [])
-        assert len(stashed) == 0
+        mock_next_inbound.execute_activity.side_effect = activity_with_outputs
+
+        result = await interceptor.execute_activity(MockExecuteActivityInput())
+
+        assert isinstance(result, _TaskOutput)
+        assert result.rows == 3
+        assert result.metrics == {"rows": {"value": 3, "display_name": "Rows"}}
+        assert result.artifacts is None
+        # The activity's own object is not mutated.
+        assert returned.metrics is None
+
+    @pytest.mark.asyncio
+    async def test_output_passthrough_does_not_carry_upstream_metrics(
+        self, interceptor, mock_next_inbound
+    ):
+        """A task returning an upstream output unchanged must not re-carry its metrics.
+
+        Otherwise the workflow would count the upstream task's metrics twice.
+        """
+        upstream = _TaskOutput(rows=1, metrics={"rows": 1}, artifacts={"a": "p"})
+        mock_next_inbound.execute_activity.return_value = upstream
+
+        result = await interceptor.execute_activity(MockExecuteActivityInput())
+
+        assert result.metrics is None
+        assert result.artifacts is None
+        assert result.rows == 1
+
+    @pytest.mark.asyncio
+    async def test_result_that_cannot_carry_outputs_is_unchanged(
+        self, interceptor, mock_next_inbound
+    ):
+        """A None result is returned as-is; its outputs are dropped with a warning."""
+
+        async def activity_with_outputs(input):
+            get_outputs().add_metric(Metric(name="count", value=1))
+            return None
+
+        mock_next_inbound.execute_activity.side_effect = activity_with_outputs
+
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.interceptors.outputs.activity"
+            ) as mock_activity,
+            mock.patch(
+                "application_sdk.execution._temporal.interceptors.outputs.logger"
+            ) as mock_logger,
+        ):
+            mock_activity.info.return_value = MockActivityInfo()
+            result = await interceptor.execute_activity(MockExecuteActivityInput())
+
+        assert result is None
+        mock_logger.warning.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_dict_without_outputs_is_unchanged(
+        self, interceptor, mock_next_inbound
+    ):
+        """No outputs collected: a dict result keeps its own keys untouched."""
+        own = {"metrics": "not ours"}
+        mock_next_inbound.execute_activity.return_value = own
+
+        result = await interceptor.execute_activity(MockExecuteActivityInput())
+
+        assert result is own
+
+    def test_no_process_level_store(self):
+        """Outputs must not be held in process memory keyed by run id.
+
+        The activity and its workflow can run in different worker processes,
+        so a process-local store silently loses them.
+        """
+        assert not hasattr(outputs_module, "_collected_outputs")
 
 
 class TestOutputWorkflowInboundInterceptor:
-    """Tests for OutputWorkflowInboundInterceptor."""
+    """Tests for OutputWorkflowInboundInterceptor and its outbound harvest."""
 
     @pytest.fixture
     def mock_next_inbound(self):
@@ -192,6 +245,7 @@ class TestOutputWorkflowInboundInterceptor:
         mock_next.execute_workflow = mock.AsyncMock(
             return_value={"transformed_data_prefix": "s3://bucket/path"}
         )
+        mock_next.init = mock.MagicMock()
         return mock_next
 
     @pytest.fixture
@@ -199,16 +253,31 @@ class TestOutputWorkflowInboundInterceptor:
         """Create the interceptor instance."""
         return OutputWorkflowInboundInterceptor(mock_next_inbound)
 
+    @pytest.fixture
+    def mock_next_outbound(self):
+        """The outbound chain below the output interceptor."""
+        return mock.MagicMock()
+
+    @pytest.fixture
+    def outbound(self, interceptor, mock_next_inbound, mock_next_outbound):
+        """The outbound interceptor the workflow's activity calls go through."""
+        interceptor.init(mock_next_outbound)
+        return mock_next_inbound.init.call_args.args[0]
+
     @pytest.fixture(autouse=True)
     def cleanup_state(self):
-        """Clean up global state before and after each test."""
+        """Clean up ContextVar state before and after each test."""
         _current_outputs.set(None)
-        with _lock:
-            _collected_outputs.clear()
         yield
         _current_outputs.set(None)
-        with _lock:
-            _collected_outputs.clear()
+
+    @staticmethod
+    def _completed(result: Any) -> "asyncio.Future[Any]":
+        """A handle that resolves on a later loop tick, as Temporal's does."""
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        loop.call_soon(fut.set_result, result)
+        return fut
 
     @pytest.mark.asyncio
     async def test_returns_original_result_when_no_outputs(
@@ -217,116 +286,193 @@ class TestOutputWorkflowInboundInterceptor:
         """Test that original result is returned when no outputs collected."""
         expected_result = {"key": "value"}
         mock_next_inbound.execute_workflow.return_value = expected_result
-        input_data = MockExecuteWorkflowInput()
 
-        with mock.patch(
-            "application_sdk.execution._temporal.interceptors.outputs.workflow"
-        ) as mock_wf:
-            mock_wf.info.return_value = MockWorkflowInfo()
-            result = await interceptor.execute_workflow(input_data)
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
         assert result == expected_result
 
     @pytest.mark.asyncio
-    async def test_merges_activity_outputs_into_result(
-        self, interceptor, mock_next_inbound
+    async def test_merges_outputs_carried_on_activity_results(
+        self, interceptor, outbound, mock_next_inbound, mock_next_outbound
     ):
-        """Test that activity outputs are merged into workflow result."""
-        workflow_run_id = "test-merge-run-id"
+        """Outputs carried on completed activity results reach the workflow result."""
+        handles = [
+            self._completed(_TaskOutput(rows=1, metrics={"count": 50})),
+            self._completed(
+                {"x": 1, "metrics": {"count": 30, "other": 10}, "artifacts": {"a": "p"}}
+            ),
+        ]
+        mock_next_outbound.start_activity.side_effect = handles
 
-        activity_collector = OutputCollector()
-        activity_collector.add_metric(Metric(name="tables", value=100))
-        with _lock:
-            _collected_outputs[workflow_run_id].append(activity_collector)
+        async def run(input):
+            for _ in handles:
+                await outbound.start_activity(mock.MagicMock())
+            return {"base": "data"}
 
-        mock_next_inbound.execute_workflow.return_value = {
-            "connection_qualified_name": "default/redshift/prod"
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert result == {
+            "base": "data",
+            "metrics": {"count": 80, "other": 10},
+            "artifacts": {"a": "p"},
         }
-        input_data = MockExecuteWorkflowInput()
 
-        with mock.patch(
-            "application_sdk.execution._temporal.interceptors.outputs.workflow"
-        ) as mock_wf:
-            mock_wf.info.return_value = MockWorkflowInfo(run_id=workflow_run_id)
-            result = await interceptor.execute_workflow(input_data)
+    @pytest.mark.asyncio
+    async def test_handle_already_done_when_returned_is_still_merged(
+        self, interceptor, outbound, mock_next_inbound, mock_next_outbound
+    ):
+        """A done handle's callback is only queued; the exit flush still merges it."""
+        fut = asyncio.get_running_loop().create_future()
+        fut.set_result(_TaskOutput(metrics={"early": 1}))
+        mock_next_outbound.start_activity.return_value = fut
+
+        async def run(input):
+            await outbound.start_activity(mock.MagicMock())
+            return {}
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert result == {"metrics": {"early": 1}}
+
+    @pytest.mark.asyncio
+    async def test_returns_the_same_handle(self, outbound, mock_next_outbound):
+        """start_activity keeps returning Temporal's cancellable handle."""
+        handle = self._completed(None)
+        mock_next_outbound.start_activity.return_value = handle
+
+        assert outbound.start_activity(mock.MagicMock()) is handle
+
+    @pytest.mark.asyncio
+    async def test_harvests_local_activities(
+        self, interceptor, outbound, mock_next_inbound, mock_next_outbound
+    ):
+        """Local activity results carry outputs the same way."""
+        mock_next_outbound.start_local_activity.return_value = self._completed(
+            _TaskOutput(metrics={"local": 2})
+        )
+
+        async def run(input):
+            await outbound.start_local_activity(mock.MagicMock())
+            return {}
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert result == {"metrics": {"local": 2}}
+
+    @pytest.mark.asyncio
+    async def test_harvests_through_a_coroutine_returning_outbound(
+        self, interceptor, outbound, mock_next_inbound, mock_next_outbound
+    ):
+        """An outbound below that returns a coroutine (the lock interceptor) still works."""
+
+        async def locked_start(input):
+            return _TaskOutput(metrics={"locked": 1})
+
+        mock_next_outbound.start_activity.side_effect = locked_start
+
+        async def run(input):
+            result = await outbound.start_activity(mock.MagicMock())
+            assert result.metrics == {"locked": 1}
+            return {}
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert result == {"metrics": {"locked": 1}}
+
+    @pytest.mark.asyncio
+    async def test_failed_activity_contributes_nothing(
+        self, interceptor, outbound, mock_next_inbound, mock_next_outbound
+    ):
+        """A failed activity's handle is ignored and its error still propagates."""
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        loop.call_soon(fut.set_exception, RuntimeError("boom"))
+        mock_next_outbound.start_activity.return_value = fut
+
+        async def run(input):
+            with pytest.raises(RuntimeError):
+                await outbound.start_activity(mock.MagicMock())
+            return {"status": "recovered"}
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert result == {"status": "recovered"}
+
+    @pytest.mark.asyncio
+    async def test_ignores_keys_not_in_the_carried_shape(
+        self, interceptor, outbound, mock_next_inbound, mock_next_outbound
+    ):
+        """A dict result whose own ``metrics`` key is not a mapping is not harvested."""
+        mock_next_outbound.start_activity.return_value = self._completed(
+            {"metrics": "a string of its own", "artifacts": ["x"]}
+        )
+
+        async def run(input):
+            await outbound.start_activity(mock.MagicMock())
+            return {"status": "done"}
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert result == {"status": "done"}
+
+    @pytest.mark.asyncio
+    async def test_activity_result_crosses_processes(
+        self, interceptor, outbound, mock_next_inbound, mock_next_outbound
+    ):
+        """End to end at unit level: one activity interceptor, one workflow interceptor.
+
+        They share nothing but the activity result, as when the activity runs
+        in another worker process.
+        """
+
+        async def activity_body(input):
+            get_outputs().add_metric(Metric(name="tables", value=100))
+            return _TaskOutput(rows=100)
+
+        activity_next = mock.AsyncMock()
+        activity_next.execute_activity.side_effect = activity_body
+        carried = await OutputActivityInboundInterceptor(
+            activity_next
+        ).execute_activity(MockExecuteActivityInput())
+
+        mock_next_outbound.start_activity.return_value = self._completed(carried)
+
+        async def run(input):
+            await outbound.start_activity(mock.MagicMock())
+            return {"connection_qualified_name": "default/redshift/prod"}
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
         assert result["connection_qualified_name"] == "default/redshift/prod"
         assert result["metrics"] == {"tables": 100}
-
-    @pytest.mark.asyncio
-    async def test_merges_multiple_activity_outputs(
-        self, interceptor, mock_next_inbound
-    ):
-        """Test that multiple activity outputs are merged correctly."""
-        workflow_run_id = "test-multi-activity-run-id"
-
-        collector1 = OutputCollector()
-        collector1.add_metric(Metric(name="count", value=50))
-
-        collector2 = OutputCollector()
-        collector2.add_metric(Metric(name="count", value=30))
-        collector2.add_metric(Metric(name="other", value=10))
-
-        with _lock:
-            _collected_outputs[workflow_run_id].extend([collector1, collector2])
-
-        mock_next_inbound.execute_workflow.return_value = {"base": "data"}
-        input_data = MockExecuteWorkflowInput()
-
-        with mock.patch(
-            "application_sdk.execution._temporal.interceptors.outputs.workflow"
-        ) as mock_wf:
-            mock_wf.info.return_value = MockWorkflowInfo(run_id=workflow_run_id)
-            result = await interceptor.execute_workflow(input_data)
-
-        assert result["metrics"]["count"] == 80
-        assert result["metrics"]["other"] == 10
-        assert result["base"] == "data"
-
-    @pytest.mark.asyncio
-    async def test_removes_collected_outputs_after_merge(
-        self, interceptor, mock_next_inbound
-    ):
-        """Test that collected outputs are removed after workflow completion."""
-        workflow_run_id = "test-cleanup-run-id"
-
-        activity_collector = OutputCollector()
-        activity_collector.add_metric(Metric(name="m", value=1))
-        with _lock:
-            _collected_outputs[workflow_run_id].append(activity_collector)
-
-        input_data = MockExecuteWorkflowInput()
-
-        with mock.patch(
-            "application_sdk.execution._temporal.interceptors.outputs.workflow"
-        ) as mock_wf:
-            mock_wf.info.return_value = MockWorkflowInfo(run_id=workflow_run_id)
-            await interceptor.execute_workflow(input_data)
-
-        with _lock:
-            remaining = _collected_outputs.get(workflow_run_id)
-        assert remaining is None or len(remaining) == 0
 
     @pytest.mark.asyncio
     async def test_handles_non_dict_result_with_outputs(
         self, interceptor, mock_next_inbound
     ):
         """Test handling when workflow returns non-dict but outputs exist."""
-        workflow_run_id = "test-non-dict-run-id"
 
-        activity_collector = OutputCollector()
-        activity_collector.add_metric(Metric(name="m", value=1))
-        with _lock:
-            _collected_outputs[workflow_run_id].append(activity_collector)
+        async def run(input):
+            get_outputs().add_metric(Metric(name="m", value=1))
+            return "not a dict"
 
-        mock_next_inbound.execute_workflow.return_value = "not a dict"
-        input_data = MockExecuteWorkflowInput()
+        mock_next_inbound.execute_workflow.side_effect = run
 
-        with mock.patch(
-            "application_sdk.execution._temporal.interceptors.outputs.workflow"
-        ) as mock_wf:
-            mock_wf.info.return_value = MockWorkflowInfo(run_id=workflow_run_id)
-            result = await interceptor.execute_workflow(input_data)
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
         assert result == {"metrics": {"m": 1}}
 
@@ -342,13 +488,8 @@ class TestOutputWorkflowInboundInterceptor:
             return {"status": "done"}
 
         mock_next_inbound.execute_workflow.side_effect = workflow_with_outputs
-        input_data = MockExecuteWorkflowInput()
 
-        with mock.patch(
-            "application_sdk.execution._temporal.interceptors.outputs.workflow"
-        ) as mock_wf:
-            mock_wf.info.return_value = MockWorkflowInfo()
-            result = await interceptor.execute_workflow(input_data)
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
         assert result["metrics"]["workflow-metric"] == 999
         assert result["status"] == "done"

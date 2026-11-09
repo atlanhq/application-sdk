@@ -12,21 +12,20 @@ Usage:
 
     The SDK's output interceptor automatically:
     - Creates fresh collectors for each execution context
-    - Merges activity outputs at workflow exit
-    - Enriches the workflow's return dict with collected data
+    - Carries each activity's outputs back to the workflow on the
+      activity's own result
+    - Enriches the workflow's return value with collected data
 
 Architecture:
     - _current_outputs: ContextVar holding the collector for the current
       activity or workflow execution.
-    - _collected_outputs: Process-level dict storing activity collectors
-      keyed by workflow_run_id, waiting for workflow exit merge.
-    - OutputInterceptor: Temporal interceptor managing the lifecycle.
+    - OutputInterceptor: Temporal interceptor managing the lifecycle. There is
+      no process-level store: the activity and its workflow may run in
+      different worker processes, so outputs travel through Temporal history
+      on the activity result.
 """
 
 import contextvars
-import threading
-from collections import defaultdict
-from typing import Dict, List
 
 from application_sdk.outputs.collector import OutputCollector
 from application_sdk.outputs.models import Artifact, Metric
@@ -34,9 +33,6 @@ from application_sdk.outputs.models import Artifact, Metric
 _current_outputs: contextvars.ContextVar[OutputCollector | None] = (
     contextvars.ContextVar("workflow_outputs", default=None)
 )
-
-_collected_outputs: Dict[str, List[OutputCollector]] = defaultdict(list)
-_lock = threading.Lock()
 
 
 def get_outputs() -> OutputCollector:

@@ -199,3 +199,41 @@ class TestHasData:
         c = OutputCollector()
         c.add_artifact(Artifact(name="f", path="p"))
         assert c.has_data() is True
+
+
+class TestFromDict:
+    """OutputCollector.from_dict() is the inverse of to_dict()."""
+
+    def test_round_trips_plain_and_display_name_forms(self) -> None:
+        original = OutputCollector()
+        original.add_metric(Metric(name="count", value=3))
+        original.add_metric(Metric(name="rate", value=0.5, display_name="Rate"))
+        original.add_metric(Metric(name="state", value="done"))
+        original.add_artifact(Artifact(name="logs", path="s3://b/logs"))
+        original.add_artifact(
+            Artifact(name="dump", path="s3://b/dump", display_name="Dump")
+        )
+        data = original.to_dict()
+
+        rebuilt = OutputCollector.from_dict(data["metrics"], data["artifacts"])
+
+        assert rebuilt.to_dict() == data
+
+    def test_none_namespaces_give_empty_collector(self) -> None:
+        assert not OutputCollector.from_dict(None, None).has_data()
+
+    def test_rebuilt_metrics_sum_on_merge(self) -> None:
+        target = OutputCollector()
+        target.add_metric(Metric(name="rows", value=10))
+
+        target.merge(OutputCollector.from_dict({"rows": 5}, None))
+
+        assert target.to_dict() == {"metrics": {"rows": 15}}
+
+    def test_malformed_entries_are_skipped(self) -> None:
+        rebuilt = OutputCollector.from_dict(
+            {"ok": 1, "no-value": {"display_name": "x"}, "bad-type": [1]},
+            {"ok": "p", "no-path": {"display_name": "y"}},
+        )
+
+        assert rebuilt.to_dict() == {"metrics": {"ok": 1}, "artifacts": {"ok": "p"}}

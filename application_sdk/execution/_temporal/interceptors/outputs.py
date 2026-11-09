@@ -12,41 +12,121 @@ v3 adaptation:
     Temporal's pydantic_data_converter.
 
 Architecture:
-    - OutputActivityInboundInterceptor: Creates fresh collector per activity,
-      stashes non-empty collectors for later merge.
-    - OutputWorkflowInboundInterceptor: At workflow exit, merges all activity
-      collectors into the return value.
+    - OutputActivityInboundInterceptor: Creates a fresh collector per activity
+      and writes what it collected onto the activity's own result
+      (``metrics`` / ``artifacts`` on an ``Output`` model, or the same keys on
+      a dict result).
+    - _OutputWorkflowOutboundInterceptor: Reads those fields back from every
+      completed activity (and local activity) into the workflow's collector.
+    - OutputWorkflowInboundInterceptor: At workflow exit, merges the
+      workflow's collector into the return value.
     - OutputInterceptor: Top-level interceptor registering both components.
+
+    Outputs travel through Temporal history on the activity result, never
+    through process memory. An activity and the workflow that scheduled it
+    may run in different worker processes (more than one replica, a restart,
+    a dedicated pool queue), and a replay on another worker must rebuild the
+    same metrics; a process-local store satisfies neither.
 
 Usage:
     Activities call get_outputs().add_metric(...) during execution.
     The interceptor handles the rest automatically.
 """
 
+import asyncio
+from collections.abc import Awaitable, Mapping
 from typing import Any, Optional, Type
 
-from temporalio import activity, workflow
+from temporalio import activity
 from temporalio.worker import (
     ActivityInboundInterceptor,
     ExecuteActivityInput,
     ExecuteWorkflowInput,
     Interceptor,
+    StartActivityInput,
+    StartLocalActivityInput,
     WorkflowInboundInterceptor,
     WorkflowInterceptorClassInput,
+    WorkflowOutboundInterceptor,
 )
 
+from application_sdk.contracts.base import Output
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs import _collected_outputs, _current_outputs, _lock
+from application_sdk.outputs import _current_outputs
 from application_sdk.outputs.collector import OutputCollector
 
 logger = get_logger(__name__)
+
+_METRICS_KEY = "metrics"
+_ARTIFACTS_KEY = "artifacts"
+
+
+def _attach_outputs(result: Any, collector: OutputCollector) -> Any:
+    """Write an activity's collected outputs onto its result.
+
+    - ``Output`` model: ``metrics`` / ``artifacts`` are set to exactly this
+      activity's outputs, and cleared when it collected none. A task that
+      returns an upstream task's output unchanged must not carry that
+      upstream task's metrics a second time, or the workflow would count
+      them twice.
+    - dict: the collected namespaces are added under the same keys the
+      workflow-level merge already writes. Left untouched when nothing was
+      collected, so a dict result keeps any keys of its own.
+    - anything else cannot carry outputs; they are dropped with a warning.
+
+    Returns:
+        The result to hand back to Temporal (a copy when it changed).
+    """
+    data = collector.to_dict()
+    if isinstance(result, Output):
+        metrics = data.get(_METRICS_KEY)
+        artifacts = data.get(_ARTIFACTS_KEY)
+        if result.metrics == metrics and result.artifacts == artifacts:
+            return result
+        return result.model_copy(
+            update={_METRICS_KEY: metrics, _ARTIFACTS_KEY: artifacts}
+        )
+    if not data:
+        return result
+    if isinstance(result, dict):
+        return {**result, **data}
+    logger.warning(
+        "Activity %s recorded outputs but returned %s, which cannot carry them "
+        "back to the workflow; return an Output model to keep them. Dropped "
+        "metrics: %s; dropped artifacts: %s",
+        activity.info().activity_type,
+        type(result).__name__,
+        sorted(data.get(_METRICS_KEY, {})),
+        sorted(data.get(_ARTIFACTS_KEY, {})),
+    )
+    return result
+
+
+def _carried_outputs(result: Any) -> Optional[OutputCollector]:
+    """Read the outputs an activity carried on its result, if any."""
+    if isinstance(result, Output):
+        metrics, artifacts = result.metrics, result.artifacts
+    elif isinstance(result, Mapping):
+        metrics, artifacts = result.get(_METRICS_KEY), result.get(_ARTIFACTS_KEY)
+    else:
+        return None
+    # Only the shapes ``to_dict()`` writes; anything else is the result's own
+    # data that merely shares a key name.
+    if not isinstance(metrics, Mapping):
+        metrics = None
+    if not isinstance(artifacts, Mapping):
+        artifacts = None
+    if not metrics and not artifacts:
+        return None
+    return OutputCollector.from_dict(metrics, artifacts)
 
 
 class OutputActivityInboundInterceptor(ActivityInboundInterceptor):
     """Interceptor for collecting activity outputs.
 
-    Creates a fresh OutputCollector for each activity execution and stashes
-    non-empty collectors in process-level storage keyed by workflow_run_id.
+    Creates a fresh OutputCollector for each activity execution and writes
+    what it collected onto the activity's result, so the outputs reach the
+    workflow through Temporal history whichever process runs the workflow.
     """
 
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
@@ -56,7 +136,7 @@ class OutputActivityInboundInterceptor(ActivityInboundInterceptor):
             input: The activity execution input.
 
         Returns:
-            The original activity return value, unchanged.
+            The activity's return value, carrying its collected outputs.
         """
         collector = OutputCollector()
         _current_outputs.set(collector)
@@ -69,35 +149,109 @@ class OutputActivityInboundInterceptor(ActivityInboundInterceptor):
             _current_outputs.set(None)
 
         try:
-            if collector.has_data():
-                workflow_run_id = activity.info().workflow_run_id
-                with _lock:
-                    _collected_outputs[workflow_run_id].append(collector)
-                logger.debug(
-                    "Stashed output collector for workflow run %s",
-                    workflow_run_id,
-                )
+            return _attach_outputs(result, collector)
         except Exception:
             # Output collection is non-critical — never let it fail the activity.
             logger.warning(
-                "Failed to stash output collector; outputs for this activity will be lost.",
+                "Failed to attach collected outputs to the activity result; "
+                "outputs for this activity will be lost.",
                 exc_info=True,
             )
+            return result
 
+
+class _OutputWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
+    """Harvests the outputs each completed activity carried on its result.
+
+    The harvest reads the decoded activity result, which comes from workflow
+    history, so it is deterministic and a replay on any worker rebuilds the
+    same collector.
+    """
+
+    def __init__(
+        self, next: WorkflowOutboundInterceptor, collector: OutputCollector
+    ) -> None:
+        super().__init__(next)
+        self._collector = collector
+        # Handles whose result has not been merged yet. The done callback
+        # normally merges and drops each one; ``flush()`` covers a handle whose
+        # callback had not run yet when the workflow returned. Keyed by id()
+        # for O(1) removal; a dict keeps start order, so merges (and so
+        # last-write-wins on string metrics and artifacts) stay deterministic.
+        self._pending: dict[int, asyncio.Future[Any]] = {}
+
+    def start_activity(self, input: StartActivityInput) -> Any:
+        return self._harvest(self.next.start_activity(input))
+
+    def start_local_activity(self, input: StartLocalActivityInput) -> Any:
+        return self._harvest(self.next.start_local_activity(input))
+
+    def _harvest(self, handle: Any) -> Any:
+        # Temporal's own handle is a future; an outbound interceptor further
+        # down the chain may instead return a coroutine (the Redis lock
+        # interceptor does). Keep each kind its own kind, so callers of
+        # ``workflow.start_activity`` still get a cancellable handle.
+        if asyncio.isfuture(handle):
+            self._pending[id(handle)] = handle
+            handle.add_done_callback(self._on_done)
+            return handle
+        if isinstance(handle, Awaitable):
+            return self._await_and_merge(handle)
+        return handle
+
+    async def _await_and_merge(self, awaitable: Awaitable[Any]) -> Any:
+        result = await awaitable
+        self._merge(result)
         return result
+
+    def _on_done(self, fut: "asyncio.Future[Any]") -> None:
+        if self._pending.pop(id(fut), None) is None:
+            return  # already merged by flush()
+        if fut.cancelled() or fut.exception() is not None:
+            return
+        self._merge(fut.result())
+
+    def flush(self) -> None:
+        """Merge every completed handle whose done callback has not run yet."""
+        for fut in [f for f in self._pending.values() if f.done()]:
+            self._on_done(fut)
+
+    def _merge(self, result: Any) -> None:
+        try:
+            carried = _carried_outputs(result)
+            if carried is not None:
+                self._collector.merge(carried)
+        except Exception:
+            # Output enrichment is non-critical — never let it fail the workflow.
+            logger.warning(
+                "Failed to read outputs carried on an activity result; "
+                "they will be missing from the workflow result.",
+                exc_info=True,
+            )
 
 
 class OutputWorkflowInboundInterceptor(WorkflowInboundInterceptor):
     """Interceptor for merging outputs at workflow completion.
 
-    After the workflow's run() method completes, merges all collected
-    activity outputs into the return value under "metrics" and "artifacts"
+    Owns the workflow's collector: workflow code's ``get_outputs()`` writes to
+    it, and the outbound interceptor merges each completed activity's carried
+    outputs into it. After the workflow's run() method completes, merges it
+    into the return value under "metrics" and "artifacts"
     namespaces.
 
     v3 adaptation: when the result is a Pydantic BaseModel (e.g. an Output
     subclass), the merge round-trips through model_dump() / model_validate()
     so Temporal's pydantic_data_converter receives the correct typed model back.
     """
+
+    def __init__(self, next: WorkflowInboundInterceptor) -> None:
+        super().__init__(next)
+        self._collector = OutputCollector()
+        self._outbound: Optional[_OutputWorkflowOutboundInterceptor] = None
+
+    def init(self, outbound: WorkflowOutboundInterceptor) -> None:
+        self._outbound = _OutputWorkflowOutboundInterceptor(outbound, self._collector)
+        super().init(self._outbound)
 
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
         """Execute a workflow with output merging.
@@ -108,28 +262,18 @@ class OutputWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         Returns:
             The workflow result, enriched with collected outputs if any.
         """
-        collector = OutputCollector()
-        _current_outputs.set(collector)
-        workflow_run_id = workflow.info().run_id
-        # Populated in finally so cleanup always happens; the list is reused
-        # on the success path below.
-        activity_collectors: list = []
-
+        _current_outputs.set(self._collector)
         try:
             result = await super().execute_workflow(input)
         finally:
-            # Always pop the per-run bucket (even on failure/cancellation) to
-            # prevent unbounded memory growth.
-            activity_collectors = _collected_outputs.pop(workflow_run_id, [])
             _current_outputs.set(None)
 
         # Only reached when super().execute_workflow() returned without raising.
         try:
-            for ac in activity_collectors:
-                collector.merge(ac)
-
-            if collector.has_data():
-                result = _merge_outputs_into_result(result, collector)
+            if self._outbound is not None:
+                self._outbound.flush()
+            if self._collector.has_data():
+                result = _merge_outputs_into_result(result, self._collector)
         except Exception:
             # Output enrichment is non-critical — never let it fail the workflow.
             logger.warning(
