@@ -261,13 +261,16 @@ TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
 TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS: float = float(
     os.getenv("ATLAN_TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS", "5.0")
 )
-#: Upper bound on the bytes read from the loopback metrics endpoint when
-#: reading sdk-core's poller gauge for diagnostics. The endpoint is local and
-#: diagnostics-only, but a high-cardinality or misbehaving exporter could
-#: otherwise make the observer allocate an unbounded string every interval.
-#: Oversize is treated as unknown (``None``), never as zero. ~1 MiB is far
-#: above a healthy exposition (~460 series) and far below anything that could
-#: pressure the worker.
+#: Upper bound on the bytes read from the loopback metrics endpoint by every
+#: reader of it: the worker's poller-gauge diagnostic, the combined-mode
+#: FastAPI ``/metrics`` proxy and the worker's ``TemporalCoreCollector``
+#: (Pushgateway). A high-cardinality or misbehaving exporter could otherwise
+#: make each reader allocate an unbounded body on every interval, scrape or
+#: push. Oversize is treated as unknown — the diagnostic reports ``None``
+#: (never zero), the proxy serves ``/metrics`` without core series and counts
+#: ``reason="oversize"``, the collector skips the cycle. ~1 MiB is far above a
+#: healthy exposition (~460 series) and far below anything that could
+#: pressure the process.
 TEMPORAL_CORE_METRICS_MAX_BYTES: int = int(
     os.getenv("ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES", str(1024 * 1024))
 )
