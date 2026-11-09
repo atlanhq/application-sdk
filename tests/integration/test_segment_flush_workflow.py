@@ -1,7 +1,7 @@
 """SYSAPPS-328: ``SegmentClient.flush()`` must not bridge event loops in a workflow.
 
 The production failure is a *cross-loop bridge*. ``SegmentClient`` runs its
-sender on a dedicated thread with its own event loop; ``flush()`` schedules the
+sender on the shared observability loop, in its own thread; ``flush()`` schedules the
 drain there with ``run_coroutine_threadsafe`` and awaits the result via
 ``asyncio.wrap_future``. ``wrap_future`` resolves the awaited future from a
 done-callback that first calls ``is_closed()`` on the *destination* loop.
@@ -98,7 +98,7 @@ class SegmentFlushApp(App):
 
 @pytest.fixture
 def segment_client() -> Iterator[SegmentClient]:
-    """A live ``SegmentClient`` with a real worker thread and event loop.
+    """A live ``SegmentClient`` with a real worker on the shared observability loop.
 
     ``api_url`` points at a closed local port so nothing reaches Segment from
     CI: any batch the worker does send fails its connection locally, which is
@@ -112,8 +112,8 @@ def segment_client() -> Iterator[SegmentClient]:
 
     # Non-vacuity guards. ``flush()`` early-returns when the client is disabled
     # or its loop is not yet running, which would make every assertion below
-    # pass for the wrong reason. ``_initialized_event`` is set *before*
-    # ``run_until_complete`` starts the loop, so poll rather than assume.
+    # pass for the wrong reason. The shared observability loop's thread may
+    # not have entered ``run_forever`` yet, so poll rather than assume.
     assert client.enabled, "client must be enabled or flush() is a no-op"
     deadline = time.monotonic() + 5.0
     while time.monotonic() < deadline:
@@ -143,7 +143,7 @@ class _RecordCollector(logging.Handler):
 
 @pytest.fixture
 def captured_logs() -> Iterator[_RecordCollector]:
-    """Collect every propagated record, including from the Segment worker thread.
+    """Collect every propagated record, including from the observability loop's thread.
 
     ``concurrent.futures`` logs the failing done-callback on whichever thread
     completes the future, so a thread-local or logger-scoped capture would miss

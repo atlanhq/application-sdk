@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import subprocess
@@ -42,7 +43,6 @@ from application_sdk.testing.hypothesis.strategies.common.logger import (
     activity_info_strategy,
     workflow_info_strategy,
 )
-from tests.unit.private_stdlib import private_stdlib
 
 
 @pytest.fixture
@@ -754,7 +754,7 @@ def _store_sink_adapters() -> Generator[
             "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
             True,
         ),
-        mock.patch.object(AtlanLoggerAdapter, "_spawn_flush_thread"),
+        mock.patch.object(AtlanLoggerAdapter, "_start_periodic_flush"),
         mock.patch.object(
             AtlanLoggerAdapter, "_periodic_flush", new_callable=mock.AsyncMock
         ),
@@ -1538,92 +1538,49 @@ class TestTemporalAttributePassthrough:
         assert len(tenant_keys) == 0
 
 
-# BLDX-1129 follow-up: these two tests patch
-# `application_sdk.observability.logger_adaptor.threading.Thread`, which is the
-# threading module reference and patches Thread globally. OTel SDK batch
-# processors spawn their own threads on adapter construction and get caught by
-# the mock, breaking assert_called_once / assert_not_called. Real fix is to
-# Tests now mock the injectable `_spawn_flush_thread()` boundary directly
-# (added to `AtlanLoggerAdapter` on main as part of BLDX-1129's BLDX-1172),
-# so they no longer need to patch `threading.Thread` globally and no longer
-# leak into OTel SDK background threads.
-class TestPython314EventLoopCompat:
-    """Tests for Python 3.14 compatibility where asyncio.get_event_loop()
-    raises RuntimeError when no current event loop exists.
+class TestPeriodicFlushStartsOnSharedLoop:
+    """FND-4648: the log flush starts on the one observability loop.
 
-    These tests simulate the Python 3.14 behavior by patching
-    asyncio.get_event_loop to raise RuntimeError, verifying that the
-    logger adapter falls back to a threading-based flush instead.
+    It used to be a task on the running loop, or else a private
+    ``new_event_loop`` + ``run_forever`` thread. Now it is the shared loop
+    either way, so one shutdown bound covers its final flush.
     """
 
-    def test_flush_task_starts_via_thread_when_no_event_loop(self):
-        """When no running event loop exists (Python 3.14 behavior),
-        the adapter should fall back to starting the flush in a daemon thread."""
+    @staticmethod
+    def _construct(name: str) -> mock.MagicMock:
         AtlanLoggerAdapter._reset_for_testing()
-        with mock.patch.dict(
-            "os.environ",
-            {
-                "LOG_LEVEL": "INFO",
-                "ENABLE_OTLP_LOGS": "false",
-                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
-            },
-        ):
-            with mock.patch(
+        with (
+            mock.patch.dict(
+                "os.environ",
+                {
+                    "LOG_LEVEL": "INFO",
+                    "ENABLE_OTLP_LOGS": "false",
+                    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
+                },
+            ),
+            mock.patch(
                 "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
                 True,
-            ):
-                with (
-                    private_stdlib(
-                        "application_sdk.observability.logger_adaptor", "asyncio"
-                    ) as local_asyncio,
-                    mock.patch.object(
-                        local_asyncio,
-                        "get_running_loop",
-                        side_effect=RuntimeError("no running event loop"),
-                    ),
-                ):
-                    with mock.patch.object(
-                        AtlanLoggerAdapter, "_spawn_flush_thread"
-                    ) as mock_spawn:
-                        _ = AtlanLoggerAdapter("test_py314")
-
-                        mock_spawn.assert_called_once()
-
-    def test_flush_task_uses_running_loop_when_available(self):
-        """When a running event loop exists, the adapter should create
-        a task on it instead of spawning a thread."""
-        AtlanLoggerAdapter._reset_for_testing()
-        AtlanLoggerAdapter._flush_task_started = False
-        mock_loop = mock.MagicMock()
-        with mock.patch.dict(
-            "os.environ",
-            {
-                "LOG_LEVEL": "INFO",
-                "ENABLE_OTLP_LOGS": "false",
-                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
-            },
+            ),
+            mock.patch(
+                "application_sdk.observability.observability.observability_loop"
+            ) as shared_loop,
         ):
-            with mock.patch(
-                "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
-                True,
-            ):
-                with (
-                    private_stdlib(
-                        "application_sdk.observability.logger_adaptor", "asyncio"
-                    ) as local_asyncio,
-                    mock.patch.object(
-                        local_asyncio,
-                        "get_running_loop",
-                        return_value=mock_loop,
-                    ),
-                ):
-                    with mock.patch.object(
-                        AtlanLoggerAdapter, "_spawn_flush_thread"
-                    ) as mock_spawn:
-                        _ = AtlanLoggerAdapter("test_py314_loop")
+            _ = AtlanLoggerAdapter(name)
+        shared_loop.start.assert_called_once()
+        # Close the coroutine the mock swallowed, so it is not reported as
+        # never awaited.
+        shared_loop.start.call_args.args[0].close()
+        assert AtlanLoggerAdapter._flush_task is shared_loop.start.return_value
+        return shared_loop
 
-                        mock_loop.create_task.assert_called_once()
-                        mock_spawn.assert_not_called()
+    def test_without_a_running_loop(self):
+        self._construct("test_flush_no_loop")
+
+    async def test_with_a_running_loop_no_task_lands_on_it(self):
+        before = asyncio.all_tasks()
+        self._construct("test_flush_in_loop")
+        assert asyncio.all_tasks() == before
 
 
 # ───────────────────────────────────────────────────────────────────────────

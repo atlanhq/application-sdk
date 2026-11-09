@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Generator
@@ -11,7 +12,6 @@ from application_sdk.observability.traces_adaptor import (
     TraceRecord,
     get_traces,
 )
-from tests.unit.private_stdlib import private_stdlib
 
 
 @pytest.fixture
@@ -112,7 +112,6 @@ def test_process_record_with_dict():
         assert processed == record
 
 
-@pytest.mark.asyncio
 async def test_send_to_otel():
     """Test _send_to_otel() method."""
     with create_traces_adapter() as traces_adapter:
@@ -144,7 +143,6 @@ async def test_send_to_otel():
             )
 
 
-@pytest.mark.asyncio
 async def test_log_to_console():
     """Test _log_to_console() method."""
     with create_traces_adapter() as traces_adapter:
@@ -188,7 +186,6 @@ def test_get_traces():
     assert isinstance(traces1, AtlanTracesAdapter)
 
 
-@pytest.mark.asyncio
 async def test_cleanup_old_records():
     """Test cleanup of old records."""
     with create_traces_adapter() as traces_adapter:
@@ -213,70 +210,35 @@ async def test_cleanup_old_records():
         assert True
 
 
-class TestPython314EventLoopCompat:
-    """Tests for Python 3.14 compatibility where asyncio.get_event_loop()
-    raises RuntimeError when no current event loop exists."""
+class TestPeriodicFlushStartsOnSharedLoop:
+    """FND-4648: the traces flush starts on the one observability loop,
+    whether or not a loop is running where the adapter is built. It used to
+    be a task on the running loop, or else an ``asyncio.run`` thread."""
 
-    def test_flush_task_starts_via_thread_when_no_event_loop(self):
-        """When no running event loop exists (Python 3.14 behavior),
-        the adapter should fall back to starting the flush in a daemon thread."""
+    @staticmethod
+    def _construct() -> None:
         AtlanTracesAdapter._flush_task_started = False
-        with mock.patch.dict(
-            "os.environ",
-            {
-                "ENABLE_OTLP_TRACES": "true",
-                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
-            },
+        with (
+            mock.patch.dict(
+                "os.environ",
+                {
+                    "ENABLE_OTLP_TRACES": "true",
+                    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
+                },
+            ),
+            mock.patch(
+                "application_sdk.observability.observability.observability_loop"
+            ) as shared_loop,
         ):
-            with (
-                private_stdlib(
-                    "application_sdk.observability.traces_adaptor", "asyncio"
-                ) as local_asyncio,
-                mock.patch.object(
-                    local_asyncio,
-                    "get_running_loop",
-                    side_effect=RuntimeError("no running event loop"),
-                ),
-            ):
-                with mock.patch(
-                    "application_sdk.observability.traces_adaptor.threading.Thread"
-                ) as mock_thread:
-                    mock_thread_instance = mock.MagicMock()
-                    mock_thread.return_value = mock_thread_instance
+            _ = AtlanTracesAdapter()
+        shared_loop.start.assert_called_once()
+        shared_loop.start.call_args.args[0].close()
+        assert AtlanTracesAdapter._flush_task_started is True
 
-                    _ = AtlanTracesAdapter()
+    def test_without_a_running_loop(self):
+        self._construct()
 
-                    mock_thread.assert_called_once()
-                    _, kwargs = mock_thread.call_args
-                    assert kwargs.get("daemon") is True
-                    mock_thread_instance.start.assert_called_once()
-
-    def test_flush_task_uses_running_loop_when_available(self):
-        """When a running event loop exists, the adapter should create
-        a task on it instead of spawning a thread."""
-        AtlanTracesAdapter._flush_task_started = False
-        mock_loop = mock.MagicMock()
-        with mock.patch.dict(
-            "os.environ",
-            {
-                "ENABLE_OTLP_TRACES": "true",
-                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
-            },
-        ):
-            with (
-                private_stdlib(
-                    "application_sdk.observability.traces_adaptor", "asyncio"
-                ) as local_asyncio,
-                mock.patch.object(
-                    local_asyncio,
-                    "get_running_loop",
-                    return_value=mock_loop,
-                ),
-            ):
-                with mock.patch(
-                    "application_sdk.observability.traces_adaptor.threading.Thread"
-                ) as mock_thread:
-                    _ = AtlanTracesAdapter()
-
-                    mock_loop.create_task.assert_called_once()
-                    mock_thread.assert_not_called()
+    async def test_with_a_running_loop_no_task_lands_on_it(self):
+        before = asyncio.all_tasks()
+        self._construct()
+        assert asyncio.all_tasks() == before

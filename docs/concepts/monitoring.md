@@ -778,6 +778,12 @@ ATLAN_LOG_FLUSH_INTERVAL_SECONDS=10
 
 See [Configuration](../configuration.md#logging) for all observability variables.
 
+### The background flush loop
+
+Every periodic flush (logs, metrics, traces, sizing) and the Segment sender run on one daemon thread, `atlan-observability-loop`, with one event loop. It starts on first use, not at import. At interpreter exit it stops everything within one bound, `ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS` (default 10): each periodic flush makes its final flush, then the Segment sender sends its last batch, and a batch flush already writing is waited for, not cancelled. A process forked after the loop started gets its own loop, with every sink's periodic flush restarted on it. Past the bound the rest is abandoned and the process exits.
+
+The console writer stays a separate thread on purpose. It does blocking writes to stdout and stderr, and on the shared loop a stalled pipe would stall every flush.
+
 ### Flushing under failure
 
 A full batch is written by a background flush task. At most four run per signal at once; while an object-store outage holds them, new records wait in the buffer and the next flush takes them. Shutdown (`AtlanObservability.flush_all()`) waits for in-flight flushes before writing what is left, so the last records before a worker drains are not lost. A failed periodic flush is logged and retried on the next interval.

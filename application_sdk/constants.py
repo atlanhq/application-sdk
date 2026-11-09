@@ -991,6 +991,14 @@ SIZING_CLEANUP_ENABLED = (
 SIZING_FILE_NAME = os.environ.get("ATLAN_SIZING_FILE_NAME", "sizing.parquet")
 TRACES_FILE_NAME = os.environ.get("ATLAN_TRACES_FILE_NAME", "traces.parquet")
 
+#: Upper bound, in seconds, on stopping the shared observability background
+#: loop at process exit: the final flush of every periodic sink (logs,
+#: metrics, traces, sizing) and the Segment worker's last batch, together.
+#: See ``application_sdk.observability.background_loop``.
+OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS = float(
+    os.environ.get("ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS", "10")
+)
+
 # Segment Configuration
 #: Segment API URL for sending events. Defaults to https://api.segment.io/v1/batch
 SEGMENT_API_URL = os.getenv("ATLAN_SEGMENT_API_URL", "https://api.segment.io/v1/batch")
