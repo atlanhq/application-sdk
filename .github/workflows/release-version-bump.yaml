@@ -53,11 +53,11 @@ on:
         default: false
     secrets:
       ORG_PAT_GITHUB:
-        required: true
-        description: "Org PAT for git push and gh pr create"
+        required: false
+        description: "Formerly the fallback token for git push and gh pr create. Unused since FND-4652, when the fleet App token stopped falling back to it: the mint fails the job instead. Declared optional so a caller that still passes it explicitly keeps parsing."
       FLEET_APP_ID:
         required: false
-        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting. Effectively required: the 'Mint fleet App token' step fails the job without it (FND-4652); declared optional only so an omitting caller gets a red step rather than a startup_failure."
       FLEET_APP_PRIVATE_KEY:
         required: false
         description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
@@ -99,7 +99,6 @@ jobs:
         # self-approval regardless of author identity), so only the re-fire
         # property matters here, not a specific bypass-actor identity.
         id: app-token
-        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -111,7 +110,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
 
       # Recorded before anything else runs: the publish job rebuilds the bump on
       # exactly this commit, and leases its push on the bump branch's tip as
@@ -262,7 +261,7 @@ jobs:
       - name: Generate changelog
         if: steps.bump.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         # `auto` (FND-3748): full notes — every type but `ci` — only once this
         # repo's shims gate bump-PR CI on `gate-check`; until its resync lands,
@@ -301,7 +300,7 @@ jobs:
       - name: Reset the bump PR's CI opt-in
         if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false' && hashFiles('.sdk-scripts/.github/scripts/bump_pr_opt_in.py') != ''
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           TARGET_BRANCH: ${{ inputs.target_branch }}
         run: |
           python3 .sdk-scripts/.github/scripts/bump_pr_opt_in.py clear \
@@ -361,7 +360,6 @@ jobs:
     steps:
       - name: Mint fleet App token
         id: app-token
-        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -373,7 +371,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.bump-version.outputs.base_sha }}
-          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Checkout SDK helper scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -443,7 +441,7 @@ jobs:
       # because the version they are built from is the one the branch carries.
       - name: Open or sync bump PR
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           TARGET_BRANCH: ${{ inputs.target_branch }}
           RELEASE_LABEL: ${{ inputs.release_label }}
           CURRENT_VERSION: ${{ needs.bump-version.outputs.current }}

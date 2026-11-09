@@ -107,7 +107,6 @@ jobs:
         # Release created below re-fires harbor-release.yaml's
         # `on: release: [published]` trigger.
         id: app-token
-        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -118,7 +117,7 @@ jobs:
       - name: Delete existing GitHub Release (if any)
         run: gh release delete "v${{ env.VERSION }}" --yes 2>/dev/null || true
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Create GitHub Release
         id: create_release
@@ -129,7 +128,7 @@ jobs:
           body_path: .github/release_notes.md
           draft: false
           prerelease: ${{ contains(env.VERSION, 'rc') }}
-          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
 
   fan-out:
     # After an SDK release, trigger the self-hosted Renovate runner so consumers
@@ -176,10 +175,11 @@ jobs:
 
       # Minted after the wait so the one-hour token covers the follow-up.
       # Owner-scoped (no `repositories:`): the follow-up reads fleet repos'
-      # uv.lock and rules as well as dispatching here.
+      # uv.lock and rules as well as dispatching here. Not soft-fail: a mint
+      # failure reds this job (the release itself is already out) instead of
+      # running the sweep on ORG_PAT_GITHUB (FND-4652).
       - name: Mint fleet App token
         id: app-token
-        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -191,7 +191,7 @@ jobs:
         # throughout (the script warns and exits 0) so a fan-out hiccup never
         # fails the release — the 4-hourly schedule is the backstop.
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PACKAGES: ${{ steps.pypi.outputs.packages }}
         run: python3 .github/scripts/renovate_release_followup.py --packages "$PACKAGES"
 

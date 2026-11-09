@@ -907,6 +907,50 @@ Used by `tests-reusable.yaml` (unit, integration, e2e), `checks-reusable.yaml`,
 in `build-and-publish-app.yaml` (see `docs/standards/app-certification.md`).
 `test_private_git_deps_wiring.py` pins the shape (FND-4740).
 
+## A fleet App token that fails to mint fails the job
+
+**Rule:** a `Mint fleet App token` step has no `continue-on-error`, and its
+token is never combined with `ORG_PAT_GITHUB` (no
+`steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB`, in either order).
+
+```yaml
+# WRONG — a broken App credential silently runs on the org-admin PAT
+- name: Mint fleet App token
+  id: app-token
+  continue-on-error: true
+  uses: actions/create-github-app-token@<sha> # v3
+- uses: actions/checkout@<sha>
+  with:
+    token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+
+# RIGHT — the mint step goes red and names the problem
+- name: Mint fleet App token
+  id: app-token
+  uses: actions/create-github-app-token@<sha> # v3
+- uses: actions/checkout@<sha>
+  with:
+    token: ${{ steps.app-token.outputs.token }}
+```
+
+The fallback hid every App credential failure behind the broader credential,
+so nothing ever went red, and the PAT could not be revoked because no one could
+tell which runs still depended on it (FND-4652). A caller without
+`FLEET_APP_ID` / `FLEET_APP_PRIVATE_KEY` now fails at the mint step; the fix is
+`secrets: inherit`. The reusables still declare both secrets
+`required: false`, so an omitting caller gets that red step rather than a
+`startup_failure` with no check run.
+
+A job that also runs on fork or Dependabot PRs, which get no Actions secrets,
+skips the mint for both (`head.repo.fork != true` and
+`user.login != 'dependabot[bot]'`) and hands the consumer `github.token` on
+those runs (see `sdk-tests-reusable.yaml`). Never the PAT.
+
+Out of scope: GHCR login and push still use `ORG_PAT_GITHUB`, because fleet
+packages are org-level and the App only has repo-level Packages permission.
+The scoped `git-deps-token` / `image-git-token` mints stay `continue-on-error`:
+they have no PAT fallback, and the install or build that needs the token fails
+when it is empty. `test_app_token_fails_closed.py` pins all of this.
+
 ## Renovate release freeze
 
 Renovate PRs do not merge into application-sdk `main` while a release train is in

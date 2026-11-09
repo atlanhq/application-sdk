@@ -753,7 +753,6 @@ jobs:
     steps:
       - name: Mint fleet App token
         id: app-token
-        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -770,7 +769,7 @@ jobs:
             .security
             .github/scripts
           path: _sdk
-          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
 
       # Both attempts stay continue-on-error: this job is the required check, so
       # a raw `Unable to download artifact(s)` here would be the whole story a
