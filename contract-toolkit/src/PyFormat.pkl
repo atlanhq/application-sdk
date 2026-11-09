@@ -231,7 +231,7 @@ const local function assignment(indent: String, target: String, value: String): 
   else List(indent + target + " = " + value)
 
 /// One physical line, wrapped if it is longer than `lineLength`.
-function wrapLine(line: String): List<String> =
+const function wrapLine(line: String): List<String> =
   if (fits(line)) List(line)
   else
     let (body = line.trimStart())
@@ -344,7 +344,7 @@ const local function quoteStep(st: QuoteState, c: String): QuoteState =
 
 /// `line` with every single-line string literal quoted as ruff would. A line
 /// with a `"""` string, a comment, or an unterminated string is left alone.
-function normalizeQuotes(line: String): String =
+const function normalizeQuotes(line: String): String =
   if (!line.contains("\"") || line.contains("\"\"\"") || line.trimStart().startsWith("#")) line
   else
     let (st = line.chars.fold(new QuoteState { text = ""; quote = null; body = ""; escaped = false }, (st, c) -> quoteStep(st, c)))
