@@ -518,6 +518,52 @@ class TestAddRecordFlushTasks:
         assert len(sink) == 200
         assert not obs_instance._flush_tasks
 
+    async def test_flush_all_yields_when_a_finished_flush_is_still_tracked(
+        self, obs_instance
+    ):
+        """``flush_all`` returns when a flush task has finished but its
+        ``_discard_flush_task`` callback has not run yet (ARUN-1391).
+
+        That callback is queued with ``call_soon``, so it only runs when the
+        loop turns. ``gather`` over finished tasks completes without yielding
+        (Python 3.12+), so ``_await_flush_tasks`` used to re-check the same
+        finished task forever, never letting the loop run the callback. The
+        forwarder's main thread was pinned at a full core and ignored SIGTERM.
+        The pass counter turns that hang into a failure.
+        """
+        max_passes = 50
+
+        class _PassCountingSet(set):
+            passes = 0
+
+            def __iter__(self):
+                type(self).passes += 1
+                if type(self).passes > max_passes:
+                    raise RuntimeError("_await_flush_tasks never yielded")
+                return super().__iter__()
+
+        obs_instance._flush_tasks = _PassCountingSet()
+
+        async def _finished_flush() -> None:
+            return None
+
+        task = asyncio.get_running_loop().create_task(_finished_flush())
+        obs_instance._flush_tasks.add(task)
+        task.add_done_callback(obs_instance._discard_flush_task)
+        # The task runs and finishes in this turn of the loop; its discard
+        # callback is queued behind this coroutine's resumption.
+        await asyncio.sleep(0)
+        assert task.done()
+        assert task in obs_instance._flush_tasks  # __contains__: not a pass
+
+        with mock.patch.object(obs_module.logging, "error") as log_error:
+            await AtlanObservability.flush_all()
+
+        log_error.assert_not_called()
+        assert _PassCountingSet.passes <= 2
+        await asyncio.sleep(0)  # the discard callback runs once the loop turns
+        assert not obs_instance._flush_tasks
+
 
 class TestPeriodicFlushSurvivesErrors:
     async def test_failed_flush_does_not_stop_periodic_flushing(self, obs_instance):

@@ -239,11 +239,24 @@ class AtlanObservability(Generic[T], ABC):
 
         Tasks bound to another loop cannot be awaited from here; that loop's
         own shutdown path flushes them.
+
+        Only tasks that are not done yet are waited on. A finished task stays in
+        ``_flush_tasks`` until its ``_discard_flush_task`` callback runs, and
+        that callback only runs once the loop turns. ``gather`` over finished
+        tasks completes without yielding to the loop (Python 3.12+), so waiting
+        on one would re-check forever, never letting the callback run, with the
+        loop stalled and a core pinned (ARUN-1391). A task that is not done
+        cannot finish without the loop turning, so every pass of this loop
+        yields to it.
         """
         loop = asyncio.get_running_loop()
         while True:
             with self._buffer_lock:
-                pending = [t for t in self._flush_tasks if t.get_loop() is loop]
+                pending = [
+                    t
+                    for t in self._flush_tasks
+                    if t.get_loop() is loop and not t.done()
+                ]
             if not pending:
                 return
             # ``_flush_records`` handles its own errors; gather only so one
