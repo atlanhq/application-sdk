@@ -243,7 +243,7 @@ class MyApiClient(BaseClient):
 
 ## Redis Client (`redis.py`)
 
-`RedisClient` and `RedisClientAsync` are distributed-lock helpers — they implement a low-level acquire/release lock protocol via Redis. The internal lock primitives (`_acquire_lock`, `_release_lock`) are exposed by the higher-level `CapacityPool` abstraction, which is the recommended interface for managing concurrency slots across pods. See [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool).
+`RedisClient` and `RedisClientAsync` are distributed-lock helpers — they implement a low-level acquire/release lock protocol via Redis, and back the SDK's task lock activities (`execution/_temporal/lock_activities.py`). They are unrelated to the deprecated `CapacityPool` (see [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool-deprecated)).
 
 Requires the `[distributed_lock]` extra: `uv add 'atlan-application-sdk[distributed_lock]'`.
 

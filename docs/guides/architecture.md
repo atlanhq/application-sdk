@@ -115,13 +115,13 @@ All infrastructure is accessed through Protocol-based interfaces, not concrete i
 | `ObjectStore`¹ | `upload_file`, `download_file`, `put_json`, `delete`, `list_keys` | `obstore`-backed | `create_local_store(tmp_path)` (no mock class needed) |
 | `Binding` | `invoke` | `DaprBinding` | `MockBinding` |
 | `PubSub` | `publish`, `subscribe` | `DaprPubSub` | `MockPubSub` |
-| `CapacityPool` | `acquire`, `release`, `renew` | Redis-backed | `LocalCapacityPool` |
+| `CapacityPool` (deprecated, removal v4.0.0) | `acquire`, `release`, `renew` | — (never wired) | `LocalCapacityPool` |
 
 `InfrastructureContext` (a frozen dataclass) holds the four services that every handler and worker needs: `state_store`, `secret_store`, `storage` (ObjectStore), and `event_binding` (Binding). It is stored in a module-level singleton, set once at startup via `application_sdk.main`, and accessed anywhere via `get_infrastructure()`. A module-level variable is used rather than a `ContextVar` because uvicorn HTTP request handlers run in isolated `contextvars.Context` instances and would silently receive `None` if the value were stored in a `ContextVar`.
 
 ¹ `ObjectStore` is the `obstore` library type (not an SDK-defined Protocol). It is held by `InfrastructureContext.storage` and the SDK exposes it through module-level functions in `application_sdk.storage` — `upload_file`, `download_file`, `put_json`, `delete`, `exists`, `list_keys`, `delete_prefix` — rather than direct method calls on the store object. For tests, `create_local_store(tmp_path)` or `create_memory_store()` — no Dapr sidecar required.
 
-`PubSub` and `CapacityPool` are accessed directly from `application_sdk.infrastructure` — they are not fields on `InfrastructureContext`.
+`PubSub` and the deprecated `CapacityPool` are accessed directly from `application_sdk.infrastructure` — they are not fields on `InfrastructureContext`.
 
 This means **unit tests never need a Dapr sidecar or Temporal server** — inject `MockStateStore`, `MockSecretStore`, etc. from `application_sdk.testing.mocks` and run pure Python. See [ADR-0005](../adr/0005-infrastructure-abstraction.md).
 
@@ -226,7 +226,7 @@ python -m application_sdk.main --mode worker
 python -m application_sdk.main --mode combined
 ```
 
-Key chart features: KEDA `ScaledObject` (worker scales to zero on empty queue), `imagePullSecret` for GHCR, configurable resource limits, Temporal TLS and auth, Redis-backed capacity pool, Dapr component mounts.
+Key chart features: KEDA `ScaledObject` (worker scales to zero on empty queue), `imagePullSecret` for GHCR, configurable resource limits, Temporal TLS and auth, Dapr component mounts.
 
 ---
 
@@ -272,7 +272,7 @@ application_sdk/
 │
 ├── infrastructure/         # Infrastructure protocols and implementations
 │   ├── bindings.py         # Binding Protocol + implementations
-│   ├── capacity.py         # CapacityPool Protocol + get_capacity_pool()
+│   ├── capacity.py         # CapacityPool Protocol + get_capacity_pool() (deprecated)
 │   ├── context.py          # InfrastructureContext, get_infrastructure()
 │   ├── credential_vault.py # Credential vault helpers
 │   ├── pubsub.py           # PubSub Protocol + implementations
