@@ -1577,7 +1577,6 @@ class TestPeriodicFlushStartsOnSharedLoop:
     def test_without_a_running_loop(self):
         self._construct("test_flush_no_loop")
 
-    @pytest.mark.asyncio
     async def test_with_a_running_loop_no_task_lands_on_it(self):
         before = asyncio.all_tasks()
         self._construct("test_flush_in_loop")

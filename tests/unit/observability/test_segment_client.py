@@ -190,7 +190,11 @@ class TestEnabledConstruction:
             client = SegmentClient(write_key="fake-key")
         shared_loop.start.assert_called_once()
         coro = shared_loop.start.call_args.args[0]
-        assert shared_loop.start.call_args.kwargs == {"name": "segment-worker"}
+        # Stopped after the periodic flushes, whose metrics drain uses it.
+        assert shared_loop.start.call_args.kwargs == {
+            "name": "segment-worker",
+            "stop_order": 1,
+        }
         coro.close()
         handle = shared_loop.start.return_value
         assert client._worker is handle
@@ -930,7 +934,7 @@ class TestWorkerStartAndClose:
 
         client._start_lock = _ArrivalLock()  # type: ignore[assignment]
 
-        def _fake_start(coro, *, name):
+        def _fake_start(coro, *, name, stop_order):
             coro.close()
             gate.wait(10.0)
             started.append(1)

@@ -15,6 +15,7 @@ from application_sdk.constants import (
     OTEL_EXPORTER_TIMEOUT_SECONDS,
     SERVICE_NAME,
 )
+from application_sdk.observability.background_loop import BackgroundTask
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.models import TraceRecord
 from application_sdk.observability.observability import (
@@ -56,11 +57,19 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
     """
 
     _flush_task_started: ClassVar[bool] = False
+    # Kept so ``_reset_for_testing`` can stop the flush: otherwise the next
+    # construction starts a second one beside it on the shared loop.
+    _flush_task: ClassVar[BackgroundTask | None] = None
 
     @classmethod
     def _reset_for_testing(cls) -> None:
         """Reset initialization state for test isolation."""
+        task = cls._flush_task
+        cls._flush_task = None
         cls._flush_task_started = False
+        if task is not None:
+            task.cancel()
+            task.wait(timeout=5)
 
     def __init__(self):
         """Initialize the traces adapter with configuration and setup.
@@ -86,7 +95,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         # Start periodic flush task if not already started
         if not AtlanTracesAdapter._flush_task_started:
             try:
-                self._start_periodic_flush()
+                AtlanTracesAdapter._flush_task = self._start_periodic_flush()
                 AtlanTracesAdapter._flush_task_started = True
             except Exception:
                 # BLDX-1189: switched from root `logging.error` to the SDK

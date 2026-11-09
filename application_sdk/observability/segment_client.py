@@ -2,6 +2,7 @@ import asyncio
 import base64
 import logging
 import threading
+import weakref
 from collections import deque
 from datetime import datetime
 from typing import Any
@@ -19,6 +20,7 @@ from application_sdk.constants import (
 from application_sdk.observability.background_loop import (
     BackgroundTask,
     observability_loop,
+    register_after_fork,
 )
 from application_sdk.observability.models import MetricRecord
 from application_sdk.observability.utils import in_temporal_workflow
@@ -184,6 +186,7 @@ class SegmentClient:
             )
             return
 
+        _live_clients.add(self)
         # Start the queue worker on the shared observability loop
         self._start_worker()
 
@@ -192,6 +195,22 @@ class SegmentClient:
             self._batch_size,
             self._batch_timeout_seconds,
         )
+
+    def _reset_after_fork(self) -> None:
+        """In a forked child, drop the worker that ran on the parent's loop.
+
+        The next ``send_metric`` starts a worker on the child's loop. Locks
+        are replaced because a parent thread may have held one at the fork;
+        events handed off to the parent's loop are dropped with it.
+        """
+        self._start_lock = threading.Lock()
+        self._ingress_lock = threading.Lock()
+        self._ingress.clear()
+        self._drain_scheduled = False
+        self._worker = None
+        self._loop = None
+        self._queue = None
+        self._client = None
 
     @property
     def dropped_count(self) -> int:
@@ -232,8 +251,13 @@ class SegmentClient:
                     keepalive_expiry=30.0,
                 ),
             )
+            # Stopped in a later stage than the periodic flushes: the metrics
+            # final flush drains this queue through this HTTP client, which
+            # the worker closes as it exits.
             worker = observability_loop.start(
-                self._run_worker(queue, client), name="segment-worker"
+                self._run_worker(queue, client),
+                name="segment-worker",
+                stop_order=1,
             )
             if worker is None:
                 # The observability loop has shut down: nothing can send.
@@ -628,3 +652,15 @@ class SegmentClient:
         # Check for explicit send_to_segment label
         send_to_segment = metric_record.labels.get("send_to_segment", "").lower()
         return send_to_segment == "true"
+
+
+# Enabled clients, so a forked child can drop each one's parent-loop worker.
+_live_clients: "weakref.WeakSet[SegmentClient]" = weakref.WeakSet()
+
+
+def _reset_clients_after_fork() -> None:
+    for client in list(_live_clients):
+        client._reset_after_fork()
+
+
+register_after_fork(_reset_clients_after_fork)

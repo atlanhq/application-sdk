@@ -32,6 +32,7 @@ from application_sdk.constants import (
 from application_sdk.observability.background_loop import (
     BackgroundTask,
     observability_loop,
+    register_after_fork,
 )
 from application_sdk.observability.utils import in_temporal_workflow
 
@@ -207,6 +208,9 @@ class AtlanObservability(Generic[T], ABC):
         # number can be capped. Guarded by ``_buffer_lock``: ``add_record`` runs
         # on any thread that has a running loop.
         self._flush_tasks: set[asyncio.Task[None]] = set()
+        # This sink's periodic flush on the shared observability loop, if it
+        # started one; a forked child restarts it on its own loop.
+        self._periodic_flush_task: BackgroundTask | None = None
 
         # Ensure data directory exists
         os.makedirs(data_dir, exist_ok=True)
@@ -452,10 +456,34 @@ class AtlanObservability(Generic[T], ABC):
         Returns the task's handle, or ``None`` when the loop has already shut
         down.
         """
-        return observability_loop.start(
+        handle = observability_loop.start(
             self._periodic_flush(),
             name=f"observability-{self._get_signal_type()}-flush",
         )
+        self._periodic_flush_task = handle
+        return handle
+
+    @classmethod
+    def _restart_periodic_flushes_after_fork(cls) -> None:
+        """In a forked child, restart each sink's periodic flush on the child's loop.
+
+        The child inherits the sinks and their "flush started" guards, but not
+        the thread that ran the flushes, so without this nothing in the child
+        would flush. The buffer lock is replaced first: a parent thread may
+        have held it at the moment of the fork.
+        """
+        for instance in list(cls._instances):
+            instance._buffer_lock = threading.Lock()
+            instance._flush_tasks = set()
+            old = instance._periodic_flush_task
+            if old is None:
+                continue
+            new = instance._start_periodic_flush()
+            # Logs, metrics, traces and sizing keep a class-level handle to
+            # stop the flush with; point it at the child's task.
+            owner = type(instance)
+            if getattr(owner, "_flush_task", None) is old:
+                owner._flush_task = new  # type: ignore[attr-defined]  # — set only on classes that declare it
 
     async def _periodic_flush(self):
         """Periodically flush the buffer to storage.
@@ -826,3 +854,8 @@ class AtlanObservability(Generic[T], ABC):
 
         except Exception:
             logging.error("Error adding record", exc_info=True)
+
+
+register_after_fork(
+    AtlanObservability._restart_periodic_flushes_after_fork, restarts_work=True
+)

@@ -290,8 +290,15 @@ Segment sender runs there as a task. One `atexit` shutdown, bounded by
 started task once (its `CancelledError` handler makes the final flush or sends
 the last batch), awaits any other task on the loop without cancelling it
 (cancelling a batch flush deletes its half-written file), then stops the loop.
-A cancel that arrives before a task's first step is deferred until the task
-has started, so its final flush still runs.
+Tasks stop in stages: the periodic flushes first, then the Segment worker, so
+the metrics final flush drains the Segment queue through an HTTP client that
+is still open. A cancel that arrives before a task's first step is deferred
+until the task has started, so its final flush still runs.
+
+After `fork()`, the child replaces the loop's lock, forgets the parent's
+loop, drops each Segment client's worker, and restarts every sink's periodic
+flush on its own loop. Without that, the child inherits the "flush started"
+guards but not the thread, and nothing in it would flush.
 
 Two pieces of background work stay off the loop on purpose. The console writer
 is a plain thread because its job is a blocking `write()` to stdout; on the

@@ -45,6 +45,17 @@ class TestResetForTesting:
         AtlanTracesAdapter._reset_for_testing()
         assert AtlanTracesAdapter._flush_task_started is False
 
+    def test_reset_for_testing_stops_the_running_flush(self) -> None:
+        """A reset stops the old flush, so the next construction does not
+        leave two running side by side on the shared loop."""
+        task = mock.MagicMock()
+        AtlanTracesAdapter._flush_task = task
+        AtlanTracesAdapter._flush_task_started = True
+        AtlanTracesAdapter._reset_for_testing()
+        task.cancel.assert_called_once_with()
+        task.wait.assert_called_once_with(timeout=5)
+        assert AtlanTracesAdapter._flush_task is None
+
 
 # ---------------------------------------------------------------------------
 # _setup_otel_traces success path

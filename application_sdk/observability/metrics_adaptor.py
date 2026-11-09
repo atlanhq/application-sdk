@@ -19,6 +19,7 @@ from application_sdk.constants import (
     SEGMENT_WRITE_KEY,
     SERVICE_NAME,
 )
+from application_sdk.observability.background_loop import BackgroundTask
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.models import MetricRecord, MetricType
 from application_sdk.observability.observability import AtlanObservability
@@ -49,12 +50,20 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     """
 
     _flush_task_started: ClassVar[bool] = False
+    # Kept so ``_reset_for_testing`` can stop the flush: otherwise the next
+    # construction starts a second one beside it on the shared loop.
+    _flush_task: ClassVar[BackgroundTask | None] = None
     _otel_setup_failed_logged: ClassVar[bool] = False
 
     @classmethod
     def _reset_for_testing(cls) -> None:
         """Reset initialization state for test isolation."""
+        task = cls._flush_task
+        cls._flush_task = None
         cls._flush_task_started = False
+        if task is not None:
+            task.cancel()
+            task.wait(timeout=5)
         cls._otel_setup_failed_logged = False
 
     def __init__(self):
@@ -94,7 +103,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         # Start periodic flush task if not already started
         if not AtlanMetricsAdapter._flush_task_started:
             try:
-                self._start_periodic_flush()
+                AtlanMetricsAdapter._flush_task = self._start_periodic_flush()
                 AtlanMetricsAdapter._flush_task_started = True
             except Exception:
                 logging.error("Failed to start metrics flush task", exc_info=True)

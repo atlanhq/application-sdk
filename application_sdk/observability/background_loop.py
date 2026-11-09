@@ -14,13 +14,22 @@ which returns a :class:`BackgroundTask` handle. :meth:`ObservabilityLoop.shutdow
 runs once at interpreter exit (``atexit``) and stops everything within one
 bound, ``OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS``:
 
-1. every started task is cancelled once; the periodic flushes make their final
-   flush in their ``CancelledError`` handler, and the Segment worker sends its
-   last batch and closes its HTTP client;
+1. started tasks are cancelled once each, in ascending ``stop_order`` stages:
+   a stage is cancelled only after the one before it has finished. The
+   periodic flushes (stage 0) make their final flush in their
+   ``CancelledError`` handler, which for metrics drains the Segment queue;
+   the Segment worker (stage 1) then sends its last batch and closes the HTTP
+   client those drains used;
 2. every other task on the loop (a batch flush ``add_record`` started there) is
    awaited, never cancelled, because cancelling one deletes its half-written
    file and loses the batch;
 3. the loop stops and the thread is joined with what is left of the bound.
+
+After ``fork()`` the child gets a fresh lock and no loop; the next
+:meth:`ObservabilityLoop.start` starts the child's own thread. Callbacks
+registered with :func:`register_after_fork` (the sinks restart their
+periodic flushes, the Segment client drops its worker) run in the child
+after that reset.
 
 Two pieces of background work deliberately stay off this loop. The console
 writer (``console_sink``) is a plain thread because its whole job is a blocking
@@ -37,7 +46,7 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 from application_sdk.constants import OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS
@@ -53,9 +62,12 @@ class BackgroundTask:
     second cancel can never interrupt the final flush the first one started.
     """
 
-    def __init__(self, name: str, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(
+        self, name: str, loop: asyncio.AbstractEventLoop, stop_order: int = 0
+    ) -> None:
         self.name = name
         self.loop = loop
+        self.stop_order = stop_order
         self._task: asyncio.Task[Any] | None = None
         # Set by the task's first step. Until then a cancel is deferred: a task
         # cancelled before its first step never enters the coroutine, so its
@@ -187,13 +199,16 @@ class ObservabilityLoop:
             return None
 
     def start(
-        self, coro: Coroutine[Any, Any, Any], *, name: str
+        self, coro: Coroutine[Any, Any, Any], *, name: str, stop_order: int = 0
     ) -> BackgroundTask | None:
         """Run the long-lived *coro* on the loop until it ends or is cancelled.
 
         *coro* must handle ``asyncio.CancelledError`` as its signal to finish
         up (final flush, final batch): :meth:`shutdown` cancels it once and
-        waits for it within the shutdown bound.
+        waits for it within the shutdown bound. Tasks with a higher
+        *stop_order* are cancelled only after every lower one has finished,
+        so a task other tasks' final work depends on (the Segment worker and
+        its HTTP client) outlives them.
 
         Returns its handle, or ``None`` (and closes *coro*) when the loop has
         been shut down.
@@ -203,21 +218,21 @@ class ObservabilityLoop:
             if loop is None:
                 coro.close()
                 return None
-            handle = BackgroundTask(name, loop)
+            handle = BackgroundTask(name, loop, stop_order)
+
+            def _spawn() -> None:
+                handle._attach(loop.create_task(handle._run(coro), name=name))
+
+            # Scheduled under the lock: ``shutdown`` takes it to close, so its
+            # drain is always scheduled after this spawn and finds the task.
+            try:
+                loop.call_soon_threadsafe(_spawn)
+            except RuntimeError:
+                coro.close()
+                handle._done.set()
+                return None
             self._tasks = {t for t in self._tasks if not t.done()}
             self._tasks.add(handle)
-
-        def _spawn() -> None:
-            handle._attach(loop.create_task(handle._run(coro), name=name))
-
-        try:
-            loop.call_soon_threadsafe(_spawn)
-        except RuntimeError:
-            coro.close()
-            handle._done.set()
-            with self._lock:
-                self._tasks.discard(handle)
-            return None
         return handle
 
     def shutdown(self, timeout: float = OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS) -> bool:
@@ -257,6 +272,7 @@ class ObservabilityLoop:
                 "Observability background loop did not finish its final flushes "
                 "within %ss; abandoning the rest",
                 timeout,
+                exc_info=True,
             )
         # conformance: ignore[E004] shutdown path; a failed drain must not block exit
         except Exception:
@@ -269,6 +285,15 @@ class ObservabilityLoop:
         thread.join(max(0.0, deadline - time.monotonic()))
         return clean and not thread.is_alive()
 
+    def _reset_after_fork(self) -> None:
+        """Forget the parent's loop and thread in a forked child.
+
+        The lock is replaced too: another parent thread may have held it at
+        the moment of the fork, and the child would wait on it forever.
+        """
+        self._lock = threading.Lock()
+        self._init_state()
+
     def _reset_for_testing(self, timeout: float = 5.0) -> None:
         """Shut down (bounded by *timeout*) and allow a fresh start.
 
@@ -280,27 +305,67 @@ class ObservabilityLoop:
 
 
 async def _drain(tasks: list[BackgroundTask]) -> None:
-    """Cancel each started task once, then wait for every task on the loop.
+    """Cancel each started task once, stage by stage, then wait for the rest.
 
-    Runs on the loop. Tasks it did not start (a batch flush ``add_record``
-    began on this loop) are awaited, not cancelled. Re-checks until none are
-    left, since a final flush can log and so start another batch flush.
+    Runs on the loop. Started tasks are cancelled in ascending ``stop_order``;
+    each stage is awaited before the next is cancelled. Tasks it did not start
+    (a batch flush ``add_record`` began on this loop) are awaited, not
+    cancelled. Re-checks until none are left, since a final flush can log and
+    so start another batch flush.
     """
-    for handle in tasks:
-        handle._cancel_requested = True
-        handle._cancel_on_loop()
     current = asyncio.current_task()
+    for order in sorted({handle.stop_order for handle in tasks}):
+        stage = [handle for handle in tasks if handle.stop_order == order]
+        for handle in stage:
+            handle._cancel_requested = True
+            handle._cancel_on_loop()
+        await _await_all(
+            [h._task for h in stage if h._task is not None and h._task is not current]
+        )
     while True:
         pending = [t for t in asyncio.all_tasks() if t is not current]
         if not pending:
             return
-        results = await asyncio.gather(*pending, return_exceptions=True)
-        for result in results:
-            if isinstance(result, Exception):
-                logging.warning(
-                    "Observability background task failed at shutdown",
-                    exc_info=(type(result), result, result.__traceback__),
-                )
+        await _await_all(pending)
+
+
+async def _await_all(pending: list[asyncio.Task[Any]]) -> None:
+    """Wait for every task in *pending*, logging any that failed."""
+    results = await asyncio.gather(*pending, return_exceptions=True)
+    for result in results:
+        if isinstance(result, Exception):
+            logging.warning(
+                "Observability background task failed at shutdown",
+                exc_info=(type(result), result, result.__traceback__),
+            )
+
+
+_after_fork_resets: list[Callable[[], None]] = []
+_after_fork_restarts: list[Callable[[], None]] = []
+
+
+def register_after_fork(
+    callback: Callable[[], None], *, restarts_work: bool = False
+) -> None:
+    """Run *callback* in a forked child, after the observability loop's reset.
+
+    For state that belongs to the parent's loop: a sink's periodic flush, the
+    Segment worker. Callbacks that only drop inherited state run first, in
+    registration order; callbacks that start work on the child's loop
+    (*restarts_work*) run after all of them, so new work never meets state
+    still pointing at the parent's loop. Callbacks must not raise.
+    """
+    (_after_fork_restarts if restarts_work else _after_fork_resets).append(callback)
+
+
+def _after_fork_in_child() -> None:
+    observability_loop._reset_after_fork()
+    for callback in [*_after_fork_resets, *_after_fork_restarts]:
+        try:
+            callback()
+        # conformance: ignore[E004] fork hook; one failing callback must not stop the rest or the child
+        except Exception:
+            logging.warning("Observability after-fork callback failed", exc_info=True)
 
 
 #: The process-wide observability loop.
@@ -311,3 +376,7 @@ observability_loop = ObservabilityLoop()
 # handlers in reverse registration order, so handlers registered after this
 # import (none of the sinks need one any more) run before it.
 atexit.register(observability_loop.shutdown)
+
+# ``os.register_at_fork`` does not exist on Windows, which has no fork.
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_after_fork_in_child)

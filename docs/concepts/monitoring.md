@@ -780,7 +780,7 @@ See [Configuration](../configuration.md#logging) for all observability variables
 
 ### The background flush loop
 
-Every periodic flush (logs, metrics, traces, sizing) and the Segment sender run on one daemon thread, `atlan-observability-loop`, with one event loop. It starts on first use, not at import. At interpreter exit it stops everything within one bound, `ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS` (default 10): each periodic flush makes its final flush, the Segment sender sends its last batch, and a batch flush already writing is waited for, not cancelled. Past the bound the rest is abandoned and the process exits.
+Every periodic flush (logs, metrics, traces, sizing) and the Segment sender run on one daemon thread, `atlan-observability-loop`, with one event loop. It starts on first use, not at import. At interpreter exit it stops everything within one bound, `ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS` (default 10): each periodic flush makes its final flush, then the Segment sender sends its last batch, and a batch flush already writing is waited for, not cancelled. A process forked after the loop started gets its own loop, with every sink's periodic flush restarted on it. Past the bound the rest is abandoned and the process exits.
 
 The console writer stays a separate thread on purpose. It does blocking writes to stdout and stderr, and on the shared loop a stalled pipe would stall every flush.
 
