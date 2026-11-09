@@ -8,7 +8,10 @@ everything says @main this test is what keeps a tag or SHA from creeping back.
 
 It also fails on a self-reference to an action or workflow that does not exist
 in this tree, so deleting a reusable without updating its callers and usage
-examples is red here rather than on a consumer's next run.
+examples is red here rather than on a consumer's next run. It only sees
+callers in this tree: a reusable called by a retired bootstrap shim that
+lingers in consumer repos has no caller here, and
+test_reusable_retirement.py guards that case (FND-4654).
 """
 
 from __future__ import annotations

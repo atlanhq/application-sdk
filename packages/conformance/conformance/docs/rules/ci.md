@@ -78,18 +78,20 @@ workflow shims into `.github/workflows/`. This rule flags any managed file that 
 missing or whose content has diverged from what `bootstrap` would write, plus any
 *retired* shim still present — one `bootstrap` once installed fleet-wide and now
 deletes, which until it does keeps firing on every PR with nothing behind it. Re-run
-`bootstrap` to re-sync (the same bare re-run removes a retired file); structural drift
-is flagged while intentional per-repo value choices (e.g. `unit_tests_workflow_file`)
-are preserved. `conformance-upload-sarif.yaml` is opt-in, for public repos only: absent
-is clean, since a private repo cannot accept the upload without GitHub Advanced
-Security. A copy without the `bootstrap --sarif-upload true` marker is reported for
-removal, which a bare re-run does. The exceptions are `tests.yaml` and `renovate.json`,
-write-if-absent scaffolds a bare re-run never rewrites — pass `--resync` to pull their
-structure forward, which likewise preserves each file's recognized per-repo values
-(tests.yaml's app-name, app-image-name, enable-e2e, services-script,
-unit-coverage-fail-under, force-external-runtime, dataforge-hermetic-fallback,
-dataforge-lifecycle and any explicit `secrets:` mapping; renovate.json's auto-merge
-mode).
+`bootstrap` to re-sync (the same bare re-run removes a retired file). The fleet count of
+a retired shim's findings is also what allows application-sdk to delete the reusable
+that shim called: the reusable stays until the count reaches zero, or every remaining
+copy fails at startup. Structural drift is flagged while intentional per-repo value
+choices (e.g. `unit_tests_workflow_file`) are preserved. `conformance-upload-sarif.yaml`
+is opt-in, for public repos only: absent is clean, since a private repo cannot accept
+the upload without GitHub Advanced Security. A copy without the `bootstrap
+--sarif-upload true` marker is reported for removal, which a bare re-run does. The
+exceptions are `tests.yaml` and `renovate.json`, write-if-absent scaffolds a bare re-run
+never rewrites — pass `--resync` to pull their structure forward, which likewise
+preserves each file's recognized per-repo values (tests.yaml's app-name, app-image-name,
+enable-e2e, services-script, unit-coverage-fail-under, force-external-runtime,
+dataforge-hermetic-fallback, dataforge-lifecycle and any explicit `secrets:` mapping;
+renovate.json's auto-merge mode).
 
 A caveat `--resync` cannot express: the canonical template has no slot for per-repo
 *rationale*. Values survive, the comments explaining them do not. That matters where the
