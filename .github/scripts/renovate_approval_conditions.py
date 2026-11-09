@@ -596,7 +596,8 @@ def non_pin_only_workflows(files: list[ChangedFile]) -> list[Offender]:
 
     Why it exists (FND-1996): the ``.github/`` prefix allowlist marks anything
     under it dependency-only, and the fleet preset sets ``automerge`` +
-    ``platformAutomerge`` on the ``github-actions`` group. An arbitrary workflow
+    ``platformAutomerge`` on the ``github-actions`` group's minor, patch and
+    digest bumps (majors are human-merged since FND-4651). An arbitrary workflow
     diff from a Renovate identity would therefore collect the atlan-ci
     CODEOWNER approval and merge on green with no human. That is safe today only
     because no fleet identity holds ``workflows: write`` — a permission doing the

@@ -1154,6 +1154,48 @@ the fleet runner and cannot import the conformance package. A test in
 `.github/scripts/tests/` pins the two equal; without it, adding a reason to the
 writer alone would silently make the alarm stop firing.
 
+## Renovate release-age windows
+
+The org security baseline (§5) sets a 7-day release-age cooldown. Renovate
+holds third-party updates for 7 days or 3 days depending on the lane. The 3-day
+lanes are a deliberate exception to the baseline, recorded here (FND-4651).
+
+| Lane | Window | Where it is set |
+|---|---|---|
+| Third-party GitHub Actions, and the toolchains `actions/setup-*` and `astral-sh/setup-uv` install | 7 days | `renovate-config/default.json`, github-actions release-age rule |
+| The uv cache-key literal in `setup-deps` | 7 days | `renovate.json`, astral-sh/uv release-age rule |
+| Third-party PyPI (major, minor, patch) | 3 days | `renovate-config/default.json`, PyPI release-age rule |
+| Lock refresh (`lockFileMaintenance`), fleet | 3 days | `renovate-config/self-hosted.js`, `--window P3D` |
+| Lock refresh, application-sdk itself | 3 days | `.github/workflows/renovate-lock-cooldown.yaml`, `--window P3D` |
+| pkl toolchain | 3 days | `renovate.json`, pkl release-age rule |
+| pre-commit hooks | 3 days | `renovate.json`, pre-commit release-age rule |
+
+First-party packages (`atlan-application-sdk`, `-conformance`, `pyatlan`, the
+app-contract-toolkit, and `atlanhq/**` actions and reusable workflows) have no
+window. We publish them, and holding them would hold every SDK fix.
+
+**Why 3 days on the library and tool lanes.** The security team confirmed that
+the detection window they work to is 2 to 3 days. 3 is the conservative end. A
+longer hold adds no detection time, and it delays the fix in an upstream release
+that ships before its advisory, because that release looks like any other.
+
+**Why 7 days on GitHub Actions.** The exception does not extend to actions. An
+action runs inside a workflow that holds the org token, so a compromised release
+reaches a credential on its first run. A library reaches a test environment
+first. Action majors are also not auto-merged: a human reviews and merges the
+`renovate/major-github-actions` PR. Minor, patch and digest bumps still
+auto-merge once they are 7 days old.
+
+**What this record is not.** It is not a change to the org baseline. Security
+owns the baseline, and they need to amend it or acknowledge this exception
+there. Until then, `checks/dep-cooldown` (from the `atlan-security` App) keeps
+enforcing 7 days and reports adoptions aged 3 to 7 days. See
+[What `checks/dep-cooldown` still reports](#what-checksdep-cooldown-still-reports-and-why-that-is-not-a-bug-here).
+
+**Changing a window.** Change this table first, then every place it names.
+`.github/scripts/tests/test_renovate_release_age_policy.py` checks that the
+configs match the table's windows, and that action majors are not auto-merged.
+
 ## The release-age bound on application-sdk's own lock refresh
 
 `postUpgradeTasks` reaches every repo in the fleet except the one that publishes

@@ -91,6 +91,9 @@ def test_renovate_groups_the_key_bump_with_the_install_bump():
         for r in rules
         if "custom.regex" in r.get("matchManagers", [])
         and "astral-sh/uv" in r.get("matchDepNames", [])
+        # The release-age rule for the same dep (FND-4651) sets no group;
+        # test_renovate_release_age_policy.py checks the two halves age alike.
+        and "groupName" in r
     ]
     assert len(matches) == 1, matches
     rule = matches[0]

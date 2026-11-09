@@ -138,6 +138,8 @@ jobs:
         with:
           node-version: "26"
 
+      # P3D is the fleet's recorded exception to the org baseline's 7 days
+      # (docs/standards/ci.md, "Renovate release-age windows").
       # P3D matches the fleet. A shorter window here would put application-sdk's
       # CI on a different dependency set from the connectors again, which is half
       # of what FND-376 exists to fix.

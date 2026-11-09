@@ -70,7 +70,7 @@
       "commitMessageTopic": "the pinned pkl toolchain"
     },
     {
-      "description": "Hold pkl bumps for the fleet's 3-day release-age cooldown (FND-4356), the same window as the preset's third-party PyPI rule and renovate-lock-cooldown.yaml's --window P3D. The preset's rule matches only the pypi datasource, so without this the pkl lane had no hold. That let Renovate open application-sdk#4539 in the hour between apple/pkl pushing the 0.32.2 tag and publishing the release that carries the binaries, and every install-pkl download in its CI returned 404. The github-tags datasource gives each tag a releaseTimestamp: the annotated tag's tagger date, raised to the GitHub release's publishedAt when the release is later. So the 3 days run from when the binaries exist whenever the release is visible to Renovate, and the tag-before-assets race is closed either way. apple/pkl's tags are annotated and carry tagger dates, which matters because Renovate's default minimumReleaseAgeBehaviour (timestamp-required) silently suppresses an update with no timestamp. Positive matchUpdateTypes, the same shape as the preset rule, so no timestamp-less update type is caught. A separate rule from the review rule above, so that rule's automerge: false still covers every pkl update type.",
+      "description": "Hold pkl bumps for the fleet's 3-day release-age cooldown (FND-4356), the same window as the preset's third-party PyPI rule and renovate-lock-cooldown.yaml's --window P3D. The 3 days is a recorded exception to the org baseline's 7 (docs/standards/ci.md, 'Renovate release-age windows', FND-4651). The preset's rule matches only the pypi datasource, so without this the pkl lane had no hold. That let Renovate open application-sdk#4539 in the hour between apple/pkl pushing the 0.32.2 tag and publishing the release that carries the binaries, and every install-pkl download in its CI returned 404. The github-tags datasource gives each tag a releaseTimestamp: the annotated tag's tagger date, raised to the GitHub release's publishedAt when the release is later. So the 3 days run from when the binaries exist whenever the release is visible to Renovate, and the tag-before-assets race is closed either way. apple/pkl's tags are annotated and carry tagger dates, which matters because Renovate's default minimumReleaseAgeBehaviour (timestamp-required) silently suppresses an update with no timestamp. Positive matchUpdateTypes, the same shape as the preset rule, so no timestamp-less update type is caught. A separate rule from the review rule above, so that rule's automerge: false still covers every pkl update type.",
       "matchManagers": [
         "custom.regex"
       ],
@@ -120,6 +120,21 @@
       "platformAutomerge": true
     },
     {
+      "description": "The same 7-day release-age hold as the preset's github-actions rule (FND-4651), which covers astral-sh/setup-uv's `version:` input (dep astral-sh/uv, github-releases) but not this regex manager. Without it the two halves of one bump would age differently: the cache key would be proposed the day uv publishes, a week before the install it must match, and land alone in the github-actions PR, failing test_setup_deps_uv_cache_key.py. github-releases carries a published timestamp, so the default timestamp-required behaviour delays rather than suppresses. Positive matchUpdateTypes, the same shape as the preset's rules. Majors need no rule: the preset disables custom.regex majors outright.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDepNames": [
+        "astral-sh/uv"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
+      "minimumReleaseAge": "7 days"
+    },
+    {
       "description": "pyatlan floor lane (FND-4439): on every pyatlan release, raise the `pyatlan>=X` floor the SDK PUBLISHES (root pyproject.toml and packages/api's `pyatlan` extra) instead of only moving this repo's lock, so the next SDK release carries the new pyatlan to every app. Under the preset's default rangeStrategy an in-range release produces no PR at all and reaches only this repo's uv.lock through lockFileMaintenance, which apps never see. groupName splits pyatlan out of the preset's 'non-critical python dependencies' group so both manifests move in one PR on its own branch (renovate/pyatlan; a major lands on renovate/major-pyatlan via separateMajorMinor). packages/conformance does not declare pyatlan, so Renovate cannot touch its lock: .github/workflows/renovate-pyatlan-sync.yaml moves that lock to the root's pyatlan and regenerates relationship_directions.json on the minor/patch branch. No matchUpdateTypes: the rule applies to every update type, and the next rule takes majors back out of auto-merge (under rangeStrategy bump Renovate keeps updateType minor/patch and only adds `bump` as a second matchable type, so either shape would match; this one does not depend on that). semanticCommitType is restated so the commit type does not hinge on rule order against config:recommended's fix-for-deps preset. No minimumReleaseAge: pyatlan is Atlan-published and exempt from the cooldown (FND-378), and upstream exempts `bump` regardless. Mend cannot run postUpgradeTasks, which is why the regeneration is a workflow and not a task here.",
       "matchDatasources": [
         "pypi"
@@ -149,7 +164,7 @@
       "platformAutomerge": false
     },
     {
-      "description": "Release-age hold for pre-commit hook bumps (FND-4247): the fleet's 3-day cooldown, the same window as the preset's third-party PyPI rule and the pkl rule above. The preset's cooldown matches only the pypi datasource, so without this a hook tag would be proposed the hour it is pushed. github-tags gives each tag a releaseTimestamp (tagger date, or commit date for a lightweight tag), so the default timestamp-required behaviour delays rather than suppresses. Positive matchUpdateTypes, the same shape as the preset rule, so no timestamp-less update type is caught. Not auto-merged: a hook bump changes what CI enforces, and a linter release can fail files that passed yesterday, so a human reads the PR.",
+      "description": "Release-age hold for pre-commit hook bumps (FND-4247): the fleet's 3-day cooldown, the same window as the preset's third-party PyPI rule and the pkl rule above. The 3 days is a recorded exception to the org baseline's 7 (docs/standards/ci.md, 'Renovate release-age windows', FND-4651). The preset's cooldown matches only the pypi datasource, so without this a hook tag would be proposed the hour it is pushed. github-tags gives each tag a releaseTimestamp (tagger date, or commit date for a lightweight tag), so the default timestamp-required behaviour delays rather than suppresses. Positive matchUpdateTypes, the same shape as the preset rule, so no timestamp-less update type is caught. Not auto-merged: a hook bump changes what CI enforces, and a linter release can fail files that passed yesterday, so a human reads the PR.",
       "matchManagers": [
         "pre-commit"
       ],
