@@ -148,7 +148,8 @@ for free, with zero changes to its repo.
 | **v3 shape** | Warn-only — annotated, does not block. |
 
 Unit test pass/fail and contract drift are enforced: a failing run blocks
-publish. Coverage threshold and v3 shape remain warn-only during rollout —
+publish. Coverage threshold and v3 shape remain warn-only until their
+[exit plan](#exit-plan-for-the-warn-only-layers) flips them —
 every check runs and the verdict is annotated on the workflow summary, but
 only a test failure, a contract-drift failure, or an app install failure
 exits non-zero.
@@ -160,11 +161,23 @@ app with no `contract/app.pkl` skips the contract-drift check. An app whose
 dependencies fail to install does **not** skip: the checks it cannot run count
 as failed, so an app is never published uncertified.
 
-## Known rollout gaps (before enforcement)
+## Exit plan for the warn-only layers
 
-- **Coverage threshold fixed at 85%.** Before flipping to enforcing, verify
-  active connector repos meet this bar. Raise the enforcement question in
-  `#pod-app-distribution`.
+The two warn-only layers will become enforcing. Each has its own ticket, owner
+and target date. Neither flips until the fleet has been measured against it, so
+the flip does not block publishes on the day it lands.
+
+| Layer | Tracked in | Target | Before the flip |
+|-------|------------|--------|-----------------|
+| **Coverage threshold** | [FND-4784][fnd-4784] | 2026-12-18 | Measure every active app's coverage from its latest `certify` run and set the threshold from that data. Apps below it get a fix or a dated exception. |
+| **v3 shape** | [FND-4785][fnd-4785] | 2027-01-29 | Count active apps that fail v3 shape. Flip once the fleet is on v3. |
+
+If your app fails either layer today, the run summary already says so. Fixing
+it now means the flip is a no-op for you. Questions go to
+`#pod-app-distribution`.
+
+[fnd-4784]: https://linear.app/atlan-epd/issue/FND-4784
+[fnd-4785]: https://linear.app/atlan-epd/issue/FND-4785
 
 ## Relationship to the other layers
 
