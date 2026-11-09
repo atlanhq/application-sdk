@@ -240,7 +240,7 @@ Names emitted by the consolidated SDK surface (all use OTel base units
     the snake_case names in this table. Write new names in snake_case so the
     name in the code is the name you query. Never put a variable part — a
     function, table or format — in the name: make it a label
-    (`function_calls{function="..."}`, not `<function>_success`).
+    (`function_calls_total{function="..."}`, not `<function>_success_total`).
 
 | Metric | Type | Source |
 |---|---|---|

@@ -33,7 +33,6 @@ def test_construction_warns() -> None:
 
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
 class TestRedisCapacityPool:
-    @pytest.mark.asyncio
     async def test_acquire_passes_pool_keys_and_limits(self) -> None:
         client = _redis(3)
         pool = RedisCapacityPool(client, max_permits=5)
@@ -55,12 +54,10 @@ class TestRedisCapacityPool:
             "capacity:api:ttl:",
         )
 
-    @pytest.mark.asyncio
     async def test_acquire_returns_zero_when_exhausted(self) -> None:
         pool = RedisCapacityPool(_redis(0))
         assert await pool.acquire("api", 4, holder_id="w1") == 0
 
-    @pytest.mark.asyncio
     async def test_release_targets_holder_ttl_key(self) -> None:
         client = _redis(1)
         await RedisCapacityPool(client).release("api", "w1")
@@ -68,7 +65,6 @@ class TestRedisCapacityPool:
             _RELEASE_SCRIPT, 1, "capacity:api:holders", "w1", "capacity:api:ttl:w1"
         )
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(("result", "expected"), [(1, True), (0, False)])
     async def test_renew_reports_whether_holder_exists(
         self, result: int, expected: bool
