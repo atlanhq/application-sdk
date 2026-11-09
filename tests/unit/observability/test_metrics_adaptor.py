@@ -12,6 +12,7 @@ from application_sdk.observability.metrics_adaptor import (
     get_metrics,
 )
 from application_sdk.observability.models import MetricRecord, MetricType
+from application_sdk.observability.utils import get_metric_labels
 
 
 @pytest.fixture
@@ -167,9 +168,36 @@ def test_record_metric_with_various_inputs(
         else:
             assert buffered_metric["value"] == value
         assert buffered_metric["type"] == metric_type.value
-        assert buffered_metric["labels"] == labels
+        assert buffered_metric["labels"] == {**labels, **get_metric_labels()}
+        assert labels == {"test": "label"}
         assert buffered_metric["description"] == description
         assert buffered_metric["unit"] == unit
+
+
+def test_record_metric_does_not_mutate_caller_labels():
+    """Context labels are merged into a copy, never into the caller's dict."""
+    caller_labels: dict[str, str | int | float | bool] = {"format": "parquet"}
+    with (
+        create_metrics_adapter() as metrics_adapter,
+        mock.patch(
+            "application_sdk.observability.metrics_adaptor.get_metric_labels",
+            return_value={"workflow_type": "wf", "activity_type": "act"},
+        ),
+    ):
+        metrics_adapter.record_metric(
+            name="chunks_written",
+            value=1,
+            metric_type=MetricType.COUNTER,
+            labels=caller_labels,
+        )
+        buffered = metrics_adapter._buffer[0]
+
+    assert caller_labels == {"format": "parquet"}
+    assert buffered["labels"] == {
+        "format": "parquet",
+        "workflow_type": "wf",
+        "activity_type": "act",
+    }
 
 
 def test_init_starts_flusher_on_the_shared_loop():
