@@ -89,6 +89,12 @@ match the rest of the surface.
   artifacts merged into workflow output) and `EventInterceptor` (v3
   audit / dashboard event bus) are not observability and remain their
   own interceptors gated by their own settings.
+  `OutputInterceptor` carries each activity's metrics and artifacts back
+  to the workflow on the activity's own result (the `metrics` /
+  `artifacts` fields of `Output`, or a reserved `_atlan_outputs` key on a
+  dict result), not
+  through process memory, so they survive an activity running on another
+  replica or pool queue and a workflow replay on another worker.
 
 ### Pushgateway for short-lived workers
 

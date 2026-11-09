@@ -482,6 +482,13 @@ class Output(BaseModel):
         ``artifacts`` from any ``get_outputs().add_metric()`` /
         ``add_artifact()`` calls made during the workflow or its activities.
         Connector code never needs to set these fields directly.
+
+        On a task's output the two fields carry that task's own outputs back
+        to the workflow through Temporal history, so they arrive even when
+        the task runs in a different worker process. The interceptor
+        overwrites them with exactly what the task collected (``None`` when
+        it collected nothing): a task that returns an upstream output
+        unchanged does not report the upstream metrics a second time.
     """
 
     model_config = ConfigDict()

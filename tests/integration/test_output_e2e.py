@@ -13,6 +13,7 @@ import pytest
 from temporalio import activity, workflow
 from temporalio.worker import Worker
 
+from application_sdk.contracts.base import Output
 from application_sdk.execution._temporal.interceptors.outputs import OutputInterceptor
 from application_sdk.outputs import Artifact, Metric, get_outputs
 
@@ -61,6 +62,37 @@ async def count_batch_3(args: dict) -> dict:
     """Batch counting activity 3."""
     get_outputs().add_metric(Metric(name="rows-processed", value=500))
     return {}
+
+
+class CountOutput(Output):
+    """Typed task-style result, as a v3 ``@task`` returns."""
+
+    rows: int
+
+
+@activity.defn
+async def count_rows(args: dict) -> CountOutput:
+    """Typed activity that emits a metric and an artifact."""
+    get_outputs().add_metric(Metric(name="rows-counted", value=7))
+    get_outputs().add_artifact(Artifact(name="row-dump", path="s3://bucket/rows"))
+    return CountOutput(rows=7)
+
+
+@workflow.defn(sandboxed=False)
+class PoolQueueWorkflow:
+    """Dispatches its activity to another task queue, like a task with a pool."""
+
+    @workflow.run
+    async def run(self, pool_queue: str) -> dict:
+        result = await workflow.execute_activity(
+            count_rows,
+            {},
+            task_queue=pool_queue,
+            result_type=CountOutput,
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+        # Echo what crossed the worker boundary on the activity result.
+        return {"rows": result.rows, "carried": result.metrics}
 
 
 @workflow.defn(sandboxed=False)
@@ -126,7 +158,6 @@ class BatchCountWorkflow:
         return {"batch_count": 3}
 
 
-@pytest.mark.asyncio
 async def test_metrics_flow_through_interceptor(temporal_client, task_queue):
     """Test that metrics from activities are merged into workflow result."""
     async with Worker(
@@ -155,7 +186,6 @@ async def test_metrics_flow_through_interceptor(temporal_client, task_queue):
     assert result["artifacts"]["debug-log"] == "s3://bucket/debug.tgz"
 
 
-@pytest.mark.asyncio
 async def test_workflow_without_metrics_returns_unchanged(temporal_client, task_queue):
     """Test that workflows without metrics return their original result."""
     async with Worker(
@@ -177,7 +207,6 @@ async def test_workflow_without_metrics_returns_unchanged(temporal_client, task_
     assert "artifacts" not in result
 
 
-@pytest.mark.asyncio
 async def test_multiple_activities_same_metric_sums(temporal_client, task_queue):
     """Test that same-named numeric metrics from multiple activities sum correctly."""
     async with Worker(
@@ -191,6 +220,69 @@ async def test_multiple_activities_same_metric_sums(temporal_client, task_queue)
             BatchCountWorkflow.run,
             {},
             id=f"test-batch-workflow-{uuid4().hex[:8]}",
+            task_queue=task_queue,
+        )
+
+    assert result["batch_count"] == 3
+    assert result["metrics"]["rows-processed"] == 4000
+
+
+async def test_activity_on_another_worker_carries_outputs_to_workflow(
+    temporal_client, task_queue
+):
+    """An activity run by a different worker than its workflow still reports.
+
+    The outputs must travel on the activity result through Temporal history:
+    with more than one replica, or a task on its own pool queue, the activity
+    and the workflow do not share process memory.
+    """
+    pool_queue = f"{task_queue}-pool"
+    async with (
+        Worker(
+            temporal_client,
+            task_queue=task_queue,
+            workflows=[PoolQueueWorkflow],
+            interceptors=[OutputInterceptor()],
+        ),
+        Worker(
+            temporal_client,
+            task_queue=pool_queue,
+            activities=[count_rows],
+            interceptors=[OutputInterceptor()],
+        ),
+    ):
+        result = await temporal_client.execute_workflow(
+            PoolQueueWorkflow.run,
+            pool_queue,
+            id=f"test-pool-queue-workflow-{uuid4().hex[:8]}",
+            task_queue=task_queue,
+        )
+
+    assert result["rows"] == 7
+    assert result["carried"] == {"rows-counted": 7}
+    assert result["metrics"] == {"rows-counted": 7}
+    assert result["artifacts"] == {"row-dump": "s3://bucket/rows"}
+
+
+async def test_outputs_survive_workflow_cache_eviction(temporal_client, task_queue):
+    """Metrics survive the workflow being evicted and replayed between tasks.
+
+    ``max_cached_workflows=0`` evicts after every workflow task, so each
+    activity completion is applied to a fresh replay — the same thing a worker
+    restart or a move to another replica does mid-run.
+    """
+    async with Worker(
+        temporal_client,
+        task_queue=task_queue,
+        workflows=[BatchCountWorkflow],
+        activities=[count_batch_1, count_batch_2, count_batch_3],
+        interceptors=[OutputInterceptor()],
+        max_cached_workflows=0,
+    ):
+        result = await temporal_client.execute_workflow(
+            BatchCountWorkflow.run,
+            {},
+            id=f"test-evicted-batch-workflow-{uuid4().hex[:8]}",
             task_queue=task_queue,
         )
 
