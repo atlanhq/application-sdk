@@ -247,27 +247,33 @@ class AtlanObservability(Generic[T], ABC):
         on one would re-check forever, never letting the callback run, with the
         loop stalled and a core pinned (ARUN-1391). A task that is not done
         cannot finish without the loop turning, so every pass of this loop
-        yields to it.
+        yields to it. A finished task is removed here instead, and its failure,
+        if any, reported the same way as a waited-on one's.
         """
         loop = asyncio.get_running_loop()
         while True:
             with self._buffer_lock:
-                pending = [
-                    t
-                    for t in self._flush_tasks
-                    if t.get_loop() is loop and not t.done()
-                ]
-            if not pending:
-                return
-            # ``_flush_records`` handles its own errors; gather only so one
-            # unexpected failure cannot hide the others.
-            results = await asyncio.gather(*pending, return_exceptions=True)
-            for result in results:
-                if isinstance(result, Exception):
+                owned = [t for t in self._flush_tasks if t.get_loop() is loop]
+                finished = [t for t in owned if t.done()]
+                pending = [t for t in owned if not t.done()]
+                # Removed now so the next pass, or the next call, does not
+                # report it again; the queued callback then finds it gone.
+                self._flush_tasks.difference_update(finished)
+            failures = [
+                t.exception() for t in finished if not t.cancelled() and t.exception()
+            ]
+            if pending:
+                # ``_flush_records`` handles its own errors; gather only so one
+                # unexpected failure cannot hide the others.
+                failures.extend(await asyncio.gather(*pending, return_exceptions=True))
+            for failure in failures:
+                if isinstance(failure, Exception):
                     logging.warning(
                         "Observability batch flush failed",
-                        exc_info=(type(result), result, result.__traceback__),
+                        exc_info=(type(failure), failure, failure.__traceback__),
                     )
+            if not pending:
+                return
 
     def _discard_flush_task(self, task: "asyncio.Task[None]") -> None:
         with self._buffer_lock:

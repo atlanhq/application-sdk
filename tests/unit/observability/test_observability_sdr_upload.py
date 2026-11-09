@@ -561,7 +561,35 @@ class TestAddRecordFlushTasks:
 
         log_error.assert_not_called()
         assert _PassCountingSet.passes <= 2
-        await asyncio.sleep(0)  # the discard callback runs once the loop turns
+        assert not obs_instance._flush_tasks
+        await asyncio.sleep(0)  # the queued discard callback is now a no-op
+
+    async def test_flush_all_reports_a_finished_flush_that_failed(self, obs_instance):
+        """A flush task that already failed when ``flush_all`` looks is still
+        reported, exactly once, as a waited-on failure would be. Skipping
+        finished tasks (so the wait always yields) must not leave the error to
+        asyncio's "exception was never retrieved" handler."""
+
+        async def _failed_flush() -> None:
+            raise OSError("unlink failed")
+
+        task = asyncio.get_running_loop().create_task(_failed_flush())
+        obs_instance._flush_tasks.add(task)
+        task.add_done_callback(obs_instance._discard_flush_task)
+        await asyncio.sleep(0)
+        assert task.done()
+        assert task in obs_instance._flush_tasks
+
+        with mock.patch.object(obs_module.logging, "warning") as log_warning:
+            await AtlanObservability.flush_all()
+
+        failures = [
+            c
+            for c in log_warning.call_args_list
+            if c.args == ("Observability batch flush failed",)
+        ]
+        assert len(failures) == 1
+        assert failures[0].kwargs["exc_info"][1] is task.exception()
         assert not obs_instance._flush_tasks
 
 
