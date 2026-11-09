@@ -1158,9 +1158,11 @@ def _recheck_call(
     items: list[tuple[Finding, RecheckEvidence]],
     author_claim: str,
     max_tokens: int,
-) -> dict[str, tuple[str, str]] | None:
-    """One model call over every finding that needs one: id -> (status, reason).
-    None when no verdict came back (budget, transport, or out of output tokens)."""
+) -> tuple[dict[str, tuple[str, str]] | None, bool]:
+    """One model call over every finding that needs one: (id -> (status, reason),
+    cut_off). The verdicts are None when none came back (budget, transport, or out
+    of output tokens); cut_off is True when the call spent its whole output budget
+    before answering, which `/lens recheck verify-budget` can fix."""
     parts = []
     if author_claim:
         # Untrusted: shown as a claim to check, and unable to close or open a tag.
@@ -1193,9 +1195,9 @@ def _recheck_call(
         )
     except (BudgetExhausted, LLMError) as e:
         trace.line(f"recheck: no verdict — {trace.short(str(e), 200)}")
-        return None
+        return None, False
     if not comp.tool_calls:
-        return None
+        return None, _out_of_output_budget(comp, max_tokens)
     ids = {f.id for f, _ in items}
     out: dict[str, tuple[str, str]] = {}
     for it in verdict_items(comp.tool_calls):
@@ -1205,7 +1207,29 @@ def _recheck_call(
                 str(it["status"]),
                 " ".join(str(it.get("reason") or "").split()),
             )
-    return out
+    return out, False
+
+
+def recheck_cut_off_line(
+    ids: list[str], max_tokens: int, opted_in: bool, cfg: Config
+) -> str:
+    """Why a re-check gave no verdict, and the opt-in that gives it more room.
+
+    The re-check's model call shares verify's output budget, and reasoning tokens
+    count against it, so a hard finding can spend all of it before answering."""
+    line = (
+        f"The re-check spent all {max_tokens:,} output tokens before answering, so "
+        f"{', '.join(ids)} {'was' if len(ids) == 1 else 'were'} not re-judged"
+    )
+    if opted_in:
+        return line + (
+            " (this was already the opt-in budget, `agent.verify_max_tokens_opt_in` "
+            "in `.github/lens/config.toml`)"
+        )
+    return line + (
+        f"; comment `/lens recheck verify-budget {' '.join(ids)} <reason>` to retry "
+        f"with {cfg.limits.verify_max_tokens_opt_in:,}"
+    )
 
 
 def recheck(
@@ -1220,8 +1244,9 @@ def recheck(
     actor: str,
     post: bool = True,
     run_url: str = "",
+    verify_budget: bool = False,
 ) -> RunResult:
-    """`/lens recheck F-… [reason]`: re-judge open findings with repo-aware evidence.
+    """`/lens recheck [verify-budget] F-… [reason]`: re-judge open findings with repo-aware evidence.
 
     Deterministic first: the evidence (merge-base existence, callers, privacy,
     the capability manifest) is gathered with no model call, and a compatibility
@@ -1264,6 +1289,8 @@ def recheck(
     resolved: list[tuple[Finding, str]] = []
     kept: list[tuple[Finding, str, list[str]]] = []
     spent = Ledger(cap_usd=max(ledger.remaining, 0.0))
+    cut_off = False
+    cut_off_note = ""
     if targets:
         pr = gh.pr(number)
         head, base = pr["head"]["sha"], pr["base"]["sha"]
@@ -1302,9 +1329,22 @@ def recheck(
             ]
         elif ask:
             client: Client = client_factory(spent)
-            verdicts = _recheck_call(client, ask, reason, cfg.limits.verify_max_tokens)
+            max_tokens = (
+                cfg.limits.verify_max_tokens_opt_in
+                if verify_budget
+                else cfg.limits.verify_max_tokens
+            )
+            verdicts, cut_off = _recheck_call(client, ask, reason, max_tokens)
             if verdicts is None:
-                res.incomplete.append("re-check: no verdict came back")
+                res.incomplete.append(
+                    "re-check: ran out of output budget"
+                    if cut_off
+                    else "re-check: no verdict came back"
+                )
+            if cut_off:
+                cut_off_note = recheck_cut_off_line(
+                    [f.id for f, _ in ask], max_tokens, verify_budget, cfg
+                )
             for f, ev in ask:
                 status, why = (verdicts or {}).get(f.id, ("", ""))
                 if status == "resolved":
@@ -1312,7 +1352,18 @@ def recheck(
                         (f, f"{ev.facts[0]} — {why}" if why else ev.facts[0])
                     )
                 else:
-                    kept.append((f, why or "no verdict came back", ev.facts))
+                    kept.append(
+                        (
+                            f,
+                            why
+                            or (
+                                "not re-judged: the re-check ran out of output budget"
+                                if cut_off
+                                else "no verdict came back"
+                            ),
+                            ev.facts,
+                        )
+                    )
             _book(ledger, spent)
     for f, why in resolved:
         f.status, f.fixed_round, f.fixed_by = "fixed", state.round, "rechecked"
@@ -1354,6 +1405,8 @@ def recheck(
         lines.append(f"- ❌ `{f.id}` still stands: {why}")
         lines += [f"  - {x}" for x in facts]
     lines += [f"- ⚠️ {r}" for r in refused]
+    if cut_off_note:
+        lines.append(f"- ⚠️ {cut_off_note}")
     if not targets:
         gh.comment(number, "lens: nothing was re-checked.\n\n" + "\n".join(lines))
         return res
