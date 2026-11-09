@@ -477,9 +477,17 @@ class _FreshIamToken:
     so the token reaches the driver under whatever keyword it takes
     (``password``, ``passwd``) without naming one here.
 
-    Runs on whichever thread opens the connection; the lock makes concurrent
-    connects build the token once. A failure to build one propagates out of
-    the connect, already typed.
+    ``build`` blocks (for IAM-role auth it runs an STS ``AssumeRole``). A sync
+    engine connects on a worker thread, so it is called there. An async
+    engine's connect runs on the event loop, inside SQLAlchemy's greenlet;
+    with ``on_loop`` the build is offloaded through ``run_in_thread`` and
+    awaited from that greenlet, so the loop stays free while STS answers.
+
+    One refresh runs at a time: a connect that finds one in flight waits for
+    it instead of calling STS again. The lock guards only the listener's
+    state and is never held while waiting, so a connect on the loop cannot
+    block it. A failed build propagates out of the connect that ran it,
+    already typed; a connect that was waiting on it then tries itself.
     """
 
     def __init__(
@@ -487,15 +495,20 @@ class _FreshIamToken:
         build: Callable[[], str],
         connection_string: str,
         issued_at: float,
+        *,
+        on_loop: bool = False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         from sqlalchemy.engine import make_url  # noqa: PLC0415 — optional dep: sqlalchemy
 
         self._build = build
+        self._on_loop = on_loop
         self._clock = clock
         self._lock = threading.Lock()
         self._engine_url = make_url(connection_string)
         self._issued_at = issued_at
+        #: The refresh in flight, if any; connects that find it wait on it.
+        self._refreshing: concurrent.futures.Future[None] | None = None
         #: Positional and keyword driver arguments to swap in, by the URL that
         #: last refreshed them; empty while the engine's own token is fresh.
         self._cargs: dict[int, Any] = {}
@@ -503,25 +516,73 @@ class _FreshIamToken:
         #: The engine URL's own driver arguments, which a swap must still find.
         self._baseline: tuple[list[Any], dict[str, Any]] = ([], {})
 
+    def _built_connection_string(self) -> str:
+        if not self._on_loop:
+            return self._build()
+        from sqlalchemy.util import (  # noqa: PLC0415 — optional dep: sqlalchemy
+            await_only,
+        )
+
+        return await_only(run_in_thread(self._build))
+
+    def _wait(self, refreshing: "concurrent.futures.Future[None]") -> None:
+        if not self._on_loop:
+            refreshing.result()
+            return
+        from sqlalchemy.util import (  # noqa: PLC0415 — optional dep: sqlalchemy
+            await_only,
+        )
+
+        await_only(asyncio.wrap_future(refreshing))
+
+    def _stale(self) -> bool:
+        with self._lock:
+            return self._clock() - self._issued_at >= _RDS_AUTH_TOKEN_REFRESH_SECONDS
+
     def _refresh(self, dialect: "Dialect") -> None:
+        """Rebuild the token, or wait for the refresh another connect started.
+
+        A failed build raises here, out of the connect that ran it.
+        """
         from sqlalchemy.engine import make_url  # noqa: PLC0415 — optional dep: sqlalchemy
 
-        # Taken before the build, so the token's age is never understated.
-        issued_at = self._clock()
-        fresh = make_url(self._build())
-        old_args, old_params = dialect.create_connect_args(self._engine_url)
-        new_args, new_params = dialect.create_connect_args(fresh)
-        self._cargs = {
-            i: new for i, (old, new) in enumerate(zip(old_args, new_args)) if old != new
-        }
-        self._cparams = {
-            key: value
-            for key, value in new_params.items()
-            if old_params.get(key, _MISSING) != value
-        }
-        self._baseline = (list(old_args), dict(old_params))
-        self._issued_at = issued_at
-        logger.debug("Refreshed the RDS IAM auth token for new connections")
+        with self._lock:
+            refreshing = self._refreshing
+            if refreshing is None:
+                refreshing = self._refreshing = concurrent.futures.Future()
+                owner = True
+            else:
+                owner = False
+        if not owner:
+            self._wait(refreshing)
+            return
+        try:
+            # Taken before the build, so the token's age is never understated.
+            issued_at = self._clock()
+            fresh = make_url(self._built_connection_string())
+            old_args, old_params = dialect.create_connect_args(self._engine_url)
+            new_args, new_params = dialect.create_connect_args(fresh)
+            with self._lock:
+                self._cargs = {
+                    i: new
+                    for i, (old, new) in enumerate(zip(old_args, new_args))
+                    if old != new
+                }
+                self._cparams = {
+                    key: value
+                    for key, value in new_params.items()
+                    if old_params.get(key, _MISSING) != value
+                }
+                self._baseline = (list(old_args), dict(old_params))
+                self._issued_at = issued_at
+            logger.debug("Refreshed the RDS IAM auth token for new connections")
+        finally:
+            # Released whether or not the build succeeded: a waiter re-checks
+            # the token's age, and refreshes itself if this one failed or was
+            # cancelled, rather than inheriting another connect's error.
+            with self._lock:
+                self._refreshing = None
+            refreshing.set_result(None)
 
     def __call__(
         self,
@@ -530,12 +591,10 @@ class _FreshIamToken:
         cargs: list[Any],
         cparams: dict[str, Any],
     ) -> None:
+        while self._stale():
+            self._refresh(dialect)
         with self._lock:
-            if self._clock() - self._issued_at >= _RDS_AUTH_TOKEN_REFRESH_SECONDS:
-                self._refresh(dialect)
             swap_args, swap_params = self._cargs, self._cparams
-            if not (swap_args or swap_params):
-                return
             old_args, old_params = self._baseline
         for i, value in swap_args.items():
             if i < len(cargs) and cargs[i] == old_args[i]:
@@ -550,12 +609,18 @@ _MISSING = object()
 
 
 def _install_iam_token_refresh(
-    engine: object, client: "BaseSQLClient", connection_string: str, issued_at: float
+    engine: object,
+    client: "BaseSQLClient",
+    connection_string: str,
+    issued_at: float,
+    *,
+    on_loop: bool = False,
 ) -> None:
     """Refresh ``engine``'s RDS IAM token on new connections, for IAM auth only.
 
-    ``engine`` is a sync Engine (an async engine's ``sync_engine``); anything
-    else, such as a test double, is left alone, as is every other ``authType``.
+    ``engine`` is a sync Engine (an async engine's ``sync_engine``, with
+    ``on_loop``: its connects run on the event loop); anything else, such as
+    a test double, is left alone, as is every other ``authType``.
     """
     from sqlalchemy import event  # noqa: PLC0415 — optional dep: sqlalchemy
     from sqlalchemy.engine import Engine  # noqa: PLC0415 — optional dep: sqlalchemy
@@ -568,7 +633,10 @@ def _install_iam_token_refresh(
         engine,
         "do_connect",
         _FreshIamToken(
-            client.get_sqlalchemy_connection_string, connection_string, issued_at
+            client.get_sqlalchemy_connection_string,
+            connection_string,
+            issued_at,
+            on_loop=on_loop,
         ),
     )
 
@@ -952,6 +1020,13 @@ class BaseSQLClient(ClientInterface):
         This method constructs a connection string using the configured database
         parameters and credentials. It handles different authentication methods
         and includes necessary connection parameters.
+
+        For ``authType`` ``iam_user`` and ``iam_role`` this is called again
+        after ``load()``, each time the RDS IAM token it put in the URL is
+        about to expire and a new connection is opened. It always runs on a
+        worker thread, never the event loop, but not necessarily the one
+        ``load()`` used. An override must therefore be safe to call repeatedly
+        and from any thread, and return a fresh token each time.
 
         Returns:
             str: Complete SQLAlchemy connection string.
@@ -1398,7 +1473,11 @@ class AsyncBaseSQLClient(BaseSQLClient):
 
                 # The URL's IAM token expires; later connects need a fresh one.
                 _install_iam_token_refresh(
-                    self.engine.sync_engine, self, connection_string, issued_at
+                    self.engine.sync_engine,
+                    self,
+                    connection_string,
+                    issued_at,
+                    on_loop=True,
                 )
 
                 # Test connection briefly to validate credentials

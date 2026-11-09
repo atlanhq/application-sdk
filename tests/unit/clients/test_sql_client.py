@@ -1549,6 +1549,78 @@ class TestFreshIamToken:
             engine.raw_connection()
 
 
+def test_concurrent_connects_share_one_refresh() -> None:
+    """Connects that find a refresh in flight wait for it instead of calling STS again."""
+    pytest.importorskip("psycopg2")
+    import threading
+
+    from sqlalchemy import create_engine, event
+
+    from application_sdk.clients.sql import _FreshIamToken
+
+    clock = _Clock()
+    started, release = threading.Event(), threading.Event()
+    calls: list[int] = []
+
+    def _build() -> str:
+        calls.append(1)
+        started.set()
+        assert release.wait(10)
+        return _url("token-1")
+
+    engine = create_engine(_url("token-0"))
+    event.listen(
+        engine,
+        "do_connect",
+        _FreshIamToken(_build, _url("token-0"), clock.now, clock=clock),
+    )
+    seen = _record_connect_params(engine)
+    clock.now += 11 * 60
+
+    def _connect() -> None:
+        with pytest.raises(_StopConnect):
+            engine.raw_connection()
+
+    first = threading.Thread(target=_connect)
+    first.start()
+    assert started.wait(10)
+    second = threading.Thread(target=_connect)
+    second.start()
+    release.set()
+    first.join(10)
+    second.join(10)
+
+    assert len(calls) == 1
+    assert [p["password"] for p in seen] == ["token-1", "token-1"]
+
+
+def test_a_connect_waiting_on_a_failed_refresh_tries_itself() -> None:
+    pytest.importorskip("psycopg2")
+    from sqlalchemy import create_engine, event
+
+    from application_sdk.clients.sql import _FreshIamToken
+
+    clock = _Clock()
+    outcomes = iter([SqlAwsCredentialsError(message="sts down"), _url("token-1")])
+
+    def _build() -> str:
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    engine = create_engine(_url("token-0"))
+    event.listen(
+        engine,
+        "do_connect",
+        _FreshIamToken(_build, _url("token-0"), clock.now, clock=clock),
+    )
+    clock.now += 11 * 60
+    with pytest.raises(SqlAwsCredentialsError):
+        engine.raw_connection()
+    assert _connect_params(engine)["password"] == "token-1"
+
+
 class _IamClient(BaseSQLClient):
     DB_CONFIG = DatabaseConfig(template="unused://{host}", required=["host"])
 
