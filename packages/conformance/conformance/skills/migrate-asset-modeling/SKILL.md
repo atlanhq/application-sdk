@@ -55,6 +55,29 @@ The rule definitions own what "correct" is: each finding carries its rule's
 `full_description` and `terminal_state`. This skill owns how to tell the sites
 apart, what evidence each needs, and how to prove the change.
 
+## What each rule fires on
+
+| Rule | Fires on | Stops when |
+|---|---|---|
+| P028 | an f-string that interpolates a name matching `qualified_name`, `*_qn` or `qn` **and** has a `/` literal (an object-store key, with a `/` literal before the name, is exempt) | the qualifiedName comes from `X.creator(...).qualified_name` or `Process.generate_qualified_name(...)`; an ignore is correct only where the string is not a qualifiedName (the rule's terminal state) |
+| P052 | `.to_nested_bytes()`, `.to_nested_dict()`, pyatlan_v9 `to_atlas_format`, or `to_atlas_format_dict`, in `app/` (not `app/generated/`) | the entity goes through `entity_bytes` |
+| P055 | a pyatlan_v9 mapper populating the list end of a 1-to-N relationship — `Table(columns=...)`, `process.fabric_activities = [...]`, `schema.tables.append(...)` | each child sets its single reference to the parent (`column.table = RelatedTable(...)`) and the parent's list is left unset |
+| P058 | a dict with literal `"typeName"` and `"attributes"` keys (or `dict(typeName=..., attributes=...)`) that is appended / extended / inserted, yielded, passed to `entity_bytes`, or returned from a `map_<entity>` mapper, in `app/` (not `app/generated/`) — directly or through a local name | the entity is a `pyatlan_v9.model.assets` object, or the site carries a justified ignore for a type pyatlan_v9 does not model |
+| O002 | any `.dict()` call in a module that imports pyatlan asset models | `.dict()` is gone, or the module no longer imports asset models |
+| O003 | a function with no return annotation that returns a directly constructed asset `X(...)` | the function has a return annotation |
+| O004 | an import of `pyatlan.model.assets` | the import is `pyatlan_v9.model.assets` |
+
+Scope: P028, P055 and the O-rules scan every non-test Python file (`main.py` and
+`scripts/` too); P052 and P058 scan `app/` only. A suppression directive must be on
+the finding's line or on a comment-only line directly above it.
+
+**Do not dodge P028.** The checker does not see `"/".join(...)`, `+`,
+`.format()`, `%`, renamed variables, or the deprecated
+`application_sdk.transformers.common.utils.build_atlas_qualified_name`. Using
+any of them clears the finding and keeps the hand-built grammar. That is not a
+fix. If the app already has such helpers (for example a `_qn(*parts)` join),
+treat their call sites as part of this migration.
+
 ## Judge inputs by where they come from
 
 A creator check or a parity check is only as good as its inputs. An input
@@ -178,15 +201,18 @@ An app whose mappers all emit dicts moves as one unit, not site by site.
 - `legacy-pin` — when the app keeps the legacy `AtlasTransformer` on
   purpose. End state: `# conformance: ignore[O004] <the pin>`.
 
-### O002, O003, P055
+### O002, O003, P055 (unchanged)
 
-- O002: a `.dict()` on an asset goes through `entity_bytes`; a `.dict()` on a
-  non-asset model is a false positive, ignored with that reason.
-- O003: add the return annotation (`-> Table`, a union, `Optional`).
-- P055: set the single reference on each child
-  (`column.table = RelatedTable(...)`), derived from the child's own source
-  record, and leave the parent's list unset. A child emitted only through the
-  parent's list is an owner decision: the app must start emitting it.
+- **O002** — serialize through `entity_bytes` as for P052. A `.dict()` on a model that is not an asset is a false positive: ignore it
+  with that reason.
+- **O003** — add the return annotation (`-> Table`, a union, or `Optional`).
+- **P055** — remove the list from the parent and set the single reference
+  the finding names on each child instead (`activity.fabric_process =
+  RelatedProcess(qualified_name=process_qn)`). The child's mapper must know
+  its parent's qualifiedName; derive it from the child's source record, not
+  from the parent asset. If a child is emitted only through the parent's
+  list (no mapper of its own), that is an owner decision: the app has to
+  start emitting the child.
 
 ### Order inside one mapper
 
