@@ -192,12 +192,13 @@ Sites that share a mapper or an identity move in one unit.
 
 ## Before you change anything
 
-1. SDK version from `uv.lock`: 3.39.0 or later, or raise it (newest release
-   at least 7 days old) when the app will emit creator-built assets. Below
-   3.20.0: stop and run `migrate-off-daft`.
-2. A creator missing in the locked pyatlan but present in a release at least
-   7 days old inside the allowed range: with a developer, raise pyatlan in
-   the lock; in the remediation lane the site is held for that raise.
+1. SDK version from `uv.lock`: 3.39.0 or later, or raise it when the app
+   will emit creator-built assets. Below 3.20.0: stop and run
+   `migrate-off-daft`.
+2. A creator missing in the locked pyatlan but present in a newer pyatlan
+   release inside the allowed range (pyatlan is first-party: no release-age
+   wait): with a developer, raise pyatlan in the lock; in the remediation
+   lane the site is held for that raise.
 3. Baseline:
    `atlan-application-sdk-conformance detect --rule P028,P052,P055,P058,O002,O003,O004 --exit-zero --output before.sarif`
    and the test suite; record tests that already fail.
