@@ -33,6 +33,9 @@ FILES = sorted(
 )
 
 EXPR = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
+#: ``a['b']`` / ``a["b"]`` index access, which GitHub expressions accept as an
+#: alternative to ``a.b``; normalised to the dotted form before matching.
+INDEX = re.compile(r"""\s*\[\s*(['"])([^'"]+)\1\s*\]""")
 
 #: Soft mints that are allowed to stay continue-on-error. None of them falls
 #: back to ORG_PAT_GITHUB:
@@ -55,13 +58,20 @@ def _steps(doc: dict[str, Any]) -> list[dict[str, Any]]:
     return list(runs.get("steps") or [])
 
 
+def _normalise(expr: str) -> str:
+    """Dotted, whitespace-free form: ``steps['x'].outputs[ 'token' ]`` reads as
+    ``steps.x.outputs.token``."""
+    return re.sub(r"\s+", "", INDEX.sub(r".\2", expr))
+
+
 def org_pat_fallbacks(text: str) -> list[str]:
     """Expressions that combine a minted token with ORG_PAT_GITHUB."""
-    return [
-        expr.strip()
-        for expr in EXPR.findall(text)
-        if "outputs.token" in expr and "ORG_PAT_GITHUB" in expr
-    ]
+    found: list[str] = []
+    for expr in EXPR.findall(text):
+        flat = _normalise(expr)
+        if ".outputs.token" in flat and "ORG_PAT_GITHUB" in flat:
+            found.append(expr.strip())
+    return found
 
 
 def soft_mints(name: str, doc: dict[str, Any]) -> list[str]:
@@ -114,6 +124,11 @@ jobs:
       - run: echo
         env:
           GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB || steps.app-token.outputs.token }}
+      - run: echo
+        env:
+          A: ${{ steps['app-token'].outputs['token'] || secrets.ORG_PAT_GITHUB }}
+          B: ${{ steps.app-token.outputs[ "token" ] || secrets['ORG_PAT_GITHUB'] }}
+          C: ${{ steps.git-deps-token.outputs.token || '' }}
 """
-    assert len(org_pat_fallbacks(text)) == 2
+    assert len(org_pat_fallbacks(text)) == 4
     assert soft_mints("x.yaml", yaml.safe_load(text)) == ["app-token"]

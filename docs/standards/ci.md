@@ -940,9 +940,10 @@ tell which runs still depended on it (FND-4652). A caller without
 `required: false`, so an omitting caller gets that red step rather than a
 `startup_failure` with no check run.
 
-A job that also runs on fork PRs, which get no secrets, skips the mint with
-`if: github.event.pull_request.head.repo.fork != true` and hands the consumer
-`github.token` on a fork (see `sdk-tests-reusable.yaml`). Never the PAT.
+A job that also runs on fork or Dependabot PRs, which get no Actions secrets,
+skips the mint for both (`head.repo.fork != true` and
+`user.login != 'dependabot[bot]'`) and hands the consumer `github.token` on
+those runs (see `sdk-tests-reusable.yaml`). Never the PAT.
 
 Out of scope: GHCR login and push still use `ORG_PAT_GITHUB`, because fleet
 packages are org-level and the App only has repo-level Packages permission.
