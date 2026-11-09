@@ -11,7 +11,7 @@ repos:
   # `--fix` keeps the auto-fix isort used to give: an unsorted import block
   # is rewritten in place (and the hook still fails, so CI stays a check).
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.17.3
+    rev: v0.17.4
     hooks:
       - id: ruff-check
         args: ["--fix"]
