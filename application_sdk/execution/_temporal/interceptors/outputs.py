@@ -14,8 +14,8 @@ v3 adaptation:
 Architecture:
     - OutputActivityInboundInterceptor: Creates a fresh collector per activity
       and writes what it collected onto the activity's own result
-      (``metrics`` / ``artifacts`` on an ``Output`` model, or the same keys on
-      a dict result).
+      (``metrics`` / ``artifacts`` on an ``Output`` model, or the reserved
+      ``_atlan_outputs`` key on a dict result).
     - _OutputWorkflowOutboundInterceptor: Reads those fields back from every
       completed activity (and local activity) into the workflow's collector.
     - OutputWorkflowInboundInterceptor: At workflow exit, merges the
@@ -59,6 +59,10 @@ logger = get_logger(__name__)
 
 _METRICS_KEY = "metrics"
 _ARTIFACTS_KEY = "artifacts"
+# Dict results carry outputs under one reserved key rather than ``metrics`` /
+# ``artifacts``: a dict activity may return keys of those names as its own
+# data, and the workflow must never mistake that data for collected outputs.
+_DICT_CARRIER_KEY = "_atlan_outputs"
 
 
 def _attach_outputs(result: Any, collector: OutputCollector) -> Any:
@@ -69,9 +73,9 @@ def _attach_outputs(result: Any, collector: OutputCollector) -> Any:
       returns an upstream task's output unchanged must not carry that
       upstream task's metrics a second time, or the workflow would count
       them twice.
-    - dict: the collected namespaces are added under the same keys the
-      workflow-level merge already writes. Left untouched when nothing was
-      collected, so a dict result keeps any keys of its own.
+    - dict: the collected namespaces are added under the reserved
+      ``_atlan_outputs`` key; the workflow interceptor strips it from a dict
+      workflow result. Left untouched when nothing was collected.
     - anything else cannot carry outputs; they are dropped with a warning.
 
     Returns:
@@ -89,7 +93,7 @@ def _attach_outputs(result: Any, collector: OutputCollector) -> Any:
     if not data:
         return result
     if isinstance(result, dict):
-        return {**result, **data}
+        return {**result, _DICT_CARRIER_KEY: data}
     logger.warning(
         "Activity %s recorded outputs but returned %s, which cannot carry them "
         "back to the workflow; return an Output model to keep them. Dropped "
@@ -107,11 +111,15 @@ def _carried_outputs(result: Any) -> Optional[OutputCollector]:
     if isinstance(result, Output):
         metrics, artifacts = result.metrics, result.artifacts
     elif isinstance(result, Mapping):
-        metrics, artifacts = result.get(_METRICS_KEY), result.get(_ARTIFACTS_KEY)
+        # Only the reserved key: a dict's own ``metrics`` / ``artifacts`` keys
+        # are its data, never collected outputs.
+        carried = result.get(_DICT_CARRIER_KEY)
+        if not isinstance(carried, Mapping):
+            return None
+        metrics, artifacts = carried.get(_METRICS_KEY), carried.get(_ARTIFACTS_KEY)
     else:
         return None
-    # Only the shapes ``to_dict()`` writes; anything else is the result's own
-    # data that merely shares a key name.
+    # Only the shapes ``to_dict()`` writes.
     if not isinstance(metrics, Mapping):
         metrics = None
     if not isinstance(artifacts, Mapping):
@@ -270,6 +278,10 @@ class OutputWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
         # Only reached when super().execute_workflow() returned without raising.
         try:
+            if isinstance(result, dict) and _DICT_CARRIER_KEY in result:
+                # A workflow that returns an activity's dict result as its own
+                # must not leak the internal carrier into its output.
+                result = {k: v for k, v in result.items() if k != _DICT_CARRIER_KEY}
             if self._outbound is not None:
                 self._outbound.flush()
             if self._collector.has_data():

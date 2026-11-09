@@ -158,7 +158,6 @@ class BatchCountWorkflow:
         return {"batch_count": 3}
 
 
-@pytest.mark.asyncio
 async def test_metrics_flow_through_interceptor(temporal_client, task_queue):
     """Test that metrics from activities are merged into workflow result."""
     async with Worker(
@@ -187,7 +186,6 @@ async def test_metrics_flow_through_interceptor(temporal_client, task_queue):
     assert result["artifacts"]["debug-log"] == "s3://bucket/debug.tgz"
 
 
-@pytest.mark.asyncio
 async def test_workflow_without_metrics_returns_unchanged(temporal_client, task_queue):
     """Test that workflows without metrics return their original result."""
     async with Worker(
@@ -209,7 +207,6 @@ async def test_workflow_without_metrics_returns_unchanged(temporal_client, task_
     assert "artifacts" not in result
 
 
-@pytest.mark.asyncio
 async def test_multiple_activities_same_metric_sums(temporal_client, task_queue):
     """Test that same-named numeric metrics from multiple activities sum correctly."""
     async with Worker(
@@ -230,7 +227,6 @@ async def test_multiple_activities_same_metric_sums(temporal_client, task_queue)
     assert result["metrics"]["rows-processed"] == 4000
 
 
-@pytest.mark.asyncio
 async def test_activity_on_another_worker_carries_outputs_to_workflow(
     temporal_client, task_queue
 ):
@@ -268,7 +264,6 @@ async def test_activity_on_another_worker_carries_outputs_to_workflow(
     assert result["artifacts"] == {"row-dump": "s3://bucket/rows"}
 
 
-@pytest.mark.asyncio
 async def test_outputs_survive_workflow_cache_eviction(temporal_client, task_queue):
     """Metrics survive the workflow being evicted and replayed between tasks.
 

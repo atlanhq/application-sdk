@@ -82,7 +82,6 @@ class TestOutputActivityInboundInterceptor:
         yield
         _current_outputs.set(None)
 
-    @pytest.mark.asyncio
     async def test_creates_fresh_collector_for_activity(
         self, interceptor, mock_next_inbound
     ):
@@ -114,7 +113,6 @@ class TestOutputActivityInboundInterceptor:
         # Collector is reset to None after execution (try/finally cleanup)
         assert _current_outputs.get() is None
 
-    @pytest.mark.asyncio
     async def test_returns_original_activity_result(
         self, interceptor, mock_next_inbound
     ):
@@ -131,7 +129,6 @@ class TestOutputActivityInboundInterceptor:
 
         assert result == expected_result
 
-    @pytest.mark.asyncio
     async def test_dict_result_carries_outputs(self, interceptor, mock_next_inbound):
         """Collected outputs are added to a dict result under their namespaces."""
 
@@ -147,11 +144,12 @@ class TestOutputActivityInboundInterceptor:
 
         assert result == {
             "status": "ok",
-            "metrics": {"count": 42},
-            "artifacts": {"dump": "s3://b/dump"},
+            "_atlan_outputs": {
+                "metrics": {"count": 42},
+                "artifacts": {"dump": "s3://b/dump"},
+            },
         }
 
-    @pytest.mark.asyncio
     async def test_output_model_carries_outputs(self, interceptor, mock_next_inbound):
         """An Output result carries outputs on its metrics/artifacts fields."""
         returned = _TaskOutput(rows=3)
@@ -171,7 +169,6 @@ class TestOutputActivityInboundInterceptor:
         # The activity's own object is not mutated.
         assert returned.metrics is None
 
-    @pytest.mark.asyncio
     async def test_output_passthrough_does_not_carry_upstream_metrics(
         self, interceptor, mock_next_inbound
     ):
@@ -188,7 +185,6 @@ class TestOutputActivityInboundInterceptor:
         assert result.artifacts is None
         assert result.rows == 1
 
-    @pytest.mark.asyncio
     async def test_result_that_cannot_carry_outputs_is_unchanged(
         self, interceptor, mock_next_inbound
     ):
@@ -214,7 +210,6 @@ class TestOutputActivityInboundInterceptor:
         assert result is None
         mock_logger.warning.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_dict_without_outputs_is_unchanged(
         self, interceptor, mock_next_inbound
     ):
@@ -279,7 +274,6 @@ class TestOutputWorkflowInboundInterceptor:
         loop.call_soon(fut.set_result, result)
         return fut
 
-    @pytest.mark.asyncio
     async def test_returns_original_result_when_no_outputs(
         self, interceptor, mock_next_inbound
     ):
@@ -291,7 +285,6 @@ class TestOutputWorkflowInboundInterceptor:
 
         assert result == expected_result
 
-    @pytest.mark.asyncio
     async def test_merges_outputs_carried_on_activity_results(
         self, interceptor, outbound, mock_next_inbound, mock_next_outbound
     ):
@@ -299,7 +292,13 @@ class TestOutputWorkflowInboundInterceptor:
         handles = [
             self._completed(_TaskOutput(rows=1, metrics={"count": 50})),
             self._completed(
-                {"x": 1, "metrics": {"count": 30, "other": 10}, "artifacts": {"a": "p"}}
+                {
+                    "x": 1,
+                    "_atlan_outputs": {
+                        "metrics": {"count": 30, "other": 10},
+                        "artifacts": {"a": "p"},
+                    },
+                }
             ),
         ]
         mock_next_outbound.start_activity.side_effect = handles
@@ -319,7 +318,6 @@ class TestOutputWorkflowInboundInterceptor:
             "artifacts": {"a": "p"},
         }
 
-    @pytest.mark.asyncio
     async def test_handle_already_done_when_returned_is_still_merged(
         self, interceptor, outbound, mock_next_inbound, mock_next_outbound
     ):
@@ -338,7 +336,6 @@ class TestOutputWorkflowInboundInterceptor:
 
         assert result == {"metrics": {"early": 1}}
 
-    @pytest.mark.asyncio
     async def test_returns_the_same_handle(self, outbound, mock_next_outbound):
         """start_activity keeps returning Temporal's cancellable handle."""
         handle = self._completed(None)
@@ -346,7 +343,6 @@ class TestOutputWorkflowInboundInterceptor:
 
         assert outbound.start_activity(mock.MagicMock()) is handle
 
-    @pytest.mark.asyncio
     async def test_harvests_local_activities(
         self, interceptor, outbound, mock_next_inbound, mock_next_outbound
     ):
@@ -365,7 +361,6 @@ class TestOutputWorkflowInboundInterceptor:
 
         assert result == {"metrics": {"local": 2}}
 
-    @pytest.mark.asyncio
     async def test_harvests_through_a_coroutine_returning_outbound(
         self, interceptor, outbound, mock_next_inbound, mock_next_outbound
     ):
@@ -387,7 +382,6 @@ class TestOutputWorkflowInboundInterceptor:
 
         assert result == {"metrics": {"locked": 1}}
 
-    @pytest.mark.asyncio
     async def test_failed_activity_contributes_nothing(
         self, interceptor, outbound, mock_next_inbound, mock_next_outbound
     ):
@@ -408,13 +402,16 @@ class TestOutputWorkflowInboundInterceptor:
 
         assert result == {"status": "recovered"}
 
-    @pytest.mark.asyncio
-    async def test_ignores_keys_not_in_the_carried_shape(
+    async def test_dict_own_metrics_key_is_not_harvested(
         self, interceptor, outbound, mock_next_inbound, mock_next_outbound
     ):
-        """A dict result whose own ``metrics`` key is not a mapping is not harvested."""
+        """A dict activity's own ``metrics`` / ``artifacts`` data is not collected output.
+
+        Only the reserved carrier key is read, so an activity that returns
+        ``{"metrics": {...}}`` without calling get_outputs() reports nothing.
+        """
         mock_next_outbound.start_activity.return_value = self._completed(
-            {"metrics": "a string of its own", "artifacts": ["x"]}
+            {"metrics": {"rows": 500}, "artifacts": {"a": "p"}}
         )
 
         async def run(input):
@@ -427,7 +424,6 @@ class TestOutputWorkflowInboundInterceptor:
 
         assert result == {"status": "done"}
 
-    @pytest.mark.asyncio
     async def test_activity_result_crosses_processes(
         self, interceptor, outbound, mock_next_inbound, mock_next_outbound
     ):
@@ -460,7 +456,23 @@ class TestOutputWorkflowInboundInterceptor:
         assert result["connection_qualified_name"] == "default/redshift/prod"
         assert result["metrics"] == {"tables": 100}
 
-    @pytest.mark.asyncio
+    async def test_carrier_key_is_stripped_from_dict_workflow_result(
+        self, interceptor, outbound, mock_next_inbound, mock_next_outbound
+    ):
+        """A workflow returning an activity's dict result does not leak the carrier."""
+        mock_next_outbound.start_activity.return_value = self._completed(
+            {"status": "ok", "_atlan_outputs": {"metrics": {"rows": 2}}}
+        )
+
+        async def run(input):
+            return await outbound.start_activity(mock.MagicMock())
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert result == {"status": "ok", "metrics": {"rows": 2}}
+
     async def test_handles_non_dict_result_with_outputs(
         self, interceptor, mock_next_inbound
     ):
@@ -476,7 +488,6 @@ class TestOutputWorkflowInboundInterceptor:
 
         assert result == {"metrics": {"m": 1}}
 
-    @pytest.mark.asyncio
     async def test_workflow_level_outputs_are_included(
         self, interceptor, mock_next_inbound
     ):

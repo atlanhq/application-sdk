@@ -91,7 +91,8 @@ match the rest of the surface.
   own interceptors gated by their own settings.
   `OutputInterceptor` carries each activity's metrics and artifacts back
   to the workflow on the activity's own result (the `metrics` /
-  `artifacts` fields of `Output`, or the same keys on a dict result), not
+  `artifacts` fields of `Output`, or a reserved `_atlan_outputs` key on a
+  dict result), not
   through process memory, so they survive an activity running on another
   replica or pool queue and a workflow replay on another worker.
 

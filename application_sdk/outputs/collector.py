@@ -158,7 +158,9 @@ class OutputCollector:
                 else:
                     metric = Metric(name=name, value=raw)
             except (KeyError, ValidationError):
-                _logger.warning("Skipping malformed carried metric %s", name)
+                _logger.warning(
+                    "Skipping malformed carried metric %s", name, exc_info=True
+                )
                 continue
             collector.add_metric(metric)
         for name, raw in (artifacts or {}).items():
@@ -172,7 +174,9 @@ class OutputCollector:
                 else:
                     artifact = Artifact(name=name, path=raw)
             except (KeyError, ValidationError):
-                _logger.warning("Skipping malformed carried artifact %s", name)
+                _logger.warning(
+                    "Skipping malformed carried artifact %s", name, exc_info=True
+                )
                 continue
             collector.add_artifact(artifact)
         return collector
