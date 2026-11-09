@@ -137,10 +137,10 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: true
-        description: "Org-level PAT for GHCR login and push (the fleet App only has repo-level Packages permission; these packages are org-level). Not the private-dependency git_token BuildKit secret: the build job mints a read-only fleet App token for that, because every build backend the Dockerfile's `uv sync` runs can read it (FND-4744). Also a fallback if the App token can't be minted elsewhere. Cross-repo checkout/dispatch steps in jobs that never touch GHCR (certify, leak-scan, app-deployment-dispatcher) use a minted atlan-app-fleet token instead — see the 'Mint fleet App token' steps."
+        description: "Org-level PAT for GHCR login and push (the fleet App only has repo-level Packages permission; these packages are org-level). Not the private-dependency git_token BuildKit secret: the build job mints a read-only fleet App token for that, because every build backend the Dockerfile's `uv sync` runs can read it (FND-4744). Never a fallback for the App token (FND-4652). Cross-repo checkout/dispatch steps in jobs that never touch GHCR (certify, leak-scan, app-deployment-dispatcher) use a minted atlan-app-fleet token instead — see the 'Mint fleet App token' steps."
       FLEET_APP_ID:
         required: false
-        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit', which every caller already uses. Declared here so the contract is self-documenting; a caller using explicit named secrets instead of inherit would need to list this too."
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit', which every caller already uses. Declared here so the contract is self-documenting; a caller using explicit named secrets instead of inherit would need to list this too. Effectively required: every 'Mint fleet App token' step fails the job without it, with no ORG_PAT_GITHUB fallback (FND-4652). Declared optional only so an omitting caller gets a red step rather than a startup_failure."
       FLEET_APP_PRIVATE_KEY:
         required: false
         description: "atlan-app-fleet App private key (org secret). Same inherit-only availability as FLEET_APP_ID above."
@@ -589,14 +589,12 @@ jobs:
           persist-credentials: false
 
       - name: Mint fleet App token
-        # For the SDK checkout only. continue-on-error + the
-        # `|| secrets.ORG_PAT_GITHUB` fallback on that checkout:
-        # FLEET_APP_ID/FLEET_APP_PRIVATE_KEY are declared optional (every real
-        # caller uses secrets: inherit), so a caller without them still checks
-        # out the SDK. The private-deps install uses its own scoped token below
-        # and has no such fallback: it fails instead.
+        # For the SDK checkout only. No continue-on-error and no
+        # ORG_PAT_GITHUB fallback (FND-4652): a caller without
+        # FLEET_APP_ID/FLEET_APP_PRIVATE_KEY (pass `secrets: inherit`) fails
+        # here, by name, instead of silently running on the org PAT. The
+        # private-deps install uses its own scoped token below.
         id: app-token
-        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -661,7 +659,7 @@ jobs:
           repository: atlanhq/application-sdk
           ref: main
           path: sdk
-          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
           persist-credentials: false
 
       # Certify on the Python the app image ships, not the runner's system
@@ -884,7 +882,6 @@ jobs:
 
       - name: Mint fleet App token
         id: app-token
-        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -908,7 +905,7 @@ jobs:
           # files rather than the repo.
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
-          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
 
       # ── Layer 1: deterministic hardcoded-secret scan (gitleaks) ───────────────
       - name: Install gitleaks
@@ -1588,7 +1585,6 @@ jobs:
     steps:
       - name: Mint fleet App token
         id: app-token
-        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -1599,7 +1595,7 @@ jobs:
       - name: Repository Dispatch
         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
         with:
-          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
           repository: ${{ matrix.repo }}
           event-type: dispatch_app_builder_workflow
           client-payload: |-

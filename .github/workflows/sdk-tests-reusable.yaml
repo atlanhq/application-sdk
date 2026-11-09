@@ -45,9 +45,13 @@ jobs:
         os: [ubuntu-22.04, macOS-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Fails the job when it cannot mint: no continue-on-error and no
+      # ORG_PAT_GITHUB fallback (FND-4652). Skipped on a fork PR, which gets no
+      # secrets; the token only posts the coverage comment, so a fork run hands
+      # the composite the caller's GITHUB_TOKEN instead.
       - name: Mint fleet App token
         id: app-token
-        continue-on-error: true
+        if: github.event.pull_request.head.repo.fork != true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -60,7 +64,7 @@ jobs:
           repositories: application-sdk
       - uses: "./.github/actions/unit-tests"
         with:
-          github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ github.event.pull_request.head.repo.fork == true && github.token || steps.app-token.outputs.token }}
           fail-under: "85"
           python-version: ${{ matrix.python-version }}
           # One leg measures coverage; it posts the PR comment and enforces

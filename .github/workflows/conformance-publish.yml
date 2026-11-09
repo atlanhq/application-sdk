@@ -131,7 +131,6 @@ jobs:
 
       - name: Mint fleet App token
         id: app-token
-        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -140,6 +139,6 @@ jobs:
 
       - name: Trigger Renovate and re-dispatch repos it missed
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PACKAGES: ${{ steps.pypi.outputs.packages }}
         run: python3 .github/scripts/renovate_release_followup.py --packages "$PACKAGES"

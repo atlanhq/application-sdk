@@ -32,11 +32,11 @@ on:
         default: "main"
     secrets:
       ORG_PAT_GITHUB:
-        required: true
-        description: "Org PAT for git tag push and gh release create"
+        required: false
+        description: "Formerly the fallback token for git tag push and gh release create. Unused since FND-4652, when the fleet App token stopped falling back to it: the mint fails the job instead. Declared optional so a caller that still passes it explicitly keeps parsing."
       FLEET_APP_ID:
         required: false
-        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting. Effectively required: the 'Mint fleet App token' step fails the job without it (FND-4652); declared optional only so an omitting caller gets a red step rather than a startup_failure."
       FLEET_APP_PRIVATE_KEY:
         required: false
         description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
@@ -57,7 +57,6 @@ jobs:
         # workflows in the caller's repo, the same way a real PAT identity
         # does and the default GITHUB_TOKEN does not.
         id: app-token
-        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -69,7 +68,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Checkout SDK helper scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -118,7 +117,7 @@ jobs:
       - name: Delete existing GitHub Release (if any)
         run: gh release delete "v${{ steps.get_version.outputs.version }}" --yes 2>/dev/null || true
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
@@ -128,4 +127,4 @@ jobs:
           body_path: .github/release_notes.md
           draft: false
           prerelease: ${{ contains(steps.get_version.outputs.version, '-') }}
-          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
