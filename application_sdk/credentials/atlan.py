@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 from pydantic import ConfigDict
+from typing_extensions import deprecated
 
 from application_sdk.credentials.types import (
     BearerTokenCredential,
@@ -77,11 +78,24 @@ class AtlanOAuthClient(OAuthClientCredential, frozen=True):
         return "atlan_oauth_client"
 
     @property
+    @deprecated(
+        "AtlanOAuthClient.effective_token_url is deprecated and will be removed "
+        "in v4.0.0. Nothing in the SDK exchanges an AtlanOAuthClient against "
+        "this URL: create_async_atlan_client() hands client_id/client_secret to "
+        "pyatlan's AsyncAtlanClient, whose token manager resolves the token "
+        "endpoint itself. Use create_async_atlan_client()."
+    )
     def effective_token_url(self) -> str:
         """Derive the token URL from base_url when token_url is not set.
 
         Supports INTERNAL K8s routing via the ``ATLAN_INTERNAL_HERACLES_URL``
         environment variable.
+
+        .. deprecated:: 3.56
+            No SDK path exchanges a token against this URL; pyatlan's token
+            manager owns the Atlan OAuth exchange. Use
+            :func:`~application_sdk.credentials.atlan_client.create_async_atlan_client`.
+            Will be removed in v4.0.0.
         """
         if self.token_url:
             return self.token_url
@@ -92,8 +106,22 @@ class AtlanOAuthClient(OAuthClientCredential, frozen=True):
             return f"{self.base_url.rstrip('/')}/auth/realms/default/protocol/openid-connect/token"
         return ""
 
+    @deprecated(
+        "AtlanOAuthClient.build_token_request_data is deprecated and will be "
+        "removed in v4.0.0. No SDK token exchange sends this payload "
+        "(OAuthTokenService always form-encodes, and the Atlan OAuth exchange "
+        "runs in pyatlan's token manager), so ATLAN_INTERNAL_HERACLES_URL has "
+        "no effect through it. Use create_async_atlan_client()."
+    )
     def build_token_request_data(self) -> tuple[dict[str, Any], bool]:
         """Build the token request payload.
+
+        .. deprecated:: 3.56
+            No SDK token exchange sends this payload; pyatlan's token manager
+            owns the Atlan OAuth exchange, including the Heracles JSON shape.
+            Use
+            :func:`~application_sdk.credentials.atlan_client.create_async_atlan_client`.
+            Will be removed in v4.0.0.
 
         Returns:
             A ``(data_dict, use_json)`` tuple:

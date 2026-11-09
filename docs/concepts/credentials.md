@@ -35,6 +35,10 @@ ref = api_key_ref("my-service")
 
 All factory functions accept an optional `store_name` keyword argument (default: `"default"`) to route to a specific `SecretStore`.
 
+!!! note "Exchanging an `AtlanOAuthClient` for a token"
+
+    Pass the credential to `create_async_atlan_client()` (or use `AtlanClientMixin`). It hands `client_id` and `client_secret` to pyatlan's `AsyncAtlanClient`, whose token manager does the exchange and refresh, including the in-cluster Heracles request shape. `AtlanOAuthClient.effective_token_url` and `AtlanOAuthClient.build_token_request_data()` are deprecated (removal in v4.0.0): no SDK exchange used them, so `ATLAN_INTERNAL_HERACLES_URL` never changed a real token request.
+
 ---
 
 ## Credential Types
