@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.37.1] - 2026-11-09
+
+### Bug fixes
+
+- mark PyFormat wrapLine and normalizeQuotes const for pkl 0.33 (#4804) ([1a64990](https://github.com/atlanhq/application-sdk/commit/1a64990))
+
 ## [0.37.0] - 2026-11-06
 
 ### Features
