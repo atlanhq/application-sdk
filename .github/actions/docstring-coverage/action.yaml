@@ -39,10 +39,21 @@ runs:
         echo "### 📜 Docstring Coverage Report" > docstring-cov.md
         echo >> docstring-cov.md
 
+    # Inputs reach the shell through env, never `${{ }}` in the script, so a
+    # caller's value is data and cannot inject commands.
+    #
+    # continue-on-error so a below-floor run still writes the detailed report
+    # and posts the PR comment; the last step fails the action on it.
     - name: Run Basic Coverage Check
+      id: basic
+      continue-on-error: true
       shell: bash
+      env:
+        MODULE_NAME: ${{ inputs.module-name }}
+        FAIL_UNDER: ${{ inputs.fail-under }}
       run: |
-        interrogate ${{ inputs.module-name }} --fail-under ${{ inputs.fail-under }} >> docstring-cov.md
+        set -o pipefail
+        interrogate "$MODULE_NAME" --fail-under "$FAIL_UNDER" | tee -a docstring-cov.md
 
     - name: Add Detailed Report Section
       shell: bash
@@ -53,10 +64,14 @@ runs:
         echo >> docstring-cov.md
         echo "\`\`\`" >> docstring-cov.md
 
+    # Report only: the verdict is the basic check's. `--fail-under 0` because
+    # interrogate's own default floor is 80.
     - name: Run Detailed Coverage Check
       shell: bash
+      env:
+        MODULE_NAME: ${{ inputs.module-name }}
       run: |
-        interrogate ${{ inputs.module-name }} --fail-under ${{ inputs.fail-under }} -v >> docstring-cov.md
+        interrogate "$MODULE_NAME" --fail-under 0 -v >> docstring-cov.md
 
     - name: Close Detailed Report Section
       shell: bash
@@ -65,10 +80,19 @@ runs:
         echo "</details>" >> docstring-cov.md
 
     # Only a PR has somewhere to comment. In the merge queue (merge_group)
-    # the coverage check above is the whole job.
+    # the coverage check is the whole job.
     - name: Comment Docstring Coverage on PR
       if: github.event_name == 'pull_request'
       uses: mshick/add-pr-comment@ec328af66588ab8f77cdeb2c264f14aba45bbf59 # v3
       with:
         message-id: "docstring-coverage"
         message-path: docstring-cov.md
+
+    - name: Fail when coverage is below the floor
+      if: steps.basic.outcome == 'failure'
+      shell: bash
+      env:
+        FAIL_UNDER: ${{ inputs.fail-under }}
+      run: |
+        echo "::error title=Docstring coverage::Coverage is below the ${FAIL_UNDER}% floor. See the report above or the PR comment."
+        exit 1
