@@ -6701,24 +6701,21 @@ class TestMetricsEndpoint:
         assert "python_info" in response.text
         mock_async_client.assert_not_called()
 
-    def test_metrics_connect_error_logs_warning_with_traceback(
-        self, tmp_path: Path
-    ) -> None:
+    @staticmethod
+    def _core_transport(handler):
+        """Route the proxy's ``httpx.AsyncClient`` through a MockTransport."""
         import httpx
 
-        class _UnavailableTemporalMetricsClient:
-            def __init__(self, *args: object, **kwargs: object) -> None:
-                pass
+        real_async_client = httpx.AsyncClient
+        transport = httpx.MockTransport(handler)
 
-            async def __aenter__(self):
-                return self
+        def _client(*args: object, **kwargs: object) -> httpx.AsyncClient:
+            return real_async_client(*args, transport=transport, **kwargs)  # type: ignore[arg-type]
 
-            async def __aexit__(self, *args: object) -> None:
-                return None
+        return patch("httpx.AsyncClient", side_effect=_client)
 
-            async def get(self, url: str) -> object:
-                raise httpx.ConnectError("All connection attempts failed")
-
+    @staticmethod
+    def _proxying_client(tmp_path: Path) -> TestClient:
         app = create_app_handler_service(
             _TestHandler(),
             app_name="metrics-test",
@@ -6726,51 +6723,106 @@ class TestMetricsEndpoint:
             prometheus_bind_address="127.0.0.1:9464",
             frontend_assets_path=str(tmp_path),
         )
-        client = TestClient(app)
+        return TestClient(app)
+
+    def test_metrics_merges_temporal_core_series(self, tmp_path: Path) -> None:
+        import httpx
+
+        core = b'temporal_num_pollers{poller_type="workflow_task"} 2.0\n'
+        client = self._proxying_client(tmp_path)
 
         with (
-            patch("httpx.AsyncClient", new=_UnavailableTemporalMetricsClient),
-            patch("application_sdk.handler.service.logger.debug") as mock_debug,
-            patch("application_sdk.handler.service.logger.warning") as mock_warning,
+            self._core_transport(lambda _r: httpx.Response(200, content=core)),
+            patch("application_sdk.handler.service._record_proxy_failure") as failure,
         ):
             response = client.get("/metrics")
 
         assert response.status_code == 200
         assert "python_info" in response.text
-        mock_debug.assert_not_called()
-        mock_warning.assert_called_once()
-        assert "proxy request failed" in mock_warning.call_args.args[0]
-        assert mock_warning.call_args.kwargs.get("exc_info") is True
+        assert 'temporal_num_pollers{poller_type="workflow_task"} 2.0' in response.text
+        failure.assert_not_called()
 
-    def test_metrics_request_error_logs_warning_with_traceback(
+    @pytest.mark.parametrize("declared_length", [True, False])
+    def test_metrics_oversize_core_body_is_dropped_and_counted(
+        self, tmp_path: Path, declared_length: bool
+    ) -> None:
+        """An oversize core exposition is never read into handler memory whole.
+
+        Covers both a declared ``Content-Length`` and a chunked body with no
+        length, where the running byte total must trip the cap mid-stream.
+        """
+        import httpx
+
+        cap = 1024
+        pulled = 0
+
+        class _Chunks(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                nonlocal pulled
+                while pulled < cap * 100:
+                    pulled += 64
+                    yield b"#" * 64
+
+        def _serve(_request: httpx.Request) -> httpx.Response:
+            if declared_length:
+                return httpx.Response(200, content=b"#" * (cap + 1))
+            return httpx.Response(200, stream=_Chunks())
+
+        client = self._proxying_client(tmp_path)
+        with (
+            patch("application_sdk.constants.TEMPORAL_CORE_METRICS_MAX_BYTES", cap),
+            self._core_transport(_serve),
+            patch("application_sdk.handler.service._record_proxy_failure") as failure,
+        ):
+            response = client.get("/metrics")
+
+        assert response.status_code == 200
+        assert "python_info" in response.text
+        assert "#" * 64 not in response.text
+        failure.assert_called_once()
+        assert failure.call_args.args[0] == "oversize"
+        if not declared_length:
+            assert pulled < cap * 3
+
+    def test_metrics_non_200_is_counted_with_status_reason(
         self, tmp_path: Path
     ) -> None:
         import httpx
 
-        class _FailingTemporalMetricsClient:
-            def __init__(self, *args: object, **kwargs: object) -> None:
-                pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args: object) -> None:
-                return None
-
-            async def get(self, url: str) -> object:
-                raise httpx.ReadTimeout("read timed out")
-
-        app = create_app_handler_service(
-            _TestHandler(),
-            app_name="metrics-test",
-            enable_temporal_core_metrics=True,
-            prometheus_bind_address="127.0.0.1:9464",
-            frontend_assets_path=str(tmp_path),
-        )
-        client = TestClient(app)
-
+        client = self._proxying_client(tmp_path)
         with (
-            patch("httpx.AsyncClient", new=_FailingTemporalMetricsClient),
+            self._core_transport(lambda _r: httpx.Response(503, content=b"down")),
+            patch("application_sdk.handler.service._record_proxy_failure") as failure,
+        ):
+            response = client.get("/metrics")
+
+        assert response.status_code == 200
+        assert "down" not in response.text
+        failure.assert_called_once()
+        assert failure.call_args.args[0] == "http_503"
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            pytest.param("connect", id="connect_error"),
+            pytest.param("timeout", id="read_timeout"),
+        ],
+    )
+    def test_metrics_request_error_logs_warning_with_traceback(
+        self, tmp_path: Path, error: str
+    ) -> None:
+        import httpx
+
+        def _fail(request: httpx.Request) -> httpx.Response:
+            if error == "connect":
+                raise httpx.ConnectError(
+                    "All connection attempts failed", request=request
+                )
+            raise httpx.ReadTimeout("read timed out", request=request)
+
+        client = self._proxying_client(tmp_path)
+        with (
+            self._core_transport(_fail),
             patch("application_sdk.handler.service.logger.debug") as mock_debug,
             patch("application_sdk.handler.service.logger.warning") as mock_warning,
         ):

@@ -54,7 +54,10 @@ The FastAPI `/metrics` endpoint (or a worker push) merges:
   histograms emitted by activity/workflow execution) plus, when enabled
   and reachable, the Rust-core families proxied from `127.0.0.1:9464`
   (`temporal_request_*`, `temporal_workflow_task_*`,
-  `temporal_sticky_cache_*`, `temporal_num_pollers`, etc.)
+  `temporal_sticky_cache_*`, `temporal_num_pollers`, etc.). Every read of
+  that endpoint (this proxy, the worker's `TemporalCoreCollector` and the
+  poll-state diagnostic) is capped at `ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES`;
+  an oversize body is skipped, never read whole
 - **`prometheus_client` defaults** (`process_*`, `python_gc_*`,
   `python_info`)
 

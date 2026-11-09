@@ -109,7 +109,6 @@ async def read_core_poller_counts() -> dict[str, float] | None:
     when core's Prometheus exporter is disabled
     (``ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS``).
     """
-    import httpx  # noqa: PLC0415 — cold path: diagnostics only
     from prometheus_client.parser import (  # noqa: PLC0415 — cold path: diagnostics only
         text_string_to_metric_families,
     )
@@ -119,60 +118,20 @@ async def read_core_poller_counts() -> dict[str, float] | None:
         TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS,
         TEMPORAL_PROMETHEUS_BIND_ADDRESS,
     )
+    from application_sdk.observability.temporal_core_metrics import (  # noqa: PLC0415 — cold path: diagnostics only
+        CoreMetricsUnavailable,
+        fetch_core_metrics,
+    )
 
     url = f"http://{TEMPORAL_PROMETHEUS_BIND_ADDRESS}/metrics"
     try:
-        async with httpx.AsyncClient(
-            timeout=TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS
-        ) as http_client:
-            # Stream so the read is bounded: reject on a declared oversize
-            # Content-Length, else accumulate chunks and bail the moment the
-            # running total crosses the cap. Passing chunk_size=cap bounds each
-            # chunk yielded to this loop; the running-total check bounds the
-            # retained bytes. (httpx may still buffer an individual raw
-            # transport chunk internally above the cap, so this bounds what the
-            # loop retains rather than every transient allocation.) An
-            # unbounded response.text would let a high-cardinality or
-            # misbehaving local exporter allocate an unbounded string each
-            # interval. Oversize is unknown (None), never zero.
-            async with http_client.stream("GET", url) as response:
-                if response.status_code != 200:
-                    logger.debug(
-                        "Temporal-core metrics endpoint %s returned HTTP %d; poller count unknown",
-                        url,
-                        response.status_code,
-                    )
-                    return None
-                content_length = response.headers.get("content-length")
-                if content_length is not None and int(content_length) > (
-                    TEMPORAL_CORE_METRICS_MAX_BYTES
-                ):
-                    logger.debug(
-                        "Temporal-core metrics endpoint %s declared %s bytes (cap %d); poller count unknown",
-                        url,
-                        content_length,
-                        TEMPORAL_CORE_METRICS_MAX_BYTES,
-                    )
-                    return None
-                chunks: list[bytes] = []
-                received = 0
-                oversize = False
-                async for chunk in response.aiter_bytes(
-                    chunk_size=TEMPORAL_CORE_METRICS_MAX_BYTES
-                ):
-                    received += len(chunk)
-                    if received > TEMPORAL_CORE_METRICS_MAX_BYTES:
-                        oversize = True
-                        break
-                    chunks.append(chunk)
-                if oversize:
-                    logger.debug(
-                        "Temporal-core metrics endpoint %s exceeded %d bytes; poller count unknown",
-                        url,
-                        TEMPORAL_CORE_METRICS_MAX_BYTES,
-                    )
-                    return None
-                payload = b"".join(chunks).decode("utf-8", errors="replace")
+        # Bounded read: a high-cardinality or misbehaving local exporter must
+        # not make this observer allocate an unbounded body every interval.
+        read = await fetch_core_metrics(
+            url,
+            timeout_s=TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS,
+            max_bytes=TEMPORAL_CORE_METRICS_MAX_BYTES,
+        )
     except Exception:
         logger.debug(
             "Temporal-core metrics endpoint %s unreachable; poller count unknown",
@@ -180,6 +139,16 @@ async def read_core_poller_counts() -> dict[str, float] | None:
             exc_info=True,
         )
         return None
+    if isinstance(read, CoreMetricsUnavailable):
+        # Non-200 or oversize is unknown (None), never zero.
+        logger.debug(
+            "Temporal-core metrics endpoint %s unusable (%s, cap %d bytes); poller count unknown",
+            url,
+            read.reason,
+            TEMPORAL_CORE_METRICS_MAX_BYTES,
+        )
+        return None
+    payload = read.body.decode("utf-8", errors="replace")
 
     counts: dict[str, float] = {}
     try:
