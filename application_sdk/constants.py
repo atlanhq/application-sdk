@@ -1130,8 +1130,28 @@ INCREMENTAL_DEFAULT_STATE = "NO CHANGE"
 #: Base folder for DuckDB temp files (each connection gets a unique UUID subfolder)
 DUCKDB_COMMON_TEMP_FOLDER = "/tmp/incremental_duckdb"
 
-#: Default memory limit for DuckDB (fixed for K8s pods)
+#: Upper bound on DuckDB's memory limit. A connection opened without an
+#: explicit ``memory_limit`` gets this when the container has no memory limit;
+#: otherwise it gets the smaller of this and a share of the container's free
+#: memory (see ``duckdb_utils.default_duckdb_memory_limit``).
 DUCKDB_DEFAULT_MEMORY_LIMIT = "2GB"
+
+#: ``DUCKDB_DEFAULT_MEMORY_LIMIT`` in bytes (DuckDB's ``GB`` is 1000^3).
+DUCKDB_MAX_MEMORY_LIMIT_BYTES = 2 * 1000**3
+
+#: Share of the container's free memory (limit minus current usage) that the
+#: DuckDB connections opened without an explicit ``memory_limit`` may use
+#: between them. The rest is a reserve for the worker's own growth and for
+#: DuckDB's allocations outside its buffer manager, so a scan spills to
+#: ``temp_directory`` rather than pushing the container toward an OOM kill.
+DUCKDB_MEMORY_LIMIT_FRACTION = 0.5
+
+#: Lower bound, in bytes, on a container-derived DuckDB memory limit.
+DUCKDB_MIN_MEMORY_LIMIT_BYTES = 256 * 1024 * 1024
+
+#: Operator override for the default DuckDB memory limit (any DuckDB size
+#: string, e.g. ``1GB``). Empty means derive it from the container limit.
+DUCKDB_MEMORY_LIMIT_OVERRIDE = os.getenv("ATLAN_DUCKDB_MEMORY_LIMIT", "").strip()
 
 SSL_CERT_DIR = os.getenv("SSL_CERT_DIR", "")
 """Custom SSL/TLS certificate directory for corporate/private CAs.

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import threading
 import uuid
 from collections.abc import Generator
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
@@ -19,7 +20,12 @@ from application_sdk._runtime.offload import current_cancel_handle
 from application_sdk.constants import (
     DUCKDB_COMMON_TEMP_FOLDER,
     DUCKDB_DEFAULT_MEMORY_LIMIT,
+    DUCKDB_MAX_MEMORY_LIMIT_BYTES,
+    DUCKDB_MEMORY_LIMIT_FRACTION,
+    DUCKDB_MEMORY_LIMIT_OVERRIDE,
+    DUCKDB_MIN_MEMORY_LIMIT_BYTES,
 )
+from application_sdk.observability import cgroup as _cgroup
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -93,6 +99,59 @@ def interrupt_on_cancel(conn: DuckDBPyConnection) -> AbstractContextManager[None
     return handle.registered(conn.interrupt)
 
 
+#: Open :class:`DuckDBConnectionManager` instances in this process. A new
+#: default-sized connection shares the free memory with them.
+_open_managers = 0
+_open_managers_lock = threading.Lock()
+
+
+def default_duckdb_memory_limit(open_connections: int = 0) -> str:
+    """DuckDB memory limit for a connection opened without an explicit one.
+
+    ``ATLAN_DUCKDB_MEMORY_LIMIT`` wins when set. Otherwise the limit is
+    ``DUCKDB_MEMORY_LIMIT_FRACTION`` of the container's free memory (its
+    memory limit minus current usage), split evenly between this connection
+    and the *open_connections* already open in the process, then clamped to
+    ``[DUCKDB_MIN_MEMORY_LIMIT_BYTES, DUCKDB_MAX_MEMORY_LIMIT_BYTES]``. With
+    no container limit known it is ``DUCKDB_DEFAULT_MEMORY_LIMIT``; with the
+    limit known but usage not, the whole limit counts as free.
+
+    This lowers the chance of an OOM kill; it cannot rule one out. The free
+    memory is a snapshot at open time, the floor can exceed what is free on
+    an almost-full container, and DuckDB allocates a little outside its
+    limit. The reserve left by the fraction absorbs the usual worker growth.
+
+    A fixed 2GB limit is larger than a 2 GiB container that is already
+    holding the worker's own state, so DuckDB never spilled and the kernel
+    OOM-killed the worker mid-scan instead.
+
+    Args:
+        open_connections: DuckDB connections already open in this process,
+            each of which may still grow into the same free memory.
+
+    Returns:
+        A DuckDB size string, e.g. ``"199MiB"``.
+    """
+    if DUCKDB_MEMORY_LIMIT_OVERRIDE:
+        return DUCKDB_MEMORY_LIMIT_OVERRIDE
+    container_limit = _cgroup.memory_limit_bytes()
+    if container_limit is None:
+        return DUCKDB_DEFAULT_MEMORY_LIMIT
+    usage = _cgroup.memory_usage_bytes()
+    free = max(0, container_limit - (usage or 0))
+    share = int(free * DUCKDB_MEMORY_LIMIT_FRACTION) // (max(0, open_connections) + 1)
+    limit = min(
+        DUCKDB_MAX_MEMORY_LIMIT_BYTES, max(DUCKDB_MIN_MEMORY_LIMIT_BYTES, share)
+    )
+    return f"{limit // (1024 * 1024)}MiB"
+
+
+def _release_manager_slot() -> None:
+    global _open_managers  # noqa: PLW0603
+    with _open_managers_lock:
+        _open_managers = max(0, _open_managers - 1)
+
+
 class DuckDBConnectionManager:
     """File-backed DuckDB connection with automatic cleanup.
 
@@ -104,7 +163,7 @@ class DuckDBConnectionManager:
     def __init__(
         self,
         base_path: str = DUCKDB_COMMON_TEMP_FOLDER,
-        memory_limit: str = DUCKDB_DEFAULT_MEMORY_LIMIT,
+        memory_limit: str | None = None,
         threads: str = "1",
         auto_cleanup: bool = True,
     ):
@@ -112,12 +171,20 @@ class DuckDBConnectionManager:
 
         Args:
             base_path: Parent directory for DuckDB instances
-            memory_limit: DuckDB memory limit (default: 2GB)
+            memory_limit: DuckDB memory limit. Default: a share of the
+                container's free memory, split with the other open managers,
+                by :func:`default_duckdb_memory_limit` (at most 2GB).
             threads: Number of threads (default: 1)
             auto_cleanup: Remove temp files on close (default: True)
         """
         if duckdb is None:
             raise ImportError("duckdb is required for DuckDBConnectionManager")
+
+        global _open_managers  # noqa: PLW0603
+        with _open_managers_lock:
+            if memory_limit is None:
+                memory_limit = default_duckdb_memory_limit(_open_managers)
+            _open_managers += 1
 
         self._instance_id = _generate_random_uuid()
         self._base_path = base_path
@@ -131,23 +198,28 @@ class DuckDBConnectionManager:
         self._temp_dir = f"{self._instance_path}/duckdb_temp"
         self._db_file = f"{self._instance_path}/duckdb.db"
 
-        os.makedirs(self._instance_path, exist_ok=True)
-        os.makedirs(self._temp_dir, exist_ok=True)
+        try:
+            os.makedirs(self._instance_path, exist_ok=True)
+            os.makedirs(self._temp_dir, exist_ok=True)
 
-        logger.info(
-            "Creating DuckDB: file=%s memory_limit=%s", self._db_file, memory_limit
-        )
-        self._connection = duckdb.connect(
-            self._db_file,
-            config={
-                "threads": threads,
-                "memory_limit": memory_limit,
-                "temp_directory": self._temp_dir,
-                "preserve_insertion_order": "false",
-                "enable_object_cache": "false",
-            },
-            read_only=False,
-        )
+            logger.info(
+                "Creating DuckDB: file=%s memory_limit=%s", self._db_file, memory_limit
+            )
+            self._connection = duckdb.connect(
+                self._db_file,
+                config={
+                    "threads": threads,
+                    "memory_limit": memory_limit,
+                    "temp_directory": self._temp_dir,
+                    "preserve_insertion_order": "false",
+                    "enable_object_cache": "false",
+                },
+                read_only=False,
+            )
+        except BaseException:
+            # Never opened, so close() will not run: give the slot back.
+            _release_manager_slot()
+            raise
         # A manager opened inside an offloaded call (the common case: the
         # helper opens its own connection) is interrupted when that call is,
         # until it closes.
@@ -180,6 +252,7 @@ class DuckDBConnectionManager:
             logger.warning("Error closing DuckDB", exc_info=True)
         finally:
             self._is_closed = True
+            _release_manager_slot()
             if self._auto_cleanup:
                 shutil.rmtree(self._instance_path, ignore_errors=True)
 

@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.55.0"
+version = "3.55.1"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -21,7 +21,7 @@ classifiers = [
 ]
 keywords = ["atlan", "sdk", "platform", "app", "development"]
 dependencies = [
-    "atlan-application-sdk-api==3.55.0",
+    "atlan-application-sdk-api==3.55.1",
     # The OTLP gRPC exporters only, not the opentelemetry-exporter-otlp meta
     # package: that also pulls the HTTP exporter, which nothing imports.
     "opentelemetry-exporter-otlp-proto-grpc>=1.45.0,<2.0.0",
@@ -205,7 +205,7 @@ dev = [
     # Exact pin, equal to the ruff-pre-commit rev in .pre-commit-config.yaml
     # (enforced by .github/scripts/tests/test_lint_guards.py), so `uv run ruff`
     # and the CI hook lint, format and sort imports identically.
-    "ruff==0.17.3",
+    "ruff==0.17.4",
     # Exact pin, equal to the pyright-python rev in .pre-commit-config.yaml
     # (enforced by .github/scripts/tests/test_check_pyright_baseline.py), so the
     # .github/scripts baseline check and the pre-commit hook run one pyright.
