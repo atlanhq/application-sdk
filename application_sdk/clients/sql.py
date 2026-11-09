@@ -15,6 +15,7 @@ import hashlib
 import math
 import re
 import threading
+import time
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -50,6 +51,7 @@ from application_sdk.clients.sql_errors import (
 )
 from application_sdk.clients.sql_typecasters import install_tolerant_text_decoder_hook
 from application_sdk.common.aws_utils import (
+    _RDS_AUTH_TOKEN_REFRESH_SECONDS,
     _sts_deadline,
     generate_aws_rds_token_with_iam_role,
     generate_aws_rds_token_with_iam_user,
@@ -153,7 +155,7 @@ def _bound_params(
 if TYPE_CHECKING:
     import pandas as pd
     from sqlalchemy.engine import URL, Connection
-    from sqlalchemy.engine.interfaces import DBAPICursor, ExecutionContext
+    from sqlalchemy.engine.interfaces import DBAPICursor, Dialect, ExecutionContext
     from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
     from sqlalchemy.orm import Session
 
@@ -453,6 +455,124 @@ def _cap_next_connect_timeout(
     event.listen(engine, "do_connect", _cap, once=True)
 
 
+#: ``authType`` values whose password is a short-lived RDS IAM auth token.
+_IAM_TOKEN_AUTH_TYPES = frozenset({"iam_user", "iam_role"})
+
+
+class _FreshIamToken:
+    """``do_connect`` listener: give every new connection an unexpired RDS IAM token.
+
+    The engine's URL holds the token generated in ``load()``, and RDS accepts it
+    for new connections for only 15 minutes. Any connect after that — a second
+    pooled connection, a reconnect after pre-ping or after a cancelled read
+    invalidated the connection — would fail auth. Once the token is
+    ``_RDS_AUTH_TOKEN_REFRESH_SECONDS`` old, the connection string is built
+    again through ``build`` (the client's ``get_sqlalchemy_connection_string``,
+    so a connector's override is honoured), and every driver argument it
+    changes is swapped into the connect. Only arguments still as the engine's
+    URL set them are swapped: a ``connect_args`` value or another listener's
+    change is kept.
+
+    Arguments are compared through the dialect's own ``create_connect_args``,
+    so the token reaches the driver under whatever keyword it takes
+    (``password``, ``passwd``) without naming one here.
+
+    Runs on whichever thread opens the connection; the lock makes concurrent
+    connects build the token once. A failure to build one propagates out of
+    the connect, already typed.
+    """
+
+    def __init__(
+        self,
+        build: Callable[[], str],
+        connection_string: str,
+        issued_at: float,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        from sqlalchemy.engine import make_url  # noqa: PLC0415 — optional dep: sqlalchemy
+
+        self._build = build
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._engine_url = make_url(connection_string)
+        self._issued_at = issued_at
+        #: Positional and keyword driver arguments to swap in, by the URL that
+        #: last refreshed them; empty while the engine's own token is fresh.
+        self._cargs: dict[int, Any] = {}
+        self._cparams: dict[str, Any] = {}
+        #: The engine URL's own driver arguments, which a swap must still find.
+        self._baseline: tuple[list[Any], dict[str, Any]] = ([], {})
+
+    def _refresh(self, dialect: "Dialect") -> None:
+        from sqlalchemy.engine import make_url  # noqa: PLC0415 — optional dep: sqlalchemy
+
+        # Taken before the build, so the token's age is never understated.
+        issued_at = self._clock()
+        fresh = make_url(self._build())
+        old_args, old_params = dialect.create_connect_args(self._engine_url)
+        new_args, new_params = dialect.create_connect_args(fresh)
+        self._cargs = {
+            i: new for i, (old, new) in enumerate(zip(old_args, new_args)) if old != new
+        }
+        self._cparams = {
+            key: value
+            for key, value in new_params.items()
+            if old_params.get(key, _MISSING) != value
+        }
+        self._baseline = (list(old_args), dict(old_params))
+        self._issued_at = issued_at
+        logger.debug("Refreshed the RDS IAM auth token for new connections")
+
+    def __call__(
+        self,
+        dialect: "Dialect",
+        conn_rec: object,
+        cargs: list[Any],
+        cparams: dict[str, Any],
+    ) -> None:
+        with self._lock:
+            if self._clock() - self._issued_at >= _RDS_AUTH_TOKEN_REFRESH_SECONDS:
+                self._refresh(dialect)
+            swap_args, swap_params = self._cargs, self._cparams
+            if not (swap_args or swap_params):
+                return
+            old_args, old_params = self._baseline
+        for i, value in swap_args.items():
+            if i < len(cargs) and cargs[i] == old_args[i]:
+                cargs[i] = value
+        for key, value in swap_params.items():
+            if cparams.get(key, _MISSING) == old_params.get(key, _MISSING):
+                cparams[key] = value
+
+
+#: Stands in for an absent driver argument, which no real value equals.
+_MISSING = object()
+
+
+def _install_iam_token_refresh(
+    engine: object, client: "BaseSQLClient", connection_string: str, issued_at: float
+) -> None:
+    """Refresh ``engine``'s RDS IAM token on new connections, for IAM auth only.
+
+    ``engine`` is a sync Engine (an async engine's ``sync_engine``); anything
+    else, such as a test double, is left alone, as is every other ``authType``.
+    """
+    from sqlalchemy import event  # noqa: PLC0415 — optional dep: sqlalchemy
+    from sqlalchemy.engine import Engine  # noqa: PLC0415 — optional dep: sqlalchemy
+
+    if not isinstance(engine, Engine):
+        return
+    if client.credentials.get("authType") not in _IAM_TOKEN_AUTH_TYPES:
+        return
+    event.listen(
+        engine,
+        "do_connect",
+        _FreshIamToken(
+            client.get_sqlalchemy_connection_string, connection_string, issued_at
+        ),
+    )
+
+
 def _budget_left(budget: asyncio.Timeout) -> float:
     """Seconds until ``budget`` expires, measured on the running loop's clock."""
     return cast(float, budget.when()) - asyncio.get_running_loop().time()
@@ -569,6 +689,7 @@ class BaseSQLClient(ClientInterface):
                 # a network round trip that would otherwise block the loop.
                 # Cancelling the await does not stop the thread, so the STS
                 # call is fitted into the budget too.
+                issued_at = time.monotonic()
                 with _sts_deadline(_budget_left(budget)):
                     connection_string = await run_in_thread(
                         self.get_sqlalchemy_connection_string
@@ -592,6 +713,11 @@ class BaseSQLClient(ClientInterface):
                 # to be remapped once per process, before any connection is opened —
                 # see sql_typecasters for why. Tracking: WARE-970, CONAT-767.
                 install_tolerant_text_decoder_hook(self.engine)
+
+                # The URL's IAM token expires; later connects need a fresh one.
+                _install_iam_token_refresh(
+                    self.engine, self, connection_string, issued_at
+                )
 
                 # Test connection briefly to validate credentials.
                 # Wrapped in run_in_thread because SQLAlchemy's synchronous
@@ -1249,6 +1375,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 # a network round trip that would otherwise block the loop.
                 # Cancelling the await does not stop the thread, so the STS
                 # call is fitted into the budget too.
+                issued_at = time.monotonic()
                 with _sts_deadline(_budget_left(budget)):
                     connection_string = await run_in_thread(
                         self.get_sqlalchemy_connection_string
@@ -1268,6 +1395,11 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 # Same WARE-970 tolerant-decoder hook as the sync client. Async
                 # engines surface DBAPI events on the underlying sync_engine.
                 install_tolerant_text_decoder_hook(self.engine.sync_engine)
+
+                # The URL's IAM token expires; later connects need a fresh one.
+                _install_iam_token_refresh(
+                    self.engine.sync_engine, self, connection_string, issued_at
+                )
 
                 # Test connection briefly to validate credentials
                 async with self.engine.connect() as _:

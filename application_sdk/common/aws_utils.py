@@ -39,6 +39,12 @@ _STS_MAX_ATTEMPTS = 2
 #: some socket layers, the opposite of what an expired deadline wants.
 _STS_MIN_TIMEOUT_SECONDS = 1.0
 
+#: Age at which an RDS IAM auth token is replaced before the next new
+#: connection. RDS accepts a token for new connections for 15 minutes after it
+#: is generated; refreshing at 10 leaves room for the time spent building it
+#: and for clock skew. An open connection is unaffected by its token expiring.
+_RDS_AUTH_TOKEN_REFRESH_SECONDS = 10 * 60.0
+
 #: ``time.monotonic()`` by which an STS call made in this context must finish,
 #: or None for the fixed bounds above. A context variable rather than a
 #: parameter so it reaches ``AssumeRole`` through any connector's override of

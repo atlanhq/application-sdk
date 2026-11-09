@@ -379,3 +379,65 @@ async def test_run_query_wrap_is_retryable_client_side(
             pass
 
     assert exc_info.value.effective_retryable is True
+
+
+@pytest.mark.asyncio
+async def test_load_refreshes_an_aged_iam_token_on_the_sync_engine() -> None:
+    """The async engine's connects run through its sync_engine; the refresh sits there."""
+    pytest.importorskip("psycopg2")
+    from sqlalchemy import create_engine, event
+
+    from application_sdk.clients.sql import _FreshIamToken
+
+    issued = 0
+
+    class _IamAsyncClient(AsyncBaseSQLClient):
+        DB_CONFIG = DatabaseConfig(template="unused://{host}", required=["host"])
+
+        def get_sqlalchemy_connection_string(self) -> str:
+            nonlocal issued
+            issued += 1
+            return f"postgresql+psycopg2://u:token-{issued}@127.0.0.1:1/db"
+
+    sync_engine = create_engine("postgresql+psycopg2://u:token-1@127.0.0.1:1/db")
+
+    class _Ping:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    async_engine = MagicMock()
+    async_engine.sync_engine = sync_engine
+    async_engine.connect = MagicMock(return_value=_Ping())
+    async_engine.dispose = AsyncMock()
+
+    client = _IamAsyncClient()
+    with patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=async_engine):
+        await client.load({"host": "h", "authType": "iam_role"})
+
+    listeners = [
+        fn
+        for fn in sync_engine.dialect.dispatch.do_connect
+        if isinstance(fn, _FreshIamToken)
+    ]
+    assert len(listeners) == 1
+    listeners[0]._issued_at -= 11 * 60
+
+    seen: list[dict[str, Any]] = []
+
+    class _Stop(Exception):
+        pass
+
+    def _record(
+        dialect: object, conn_rec: object, cargs: object, cparams: dict
+    ) -> None:
+        seen.append(dict(cparams))
+        raise _Stop
+
+    event.listen(sync_engine, "do_connect", _record)
+    with pytest.raises(_Stop):
+        sync_engine.raw_connection()
+    assert seen[0]["password"] == "token-2"
+    sync_engine.dispose()

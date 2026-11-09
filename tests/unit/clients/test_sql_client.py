@@ -1400,3 +1400,215 @@ async def test_get_results_invariant_violation_stays_non_retryable(
 def test_sql_pandas_result_error_class_default_is_non_retryable():
     """The INTERNAL class default is unchanged; retryability is per-instance."""
     assert SqlPandasResultError.default_retryable is False
+
+
+# --- RDS IAM token refresh on new connections ---------------------------------
+
+
+class _StopConnect(Exception):
+    """Raised by the recorder so no connect ever reaches a socket."""
+
+
+def _record_connect_params(engine: Any) -> list[dict[str, Any]]:
+    """Record each connect's driver keyword arguments, then stop it before any socket opens.
+
+    Registered after the refresh listener, so it sees what the driver would get.
+    """
+    from sqlalchemy import event
+
+    seen: list[dict[str, Any]] = []
+
+    def _record(
+        dialect: object, conn_rec: object, cargs: object, cparams: dict[str, Any]
+    ) -> None:
+        seen.append(dict(cparams))
+        raise _StopConnect
+
+    event.listen(engine, "do_connect", _record)
+    return seen
+
+
+def _connect_params(engine: Any) -> dict[str, Any]:
+    seen = _record_connect_params(engine)
+    with pytest.raises(_StopConnect):
+        engine.raw_connection()
+    from sqlalchemy import event
+
+    for fn in list(engine.dialect.dispatch.do_connect):
+        if getattr(fn, "__name__", "") == "_record":
+            event.remove(engine, "do_connect", fn)
+    return seen[0]
+
+
+def _url(token: str) -> str:
+    return f"postgresql+psycopg2://iam_user:{token}@127.0.0.1:1/db"
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class _Tokens:
+    """A connection-string builder that issues a new token on every call."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self) -> str:
+        self.calls += 1
+        return _url(f"token-{self.calls}")
+
+
+class TestFreshIamToken:
+    @pytest.fixture(autouse=True)
+    def _psycopg2(self) -> None:
+        pytest.importorskip("psycopg2")
+
+    def _engine(self, connect_args: dict[str, Any] | None = None) -> Any:
+        from sqlalchemy import create_engine
+
+        return create_engine(_url("token-0"), connect_args=connect_args or {})
+
+    def _listen(self, engine: Any, tokens: _Tokens, clock: _Clock) -> None:
+        from sqlalchemy import event
+
+        from application_sdk.clients.sql import _FreshIamToken
+
+        event.listen(
+            engine,
+            "do_connect",
+            _FreshIamToken(tokens, _url("token-0"), clock.now, clock=clock),
+        )
+
+    def test_keeps_the_engine_token_while_it_is_fresh(self) -> None:
+        engine, tokens, clock = self._engine(), _Tokens(), _Clock()
+        self._listen(engine, tokens, clock)
+        clock.now += 9 * 60
+
+        assert _connect_params(engine)["password"] == "token-0"
+        assert tokens.calls == 0
+
+    def test_a_connect_after_the_token_ages_gets_a_new_one(self) -> None:
+        engine, tokens, clock = self._engine(), _Tokens(), _Clock()
+        self._listen(engine, tokens, clock)
+        clock.now += 10 * 60
+
+        params = _connect_params(engine)
+
+        assert params["password"] == "token-1"
+        # Everything else is as the engine URL set it.
+        assert params["user"] == "iam_user"
+        assert params["host"] == "127.0.0.1"
+        assert params["dbname"] == "db"
+
+    def test_the_new_token_is_reused_until_it_ages_too(self) -> None:
+        engine, tokens, clock = self._engine(), _Tokens(), _Clock()
+        self._listen(engine, tokens, clock)
+        clock.now += 11 * 60
+        assert _connect_params(engine)["password"] == "token-1"
+
+        clock.now += 9 * 60
+        assert _connect_params(engine)["password"] == "token-1"
+        assert tokens.calls == 1
+
+        clock.now += 60
+        assert _connect_params(engine)["password"] == "token-2"
+
+    def test_a_connect_args_password_is_left_alone(self) -> None:
+        engine, tokens, clock = (
+            self._engine({"password": "from-connect-args"}),
+            _Tokens(),
+            _Clock(),
+        )
+        self._listen(engine, tokens, clock)
+        clock.now += 11 * 60
+
+        assert _connect_params(engine)["password"] == "from-connect-args"
+
+    def test_a_failed_build_fails_the_connect(self) -> None:
+        engine, clock = self._engine(), _Clock()
+
+        def _fail() -> str:
+            raise SqlAwsCredentialsError(message="no role")
+
+        from sqlalchemy import event
+
+        from application_sdk.clients.sql import _FreshIamToken
+
+        event.listen(
+            engine,
+            "do_connect",
+            _FreshIamToken(_fail, _url("token-0"), clock.now, clock=clock),
+        )
+        clock.now += 11 * 60
+        with pytest.raises(SqlAwsCredentialsError):
+            engine.raw_connection()
+
+
+class _IamClient(BaseSQLClient):
+    DB_CONFIG = DatabaseConfig(template="unused://{host}", required=["host"])
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tokens = _Tokens()
+
+    def get_sqlalchemy_connection_string(self) -> str:
+        return self.tokens()
+
+
+def _refresh_listener(engine: Any) -> Any:
+    from application_sdk.clients.sql import _FreshIamToken
+
+    found = [
+        fn
+        for fn in engine.dialect.dispatch.do_connect
+        if isinstance(fn, _FreshIamToken)
+    ]
+    return found[0] if found else None
+
+
+async def _load_without_ping(
+    client: BaseSQLClient, credentials: dict[str, Any]
+) -> None:
+    """``load()`` with a real engine, building the URL but skipping the ping's socket."""
+
+    async def _run(fn: Any, *args: Any) -> Any:
+        return fn(*args) if fn == client.get_sqlalchemy_connection_string else None
+
+    with patch("application_sdk.clients.sql.run_in_thread", side_effect=_run):
+        await client.load(credentials)
+
+
+@pytest.mark.parametrize("auth_type", ["iam_user", "iam_role"])
+async def test_load_refreshes_an_aged_iam_token_on_new_connections(
+    auth_type: str,
+) -> None:
+    pytest.importorskip("psycopg2")
+    client = _IamClient()
+    await _load_without_ping(client, {"host": "h", "authType": auth_type})
+    engine = client.engine
+    assert engine is not None
+    listener = _refresh_listener(engine)
+    assert listener is not None
+
+    assert _connect_params(engine)["password"] == "token-1"
+    # Age the token load() baked into the engine URL past the refresh point.
+    listener._issued_at -= 11 * 60
+    assert _connect_params(engine)["password"] == "token-2"
+    await client.close()
+
+
+@pytest.mark.parametrize(
+    "credentials", [{"host": "h"}, {"host": "h", "authType": "basic"}]
+)
+async def test_load_leaves_non_iam_auth_alone(credentials: dict[str, Any]) -> None:
+    pytest.importorskip("psycopg2")
+    client = _IamClient()
+    await _load_without_ping(client, credentials)
+    assert client.engine is not None
+    assert _refresh_listener(client.engine) is None
+    await client.close()

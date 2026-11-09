@@ -45,6 +45,7 @@ Both SQL client classes are typically **subclassed** for specific database types
     *   Called with a `credentials` dictionary.
     *   Builds the final SQLAlchemy connection string using `DB_CONFIG` and `credentials` (including authentication handling).
     *   Creates the SQLAlchemy engine (`self.engine`) and connection (`self.connection`).
+    *   **RDS IAM auth (`authType` `iam_user` or `iam_role`):** the token `load()` puts in the engine URL is accepted by RDS for new connections for only 15 minutes. `load()` therefore registers a `do_connect` listener on the engine (an async client's `sync_engine`): once the token is 10 minutes old, the next new connection calls `get_sqlalchemy_connection_string()` again (for `iam_role`, another STS `AssumeRole`) and connects with the fresh token, which later connections reuse until it ages in turn. Open pooled connections are unaffected. A connector that overrides `get_sqlalchemy_connection_string()` gets its override called for the refresh too. A password set in `DB_CONFIG.connect_args` is left as is.
 
 3.  **Executing Queries (`run_query` method):**
     *   Takes a SQL query string, an optional `batch_size` and optional `params`.
