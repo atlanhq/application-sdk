@@ -486,3 +486,57 @@ async def test_load_installs_the_on_loop_refresh_on_the_sync_engine() -> None:
     assert len(listeners) == 1
     assert listeners[0]._on_loop is True
     await real.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_waiter_does_not_break_the_shared_refresh() -> None:
+    """Cancelling a connect that waits on another's refresh must not cancel that refresh."""
+    pytest.importorskip("psycopg")
+    import asyncio
+    import threading
+
+    from sqlalchemy import event
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from application_sdk.clients.sql import _FreshIamToken
+
+    now = [1000.0]
+    release = threading.Event()
+
+    def _build() -> str:
+        assert release.wait(10)
+        return _IAM_URL.format(token="token-1")
+
+    engine = create_async_engine(_IAM_URL.format(token="token-0"))
+    listener = _FreshIamToken(
+        _build,
+        _IAM_URL.format(token="token-0"),
+        now[0],
+        on_loop=True,
+        clock=lambda: now[0],
+    )
+    event.listen(engine.sync_engine, "do_connect", listener)
+    seen = _record_connect_params(engine.sync_engine)
+    now[0] += 11 * 60
+
+    async def _connect() -> None:
+        async with engine.connect():
+            pass
+
+    owner = asyncio.ensure_future(_connect())
+    while listener._refreshing is None:
+        await asyncio.sleep(0)
+    refreshing = listener._refreshing
+    waiter = asyncio.ensure_future(_connect())
+    # The waiter is parked once it has subscribed to the shared refresh.
+    while not refreshing._done_callbacks:  # type: ignore[attr-defined]
+        await asyncio.sleep(0)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    release.set()
+
+    with pytest.raises(_StopConnect):
+        await owner
+    assert seen[-1]["password"] == "token-1"
+    await engine.dispose()

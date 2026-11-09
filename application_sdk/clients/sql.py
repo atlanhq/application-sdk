@@ -533,7 +533,10 @@ class _FreshIamToken:
             await_only,
         )
 
-        await_only(asyncio.wrap_future(refreshing))
+        # Shielded: wrap_future passes a cancel through to the wrapped future,
+        # so a cancelled waiter would cancel the refresh every other connect
+        # shares, and the owner's set_result would then raise.
+        await_only(asyncio.shield(asyncio.wrap_future(refreshing)))
 
     def _stale(self) -> bool:
         with self._lock:
