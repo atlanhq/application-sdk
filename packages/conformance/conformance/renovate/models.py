@@ -13,6 +13,7 @@ class Category(str, Enum):
 
     LOCK_MAINTENANCE = "lock-maintenance"
     GITHUB_ACTIONS = "github-actions"
+    GITHUB_ACTIONS_MAJOR = "github-actions-major"
     CONTRACT_TOOLKIT = "contract-toolkit"
     CONFORMANCE_PACKAGE = "conformance-package"
     SDK_PACKAGE = "sdk-package"

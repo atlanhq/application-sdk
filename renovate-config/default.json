@@ -154,7 +154,7 @@
       "rebaseWhen": "behind-base-branch"
     },
     {
-      "description": "Release-age cooldown for third-party PyPI packages on the lanes Renovate can actually age-check (FND-359). The window is 3 days, not the 7 the written org policy names: the security team confirmed the effective detection window they operate to is 2-3 days, and 3 is the conservative end of that. Anything longer buys no extra detection time and only widens the gap this cooldown's real cost lives in - an upstream fix that ships BEFORE an advisory exists looks like an ordinary release and is delayed the full window. Upstream exempts lockFileMaintenance, lockfileUpdate, pin, bump, rollback and replacement from minimumReleaseAge, so this covers only the lanes where Renovate itself picks the version; the lock-refresh lane carries its own bound via postUpgradeTasks. matchUpdateTypes is a positive ALLOWLIST rather than a blanket match on purpose: minimumReleaseAgeBehaviour defaults to timestamp-required, so an update type with no release timestamp counts as never-aged and a blanket rule would suppress those lanes permanently rather than delay them. Failing open that way (a newly-supported type is merely not yet cooled down) is the right direction for a rule whose job is to delay, not to block. The two packages we publish are excluded here and set minimumReleaseAge: null in their own lanes above — belt and braces, since rule order decides. pyatlan is excluded too, and the split is the point (FND-378): it is Atlan-published, so the cooldown never applies to it, but it has no LANE of its own — those are separate questions and the removed lane conflated them. No lane, because Renovate's uv manager extracts only DECLARED dependencies and exactly one fleet repo declares pyatlan, so the lane was dead config nearly everywhere; and where it did apply it duplicated a control point upstream of it, since a connector receives a pyatlan major only by taking an SDK release that raises the SDK's own `pyatlan>=N,<N+1` cap. No cooldown, because a three-day hold on pyatlan is a three-day hold on the SDK: SDK releases track pyatlan majors, and the SDK repo itself extends this preset (it is outside the fleet matrix, which filters on the atlan-*-app name, but it declares pyatlan>=10,<11). So pyatlan rides the ordinary lanes — grouped when non-major, its own low-priority human-reviewed PR when major — and waits for nothing. Note that only a range-widening major can reach this rule at all: an in-range release produces no PR under rangeStrategy auto and moves through lockFileMaintenance, which upstream exempts from minimumReleaseAge and which passes pyatlan=P0D to the bounded driver. This exclusion is belt and braces on top of that, so immediacy does not rest on that update-type analysis staying true. Nor should the `--exempt pyatlan` in the lockFileMaintenance command be read as the same policy wearing a second hat: that one is resolution correctness — without it a bounded resolve silently backtracks the SDK — and would be required even if the cooldown did apply here. docker is deliberately absent: base-image bumps are mostly CVE patches, so any hold is a net security loss, and the docker timestamp is the publisher-controlled org.opencontainers.image.created annotation, which Renovate's own docs flag as bypassable.",
+      "description": "Release-age cooldown for third-party PyPI packages on the lanes Renovate can actually age-check (FND-359). The window is 3 days, not the 7 the written org policy names: the security team confirmed the effective detection window they operate to is 2-3 days, and 3 is the conservative end of that. That exception to the org baseline is recorded, with every lane it covers, in docs/standards/ci.md under 'Renovate release-age windows' (FND-4651); change the window there first. Anything longer buys no extra detection time and only widens the gap this cooldown's real cost lives in - an upstream fix that ships BEFORE an advisory exists looks like an ordinary release and is delayed the full window. Upstream exempts lockFileMaintenance, lockfileUpdate, pin, bump, rollback and replacement from minimumReleaseAge, so this covers only the lanes where Renovate itself picks the version; the lock-refresh lane carries its own bound via postUpgradeTasks. matchUpdateTypes is a positive ALLOWLIST rather than a blanket match on purpose: minimumReleaseAgeBehaviour defaults to timestamp-required, so an update type with no release timestamp counts as never-aged and a blanket rule would suppress those lanes permanently rather than delay them. Failing open that way (a newly-supported type is merely not yet cooled down) is the right direction for a rule whose job is to delay, not to block. The two packages we publish are excluded here and set minimumReleaseAge: null in their own lanes above — belt and braces, since rule order decides. pyatlan is excluded too, and the split is the point (FND-378): it is Atlan-published, so the cooldown never applies to it, but it has no LANE of its own — those are separate questions and the removed lane conflated them. No lane, because Renovate's uv manager extracts only DECLARED dependencies and exactly one fleet repo declares pyatlan, so the lane was dead config nearly everywhere; and where it did apply it duplicated a control point upstream of it, since a connector receives a pyatlan major only by taking an SDK release that raises the SDK's own `pyatlan>=N,<N+1` cap. No cooldown, because a three-day hold on pyatlan is a three-day hold on the SDK: SDK releases track pyatlan majors, and the SDK repo itself extends this preset (it is outside the fleet matrix, which filters on the atlan-*-app name, but it declares pyatlan>=10,<11). So pyatlan rides the ordinary lanes — grouped when non-major, its own low-priority human-reviewed PR when major — and waits for nothing. Note that only a range-widening major can reach this rule at all: an in-range release produces no PR under rangeStrategy auto and moves through lockFileMaintenance, which upstream exempts from minimumReleaseAge and which passes pyatlan=P0D to the bounded driver. This exclusion is belt and braces on top of that, so immediacy does not rest on that update-type analysis staying true. Nor should the `--exempt pyatlan` in the lockFileMaintenance command be read as the same policy wearing a second hat: that one is resolution correctness — without it a bounded resolve silently backtracks the SDK — and would be required even if the cooldown did apply here. docker is deliberately absent: base-image bumps are mostly CVE patches, so any hold is a net security loss, and the docker timestamp is the publisher-controlled org.opencontainers.image.created annotation, which Renovate's own docs flag as bypassable.",
       "matchDatasources": [
         "pypi"
       ],
@@ -203,7 +203,7 @@
       "prPriority": -1
     },
     {
-      "description": "GitHub Actions: group all update types (including major) in one PR; auto-merge on green. Major action bumps are safe to auto-merge because the auto-approval workflow gates on green CI, which validates behaviour. Unlike Python deps, action majors are frequent and low-risk compared to library API changes.",
+      "description": "GitHub Actions: group every update type in one group and auto-merge minor, patch and digest bumps on green. Majors are carved back out by the next rule (FND-4651). The group still spans majors so that Renovate's separateMajorMinor puts them on their own branch, renovate/major-github-actions, rather than leaving them ungrouped; the fleet dashboard classifier keys the human-review verdict on that slug.",
       "matchManagers": [
         "github-actions"
       ],
@@ -217,6 +217,36 @@
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
+    },
+    {
+      "description": "Action majors are not auto-merged (FND-4651). A workflow file is control-plane: the jobs it defines hold the org token, and a major is where an action changes what it runs, what inputs it reads and what permissions it needs. Green CI shows the workflow still passes; it does not show the new major is the code we meant to trust. A human reads and merges the renovate/major-github-actions PR. Separate from the group rule above so minor and patch bumps keep auto-merging: Renovate auto-merges a group only when every member does, and separateMajorMinor already gives majors their own branch.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false,
+      "platformAutomerge": false
+    },
+    {
+      "description": "Release-age hold for third-party GitHub Actions and the toolchains they install (FND-4651): 7 days, the org baseline's full window, not the 3-day exception the PyPI, pre-commit, pkl and lock-refresh lanes run under (docs/standards/ci.md, 'Renovate release-age windows'). The exception does not extend here because the risk is not the same: an action runs inside a workflow that holds the org token, so a compromised release reaches a credential on the first run rather than reaching a test environment. Without this hold a new action tag was proposed and auto-merged within one Renovate pass. matchDatasources is github-tags (action refs) and github-releases (the toolchain versions actions/setup-* and astral-sh/setup-uv install), both of which carry a release timestamp, so the default timestamp-required behaviour delays rather than suppresses. Docker images and github-runners labels the same manager extracts are left out: docker for the reason the PyPI rule gives, runner labels because they carry no timestamp and would be suppressed outright. Positive matchUpdateTypes, the same shape as the PyPI rule, so digest and pin lanes are not caught; every third-party action in the fleet templates is SHA-pinned with a version comment, so its bumps arrive as major, minor or patch. atlanhq/** is exempt: those are our own reusable workflows and composite actions, released with the SDK, and holding them would hold every SDK fix the same way the PyPI rule's first-party exclusions avoid. The uv cache-key regex lane in application-sdk's renovate.json carries the same 7 days so it stays in the same PR as the setup-uv bump it must track.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchDatasources": [
+        "github-tags",
+        "github-releases"
+      ],
+      "matchPackageNames": [
+        "!atlanhq/**"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
+      "minimumReleaseAge": "7 days"
     },
     {
       "description": "Trivy CLI version (version: in with: blocks): disable auto-updates. The scanner version is pinned deliberately — scan results drift when Trivy's vuln DB schema or detection logic changes, so bumps must be a conscious decision.",
