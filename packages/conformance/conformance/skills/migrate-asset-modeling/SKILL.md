@@ -55,9 +55,12 @@ outputs:
    source can send it. Name where every input you test comes from; never
    make one up. Follow a value back to its producer (a guard, a validated
    type, the code that builds it). A value that comes straight from the
-   source with no check can be any non-blank string, unless a fixture
-   recorded from that source shows its format. Blank or `None` is possible
-   wherever `.get(k)`, `.get(k, "")` or a `str = ""` field lets it through.
+   source with no check can be any string, unless a source contract
+   committed in the repo (an API spec, a vendor schema, a fixture recorded
+   from the source) shows its format; cite it. A blank that reaches the site
+   through `.get(k)`, `.get(k, "")` or a `str = ""` field is an app bug only
+   when that evidence shows the source always sends the value; without it,
+   treat the blank as one the source can send.
 5. **When 1 or 2 cannot be proven, hold the site and say what is missing.**
    Plan it as type `SDK` when pyatlan or the SDK must add something (name
    the type, the creator, the input), or as type `Decision` when an owner
@@ -130,8 +133,10 @@ End state per site, from the rule's `full_description`:
 - a creator gives the same string: read it from a memoized
   `X.creator(...).qualified_name` helper; when only the id is known, pass it
   as `name` too and never emit that asset;
-- the same, but the creator raises on a blank input the app accepts: use it
-  anyway, with no guard and no fallback; list each such input in the PR;
+- the same, but the creator raises on a blank input that only an app bug
+  produces: use it anyway, with no guard and no fallback; list each such
+  input in the PR. A blank the source system really sends is a gap: the
+  creator must accept it (source reality wins);
 - a Process, ColumnProcess or BIProcess `{connection_qn}/{suffix}`:
   `generate_qualified_name(..., process_id=<suffix>)`;
 - the string never reaches a `qualifiedName` field or a reference (follow
@@ -140,8 +145,8 @@ End state per site, from the rule's `full_description`:
 - no creator gives the same string for an input the source can send: a gap.
   The f-string stays in one helper per name shape, unsuppressed. Say which:
   the type has no creator, the creator gives another string, it needs an
-  input the source record lacks, or it rejects a non-blank input the source
-  can send.
+  input the source record lacks, or it rejects a value (blank or not) the
+  source can send.
 
 ### P052 — one serialization seam
 
@@ -309,7 +314,7 @@ sites planned with that `fix_shape` for a person.
 
 ```decided-defaults
 {"rule": "P028", "fix_shape": "creator-string", "decision": "Read the string from a memoized helper returning X.creator(...).qualified_name; when only the id is known pass it as name too and never emit that asset.", "why": "Reference shape: atlan-metabase-app app/qualified_names.py collection_qn; atlan-mysql-app app/mysql.py _database_qn.", "interface": false}
-{"rule": "P028", "fix_shape": "creator-blank-raises", "decision": "Use the creator even when a reachable blank or None input makes it raise; add no app-side guard and keep no f-string fallback. List each such input in the PR description.", "why": "The raise replaces a broken identity such as {conn}/table/ or {conn}/None. pyatlan raises on blank identity inputs by design, so the site is closed by the creator, not a gap.", "interface": false}
+{"rule": "P028", "fix_shape": "creator-blank-raises", "decision": "Use the creator even when a blank or None input makes it raise, where evidence shows only an app bug produces that blank; no app-side guard and no f-string fallback. A blank the source can send is a gap.", "why": "The raise replaces a broken identity such as {conn}/table/ or {conn}/None. Source reality wins (FND-3843): a blank the source really sends needs the creator to accept it.", "interface": false, "pr_note": true}
 {"rule": "P028", "fix_shape": "process-id", "decision": "generate_qualified_name(name=..., connection_qualified_name=..., inputs=[None], outputs=[None], process_id=<everything after the connection qualifiedName>) for Process, ColumnProcess and BIProcess. A reachable blank name or connection qualifiedName now raises; list each such input in the PR description, as for creator-blank-raises.", "why": "Returns {connection_qualified_name}/{process_id}, the same string by construction. Reference shape: atlan-metabase-app app/qualified_names.py process_qn.", "interface": false}
 {"rule": "P028", "fix_shape": "not-identity-ignore", "decision": "# conformance: ignore[P028] <kind>, not a qualifiedName on the line above, where kind is match prefix, object-store key, lookup key or message text; only after following every reader of the value.", "why": "The rule's terminal state allows an ignore only for a string that is not an asset qualifiedName.", "suppress": true, "reason": "not a qualifiedName", "interface": false}
 {"rule": "P028", "fix_shape": "gap", "decision": "Leave the f-string in one helper per name shape, unsuppressed, and list it in the PR description; do not change the string.", "why": "No creator, a different string, or a missing creator input is a pyatlan gap; changing the string changes asset identity and suppressing hides the gap."}
