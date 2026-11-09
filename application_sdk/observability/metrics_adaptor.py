@@ -1,7 +1,4 @@
-import asyncio
-import atexit
 import logging
-import threading
 from time import time
 from typing import Any, ClassVar
 
@@ -91,17 +88,13 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             batch_size=SEGMENT_BATCH_SIZE,
             batch_timeout_seconds=SEGMENT_BATCH_TIMEOUT_SECONDS,
         )
-        # Register cleanup handler to close SegmentClient on shutdown
-        atexit.register(self.segment_client.close)
+        # No atexit close for the Segment client: its worker runs on the shared
+        # observability loop, whose one shutdown at exit sends the last batch.
 
         # Start periodic flush task if not already started
         if not AtlanMetricsAdapter._flush_task_started:
             try:
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(self._periodic_flush())
-                except RuntimeError:
-                    self._spawn_flush_thread()
+                self._start_periodic_flush()
                 AtlanMetricsAdapter._flush_task_started = True
             except Exception:
                 logging.error("Failed to start metrics flush task", exc_info=True)
@@ -157,22 +150,6 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     async def _flush_buffer(self, force=False):
         await super()._flush_buffer(force=force)
         await self.segment_client.flush()
-
-    def _spawn_flush_thread(self) -> None:
-        """Spawn a daemon thread to run the asyncio flush loop.
-
-        Extracted for testability — lets tests assert this specific call without
-        patching threading.Thread globally (which would also capture OTel internals).
-        """
-        threading.Thread(target=self._start_asyncio_flush, daemon=True).start()
-
-    def _start_asyncio_flush(self):
-        """Start an asyncio event loop for periodic metric flushing.
-
-        Creates a new event loop and runs the periodic flush task in the background.
-        This is used when no existing event loop is available.
-        """
-        asyncio.run(self._periodic_flush())
 
     def process_record(self, record: Any) -> dict[str, Any]:
         """Process a metric record into a standardized dictionary format.

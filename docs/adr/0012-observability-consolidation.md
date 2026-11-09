@@ -271,3 +271,29 @@ this dual-export.
   Temporal `OpenTelemetryConfig` instead of Prometheus). Rejected for
   the same OTel-collector reason; the loopback Prometheus + bridging
   collector pattern works without new infra.
+
+## Addendum: one background loop for every periodic flush (FND-4648)
+
+The sinks used to start their periodic flushes three different ways: a task
+on whatever loop was running, else an `asyncio.run` thread (metrics, traces);
+a `new_event_loop` + `run_forever` thread (logs); a hand-built loop on a thread
+(sizing). The Segment client ran a fourth thread with its own loop and waited
+up to 5 s for it to come up. Each had its own cadence and its own shutdown, or
+none, so no single bound covered the final flushes at exit.
+
+Now `application_sdk.observability.background_loop` owns one daemon thread
+(`atlan-observability-loop`) running one event loop, started on first use.
+Every sink starts its periodic flush through
+`AtlanObservability._start_periodic_flush()`, always on that loop, and the
+Segment sender runs there as a task. One `atexit` shutdown, bounded by
+`ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS` (default 10 s), cancels each
+started task once (its `CancelledError` handler makes the final flush or sends
+the last batch), awaits any other task on the loop without cancelling it
+(cancelling a batch flush deletes its half-written file), then stops the loop.
+A cancel that arrives before a task's first step is deferred until the task
+has started, so its final flush still runs.
+
+Two pieces of background work stay off the loop on purpose. The console writer
+is a plain thread because its job is a blocking `write()` to stdout; on the
+shared loop a stalled pipe would stall every flush. The OTLP exporter's batch
+thread belongs to the OpenTelemetry SDK.

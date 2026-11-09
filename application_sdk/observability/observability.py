@@ -29,6 +29,10 @@ from application_sdk.constants import (
     TRACES_FILE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
 )
+from application_sdk.observability.background_loop import (
+    BackgroundTask,
+    observability_loop,
+)
 from application_sdk.observability.utils import in_temporal_workflow
 
 
@@ -436,6 +440,22 @@ class AtlanObservability(Generic[T], ABC):
 
         This is an abstract method that must be implemented by subclasses.
         """
+
+    def _start_periodic_flush(self) -> BackgroundTask | None:
+        """Start :meth:`_periodic_flush` on the shared observability loop.
+
+        Every sink starts its periodic flush here, on the one background loop
+        (see ``background_loop``), whatever thread or loop the sink is built
+        on. That loop's shutdown at exit cancels the flush, whose
+        ``CancelledError`` handler makes the final flush, within one bound.
+
+        Returns the task's handle, or ``None`` when the loop has already shut
+        down.
+        """
+        return observability_loop.start(
+            self._periodic_flush(),
+            name=f"observability-{self._get_signal_type()}-flush",
+        )
 
     async def _periodic_flush(self):
         """Periodically flush the buffer to storage.

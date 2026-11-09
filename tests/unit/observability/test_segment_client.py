@@ -1,7 +1,8 @@
 """Unit tests for application_sdk.observability.segment_client.
 
 CRITICAL CONSTRAINTS:
-- No real threads, no real asyncio loops in their own threads, no real HTTP.
+- No real HTTP. Only ``test_worker_init_builds_a_bounded_queue`` runs a real
+  worker, on the shared observability loop; everything else mocks it.
 - Each test < 0.5s, deterministic.
 - Mock all side-effects HEAVILY.
 
@@ -55,21 +56,28 @@ def _make_record(
 
 
 def _disabled_client() -> SegmentClient:
-    """Construct a client with no write key — no thread is started."""
+    """Construct a client with no write key — no worker is started."""
     return SegmentClient(write_key="")
 
 
-def _enabled_client_no_thread() -> SegmentClient:
-    """Construct an enabled client while patching out _start_worker_thread.
+def _enabled_client_no_worker() -> SegmentClient:
+    """Construct an enabled client while patching out _start_worker.
 
-    The resulting client has enabled=True but no real worker thread / loop.
-    Tests can manually attach mocks for _client / _queue / _loop.
+    The resulting client has enabled=True but no worker on any loop.
+    Tests can manually attach mocks for _client / _queue / _loop / _worker.
     """
-    with mock.patch.object(SegmentClient, "_start_worker_thread", return_value=None):
+    with mock.patch.object(SegmentClient, "_start_worker", return_value=None):
         client = SegmentClient(write_key="fake-key")
-    # Sanity: thread was not started.
-    assert client._worker_thread is None
+    # Sanity: worker was not started.
+    assert client._worker is None
     return client
+
+
+def _running_worker() -> mock.MagicMock:
+    """A stand-in ``BackgroundTask`` handle for a worker that is running."""
+    worker = mock.MagicMock()
+    worker.done.return_value = False
+    return worker
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +129,7 @@ class TestDisabledClient:
         with mock.patch.object(sc_module, "SEGMENT_WRITE_KEY", ""):
             client = SegmentClient(write_key="")
         assert client.enabled is False
-        assert client._worker_thread is None
+        assert client._worker is None
         assert client._loop is None
 
     def test_send_metric_noop_when_disabled(self):
@@ -129,38 +137,33 @@ class TestDisabledClient:
             client = SegmentClient(write_key="")
         # Should silently no-op — even if metric has send_to_segment=true.
         record = _make_record(labels={"send_to_segment": "true"})
-        # Patch threading.Thread to ensure no thread is ever spawned.
-        with mock.patch.object(sc_module.threading, "Thread") as mthread:
+        # No worker is ever started on the shared loop.
+        with mock.patch.object(sc_module, "observability_loop") as shared_loop:
             client.send_metric(record)
-        mthread.assert_not_called()
+        shared_loop.start.assert_not_called()
 
     def test_close_noop_when_disabled(self):
         with mock.patch.object(sc_module, "SEGMENT_WRITE_KEY", ""):
             client = SegmentClient(write_key="")
-        # Should not raise even though there's no loop/thread/client.
+        # Should not raise even though there's no loop/worker/client.
         client.close()
 
 
 # ---------------------------------------------------------------------------
-# Enabled construction — but no real thread
+# Enabled construction — but no real worker
 # ---------------------------------------------------------------------------
 
 
 class TestEnabledConstruction:
-    def test_construction_starts_worker_thread_once(self):
-        """__init__ should invoke _start_worker_thread when enabled."""
-        with mock.patch.object(
-            SegmentClient, "_start_worker_thread", autospec=True
-        ) as start:
+    def test_construction_starts_worker_once(self):
+        """__init__ should invoke _start_worker when enabled."""
+        with mock.patch.object(SegmentClient, "_start_worker", autospec=True) as start:
             client = SegmentClient(write_key="fake-key")
         assert client.enabled is True
-        # Called exactly once with the instance as the only positional arg.
         assert start.call_count == 1
 
     def test_explicit_overrides_used(self):
-        with mock.patch.object(
-            SegmentClient, "_start_worker_thread", return_value=None
-        ):
+        with mock.patch.object(SegmentClient, "_start_worker", return_value=None):
             client = SegmentClient(
                 write_key="k",
                 api_url="https://example.test/v1/batch",
@@ -174,32 +177,38 @@ class TestEnabledConstruction:
         assert client._batch_size == 10
         assert client._batch_timeout_seconds == 2.5
 
-    def test_thread_target_intercepted_does_not_actually_run(self):
-        """Patch threading.Thread to verify __init__ wires up a daemon thread
-        target without starting any real worker.
+    def test_worker_runs_on_the_shared_observability_loop(self):
+        """FND-4648: the worker is a task on the shared observability loop,
+        not a thread with a private loop, and its queue is ready the moment
+        construction returns (no init wait).
 
         BLDX-1129 anchor: this also exercises the path where the inline import
-        target `_HTTP_POOL_TIMEOUT_SECONDS` would be resolved.
+        target `_HTTP_POOL_TIMEOUT_SECONDS` is resolved.
         """
-        fake_thread = mock.MagicMock()
-        fake_thread.is_alive.return_value = False
-        with mock.patch.object(
-            sc_module.threading, "Thread", return_value=fake_thread
-        ) as mthread:
-            # Patch Event so the 5s wait short-circuits.
-            fake_event = mock.MagicMock()
-            fake_event.wait.return_value = True
-            with mock.patch.object(
-                sc_module.threading, "Event", return_value=fake_event
-            ):
-                client = SegmentClient(write_key="fake-key")
-        assert client.enabled is True
-        # Verify Thread was constructed with daemon=True (important for clean exit).
-        mthread.assert_called_once()
-        kwargs = mthread.call_args.kwargs
-        assert kwargs.get("daemon") is True
-        # And start() was called (but on the mock, so no real thread).
-        fake_thread.start.assert_called_once()
+        with mock.patch.object(sc_module, "observability_loop") as shared_loop:
+            shared_loop.closed = False
+            client = SegmentClient(write_key="fake-key")
+        shared_loop.start.assert_called_once()
+        coro = shared_loop.start.call_args.args[0]
+        assert shared_loop.start.call_args.kwargs == {"name": "segment-worker"}
+        coro.close()
+        handle = shared_loop.start.return_value
+        assert client._worker is handle
+        assert client._loop is handle.loop
+        assert client._queue is not None
+        assert client._client is not None
+        asyncio.run(client._client.aclose())
+
+    def test_shared_loop_shut_down_starts_nothing(self):
+        """After the observability loop's exit shutdown, no worker starts and
+        ``send_metric`` has nowhere to hand off to."""
+        with mock.patch.object(sc_module, "observability_loop") as shared_loop:
+            shared_loop.closed = True
+            client = SegmentClient(write_key="fake-key")
+            client.send_metric(_make_record(labels={"send_to_segment": "true"}))
+        shared_loop.start.assert_not_called()
+        assert client._worker is None
+        assert not client._ingress
 
 
 # ---------------------------------------------------------------------------
@@ -209,14 +218,14 @@ class TestEnabledConstruction:
 
 class TestInlineImportAnchor:
     def test_constants_module_exposes_inline_import_target(self):
-        """The closure run_worker imports _HTTP_POOL_TIMEOUT_SECONDS lazily.
+        """``_start_worker`` imports _HTTP_POOL_TIMEOUT_SECONDS lazily.
 
         If that symbol disappears, the bug only surfaces at runtime. This
         test catches the regression class without driving the closure.
         """
         constants_module = importlib.import_module("application_sdk.constants")
         assert hasattr(constants_module, "_HTTP_POOL_TIMEOUT_SECONDS"), (
-            "BLDX-1129 anchor: SegmentClient.run_worker imports "
+            "BLDX-1129 anchor: SegmentClient._start_worker imports "
             "_HTTP_POOL_TIMEOUT_SECONDS lazily; symbol must exist."
         )
         # Sanity on type.
@@ -359,8 +368,8 @@ class TestBuildTrackEvent:
 class TestSendMetricEnabled:
     def test_filtered_metric_does_not_schedule(self):
         """A metric without send_to_segment=true should be dropped before
-        touching the worker thread or asyncio.run_coroutine_threadsafe."""
-        client = _enabled_client_no_thread()
+        touching the worker or asyncio.run_coroutine_threadsafe."""
+        client = _enabled_client_no_worker()
         record = _make_record(labels={})  # no send_to_segment label
         with (
             private_stdlib(sc_module, "asyncio") as local_asyncio,
@@ -369,39 +378,28 @@ class TestSendMetricEnabled:
             client.send_metric(record)
         mrun.assert_not_called()
 
-    def test_init_event_timeout_bails(self):
-        """If the worker thread fails to initialize, send_metric must bail
-        without touching the (uninitialized) loop or queue."""
-        client = _enabled_client_no_thread()
-        # Pretend the worker thread is alive so _start_worker_thread isn't
-        # called inside send_metric.
-        fake_thread = mock.MagicMock()
-        fake_thread.is_alive.return_value = True
-        client._worker_thread = fake_thread
-        # Replace the initialized_event with a fake whose wait() returns False.
-        fake_event = mock.MagicMock()
-        fake_event.wait.return_value = False
-        client._initialized_event = fake_event
+    def test_no_worker_loop_bails(self):
+        """If no worker could be started (``_loop``/``_queue`` unset),
+        send_metric must bail without scheduling anything."""
+        client = _enabled_client_no_worker()
         record = _make_record(labels={"send_to_segment": "true"})
         with (
+            mock.patch.object(client, "_start_worker") as start,
             private_stdlib(sc_module, "asyncio") as local_asyncio,
             mock.patch.object(local_asyncio, "run_coroutine_threadsafe") as mrun,
         ):
             client.send_metric(record)
+        start.assert_called_once_with()
         mrun.assert_not_called()
+        assert not client._ingress
 
     def test_happy_path_schedules_via_loop(self):
         """When everything is initialized, send_metric puts the record in the
         bounded hand-off and schedules the worker loop's ``_drain_ingress`` via
         ``call_soon_threadsafe`` — never a parked ``await queue.put`` coroutine,
         which a bounded queue would turn into an unbounded backlog of its own."""
-        client = _enabled_client_no_thread()
-        fake_thread = mock.MagicMock()
-        fake_thread.is_alive.return_value = True
-        client._worker_thread = fake_thread
-        fake_event = mock.MagicMock()
-        fake_event.wait.return_value = True
-        client._initialized_event = fake_event
+        client = _enabled_client_no_worker()
+        client._worker = _running_worker()
         client._loop = mock.MagicMock()
         client._queue = mock.MagicMock()
 
@@ -417,13 +415,8 @@ class TestSendMetricEnabled:
 
     def test_scheduling_failure_swallowed(self):
         """Any exception while scheduling must be swallowed, not propagated."""
-        client = _enabled_client_no_thread()
-        fake_thread = mock.MagicMock()
-        fake_thread.is_alive.return_value = True
-        client._worker_thread = fake_thread
-        fake_event = mock.MagicMock()
-        fake_event.wait.return_value = True
-        client._initialized_event = fake_event
+        client = _enabled_client_no_worker()
+        client._worker = _running_worker()
         client._loop = mock.MagicMock()
         client._loop.call_soon_threadsafe.side_effect = RuntimeError("boom")
         client._queue = mock.MagicMock()
@@ -443,21 +436,21 @@ class TestSendMetricEnabled:
 class TestSendBatchToSegment:
     @pytest.mark.timeout(30)
     async def test_no_client_returns_quickly(self):
-        client = _enabled_client_no_thread()
+        client = _enabled_client_no_worker()
         client._client = None
         # Should not raise.
         await client._send_batch_to_segment([_make_record()])
 
     @pytest.mark.timeout(30)
     async def test_empty_list_returns_quickly(self):
-        client = _enabled_client_no_thread()
+        client = _enabled_client_no_worker()
         client._client = mock.AsyncMock()
         await client._send_batch_to_segment([])
         client._client.post.assert_not_called()
 
     @pytest.mark.timeout(30)
     async def test_post_invoked_with_basic_auth_and_payload(self):
-        client = _enabled_client_no_thread()
+        client = _enabled_client_no_worker()
         client._write_key = "fake-key"
         client._api_url = "https://example.test/v1/batch"
         fake_resp = mock.MagicMock()
@@ -485,7 +478,7 @@ class TestSendBatchToSegment:
     async def test_http_error_swallowed(self):
         import httpx
 
-        client = _enabled_client_no_thread()
+        client = _enabled_client_no_worker()
         client._write_key = "k"
         async_client = mock.AsyncMock()
         async_client.post = mock.AsyncMock(side_effect=httpx.HTTPError("nope"))
@@ -495,7 +488,7 @@ class TestSendBatchToSegment:
 
     @pytest.mark.timeout(30)
     async def test_unexpected_exception_swallowed(self):
-        client = _enabled_client_no_thread()
+        client = _enabled_client_no_worker()
         client._write_key = "k"
         async_client = mock.AsyncMock()
         async_client.post = mock.AsyncMock(side_effect=ValueError("boom"))
@@ -511,14 +504,6 @@ class TestSendBatchToSegment:
 
 class TestProcessQueue:
     @pytest.mark.timeout(30)
-    async def test_no_queue_or_client_early_return(self):
-        client = _enabled_client_no_thread()
-        client._queue = None
-        client._client = None
-        # Should return immediately without raising.
-        await client._process_queue()
-
-    @pytest.mark.timeout(30)
     async def test_cancelled_with_pending_batch_flushes(self):
         """When the worker task is cancelled while batch is non-empty,
         _send_batch_to_segment is called once with the pending batch.
@@ -528,7 +513,7 @@ class TestProcessQueue:
         seed the batch) — this lands us directly on the cancellation branch
         without ever blocking on the queue.
         """
-        client = _enabled_client_no_thread()
+        client = _enabled_client_no_worker()
         client._batch_timeout_seconds = 0.1
         client._batch_size = 100
         client._queue = asyncio.Queue()
@@ -538,7 +523,7 @@ class TestProcessQueue:
 
         sent: list[list[MetricRecord]] = []
 
-        async def _capture(batch):
+        async def _capture(batch, client=None):
             sent.append(list(batch))
 
         # First wait_for returns the pre-loaded record; second call raises
@@ -566,7 +551,7 @@ class TestProcessQueue:
             # Mark the seeded record as task_done-able by first putting it.
             await client._queue.put(record)
             try:
-                await client._process_queue()
+                await client._process_queue(client._queue, client._client)
             except asyncio.CancelledError:
                 pass
 
@@ -587,52 +572,36 @@ class TestClose:
         # Must not raise; nothing to close.
         client.close()
 
-    def test_close_cancels_task_then_joins_thread(self):
-        """close() must signal cancellation then join the thread.
+    def test_close_cancels_worker_then_waits(self):
+        """close() cancels the worker and waits for it, bounded at 10 s.
 
-        The httpx client is now closed inside run_worker's finally block, so
-        close() must NOT call run_until_complete or run_coroutine_threadsafe —
-        that would race against the CancelledError handler's final batch send.
+        The httpx client is closed inside ``_run_worker``'s finally block, so
+        close() must not touch it — that would race the CancelledError
+        handler's final batch send.
         """
-        client = _enabled_client_no_thread()
-        fake_loop = mock.MagicMock()
-        client._loop = fake_loop
-        fake_task = mock.MagicMock()
-        fake_task.done.return_value = False
-        client._worker_task = fake_task
-        fake_thread = mock.MagicMock()
-        fake_thread.is_alive.return_value = True
-        client._worker_thread = fake_thread
+        client = _enabled_client_no_worker()
+        worker = _running_worker()
+        client._worker = worker
+        client._client = mock.AsyncMock()
 
         client.close()
 
-        # 1. Cancellation must be signalled via call_soon_threadsafe.
-        fake_loop.call_soon_threadsafe.assert_called_once()
-        assert fake_loop.call_soon_threadsafe.call_args.args[0] is fake_task.cancel
-        # 2. Thread join must be called (with the 10 s timeout).
-        fake_thread.join.assert_called_once()
-        join_timeout = (
-            fake_thread.join.call_args.kwargs.get("timeout")
-            or fake_thread.join.call_args.args[0]
-        )
-        assert join_timeout == 10.0
-        # 3. close() must NOT touch the httpx client directly — that's run_worker's job.
-        fake_loop.run_until_complete.assert_not_called()
-        fake_loop.run_coroutine_threadsafe.assert_not_called()
+        worker.cancel.assert_called_once_with()
+        worker.wait.assert_called_once_with(timeout=10.0)
+        client._client.aclose.assert_not_called()
+        assert client._closed
 
-    def test_close_already_done_task_skips_cancel(self):
-        """If the worker task is already done, call_soon_threadsafe is skipped."""
-        client = _enabled_client_no_thread()
-        fake_loop = mock.MagicMock()
-        client._loop = fake_loop
-        fake_task = mock.MagicMock()
-        fake_task.done.return_value = True  # already finished
-        client._worker_task = fake_task
-        client._worker_thread = None
+    def test_close_already_done_worker_skips_cancel(self):
+        """If the worker already finished, there is nothing to cancel."""
+        client = _enabled_client_no_worker()
+        worker = mock.MagicMock()
+        worker.done.return_value = True
+        client._worker = worker
 
         client.close()
 
-        fake_loop.call_soon_threadsafe.assert_not_called()
+        worker.cancel.assert_not_called()
+        worker.wait.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -643,14 +612,14 @@ class TestClose:
 class TestFlushQueue:
     @pytest.mark.timeout(30)
     async def test_no_queue_or_client_early_return(self):
-        client = _enabled_client_no_thread()
+        client = _enabled_client_no_worker()
         client._queue = None
         client._client = None
         await client._flush_queue()  # must not raise
 
     @pytest.mark.timeout(30)
     async def test_empty_queue_sends_nothing(self):
-        client = _enabled_client_no_thread()
+        client = _enabled_client_no_worker()
         client._queue = asyncio.Queue()
         client._client = mock.AsyncMock()
         with mock.patch.object(client, "_send_batch_to_segment") as msend:
@@ -659,7 +628,7 @@ class TestFlushQueue:
 
     @pytest.mark.timeout(30)
     async def test_drains_all_pending_records(self):
-        client = _enabled_client_no_thread()
+        client = _enabled_client_no_worker()
         client._queue = asyncio.Queue()
         records = [_make_record(name=f"m{i}") for i in range(3)]
         for r in records:
@@ -692,13 +661,13 @@ class TestFlush:
 
     @pytest.mark.timeout(30)
     async def test_flush_no_loop_is_noop(self):
-        client = _enabled_client_no_thread()
+        client = _enabled_client_no_worker()
         client._loop = None
         await client.flush()  # must not raise
 
     @pytest.mark.timeout(30)
     async def test_flush_loop_not_running_is_noop(self):
-        client = _enabled_client_no_thread()
+        client = _enabled_client_no_worker()
         fake_loop = mock.MagicMock()
         fake_loop.is_running.return_value = False
         client._loop = fake_loop
@@ -715,7 +684,7 @@ class TestFlush:
         """flush() must schedule _flush_queue on the worker loop and await it."""
         import concurrent.futures
 
-        client = _enabled_client_no_thread()
+        client = _enabled_client_no_worker()
         fake_loop = mock.MagicMock()
         fake_loop.is_running.return_value = True
         client._loop = fake_loop
@@ -751,7 +720,7 @@ class TestFlush:
         """flush() cancels the concurrent future and logs warning on timeout."""
         import concurrent.futures
 
-        client = _enabled_client_no_thread()
+        client = _enabled_client_no_worker()
         fake_loop = mock.MagicMock()
         fake_loop.is_running.return_value = True
         client._loop = fake_loop
@@ -783,7 +752,7 @@ class TestFlush:
         Temporal's workflow loop raises NotImplementedError from is_closed() when
         asyncio.wrap_future wires the worker future back to the workflow context.
         """
-        client = _enabled_client_no_thread()
+        client = _enabled_client_no_worker()
         fake_loop = mock.MagicMock()
         fake_loop.is_running.return_value = True
         client._loop = fake_loop
@@ -799,6 +768,25 @@ class TestFlush:
         mrun.assert_not_called()
 
 
+class TestFlushOnWorkerLoop:
+    @pytest.mark.timeout(30)
+    async def test_flush_on_the_worker_loop_awaits_directly(self):
+        """FND-4648: the metrics flush runs on the shared loop the worker
+        runs on, so flush() awaits ``_flush_queue`` there instead of bridging
+        to itself through ``run_coroutine_threadsafe``."""
+        client = _enabled_client_no_worker()
+        client._loop = asyncio.get_running_loop()
+        client._queue = asyncio.Queue()
+        with (
+            mock.patch.object(client, "_flush_queue", new=mock.AsyncMock()) as fq,
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "run_coroutine_threadsafe") as mrun,
+        ):
+            await client.flush()
+        fq.assert_awaited_once_with()
+        mrun.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Bounded queue, chunked flush, serialised start, closed flag
 # ---------------------------------------------------------------------------
@@ -808,12 +796,9 @@ def _ready_client(max_queue_size: int) -> SegmentClient:
     """An enabled client that looks initialized, with a mock worker loop whose
     ``call_soon_threadsafe`` records callbacks but never runs them — a worker
     loop that has fallen behind."""
-    with mock.patch.object(SegmentClient, "_start_worker_thread", return_value=None):
+    with mock.patch.object(SegmentClient, "_start_worker", return_value=None):
         client = SegmentClient(write_key="fake-key", max_queue_size=max_queue_size)
-    alive = mock.MagicMock()
-    alive.is_alive.return_value = True
-    client._worker_thread = alive
-    client._initialized_event.set()
+    client._worker = _running_worker()
     client._loop = mock.MagicMock()
     client._queue = asyncio.Queue(maxsize=max_queue_size)
     return client
@@ -882,23 +867,24 @@ class TestBoundedQueue:
         [(7, 7), (0, sc_module._DEFAULT_MAX_QUEUE_SIZE)],
     )
     def test_worker_init_builds_a_bounded_queue(self, configured, expected):
-        """The queue the real worker thread builds carries the cap — not one a
-        test substituted. Starts and closes a real worker; no request is sent."""
+        """The queue the real worker uses carries the cap — not one a test
+        substituted. Starts and closes a real worker on the shared
+        observability loop; no request is sent."""
         client = SegmentClient(write_key="fake-key", max_queue_size=configured)
         try:
-            assert client._initialized_event.is_set()
+            assert client._worker is not None
             assert client._queue is not None
             assert client._queue.maxsize == expected > 0
         finally:
             client.close()
-        assert not client._worker_thread.is_alive()
+        assert client._worker.done()
 
 
 class TestFlushQueueChunking:
     async def test_backlog_is_sent_in_batch_size_chunks(self):
         """A post-outage backlog is posted ``_batch_size`` events per request,
         not as one oversized request Segment rejects."""
-        client = _enabled_client_no_thread()
+        client = _enabled_client_no_worker()
         client._batch_size = 4
         client._queue = asyncio.Queue()
         client._client = mock.AsyncMock()
@@ -918,8 +904,8 @@ class TestFlushQueueChunking:
 
 
 class TestWorkerStartAndClose:
-    def test_concurrent_start_starts_one_thread(self):
-        """Concurrent callers that all see a dead worker start exactly one.
+    def test_concurrent_start_starts_one_worker(self):
+        """Concurrent callers that all see no live worker start exactly one.
 
         Deterministic contention: the first caller holds the start (blocked on
         ``gate``) until every caller has reached ``_start_lock``, so the other
@@ -927,7 +913,7 @@ class TestWorkerStartAndClose:
         """
         import threading  # noqa: PLC0415 — only this test needs real threads
 
-        client = _enabled_client_no_thread()
+        client = _enabled_client_no_worker()
         callers_n = 8
         started: list[int] = []
         gate = threading.Event()
@@ -944,19 +930,17 @@ class TestWorkerStartAndClose:
 
         client._start_lock = _ArrivalLock()  # type: ignore[assignment]
 
-        def _fake_start_locked() -> None:
+        def _fake_start(coro, *, name):
+            coro.close()
             gate.wait(10.0)
             started.append(1)
-            alive = mock.MagicMock()
-            alive.is_alive.return_value = True
-            client._worker_thread = alive
+            return _running_worker()
 
-        with mock.patch.object(
-            client, "_start_worker_thread_locked", side_effect=_fake_start_locked
-        ):
+        with mock.patch.object(sc_module, "observability_loop") as shared_loop:
+            shared_loop.closed = False
+            shared_loop.start.side_effect = _fake_start
             callers = [
-                threading.Thread(target=client._start_worker_thread)
-                for _ in range(callers_n)
+                threading.Thread(target=client._start_worker) for _ in range(callers_n)
             ]
             for t in callers:
                 t.start()
@@ -968,12 +952,12 @@ class TestWorkerStartAndClose:
 
         assert started == [1]
 
-    def test_send_metric_after_close_starts_no_thread(self):
-        """A metric emitted after the atexit ``close()`` is dropped; it must
-        not start a worker thread nothing will join."""
-        client = _enabled_client_no_thread()
+    def test_send_metric_after_close_starts_no_worker(self):
+        """A metric emitted after ``close()`` is dropped; it must not start a
+        worker nothing will stop."""
+        client = _enabled_client_no_worker()
         client.close()
-        with mock.patch.object(client, "_start_worker_thread_locked") as start:
+        with mock.patch.object(sc_module, "observability_loop") as shared_loop:
             client.send_metric(_make_record(labels={"send_to_segment": "true"}))
-            client._start_worker_thread()
-        start.assert_not_called()
+            client._start_worker()
+        shared_loop.start.assert_not_called()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import gzip
 import pathlib
 import threading
@@ -317,7 +316,10 @@ class TestTheFlushActuallyHappens:
             ),
         ):
             sizing_sink.get_sink()
-            await asyncio.sleep(0)  # let the created task run
+            task = SizingObservabilitySink._flush_task
+            assert task is not None, "no periodic flush was started"
+            # It runs on the shared observability loop, not this one.
+            assert task.wait(timeout=5)
         assert started, (
             "no periodic flush task was started — the buffer would never drain"
         )
@@ -394,28 +396,24 @@ spec:
 class TestResetLeavesNothingToFlushLater:
     """A sink a test built must not flush after that test ends.
 
-    Its flush thread outlived ``_reset_for_testing`` and still held the test's
-    rows. Once the session fixture restored ``DAPR_COMPONENTS_PATH``, that
-    thread's next flush resolved the store from ``./components`` and wrote into
+    Its flush outlived ``_reset_for_testing`` and still held the test's
+    rows. Once the session fixture restored ``DAPR_COMPONENTS_PATH``, its
+    next flush resolved the store from ``./components`` and wrote into
     the checkout's ``local/dapr/objectstore`` (FND-4334).
     """
 
-    def test_reset_stops_the_flush_thread(self, tmp_path):
-        before = set(threading.enumerate())
+    def test_reset_stops_the_flush_task(self, tmp_path):
         with patch.object(
             sizing_sink, "get_observability_dir", return_value=str(tmp_path)
         ):
-            sizing_sink.get_sink()  # no running loop: starts the flush thread
-        started = [
-            t
-            for t in threading.enumerate()
-            if t not in before and "_flush_forever" in t.name
-        ]
-        assert len(started) == 1, "the off-loop sink should start one flush thread"
+            sizing_sink.get_sink()
+        task = SizingObservabilitySink._flush_task
+        assert task is not None, "the sink should start its periodic flush"
+        assert not task.done(), "the periodic flush ended on its own: vacuous"
 
         sizing_sink._reset_for_testing()
 
-        assert not started[0].is_alive(), "the flush thread outlived the reset"
+        assert task.done(), "the flush task outlived the reset"
 
     def test_a_sink_built_during_a_reset_keeps_its_flush(self, tmp_path):
         """A ``get_sink`` racing the reset must not get a sink the reset stops."""

@@ -1,6 +1,4 @@
-import asyncio
 import logging
-import threading
 import time
 from typing import Any, ClassVar, Dict, Optional
 
@@ -88,13 +86,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         # Start periodic flush task if not already started
         if not AtlanTracesAdapter._flush_task_started:
             try:
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(self._periodic_flush())
-                except RuntimeError:
-                    threading.Thread(
-                        target=self._start_asyncio_flush, daemon=True
-                    ).start()
+                self._start_periodic_flush()
                 AtlanTracesAdapter._flush_task_started = True
             except Exception:
                 # BLDX-1189: switched from root `logging.error` to the SDK
@@ -213,14 +205,6 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
 
         except Exception:
             logging.error("Failed to setup console-only tracing", exc_info=True)
-
-    def _start_asyncio_flush(self):
-        """Start an asyncio event loop for periodic trace flushing.
-
-        Creates a new event loop and runs the periodic flush task in the background.
-        This is used when no existing event loop is available.
-        """
-        asyncio.run(self._periodic_flush())
 
     def process_record(self, record: Any) -> Dict[str, Any]:
         """Process a trace record into a standardized dictionary format.
