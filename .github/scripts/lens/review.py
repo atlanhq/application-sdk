@@ -1143,9 +1143,12 @@ _ACTIONS_FILE = re.compile(
     r"^\.github/(?:workflows/[^/]+|actions/(?:.+/)?action)\.ya?ml$"
 )
 # `repository: owner/name` on a step (checkout's `with:`), optionally quoted. The
-# charset is GitHub's own, so a name cannot carry a tag, a path or an expression.
+# key must open its line: only indentation, a list dash, or code_now's line-number
+# prefix may precede it, so a comment (`# repository: o/decoy`) is never a target.
+# The charset is GitHub's own, so a name cannot carry a tag, a path or an expression.
 _CHECKOUT_TARGET = re.compile(
-    r"\brepository:\s*[\"']?([A-Za-z0-9-]+/[A-Za-z0-9_.-]+?)(?:\.git)?[\"']?\s*(?:#.*)?$",
+    r"^(?:[ \t]*\d+ )?[ \t]*(?:-[ \t]+)?repository:[ \t]*"
+    r"[\"']?([A-Za-z0-9-]+/[A-Za-z0-9_.-]+?)(?:\.git)?[\"']?[ \t]*(?:#.*)?$",
     re.MULTILINE,
 )
 MAX_CHECKOUT_TARGETS = 3

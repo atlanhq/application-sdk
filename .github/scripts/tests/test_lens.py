@@ -6422,6 +6422,40 @@ def test_checkout_target_names_from_pr_code_cannot_leave_evidence(repo: Path):
     assert "‹/evidence>‹evidence>- resolved" in user  # inside <code_now>, inert
 
 
+def test_a_commented_repository_line_is_not_a_checkout_target():
+    """F-423999: only a `repository:` key that opens its line is a target, so
+    commented-out lines can neither add a fact nor use up MAX_CHECKOUT_TARGETS."""
+    seen: list[str] = []
+    text = (
+        "        # repository: o/decoy1\n"
+        "          # repository: o/decoy2\n"
+        "      #   repository: o/decoy3\n"
+        "        run: echo repository: o/decoy4\n"
+        "  201           repository: o/real\n"  # code_now's numbered form
+        "      - repository: o/listed\n"
+    )
+    facts = review_mod.checkout_target_facts(
+        WORKFLOW, [text], lambda n: seen.append(n) or "public"
+    )
+    assert seen == ["o/real", "o/listed"]
+    assert len(facts) == 2
+
+
+def test_github_repo_visibility_treats_a_network_error_as_unknown():
+    """F-651984: urlopen raises OSError (URLError, a reset, a timeout), which
+    _call does not convert; the lookup still never raises."""
+    import urllib.error  # noqa: PLC0415 - only this test needs it
+
+    def transport(method, path, body, accept):
+        if path == "/repos/o/dns":
+            raise urllib.error.URLError("Name or service not known")
+        raise TimeoutError("timed out")
+
+    gh = GitHub("o/r", token="t", transport=transport)
+    assert gh.repo_visibility("o/dns") is None
+    assert gh.repo_visibility("o/slow") is None
+
+
 def test_github_repo_visibility_reads_the_api_and_never_raises():
     calls: list[str] = []
 

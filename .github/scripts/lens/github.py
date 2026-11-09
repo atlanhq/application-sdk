@@ -124,11 +124,12 @@ class GitHub:
     def repo_visibility(self, owner_repo: str) -> str | None:
         """Another repository's `visibility` (public | private | internal) as the
         GitHub API reports it to lens's token, or None when the lookup fails (a
-        404/403 on a repo the token cannot see, a 5xx). Never raises."""
+        404/403 on a repo the token cannot see, a 5xx, or a network error: DNS,
+        a reset or a timeout surface from urlopen as OSError). Never raises."""
         q = urllib.parse.quote(owner_repo, safe="/")
         try:
             data = self._call("GET", f"/repos/{q}")
-        except (GitHubError, ValueError):
+        except (GitHubError, ValueError, OSError):
             return None
         if not isinstance(data, dict):
             return None
