@@ -35,7 +35,7 @@ logger = get_logger(__name__)
     "asyncio.Semaphore) instead."
 )
 class CapacityPool(Protocol):
-    """Protocol for distributed capacity management.
+    """Deprecated: protocol for distributed capacity management — removed in v4.0.0 (never wired by the framework).
 
     Implementations control how many concurrent operations (e.g., API calls)
     can run across all workers sharing the same pool.
@@ -98,7 +98,7 @@ class CapacityPool(Protocol):
     "asyncio.Semaphore) instead."
 )
 class LocalCapacityPool:
-    """Local-only capacity pool (no coordination).
+    """Deprecated: local-only capacity pool (no coordination) — removed in v4.0.0 (never wired by the framework).
 
     Always grants the full requested amount. Used when Redis is not
     configured (local development, single-worker deployments).
@@ -148,7 +148,7 @@ _capacity_pool: CapacityPool | None = None
     "asyncio.Semaphore) instead."
 )
 def configure_capacity_pool(pool: CapacityPool) -> None:
-    """Configure the global capacity pool for distributed rate limiting.
+    """Deprecated: configure the global capacity pool — removed in v4.0.0 (never wired by the framework).
 
     Call this at worker startup to configure the capacity pool used
     by activities that need to coordinate concurrent API access.
@@ -176,7 +176,7 @@ def configure_capacity_pool(pool: CapacityPool) -> None:
     "asyncio.Semaphore) instead."
 )
 def get_capacity_pool() -> CapacityPool | None:
-    """Get the configured capacity pool.
+    """Deprecated: get the configured capacity pool — removed in v4.0.0 (never wired by the framework).
 
     Returns:
         The configured CapacityPool, or None if not configured.
