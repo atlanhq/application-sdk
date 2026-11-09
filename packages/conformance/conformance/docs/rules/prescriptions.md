@@ -2800,12 +2800,15 @@ declared entity envelope and the placeholder-guid strip.  Bypassing it means non
 those apply, and no SDK-side fix can reach the app.
 
 Fix: serialize through `entity_bytes(asset, envelope=...)` with an envelope that keeps
-the connector's released wire shape — `to_nested_bytes()` / `to_nested_dict()` output
-matches `EnvelopeShape.PYATLAN`, `to_atlas_format()` output matches `FLATTENED` — and
-pass `connection_name` / `last_sync` unless the mapper already stamps them.  When the
-line needs a key the model cannot hold, decode what `entity_bytes` produced and decorate
-it.  WARN tier — suppress with `# conformance: ignore[P052] <reason>` only for a genuine
-non-entity use, such as a `ConnectionRef` built from `to_atlas_format`.
+the connector's released wire shape, judged from what the app publishes, not from the
+method it calls.  Output with relationships under `attributes` is `FLATTENED`: that is
+`to_atlas_format()`, and also `to_nested_bytes()` decoded and re-shaped by hand (delete
+only that reshape).  Output that keeps a top-level `relationshipAttributes` key is
+`EnvelopeShape.PYATLAN` — and pass `connection_name` / `last_sync` unless the mapper
+already stamps them.  When the line needs a key the model cannot hold, decode what
+`entity_bytes` produced and decorate it.  WARN tier — suppress with `# conformance:
+ignore[P052] <reason>` only for a genuine non-entity use, such as a `ConnectionRef`
+built from `to_atlas_format`.
 
 ---
 
