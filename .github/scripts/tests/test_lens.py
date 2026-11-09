@@ -5547,7 +5547,16 @@ def _blocking_on_added_code(repo: Path) -> tuple[FakeGitHub, Finding]:
     return gh, f
 
 
-def _recheck(gh, repo, ids, reason="", script=None, cfg=None, actor="author"):
+def _recheck(
+    gh,
+    repo,
+    ids,
+    reason="",
+    script=None,
+    cfg=None,
+    actor="author",
+    verify_budget=False,
+):
     script = script or Script()
     res = review_mod.recheck(
         gh=gh,
@@ -5558,6 +5567,7 @@ def _recheck(gh, repo, ids, reason="", script=None, cfg=None, actor="author"):
         cfg=cfg or cfg_for(repo),
         client_factory=_factory(script),
         actor=actor,
+        verify_budget=verify_budget,
     )
     return res, script
 
@@ -5652,6 +5662,141 @@ def test_recheck_runs_past_the_round_cap_but_not_past_the_dollar_cap(repo: Path)
     assert "PR budget of $1.00 is spent" in gh.posted[-1]
 
 
+@pytest.mark.parametrize(
+    ("body", "ids", "reason", "verify_budget"),
+    [
+        ("/lens recheck F-23084f it is new", ["F-23084f"], "it is new", False),
+        (
+            "/lens recheck verify-budget F-23084f it is new",
+            ["F-23084f"],
+            "it is new",
+            True,
+        ),
+        # Only right after `recheck`: later, the word is part of the author's reason.
+        (
+            "/lens recheck F-23084f see verify-budget",
+            ["F-23084f"],
+            "see verify-budget",
+            False,
+        ),
+    ],
+)
+def test_recheck_parses_the_verify_budget_opt_in(body, ids, reason, verify_budget):
+    d = decide("issue_comment", _dismiss_event(body, actor="author"), "o/r")
+    assert d.run and d.recheck == ids and d.recheck_reason == reason
+    assert d.verify_budget is verify_budget
+    bad = decide("issue_comment", _dismiss_event("/lens recheck verify-budget"), "o/r")
+    assert not bad.run and "[verify-budget]" in bad.reason
+
+
+def test_a_cut_off_recheck_says_so_and_names_the_opt_in(repo: Path):
+    """A reasoning model that spends verify's whole 8,000-token budget thinking
+    returns no verdict. The finding stays open, and the verdict says it was not
+    re-judged and how to retry with the raised budget."""
+    gh, f = _blocking_on_added_code(repo)
+    res, script = _recheck(gh, repo, [f.id], "it is public", Script(_cut_off_reply()))
+    assert [r["max_tokens"] for r in script.requests] == [8000]
+    assert res.incomplete == ["re-check: ran out of output budget"]
+    assert res.resolved_verified == []
+    st = PRState.decode(gh.comments[0]["body"])
+    assert st is not None
+    assert {x.id: x for x in st.findings}[f.id].status == "open"
+    posted = gh.posted[-1]
+    assert (
+        f"spent all 8,000 output tokens before answering, so {f.id} was not" in posted
+    )
+    assert f"`/lens recheck verify-budget {f.id} <reason>`" in posted
+    assert "with 24,000" in posted
+    assert f"`{f.id}` still stands: not re-judged" in posted
+
+
+def test_a_recheck_with_the_opt_in_uses_the_raised_budget(repo: Path):
+    gh, f = _blocking_on_added_code(repo)
+    res, script = _recheck(
+        gh,
+        repo,
+        [f.id],
+        "it is public",
+        Script(_verdict(f.id, "resolved", "the repo is public")),
+        verify_budget=True,
+    )
+    assert [r["max_tokens"] for r in script.requests] == [24000]
+    assert res.resolved_verified == [f.id]
+
+
+def _capped_tool_reply(arguments: str):
+    """A provider that stops at its cap mid tool call: a `verdicts` call whose
+    arguments are whatever was written before the cut, every output token used."""
+    call = {
+        "id": "call_verdicts_0",
+        "type": "function",
+        "function": {"name": "verdicts", "arguments": arguments},
+    }
+    status, headers, text = response([call], out=8000)
+    body = json.loads(text)
+    body["choices"][0]["finish_reason"] = "length"
+    return status, headers, json.dumps(body)
+
+
+def test_a_recheck_cut_off_mid_tool_call_is_reported_as_a_cut_off(repo: Path):
+    """F-e3d515: truncated tool arguments parse to no verdict. That is a cut-off,
+    not "no verdict came back", so the opt-in is still named."""
+    gh, f = _blocking_on_added_code(repo)
+    reply = _capped_tool_reply('{"items": [{"id": "' + f.id + '", "status": "res')
+    res, _ = _recheck(gh, repo, [f.id], "it is public", Script(reply))
+    assert res.incomplete == ["re-check: ran out of output budget"]
+    assert f"`/lens recheck verify-budget {f.id} <reason>`" in gh.posted[-1]
+
+
+def _items(*ids: str) -> list[tuple[Finding, Any]]:
+    ev = review_mod.RecheckEvidence(["fact"], False, "code", "base")
+    return [(Finding("a.py", 1, "high", "bug", t, "b", t), ev) for t in ids]
+
+
+def test_a_capped_recheck_keeps_completed_verdicts_and_flags_the_rest():
+    items = _items("x", "y")
+    a, b = items[0][0], items[1][0]
+    assert a.id != b.id
+    done = json.dumps(
+        {"items": [{"id": a.id, "status": "resolved", "reason": "fixed"}]}
+    )
+    client = _factory(Script(_capped_tool_reply(done)))(Ledger(cap_usd=1))
+    verdicts, cut_off = review_mod._recheck_call(client, items, "", 8000)
+    assert verdicts == {a.id: ("resolved", "fixed")} and cut_off
+
+    # The same verdicts with room to spare: nothing was cut off.
+    both = json.dumps(
+        {
+            "items": [
+                {"id": a.id, "status": "resolved", "reason": "fixed"},
+                {"id": b.id, "status": "open", "reason": "still"},
+            ]
+        }
+    )
+    client = _factory(Script(_capped_tool_reply(both)))(Ledger(cap_usd=1))
+    verdicts, cut_off = review_mod._recheck_call(client, items, "", 8000)
+    assert len(verdicts or {}) == 2 and not cut_off
+
+
+def test_a_cut_off_recheck_with_the_opt_in_does_not_offer_it_again():
+    line = review_mod.recheck_cut_off_line(
+        ["F-000001", "F-000002"], 24000, True, Config()
+    )
+    assert "spent all 24,000" in line and "were not re-judged" in line
+    assert "already the opt-in budget" in line and "/lens recheck" not in line
+
+
+def test_a_recheck_that_fails_for_another_reason_does_not_offer_the_opt_in(
+    repo: Path,
+):
+    gh, f = _blocking_on_added_code(repo)
+    res, _ = _recheck(
+        gh, repo, [f.id], "", Script(response())
+    )  # no verdict, not cut off
+    assert res.incomplete == ["re-check: no verdict came back"]
+    assert "verify-budget" not in gh.posted[-1]
+
+
 def test_recheck_on_shipped_code_reports_it_present_on_the_merge_base(repo: Path):
     gh = _fetch_pr_with_base()
     res = _first_round(gh, repo, COMMENT)
@@ -5696,8 +5841,13 @@ def test_the_cli_routes_recheck_without_a_review_round(monkeypatch, tmp_path):
         == 0
     )
     assert seen["ids"] == ["F-23084f"] and seen["reason"] == "it is new"
+    assert seen["verify_budget"] is False
     assert _CliGitHub.reactions == ["eyes", "rocket"]
     assert not any(c.startswith("⏳") for c in _CliGitHub.comments)  # no progress note
+
+    body = "/lens recheck verify-budget F-23084f it is new"
+    assert cli.main([*argv, "--event-path", _event_file(tmp_path, body)]) == 0
+    assert seen["verify_budget"] is True and seen["reason"] == "it is new"
 
     _CliGitHub.reactions, _CliGitHub.comments = [], []
     assert (
