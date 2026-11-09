@@ -154,6 +154,7 @@ def main(argv: list[str] | None = None) -> int:
             actor=rechecking.actor,
             post=live,
             run_url=run_url,
+            verify_budget=rechecking.verify_budget,
         )
         print(f"lens: {res.action} {res.reason}".strip())
         if live:

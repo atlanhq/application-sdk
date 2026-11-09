@@ -22,8 +22,10 @@ name: tests-reusable
 #   - connector-integration-tests composite with services-script hook (no-op
 #     by default; used when source systems need CI-level startup rather than
 #     pytest fixtures — see openapi's .github/test/setup-services.sh)
-#   - Optional pre-sync token rewrite for private atlanhq git dependencies
-#     (`private-git-deps`), plus `git-token` forwarded to the e2e image build
+#   - Optional read-only App token for private atlanhq git dependencies
+#     (`private-git-deps`), scoped to the app's private repos and seen only by
+#     git_auth.py's mirror clones, plus the same scoped token forwarded to the
+#     e2e image build as `git-token`
 #   - Label/dispatch-gated full-DAG e2e job (inlined here — see the `e2e` job;
 #     it was previously delegated to e2e-full-reusable.yaml, now folded in so
 #     the whole suite is one reusable + one Tests Gate)
@@ -440,10 +442,13 @@ on:
           dependency (e.g. query-redaction, pinned via `ssh://` or `https://`
           in [tool.uv.sources]).  Every tier of this reusable runs `uv sync` on
           the runner, and an unauthenticated clone of a private atlanhq repo
-          fails there — so with this flag each job rewrites atlanhq remotes to
-          a token URL (ORG_PAT_GITHUB, available via the caller's
-          `secrets: inherit`) BEFORE the deps action syncs.  The Docker build
-          is covered separately: `git-token` is always forwarded to sdr-e2e.
+          fails there — so with this flag each job mints a read-only fleet App
+          token (FLEET_APP_ID / FLEET_APP_PRIVATE_KEY, via `secrets: inherit`
+          or an explicit mapping naming both) and hands it to that `uv sync`
+          alone; no git config is written, so the tests never see it
+          (FND-4740).  The Docker build is covered separately: a read-only App
+          token is always forwarded to it as `git-token`, flag or not
+          (FND-4744).
           Leave false for connectors with only public dependencies.
       git-lfs-skip-smudge:
         required: false
@@ -625,14 +630,15 @@ on:
       ORG_PAT_GITHUB:
         required: false
         description: |
-          Org PAT used for the GHCR push, the connector image build's private
-          git dependency, and the private-git-deps token rewrite.
+          Org PAT used for the GHCR push and the connector image build's
+          private git dependency. Never handed to the runner's `uv sync`.
       FLEET_APP_ID:
         required: false
         description: |
-          GitHub App id used by the cross-repo callback job to mint a token for
-          the dispatching application-sdk repo. Only the SDK-dispatch path uses
-          it; connector-triggered runs leave it unset.
+          GitHub App id. Used by the cross-repo callback job to mint a token
+          for the dispatching application-sdk repo, and with
+          `private-git-deps` to mint a read-only token for the private atlanhq
+          git dependency.
       FLEET_APP_PRIVATE_KEY:
         required: false
         description: Private key paired with FLEET_APP_ID.
@@ -737,10 +743,6 @@ jobs:
       # Empty (the default) leaves the smudge filter enabled, exactly as
       # before; git-lfs only skips on an explicit "1".
       GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
-      # Surfaced as env, like E2E_SOURCE_ENV_JSON below, because a step-level
-      # `if:` cannot read the secrets context — and the rewrite step must gate
-      # on the credential actually being present, not just on the flag.
-      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
@@ -776,26 +778,67 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
-      # The flag promises a token. With ORG_PAT_GITHUB absent, GIT_TOKEN expands
-      # empty and the rewrite below would still install a global redirect of
-      # every atlanhq URL to an unauthenticated token URL — which then also
-      # applies to the connector's own repo checkout, so the job fails far from
-      # the cause. Fail here instead, naming the missing secret. The condition
-      # stays in `if:`, never in the shell (docs/standards/ci.md).
-      - name: Require ORG_PAT_GITHUB when private-git-deps is set
-        if: inputs.private-git-deps && env.GIT_TOKEN == ''
-        run: |
-          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
-          exit 1
+      # Private atlanhq git deps: a read-only fleet App token scoped to the
+      # private repos the app names (none named: no mint). It only reaches
+      # git_auth.py's mirror clones: uv, and every build backend it runs,
+      # install from local mirrors with no token in their env (FND-4740,
+      # lens round 5). A failed mint gets the named error below.
+      - name: Checkout app (to list its private git dependencies)
+        if: inputs.private-git-deps
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      # Private atlanhq git deps must be reachable before the deps action's
-      # `uv sync`. --global writes ~/.gitconfig, so it applies to the clone uv
-      # performs later in this job and needs no checkout of its own.
-      - name: Authenticate private atlanhq git dependencies
-        if: inputs.private-git-deps && env.GIT_TOKEN != ''
+      # Scoped to the private atlanhq repos the app names (git_auth.py
+      # repos: its pyproject.toml / uv.lock files, public repos dropped).
+      # No mint when it names none: create-github-app-token with no
+      # `repositories` would grant the whole installation. The script comes
+      # from this workflow's own commit (job.workflow_sha), so it is the
+      # version that matches the workflow running it.
+      - name: Checkout SDK git_auth.py (private git deps)
+        if: inputs.private-git-deps
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/git_auth.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-git-auth
+          persist-credentials: false
+
+      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
+        id: git-deps-repos
+        if: inputs.private-git-deps
         run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+          set -euo pipefail
+          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
+          # Out of the workspace: it is the image build context and the tree
+          # conformance and pre-commit look at.
+          rm -rf .sdk-git-auth
+
+      - name: Mint read-only token for private git dependencies
+        id: git-deps-token
+        if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != ''
+        # A failed mint leaves the token empty; see the guard below.
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
+          # workflow's own commit, never the PR's tree: the repos step above
+          # fails the job for any private repo not on it, so a PR's
+          # pyproject.toml / uv.lock cannot widen this scope.
+          repositories: ${{ steps.git-deps-repos.outputs.repositories }}
+          permission-contents: read
+
+      # The condition stays in `if:`, never in the shell (docs/standards/ci.md).
+      - name: Require the token when private-git-deps is set
+        if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != '' && steps.git-deps-token.outputs.token == ''
+        run: |
+          echo "::error title=No token for private git dependencies::private-git-deps is true but the fleet App token did not mint. Pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (secrets: inherit, or name both in an explicit secrets: mapping)."
+          exit 1
 
       - name: Run unit tests
         id: unit
@@ -807,6 +850,7 @@ jobs:
           # Repin so a cross-repo SDK-PR dispatch exercises the SDK branch in the
           # unit tier too (parity with integration); empty = lockfile version.
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
+          git-auth-token: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
 
   # ── Detect whether the PR's base branch is behind a merge queue ──────────
   # Decides WHERE the integration tier gates. The tier must run before a merge
@@ -1113,8 +1157,6 @@ jobs:
       # source credentials from one locked instance, never two. Empty when the
       # caller does not use dataforge; the fetch chain below then self-skips.
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
-      # Same reason: the rewrite step gates on the credential, not the flag.
-      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
@@ -1133,18 +1175,67 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
-      # See the unit job for why this gates on the token, not just the flag.
-      - name: Require ORG_PAT_GITHUB when private-git-deps is set
-        if: inputs.private-git-deps && env.GIT_TOKEN == ''
-        run: |
-          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
-          exit 1
+      # Private atlanhq git deps: a read-only fleet App token scoped to the
+      # private repos the app names (none named: no mint). It only reaches
+      # git_auth.py's mirror clones: uv, and every build backend it runs,
+      # install from local mirrors with no token in their env (FND-4740,
+      # lens round 5). A failed mint gets the named error below.
+      - name: Checkout app (to list its private git dependencies)
+        if: inputs.private-git-deps
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Authenticate private atlanhq git dependencies
-        if: inputs.private-git-deps && env.GIT_TOKEN != ''
+      # Scoped to the private atlanhq repos the app names (git_auth.py
+      # repos: its pyproject.toml / uv.lock files, public repos dropped).
+      # No mint when it names none: create-github-app-token with no
+      # `repositories` would grant the whole installation. The script comes
+      # from this workflow's own commit (job.workflow_sha), so it is the
+      # version that matches the workflow running it.
+      - name: Checkout SDK git_auth.py (private git deps)
+        if: inputs.private-git-deps
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/git_auth.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-git-auth
+          persist-credentials: false
+
+      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
+        id: git-deps-repos
+        if: inputs.private-git-deps
         run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+          set -euo pipefail
+          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
+          # Out of the workspace: it is the image build context and the tree
+          # conformance and pre-commit look at.
+          rm -rf .sdk-git-auth
+
+      - name: Mint read-only token for private git dependencies
+        id: git-deps-token
+        if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != ''
+        # A failed mint leaves the token empty; see the guard below.
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
+          # workflow's own commit, never the PR's tree: the repos step above
+          # fails the job for any private repo not on it, so a PR's
+          # pyproject.toml / uv.lock cannot widen this scope.
+          repositories: ${{ steps.git-deps-repos.outputs.repositories }}
+          permission-contents: read
+
+      # The condition stays in `if:`, never in the shell (docs/standards/ci.md).
+      - name: Require the token when private-git-deps is set
+        if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != '' && steps.git-deps-token.outputs.token == ''
+        run: |
+          echo "::error title=No token for private git dependencies::private-git-deps is true but the fleet App token did not mint. Pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (secrets: inherit, or name both in an explicit secrets: mapping)."
+          exit 1
 
       # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON) and, when the caller
       # sets dataforge-datasource, the dataforge fetch scripts + the VPN action.
@@ -1328,6 +1419,7 @@ jobs:
         uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@main
         with:
           app-name: ${{ inputs.app-name }}
+          git-auth-token: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
           test-paths: ${{ inputs.test-paths != '' && inputs.test-paths || 'tests/integration/' }}
           pytest-args: ${{ inputs.pytest-args }}
           services-script: ${{ inputs.services-script }}
@@ -1896,6 +1988,54 @@ jobs:
           # image-building path, and the only one that lacked it.
           lfs: ${{ inputs.lfs }}
 
+      # The `git_token` build secret for a Dockerfile whose `uv sync` clones a
+      # private atlanhq dependency (FND-4744). A read-only fleet App token, not
+      # ORG_PAT_GITHUB: every build backend that `uv sync` runs can read it.
+      # Minted on every build, not on `private-git-deps`: a Dockerfile without
+      # the secret mount ignores it. `continue-on-error` and no PAT fallback: a
+      # missing token only fails a build that needs it, at its clone.
+      # Scoped to the private atlanhq repos the app names (git_auth.py
+      # repos: its pyproject.toml / uv.lock files, public repos dropped).
+      # No mint when it names none: create-github-app-token with no
+      # `repositories` would grant the whole installation. The script comes
+      # from this workflow's own commit (job.workflow_sha), so it is the
+      # version that matches the workflow running it.
+      - name: Checkout SDK git_auth.py (image build)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/git_auth.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-git-auth
+          persist-credentials: false
+
+      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
+        id: image-git-repos
+        run: |
+          set -euo pipefail
+          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
+          # Out of the workspace: it is the image build context and the tree
+          # conformance and pre-commit look at.
+          rm -rf .sdk-git-auth
+
+      - name: Mint read-only token for the image build
+        id: image-git-token
+        if: steps.image-git-repos.outputs.repositories != ''
+        # A failed mint leaves the token empty; see the guard below.
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
+          # workflow's own commit, never the PR's tree: the repos step above
+          # fails the job for any private repo not on it, so a PR's
+          # pyproject.toml / uv.lock cannot widen this scope.
+          repositories: ${{ steps.image-git-repos.outputs.repositories }}
+          permission-contents: read
+
       - id: build
         uses: atlanhq/application-sdk/.github/actions/build-app-image@main
         with:
@@ -1903,7 +2043,9 @@ jobs:
           app-image-name: ${{ inputs.app-image-name }}
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
           base-image-ref: ${{ inputs.base-image-ref }}
-          git-token: ${{ secrets.ORG_PAT_GITHUB }}
+          git-token: ${{ steps.image-git-token.outputs.token }}
+          # GHCR stays on the PAT: fleet packages are org-level, and the App
+          # only has repo-level Packages permission.
           ghcr-token: ${{ secrets.ORG_PAT_GITHUB }}
           platforms: ${{ matrix.platform }}
           # Suffixes the tag AND the buildx cache scope. The cache half is the
@@ -2664,7 +2806,6 @@ jobs:
       # See the integration job: needed as env for the step-level `if:` gates.
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
-      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - name: distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
@@ -2846,21 +2987,64 @@ jobs:
           DF_HERMETIC_FALLBACK: ${{ inputs.dataforge-hermetic-fallback }}
         run: python3 application-sdk-scripts/.github/scripts/resolve_e2e_source.py
 
-      # See the unit job for why this gates on the token, not just the flag.
-      - name: Require ORG_PAT_GITHUB when private-git-deps is set
-        if: inputs.private-git-deps && env.GIT_TOKEN == ''
-        run: |
-          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
-          exit 1
-
       # The sdr-e2e action runs `uv sync` on the RUNNER as well as in the image
-      # build, so the token rewrite is needed here too — `git-token` below only
+      # build, so the host side needs the token too; `git-token` below only
       # reaches the Docker build.
-      - name: Authenticate private atlanhq git dependencies
-        if: inputs.private-git-deps && env.GIT_TOKEN != ''
+      # Private atlanhq git deps: a read-only fleet App token scoped to the
+      # private repos the app names (none named: no mint). It only reaches
+      # git_auth.py's mirror clones: uv, and every build backend it runs,
+      # install from local mirrors with no token in their env (FND-4740,
+      # lens round 5). A failed mint gets the named error below.
+      # Scoped to the private atlanhq repos the app names (git_auth.py
+      # repos: its pyproject.toml / uv.lock files, public repos dropped).
+      # No mint when it names none: create-github-app-token with no
+      # `repositories` would grant the whole installation. The script comes
+      # from this workflow's own commit (job.workflow_sha), so it is the
+      # version that matches the workflow running it.
+      - name: Checkout SDK git_auth.py (private git deps)
+        if: inputs.private-git-deps
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/git_auth.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-git-auth
+          persist-credentials: false
+
+      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
+        id: git-deps-repos
+        if: inputs.private-git-deps
         run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+          set -euo pipefail
+          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
+          # Out of the workspace: it is the image build context and the tree
+          # conformance and pre-commit look at.
+          rm -rf .sdk-git-auth
+
+      - name: Mint read-only token for private git dependencies
+        id: git-deps-token
+        if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != ''
+        # A failed mint leaves the token empty; see the guard below.
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
+          # workflow's own commit, never the PR's tree: the repos step above
+          # fails the job for any private repo not on it, so a PR's
+          # pyproject.toml / uv.lock cannot widen this scope.
+          repositories: ${{ steps.git-deps-repos.outputs.repositories }}
+          permission-contents: read
+
+      # The condition stays in `if:`, never in the shell (docs/standards/ci.md).
+      - name: Require the token when private-git-deps is set
+        if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != '' && steps.git-deps-token.outputs.token == ''
+        run: |
+          echo "::error title=No token for private git dependencies::private-git-deps is true but the fleet App token did not mint. Pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (secrets: inherit, or name both in an explicit secrets: mapping)."
+          exit 1
 
       # uv on the host for the sdr-e2e action's `uv run pytest` + summary steps.
       # The action self-installs uv only when application-sdk-ref is set
@@ -2872,10 +3056,57 @@ jobs:
           version: "0.13.7"
           enable-cache: true
 
+      # The image build's `git_token` secret (FND-4744). Separate from the
+      # opt-in `git-deps-token` above, which is for the host-side `uv sync`:
+      # this one is minted on every run, because a Dockerfile without the
+      # secret mount ignores it. Same read-only App token, no PAT fallback.
+      # Scoped to the private atlanhq repos the app names (git_auth.py
+      # repos: its pyproject.toml / uv.lock files, public repos dropped).
+      # No mint when it names none: create-github-app-token with no
+      # `repositories` would grant the whole installation. The script comes
+      # from this workflow's own commit (job.workflow_sha), so it is the
+      # version that matches the workflow running it.
+      - name: Checkout SDK git_auth.py (image build)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/git_auth.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-git-auth
+          persist-credentials: false
+
+      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
+        id: image-git-repos
+        run: |
+          set -euo pipefail
+          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
+          # Out of the workspace: it is the image build context and the tree
+          # conformance and pre-commit look at.
+          rm -rf .sdk-git-auth
+
+      - name: Mint read-only token for the image build
+        id: image-git-token
+        if: steps.image-git-repos.outputs.repositories != ''
+        # A failed mint leaves the token empty; see the guard below.
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
+          # workflow's own commit, never the PR's tree: the repos step above
+          # fails the job for any private repo not on it, so a PR's
+          # pyproject.toml / uv.lock cannot widen this scope.
+          repositories: ${{ steps.image-git-repos.outputs.repositories }}
+          permission-contents: read
+
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
         with:
           app-name: ${{ inputs.app-name }}
           app-image-name: ${{ inputs.app-image-name }}
+          git-auth-token: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
           # Reuse the merged manifest the build legs pushed and prepare-tenant
           # installed, instead of rebuilding the identical deterministic tag per
           # leg. The merged reference, not a per-arch one: compose pulls this on
@@ -2948,9 +3179,9 @@ jobs:
           ghcr-token: ${{ secrets.ORG_PAT_GITHUB }}
           # Forwarded to the image build as the `git_token` build secret so a
           # Dockerfile whose `uv sync` clones a private atlanhq dependency can
-          # authenticate. Same identity/availability rationale as ghcr-token; a
-          # Dockerfile that declares no such secret mount simply ignores it.
-          git-token: ${{ secrets.ORG_PAT_GITHUB }}
+          # authenticate. A read-only App token, not the PAT above; a Dockerfile
+          # that declares no such secret mount simply ignores it.
+          git-token: ${{ steps.image-git-token.outputs.token }}
 
   # ── Hand the tenant to whoever is next in the queue ──────────────────────
   # Prompt release, not the mechanism that makes the lease safe. GitHub cancels

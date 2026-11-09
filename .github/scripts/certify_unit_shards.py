@@ -59,7 +59,9 @@ Runner = Callable[[Sequence[str]], int]
 
 def pytest_command(shard: int, total: int, coverage_source: str) -> list[str]:
     """The pytest invocation for one shard, run from the app checkout."""
-    command = ["uv", "run", "--all-groups", "--with", "pytest-cov"]
+    # --frozen: never re-lock. The install step synced every group, and it is
+    # the only step with git auth for an app's private atlanhq deps.
+    command = ["uv", "run", "--frozen", "--all-groups", "--with", "pytest-cov"]
     if total > 1:
         command += ["--with", "pytest-split"]
     command += [
@@ -121,11 +123,15 @@ def run_shard(
 
 
 def decide_verdict(results_dir: Path, total: int) -> tuple[str, list[str]]:
-    """Fold every shard's outcome into one: ``success``, ``failure`` or ``skipped``.
+    """Fold every shard's outcome into one.
 
-    Returns the outcome and the reasons to annotate. ``skipped`` keeps the
-    gate's existing meaning: no unit tests to run, or app deps that did not
-    install (warn-only, as before sharding).
+    Outcomes: ``success``, ``failure``, ``skipped`` (no ``tests/unit`` — passes;
+    an app may have no unit tests) or ``install_failed`` (a shard's app deps did
+    not install, so its tests never ran). The two non-runs are kept apart
+    because the certification verdict treats them oppositely: an app with no
+    tests passes, an app whose tests could not run fails closed.
+
+    Returns the outcome and the reasons to annotate.
     """
     if not MIN_SHARDS <= total <= MAX_SHARDS:
         return "failure", [
@@ -151,8 +157,14 @@ def decide_verdict(results_dir: Path, total: int) -> tuple[str, list[str]]:
     if failed:
         return "failure", [f"Unit tests failed in shard(s) {failed} of {total}."]
 
-    if any(outcome == "install_failed" for outcome in outcomes.values()):
-        return "skipped", ["App dependencies did not install in a unit-test shard."]
+    install_failed = sorted(
+        shard for shard, outcome in outcomes.items() if outcome == "install_failed"
+    )
+    if install_failed:
+        return "install_failed", [
+            f"App dependencies did not install in unit-test shard(s) "
+            f"{install_failed}, so their tests did not run."
+        ]
     if all(outcome == "skipped" for outcome in outcomes.values()):
         return "skipped", []
     if all(outcome == "no_tests" for outcome in outcomes.values()):
@@ -207,7 +219,7 @@ def main(argv: Sequence[str] | None = None, runner: Runner = _subprocess_runner)
 
     outcome, reasons = decide_verdict(args.results_dir, args.total)
     for reason in reasons:
-        level = "error" if outcome == "failure" else "warning"
+        level = "error" if outcome in ("failure", "install_failed") else "warning"
         print(f"::{level}::{reason}")
     _write_output("outcome", outcome)
     return 0

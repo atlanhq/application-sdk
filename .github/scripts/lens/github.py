@@ -12,7 +12,7 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any
+from typing import Any, cast
 
 API = "https://api.github.com"
 DEFAULT_BOT_LOGIN = "atlan-app-fleet[bot]"
@@ -120,6 +120,21 @@ class GitHub:
         if isinstance(data, dict) and data.get("encoding") == "base64":
             return base64.b64decode(data["content"]).decode("utf-8", "replace")
         return None
+
+    def repo_visibility(self, owner_repo: str) -> str | None:
+        """Another repository's `visibility` (public | private | internal) as the
+        GitHub API reports it to lens's token, or None when the lookup fails (a
+        404/403 on a repo the token cannot see, a 5xx, or a network error: DNS,
+        a reset or a timeout surface from urlopen as OSError). Never raises."""
+        q = urllib.parse.quote(owner_repo, safe="/")
+        try:
+            data = self._call("GET", f"/repos/{q}")
+        except (GitHubError, ValueError, OSError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        got = cast("dict[str, object]", data).get("visibility")
+        return str(got) if got else None
 
     def issue_comments(self, number: int) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []

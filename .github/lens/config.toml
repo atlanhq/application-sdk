@@ -61,6 +61,7 @@ reflect_max_tokens = 8000
 # Verify re-checks still-open findings each round; reasoning tokens count against it too.
 # When a re-check spends it all before answering, the verdict says so and names the opt-in:
 # `/lens verify-budget` gives that one run verify_max_tokens_opt_in instead.
+# `/lens recheck verify-budget F-… <reason>` does the same for a single re-check.
 verify_max_tokens = 8000
 verify_max_tokens_opt_in = 24000
 max_comments = 12

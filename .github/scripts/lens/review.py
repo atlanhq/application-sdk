@@ -1138,6 +1138,48 @@ def recheck_evidence(
     return RecheckEvidence(facts, absent, code_now, at_base or "(none)")
 
 
+# Files GitHub Actions reads steps from: a workflow (top level only) or an action.
+_ACTIONS_FILE = re.compile(
+    r"^\.github/(?:workflows/[^/]+|actions/(?:.+/)?action)\.ya?ml$"
+)
+# `repository: owner/name` on a step (checkout's `with:`), optionally quoted. The
+# key must open its line: only indentation, a list dash, or code_now's line-number
+# prefix may precede it, so a comment (`# repository: o/decoy`) is never a target.
+# The charset is GitHub's own, so a name cannot carry a tag, a path or an expression.
+_CHECKOUT_TARGET = re.compile(
+    r"^(?:[ \t]*\d+ )?[ \t]*(?:-[ \t]+)?repository:[ \t]*"
+    r"[\"']?([A-Za-z0-9-]+/[A-Za-z0-9_.-]+?)(?:\.git)?[\"']?[ \t]*(?:#.*)?$",
+    re.MULTILINE,
+)
+MAX_CHECKOUT_TARGETS = 3
+
+
+def checkout_target_facts(
+    path: str, texts: list[str], visibility: Callable[[str], str | None]
+) -> list[str]:
+    """For a workflow or action file, the GitHub API visibility of each repo a
+    step checks out (`repository: owner/name`) in `texts`, at most
+    MAX_CHECKOUT_TARGETS of them. Any other file: no facts and no lookup. A
+    failed lookup is stated as unknown, never dropped and never fatal."""
+    if not _ACTIONS_FILE.match(path):
+        return []
+    targets: list[str] = []
+    for text in texts:
+        for m in _CHECKOUT_TARGET.finditer(text):
+            name = m.group(1)
+            if name.split("/")[1] not in (".", "..") and name not in targets:
+                targets.append(name)
+    out: list[str] = []
+    for name in targets[:MAX_CHECKOUT_TARGETS]:
+        vis = visibility(name)
+        out.append(
+            f"checkout target {name}: visibility {vis} (GitHub API)"
+            if vis
+            else f"checkout target {name}: visibility unknown (the GitHub API lookup failed)"
+        )
+    return out
+
+
 # The tags a recheck request is built from. PR-derived text (code, quotes,
 # finding prose, paths) must not be able to open or close one of them.
 _RECHECK_TAGS = re.compile(
@@ -1158,9 +1200,11 @@ def _recheck_call(
     items: list[tuple[Finding, RecheckEvidence]],
     author_claim: str,
     max_tokens: int,
-) -> dict[str, tuple[str, str]] | None:
-    """One model call over every finding that needs one: id -> (status, reason).
-    None when no verdict came back (budget, transport, or out of output tokens)."""
+) -> tuple[dict[str, tuple[str, str]] | None, bool]:
+    """One model call over every finding that needs one: (id -> (status, reason),
+    cut_off). The verdicts are None when none came back (budget, transport, or out
+    of output tokens); cut_off is True when the call stopped at its output budget
+    before answering for every finding, which `/lens recheck verify-budget` can fix."""
     parts = []
     if author_claim:
         # Untrusted: shown as a claim to check, and unable to close or open a tag.
@@ -1193,9 +1237,10 @@ def _recheck_call(
         )
     except (BudgetExhausted, LLMError) as e:
         trace.line(f"recheck: no verdict — {trace.short(str(e), 200)}")
-        return None
+        return None, False
+    capped = _out_of_output_budget(comp, max_tokens)
     if not comp.tool_calls:
-        return None
+        return None, capped
     ids = {f.id for f, _ in items}
     out: dict[str, tuple[str, str]] = {}
     for it in verdict_items(comp.tool_calls):
@@ -1205,7 +1250,32 @@ def _recheck_call(
                 str(it["status"]),
                 " ".join(str(it.get("reason") or "").split()),
             )
-    return out
+    # A call that stopped at its cap mid tool call can carry truncated arguments
+    # that parse to no verdict, or verdicts for only some findings: the rest were
+    # cut off, not judged. Completed verdicts are kept either way.
+    return out or None, capped and len(out) < len(ids)
+
+
+def recheck_cut_off_line(
+    ids: list[str], max_tokens: int, opted_in: bool, cfg: Config
+) -> str:
+    """Why a re-check gave no verdict, and the opt-in that gives it more room.
+
+    The re-check's model call shares verify's output budget, and reasoning tokens
+    count against it, so a hard finding can spend all of it before answering."""
+    line = (
+        f"The re-check spent all {max_tokens:,} output tokens before answering, so "
+        f"{', '.join(ids)} {'was' if len(ids) == 1 else 'were'} not re-judged"
+    )
+    if opted_in:
+        return line + (
+            " (this was already the opt-in budget, `agent.verify_max_tokens_opt_in` "
+            "in `.github/lens/config.toml`)"
+        )
+    return line + (
+        f"; comment `/lens recheck verify-budget {' '.join(ids)} <reason>` to retry "
+        f"with {cfg.limits.verify_max_tokens_opt_in:,}"
+    )
 
 
 def recheck(
@@ -1220,11 +1290,12 @@ def recheck(
     actor: str,
     post: bool = True,
     run_url: str = "",
+    verify_budget: bool = False,
 ) -> RunResult:
-    """`/lens recheck F-… [reason]`: re-judge open findings with repo-aware evidence.
+    """`/lens recheck [verify-budget] F-… [reason]`: re-judge open findings with repo-aware evidence.
 
     Deterministic first: the evidence (merge-base existence, callers, privacy,
-    the capability manifest) is gathered with no model call, and a compatibility
+    the capability manifest, the visibility of a workflow's checkout targets) is gathered with no model call, and a compatibility
     finding whose subject is absent on the merge base is resolved on that alone.
     Anything else gets one model call, from what is left of the PR's $ cap.
     It is not a round: `state.round` and `reviewed_head` do not move, so the
@@ -1264,6 +1335,8 @@ def recheck(
     resolved: list[tuple[Finding, str]] = []
     kept: list[tuple[Finding, str, list[str]]] = []
     spent = Ledger(cap_usd=max(ledger.remaining, 0.0))
+    cut_off = False
+    cut_off_note = ""
     if targets:
         pr = gh.pr(number)
         head, base = pr["head"]["sha"], pr["base"]["sha"]
@@ -1286,8 +1359,18 @@ def recheck(
         caps = root / CAPABILITIES_DOC
         capabilities = caps.read_text(encoding="utf-8") if caps.is_file() else ""
         ask: list[tuple[Finding, RecheckEvidence]] = []
+        seen_visibility: dict[str, str | None] = {}
+
+        def visibility(name: str) -> str | None:
+            if name not in seen_visibility:
+                seen_visibility[name] = gh.repo_visibility(name)
+            return seen_visibility[name]
+
         for f in targets:
             ev = recheck_evidence(ws, f, added, read_base, capabilities)
+            ev.facts += checkout_target_facts(
+                f.path, [f.evidence, ev.code_now], visibility
+            )
             trace.line(f"recheck {f.id}: " + "; ".join(ev.facts))
             if f.compatibility and ev.absent_on_merge_base:
                 resolved.append(
@@ -1302,8 +1385,21 @@ def recheck(
             ]
         elif ask:
             client: Client = client_factory(spent)
-            verdicts = _recheck_call(client, ask, reason, cfg.limits.verify_max_tokens)
-            if verdicts is None:
+            max_tokens = (
+                cfg.limits.verify_max_tokens_opt_in
+                if verify_budget
+                else cfg.limits.verify_max_tokens
+            )
+            verdicts, cut_off = _recheck_call(client, ask, reason, max_tokens)
+            if cut_off:
+                res.incomplete.append("re-check: ran out of output budget")
+                cut_off_note = recheck_cut_off_line(
+                    [f.id for f, _ in ask if f.id not in (verdicts or {})],
+                    max_tokens,
+                    verify_budget,
+                    cfg,
+                )
+            elif verdicts is None:
                 res.incomplete.append("re-check: no verdict came back")
             for f, ev in ask:
                 status, why = (verdicts or {}).get(f.id, ("", ""))
@@ -1312,7 +1408,18 @@ def recheck(
                         (f, f"{ev.facts[0]} — {why}" if why else ev.facts[0])
                     )
                 else:
-                    kept.append((f, why or "no verdict came back", ev.facts))
+                    kept.append(
+                        (
+                            f,
+                            why
+                            or (
+                                "not re-judged: the re-check ran out of output budget"
+                                if cut_off
+                                else "no verdict came back"
+                            ),
+                            ev.facts,
+                        )
+                    )
             _book(ledger, spent)
     for f, why in resolved:
         f.status, f.fixed_round, f.fixed_by = "fixed", state.round, "rechecked"
@@ -1354,6 +1461,8 @@ def recheck(
         lines.append(f"- ❌ `{f.id}` still stands: {why}")
         lines += [f"  - {x}" for x in facts]
     lines += [f"- ⚠️ {r}" for r in refused]
+    if cut_off_note:
+        lines.append(f"- ⚠️ {cut_off_note}")
     if not targets:
         gh.comment(number, "lens: nothing was re-checked.\n\n" + "\n".join(lines))
         return res

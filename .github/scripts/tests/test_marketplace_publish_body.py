@@ -137,25 +137,30 @@ def test_field_set_matches_the_release_workflow() -> None:
     differently-shaped version than releases do, e2e would be validating a
     registration shape that never ships.
 
-    build-and-publish-app.yaml still builds its body in an inline heredoc — it is
-    the path every release goes through, so it is deliberately not rewired in the
-    same change that introduces this module. This guard is what makes that safe:
-    the two cannot drift unnoticed. When the workflow is switched over to import
+    build-and-publish-app.yaml builds its body in its own builder,
+    build_and_publish/publish.py (moved verbatim out of the workflow's inline
+    heredoc) — it is the path every release goes through, so it is deliberately
+    not rewired onto this module. This guard is what makes that safe: the two
+    cannot drift unnoticed. When the release path is switched over to import
     this module, delete this test.
     """
-    workflow = (_REPO_ROOT / ".github/workflows/build-and-publish-app.yaml").read_text(
+    workflow = (_REPO_ROOT / ".github/scripts/build_and_publish/publish.py").read_text(
         encoding="utf-8"
     )
-    # Keys the workflow assigns into its publish body, either as a literal in the
-    # dict or via body["key"] = ....
+    # Keys the release builder assigns into its publish body, either as a literal
+    # in the dict or via body["key"] = ....
     workflow_keys = set(re.findall(r'body\["(\w+)"\]', workflow))
-    workflow_keys |= {
+    literal_keys = {
         key
-        for key in re.findall(r'^\s{14}"(\w+)":', workflow, re.M)
-        # The literal dict is indented 14 spaces inside the heredoc; filter to the
+        for key in re.findall(r'^\s{8}"(\w+)":', workflow, re.M)
+        # The literal dict is indented 8 spaces inside build_body(); filter to the
         # publish-body keys we know it declares there.
         if key in {"app_id", "image", "version", "branch", "repo", "source"}
     }
+    # A guard that finds nothing passes vacuously; fail loudly if the builder moves.
+    assert literal_keys == {"app_id", "image", "version", "branch", "repo", "source"}
+    assert len(workflow_keys) >= 5
+    workflow_keys |= literal_keys
 
     ours = set(build(_minimal(allowed_tenants=(), target_channel="all")))
     ours |= set(
