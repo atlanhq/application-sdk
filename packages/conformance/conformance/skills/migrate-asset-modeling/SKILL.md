@@ -37,23 +37,66 @@ outputs:
 
 ## What this protects
 
-- **Identity.** A qualifiedName is the asset. A changed string is a new asset:
-  duplicates on the next run, orphans for everything linked to the old one.
-  The grammar belongs to pyatlan's `creator()` factories, so one fix there
-  reaches every app. A P028 finding the app cannot close yet is how the fleet
-  finds a missing creator: never hide it.
-- **What the app publishes.** `entity_bytes` is the one seam where the SDK
-  stamps `connectionName`, applies the declared envelope, sets top-level
-  `status: ACTIVE` and strips the placeholder guid every creator sets (SDK
-  3.39.0). Those changes are expected. Any other change to the output is a
-  defect unless an owner accepts it.
-
-So every group below asks the same two questions: does the identity stay the
-same, and does the output stay the same?
+1. **Identity.** A qualifiedName is the asset: a changed string is a new
+   asset, with duplicates on the next run and orphans for everything linked
+   to the old one. The grammar belongs to pyatlan's `creator()` factories, so
+   one fix there reaches every app. Use a creator only where it gives the same
+   string. A P028 finding the app cannot close yet is how the fleet finds a
+   missing creator: never hide it.
+2. **Published output.** What the app publishes stays the same, key by key,
+   except the stamps `entity_bytes` adds by design: `connectionName`,
+   top-level `status: ACTIVE`, the placeholder guid every creator sets
+   removed (SDK 3.39.0). Those exist so every app gets central fixes, such as
+   a soft-deleted entity that comes back being restored.
+3. **`entity_bytes` is the seam for publish output only.** A payload that
+   something else reads (the Atlan API, another publish lane, another
+   service) is not fixed by moving it onto this seam.
+4. **Inputs are judged by their source.** An input matters when a real
+   source can send it. Name where every input you test comes from; never
+   make one up. Follow a value back to its producer (a guard, a validated
+   type, the code that builds it). A value that comes straight from the
+   source with no check can be any non-blank string, unless a fixture
+   recorded from that source shows its format. Blank or `None` is possible
+   wherever `.get(k)`, `.get(k, "")` or a `str = ""` field lets it through.
+5. **When 1 or 2 cannot be proven, hold the site and say what is missing.**
+   Plan it as type `SDK` when pyatlan or the SDK must add something (name
+   the type, the creator, the input), or as type `Decision` when an owner
+   must choose (ask the question). Your plan text is what the person reads.
+   A site whose shape this skill does not describe gets the same treatment:
+   describe the shape in the PR as a candidate for this skill.
 
 The rule definitions own what "correct" is: each finding carries its rule's
-`full_description` and `terminal_state`. This skill owns how to tell the sites
-apart, what evidence each needs, and how to prove the change.
+`full_description` and `terminal_state`. This skill owns how to apply them
+without breaking 1 and 2, and how to prove it.
+
+## Facts you need
+
+- Check creators in the installed pyatlan, never from memory:
+  `"creator" in vars(X)` (Process, ColumnProcess, BIProcess:
+  `"generate_qualified_name" in vars(X)`). An inherited creator is not this
+  type's creator. A type without its own creator can be built directly.
+- Creators enforce segment counts (`Database` needs a 3-segment connection
+  qualifiedName, `Schema` 4, `Table`/`View`/`Procedure` 5); some need
+  `connection_qualified_name=` to accept a non-standard depth. For a chain of
+  creators, every id in the chain goes in as a `name`.
+- `Process.generate_qualified_name(..., process_id=X)` returns
+  `{connection_qn}/X`; `process_id=None` falls back to a hash, a different
+  identity. `Process.creator` raises on an empty `inputs` or `outputs` list.
+- `EnvelopeShape.FLATTENED` puts relationship references under `attributes`;
+  `EnvelopeShape.PYATLAN` (deprecated, removed in v4.0) keeps them under a
+  top-level `relationshipAttributes`. Code that decodes `to_nested_bytes()`
+  and moves `relationshipAttributes` into `attributes` publishes
+  `FLATTENED`. Judge the envelope by what the app publishes, never by the
+  method it calls.
+- A reference built with `qualified_name=` gains an extra top-level
+  `qualifiedName` key; `unique_attributes={"qualifiedName": ...}` writes the
+  usual `{typeName, uniqueAttributes}` reference.
+- A key the model cannot hold goes on the decoded `entity_bytes` output
+  (`atlan-metabase-app` `serialize_entity`).
+- Call `resolve_last_sync_details()` (`application_sdk.common.last_sync`)
+  once per transform activity, outside the per-record loop, and pass it as
+  `last_sync=`; pass `connection_name=` unless the mapper stamps it.
+  `entity_bytes` returns bytes: the sink must accept bytes.
 
 ## What each rule fires on
 
@@ -78,151 +121,53 @@ any of them clears the finding and keeps the hand-built grammar. That is not a
 fix. If the app already has such helpers (for example a `_qn(*parts)` join),
 treat their call sites as part of this migration.
 
-## Judge inputs by where they come from
-
-A creator check or a parity check is only as good as its inputs. An input
-matters when a real source can send it.
-
-1. Name where every input you test comes from. Never make up an input to see
-   whether a creator breaks.
-2. Follow the value back to its producer: a guard, a validated type, or the
-   code that builds it. Example: a connection qualifiedName comes from the
-   Atlan connection, and `Connection.creator` always builds
-   `default/<connector>/<epoch>`, so a one-segment connection qualifiedName
-   cannot reach the site.
-3. Where the value comes straight from the source system with no check (an
-   API field, a catalog column), treat any non-blank string as possible,
-   unless a fixture recorded from that source shows its format. Say which
-   fixture.
-4. Blank or `None` is possible wherever `.get(k)`, `.get(k, "")` or a
-   `str = ""` field lets it through.
-
-## Groups
-
-Each group: **when** (what you see at the site), **why** (what is at stake),
-**end state**. The group id is the `fix_shape` the decided defaults use.
-
-No group fits: decide from the two invariants in "What this protects". If
-you cannot prove both, hold the site, describe its shape, and name it in the
-PR as a candidate group for this skill.
+## The rules
 
 ### P028 — identity from creators
 
-Check with the installed pyatlan, never from memory:
-`"creator" in vars(X)` (Process, ColumnProcess, BIProcess:
-`"generate_qualified_name" in vars(X)`). An inherited creator is not this
-type's creator. Then build the string both ways with realistic inputs and
-compare; for a chain of creators, check every id in the chain.
+End state per site, from the rule's `full_description`:
 
-- `creator-string` — when a creator gives the same string for every input the
-  source can send. End state: a memoized helper that returns
-  `X.creator(...).qualified_name`; when only the id is known, pass it as
-  `name` too and never emit that asset.
-- `creator-blank-raises` — when the creator is the same except that it raises
-  on a blank or `None` input the app accepts. Why: the f-string would publish
-  `…/None` or `…/`, a broken identity. End state: as `creator-string`, no
-  guard and no fallback; the PR lists each input that now raises.
-- `process-id` — when the site builds a Process, ColumnProcess or BIProcess
-  identity `{connection_qn}/{suffix}`. End state:
-  `generate_qualified_name(..., process_id=<suffix>)`, identical by
-  construction. Never pass `process_id=None`: that falls back to a hash.
-- `not-identity-ignore` — when the string never reaches a `qualifiedName`
-  field or a relationship reference (object-store key, prefix match, lookup
-  key, log or display text). Prove it by following every reader. End state:
-  `# conformance: ignore[P028] <kind>, not a qualifiedName` on the line
-  above.
-- `decode` — code that splits a qualifiedName apart. Not a P028 site; leave
-  it.
-- `gap` — when no creator can produce the string for an input the source can
-  send. Name which, in the brief: `no-creator` (the type has none),
-  `differs` (the creator gives another string), `missing-input` (the creator
-  needs a value the source record does not carry; name it), or
-  `rejects-input` (the creator raises on a non-blank value the source can
-  send; name the value and where it comes from). End state: the f-string in
-  one helper per name shape, unsuppressed, until pyatlan adds the creator.
+- a creator gives the same string: read it from a memoized
+  `X.creator(...).qualified_name` helper; when only the id is known, pass it
+  as `name` too and never emit that asset;
+- the same, but the creator raises on a blank input the app accepts: use it
+  anyway, with no guard and no fallback; list each such input in the PR;
+- a Process, ColumnProcess or BIProcess `{connection_qn}/{suffix}`:
+  `generate_qualified_name(..., process_id=<suffix>)`;
+- the string never reaches a `qualifiedName` field or a reference (follow
+  every reader): `# conformance: ignore[P028] <kind>, not a qualifiedName`;
+- code that splits a qualifiedName apart: not a P028 site, leave it;
+- no creator gives the same string for an input the source can send: a gap.
+  The f-string stays in one helper per name shape, unsuppressed. Say which:
+  the type has no creator, the creator gives another string, it needs an
+  input the source record lacks, or it rejects a non-blank input the source
+  can send.
 
 ### P052 — one serialization seam
 
-The envelope must keep what the app publishes today. Decide it from the
-app's released output, not from the method name.
-
-- `reshaped-flattened` — when the app decodes `to_nested_bytes()` and moves
-  `relationshipAttributes` into `attributes` (or drops them). That rebuilds
-  `EnvelopeShape.FLATTENED` by hand. End state:
-  `entity_bytes(asset, envelope=FLATTENED)`; delete only the hand
-  flattening. App-specific changes on top (a renamed field, a stripped
-  reference key, extra attributes) stay as a step on the decoded
-  `entity_bytes` output, unchanged, so the output stays the same.
-- `nested-released` — when the released output still has a top-level
-  `relationshipAttributes` key. End state: `EnvelopeShape.PYATLAN`
-  (deprecated, removed in v4.0). Moving it to `FLATTENED` changes the wire
-  shape: owner decision.
-- `to_atlas_format` call sites are `reshaped-flattened` with nothing to
-  delete.
-- `custom-shape` — when the helper's output is neither envelope: a subset of
-  attributes, or every key promoted to the top level. Its consumer reads that
-  shape. Hold for the owner.
-
-Pass `connection_name=` and `last_sync=` unless the mapper already stamps
-them. Call `resolve_last_sync_details()` (`application_sdk.common.last_sync`)
-once per transform activity, outside the per-record loop: each call reads the
-current time, so a per-record call gives one run's entities different
-`lastSyncRunAt` values. `entity_bytes` returns bytes: the sink must accept
-bytes (JSONL).
+Write every entity through `entity_bytes`, with the envelope that keeps what
+the app publishes (principle 2). Delete only the code that rebuilds that
+envelope by hand; any other change the app makes to the output stays, applied
+to the decoded `entity_bytes` output. A helper whose output is not an entity
+envelope at all is principle 3 or 5.
 
 ### P058 — entities as pyatlan_v9 assets
 
-Why: a hand-built dict has no model checking its keys and no creator owning
-its identity, and outside `entity_bytes` it misses `status: ACTIVE`, so a
-soft-deleted entity that comes back stays deleted.
-
-For every P058 group that moves to `entity_bytes`, keep the dict's released
-shape: choose the envelope as for P052 (a dict with a top-level
-`relationshipAttributes` key is `PYATLAN`), and build each reference with
-`unique_attributes={"qualifiedName": ...}`, as the dict wrote it.
-`qualified_name=` adds an extra top-level `qualifiedName` key to every
-reference.
-
-- `asset-creator` — when the dict is emitted for publish and its type has a
-  creator. End state: the creator plus model fields, through `entity_bytes`.
-  A key the model cannot hold goes back on the decoded `entity_bytes` output.
-  The qualifiedName rules of P028 apply to the creator call.
-- `asset-no-creator` — when the type is modeled but has no creator of its own
-  (for example `Function`). End state: the model class built directly with
-  the same keys, through `entity_bytes`.
-- `process-asset` — when the dict is a Process, ColumnProcess or BIProcess.
-  End state: `Process.creator(..., process_id=<suffix>)` with typed
-  input/output references; same unit as the P028 `process-id` sites of the
-  same identity. The creator raises on an empty `inputs` or `outputs` list:
-  a Process the source can emit without either is `process-no-refs`, held
-  for the owner.
-- `api-patch` — when the dict is sent straight to the Atlan API as a partial
-  update (for example a POST to `/api/meta/entity/bulk`), not written for
-  publish. Why: the publish stamps would overwrite the asset's real values.
-  Hold for the owner.
-- `nondata-lane` — when the dict is staged for publish's non-data lane
-  (glossaries, domains), which keys entities by its own path. Hold for the
-  owner.
-- `unmodeled-ignore` — when `pyatlan_v9` has no class for the type. End
-  state: the dict keeps top-level `"status": "ACTIVE"` on every non-delete
-  upsert and carries `# conformance: ignore[P058] <type> is not modeled in
-  pyatlan_v9`.
-
-An app whose mappers all emit dicts moves as one unit, not site by site.
+A dict has no model checking its keys and no creator owning its identity, and
+outside `entity_bytes` it misses `status: ACTIVE`, so a soft-deleted entity
+that comes back stays deleted. End state: each publish entity is a pyatlan_v9
+asset (creator where the type has one, P028 applies to it) written with
+`entity_bytes`, with the output unchanged. A type pyatlan_v9 does not model
+keeps the dict with top-level `"status": "ACTIVE"` and
+`# conformance: ignore[P058] <type> is not modeled in pyatlan_v9`. An app
+whose mappers all emit dicts moves as one unit.
 
 ### O004 — pyatlan_v9 models
 
-- `import-only` — when every construction keyword exists on the v9 class and
-  no legacy method (`to_atlas_dict()`, `.dict()`, `attributes=`) is used. End
-  state: the import from `pyatlan_v9.model.assets`.
-- `with-serialization` — when the models feed a mapper that also has P052 or
-  P058 sites. End state: move it in the same unit as those sites; the import
-  alone breaks the mapper.
-- `search-client` — when the models feed a search or lookup through the
-  legacy client (`FluentSearch`, `asset_type=`). Moving it means the
-  pyatlan_v9 client too. Hold for the owner.
-- `legacy-transformer` — when the models feed the legacy `AtlasTransformer`.
-  Moving off it or keeping it is the app owner's choice. Hold for the owner.
+Import from `pyatlan_v9.model.assets`. The v9 classes reject `attributes=`
+and have no `to_atlas_dict()`, and a search runs on the pyatlan_v9 client:
+where the models feed a mapper, move them with that mapper's P052 and P058
+sites; where they feed anything the import alone cannot move, principle 5.
 
 ### O002, O003, P055 (unchanged)
 
@@ -237,10 +182,8 @@ An app whose mappers all emit dicts moves as one unit, not site by site.
   list (no mapper of its own), that is an owner decision: the app has to
   start emitting the child.
 
-### Order inside one mapper
-
-O004 → O003 → P028 → P052 / O002 → P055 → P058. Sites that share a mapper
-or an identity move in one unit.
+Order inside one mapper: O004 → O003 → P028 → P052 / O002 → P055 → P058.
+Sites that share a mapper or an identity move in one unit.
 
 ## Before you change anything
 
@@ -249,48 +192,45 @@ or an identity move in one unit.
    3.20.0: stop and run `migrate-off-daft`.
 2. A creator missing in the locked pyatlan but present in a release at least
    7 days old inside the allowed range: with a developer, raise pyatlan in
-   the lock; in the remediation lane the site is held (decided defaults) for
-   that raise. No such release: the site is `gap`.
+   the lock; in the remediation lane the site is held for that raise.
 3. Baseline:
    `atlan-application-sdk-conformance detect --rule P028,P052,P055,P058,O002,O003,O004 --exit-zero --output before.sarif`
    and the test suite; record tests that already fail.
-4. Capture today's output from the offline (recorded) integration test,
-   one JSONL line per entity, outside the repo. No such test: record that
+4. Capture today's output from the offline (recorded) integration test, one
+   JSONL line per entity, outside the repo. No such test: record that
    delivered-output parity is not proven, and pin each touched type's
    qualifiedName in a unit test before any edit.
 
 ## Prove it
 
-1. Re-detect with the baseline command: only `gap`, owner-held and ignored
-   sites remain.
+1. Re-detect with the baseline command: only gaps, held and ignored sites
+   remain. Grep the call sites of hand-built helpers the checker cannot see
+   (for example a `_qn(*parts)` join) and confirm each is migrated or held.
 2. Tests: no failure that was not in the baseline.
 3. Identity: the `(typeName, qualifiedName)` pairs and every
    `uniqueAttributes.qualifiedName` in references, compared as multisets
    (counts), are equal before and after. P055 moves references by design:
    compare `(parent, child)` pairs instead.
-4. Output (P052, P058, O004): every entity equal before and after, key by
-   key, including where relationships sit and the shape of each reference,
-   except `connectionName` added, `status: ACTIVE` added, placeholder guids
-   removed and volatile `lastSync*` values.
+4. Output: every entity equal before and after, key by key, including where
+   relationships sit and the shape of each reference, except the stamps in
+   principle 2 and volatile `lastSync*` values.
 5. Pin it: commit the before-snapshot next to the recorded fixture and
    assert `Counter` equality in the offline test. Break one grammar on
    purpose, see the test fail, revert.
 
 ## PR description
 
-- per group: the sites and the end state applied;
-- every input that now raises (`creator-blank-raises`, `process-id`);
+- the sites changed and the end state applied;
+- every input that now raises;
 - every output difference and why it is expected;
-- every site left open: its group, and for `gap` the reason and what pyatlan
-  must add;
+- every site held: what is missing, and who must add or decide it;
 - whether delivered-output parity is proven or not.
 
 ## Working with a developer, and in the remediation lane
 
-With a developer: stop after the groups are decided (before any edit), and
-after the proof. In the remediation lane the decided defaults below are the
-developer's answers: a group with a default is applied, a held group exits
-with its brief.
+With a developer: stop after the plan (before any edit), and after the proof.
+In the remediation lane the decided defaults below are the developer's
+answers; a held site exits with its plan text as the brief.
 
 ## Reference shapes
 
@@ -364,31 +304,24 @@ prefix = f"{connection_qn}/"
 
 ## Decided defaults
 
-Owner answers read by remediation tooling. `fix_shape` is the group id above.
-A row with `block` holds that group for a person.
+Owner answers read by remediation tooling. A row with `block` holds the
+sites planned with that `fix_shape` for a person.
 
 ```decided-defaults
 {"rule": "P028", "fix_shape": "creator-string", "decision": "Read the string from a memoized helper returning X.creator(...).qualified_name; when only the id is known pass it as name too and never emit that asset.", "why": "Reference shape: atlan-metabase-app app/qualified_names.py collection_qn; atlan-mysql-app app/mysql.py _database_qn.", "interface": false}
-{"rule": "P028", "fix_shape": "creator-blank-raises", "decision": "Use the creator even when a blank or None input makes it raise; no app-side guard and no f-string fallback.", "why": "The raise replaces a broken identity such as {conn}/table/ or {conn}/None. pyatlan raises on blank identity inputs by design.", "interface": false, "pr_note": true}
-{"rule": "P028", "fix_shape": "process-id", "decision": "generate_qualified_name(name=..., connection_qualified_name=..., inputs=[None], outputs=[None], process_id=<everything after the connection qualifiedName>) for Process, ColumnProcess and BIProcess.", "why": "Returns {connection_qualified_name}/{process_id}, the same string by construction. Reference shape: atlan-metabase-app app/qualified_names.py process_qn.", "interface": false, "pr_note": true}
+{"rule": "P028", "fix_shape": "creator-blank-raises", "decision": "Use the creator even when a reachable blank or None input makes it raise; add no app-side guard and keep no f-string fallback. List each such input in the PR description.", "why": "The raise replaces a broken identity such as {conn}/table/ or {conn}/None. pyatlan raises on blank identity inputs by design, so the site is closed by the creator, not a gap.", "interface": false}
+{"rule": "P028", "fix_shape": "process-id", "decision": "generate_qualified_name(name=..., connection_qualified_name=..., inputs=[None], outputs=[None], process_id=<everything after the connection qualifiedName>) for Process, ColumnProcess and BIProcess. A reachable blank name or connection qualifiedName now raises; list each such input in the PR description, as for creator-blank-raises.", "why": "Returns {connection_qualified_name}/{process_id}, the same string by construction. Reference shape: atlan-metabase-app app/qualified_names.py process_qn.", "interface": false}
 {"rule": "P028", "fix_shape": "not-identity-ignore", "decision": "# conformance: ignore[P028] <kind>, not a qualifiedName on the line above, where kind is match prefix, object-store key, lookup key or message text; only after following every reader of the value.", "why": "The rule's terminal state allows an ignore only for a string that is not an asset qualifiedName.", "suppress": true, "reason": "not a qualifiedName", "interface": false}
-{"rule": "P028", "fix_shape": "gap", "decision": "Leave the f-string in one helper per name shape, unsuppressed; do not change the string.", "why": "No creator can produce this identity for an input the source can send; changing the string changes asset identity and suppressing hides the gap."}
+{"rule": "P028", "fix_shape": "gap", "decision": "Leave the f-string in one helper per name shape, unsuppressed, and list it in the PR description; do not change the string.", "why": "No creator, a different string, or a missing creator input is a pyatlan gap; changing the string changes asset identity and suppressing hides the gap."}
 {"rule": "P028", "match": "\\bhash\\(", "block": "The qualifiedName is built from Python's builtin hash(), which changes between interpreter processes, so the identity is not stable today. Any stable replacement changes asset identity.", "brief": "Pick the stable id that replaces hash() and accept the one-time identity change; until then the site stays open."}
-{"rule": "P028", "fix_shape": "^gap$", "block": "No creator produces this qualifiedName for an input the source can send: no-creator, differs, missing-input or rejects-input. Changing the string changes asset identity.", "brief": "Add or fix the creator in pyatlan for the type and input named in the site's reason, then apply the creator fix to this site."}
+{"rule": "P028", "fix_shape": "^gap$", "block": "No creator produces this qualifiedName: the type has no creator in a usable pyatlan, the creator produces a different string, rejects a non-blank input the app accepts, or needs an input the app does not have. Changing the string changes asset identity.", "brief": "Add or fix the creator in pyatlan, then apply the creator fix to this site."}
 {"rule": "P028", "fix_shape": "^creator-string$", "block": "The app's lock resolves pyatlan below the version that carries the creators these sites need.", "brief": "Raise pyatlan to a version with these creators (a dependency update), then apply the creator fix.", "requires": {"package": "pyatlan", "min": "11.5.0"}}
 {"rule": "P028", "fix_shape": "^creator-blank-raises$", "block": "The app's lock resolves pyatlan below the version that carries the creators these sites need.", "brief": "Raise pyatlan to a version with these creators (a dependency update), then apply the creator fix.", "requires": {"package": "pyatlan", "min": "11.5.0"}}
-{"rule": "P052", "fix_shape": "reshaped-flattened", "decision": "entity_bytes(asset, envelope=EntityEnvelopePolicy(shape=EnvelopeShape.FLATTENED)); delete only the code that moves relationshipAttributes into attributes; keep every app-specific change as a step on the decoded entity_bytes output.", "why": "The hand reshape rebuilds the flattened envelope: on a pyatlan_v9 Table, entity_bytes FLATTENED equals it except connectionName and status ACTIVE added and the placeholder guid removed.", "pr_note": true}
-{"rule": "P052", "fix_shape": "nested-released", "decision": "entity_bytes(asset, envelope=EntityEnvelopePolicy(shape=EnvelopeShape.PYATLAN)) where the released output keeps a top-level relationshipAttributes key.", "why": "Keeps the released wire shape; PYATLAN is a deprecated migration lever removed in v4.0.", "pr_note": true}
-{"rule": "P052", "fix_shape": "^custom-shape$", "block": "The helper's output is neither entity envelope (a subset of attributes, or every key promoted to the top level), and its consumer reads that shape.", "brief": "Decide whether the consumer can read an entity_bytes envelope; if not, record why this output stays custom."}
-{"rule": "P058", "fix_shape": "asset-creator", "decision": "Build the entity with the type's pyatlan_v9 creator plus model fields and write it with entity_bytes, with the envelope that keeps the dict's released shape and references built with unique_attributes={\"qualifiedName\": ...}; a key the model cannot hold goes back on the decoded output.", "why": "Reference shape: atlan-openapi-app app/asset_mapper.py and app/connector.py; atlan-metabase-app serialize_entity.", "pr_note": true}
-{"rule": "P058", "fix_shape": "asset-no-creator", "decision": "Build the pyatlan_v9 model class directly with the dict's keys and write it with entity_bytes.", "why": "The type is modeled, so the model checks the keys; it has no creator, so its qualifiedName follows the P028 rules for the site that builds it.", "pr_note": true}
-{"rule": "P058", "fix_shape": "process-asset", "decision": "Process.creator (or ColumnProcess / BIProcess) with process_id=<everything after the connection qualifiedName> and typed input/output references, written with entity_bytes, in the same unit as the P028 process-id sites of that identity.", "why": "generate_qualified_name and the creator return {connection_qualified_name}/{process_id}, the same identity by construction.", "pr_note": true}
-{"rule": "P058", "fix_shape": "^process-no-refs$", "block": "Process.creator raises on an empty inputs or outputs list, and the source can emit this Process without one.", "brief": "Decide how a Process without inputs or outputs is modeled: a pyatlan change, or the app stops emitting it."}
+{"rule": "P052", "fix_shape": "released-envelope", "decision": "Write the entity with entity_bytes and the envelope that matches what the app publishes today; delete only the code that rebuilds that envelope by hand; keep every other change the app makes, applied to the decoded entity_bytes output.", "why": "entity_bytes is the seam for central fixes; the envelope choice keeps the published output unchanged except the documented stamps.", "pr_note": true}
+{"rule": "P052", "fix_shape": "^hold$", "block": "Held: this site's identity or published output cannot be proven unchanged, or its payload is not publish output. The planner's reason for this site says what is missing.", "brief": "Add what the planner's reason names as missing, or answer its question, then re-run the unit."}
+{"rule": "P058", "fix_shape": "pyatlan-asset", "decision": "Build each publish entity as a pyatlan_v9 asset (the type's creator where it has one) and write it with entity_bytes so the published output is unchanged except the documented stamps.", "why": "A model checks the keys and a creator owns the identity; outside entity_bytes the entity misses status ACTIVE.", "pr_note": true}
 {"rule": "P058", "fix_shape": "unmodeled-ignore", "decision": "Keep the dict with top-level \"status\": \"ACTIVE\" on every non-delete upsert and add # conformance: ignore[P058] <type> is not modeled in pyatlan_v9.", "why": "The rule's terminal state allows an ignore only for a type pyatlan_v9 does not model.", "suppress": true, "reason": "is not modeled in pyatlan_v9"}
-{"rule": "P058", "fix_shape": "^api-patch$", "block": "The dict is a partial update sent straight to the Atlan API, not publish output; entity_bytes would add connectionName, lastSync and status to the patch.", "brief": "Decide whether a partial-update payload is in P058's scope; if it is, name the pyatlan_v9 shape it should use (for example the type's updater())."}
-{"rule": "P058", "fix_shape": "^nondata-lane$", "block": "The dict is staged for publish's non-data lane, which keys entities by its own path, not by qualifiedName.", "brief": "Confirm the non-data lane accepts entity_bytes output for this type, and which identity it must carry."}
-{"rule": "O004", "fix_shape": "import-only", "decision": "Import from pyatlan_v9.model.assets; every construction keyword exists on the v9 class and no legacy method is used.", "why": "The v9 classes carry the same fields; the import is the whole change."}
-{"rule": "O004", "fix_shape": "with-serialization", "decision": "Move the import in the same unit as the mapper's P052 and P058 sites.", "why": "pyatlan_v9 rejects attributes= and has no to_atlas_dict(), so the import alone breaks the mapper."}
-{"rule": "O004", "fix_shape": "^search-client$", "block": "The legacy models feed a search or lookup through the legacy client; moving them means moving to the pyatlan_v9 client and its FluentSearch.", "brief": "Confirm the pyatlan_v9 client is the supported search path for apps, then move the search and its models together."}
-{"rule": "O004", "fix_shape": "^legacy-transformer$", "block": "The legacy models feed the legacy AtlasTransformer; moving off it or keeping it is the app owner's choice.", "brief": "Choose: move the mapper to pyatlan_v9 assets and entity_bytes (P052/P058), or keep the AtlasTransformer and record why."}
+{"rule": "P058", "fix_shape": "^hold$", "block": "Held: this site's identity or published output cannot be proven unchanged, or its payload is not publish output. The planner's reason for this site says what is missing.", "brief": "Add what the planner's reason names as missing, or answer its question, then re-run the unit."}
+{"rule": "O004", "fix_shape": "v9-import", "decision": "Import from pyatlan_v9.model.assets, moving the models together with the mapper's P052 and P058 sites when they feed a mapper.", "why": "The v9 classes reject attributes= and have no to_atlas_dict(), so the import alone breaks a mapper."}
+{"rule": "O004", "fix_shape": "^hold$", "block": "Held: this site's identity or published output cannot be proven unchanged, or its payload is not publish output. The planner's reason for this site says what is missing.", "brief": "Add what the planner's reason names as missing, or answer its question, then re-run the unit."}
 ```
