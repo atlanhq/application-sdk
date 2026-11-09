@@ -17,7 +17,9 @@ lens reviews only when asked — a push never spends money on its own:
   cannot be dismissed by the PR's own author: someone else has to agree.
 - `/lens recheck [verify-budget] F-1a2b3c [F-…] [reason]`: re-judge open findings with repo-aware
   evidence the line review never had (does the file/symbol exist on the merge
-  base, who calls it, is it private or listed in docs/agents/sdk-capabilities.md).
+  base, who calls it, is it private or listed in docs/agents/sdk-capabilities.md;
+  in a workflow or action file, the GitHub API visibility of each repository a
+  step checks out with `repository: owner/name`, at most three per finding).
   Anyone who may trigger lens may ask, the PR author included: this is how an
   author gets a disputed blocking finding a second look without a human. The
   finding is resolved with the evidence on record, or kept and the evidence
