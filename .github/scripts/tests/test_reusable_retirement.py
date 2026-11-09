@@ -19,6 +19,7 @@ covers the callers that only exist in consumer repos.
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from typing import cast
 
@@ -58,12 +59,32 @@ def test_every_retired_workflow_is_classified() -> None:
     assert not stale, f"classified but not in RETIRED_FILES: {sorted(stale)}"
 
 
+# The one deletion made before the fleet was clear. Pinned so the exception
+# list cannot grow: a new deletion needs a zero count in DELETED_RETIRED_REUSABLES.
+_PREMATURE_DELETIONS = {"auto-fix-vulnerabilities.yaml"}
+
+
+def _record_problems(record: render.ReusableDeletion) -> list[str]:
+    problems: list[str] = []
+    if record.c002_copies != 0:
+        problems.append(f"c002_copies is {record.c002_copies}, must be 0")
+    try:
+        date.fromisoformat(record.counted_on)
+    except ValueError:
+        problems.append(f"counted_on {record.counted_on!r} is not an ISO date")
+    if not record.source.strip():
+        problems.append("source is empty")
+    return problems
+
+
 def test_retired_shim_reusables_exist_until_recorded_deleted() -> None:
+    accounted = set(render.DELETED_RETIRED_REUSABLES) | set(
+        render.PREMATURE_REUSABLE_DELETIONS
+    )
     missing = [
         f"{shim} -> {reusable}"
         for shim, reusable in render.RETIRED_SHIM_REUSABLES.items()
-        if reusable not in render.DELETED_RETIRED_REUSABLES
-        and not (WORKFLOWS / reusable).is_file()
+        if reusable not in accounted and not (WORKFLOWS / reusable).is_file()
     ]
     assert not missing, (
         "a reusable that a retired shim calls was deleted without a record. Fleet "
@@ -84,18 +105,52 @@ def test_kept_retired_shim_reusables_are_still_callable() -> None:
     assert not broken, f"no longer declare `on: workflow_call`: {sorted(broken)}"
 
 
+def test_premature_deletions_are_closed() -> None:
+    assert set(render.PREMATURE_REUSABLE_DELETIONS) == _PREMATURE_DELETIONS, (
+        "PREMATURE_REUSABLE_DELETIONS is history, not an exemption list. Record a "
+        "new deletion in DELETED_RETIRED_REUSABLES with a zero C002 count instead."
+    )
+
+
 def test_deletion_records_name_deleted_reusables() -> None:
     called = set(render.RETIRED_SHIM_REUSABLES.values())
-    for reusable, record in render.DELETED_RETIRED_REUSABLES.items():
+    records = {
+        **{r: None for r in render.PREMATURE_REUSABLE_DELETIONS},
+        **render.DELETED_RETIRED_REUSABLES,
+    }
+    overlap = set(render.PREMATURE_REUSABLE_DELETIONS) & set(
+        render.DELETED_RETIRED_REUSABLES
+    )
+    assert not overlap, f"recorded as both premature and zero-copy: {sorted(overlap)}"
+    for reusable, record in records.items():
         assert reusable in called, (
             f"{reusable}: deletion record for a reusable no retired shim calls"
         )
         assert not (WORKFLOWS / reusable).exists(), (
             f"{reusable}: recorded as deleted but still present"
         )
-        assert "C002" in record, (
-            f"{reusable}: the record must cite the C002 fleet count (or say it had none)"
-        )
+        if record is not None:
+            problems = _record_problems(record)
+            assert not problems, f"{reusable}: " + "; ".join(problems)
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        (render.ReusableDeletion(0, "2026-12-01", "fleet conformance ledger"), []),
+        (
+            render.ReusableDeletion(3, "2026-12-01", "fleet conformance ledger"),
+            ["c002_copies is 3, must be 0"],
+        ),
+        (
+            render.ReusableDeletion(0, "soon", "fleet conformance ledger"),
+            ["counted_on 'soon' is not an ISO date"],
+        ),
+        (render.ReusableDeletion(0, "2026-12-01", "  "), ["source is empty"]),
+    ],
+)
+def test_record_problems(record: render.ReusableDeletion, expected: list[str]) -> None:
+    assert _record_problems(record) == expected
 
 
 @pytest.mark.parametrize(

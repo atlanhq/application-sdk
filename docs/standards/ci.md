@@ -1624,7 +1624,10 @@ fail on every PR comment until they resync.
 retired workflow must be listed in `RETIRED_SHIM_REUSABLES` (with the reusable it
 called) or `RETIRED_SHIMS_WITHOUT_REUSABLE`. A reusable named there must still
 exist and declare `workflow_call`, unless `DELETED_RETIRED_REUSABLES` records
-its deletion. `test_self_reference_pinning.py` cannot catch this case: once the
+its deletion as a `ReusableDeletion` with `c002_copies=0`, an ISO
+`counted_on` date and a `source`. `PREMATURE_REUSABLE_DELETIONS` holds the one
+deletion made without that count (`auto-fix-vulnerabilities.yaml`); the test
+pins it to that entry, so it cannot be used to skip the count. `test_self_reference_pinning.py` cannot catch this case: once the
 shim template is gone, nothing in this tree calls the reusable.
 
 The test cannot read the fleet. The C002 count is the evidence a reviewer

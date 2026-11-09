@@ -18,6 +18,7 @@ Usage::
 from __future__ import annotations
 
 import importlib.resources as _ir
+from typing import NamedTuple
 
 import jinja2
 
@@ -159,7 +160,8 @@ RETIRED_WORKFLOWS: tuple[str, ...] = tuple(
 # ``.github/scripts/tests/test_reusable_retirement.py`` enforces the order:
 # every retired workflow in ``RETIRED_FILES`` must appear in exactly one of
 # the two tables below, and each reusable named here must still exist in
-# application-sdk unless ``DELETED_RETIRED_REUSABLES`` records its deletion.
+# application-sdk unless ``DELETED_RETIRED_REUSABLES`` records a zero-copy
+# deletion (or it is the one historical ``PREMATURE_REUSABLE_DELETIONS`` entry).
 #
 # Retired shim (relative to ``.github/workflows/``) -> the application-sdk
 # reusable workflow it called.
@@ -177,14 +179,30 @@ RETIRED_SHIMS_WITHOUT_REUSABLE: dict[str, str] = {
     "porter-bundle-cnab.yaml": "never bootstrap-managed; called no SDK reusable",
 }
 
+
+class ReusableDeletion(NamedTuple):
+    """The C002 fleet count that allowed a retired shim's reusable to go."""
+
+    # Copies of the retired shim C002 found across the fleet. Must be 0.
+    c002_copies: int
+    # ISO date the count was taken, e.g. "2026-12-01".
+    counted_on: str
+    # Where the count came from: the fleet ledger query or report, by name.
+    source: str
+
+
 # Reusable (relative to application-sdk's ``.github/workflows/``) -> the
-# record that allowed its deletion. Add an entry in the same PR that deletes
-# the reusable, citing the C002 fleet count that showed zero copies of the
-# shim (date and source). An entry is history; never remove one.
-DELETED_RETIRED_REUSABLES: dict[str, str] = {
+# count that allowed its deletion. Add an entry in the same PR that deletes
+# the reusable. An entry is history; never remove one.
+DELETED_RETIRED_REUSABLES: dict[str, ReusableDeletion] = {}
+
+# Reusables deleted before C002 reported zero copies. Closed: the test pins
+# this to exactly the entries below, so it cannot become a way around
+# ``DELETED_RETIRED_REUSABLES``.
+PREMATURE_REUSABLE_DELETIONS: dict[str, str] = {
     "auto-fix-vulnerabilities.yaml": (
-        "Deleted 2026-11-03 (#4717) WITHOUT a zero-copy C002 count: 8 app "
-        "clones still carried auto-fix.yml. Not a precedent."
+        "Deleted 2026-11-03 (#4717) with no C002 count: 8 app clones still "
+        "carried auto-fix.yml and fail at startup until they resync."
     ),
 }
 
