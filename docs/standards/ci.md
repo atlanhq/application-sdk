@@ -1605,6 +1605,49 @@ removed the `ae-workflow` composite and its `ae-workflow-register.yaml`
 wrapper, whose single consumer had pinned them to a commit and not run them in
 five months.
 
+### Retiring a reusable that a bootstrap shim called
+
+**Rule:** when bootstrap retires a shim (`RETIRED_FILES` in
+`packages/conformance/conformance/bootstrap/render.py`), the application-sdk
+reusable that shim called stays until C002 reports zero copies of the shim
+across the fleet. Delete the reusable after that, never before, and in the same
+PR add it to `DELETED_RETIRED_REUSABLES` with the C002 count (date and source).
+
+**Why:** bootstrap removes a retired shim from a consumer repo only when that
+repo next runs it, so copies linger for weeks. Each copy calls the reusable at
+`@main`. Once the reusable is gone, every trigger of that copy fails at startup:
+no jobs, no logs, a red run. The `auto-fix-vulnerabilities.yaml` reusable was
+deleted (#4717) while 8 app clones still carried `auto-fix.yml`, and those apps
+fail on every PR comment until they resync.
+
+**Enforced by:** `.github/scripts/tests/test_reusable_retirement.py`. Every
+retired workflow must be listed in `RETIRED_SHIM_REUSABLES` (with the reusable it
+called) or `RETIRED_SHIMS_WITHOUT_REUSABLE`. A reusable named there must still
+exist and declare `workflow_call`, unless `DELETED_RETIRED_REUSABLES` records
+its deletion. `test_self_reference_pinning.py` cannot catch this case: once the
+shim template is gone, nothing in this tree calls the reusable.
+
+The test cannot read the fleet. The C002 count is the evidence a reviewer
+checks against the deletion record.
+
+### Consumers stay on `@main`, not a moving major tag
+
+FND-4654 counted 886 consumer references to our reusables across the local app
+clones; 869 were `@main`. A moving major tag (`@v3`) would let a breaking edit
+to `tests-reusable.yaml` or `build-and-publish-app.yaml` land on `main` without
+reaching 65+ repos in the same minute. We are not adopting one:
+
+* It protects nothing inside the reusable. Composite actions and checkouts
+  inside our reusables resolve `@main` (see "Self-references are `@main`"), so
+  a tagged reusable still runs `main`'s composites.
+* Every consumer ref would have to be rewritten, and moving the tag on each
+  release is one more release step that can be missed.
+* The failures we have actually had came from retirement order, which the rule
+  above fixes, not from edits reaching consumers too quickly.
+
+Breaking edits to a reusable go through the same path as any other: keep old
+inputs working until callers move, and test on a consumer before merge.
+
 ## `concurrency:` is not a lock, and not a queue
 
 **Rule:** never use a `concurrency:` group to protect a shared external resource
