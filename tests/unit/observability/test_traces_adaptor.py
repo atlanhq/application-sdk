@@ -112,7 +112,6 @@ def test_process_record_with_dict():
         assert processed == record
 
 
-@pytest.mark.asyncio
 async def test_send_to_otel():
     """Test _send_to_otel() method."""
     with create_traces_adapter() as traces_adapter:
@@ -144,7 +143,6 @@ async def test_send_to_otel():
             )
 
 
-@pytest.mark.asyncio
 async def test_log_to_console():
     """Test _log_to_console() method."""
     with create_traces_adapter() as traces_adapter:
@@ -188,7 +186,6 @@ def test_get_traces():
     assert isinstance(traces1, AtlanTracesAdapter)
 
 
-@pytest.mark.asyncio
 async def test_cleanup_old_records():
     """Test cleanup of old records."""
     with create_traces_adapter() as traces_adapter:
