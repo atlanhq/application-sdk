@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.55.2 (November 09, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.55.1...v3.55.2
+
+### Bug Fixes
+
+- stop flush_all spinning on a finished, still-tracked flush task [FND-4782] (#4801) (by @cmgrote in [e1d22e8](https://github.com/atlanhq/application-sdk/commit/e1d22e8))
+
+### Chores
+
+- update the pinned pkl toolchain to v0.33.0 (#4800) (by @renovate[bot] in [88748aa](https://github.com/atlanhq/application-sdk/commit/88748aa))
+
+
 ## v3.55.1 (November 06, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.55.0...v3.55.1
