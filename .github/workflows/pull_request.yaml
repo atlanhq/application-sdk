@@ -155,7 +155,9 @@ jobs:
       - uses: "./.github/actions/docstring-coverage"
         with:
           module-name: application_sdk
-          fail-under: "30"
+          # A floor just under the measured coverage (80.2% on 2026-11-09), so
+          # it catches a real drop. It was 30, which nothing could fail.
+          fail-under: "75"
 
   trivy-container:
     name: Trivy Container Scan

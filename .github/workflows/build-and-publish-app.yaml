@@ -686,6 +686,7 @@ jobs:
         working-directory: sdk
         run: uv sync --all-extras
 
+      # Warn-only until FND-4785 flips it (see app-certification.md, Exit plan).
       - name: "v3 shape — check_migration"
         id: check_migration
         if: steps.sdk_install.outcome == 'success'
@@ -811,6 +812,7 @@ jobs:
 
       # Each shard measured its own slice (one shard when not opted in);
       # combine them before the threshold.
+      # Warn-only until FND-4784 flips it (see app-certification.md, Exit plan).
       - name: "Coverage threshold (>=85%)"
         id: coverage_threshold
         if: always() && steps.unit.outputs.outcome == 'success'
@@ -953,6 +955,7 @@ jobs:
         run: python3 sdk/.github/scripts/build_and_publish/leak_scan.py notify-gitleaks
 
       # ── Layer 2: creds-into-logs scan (regex, no LLM) — WARN-ONLY ─────────────
+      # End state (block on CRITICAL, or warn-only for good) is FND-4786.
       - name: Creds-into-logs scan (warn-only)
         id: credscan
         # `|| true`: this layer never fails the job. scan.py exits non-zero when

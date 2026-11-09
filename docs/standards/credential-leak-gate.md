@@ -181,6 +181,20 @@ path/to/file.py            # ignore the whole file
 path/to/other.py:123       # ignore a single line
 ```
 
+## Exit plan for the creds-into-logs layer
+
+The warn-only posture is not permanent by default. [FND-4786][fnd-4786]
+(target 2026-12-11) re-measures the layer's findings across the fleet and
+decides between two end states:
+
+- **block on CRITICAL only**, with `.credential-leak-allow` as the escape
+  hatch; or
+- **stay warn-only for good**, with the reason recorded here.
+
+Either way, the Slack webhook moves off the test channel to a permanent one.
+
+[fnd-4786]: https://linear.app/atlan-epd/issue/FND-4786
+
 ## Relationship to the other security jobs
 
 - **`security-scan`** (`build-and-scan.yaml`, Trivy) scans the built **image**
