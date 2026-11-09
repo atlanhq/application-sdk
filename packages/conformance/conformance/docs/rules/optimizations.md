@@ -96,9 +96,10 @@ in a BI tool's metadata), and dropping them before serialization removes the lim
 shrinks the stored output and keeps the orjson path.  In a prior incident, a bare swap
 on such a path turned a successful extract into a failure on every retry, and the only
 field in that payload that grows without bound was a subtree the app stored but never
-read.  Only when the app genuinely needs the deeply nested value, or must carry integers
-above 64 bits, should the site stay on stdlib `json`, behind the usual justified
-suppression.
+read.  If the app genuinely needs the deeply nested value, or must carry integers above
+64 bits, the site may have to stay on stdlib `json`.  That is a design decision for a
+human reviewer, not a remediated end state: it does not meet *Already correct when*, so
+the finding stays open unless the reviewer chooses to suppress it.
 
 No orjson call reproduces stdlib's default bytes: there is no separators option, no
 `ensure_ascii` option, `orjson.dumps` cannot serialize an integer above 64 bits, and
