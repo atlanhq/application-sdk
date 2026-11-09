@@ -102,6 +102,10 @@ matters when a real source can send it.
 Each group: **when** (what you see at the site), **why** (what is at stake),
 **end state**. The group id is the `fix_shape` the decided defaults use.
 
+No group fits: decide from the two invariants in "What this protects". If
+you cannot prove both, hold the site, describe its shape, and name it in the
+PR as a candidate group for this skill.
+
 ### P028 — identity from creators
 
 Check with the installed pyatlan, never from memory:
@@ -155,12 +159,29 @@ app's released output, not from the method name.
   shape: owner decision.
 - `to_atlas_format` call sites are `reshaped-flattened` with nothing to
   delete.
+- `custom-shape` — when the helper's output is neither envelope: a subset of
+  attributes, or every key promoted to the top level. Its consumer reads that
+  shape. Hold for the owner.
+
+Pass `connection_name=` and `last_sync=` unless the mapper already stamps
+them. Call `resolve_last_sync_details()` (`application_sdk.common.last_sync`)
+once per transform activity, outside the per-record loop: each call reads the
+current time, so a per-record call gives one run's entities different
+`lastSyncRunAt` values. `entity_bytes` returns bytes: the sink must accept
+bytes (JSONL).
 
 ### P058 — entities as pyatlan_v9 assets
 
 Why: a hand-built dict has no model checking its keys and no creator owning
 its identity, and outside `entity_bytes` it misses `status: ACTIVE`, so a
 soft-deleted entity that comes back stays deleted.
+
+For every P058 group that moves to `entity_bytes`, keep the dict's released
+shape: choose the envelope as for P052 (a dict with a top-level
+`relationshipAttributes` key is `PYATLAN`), and build each reference with
+`unique_attributes={"qualifiedName": ...}`, as the dict wrote it.
+`qualified_name=` adds an extra top-level `qualifiedName` key to every
+reference.
 
 - `asset-creator` — when the dict is emitted for publish and its type has a
   creator. End state: the creator plus model fields, through `entity_bytes`.
@@ -172,7 +193,9 @@ soft-deleted entity that comes back stays deleted.
 - `process-asset` — when the dict is a Process, ColumnProcess or BIProcess.
   End state: `Process.creator(..., process_id=<suffix>)` with typed
   input/output references; same unit as the P028 `process-id` sites of the
-  same identity.
+  same identity. The creator raises on an empty `inputs` or `outputs` list:
+  a Process the source can emit without either is `process-no-refs`, held
+  for the owner.
 - `api-patch` — when the dict is sent straight to the Atlan API as a partial
   update (for example a POST to `/api/meta/entity/bulk`), not written for
   publish. Why: the publish stamps would overwrite the asset's real values.
@@ -198,8 +221,8 @@ An app whose mappers all emit dicts moves as one unit, not site by site.
 - `search-client` — when the models feed a search or lookup through the
   legacy client (`FluentSearch`, `asset_type=`). Moving it means the
   pyatlan_v9 client too. Hold for the owner.
-- `legacy-pin` — when the app keeps the legacy `AtlasTransformer` on
-  purpose. End state: `# conformance: ignore[O004] <the pin>`.
+- `legacy-transformer` — when the models feed the legacy `AtlasTransformer`.
+  Moving off it or keeping it is the app owner's choice. Hold for the owner.
 
 ### O002, O003, P055 (unchanged)
 
@@ -245,9 +268,10 @@ or an identity move in one unit.
    `uniqueAttributes.qualifiedName` in references, compared as multisets
    (counts), are equal before and after. P055 moves references by design:
    compare `(parent, child)` pairs instead.
-4. Output (P052, P058, O004): every entity's attributes equal before and
-   after, except `connectionName` added, `status: ACTIVE` added, placeholder
-   guids removed and volatile `lastSync*` values.
+4. Output (P052, P058, O004): every entity equal before and after, key by
+   key, including where relationships sit and the shape of each reference,
+   except `connectionName` added, `status: ACTIVE` added, placeholder guids
+   removed and volatile `lastSync*` values.
 5. Pin it: commit the before-snapshot next to the recorded fixture and
    assert `Counter` equality in the offline test. Break one grammar on
    purpose, see the test fail, revert.
@@ -353,16 +377,18 @@ A row with `block` holds that group for a person.
 {"rule": "P028", "fix_shape": "^gap$", "block": "No creator produces this qualifiedName for an input the source can send: no-creator, differs, missing-input or rejects-input. Changing the string changes asset identity.", "brief": "Add or fix the creator in pyatlan for the type and input named in the site's reason, then apply the creator fix to this site."}
 {"rule": "P028", "fix_shape": "^creator-string$", "block": "The app's lock resolves pyatlan below the version that carries the creators these sites need.", "brief": "Raise pyatlan to a version with these creators (a dependency update), then apply the creator fix.", "requires": {"package": "pyatlan", "min": "11.5.0"}}
 {"rule": "P028", "fix_shape": "^creator-blank-raises$", "block": "The app's lock resolves pyatlan below the version that carries the creators these sites need.", "brief": "Raise pyatlan to a version with these creators (a dependency update), then apply the creator fix.", "requires": {"package": "pyatlan", "min": "11.5.0"}}
-{"rule": "P052", "fix_shape": "reshaped-flattened", "decision": "entity_bytes(asset, envelope=EntityEnvelopePolicy(shape=EnvelopeShape.FLATTENED)); delete only the code that moves relationshipAttributes into attributes; keep every app-specific change as a step on the decoded entity_bytes output.", "why": "The hand reshape rebuilds the flattened envelope: on a pyatlan_v9 Table, entity_bytes FLATTENED equals it except connectionName and status ACTIVE added and the placeholder guid removed.", "interface": false, "pr_note": true}
-{"rule": "P052", "fix_shape": "nested-released", "decision": "entity_bytes(asset, envelope=EntityEnvelopePolicy(shape=EnvelopeShape.PYATLAN)) where the released output keeps a top-level relationshipAttributes key.", "why": "Keeps the released wire shape; PYATLAN is a deprecated migration lever removed in v4.0.", "interface": false, "pr_note": true}
-{"rule": "P058", "fix_shape": "asset-creator", "decision": "Build the entity with the type's pyatlan_v9 creator plus model fields and write it with entity_bytes; a key the model cannot hold goes back on the decoded output.", "why": "Reference shape: atlan-openapi-app app/asset_mapper.py and app/connector.py; atlan-metabase-app serialize_entity.", "pr_note": true}
+{"rule": "P052", "fix_shape": "reshaped-flattened", "decision": "entity_bytes(asset, envelope=EntityEnvelopePolicy(shape=EnvelopeShape.FLATTENED)); delete only the code that moves relationshipAttributes into attributes; keep every app-specific change as a step on the decoded entity_bytes output.", "why": "The hand reshape rebuilds the flattened envelope: on a pyatlan_v9 Table, entity_bytes FLATTENED equals it except connectionName and status ACTIVE added and the placeholder guid removed.", "pr_note": true}
+{"rule": "P052", "fix_shape": "nested-released", "decision": "entity_bytes(asset, envelope=EntityEnvelopePolicy(shape=EnvelopeShape.PYATLAN)) where the released output keeps a top-level relationshipAttributes key.", "why": "Keeps the released wire shape; PYATLAN is a deprecated migration lever removed in v4.0.", "pr_note": true}
+{"rule": "P052", "fix_shape": "^custom-shape$", "block": "The helper's output is neither entity envelope (a subset of attributes, or every key promoted to the top level), and its consumer reads that shape.", "brief": "Decide whether the consumer can read an entity_bytes envelope; if not, record why this output stays custom."}
+{"rule": "P058", "fix_shape": "asset-creator", "decision": "Build the entity with the type's pyatlan_v9 creator plus model fields and write it with entity_bytes, with the envelope that keeps the dict's released shape and references built with unique_attributes={\"qualifiedName\": ...}; a key the model cannot hold goes back on the decoded output.", "why": "Reference shape: atlan-openapi-app app/asset_mapper.py and app/connector.py; atlan-metabase-app serialize_entity.", "pr_note": true}
 {"rule": "P058", "fix_shape": "asset-no-creator", "decision": "Build the pyatlan_v9 model class directly with the dict's keys and write it with entity_bytes.", "why": "The type is modeled, so the model checks the keys; it has no creator, so its qualifiedName follows the P028 rules for the site that builds it.", "pr_note": true}
 {"rule": "P058", "fix_shape": "process-asset", "decision": "Process.creator (or ColumnProcess / BIProcess) with process_id=<everything after the connection qualifiedName> and typed input/output references, written with entity_bytes, in the same unit as the P028 process-id sites of that identity.", "why": "generate_qualified_name and the creator return {connection_qualified_name}/{process_id}, the same identity by construction.", "pr_note": true}
+{"rule": "P058", "fix_shape": "^process-no-refs$", "block": "Process.creator raises on an empty inputs or outputs list, and the source can emit this Process without one.", "brief": "Decide how a Process without inputs or outputs is modeled: a pyatlan change, or the app stops emitting it."}
 {"rule": "P058", "fix_shape": "unmodeled-ignore", "decision": "Keep the dict with top-level \"status\": \"ACTIVE\" on every non-delete upsert and add # conformance: ignore[P058] <type> is not modeled in pyatlan_v9.", "why": "The rule's terminal state allows an ignore only for a type pyatlan_v9 does not model.", "suppress": true, "reason": "is not modeled in pyatlan_v9"}
 {"rule": "P058", "fix_shape": "^api-patch$", "block": "The dict is a partial update sent straight to the Atlan API, not publish output; entity_bytes would add connectionName, lastSync and status to the patch.", "brief": "Decide whether a partial-update payload is in P058's scope; if it is, name the pyatlan_v9 shape it should use (for example the type's updater())."}
 {"rule": "P058", "fix_shape": "^nondata-lane$", "block": "The dict is staged for publish's non-data lane, which keys entities by its own path, not by qualifiedName.", "brief": "Confirm the non-data lane accepts entity_bytes output for this type, and which identity it must carry."}
-{"rule": "O004", "fix_shape": "import-only", "decision": "Import from pyatlan_v9.model.assets; every construction keyword exists on the v9 class and no legacy method is used.", "why": "The v9 classes carry the same fields; the import is the whole change.", "interface": false}
+{"rule": "O004", "fix_shape": "import-only", "decision": "Import from pyatlan_v9.model.assets; every construction keyword exists on the v9 class and no legacy method is used.", "why": "The v9 classes carry the same fields; the import is the whole change."}
 {"rule": "O004", "fix_shape": "with-serialization", "decision": "Move the import in the same unit as the mapper's P052 and P058 sites.", "why": "pyatlan_v9 rejects attributes= and has no to_atlas_dict(), so the import alone breaks the mapper."}
-{"rule": "O004", "fix_shape": "legacy-pin", "decision": "# conformance: ignore[O004] naming the pin, where the app keeps the legacy AtlasTransformer on purpose.", "why": "The pin is the owner's choice and the ignore records it.", "suppress": true, "reason": "legacy AtlasTransformer pin"}
 {"rule": "O004", "fix_shape": "^search-client$", "block": "The legacy models feed a search or lookup through the legacy client; moving them means moving to the pyatlan_v9 client and its FluentSearch.", "brief": "Confirm the pyatlan_v9 client is the supported search path for apps, then move the search and its models together."}
+{"rule": "O004", "fix_shape": "^legacy-transformer$", "block": "The legacy models feed the legacy AtlasTransformer; moving off it or keeping it is the app owner's choice.", "brief": "Choose: move the mapper to pyatlan_v9 assets and entity_bytes (P052/P058), or keep the AtlasTransformer and record why."}
 ```
