@@ -37,14 +37,16 @@ That is the whole policy, and it is checked mechanically by
 workflow), which compares the importable surface at `HEAD` against the surface
 at the last stable `v*` tag.
 
-> **Status: advisory, not yet enforced.** The check runs on every PR and
-> reports, but `Symbol Removal Check` is not among the `main` ruleset's
-> required status checks, so a PR removing an un-deprecated public name goes
-> red and merges anyway. Making it required is an admin change to the ruleset:
-> add the context `Symbol Removal Check` — the **job** name, which this
-> workflow deliberately keeps identical to its own name, because a ruleset
-> context matching no check run blocks every PR indefinitely. Until then, treat
-> a red run as a review obligation rather than a wall.
+> **Status: required.** `Symbol Removal Check` is one of the `main` ruleset's
+> required status checks, on pull requests and in the merge queue. A PR that
+> removes an un-deprecated public name cannot merge until it restores the name
+> as a deprecated alias or declares the break (see
+> [Deliberate breaks](#deliberate-breaks)). It ran advisory from 2026-09-19
+> until FND-4653 made it required.
+>
+> The ruleset matches the **job** name, which the workflow keeps identical to
+> its own name. Renaming the job without updating the ruleset leaves a required
+> context that matches no check run, and that blocks every PR.
 
 Note what the rule does *not* say. It does not say "do not remove things" — the
 SDK has to be able to shed surface. It says removal is a **two-step** operation
