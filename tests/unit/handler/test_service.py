@@ -6791,13 +6791,17 @@ class TestMetricsEndpoint:
 
         client = self._proxying_client(tmp_path)
         with (
-            self._core_transport(lambda _r: httpx.Response(503, content=b"down")),
+            self._core_transport(
+                lambda _r: httpx.Response(
+                    503, content=b"temporal_core_503_body_marker 1\n"
+                )
+            ),
             patch("application_sdk.handler.service._record_proxy_failure") as failure,
         ):
             response = client.get("/metrics")
 
         assert response.status_code == 200
-        assert "down" not in response.text
+        assert "temporal_core_503_body_marker" not in response.text
         failure.assert_called_once()
         assert failure.call_args.args[0] == "http_503"
 

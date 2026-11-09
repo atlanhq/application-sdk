@@ -65,6 +65,17 @@ def _declared_oversize(headers: Mapping[str, str], max_bytes: int) -> bool:
         return False
 
 
+def _cap_disallows_any_body(max_bytes: int) -> bool:
+    """True for a non-positive cap.
+
+    The cap comes from an env var parsed as an unrestricted ``int``. Zero or
+    a negative value would otherwise reach httpx as ``chunk_size`` and raise
+    ``ValueError``. No body fits such a cap, so the read is reported as
+    oversize without making a request.
+    """
+    return max_bytes <= 0
+
+
 class _BoundedBuffer:
     """Accumulates chunks until the running total crosses ``max_bytes``."""
 
@@ -100,6 +111,8 @@ async def fetch_core_metrics(
     Raises:
         httpx.HTTPError: the request failed (connect, timeout, protocol).
     """
+    if _cap_disallows_any_body(max_bytes):
+        return CoreMetricsUnavailable(OVERSIZE_REASON)
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         async with client.stream("GET", url) as response:
             if response.status_code != 200:
@@ -124,6 +137,8 @@ def fetch_core_metrics_blocking(
     Raises:
         httpx.HTTPError: the request failed (connect, timeout, protocol).
     """
+    if _cap_disallows_any_body(max_bytes):
+        return CoreMetricsUnavailable(OVERSIZE_REASON)
     with httpx.Client(timeout=timeout_s) as client:
         with client.stream("GET", url) as response:
             if response.status_code != 200:

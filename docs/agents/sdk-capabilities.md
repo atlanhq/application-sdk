@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.55.0
-source-sha:    c5f8977a074ffe2af0ad8777e7e015b6527626d9
-source-date:   2026-11-05T12:07:15Z
+sdk-version:   3.55.2
+source-sha:    9b352e7ab5527491cfe57303df9e1b79d174be07
+source-date:   2026-11-09T20:39:55Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -3104,7 +3104,7 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 #### `TemporalCoreCollector`
 
 - **Import:** `from application_sdk.observability.pushgateway import TemporalCoreCollector`
-- **Signature:** `class TemporalCoreCollector(url: str, timeout_s: float = 1.0) -> None`
+- **Signature:** `class TemporalCoreCollector(url: str, timeout_s: float = 1.0, max_bytes: int | None = None) -> None`
 - **Summary:** Bridge Temporal's Rust-core Prometheus endpoint into the OTel registry.
 - **Defined in:** `application_sdk/observability/pushgateway.py`
 

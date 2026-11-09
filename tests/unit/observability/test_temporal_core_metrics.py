@@ -146,3 +146,27 @@ async def test_transport_error_propagates(mode: str) -> None:
 
     with pytest.raises(httpx.ConnectError):
         await _read(mode, _refuse)
+
+
+@pytest.mark.parametrize("cap", [0, -1])
+@MODES
+@pytest.mark.asyncio
+async def test_non_positive_cap_is_oversize_without_a_request(
+    mode: str, cap: int
+) -> None:
+    """A zero/negative cap must not reach httpx as ``chunk_size`` (ValueError)."""
+    requests: list[httpx.Request] = []
+
+    def _serve(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, stream=_ChunkStream(total=_CAP))
+
+    async_patch, sync_patch = _patch_transport(_serve)
+    with async_patch, sync_patch:
+        if mode == "async":
+            read = await fetch_core_metrics(_URL, timeout_s=1.0, max_bytes=cap)
+        else:
+            read = fetch_core_metrics_blocking(_URL, timeout_s=1.0, max_bytes=cap)
+
+    assert read == CoreMetricsUnavailable(OVERSIZE_REASON)
+    assert requests == []
