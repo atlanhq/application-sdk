@@ -1161,8 +1161,8 @@ def _recheck_call(
 ) -> tuple[dict[str, tuple[str, str]] | None, bool]:
     """One model call over every finding that needs one: (id -> (status, reason),
     cut_off). The verdicts are None when none came back (budget, transport, or out
-    of output tokens); cut_off is True when the call spent its whole output budget
-    before answering, which `/lens recheck verify-budget` can fix."""
+    of output tokens); cut_off is True when the call stopped at its output budget
+    before answering for every finding, which `/lens recheck verify-budget` can fix."""
     parts = []
     if author_claim:
         # Untrusted: shown as a claim to check, and unable to close or open a tag.
@@ -1196,8 +1196,9 @@ def _recheck_call(
     except (BudgetExhausted, LLMError) as e:
         trace.line(f"recheck: no verdict — {trace.short(str(e), 200)}")
         return None, False
+    capped = _out_of_output_budget(comp, max_tokens)
     if not comp.tool_calls:
-        return None, _out_of_output_budget(comp, max_tokens)
+        return None, capped
     ids = {f.id for f, _ in items}
     out: dict[str, tuple[str, str]] = {}
     for it in verdict_items(comp.tool_calls):
@@ -1207,7 +1208,10 @@ def _recheck_call(
                 str(it["status"]),
                 " ".join(str(it.get("reason") or "").split()),
             )
-    return out, False
+    # A call that stopped at its cap mid tool call can carry truncated arguments
+    # that parse to no verdict, or verdicts for only some findings: the rest were
+    # cut off, not judged. Completed verdicts are kept either way.
+    return out or None, capped and len(out) < len(ids)
 
 
 def recheck_cut_off_line(
@@ -1335,16 +1339,16 @@ def recheck(
                 else cfg.limits.verify_max_tokens
             )
             verdicts, cut_off = _recheck_call(client, ask, reason, max_tokens)
-            if verdicts is None:
-                res.incomplete.append(
-                    "re-check: ran out of output budget"
-                    if cut_off
-                    else "re-check: no verdict came back"
-                )
             if cut_off:
+                res.incomplete.append("re-check: ran out of output budget")
                 cut_off_note = recheck_cut_off_line(
-                    [f.id for f, _ in ask], max_tokens, verify_budget, cfg
+                    [f.id for f, _ in ask if f.id not in (verdicts or {})],
+                    max_tokens,
+                    verify_budget,
+                    cfg,
                 )
+            elif verdicts is None:
+                res.incomplete.append("re-check: no verdict came back")
             for f, ev in ask:
                 status, why = (verdicts or {}).get(f.id, ("", ""))
                 if status == "resolved":

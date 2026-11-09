@@ -5724,6 +5724,60 @@ def test_a_recheck_with_the_opt_in_uses_the_raised_budget(repo: Path):
     assert res.resolved_verified == [f.id]
 
 
+def _capped_tool_reply(arguments: str):
+    """A provider that stops at its cap mid tool call: a `verdicts` call whose
+    arguments are whatever was written before the cut, every output token used."""
+    call = {
+        "id": "call_verdicts_0",
+        "type": "function",
+        "function": {"name": "verdicts", "arguments": arguments},
+    }
+    status, headers, text = response([call], out=8000)
+    body = json.loads(text)
+    body["choices"][0]["finish_reason"] = "length"
+    return status, headers, json.dumps(body)
+
+
+def test_a_recheck_cut_off_mid_tool_call_is_reported_as_a_cut_off(repo: Path):
+    """F-e3d515: truncated tool arguments parse to no verdict. That is a cut-off,
+    not "no verdict came back", so the opt-in is still named."""
+    gh, f = _blocking_on_added_code(repo)
+    reply = _capped_tool_reply('{"items": [{"id": "' + f.id + '", "status": "res')
+    res, _ = _recheck(gh, repo, [f.id], "it is public", Script(reply))
+    assert res.incomplete == ["re-check: ran out of output budget"]
+    assert f"`/lens recheck verify-budget {f.id} <reason>`" in gh.posted[-1]
+
+
+def _items(*ids: str) -> list[tuple[Finding, Any]]:
+    ev = review_mod.RecheckEvidence(["fact"], False, "code", "base")
+    return [(Finding("a.py", 1, "high", "bug", t, "b", t), ev) for t in ids]
+
+
+def test_a_capped_recheck_keeps_completed_verdicts_and_flags_the_rest():
+    items = _items("x", "y")
+    a, b = items[0][0], items[1][0]
+    assert a.id != b.id
+    done = json.dumps(
+        {"items": [{"id": a.id, "status": "resolved", "reason": "fixed"}]}
+    )
+    client = _factory(Script(_capped_tool_reply(done)))(Ledger(cap_usd=1))
+    verdicts, cut_off = review_mod._recheck_call(client, items, "", 8000)
+    assert verdicts == {a.id: ("resolved", "fixed")} and cut_off
+
+    # The same verdicts with room to spare: nothing was cut off.
+    both = json.dumps(
+        {
+            "items": [
+                {"id": a.id, "status": "resolved", "reason": "fixed"},
+                {"id": b.id, "status": "open", "reason": "still"},
+            ]
+        }
+    )
+    client = _factory(Script(_capped_tool_reply(both)))(Ledger(cap_usd=1))
+    verdicts, cut_off = review_mod._recheck_call(client, items, "", 8000)
+    assert len(verdicts or {}) == 2 and not cut_off
+
+
 def test_a_cut_off_recheck_with_the_opt_in_does_not_offer_it_again():
     line = review_mod.recheck_cut_off_line(
         ["F-000001", "F-000002"], 24000, True, Config()
