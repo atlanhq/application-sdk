@@ -1530,10 +1530,11 @@ Fix, by site:
   `X.creator(...)`.  To get only the string, read `X.creator(...).qualified_name` in a
   memoized helper; when the caller has only the id, pass it as `name` too and never emit
   that asset.
-- The creator raises on a blank or `None` input that only an app bug produces: use it
-  all the same and let it raise.  Do not add an app-side guard and do not keep the
-  f-string: list each such input in the PR description.  A blank the source system
-  really sends is a gap: the creator must accept it (source reality wins).
+- The creator raises on a blank or `None` input (on purpose: the f-string published a
+  broken identity there).  A blank only an app bug produces gets an app guard before the
+  creator, never a fallback string; list each guard in the PR description.  A blank the
+  source system really sends must be accepted by the creator (source reality wins): use
+  its optional parents, or it is a gap.
 - `Process` / `ColumnProcess` / `BIProcess`: call `generate_qualified_name(...,
   process_id=<everything after the connection qualifiedName>)`, which returns
   `{connection_qualified_name}/{process_id}`.  A blank `process_id` raises; never pass
