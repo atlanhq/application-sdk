@@ -220,6 +220,11 @@ jobs:
     runs-on: ubuntu-slim
     timeout-minutes: 2
     steps:
+      # No `token:` needed: atlanhq/application-sdk is a PUBLIC repo, so the
+      # calling app's GITHUB_TOKEN can clone it from this reusable workflow.
+      # build-decision's identical tokenless checkout already runs on main in
+      # every consumer app's Build & Publish and succeeds. Only the PRIVATE
+      # repos (app deps, the private-dependency mirror) need an App token.
       - name: Checkout SDK helper scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -647,10 +652,10 @@ jobs:
       - name: Checkout application-sdk (migration tooling)
         # tools.migrate_v3 ships in the SDK repo, not the published package —
         # pinned to main so the check tracks the latest released rules.
-        # A token is required because this workflow runs in the context
-        # of a consumer app repo whose GITHUB_TOKEN is scoped to that repo and
-        # cannot read other org repos (even public ones via cross-repo reusable
-        # workflow invocations). The fleet App token grants the necessary read access.
+        # application-sdk is public, so the caller's GITHUB_TOKEN could clone
+        # it (as every tokenless "Checkout SDK helper scripts" step does); the
+        # token below (the SDK-scoped App token minted above) is not what makes
+        # this checkout work, and is kept only because it was already here.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
