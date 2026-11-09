@@ -1138,6 +1138,45 @@ def recheck_evidence(
     return RecheckEvidence(facts, absent, code_now, at_base or "(none)")
 
 
+# Files GitHub Actions reads steps from: a workflow (top level only) or an action.
+_ACTIONS_FILE = re.compile(
+    r"^\.github/(?:workflows/[^/]+|actions/(?:.+/)?action)\.ya?ml$"
+)
+# `repository: owner/name` on a step (checkout's `with:`), optionally quoted. The
+# charset is GitHub's own, so a name cannot carry a tag, a path or an expression.
+_CHECKOUT_TARGET = re.compile(
+    r"\brepository:\s*[\"']?([A-Za-z0-9-]+/[A-Za-z0-9_.-]+?)(?:\.git)?[\"']?\s*(?:#.*)?$",
+    re.MULTILINE,
+)
+MAX_CHECKOUT_TARGETS = 3
+
+
+def checkout_target_facts(
+    path: str, texts: list[str], visibility: Callable[[str], str | None]
+) -> list[str]:
+    """For a workflow or action file, the GitHub API visibility of each repo a
+    step checks out (`repository: owner/name`) in `texts`, at most
+    MAX_CHECKOUT_TARGETS of them. Any other file: no facts and no lookup. A
+    failed lookup is stated as unknown, never dropped and never fatal."""
+    if not _ACTIONS_FILE.match(path):
+        return []
+    targets: list[str] = []
+    for text in texts:
+        for m in _CHECKOUT_TARGET.finditer(text):
+            name = m.group(1)
+            if name.split("/")[1] not in (".", "..") and name not in targets:
+                targets.append(name)
+    out: list[str] = []
+    for name in targets[:MAX_CHECKOUT_TARGETS]:
+        vis = visibility(name)
+        out.append(
+            f"checkout target {name}: visibility {vis} (GitHub API)"
+            if vis
+            else f"checkout target {name}: visibility unknown (the GitHub API lookup failed)"
+        )
+    return out
+
+
 # The tags a recheck request is built from. PR-derived text (code, quotes,
 # finding prose, paths) must not be able to open or close one of them.
 _RECHECK_TAGS = re.compile(
@@ -1253,7 +1292,7 @@ def recheck(
     """`/lens recheck [verify-budget] F-… [reason]`: re-judge open findings with repo-aware evidence.
 
     Deterministic first: the evidence (merge-base existence, callers, privacy,
-    the capability manifest) is gathered with no model call, and a compatibility
+    the capability manifest, the visibility of a workflow's checkout targets) is gathered with no model call, and a compatibility
     finding whose subject is absent on the merge base is resolved on that alone.
     Anything else gets one model call, from what is left of the PR's $ cap.
     It is not a round: `state.round` and `reviewed_head` do not move, so the
@@ -1317,8 +1356,18 @@ def recheck(
         caps = root / CAPABILITIES_DOC
         capabilities = caps.read_text(encoding="utf-8") if caps.is_file() else ""
         ask: list[tuple[Finding, RecheckEvidence]] = []
+        seen_visibility: dict[str, str | None] = {}
+
+        def visibility(name: str) -> str | None:
+            if name not in seen_visibility:
+                seen_visibility[name] = gh.repo_visibility(name)
+            return seen_visibility[name]
+
         for f in targets:
             ev = recheck_evidence(ws, f, added, read_base, capabilities)
+            ev.facts += checkout_target_facts(
+                f.path, [f.evidence, ev.code_now], visibility
+            )
             trace.line(f"recheck {f.id}: " + "; ".join(ev.facts))
             if f.compatibility and ev.absent_on_merge_base:
                 resolved.append(

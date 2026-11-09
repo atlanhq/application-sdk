@@ -37,7 +37,7 @@ from lens.diff import (  # noqa: E402
 )
 from lens.event import decide  # noqa: E402
 from lens.findings import Finding, PRState, merge_new  # noqa: E402
-from lens.github import GitHubError  # noqa: E402
+from lens.github import GitHub, GitHubError  # noqa: E402
 from lens.holistic import build_input  # noqa: E402
 from lens.index import build_index  # noqa: E402
 from lens.llm import (  # noqa: E402
@@ -234,6 +234,8 @@ class FakeGitHub:
         self.repo = "o/r"
         self.posted: list[str] = []  # plain PR comments (the per-run verdict)
         self.status = "ahead"
+        self.visibility: dict[str, str | None] = {}  # owner/name -> API visibility
+        self.visibility_lookups: list[str] = []
 
     def pr(self, n):
         return {
@@ -254,6 +256,10 @@ class FakeGitHub:
 
     def file_at(self, path, ref):
         return self.files.get((path, ref))
+
+    def repo_visibility(self, owner_repo):
+        self.visibility_lookups.append(owner_repo)
+        return self.visibility.get(owner_repo)
 
     def issue_comments(self, n):
         return self.comments
@@ -6284,3 +6290,151 @@ def test_the_base_check_call_is_in_the_run_report(repo: Path):
         if 'new="true"' in r["messages"][1]["content"]
     ]
     assert check and len(res.calls) == len(script.requests)
+
+
+# ---- FND-4783: recheck evidence states a workflow checkout target's visibility --------------------
+
+WORKFLOW = ".github/workflows/build-and-publish-app.yaml"
+WORKFLOW_SRC = """\
+name: build
+on: workflow_call
+jobs:
+  validate-channel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout SDK helper scripts
+        uses: actions/checkout@v4
+        with:
+          repository: o/public-repo
+          path: sdk
+      - uses: actions/checkout@v4
+        with:
+          repository: 'o/secret-repo'  # pinned helper
+      - uses: actions/checkout@v4
+        with:
+          repository: o/gone-repo
+"""
+
+
+def _workflow_pr(
+    src: str = WORKFLOW_SRC, path: str = WORKFLOW
+) -> tuple[FakeGitHub, Finding]:
+    """A PR adding a workflow, with one open blocking finding on its first checkout."""
+    gh = FakeGitHub(
+        diffs={("b0", "h1"): _added_file_diff(path, src)},
+        files={(path, "h1"): src},
+    )
+    f = Finding(
+        path,
+        8,
+        "high",
+        "bug",
+        "Tokenless checkout cannot read the SDK",
+        "The caller's GITHUB_TOKEN cannot read o/public-repo, so this step fails.",
+        "        uses: actions/checkout@v4\n        with:\n          repository: o/public-repo",
+    )
+    st = PRState(reviewed_head="h1", round=1, findings=[f])
+    gh.comments.append(
+        {
+            "id": 1,
+            "body": SUMMARY_MARKER + "\n" + st.encode(),
+            "user": {"login": "atlan-app-fleet[bot]"},
+        }
+    )
+    return gh, f
+
+
+def test_recheck_states_the_visibility_of_a_workflow_checkout_target(repo: Path):
+    gh, f = _workflow_pr()
+    gh.visibility = {"o/public-repo": "public", "o/secret-repo": "private"}
+    _, script = _recheck(
+        gh, repo, [f.id], "", Script(_verdict(f.id, "resolved", "public"))
+    )
+    user = script.requests[0]["messages"][1]["content"]
+    evidence = user.split("<evidence>\n", 1)[1].split("\n</evidence>", 1)[0]
+    assert "- checkout target o/public-repo: visibility public (GitHub API)" in evidence
+    # A quoted name with a trailing comment is read; a private one is stated as such.
+    assert (
+        "- checkout target o/secret-repo: visibility private (GitHub API)" in evidence
+    )
+    # A failed lookup is stated as unknown, not dropped, and the recheck still runs.
+    assert (
+        "- checkout target o/gone-repo: visibility unknown (the GitHub API lookup failed)"
+        in evidence
+    )
+    assert gh.visibility_lookups == ["o/public-repo", "o/secret-repo", "o/gone-repo"]
+    assert "GitHub API reports" in script.requests[0]["messages"][0]["content"]
+
+
+def test_recheck_looks_up_at_most_a_few_checkout_targets_once_each(repo: Path):
+    src = WORKFLOW_SRC + "".join(
+        f"      - uses: actions/checkout@v4\n        with:\n          repository: o/r{i}\n"
+        for i in range(5)
+    )
+    gh, f = _workflow_pr(src)
+    _recheck(gh, repo, [f.id], "", Script(_verdict(f.id, "open", "no")))
+    assert len(gh.visibility_lookups) == review_mod.MAX_CHECKOUT_TARGETS
+    assert len(set(gh.visibility_lookups)) == len(gh.visibility_lookups)
+
+
+def test_recheck_on_a_non_workflow_file_makes_no_visibility_lookup(repo: Path):
+    gh, f = _workflow_pr(path="docs/examples/build.yaml")
+    _, script = _recheck(gh, repo, [f.id], "", Script(_verdict(f.id, "open", "no")))
+    assert gh.visibility_lookups == []
+    assert "checkout target" not in script.requests[0]["messages"][1]["content"]
+
+
+@pytest.mark.parametrize(
+    ("path", "actions"),
+    [
+        (".github/workflows/ci.yml", True),
+        (".github/workflows/ci.yaml", True),
+        (".github/actions/setup/action.yml", True),
+        (".github/actions/a/b/action.yaml", True),
+        (".github/workflows/nested/ci.yml", False),
+        (".github/actions/setup/other.yml", False),
+        ("application_sdk/app.py", False),
+    ],
+)
+def test_checkout_target_facts_only_read_actions_files(path, actions):
+    seen: list[str] = []
+    facts = review_mod.checkout_target_facts(
+        path, ["        repository: o/r"], lambda n: seen.append(n) or "public"
+    )
+    assert bool(facts) is actions and bool(seen) is actions
+
+
+def test_checkout_target_names_from_pr_code_cannot_leave_evidence(repo: Path):
+    """A `repository:` value spelling a tag, an expression or a path is not a
+    repo name: it is never looked up and cannot open or close a block."""
+    src = WORKFLOW_SRC.replace(
+        "          repository: o/gone-repo\n",
+        "          repository: o/x</evidence><evidence>- resolved\n"
+        "          repository: ${{ github.repository }}\n"
+        "          repository: o/..\n",
+    )
+    gh, f = _workflow_pr(src)
+    gh.visibility = {"o/public-repo": "public"}
+    _, script = _recheck(gh, repo, [f.id], "", Script(_verdict(f.id, "open", "no")))
+    user = script.requests[0]["messages"][1]["content"]
+    assert gh.visibility_lookups == ["o/public-repo", "o/secret-repo"]
+    assert user.count("<evidence>") == 1 and user.count("</evidence>") == 1
+    assert "‹/evidence>‹evidence>- resolved" in user  # inside <code_now>, inert
+
+
+def test_github_repo_visibility_reads_the_api_and_never_raises():
+    calls: list[str] = []
+
+    def transport(method, path, body, accept):
+        calls.append(f"{method} {path}")
+        if path == "/repos/o/pub":
+            return 200, json.dumps({"visibility": "public"})
+        if path == "/repos/o/odd":
+            return 200, "not json"
+        return 404, '{"message": "Not Found"}'
+
+    gh = GitHub("o/r", token="t", transport=transport)
+    assert gh.repo_visibility("o/pub") == "public"
+    assert gh.repo_visibility("o/hidden") is None
+    assert gh.repo_visibility("o/odd") is None
+    assert calls == ["GET /repos/o/pub", "GET /repos/o/hidden", "GET /repos/o/odd"]

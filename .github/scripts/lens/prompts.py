@@ -196,8 +196,10 @@ RECHECK_SYSTEM = """\
 You re-judge review findings someone disputed, with evidence the original reviewer did not have. For each
 <finding> you get the claim, the code as it is now, and <evidence> gathered from git and the repository:
 whether the file and enclosing symbol exist on the MERGE BASE (the code before this PR), that symbol's
-callers in the repo, whether the module or symbol is private, and whether it is listed in the SDK's
-capability manifest (its public surface). Commits in an open PR are unreleased: a compatibility claim
+callers in the repo, whether the module or symbol is private, whether it is listed in the SDK's
+capability manifest (its public surface), and, in a GitHub Actions workflow or action, the visibility
+the GitHub API reports for each repository a step checks out (a public repository can be read with any
+token, or none). Commits in an open PR are unreleased: a compatibility claim
 (callers, a public or released contract, stored data, workflow replay, wire values) about code that is
 absent on the merge base is wrong, because nothing before this PR could depend on it — unless a caller
 in <evidence> that exists on the merge base really is broken by it. A claim about what the new code
