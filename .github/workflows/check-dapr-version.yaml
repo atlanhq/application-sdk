@@ -91,77 +91,33 @@ jobs:
           # App installation tokens DO trigger workflows).
           token: ${{ steps.fleet-token.outputs.token }}
 
+      # The logic for every step below lives in a tested script
+      # (.github/scripts/sync_dapr_version.py), per docs/standards/ci.md.
       - name: Read pinned daprd version
         id: pinned
-        run: |
-          set -euo pipefail
-          ver=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
-          if [[ -z "$ver" ]]; then
-            echo "::error::Failed to parse __dapr_version from application_sdk/version.py"
-            exit 1
-          fi
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
+        run: python3 .github/scripts/sync_dapr_version.py pinned
 
+      # Public image: anonymous pull, no registry login needed (same as the
+      # Hourly Security Scan). The raw ``daprd --version`` output is logged.
       - name: Extract daprd version from runtime base image
         id: baked
         env:
           IMAGE: ${{ env.TARGET_IMAGE }}
-        run: |
-          set -euo pipefail
-          # Public image — anonymous pull, no registry login needed (same as the
-          # Hourly Security Scan).
-          docker pull "$IMAGE"
-          # daprd lives at /usr/bin/daprd in the runtime base (inherited from the
-          # golden base; the SDK Dockerfile symlinks it). Override the entrypoint
-          # to invoke it directly.
-          raw=$(docker run --rm --entrypoint /usr/bin/daprd "$IMAGE" --version 2>&1 || true)
-          # Log the raw output unconditionally: this satisfies the "log it"
-          # requirement and reveals the true format if a future daprd build
-          # changes it.
-          echo "::group::daprd --version (raw)"
-          echo "$raw"
-          echo "::endgroup::"
-          # Tolerant parse: take the first semver in the output and strip any
-          # leading 'v' so it matches the bare x.y.z stored in __dapr_version.
-          # Don't anchor on a prefix label that may differ across daprd builds.
-          ver=$(printf '%s\n' "$raw" | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -n1 | sed 's/^v//')
-          if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Could not extract a valid daprd version from the base image (see raw output above)"
-            exit 1
-          fi
-          echo "::notice::Base image daprd version: $ver"
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
+        run: python3 .github/scripts/sync_dapr_version.py baked --image "$IMAGE"
 
       - name: Compare
         id: compare
-        run: |
-          set -euo pipefail
-          pinned="${{ steps.pinned.outputs.version }}"
-          baked="${{ steps.baked.outputs.version }}"
-          echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
-          echo "baked=$baked" >> "$GITHUB_OUTPUT"
-          if [[ "$pinned" == "$baked" ]]; then
-            echo "match=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::daprd pin is in sync with the base image ($pinned)"
-          else
-            echo "match=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::daprd pin $pinned differs from base image $baked"
-          fi
+        env:
+          PINNED: ${{ steps.pinned.outputs.version }}
+          BAKED: ${{ steps.baked.outputs.version }}
+        run: python3 .github/scripts/sync_dapr_version.py compare --pinned "$PINNED" --baked "$BAKED"
 
       - name: Bump version.py
         if: steps.compare.outputs.match == 'false'
-        run: |
-          set -euo pipefail
-          pinned="${{ steps.compare.outputs.pinned }}"
-          baked="${{ steps.compare.outputs.baked }}"
-          sed -i "s/^__dapr_version: str = \"${pinned}\"$/__dapr_version: str = \"${baked}\"/" \
-            application_sdk/version.py
-          # Confirm exactly one line changed; bail if sed missed.
-          new=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
-          if [[ "$new" != "$baked" ]]; then
-            echo "::error::sed did not rewrite version.py as expected (got '$new', want '$baked')"
-            exit 1
-          fi
+        env:
+          PINNED: ${{ steps.compare.outputs.pinned }}
+          BAKED: ${{ steps.compare.outputs.baked }}
+        run: python3 .github/scripts/sync_dapr_version.py bump --pinned "$PINNED" --baked "$BAKED"
 
       - name: Sign bot commits
         if: steps.compare.outputs.match == 'false'
@@ -169,92 +125,20 @@ jobs:
         with:
           signing-key: ${{ secrets.BOT_SIGNING_KEY }}
 
+      # PR always targets main: both ``workflow_run`` and a dispatch from main
+      # check out main's tip, so the pin read above is main's current one. The
+      # branch is per-version, so a re-run lands back on the existing PR.
       - name: Open PR if drift detected
         id: open-pr
         if: steps.compare.outputs.match == 'false'
         env:
           GH_TOKEN: ${{ steps.fleet-token.outputs.token }}
-        run: |
-          set -euo pipefail
-          git config --global user.name 'atlan-app-fleet[bot]'
-          git config --global user.email 'atlan-app-fleet[bot]@users.noreply.github.com'
-
-          baked="${{ steps.compare.outputs.baked }}"
-          pinned="${{ steps.compare.outputs.pinned }}"
-          image="${{ env.TARGET_IMAGE }}"
-          # PR always targets main. Both ``workflow_run`` and a dispatch from main
-          # check out main's tip, so the pin read above is main's current one.
-          base="main"
-          branch="chore/sync-daprd-${baked}"
-
-          # Branch is per-version so re-runs against the same baked version land
-          # back on the existing PR rather than churning a new one each trigger.
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-            git fetch origin "$branch"
-            git checkout "$branch"
-            # Defensive re-apply: normally a no-op (the existing branch tip already
-            # has __dapr_version = ${baked}). Only does anything in the rare case
-            # where that branch's version.py drifted from ${baked} — e.g. a manual
-            # edit on the branch.
-            sed -i "s/^__dapr_version: str = \"${pinned}\"$/__dapr_version: str = \"${baked}\"/" \
-              application_sdk/version.py
-          else
-            git checkout -b "$branch"
-          fi
-
-          git add application_sdk/version.py
-          if git diff --cached --quiet; then
-            echo "::notice::No actual change to commit; PR may already be up to date."
-            # Nothing new to push, but still surface any open PR for this branch so
-            # the approve + queue step below can (re-)act on it — one opened by an
-            # earlier run (before that step existed, or with its approval since
-            # dismissed by a push) would otherwise never get it, because the
-            # commit + create paths below are skipped.
-            existing=$(gh pr list \
-              --head "$branch" --base "$base" --state open \
-              --json number --jq '.[0].number')
-            echo "pr_number=${existing}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          git commit -m "chore(deps): sync daprd pin to ${baked} from base image"
-          git push origin "$branch" --force-with-lease
-
-          existing=$(gh pr list \
-            --head "$branch" \
-            --base "$base" \
-            --state open \
-            --json number \
-            --jq '.[0].number')
-
-          if [[ -n "$existing" ]]; then
-            echo "::notice::PR #${existing} already open for ${branch}; commit pushed."
-            echo "pr_number=${existing}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          pr_url=$(gh pr create \
-            --base "$base" \
-            --title "chore(deps): sync daprd pin to ${baked}" \
-            --label "dependencies" \
-            --body "The daprd shipped in the runtime base image is now **${baked}**.
-
-          | | version |
-          |---|---|
-          | Current pin | \`${pinned}\` |
-          | Runtime image daprd | \`${baked}\` |
-          | Runtime image | \`${image}\` |
-
-          This PR syncs \`__dapr_version\` in [\`application_sdk/version.py\`](application_sdk/version.py) to match the daprd that actually ships in the container, so:
-
-          - The embedded local-dev daprd (via \`application_sdk.dev._dapr\`) downloads the same release the container runs.
-          - CI workflows that read \`__dapr_version\` boot the matching daprd.
-
-          The version was read from \`${image}\`'s \`daprd --version\` (public image, pulled anonymously).
-
-          Opened automatically by [\`.github/workflows/check-dapr-version.yaml\`](.github/workflows/check-dapr-version.yaml).")
-
-          echo "pr_number=${pr_url##*/}" >> "$GITHUB_OUTPUT"
+          PINNED: ${{ steps.compare.outputs.pinned }}
+          BAKED: ${{ steps.compare.outputs.baked }}
+          IMAGE: ${{ env.TARGET_IMAGE }}
+        run: >-
+          python3 .github/scripts/sync_dapr_version.py open-pr
+          --pinned "$PINNED" --baked "$BAKED" --image "$IMAGE"
 
       # Hands-off merge, in two parts that must use DIFFERENT identities:
       #

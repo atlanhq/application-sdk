@@ -37,6 +37,38 @@ are stubbed, `git` runs against a throwaway repo in `tmp_path`, and every
 branch (opt-in gate, missing input, eval-failure fallback, no-change
 short-circuit) has a case.
 
+### Enforced by a test (FND-4244)
+
+`.github/scripts/tests/test_no_conditional_run_blocks.py` walks every workflow
+under `.github/workflows/` and every composite `action.y*ml` under
+`.github/actions/` (which actionlint does not lint), and fails on any `run:`
+block that branches: an `if`/`for`/`while`/`until`/`case`/`select` in command
+position, or a test chained into the next command (`[ … ] && x`,
+`test -n "$X" || { …; }`). Comments, quoted strings and `${{ … }}` expressions
+are blanked first (whole-line and trailing comments alike), and backslash
+continuations are joined, so prose in an `echo` does not count and a chain
+split across lines does. A heredoc interpreter
+(`python3 - <<EOF`) is scanned too: logic in it is still untested.
+
+Blocks that predate the guard are listed in
+`.github/scripts/conditional_run_allowlist.txt`, keyed
+`<file>::jobs.<job>.<step id|name>` (or `::runs.<step>` for a composite
+action). Two checks keep it from growing:
+
+* An entry whose block is gone or no longer branches fails as stale, so a
+  migration deletes its line in the same PR.
+* The entry count must equal `ALLOWLIST_CEILING` in the test. Removing an
+  entry means lowering the ceiling in the same PR, so the ceiling only goes
+  down.
+
+This is a shrinking size cap, not a frozen set. CI does not stop a PR that
+removes a migrated entry and adds a different one in its place at the same
+count. That shows up as an added line in the allowlist diff, and review should
+refuse it.
+
+A new step that needs to decide something gets a script, not an allowlist
+entry.
+
 ## Running the script tests
 
 The `CI script tests` workflow (`.github/workflows/scripts-tests.yaml`) runs
@@ -757,8 +789,16 @@ build-args: |
 
 # RIGHT — the value is available during the RUN and nowhere after it
 secrets: |
-  git_token=${{ secrets.ORG_PAT_GITHUB }}
+  git_token=${{ steps.image-git-token.outputs.token }}
 ```
+
+The token itself is a read-only fleet App token minted in the same job,
+scoped to the private atlanhq repositories the app names as git dependencies
+(the mint steps below), never `ORG_PAT_GITHUB`. When
+the app names none, nothing is minted and no secret is passed. A secret mount
+keeps the token out of the image, but not out of the `RUN`: every build backend
+that `uv sync` runs can read it, which is why it is scoped to what the build
+needs. `test_image_build_git_token.py` pins this.
 
 ```dockerfile
 RUN --mount=type=secret,id=git_token,uid=1000 \
@@ -791,6 +831,81 @@ against a private git dependency fails on the next build rather than at merge.
 **Scope note:** this covers credentials only. Non-secret build inputs — a
 version string, a target arch, a base-image reference — are what `build-args`
 are for, and recording those in image history is a feature.
+
+## Never let a GitHub token reach uv or app code
+
+An app with a private atlanhq git dependency needs a GitHub token for the
+`uv sync` or `uv lock` that clones it. Do not hand it over with
+`git config --global url.<authed>.insteadOf`, and do not put it in job-level
+`env:`. Both leave the token readable by every later step: tests, pre-commit
+hooks, conformance series and anything else that imports app code.
+
+Do not put it in uv's environment either, not even as a `GIT_CONFIG_*`
+rewrite on the `uv` process alone. `uv sync` and `uv lock` run PEP 517 build
+backends and build hooks, and they inherit uv's environment.
+
+Instead:
+
+1. Mint the token in four inline steps, gated on the caller's opt-in input:
+   check out the app; sparse-check-out `.github/scripts/git_auth.py` from
+   `ref: ${{ job.workflow_sha }}` at `.sdk-git-auth`; run
+   `git_auth.py repos` to list the private atlanhq repositories the app names
+   as git dependencies (every `pyproject.toml` and `uv.lock` in the checkout),
+   then `rm -rf .sdk-git-auth`; and mint a read-only fleet App token
+   (`continue-on-error: true`) scoped to exactly that list. When the list is
+   empty, skip the mint: `create-github-app-token` with no `repositories`
+   grants the whole installation. The list is also capped by
+   `ALLOWED_PRIVATE_DEPS` in `git_auth.py`: a PR controls its own
+   `pyproject.toml` and `uv.lock`, so an app naming any other private repo
+   fails closed (`repos` and `mirror` both refuse it). Only aggregator repos in
+   `AGGREGATOR_REPOS` (common-app-server), matched on `GITHUB_REPOSITORY`, may
+   name any. Never fall back to `ORG_PAT_GITHUB`. Inline,
+   not a composite: callers pin composites `@main`, so a new one cannot run
+   before it merges, and composite steps cannot `continue-on-error`.
+   `.github/scripts/tests/_scoped_mint.py` pins the shape.
+2. Follow it with a guard step that fails, naming `FLEET_APP_ID` and
+   `FLEET_APP_PRIVATE_KEY`, when the opt-in is set, the app names a private
+   repository (`outputs.repositories != ''`) and the token is empty.
+3. Hand the token to a step of its own that runs `git_auth.py mirror`, and
+   run the fetching command through `git_auth.py run` in a later step with no
+   token:
+
+   ```yaml
+   - name: Mirror private git dependencies
+     if: inputs.private-git-deps
+     env:
+       GIT_TOKEN: ${{ steps.git-deps-token.outputs.token }}
+       PRIVATE_GIT_DEPS: "true"
+     run: python3 path/to/git_auth.py mirror
+
+   - run: python3 path/to/git_auth.py run -- uv sync
+   ```
+
+   `mirror` mirror-clones each private repository into
+   `$RUNNER_TEMP/git-mirrors` (a bare `git clone --mirror` runs no repository
+   code, and git keeps the remote URL as written, so the token is not stored
+   in the mirror) and exits. `run` points those remotes at the mirrors with a
+   token-free rewrite. The split is the point: a build backend can read the
+   environment of every ancestor process (`/proc/<pid>/environ`), so the token
+   must not be in the env of the step that starts uv, not only out of uv's own
+   env. `run` refuses to start when `GIT_TOKEN` is set. A composite takes the
+   token as its `git-auth-token` input and does the same inside (`setup-deps`
+   mirrors; later `git_auth.py run` steps in the job reuse the mirrors).
+
+An image build is the one place the token reaches caller code: the app's
+Dockerfile reads the `git_token` BuildKit secret. That token comes from the
+same composite, so it is scoped to the repositories the app names, and absent
+when it names none.
+
+Only the first install needs the token. Once it has populated the uv cache and
+venv, later `uv sync`, `uv run`, `uv lock --check` and even a re-lock of a
+stale lock fetch nothing. `uv run --isolated` and a re-resolve on a cold cache
+do fetch, so give them the token too, through `git_auth.py`.
+
+Used by `tests-reusable.yaml` (unit, integration, e2e), `checks-reusable.yaml`,
+`conformance-reusable.yaml`, `release-version-bump.yaml` and the certify gate
+in `build-and-publish-app.yaml` (see `docs/standards/app-certification.md`).
+`test_private_git_deps_wiring.py` pins the shape (FND-4740).
 
 ## Renovate release freeze
 

@@ -37,7 +37,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
-<% if checks_private_git_deps %>    # private-git-deps needs ORG_PAT_GITHUB from the reusable's declared secrets.
+<% if checks_private_git_deps %>    # private-git-deps needs FLEET_APP_ID / FLEET_APP_PRIVATE_KEY (read-only token).
     secrets: inherit
 <% endif %>    with:
       skip-on-bump-pr: true
