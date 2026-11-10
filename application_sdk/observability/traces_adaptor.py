@@ -5,11 +5,16 @@ from typing import Any, ClassVar, Dict, Optional
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+from opentelemetry.sdk.trace.export import (
+    BatchSpanProcessor,
+    ConsoleSpanExporter,
+    SpanExporter,
+)
 from opentelemetry.trace import SpanKind
 
 from application_sdk.constants import (
     ENABLE_OTLP_TRACES,
+    ENABLE_TRACES_CONSOLE,
     OTEL_BATCH_DELAY_MS,
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_TIMEOUT_SECONDS,
@@ -34,12 +39,82 @@ _TRACES_FLUSH_INTERVAL_SECONDS = 5
 _TRACES_RETENTION_DAYS = 30
 _TRACES_CLEANUP_ENABLED = True
 
-__all__ = ["TraceRecord", "AtlanTracesAdapter", "get_traces"]
+__all__ = ["TraceRecord", "AtlanTracesAdapter", "get_traces", "setup_tracer_provider"]
 
 # SDK logger for module-level diagnostics (init failures, etc.). Uses the SDK
 # logger rather than the root `logging` module so messages are routed through
 # the configured handlers.
 _module_logger = get_logger(__name__)
+
+
+# The provider this module installed as the OTel global, once per process.
+_tracer_provider: Optional[TracerProvider] = None
+
+
+def setup_tracer_provider() -> Optional[TracerProvider]:
+    """Install the process-wide OpenTelemetry tracer provider, once.
+
+    Temporal's ``TracingInterceptor`` (behind ``TraceInterceptor``) emits spans
+    through the *global* tracer provider; until one is installed those spans
+    go to OTel's no-op provider and nothing is exported. ``run_main`` calls
+    this at process start, beside ``get_metrics()``.
+
+    Does nothing and returns ``None`` unless ``ATLAN_ENABLE_OTLP_TRACES`` is
+    on. Spans export via OTLP to ``OTEL_EXPORTER_OTLP_ENDPOINT``; they are
+    also printed to stdout only when ``ATLAN_ENABLE_TRACES_CONSOLE`` is on,
+    a development-only switch. Idempotent: later calls return the provider
+    the first call installed. If setup fails the error is logged, no
+    provider is installed and ``None`` is returned — there is no fallback
+    that would write spans to stdout instead.
+
+    Returns:
+        The installed provider, or ``None`` when tracing is off or setup
+        failed.
+    """
+    global _tracer_provider
+    if not ENABLE_OTLP_TRACES:
+        return None
+    if _tracer_provider is not None:
+        return _tracer_provider
+
+    try:
+        provider = TracerProvider(resource=build_otel_resource())
+        exporters: list[SpanExporter] = []
+        if OTEL_EXPORTER_OTLP_ENDPOINT:
+            try:
+                exporters.append(
+                    OTLPSpanExporter(
+                        endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
+                        timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
+                    )
+                )
+            except Exception:
+                _module_logger.warning(
+                    "Failed to set up the OTLP span exporter; spans will not be exported over OTLP",
+                    exc_info=True,
+                )
+        if ENABLE_TRACES_CONSOLE:
+            exporters.append(ConsoleSpanExporter())
+        if not exporters:
+            _module_logger.warning(
+                "ATLAN_ENABLE_OTLP_TRACES=true but no span exporter is configured "
+                "(OTEL_EXPORTER_OTLP_ENDPOINT is empty or its exporter failed); "
+                "spans will be dropped"
+            )
+        for exporter in exporters:
+            provider.add_span_processor(
+                BatchSpanProcessor(exporter, schedule_delay_millis=OTEL_BATCH_DELAY_MS)
+            )
+        trace.set_tracer_provider(provider)
+    except Exception:
+        _module_logger.error(
+            "Failed to set up the OpenTelemetry tracer provider; tracing disabled",
+            exc_info=True,
+        )
+        return None
+
+    _tracer_provider = provider
+    return provider
 
 
 class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
@@ -99,121 +174,25 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                 AtlanTracesAdapter._flush_task_started = True
             except Exception:
                 # BLDX-1189: switched from root `logging.error` to the SDK
-                # logger here. Six other `logging.*` call sites in this file
+                # logger here. Three other `logging.*` call sites in this file
                 # still use the root logger; tracked for a follow-up sweep.
                 _module_logger.error("Failed to start traces flush task", exc_info=True)
 
     def _setup_otel_traces(self):
-        """Set up OpenTelemetry traces exporter and configuration.
+        """Bind the adapter to the process-wide tracer provider.
 
-        This method:
-        - Configures resource attributes
-        - Creates console and OTLP exporters
-        - Sets up span processors
-        - Initializes tracer provider
-        - Creates tracer for the service
-
-        Falls back to console-only tracing if setup fails.
+        The provider is installed once per process by
+        :func:`setup_tracer_provider` (normally already done by ``run_main``);
+        the adapter reuses it rather than installing a second one. When setup
+        failed, ``tracer_provider`` and ``tracer`` stay ``None`` and
+        ``_send_to_otel`` becomes a no-op.
         """
-        # Pre-assign so attributes always exist if setup fails before they are
-        # bound. Downstream callers must check for None.
-        self.tracer_provider = None
-        self.tracer = None
-        try:
-            # Create resource
-            resource = build_otel_resource()
-
-            # Create exporters
-            exporters = []
-
-            # Add console exporter for local development
-            console_exporter = ConsoleSpanExporter()
-            exporters.append(console_exporter)
-
-            # Add OTLP exporter if endpoint is configured
-            if OTEL_EXPORTER_OTLP_ENDPOINT:
-                try:
-                    otlp_exporter = OTLPSpanExporter(
-                        endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
-                        timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
-                    )
-                    exporters.append(otlp_exporter)
-                except Exception:
-                    logging.warning(
-                        "Failed to setup OTLP exporter, falling back to console only",
-                        exc_info=True,
-                    )
-
-            # Create span processors for each exporter
-            span_processors = [
-                BatchSpanProcessor(
-                    exporter,
-                    schedule_delay_millis=OTEL_BATCH_DELAY_MS,
-                )
-                for exporter in exporters
-            ]
-
-            # Create tracer provider
-            self.tracer_provider = TracerProvider(
-                resource=resource,
-            )
-
-            # Add all span processors
-            for processor in span_processors:
-                self.tracer_provider.add_span_processor(processor)
-
-            # Set global tracer provider
-            trace.set_tracer_provider(self.tracer_provider)
-
-            # Create tracer
-            self.tracer = self.tracer_provider.get_tracer(SERVICE_NAME)
-
-        except Exception:
-            logging.error("Failed to setup OpenTelemetry traces", exc_info=True)
-            # Fall back to console-only tracing
-            self._setup_console_only_traces()
-
-    def _setup_console_only_traces(self):
-        """Set up console-only tracing as fallback.
-
-        This method:
-        - Creates basic resource attributes
-        - Sets up console exporter
-        - Configures span processor
-        - Initializes tracer provider
-        - Creates tracer for the service
-        """
-        # Pre-assign so attributes always exist if setup fails before they are
-        # bound. Downstream callers must check for None.
-        self.tracer_provider = None
-        self.tracer = None
-        try:
-            # Create resource with basic attributes
-            resource = build_otel_resource()
-
-            # Create console exporter
-            console_exporter = ConsoleSpanExporter()
-
-            # Create span processor
-            span_processor = BatchSpanProcessor(
-                console_exporter,
-                schedule_delay_millis=OTEL_BATCH_DELAY_MS,
-            )
-
-            # Create tracer provider
-            self.tracer_provider = TracerProvider(
-                resource=resource,
-            )
-            self.tracer_provider.add_span_processor(span_processor)
-
-            # Set global tracer provider
-            trace.set_tracer_provider(self.tracer_provider)
-
-            # Create tracer
-            self.tracer = self.tracer_provider.get_tracer(SERVICE_NAME)
-
-        except Exception:
-            logging.error("Failed to setup console-only tracing", exc_info=True)
+        self.tracer_provider = setup_tracer_provider()
+        self.tracer = (
+            self.tracer_provider.get_tracer(SERVICE_NAME)
+            if self.tracer_provider is not None
+            else None
+        )
 
     def process_record(self, record: Any) -> Dict[str, Any]:
         """Process a trace record into a standardized dictionary format.

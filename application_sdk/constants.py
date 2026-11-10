@@ -1198,7 +1198,16 @@ SEGMENT_BATCH_TIMEOUT_SECONDS = float(
 # Traces Configuration
 #: Whether to register Temporal's OTel TracingInterceptor and emit spans.
 #: Production does not yet support traces; default is False.
+#: The single read of ``ATLAN_ENABLE_OTLP_TRACES``: ``run_main``, the
+#: ``TraceInterceptor`` and the traces adapter all consult this constant.
 ENABLE_OTLP_TRACES = os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true"
+#: Development only: also print every span to stdout via OTel's
+#: ``ConsoleSpanExporter``. Has no effect unless ``ENABLE_OTLP_TRACES`` is on.
+#: Default False — in a deployed pod it would serialise every span onto the
+#: log stream.
+ENABLE_TRACES_CONSOLE = (
+    os.getenv("ATLAN_ENABLE_TRACES_CONSOLE", "false").lower() == "true"
+)
 
 
 def _read_enable_tri_state(name: str) -> tuple[str | None, bool | None]:

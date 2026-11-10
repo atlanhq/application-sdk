@@ -3207,6 +3207,13 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** Set the current execution context.
 - **Defined in:** `application_sdk/observability/context.py`
 
+#### `setup_tracer_provider`
+
+- **Import:** `from application_sdk.observability.traces_adaptor import setup_tracer_provider`
+- **Signature:** `setup_tracer_provider() -> Optional[TracerProvider]`
+- **Summary:** Install the process-wide OpenTelemetry tracer provider, once.
+- **Defined in:** `application_sdk/observability/traces_adaptor.py`
+
 ### Constants and Enums
 
 #### `ARTIFACT_VALIDATION_EVENT`

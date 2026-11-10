@@ -2613,6 +2613,21 @@ def run_main(config: AppConfig) -> None:
 
     get_metrics()
 
+    # Same for the global TracerProvider: Temporal's TracingInterceptor emits
+    # through it, so without this ATLAN_ENABLE_OTLP_TRACES=true exports no
+    # worker spans. Gated here so the OTLP/gRPC exporter is not imported when
+    # tracing is off.
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: lazy access to env-var-derived constants
+        ENABLE_OTLP_TRACES,
+    )
+
+    if ENABLE_OTLP_TRACES:
+        from application_sdk.observability.traces_adaptor import (  # noqa: PLC0415 — cold path: tracer provider bootstrap at process start
+            setup_tracer_provider,
+        )
+
+        setup_tracer_provider()
+
     if config.mode == "worker":
         asyncio.run(run_worker_mode(config, bound_post_drain_exit=True))
     elif config.mode == "handler":

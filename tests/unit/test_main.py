@@ -445,6 +445,32 @@ class TestRunMain:
             run_main(config)
             mock_handler.assert_called_once_with(config)
 
+    def test_bootstraps_tracer_provider_when_traces_enabled(self) -> None:
+        """FND-4642: run_main installs the global TracerProvider beside the
+        MeterProvider, so ATLAN_ENABLE_OTLP_TRACES=true exports worker spans."""
+        config = AppConfig(mode="handler", app_module="pkg:App")
+        with (
+            mock.patch("application_sdk.constants.ENABLE_OTLP_TRACES", True),
+            mock.patch(
+                "application_sdk.observability.traces_adaptor.setup_tracer_provider"
+            ) as mock_setup,
+            mock.patch("application_sdk.main.run_handler_mode"),
+        ):
+            run_main(config)
+        mock_setup.assert_called_once_with()
+
+    def test_skips_tracer_provider_when_traces_disabled(self) -> None:
+        config = AppConfig(mode="handler", app_module="pkg:App")
+        with (
+            mock.patch("application_sdk.constants.ENABLE_OTLP_TRACES", False),
+            mock.patch(
+                "application_sdk.observability.traces_adaptor.setup_tracer_provider"
+            ) as mock_setup,
+            mock.patch("application_sdk.main.run_handler_mode"),
+        ):
+            run_main(config)
+        mock_setup.assert_not_called()
+
     def test_combined_mode_calls_asyncio_run(self) -> None:
         config = AppConfig(mode="combined", app_module="pkg:App")
         with (

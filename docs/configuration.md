@@ -331,7 +331,8 @@ Used by the distributed lock (`RedisClient` / `RedisClientAsync`). Leave empty f
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAN_ENABLE_OTLP_TRACES` | `false` | Export traces via OTLP. |
+| `ATLAN_ENABLE_OTLP_TRACES` | `false` | Export traces via OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT`. `run_main` installs the process-wide tracer provider at startup, so worker spans from the Temporal `TraceInterceptor` are exported. |
+| `ATLAN_ENABLE_TRACES_CONSOLE` | `false` | Development only. Also print every span to stdout via OTel's `ConsoleSpanExporter`. Has no effect unless `ATLAN_ENABLE_OTLP_TRACES` is on. Leave off in deployed pods: it puts every span on the log stream. |
 
 ---
 

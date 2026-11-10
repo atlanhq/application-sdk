@@ -2,17 +2,17 @@
 
 Targets the uncovered branches:
 - _reset_for_testing (ClassVar reset).
-- _setup_otel_traces success path (with OTLP endpoint).
-- _setup_otel_traces fallback when OTLPSpanExporter raises.
-- _setup_otel_traces full-failure → console-only fallback.
-- _setup_console_only_traces success and failure.
+- setup_tracer_provider: off, OTLP-only default, dev-only console exporter,
+  idempotence, exporter and provider failures.
+- the adapter binding to the shared provider.
 - export_record dispatch (TraceRecord vs other; ENABLE_OTLP_TRACES on/off).
 - _send_to_otel ERROR-status branch and exception swallow.
 - _log_to_console exception swallow.
 - record_trace re-raises after logging.
 
-All real OTel SDK objects (TracerProvider, BatchSpanProcessor, ConsoleSpanExporter,
-OTLPSpanExporter, set_tracer_provider) are mocked at the import site.
+``set_tracer_provider`` is always mocked so no test installs a process-wide
+provider; the exporter-wiring tests build a real ``TracerProvider`` so they
+check the processors actually attached.
 """
 
 from __future__ import annotations
@@ -21,6 +21,9 @@ import logging
 from unittest import mock
 
 import pytest
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import ConsoleSpanExporter
 
 from application_sdk.observability import traces_adaptor as tracer_mod
 from application_sdk.observability.models import TraceRecord
@@ -58,110 +61,142 @@ class TestResetForTesting:
 
 
 # ---------------------------------------------------------------------------
-# _setup_otel_traces success path
+# setup_tracer_provider: the process-wide provider bootstrap
 # ---------------------------------------------------------------------------
 
 
-class TestSetupOtelTraces:
-    def test_otel_setup_uses_otlp_when_endpoint_set(self) -> None:
-        AtlanTracesAdapter._flush_task_started = True
+@pytest.fixture(autouse=True)
+def _reset_installed_provider():
+    """Each test starts with no provider installed by this module."""
+    tracer_mod._tracer_provider = None
+    yield
+    tracer_mod._tracer_provider = None
 
+
+def _exporters_on(provider: TracerProvider) -> list[object]:
+    """The span exporters attached to a real ``TracerProvider``."""
+    processors = provider._active_span_processor._span_processors
+    return [p.span_exporter for p in processors]
+
+
+class TestSetupTracerProvider:
+    def test_noop_when_traces_disabled(self) -> None:
         with (
-            mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
-            mock.patch.object(
-                tracer_mod, "OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel:4317"
-            ),
-            mock.patch.object(tracer_mod, "ConsoleSpanExporter") as mock_console,
-            mock.patch.object(tracer_mod, "OTLPSpanExporter") as mock_otlp,
-            mock.patch.object(tracer_mod, "BatchSpanProcessor") as mock_proc,
-            mock.patch.object(tracer_mod, "TracerProvider") as mock_provider,
+            mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", False),
             mock.patch.object(tracer_mod.trace, "set_tracer_provider") as mock_set,
         ):
-            mock_provider_instance = mock.MagicMock()
-            mock_provider.return_value = mock_provider_instance
+            assert tracer_mod.setup_tracer_provider() is None
+        mock_set.assert_not_called()
 
-            adapter = AtlanTracesAdapter()
-
-        # Both exporters were instantiated.
-        mock_console.assert_called_once()
-        mock_otlp.assert_called_once()
-        # One BatchSpanProcessor per exporter.
-        assert mock_proc.call_count == 2
-        mock_set.assert_called_once_with(mock_provider_instance)
-        assert adapter.tracer_provider is mock_provider_instance
-        assert hasattr(adapter, "tracer")
-
-    def test_otel_setup_continues_when_otlp_exporter_fails(self) -> None:
-        """If OTLPSpanExporter constructor blows up, console exporter still wins."""
-        AtlanTracesAdapter._flush_task_started = True
-
+    def test_installs_global_provider_with_otlp_only_by_default(self) -> None:
+        """FND-4642: OTLP only — no ConsoleSpanExporter writing every span to
+        stdout unless the dev-only flag asks for it."""
         with (
             mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
+            mock.patch.object(tracer_mod, "ENABLE_TRACES_CONSOLE", False),
             mock.patch.object(
                 tracer_mod, "OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel:4317"
             ),
-            mock.patch.object(tracer_mod, "ConsoleSpanExporter") as mock_console,
+            mock.patch.object(tracer_mod.trace, "set_tracer_provider") as mock_set,
+        ):
+            provider = tracer_mod.setup_tracer_provider()
+
+        assert isinstance(provider, TracerProvider)
+        mock_set.assert_called_once_with(provider)
+        exporters = _exporters_on(provider)
+        assert [type(e) for e in exporters] == [OTLPSpanExporter]
+        provider.shutdown()
+
+    def test_console_exporter_only_behind_dev_flag(self) -> None:
+        with (
+            mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
+            mock.patch.object(tracer_mod, "ENABLE_TRACES_CONSOLE", True),
+            mock.patch.object(
+                tracer_mod, "OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel:4317"
+            ),
+            mock.patch.object(tracer_mod.trace, "set_tracer_provider"),
+        ):
+            provider = tracer_mod.setup_tracer_provider()
+
+        assert provider is not None
+        exporters = _exporters_on(provider)
+        assert [type(e) for e in exporters] == [OTLPSpanExporter, ConsoleSpanExporter]
+        provider.shutdown()
+
+    def test_idempotent(self) -> None:
+        """Called from run_main, the TraceInterceptor and the adapter: one
+        provider, installed once."""
+        with (
+            mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
+            mock.patch.object(tracer_mod, "OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+            mock.patch.object(tracer_mod.trace, "set_tracer_provider") as mock_set,
+        ):
+            first = tracer_mod.setup_tracer_provider()
+            second = tracer_mod.setup_tracer_provider()
+
+        assert first is not None
+        assert first is second
+        mock_set.assert_called_once()
+
+    def test_otlp_exporter_failure_does_not_add_console(self) -> None:
+        with (
+            mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
+            mock.patch.object(tracer_mod, "ENABLE_TRACES_CONSOLE", False),
+            mock.patch.object(
+                tracer_mod, "OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel:4317"
+            ),
             mock.patch.object(
                 tracer_mod, "OTLPSpanExporter", side_effect=RuntimeError("bad config")
             ),
-            mock.patch.object(tracer_mod, "BatchSpanProcessor") as mock_proc,
-            mock.patch.object(tracer_mod, "TracerProvider"),
+            mock.patch.object(tracer_mod, "ConsoleSpanExporter") as mock_console,
             mock.patch.object(tracer_mod.trace, "set_tracer_provider"),
         ):
-            adapter = AtlanTracesAdapter()
+            provider = tracer_mod.setup_tracer_provider()
 
-        mock_console.assert_called_once()
-        # Only console processor, not OTLP.
-        assert mock_proc.call_count == 1
-        assert hasattr(adapter, "tracer")
+        assert provider is not None
+        mock_console.assert_not_called()
+        assert _exporters_on(provider) == []
 
-    def test_otel_setup_falls_back_to_console_only_when_provider_creation_fails(
-        self,
-    ) -> None:
-        """If TracerProvider raises, fallback _setup_console_only_traces runs."""
-        AtlanTracesAdapter._flush_task_started = True
-
-        # First TracerProvider() raises (in _setup_otel_traces),
-        # second TracerProvider() succeeds (in _setup_console_only_traces).
-        provider_instance = mock.MagicMock()
+    def test_provider_failure_installs_nothing(self) -> None:
+        """No console-only fallback: a failed setup leaves tracing off."""
         with (
             mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
-            mock.patch.object(tracer_mod, "OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-            mock.patch.object(tracer_mod, "ConsoleSpanExporter"),
-            mock.patch.object(tracer_mod, "BatchSpanProcessor"),
-            mock.patch.object(
-                tracer_mod,
-                "TracerProvider",
-                side_effect=[RuntimeError("first try fails"), provider_instance],
-            ),
-            mock.patch.object(tracer_mod.trace, "set_tracer_provider"),
-        ):
-            adapter = AtlanTracesAdapter()
-
-        # Fallback assigned the second provider.
-        assert adapter.tracer_provider is provider_instance
-
-
-class TestSetupConsoleOnlyTraces:
-    def test_console_only_setup_swallows_failure(self) -> None:
-        """If everything in console-only setup blows up, the constructor still returns."""
-        AtlanTracesAdapter._flush_task_started = True
-
-        with (
-            mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
-            mock.patch.object(tracer_mod, "OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-            mock.patch.object(tracer_mod, "ConsoleSpanExporter"),
-            mock.patch.object(tracer_mod, "BatchSpanProcessor"),
-            # First call (otel path) raises; second call (console path) raises too.
             mock.patch.object(
                 tracer_mod, "TracerProvider", side_effect=RuntimeError("kaboom")
             ),
-            mock.patch.object(tracer_mod.trace, "set_tracer_provider"),
+            mock.patch.object(tracer_mod, "ConsoleSpanExporter") as mock_console,
+            mock.patch.object(tracer_mod.trace, "set_tracer_provider") as mock_set,
         ):
-            # Constructor returns without re-raising — both setup methods swallow.
+            assert tracer_mod.setup_tracer_provider() is None
+
+        mock_console.assert_not_called()
+        mock_set.assert_not_called()
+        assert tracer_mod._tracer_provider is None
+
+
+class TestAdapterUsesSharedProvider:
+    def test_adapter_reuses_the_installed_provider(self) -> None:
+        AtlanTracesAdapter._flush_task_started = True
+        provider = mock.MagicMock()
+        with (
+            mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
+            mock.patch.object(
+                tracer_mod, "setup_tracer_provider", return_value=provider
+            ),
+        ):
             adapter = AtlanTracesAdapter()
 
-        # Tracer provider attribute exists but is None (no half-init).
+        assert adapter.tracer_provider is provider
+        assert adapter.tracer is provider.get_tracer.return_value
+
+    def test_adapter_without_provider_has_no_tracer(self) -> None:
+        AtlanTracesAdapter._flush_task_started = True
+        with (
+            mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
+            mock.patch.object(tracer_mod, "setup_tracer_provider", return_value=None),
+        ):
+            adapter = AtlanTracesAdapter()
+
         assert adapter.tracer_provider is None
         assert adapter.tracer is None
 

@@ -346,7 +346,7 @@ application_sdk/
 │   ├── resource_sampler.py # Resource-based sampling helpers
 │   ├── segment_client.py   # Segment analytics client
 │   ├── trace_context.py    # Correlation ID propagation
-│   ├── traces_adaptor.py   # OTel TracerProvider setup
+│   ├── traces_adaptor.py   # OTel TracerProvider setup (installed by run_main)
 │   └── utils.py            # Shared observability utilities (METRIC_ENRICHMENT_KEYS, etc.)
 │
 ├── server/                 # Internal FastAPI / health-check servers

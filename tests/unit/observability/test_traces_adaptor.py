@@ -242,3 +242,51 @@ class TestPeriodicFlushStartsOnSharedLoop:
         before = asyncio.all_tasks()
         self._construct()
         assert asyncio.all_tasks() == before
+
+
+def test_enabled_traces_give_temporal_interceptor_a_recording_tracer():
+    """FND-4642, end to end in a fresh interpreter: with
+    ATLAN_ENABLE_OTLP_TRACES=true, the TraceInterceptor's upstream delegate
+    records spans (before the fix it got OTel's no-op provider) and no
+    ConsoleSpanExporter is attached unless ATLAN_ENABLE_TRACES_CONSOLE is set.
+
+    A subprocess because ``trace.set_tracer_provider`` can only be set once
+    per process, and the flag is read at import.
+    """
+    import os
+    import subprocess
+    import sys
+
+    script = (
+        "from opentelemetry import trace\n"
+        "from opentelemetry.sdk.trace.export import ConsoleSpanExporter\n"
+        "from application_sdk.execution._temporal.interceptors.trace import TraceInterceptor\n"
+        "from application_sdk.observability import traces_adaptor\n"
+        "interceptor = TraceInterceptor()\n"
+        "provider = trace.get_tracer_provider()\n"
+        "assert provider is traces_adaptor._tracer_provider, type(provider)\n"
+        "span = interceptor._delegate.tracer.start_span('probe')\n"
+        "assert span.is_recording()\n"
+        "span.end()\n"
+        "exporters = [p.span_exporter for p in provider._active_span_processor._span_processors]\n"
+        "assert not any(isinstance(e, ConsoleSpanExporter) for e in exporters), exporters\n"
+        "provider.shutdown()\n"
+        "print('ok')\n"
+    )
+    env = {
+        k: v for k, v in os.environ.items() if k not in ("ATLAN_ENABLE_TRACES_CONSOLE",)
+    }
+    env["ATLAN_ENABLE_OTLP_TRACES"] = "true"
+    # Unroutable port: the exporter is wired but never needs to connect.
+    env["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://127.0.0.1:1"
+    env["OTEL_EXPORTER_TIMEOUT_SECONDS"] = "1"
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().endswith("ok")

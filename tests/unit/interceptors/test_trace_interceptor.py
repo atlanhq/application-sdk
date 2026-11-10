@@ -7,37 +7,60 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from application_sdk.execution._temporal.interceptors.trace import (
-    TraceInterceptor,
-    _traces_enabled,
-)
+from application_sdk import constants
+from application_sdk.execution._temporal.interceptors.trace import TraceInterceptor
 
 
 @pytest.fixture(autouse=True)
-def unset_trace_env(monkeypatch):
-    monkeypatch.delenv("ATLAN_ENABLE_OTLP_TRACES", raising=False)
+def traces_off(monkeypatch):
+    monkeypatch.setattr(constants, "ENABLE_OTLP_TRACES", False)
 
 
-class TestTracesEnabled:
-    def test_default_is_false(self):
-        assert _traces_enabled() is False
+@pytest.fixture
+def setup_provider():
+    """Stand-in for the tracer provider bootstrap, so no test installs a
+    process-wide provider."""
+    with patch(
+        "application_sdk.observability.traces_adaptor.setup_tracer_provider"
+    ) as mock_setup:
+        yield mock_setup
 
-    def test_true_when_env_set(self, monkeypatch):
+
+@pytest.fixture
+def enable_traces(monkeypatch, setup_provider):
+    monkeypatch.setattr(constants, "ENABLE_OTLP_TRACES", True)
+    return setup_provider
+
+
+class TestTracesFlag:
+    def test_reads_the_constant_not_the_env(self, monkeypatch, setup_provider):
+        """FND-4642: the flag is read once, in constants. Setting the env var
+        after import does not change the interceptor's decision."""
         monkeypatch.setenv("ATLAN_ENABLE_OTLP_TRACES", "true")
-        assert _traces_enabled() is True
+        interceptor = TraceInterceptor()
+        assert interceptor._delegate is None
+        setup_provider.assert_not_called()
 
-    def test_false_when_env_set_to_false(self, monkeypatch):
-        monkeypatch.setenv("ATLAN_ENABLE_OTLP_TRACES", "false")
-        assert _traces_enabled() is False
-
-    def test_case_insensitive(self, monkeypatch):
-        monkeypatch.setenv("ATLAN_ENABLE_OTLP_TRACES", "TRUE")
-        assert _traces_enabled() is True
+    def test_enabled_installs_the_tracer_provider(self, enable_traces):
+        """FND-4642: the upstream interceptor emits through the global
+        provider; without one installed, enabled tracing exported nothing."""
+        mock_tracing_cls = MagicMock()
+        with patch.dict(
+            sys.modules,
+            {
+                "temporalio.contrib.opentelemetry": MagicMock(
+                    TracingInterceptor=mock_tracing_cls
+                )
+            },
+        ):
+            TraceInterceptor()
+        enable_traces.assert_called_once_with()
 
 
 class TestTraceInterceptorDisabled:
-    def test_delegate_is_none_when_disabled(self):
+    def test_delegate_is_none_when_disabled(self, setup_provider):
         interceptor = TraceInterceptor()
+        setup_provider.assert_not_called()
         assert interceptor._delegate is None
 
     def test_workflow_interceptor_class_returns_none(self):
@@ -53,8 +76,7 @@ class TestTraceInterceptorDisabled:
 
 
 class TestTraceInterceptorEnabled:
-    def test_delegate_set_when_enabled(self, monkeypatch):
-        monkeypatch.setenv("ATLAN_ENABLE_OTLP_TRACES", "true")
+    def test_delegate_set_when_enabled(self, enable_traces):
         mock_tracing_cls = MagicMock()
         mock_instance = MagicMock()
         mock_tracing_cls.return_value = mock_instance
@@ -71,8 +93,7 @@ class TestTraceInterceptorEnabled:
 
         assert interceptor._delegate is mock_instance
 
-    def test_workflow_class_delegates_to_upstream(self, monkeypatch):
-        monkeypatch.setenv("ATLAN_ENABLE_OTLP_TRACES", "true")
+    def test_workflow_class_delegates_to_upstream(self, enable_traces):
         mock_tracing_cls = MagicMock()
         mock_instance = MagicMock()
         mock_tracing_cls.return_value = mock_instance
@@ -94,8 +115,7 @@ class TestTraceInterceptorEnabled:
         mock_instance.workflow_interceptor_class.assert_called_once_with(inp)
         assert result is expected_class
 
-    def test_intercept_activity_delegates_to_upstream(self, monkeypatch):
-        monkeypatch.setenv("ATLAN_ENABLE_OTLP_TRACES", "true")
+    def test_intercept_activity_delegates_to_upstream(self, enable_traces):
         mock_tracing_cls = MagicMock()
         mock_instance = MagicMock()
         mock_tracing_cls.return_value = mock_instance
@@ -119,8 +139,7 @@ class TestTraceInterceptorEnabled:
 
 
 class TestTraceInterceptorImportError:
-    def test_graceful_fallback_on_import_error(self, monkeypatch):
-        monkeypatch.setenv("ATLAN_ENABLE_OTLP_TRACES", "true")
+    def test_graceful_fallback_on_import_error(self, enable_traces):
         # Removing the module from sys.modules forces a fresh import that we
         # can make fail by temporarily replacing it with None.
         original = sys.modules.pop("temporalio.contrib.opentelemetry", None)
