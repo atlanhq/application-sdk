@@ -113,8 +113,9 @@ without breaking 1 and 2, and how to prove it.
   and moves `relationshipAttributes` into `attributes` publishes
   `FLATTENED`. Judge the envelope by what the app publishes, never by the
   method it calls.
-- `FLATTENED` differs from a hand reshape of nested output in three places a
-  unit test rarely reaches: a reference set to `None` is written as
+- `FLATTENED` is known to differ from a hand reshape of nested output in at
+  least these places, which a unit test rarely reaches (observed on seven
+  apps, not a complete list): a reference set to `None` is written as
   `attributes.<ref>: null`, which clears that relationship on publish (the
   nested encoder omits it); `meanings` stays top-level only and loses
   `semantic` (nested output also carries it under `relationshipAttributes`);
@@ -122,7 +123,9 @@ without breaking 1 and 2, and how to prove it.
   encoders omit a field that was never set (`entity_envelope` module docs):
   leave a reference unset when the source has none, never assign `None`.
   For `meanings` and dropped references this skill has no tested answer:
-  where they appear, hold the site.
+  where they appear, hold the site. Any other difference in what the app
+  publishes is not allowed either (principle 2): where you find one, hold
+  the site and name it.
 - A reference built with `qualified_name=` gains an extra top-level
   `qualifiedName` key; `unique_attributes={"qualifiedName": ...}` writes the
   usual `{typeName, uniqueAttributes}` reference.
