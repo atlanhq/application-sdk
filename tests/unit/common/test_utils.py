@@ -1,10 +1,17 @@
+import json
 import os
 import re
 from pathlib import Path
 from unittest.mock import mock_open, patch
 
 import pytest
+from pydantic import BaseModel
 
+from application_sdk.common.errors import (
+    JsonParseError,
+    ResponseKeyMissingError,
+    ResponseTypeError,
+)
 from application_sdk.common.sql_filters import (
     extract_database_names_from_regex_common,
     normalize_filters,
@@ -14,6 +21,8 @@ from application_sdk.common.sql_filters import (
     read_sql_files,
 )
 from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
+from application_sdk.common.utils import download_file_from_upload_response
+from application_sdk.handler.contracts import FileUploadResponse
 
 
 class TestPrepareQuery:
@@ -1040,3 +1049,115 @@ class TestParseFilterInput:
 
         with pytest.raises(InvalidSqlFilterError):
             parse_filter_input("not json at all")
+
+
+_KEY = "workflow_file_upload/abc123.csv"
+_DOWNLOAD = "application_sdk.storage.ops.download_file_chunked"
+
+
+class TestDownloadFileFromUploadResponse:
+    """download_file_from_upload_response accepts every shape the upload route yields."""
+
+    @patch(_DOWNLOAD)
+    async def test_download_with_dict_input(self, mock_download) -> None:
+        result = await download_file_from_upload_response({"key": _KEY, "id": "abc"})
+
+        mock_download.assert_called_once()
+        assert mock_download.call_args[1]["key"] == _KEY
+        assert result.endswith(_KEY)
+
+    @patch(_DOWNLOAD)
+    async def test_download_with_string_input(self, mock_download) -> None:
+        result = await download_file_from_upload_response(json.dumps({"key": _KEY}))
+
+        assert mock_download.call_args[1]["key"] == _KEY
+        assert result.endswith(_KEY)
+
+    @patch(_DOWNLOAD)
+    async def test_download_with_handler_file_upload_response(
+        self, mock_download
+    ) -> None:
+        """The handler's own return type was rejected with ResponseTypeError (FND-4692)."""
+        response = FileUploadResponse(
+            id="abc123", key=_KEY, raw_name="original.csv", is_uploaded=True
+        )
+
+        result = await download_file_from_upload_response(response)
+
+        assert mock_download.call_args[1]["key"] == _KEY
+        assert result.endswith(_KEY)
+
+    @patch(_DOWNLOAD)
+    async def test_download_with_handler_response_parsed_from_wire(
+        self, mock_download
+    ) -> None:
+        """A typed caller validating the route's camelCase JSON gets the same key."""
+        wire = FileUploadResponse(key=_KEY).model_dump(by_alias=True)
+        response = FileUploadResponse.model_validate(wire)
+
+        await download_file_from_upload_response(response)
+
+        assert mock_download.call_args[1]["key"] == _KEY
+
+    @patch(_DOWNLOAD)
+    async def test_download_with_deprecated_v2_file_upload_response(
+        self, mock_download
+    ) -> None:
+        from application_sdk.server.fastapi.models import (
+            FileUploadResponse as V2FileUploadResponse,
+        )
+
+        with pytest.warns(DeprecationWarning, match="FileUploadResponse"):
+            response = V2FileUploadResponse(
+                id="abc123",
+                version="abc12345",
+                isActive=True,
+                createdAt=1000,
+                updatedAt=1000,
+                fileName="abc123.csv",
+                rawName="original.csv",
+                key=_KEY,
+                extension=".csv",
+                contentType="text/csv",
+                fileSize=100,
+                isEncrypted=False,
+                redirectUrl="",
+                isUploaded=True,
+                uploadedAt="2024-01-01T00:00:00Z",
+                isArchived=False,
+            )
+
+        await download_file_from_upload_response(response)
+
+        assert mock_download.call_args[1]["key"] == _KEY
+
+    async def test_model_without_key_field_is_a_type_error(self) -> None:
+        class NotAnUpload(BaseModel):
+            id: str = "abc"
+
+        with pytest.raises(ResponseTypeError):
+            await download_file_from_upload_response(NotAnUpload())
+
+    async def test_handler_response_with_unset_key_is_missing_key(self) -> None:
+        """The handler model defaults ``key`` to "" — that is a missing key."""
+        with pytest.raises(ResponseKeyMissingError):
+            await download_file_from_upload_response(FileUploadResponse(id="abc"))
+
+    async def test_download_missing_key_error(self) -> None:
+        with pytest.raises(ResponseKeyMissingError):
+            await download_file_from_upload_response({"id": "abc123"})
+
+    async def test_download_invalid_json_error(self) -> None:
+        with pytest.raises(JsonParseError):
+            await download_file_from_upload_response("not valid json")
+
+    async def test_unsupported_type_is_a_type_error(self) -> None:
+        with pytest.raises(ResponseTypeError):
+            await download_file_from_upload_response(42)  # type: ignore[arg-type]
+
+    @patch(_DOWNLOAD)
+    async def test_download_error_propagation(self, mock_download) -> None:
+        mock_download.side_effect = Exception("Download failed")
+
+        with pytest.raises(Exception, match="Download failed"):
+            await download_file_from_upload_response({"key": _KEY})

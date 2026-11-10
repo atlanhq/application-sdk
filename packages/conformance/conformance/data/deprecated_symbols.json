@@ -514,6 +514,177 @@
       "symbol": "StateStoreError"
     },
     {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.ConfigMapResponse is deprecated; use the handler's GET /workflows/v1/configmap/{config_map_id} route instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "ConfigMapResponse"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.EventWorkflowRequest is deprecated; use application_sdk.handler.contracts.CloudEventEnvelope instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "EventWorkflowRequest"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.EventWorkflowResponse is deprecated; use the handler's /events/v1/event/{event_id} route instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "EventWorkflowResponse"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.FetchMetadataRequest is deprecated; use application_sdk.handler.contracts.MetadataInput instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "FetchMetadataRequest"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.FetchMetadataResponse is deprecated; use application_sdk.handler.contracts.MetadataOutput instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "FetchMetadataResponse"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.FileUploadResponse is deprecated; use application_sdk.handler.contracts.FileUploadResponse instead (snake_case attributes, serialised with the same camelCase aliases) \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "FileUploadResponse"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.MetadataType is deprecated; use application_sdk.handler.contracts.MetadataInput instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "MetadataType"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.PreflightCheckRequest is deprecated; use application_sdk.handler.contracts.PreflightInput instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "PreflightCheckRequest"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.PreflightCheckResponse is deprecated; use application_sdk.handler.contracts.PreflightOutput instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "PreflightCheckResponse"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.Subscription is deprecated; use application_sdk.handler.contracts.SubscriptionConfig instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "Subscription"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.TestAuthRequest is deprecated; use application_sdk.handler.contracts.AuthInput instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "TestAuthRequest"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.TestAuthResponse is deprecated; use application_sdk.handler.contracts.AuthOutput instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "TestAuthResponse"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.WorkflowConfigRequest is deprecated; use the App's typed Input contract instead (an application_sdk.contracts.base.Input subclass, which the handler's /workflows/v1 routes accept) \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "WorkflowConfigRequest"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.WorkflowConfigResponse is deprecated; use the handler's GET /workflows/v1/config/{config_id} route instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "WorkflowConfigResponse"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.WorkflowData is deprecated; use the handler's POST /workflows/v1/start response instead (it carries workflow_id and run_id) \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "WorkflowData"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.WorkflowRequest is deprecated; use the App's typed Input contract instead (an application_sdk.contracts.base.Input subclass, which the handler's /workflows/v1 routes accept) \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "WorkflowRequest"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.models.WorkflowResponse is deprecated; use the handler's POST /workflows/v1/start response instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.models",
+      "removal_version": "4.0",
+      "symbol": "WorkflowResponse"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.utils.internal_server_error_handler is deprecated; use the v3 handler service instead (application_sdk.handler), which installs its own sanitised 500 handling \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.utils",
+      "removal_version": "4.0",
+      "symbol": "internal_server_error_handler"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.server.fastapi.utils.upload_file_to_object_store is deprecated; use the handler's POST /workflows/v1/file route instead, or application_sdk.storage.batch.upload_file_from_bytes to write the bytes yourself \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.utils",
+      "removal_version": "4.0",
+      "symbol": "upload_file_to_object_store"
+    },
+    {
       "kind": "function",
       "marker_via": "decorator",
       "message": "run_health_server is deprecated; construct WorkerHealthServer (or call build_worker_health_server) and start it with `async with` \u2014 will be removed in v4.0.0.",
@@ -710,6 +881,51 @@
       "module": "application_sdk.testing.full_dag.sql_app",
       "removal_version": "4.0",
       "symbol": "SQLAppE2EFullTest"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "auth_credentials_strategy is deprecated; use a strategy built from your app's own credential model \u2014 it generates the v2 server's credential dict. Will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
+      "removal_version": "4.0",
+      "symbol": "auth_credentials_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "event_data_strategy is deprecated; use a strategy built from application_sdk.handler.contracts.CloudEventEnvelope \u2014 it generates the v2 server's Dapr event payload. Will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
+      "removal_version": "4.0",
+      "symbol": "event_data_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "metadata_strategy is deprecated; use a strategy built from your app's own metadata model \u2014 it generates the v2 server's include/exclude-filter dict. Will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
+      "removal_version": "4.0",
+      "symbol": "metadata_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "payload_strategy is deprecated; use a strategy built from your app's typed Input contract \u2014 it generates the v2 server's credentials+metadata payload. Will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
+      "removal_version": "4.0",
+      "symbol": "payload_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "workflow_event_strategy is deprecated; use a strategy built from your app's own event model \u2014 it generates the v2 server's workflow-start Event. Will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
+      "removal_version": "4.0",
+      "symbol": "workflow_event_strategy"
     },
     {
       "kind": "class",
