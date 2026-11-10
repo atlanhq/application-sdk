@@ -230,7 +230,12 @@ def gateway_cost(header: str | None, usage: dict[str, Any]) -> float | None:
     """What the gateway's price header charges for `usage`; None when the header
     is absent or unreadable (the list price in config is booked instead). On the
     OpenAI route `prompt_tokens` already counts the cached tokens. A cache rate
-    the header omits falls back to the input rate, never to free."""
+    the header omits falls back to the input rate, never to free.
+
+    The usage does not say which uncached prompt tokens were written to the
+    cache, so when the header prices `cache_write` above `input` every uncached
+    prompt token is booked at the write rate: the ledger may overstate a call,
+    never understate it, so the per-PR cap still holds."""
     try:
         raw = json.loads(header) if header else None
     except ValueError:
@@ -246,8 +251,10 @@ def gateway_cost(header: str | None, usage: dict[str, Any]) -> float | None:
     cached = int(details.get("cached_tokens") or 0)
     out = int(usage.get("completion_tokens") or 0)
     rate_cached = _rate(price, "cache_read")
+    rate_write = _rate(price, "cache_write")
+    rate_uncached = rate_in if rate_write is None else max(rate_in, rate_write)
     return (
-        max(prompt - cached, 0) * rate_in
+        max(prompt - cached, 0) * rate_uncached
         + cached * (rate_in if rate_cached is None else rate_cached)
         + out * rate_out
     ) / 1e6

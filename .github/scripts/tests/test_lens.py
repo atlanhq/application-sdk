@@ -630,6 +630,21 @@ def test_cost_is_priced_from_the_gateway_header_with_cached_tokens_at_the_cache_
         assert gateway_cost(bad, usage) is None
 
 
+def test_gateway_cost_books_uncached_prompt_tokens_at_the_cache_write_rate():
+    usage = {
+        "prompt_tokens": 1_000_000,
+        "completion_tokens": 0,
+        "prompt_tokens_details": {"cached_tokens": 0},
+    }
+    header = json.dumps(
+        {"input": 0.10, "output": 1.0, "cache_read": 0.01, "cache_write": 0.125}
+    )
+    assert gateway_cost(header, usage) == pytest.approx(0.125)
+    # A write rate below input never discounts the uncached tokens.
+    cheap_write = json.dumps({"input": 0.10, "output": 1.0, "cache_write": 0.05})
+    assert gateway_cost(cheap_write, usage) == pytest.approx(0.10)
+
+
 def test_no_price_header_books_the_list_price():
     led = Ledger(cap_usd=1)
     body = json.loads(response()[2])
