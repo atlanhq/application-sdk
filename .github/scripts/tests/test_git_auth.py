@@ -127,6 +127,67 @@ def test_referenced_repos_ignores_commented_out_sources(tmp_path: Path) -> None:
     assert git_auth.referenced_repos(tmp_path) == ["live-dep"]
 
 
+def test_referenced_repos_reads_hosted_api_app_pins(tmp_path: Path) -> None:
+    """common-app-server's image build clones every ``repo`` in
+    hosted-api-apps.toml, and uv.lock only sees them as path dependencies."""
+    (tmp_path / "uv.lock").write_text(
+        'source = { git = "https://github.com/atlanhq/locked-dep?rev=abc#abc" }\n'
+    )
+    (tmp_path / "hosted-api-apps.toml").write_text(
+        "# [apps.example]\n"
+        '# repo = "atlanhq/commented-app"\n'
+        "[sdk]\n"
+        'repo = "atlanhq/application-sdk"\n'
+        "[apps.one]\n"
+        'repo = "atlanhq/hosted-app"\n'
+        'tag = "v1.0.0"\n'
+        "[apps.other]\n"
+        'repo = "someone-else/other-app"\n'
+    )
+    # Only that file is read for `repo =` keys.
+    (tmp_path / "pyproject.toml").write_text('repo = "atlanhq/not-a-dep"\n')
+    assert git_auth.referenced_repos(tmp_path) == [
+        "application-sdk",
+        "hosted-app",
+        "locked-dep",
+    ]
+
+
+def test_hosted_api_app_pins_ignore_repo_text_outside_the_pin_tables(
+    tmp_path: Path,
+) -> None:
+    """Only the ``repo`` key of ``[sdk]`` and ``[apps.<name>]`` counts: a
+    ``repo = ...`` line inside a multiline string, or under any other table,
+    must not widen the token's scope (lens F-77addf)."""
+    (tmp_path / "hosted-api-apps.toml").write_text(
+        'notes = """\n'
+        'repo = "atlanhq/inside-a-string"\n'
+        '"""\n'
+        "[other]\n"
+        'repo = "atlanhq/other-table"\n'
+        "[apps.one]\n"
+        'repo = "atlanhq/hosted-app"\n'
+        'description = """\n'
+        'repo = "atlanhq/inside-an-app-string"\n'
+        '"""\n'
+        "[apps.two]\n"
+        'repo = "atlanhq/../escape"\n'
+    )
+    assert git_auth.referenced_repos(tmp_path) == ["hosted-app"]
+
+
+def test_unparseable_hosted_api_apps_adds_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "hosted-api-apps.toml").write_text(
+        '[apps.one]\nrepo = "atlanhq/hosted-app"\nrepo = "atlanhq/duplicate-key"\n'
+    )
+    assert git_auth.referenced_repos(tmp_path) == []
+    assert (
+        "::warning title=Unreadable hosted-api-apps.toml::" in capsys.readouterr().out
+    )
+
+
 def test_private_repos_drops_the_public_ones(tmp_path: Path) -> None:
     (tmp_path / "uv.lock").write_text(
         'source = { git = "https://github.com/atlanhq/application-sdk?tag=v3#a" }\n'
