@@ -4,8 +4,8 @@ from unittest.mock import mock_open, patch
 import pyarrow as pa
 import pytest
 
+from application_sdk.common.yaml_templates import flatten_yaml_columns
 from application_sdk.transformers import query as query_module
-from application_sdk.transformers.common.utils import flatten_yaml_columns
 from application_sdk.transformers.query import QueryBasedTransformer
 from application_sdk.transformers.query.errors import (
     BuildStructLevelRequiredError,

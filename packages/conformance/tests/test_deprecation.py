@@ -347,6 +347,68 @@ def test_b001_real_manifest_flags_transformer_interface_import() -> None:
     assert ids == ["B001"]
 
 
+@pytest.mark.parametrize(
+    ("src", "target"),
+    [
+        (
+            "from application_sdk.transformers.common.utils import "
+            "get_yaml_query_template_path_mappings\n",
+            "application_sdk.common.yaml_templates.yaml_template_paths",
+        ),
+        (
+            "from application_sdk.transformers.common.utils import "
+            "flatten_yaml_columns\n",
+            "application_sdk.common.yaml_templates.flatten_yaml_columns",
+        ),
+        (
+            "from application_sdk.transformers.common.utils import "
+            "build_atlas_qualified_name\n",
+            "creator(",
+        ),
+        (
+            "from application_sdk.transformers.common.last_sync import "
+            "LastSyncDetails\n",
+            "application_sdk.common.last_sync.LastSyncDetails",
+        ),
+        (
+            "from application_sdk.transformers.errors import "
+            "TransformerNotImplementedError\n",
+            "application_sdk.errors.UnimplementedError",
+        ),
+    ],
+)
+def test_b001_real_manifest_flags_transformer_helper_modules(
+    src: str, target: str
+) -> None:
+    """FND-4690: the transformers helper modules reach the fleet through B001.
+
+    ``transformers.common.utils``, ``transformers.common.last_sync`` and
+    ``transformers.errors`` were absent from the manifest while 17 apps
+    imported them, so the v4.0 removal of ``transformers/`` would have broken
+    those apps with no prior finding. Each finding names the replacement.
+    """
+    tree, directives = _tree_and_directives(src)
+    findings = scan_consumer(tree, "app/x.py", load_manifest(), directives)
+    assert [f.rule_id for f in findings] == ["B001"]
+    assert target in findings[0].message
+    assert "v4.0" in findings[0].message
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "from application_sdk.common.yaml_templates import flatten_yaml_columns\n",
+        "from application_sdk.common.yaml_templates import yaml_template_paths\n",
+        "from application_sdk.common.last_sync import LastSyncDetails\n",
+    ],
+)
+def test_b001_real_manifest_silent_on_rehomed_transformer_helpers(src: str) -> None:
+    """The re-homed names share the deprecated names; module-aware matching
+    must leave the migration target itself unflagged."""
+    tree, directives = _tree_and_directives(src)
+    assert scan_consumer(tree, "app/x.py", load_manifest(), directives) == []
+
+
 def test_b001_real_manifest_transformer_suppressible() -> None:
     """A justified inline suppression silences the transformer finding (and is
     still emitted to SARIF in its own category by the runner)."""

@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.55.3
-source-sha:    39213d0f1807839a42b6cd183e7b10eadf254d75
-source-date:   2026-11-10T14:20:38Z
+source-sha:    fc575c9f15574a9447bc3162726abec87685629e
+source-date:   2026-11-10T18:13:16Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 48 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 56 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 58 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 46 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
@@ -714,6 +714,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Merge a nested-format entity's relationship refs into ``attributes``.
 - **Defined in:** `application_sdk/common/entity_envelope.py`
 
+#### `flatten_yaml_columns`
+
+- **Import:** `from application_sdk.common.yaml_templates import flatten_yaml_columns`
+- **Signature:** `flatten_yaml_columns(nested: dict[str, Any], parent_key: str = '', sep: str = '.') -> list[dict[str, Any]]`
+- **Summary:** Flatten a template's nested ``columns:`` mapping into a list of columns.
+- **Defined in:** `application_sdk/common/yaml_templates.py`
+
 #### `get_actual_cpu_count`
 
 - **Import:** `from application_sdk.common import get_actual_cpu_count`
@@ -853,6 +860,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `to_atlas_format_dict(asset: object) -> dict[str, Any] | None`
 - **Summary:** ``pyatlan_v9.to_atlas_format(asset)``, or ``None`` if it doesn't apply.
 - **Defined in:** `application_sdk/common/entity_envelope.py`
+
+#### `yaml_template_paths`
+
+- **Import:** `from application_sdk.common.yaml_templates import yaml_template_paths`
+- **Signature:** `yaml_template_paths(templates_path: str, assets: list[str] | None = None) -> dict[str, str]`
+- **Summary:** Map each YAML template under *templates_path* to its file path.
+- **Defined in:** `application_sdk/common/yaml_templates.py`
 
 ### Constants and Enums
 

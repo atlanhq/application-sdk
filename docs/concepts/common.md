@@ -668,6 +668,10 @@ The return type is a typed model rather than a `Mapping[str, Any]` deliberately.
 | `get_actual_cpu_count()` | `application_sdk.common` | CPU count respecting container limits |
 | `get_safe_num_threads()` | `application_sdk.common` | Reasonable thread count for parallel work (`cpu_count * 2`, min 2) |
 | `parse_credentials_extra(credentials)` | `application_sdk.credentials` | Parse the `extra` JSON field in a credentials dict |
+| `yaml_template_paths(templates_path, assets=None)` | `application_sdk.common.yaml_templates` | Map each `*.yaml` template under an app's directory (recursive) to its path, keyed by upper-cased basename (`table.yaml` → `"TABLE"`); `assets` filters the keys |
+| `flatten_yaml_columns(nested)` | `application_sdk.common.yaml_templates` | Flatten a template's nested `columns:` mapping into one dict per leaf column with a dotted `name` |
+
+The two YAML-template helpers moved here from the deprecated `application_sdk.transformers.common.utils`, for apps that run their own templates through an app-side applier. `yaml_template_paths` resolves only the directory it is given: unlike `get_yaml_query_template_path_mappings`, it does not merge in the SQL templates bundled with `QueryBasedTransformer`, which are removed with it in v4.0. Copy any of those you rely on into your app.
 
 ## Temporal Configuration
 
