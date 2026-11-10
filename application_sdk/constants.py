@@ -300,6 +300,13 @@ _DEFAULT_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS = 35.0
 # Headroom kept back from the grace for what runs after the Python process
 # exits: the entrypoint stops daprd for up to DAPR_STOP_TIMEOUT_SECONDS (30 s).
 _SHUTDOWN_HEADROOM_CAP_SECONDS = 30
+# The least the drain ever leaves for the steps after it, so the observability
+# flush (10 s bound) still has a chance when the drain takes almost the whole
+# grace.
+_MIN_SHUTDOWN_TAIL_SECONDS = 10
+# Read here as well as in ExecutionSettings because the tail after the drain is
+# whatever the drain leaves; an explicit drain changes that remainder.
+_DRAIN_ENV = "TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT"
 
 
 @dataclass(frozen=True)
@@ -311,8 +318,12 @@ class ShutdownBudget:
     (``drain_seconds``), then everything after the drain under one deadline
     (``post_drain_seconds``) — the Pushgateway final push, pre-DELETE hold and
     DELETE, closing infrastructure, the observability flush and interpreter exit
-    hooks. ``headroom_seconds`` is left over for daprd's stop after the process
-    exits, so the sum never reaches the grace and SIGKILL never lands mid-step.
+    hooks. ``headroom_seconds`` is left for daprd's stop after the process exits.
+
+    The drain comes first. In-flight activities are the only step whose loss is
+    not best-effort, and daprd stays up for the whole drain (the entrypoint only
+    stops it after Python exits), so activities keep Dapr access to the end.
+    The steps after the drain take what is left.
     """
 
     grace_seconds: int
@@ -324,35 +335,54 @@ class ShutdownBudget:
 
 
 def derive_shutdown_budget(
-    grace_seconds: int, drain_delay_seconds: float = SHUTDOWN_DRAIN_DELAY_SECONDS
+    grace_seconds: int,
+    drain_delay_seconds: float = SHUTDOWN_DRAIN_DELAY_SECONDS,
+    preferred_drain_seconds: int = _DEFAULT_DRAIN_SECONDS,
 ) -> ShutdownBudget:
-    """Split a pod grace period into the bounds each shutdown step gets.
+    """Split a pod grace period into the bounds each shutdown step gets, drain first.
 
-    The post-drain deadline takes a quarter of the grace and the headroom a
-    tenth, each capped at its fixed default (120 s, 30 s); the drain gets the
-    rest. Inside the post-drain deadline the Pushgateway gets at most half:
-    per-call HTTP timeout ≤ 1/8 of it (two calls), the pre-DELETE hold the
-    remainder of that half. A 12 h grace therefore keeps the 120/10/35 s
-    defaults and drains for ~12 h; a 30 s grace drains for 15 s.
+    The tail after the drain would ideally get a post-drain deadline of a
+    quarter of the grace and daprd headroom of a tenth, capped at 120 s and
+    30 s. It never takes that from a drain of up to ``preferred_drain_seconds``
+    (the explicit or default drain): it then gets only what the grace leaves
+    beyond that drain, and never less than 10 s. The drain gets the rest. Inside
+    the tail, daprd gets up to a quarter (capped at 30 s) and the post-drain
+    deadline the remainder (capped at 120 s). The Pushgateway gets at most half
+    of the post-drain deadline: per-call HTTP timeout ≤ 1/8 of it (two calls),
+    the pre-DELETE hold the rest of that half.
+
+    So a 12 h grace keeps the 120/10/35 s defaults and drains for ~12 h; a
+    3660 s grace keeps the full 3600 s drain and squeezes the 55 s left over; a
+    30 s grace drains for 15 s.
 
     Raises:
         ValueError: The grace is shorter than the drain delay plus a 1 s
             post-drain deadline, so no split can fit inside it.
     """
     grace = max(0, grace_seconds)
+    delay = math.ceil(drain_delay_seconds)
     # The drain delay and a 1 s post-drain deadline are fixed costs: below
     # their sum no split fits the grace, and a drain of 0 would still leave
     # SIGKILL landing before the worker reached Temporal's shutdown.
-    minimum = math.ceil(drain_delay_seconds) + 1
+    minimum = delay + 1
     if grace < minimum:
         raise ValueError(
             f"grace of {grace}s cannot fit the {drain_delay_seconds}s drain delay "
             f"and a 1s post-drain deadline; it must be at least {minimum}s"
         )
-    headroom = min(_SHUTDOWN_HEADROOM_CAP_SECONDS, grace // 10)
+    ideal_tail = min(_DEFAULT_POST_DRAIN_SECONDS, grace // 4) + min(
+        _SHUTDOWN_HEADROOM_CAP_SECONDS, grace // 10
+    )
+    beyond_preferred_drain = grace - delay - max(0, preferred_drain_seconds)
+    tail = min(
+        ideal_tail,
+        max(min(ideal_tail, _MIN_SHUTDOWN_TAIL_SECONDS), beyond_preferred_drain),
+    )
     # Never 0: a non-positive post-drain timeout disables the deadline.
-    post_drain = max(1, min(_DEFAULT_POST_DRAIN_SECONDS, grace // 4))
-    drain = max(0, grace - math.ceil(drain_delay_seconds) - post_drain - headroom)
+    tail = min(max(1, tail), grace - delay)
+    headroom = min(_SHUTDOWN_HEADROOM_CAP_SECONDS, tail // 4)
+    post_drain = max(1, min(_DEFAULT_POST_DRAIN_SECONDS, tail - headroom))
+    drain = max(0, grace - delay - post_drain - headroom)
     http_timeout = min(_DEFAULT_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS, post_drain / 8)
     delete_delay = max(
         0.0,
@@ -369,6 +399,19 @@ def derive_shutdown_budget(
         pushgateway_http_timeout_seconds=http_timeout,
         pushgateway_shutdown_delete_delay_seconds=delete_delay,
     )
+
+
+def _preferred_drain_seconds() -> int:
+    """The explicit drain if one is set and parses, else the 3600 s default.
+
+    A value that does not parse is left for ``load_execution_settings`` to
+    reject, as it always has; here it only falls back to the default.
+    """
+    raw = os.environ.get(_DRAIN_ENV, "").strip()
+    try:
+        return int(raw) if raw else _DEFAULT_DRAIN_SECONDS
+    except ValueError:
+        return _DEFAULT_DRAIN_SECONDS
 
 
 def load_shutdown_budget() -> ShutdownBudget | None:
@@ -393,7 +436,9 @@ def load_shutdown_budget() -> ShutdownBudget | None:
     if grace <= 0:
         return None
     try:
-        return derive_shutdown_budget(grace)
+        return derive_shutdown_budget(
+            grace, preferred_drain_seconds=_preferred_drain_seconds()
+        )
     except ValueError as exc:
         warnings.warn(
             f"{SHUTDOWN_GRACE_SECONDS_ENV}={grace}: {exc}. Shutdown bounds keep "

@@ -3431,7 +3431,7 @@ class TestPostDrainExitDeadline:
         monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "30")
         timer = _start_post_drain_exit_deadline(exit_fn=MagicMock())
         try:
-            assert timer is not None and timer.interval == 7
+            assert timer is not None and timer.interval == 8
         finally:
             assert timer is not None
             timer.cancel()
@@ -3492,8 +3492,8 @@ class TestLogShutdownBudget:
     def test_overrun_counts_the_daprd_headroom(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """5 s delay + 18 s drain + 7 s post-drain fills a 30 s grace exactly,
-        leaving none of the 3 s kept back for daprd's stop."""
+        """5 s delay + 18 s drain + 8 s post-drain overruns a 30 s grace even
+        before the 2 s kept back for daprd's stop is counted."""
         monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "30")
         monkeypatch.setenv("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", "18")
         monkeypatch.delenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", raising=False)

@@ -199,8 +199,8 @@ class TestShutdownBudget:
         b = derive_shutdown_budget(30, drain_delay_seconds=5)
         assert (b.drain_seconds, b.post_drain_seconds, b.headroom_seconds) == (
             15,
-            7,
-            3,
+            8,
+            2,
         )
         assert 5 + b.drain_seconds + b.post_drain_seconds + b.headroom_seconds <= 30
         # The Pushgateway's stop (hold + two calls) fits in its share of post-drain.
@@ -219,14 +219,47 @@ class TestShutdownBudget:
         assert b.pushgateway_shutdown_delete_delay_seconds == 35
         assert b.drain_seconds == 43230 - 5 - 120 - 30
 
+    def test_grace_just_above_the_default_drain_keeps_the_full_drain(self) -> None:
+        """The deleted SDK chart paired a 3660 s grace with the 3600 s drain.
+        Declaring that grace must not shorten the drain: the steps after it are
+        best-effort and shrink into the 55 s left instead."""
+        b = derive_shutdown_budget(3660, drain_delay_seconds=5)
+        assert b.drain_seconds == 3600
+        assert 5 + b.drain_seconds + b.post_drain_seconds + b.headroom_seconds == 3660
+        assert b.pushgateway_shutdown_delete_delay_seconds < 35
+
+    def test_tail_never_drops_below_its_floor_to_feed_the_drain(self) -> None:
+        """A 600 s grace cannot hold the 3600 s drain, so it drains for all but
+        the 10 s floor after it."""
+        b = derive_shutdown_budget(600, drain_delay_seconds=5)
+        assert b.drain_seconds == 585
+        assert b.post_drain_seconds + b.headroom_seconds == 10
+
+    def test_explicit_drain_sets_what_the_tail_gets(self) -> None:
+        """With an explicit 600 s drain, a 3660 s grace has room for the full
+        default tail, so it is not squeezed."""
+        b = derive_shutdown_budget(
+            3660, drain_delay_seconds=5, preferred_drain_seconds=600
+        )
+        assert (b.post_drain_seconds, b.headroom_seconds) == (120, 30)
+
     @pytest.mark.parametrize("grace", [1, 4, 30, 60, 600, 3600, 43230, 86400])
     def test_bounds_never_exceed_grace(self, grace: int) -> None:
         b = derive_shutdown_budget(grace, drain_delay_seconds=0)
         assert b.post_drain_seconds >= 1  # 0 would disable the deadline
         assert b.drain_seconds >= 0
         assert b.pushgateway_shutdown_delete_delay_seconds >= 0
-        if grace >= 4:
-            assert b.drain_seconds + b.post_drain_seconds + b.headroom_seconds <= grace
+        assert b.drain_seconds + b.post_drain_seconds + b.headroom_seconds <= grace
+        if grace >= 6:
+            b5 = derive_shutdown_budget(grace, drain_delay_seconds=5)
+            assert (
+                5 + b5.drain_seconds + b5.post_drain_seconds + b5.headroom_seconds
+                <= grace
+            )
+            # Drain first: never shorter than the default whenever the grace
+            # can hold it alongside the 10 s tail floor.
+            if grace >= 5 + 3600 + 10:
+                assert b5.drain_seconds >= 3600
 
     def test_grace_too_short_for_the_drain_delay_is_rejected(self) -> None:
         """A 1 s grace cannot even cover the 5 s delay before Temporal shutdown."""
@@ -265,6 +298,14 @@ class TestShutdownBudget:
         expected = derive_shutdown_budget(43230).drain_seconds
         assert load_execution_settings().graceful_shutdown_timeout_seconds == expected
         assert expected > 3600
+
+    def test_explicit_drain_feeds_the_derived_tail(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", "600")
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "3660")
+        budget = load_shutdown_budget()
+        assert budget is not None and budget.post_drain_seconds == 120
 
     def test_explicit_drain_beats_grace(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", "7200")
