@@ -1034,6 +1034,51 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # Private atlanhq git deps, as in the unit job: the member's wheel
+      # carries the app's git requirements, so `uv pip install` below clones
+      # them. The token only reaches git_auth.py's mirror clones (FND-4740).
+      - name: Checkout SDK git_auth.py (private git deps)
+        if: inputs.private-git-deps
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/git_auth.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-git-auth
+          persist-credentials: false
+
+      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
+        id: git-deps-repos
+        if: inputs.private-git-deps
+        run: |
+          set -euo pipefail
+          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
+          rm -rf .sdk-git-auth
+
+      - name: Mint read-only token for private git dependencies
+        id: git-deps-token
+        if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != ''
+        # A failed mint leaves the token empty; see the guard below.
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
+          # workflow's own commit, never the PR's tree.
+          repositories: ${{ steps.git-deps-repos.outputs.repositories }}
+          permission-contents: read
+
+      # The condition stays in `if:`, never in the shell (docs/standards/ci.md).
+      - name: Require the token when private-git-deps is set
+        if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != '' && steps.git-deps-token.outputs.token == ''
+        run: |
+          echo "::error title=No token for private git dependencies::private-git-deps is true but the fleet App token did not mint. Pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (secrets: inherit, or name both in an explicit secrets: mapping)."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
@@ -1052,6 +1097,17 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.7"
+
+      # The only step that holds the token: it mirror-clones the private deps
+      # into $RUNNER_TEMP/git-mirrors and exits, so no build backend uv runs
+      # below can read it.
+      - name: Mirror private git dependencies
+        if: inputs.private-git-deps
+        env:
+          GIT_TOKEN: ${{ steps.git-deps-token.outputs.token }}
+          PRIVATE_GIT_DEPS: "true"
+        run: python3 application-sdk-scripts/.github/scripts/git_auth.py mirror
+
       - name: Install the api member alone and mount it like the host
         env:
           MEMBER: ${{ needs.detect-api-member.outputs.member }}
@@ -1067,7 +1123,10 @@ jobs:
           # httpx2 is starlette's TestClient transport (the probe mounts the app
           # with it). Pinned exactly so every app's CI runs the same client; bump
           # to a release public >= 7 days (org dependency cooldown).
-          uv pip install --python .venv-api dist-api/*.whl httpx2==2.13.1
+          # Through git_auth.py: private git deps come from the mirrors, with
+          # no token here; without mirrors it installs exactly as before.
+          python3 application-sdk-scripts/.github/scripts/git_auth.py run -- \
+            uv pip install --python .venv-api dist-api/*.whl httpx2==2.13.1
           .venv-api/bin/python application-sdk-scripts/.github/scripts/probe_app_api_member.py \
             --name "$APP_NAME" --package "$PACKAGE" --object "$OBJECT"
 
