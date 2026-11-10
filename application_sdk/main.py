@@ -1416,7 +1416,7 @@ async def _observe_worker_poll_state(
     health_server: Any = None,
     interval: float = 0,
 ) -> None:
-    """Log whether this worker is actually polling, and never act on it.
+    """Log whether this worker is actually polling, and feed the ``/live`` probe.
 
     A worker can be alive, healthy on every probe, refreshing its Temporal token
     — and have zero pollers on its task queue, doing no work until a human
@@ -1432,11 +1432,13 @@ async def _observe_worker_poll_state(
        nothing in-process can be made to observe it after the fact.
 
     This observer records the evidence that tells them apart — sdk-core's live
-    poller gauge alongside the fatal count — and deliberately draws no
-    conclusion: it never raises, never restarts the worker, and never flips a
-    probe. The mechanism has not been established on a live tenant yet, and a
-    remedy built on the wrong one either tears down healthy workers or hides the
-    outage behind a self-healing loop that cannot heal it.
+    poller gauge alongside the fatal count. It never raises and never restarts
+    the worker in-process: a remedy built on the wrong mechanism either tears
+    down healthy workers or hides the outage behind a self-healing loop that
+    cannot heal it. Instead the readings go to the health server, whose ``/live``
+    probe fails on a sustained definitive zero or an unrecovered fatal
+    (FND-4641), so the pod restart policy — which works whichever mechanism
+    applies — does the recovery.
 
     Logs a transition rather than every reading, so a long-running worker stays
     quiet until something changes: an active-pollers reading is an INFO on change,
@@ -1565,9 +1567,9 @@ async def _run_worker_with_restart(
             that never finishes — see ``_FatalTeardownWatchdog``.
     """
     # Runs for the whole supervised lifetime, across worker rebuilds, so a
-    # rebuilt worker that comes back without pollers is still observed. Purely
-    # observational — it never raises and never restarts anything, so it is not
-    # raced against the worker.
+    # rebuilt worker that comes back without pollers is still observed. It never
+    # raises and never restarts anything (its readings reach /live via the
+    # health server), so it is not raced against the worker.
     observer = asyncio.ensure_future(
         _observe_worker_poll_state(
             shutdown_event=shutdown_event,
@@ -2664,6 +2666,12 @@ Environment Variables:
                            When >0, /live fails if no worker activity within the window.
                            Enable only for continuously-busy queues; a positive value
                            false-positives on legitimately idle queues.
+  ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS
+                           Consecutive zero-poller readings before /live fails
+                           (default: 5; 0 = disabled).
+  ATLAN_WORKER_LIVENESS_FATAL_RECOVERY_SECONDS
+                           Seconds a fatal poll error may go without the worker
+                           polling again before /live fails (default: 600; 0 = disabled).
   ATLAN_LOG_LEVEL          Log level (default: INFO)
                            Falls back to LOG_LEVEL (v2)
 

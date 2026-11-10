@@ -33,8 +33,33 @@ These are registered automatically. No configuration is needed.
 ### Worker liveness window
 
 In worker and combined mode the SDK also runs a `WorkerHealthServer` that
-exposes `/health`, `/ready`, and `/live`. By default `/live` always returns
-healthy. Setting `ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS` to a positive value
+exposes `/health`, `/ready`, and `/live`.
+
+#### Poll-loop checks (on by default)
+
+`/live` returns 503 when the worker is alive but its Temporal poll loop is
+confirmed dead (FND-4641). Kubernetes then restarts the pod, which recovers a
+worker that the in-process restart supervisor and fatal-teardown watchdog could
+not. Two conditions trip it:
+
+| Condition | Default | Opt-out |
+|---|---|---|
+| sdk-core's poller gauge reads a definitive zero for N consecutive observer readings | N = 5 (about 5 minutes at the 60s interval) | `ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS=0` |
+| A fatal poll error is followed by no `polling` reading within the bound | 600 seconds | `ATLAN_WORKER_LIVENESS_FATAL_RECOVERY_SECONDS=0` |
+
+The zero-poller check does not false-positive on an idle queue: an idle worker
+still reads its configured poller count. An `unknown` reading (gauge
+unreadable) resets the count rather than adding to it. The fatal check is
+cleared by the first `polling` reading after the fatal, which the supervisor
+produces when it rebuilds a worker that polls again. When the gauge cannot be
+read at all (Prometheus exporter or observer disabled), no recovery is visible,
+so a fatal restarts the pod after the bound even if the supervisor recovered in
+process. The 503 body carries the poller counts, fatal count and
+`fatal_unrecovered_since` for diagnosis.
+
+#### Idle window (off by default)
+
+Setting `ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS` to a positive value
 makes `/live` fail once no worker activity (an activity execution or heartbeat)
 has been recorded within that window, so a Kubernetes `livenessProbe` can
 recycle a worker whose Temporal poll loop has silently parked while `run()`
