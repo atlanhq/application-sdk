@@ -2294,6 +2294,9 @@ class TestRunCombinedMode:
         kwargs = combined_patches["create_svc"].call_args.kwargs
         assert kwargs["enable_temporal_core_metrics"] is True
         assert kwargs["prometheus_bind_address"] == "127.0.0.1:9464"
+        # FND-4644: the handler port's /ready mirrors the co-hosted worker's
+        # health server, so both ports give one answer about the pod.
+        assert kwargs["worker_health"] is combined_patches["health"].return_value
         combined_patches["uvicorn_server"].serve.assert_awaited()
         combined_patches["close_infra"].assert_awaited_once()
 

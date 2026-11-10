@@ -16,7 +16,7 @@ Routes:
     POST /workflows/v1/config/{config_id} - Update workflow config
     POST /workflows/v1/file - Upload file to object storage
     GET  /health - Health check (k8s liveness probe)
-    GET  /server/ready - Readiness probe
+    GET  /server/ready - Readiness probe (the co-hosted worker's readiness in combined mode)
     GET  /metrics - Prometheus metrics endpoint (when enabled)
     GET  / - Serve frontend UI (app/generated/frontend/static/index.html)
 
@@ -267,6 +267,7 @@ if TYPE_CHECKING:
 
     from application_sdk.app.base import App
     from application_sdk.infrastructure.secrets import SecretStore
+    from application_sdk.server.health import WorkerHealthServer
 
 
 # ---------------------------------------------------------------------------
@@ -1882,6 +1883,7 @@ def create_app_handler_service(
     enable_temporal_core_metrics: bool = True,
     prometheus_bind_address: str = "",
     workflow_max_timeout_hours: int | None = None,
+    worker_health: WorkerHealthServer | None = None,
     # Deprecated: state_store is no longer used. Credential resolution now
     # goes through DaprCredentialVault exclusively. Passing this parameter
     # emits a DeprecationWarning. Will be removed in v3.2.0.
@@ -1924,6 +1926,11 @@ def create_app_handler_service(
             default applies. Reads ``ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS`` env var
             when constructed via :class:`AppConfig`; non-positive values are
             treated as ``None`` with a boot-time warning.
+        worker_health: The co-hosted worker's health server, in combined mode.
+            When set, ``/ready`` and ``/server/ready`` answer with the worker's
+            readiness (:meth:`WorkerHealthServer.check_ready`, 503 when not
+            ready), so both ports give one answer about the pod. ``None`` (the
+            default, handler-only mode) keeps the static ``{"status": "ok"}``.
 
     Returns:
         Configured FastAPI application.
@@ -2105,8 +2112,16 @@ def create_app_handler_service(
 
     @app.get("/ready")
     @app.get("/server/ready")
-    async def ready() -> dict[str, str]:
-        return {"status": "ok"}
+    async def ready() -> Response:
+        # Combined mode: one probe model per pod. The worker port's /ready is the
+        # source of truth; this port mirrors it rather than answering on its own.
+        if worker_health is None:
+            return JSONResponse({"status": "ok"})
+        status = await worker_health.check_ready()
+        return JSONResponse(
+            status.to_dict(),
+            status_code=200 if status.healthy else 503,
+        )
 
     # ------------------------------------------------------------------
     # Prometheus metrics
