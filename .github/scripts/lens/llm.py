@@ -1,9 +1,9 @@
-"""The one way lens talks to a model: Atlan Model Gateway's OpenAI-compatible
-`/v1/responses` (or `/v1/chat/completions`), with the spend cap enforced here in code.
+"""The one way lens talks to a model: LiteLLM's OpenAI-compatible
+`/chat/completions`, with the spend cap enforced here in code.
 
 Every call is priced BEFORE it is sent (prompt estimate × input price +
 `max_tokens` × output price) and refused if it could take the run past its
-budget; the actual cost the gateway reports (or the list-price cost) is then booked. A prompt cannot talk
+budget; the actual cost LiteLLM reports is then booked. A prompt cannot talk
 its way past this, and neither can a model that keeps calling tools.
 
 Retries are for transport weather only — 5xx, a rate-limit 429, a timeout —
@@ -21,10 +21,9 @@ import sys
 import threading
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any
 
 
 class LLMError(RuntimeError):
@@ -177,15 +176,6 @@ class Completion:
     message: dict[str, Any]
 
 
-# Model Gateway names why it refused in `error.reason`. A 429 is either a spent
-# budget (never clears before the monthly reset) or a rate limit (retry).
-_BUDGET_REASONS = frozenset({"budget_exceeded"})
-_RETRYABLE_REASONS = frozenset({"metering_rate_limited", "provider_throttled"})
-
-# The gateway's spend endpoint, relative to the gateway's origin (not the /openai base).
-BUDGET_PATH = "/registry/v1/policies/effective?meter=model.cost"
-NANO_USD = 1e9
-
 _BUDGET_MARKERS = (
     "budget",
     "spend cap",
@@ -195,90 +185,9 @@ _BUDGET_MARKERS = (
 )
 
 
-def _error_reason(body: str) -> str:
-    try:
-        err = json.loads(body).get("error") or {}
-    except (ValueError, AttributeError):
-        return ""
-    if not isinstance(err, dict):
-        return ""
-    fields = cast(dict[str, Any], err)
-    return str(fields.get("reason") or fields.get("code") or "")
-
-
 def _is_budget_error(body: str) -> bool:
-    reason = _error_reason(body)
-    if reason in _BUDGET_REASONS:
-        return True
-    if reason in _RETRYABLE_REASONS:
-        return False
     low = body.lower()
     return any(m in low for m in _BUDGET_MARKERS)
-
-
-# Model Gateway prices every response in this header: USD per million tokens,
-# `input`/`output` always, `cache_read`/`cache_write` when the model has them.
-PRICE_HEADER = "x-gateway-model-price"
-
-
-def _rate(price: dict[str, Any], name: str) -> float | None:
-    v = price.get(name)
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
-
-
-def gateway_cost(header: str | None, usage: dict[str, Any]) -> float | None:
-    """What the gateway's price header charges for `usage`; None when the header
-    is absent or unreadable (the list price in config is booked instead). On the
-    OpenAI route `prompt_tokens` already counts the cached tokens. A cache rate
-    the header omits falls back to the input rate, never to free.
-
-    The usage does not say which uncached prompt tokens were written to the
-    cache, so when the header prices `cache_write` above `input` every uncached
-    prompt token is booked at the write rate: the ledger may overstate a call,
-    never understate it, so the per-PR cap still holds."""
-    try:
-        raw = json.loads(header) if header else None
-    except ValueError:
-        return None
-    if not isinstance(raw, dict):
-        return None
-    price = cast(dict[str, Any], raw)
-    rate_in, rate_out = _rate(price, "input"), _rate(price, "output")
-    if rate_in is None or rate_out is None:
-        return None
-    prompt = int(usage.get("prompt_tokens") or 0)
-    details = cast(dict[str, Any], usage.get("prompt_tokens_details") or {})
-    cached = int(details.get("cached_tokens") or 0)
-    out = int(usage.get("completion_tokens") or 0)
-    rate_cached = _rate(price, "cache_read")
-    rate_write = _rate(price, "cache_write")
-    rate_uncached = rate_in if rate_write is None else max(rate_in, rate_write)
-    return (
-        max(prompt - cached, 0) * rate_uncached
-        + cached * (rate_in if rate_cached is None else rate_cached)
-        + out * rate_out
-    ) / 1e6
-
-
-def _least_remaining(data: Any) -> float | None:
-    """The smallest `remaining` (nano-USD) across every budget that applies to
-    the key, wherever the policies response nests them; None if it names none."""
-    found: list[float] = []
-
-    def walk(node: Any) -> None:
-        if isinstance(node, dict):
-            obj = cast(dict[str, Any], node)
-            v = obj.get("remaining")
-            if isinstance(v, (int, float)) and not isinstance(v, bool):
-                found.append(float(v))
-            for child in obj.values():
-                walk(child)
-        elif isinstance(node, list):
-            for child in cast(list[Any], node):
-                walk(child)
-
-    walk(data)
-    return min(found) if found else None
 
 
 class Client:
@@ -327,10 +236,15 @@ class Client:
         self.model = model
         self.price = price
         self.ledger = ledger
-        self.base_url = (
-            base_url or os.environ.get("MODEL_GATEWAY_BASE_URL") or ""
-        ).rstrip("/")
-        self.api_key = api_key or os.environ.get("LENS_GATEWAY_KEY") or ""
+        self.base_url = (base_url or os.environ.get("LITELLM_BASE_URL") or "").rstrip(
+            "/"
+        )
+        self.api_key = (
+            api_key
+            or os.environ.get("LENS_LITELLM_KEY")
+            or os.environ.get("LITELLM_API_KEY")
+            or ""
+        )
         self.timeout_s = timeout_s
         self.max_retries = max_retries
         self.max_consecutive_failures = max_consecutive_failures
@@ -394,7 +308,7 @@ class Client:
     def _root(self) -> str:
         if not self.base_url or not self.api_key:
             raise LLMError(
-                "Model Gateway is not configured: set MODEL_GATEWAY_BASE_URL and LENS_GATEWAY_KEY."
+                "LiteLLM is not configured: set LITELLM_BASE_URL and LENS_LITELLM_KEY."
             )
         return self.base_url.removesuffix("/v1")
 
@@ -420,15 +334,9 @@ class Client:
         except urllib.error.HTTPError as e:
             return e.code, dict(e.headers or {}), e.read().decode("utf-8", "replace")
 
-    def _origin(self) -> str:
-        """scheme://host of the gateway: its spend API lives outside the /openai base."""
-        parts = urllib.parse.urlsplit(self._root())
-        return f"{parts.scheme}://{parts.netloc}"
-
     def _http_get(self, path: str) -> tuple[int, str]:
-        url = self._origin() + path if path == BUDGET_PATH else self._root() + path
         req = urllib.request.Request(
-            url,
+            self._root() + path,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "User-Agent": USER_AGENT,
@@ -443,7 +351,7 @@ class Client:
     # ---- preflight: zero-token checks ------------------------------------
     def _diagnose(self, path: str, status: int, text: str) -> None:
         """Record what answered an unexpected preflight status, so a CI failure
-        explains itself: the gateway's JSON error, or an HTML page from an edge
+        explains itself: LiteLLM's JSON error, or an HTML page from an edge
         (e.g. Cloudflare) in front of it. Never the key or the base URL; any
         key-shaped token in the body is redacted."""
         if status in (200, 401):
@@ -452,9 +360,9 @@ class Client:
         if "error code: 1010" in low or "error 1010" in low:
             who = "Cloudflare error 1010 (request signature / User-Agent banned at the edge)"
         elif "cloudflare" in low or "cf-ray" in low:
-            who = "a Cloudflare page (edge block, not the gateway)"
+            who = "a Cloudflare page (edge block, not LiteLLM)"
         elif "<html" in low:
-            who = "an HTML page (an edge or proxy, not the gateway)"
+            who = "an HTML page (an edge or proxy, not LiteLLM)"
         else:
             who = "the gateway's JSON"
         snippet = re.sub(r"sk-[A-Za-z0-9._-]+", "sk-…", " ".join(text.split()))[:160]
@@ -466,12 +374,12 @@ class Client:
         """None when the run may start; otherwise the reason it must not.
 
         Uses only the gateway's metadata endpoints — no completion, no tokens.
-        A check the gateway cannot answer (route missing, no permission) is
+        A check the gateway cannot answer (older LiteLLM, no permission) is
         skipped rather than failed: preflight exists to avoid wasted requests,
         not to add a new way for lens to break.
 
         Only a 401 means the key itself is bad. A 403 on a METADATA route means
-        this key may not call that route (keys can be scoped to the
+        this key may not call that route (LiteLLM keys can be scoped to the
         completion routes) — observed on the first live run, with a key that
         does serve completions. That check is skipped; if completions are
         forbidden too, the first real call fails fast with the gateway's text."""
@@ -481,7 +389,7 @@ class Client:
             return f"gateway unreachable: {e}"
         self._diagnose("/v1/models", status, text)
         if status == 401:
-            return f"the gateway key was rejected (HTTP 401: {text[:160]})"
+            return f"the LiteLLM key was rejected (HTTP 401: {text[:160]})"
         if status == 200:
             try:
                 ids = {m.get("id") for m in json.loads(text).get("data", [])}
@@ -490,17 +398,22 @@ class Client:
             if ids and self.model not in ids:
                 return f"model {self.model!r} is not available to this key"
         try:
-            status, text = self._meta(BUDGET_PATH)
+            status, text = self._meta("/key/info")
         except (TimeoutError, urllib.error.URLError, OSError):
             return None
-        self._diagnose(BUDGET_PATH, status, text)
+        self._diagnose("/key/info", status, text)
         if status == 200:
             try:
-                left = _least_remaining(json.loads(text))
-            except ValueError:
+                info = json.loads(text).get("info") or {}
+            except (ValueError, AttributeError):
                 return None
-            if left is not None and left / NANO_USD < min_budget_usd:
-                return f"the gateway key has ${left / NANO_USD:.2f} of budget left (needs ${min_budget_usd:.2f})"
+            budget, spend = info.get("max_budget"), info.get("spend")
+            if (
+                budget is not None
+                and spend is not None
+                and float(budget) - float(spend) < min_budget_usd
+            ):
+                return f"the gateway key has ${float(budget) - float(spend):.2f} of budget left (needs ${min_budget_usd:.2f})"
         return None
 
     # ---- breaker -------------------------------------------------------
@@ -630,12 +543,7 @@ class Client:
                 self.unsupported.add(p)
                 body.pop(p)
                 return True
-        # Model Gateway hides the provider's message behind `provider_rejected`, so a
-        # refused forced choice does not name `tool_choice`: downgrade once on that too.
-        # A second refusal, with `auto`, is then fatal as before.
-        if body.get("tool_choice") == "required" and (
-            "tool_choice" in low or "provider_rejected" in low
-        ):
+        if body.get("tool_choice") == "required" and "tool_choice" in low:
             self.required_tool_choice_ok = False
             body["tool_choice"] = "auto"
             return True
@@ -817,8 +725,11 @@ class Client:
                     usage = data.get("usage") or {}
                 reported = None
                 for k, v in headers.items():
-                    if k.lower() == PRICE_HEADER:
-                        reported = gateway_cost(v, usage)
+                    if k.lower() == "x-litellm-response-cost":
+                        try:
+                            reported = float(v)
+                        except ValueError:
+                            pass
                 cost = self.actual_cost(usage, reported)
                 self.ledger.book(stage, cost, usage)
                 self._note_call(
