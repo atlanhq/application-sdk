@@ -137,7 +137,8 @@ class TestRunHealthServer:
     @pytest.mark.asyncio
     async def test_run_health_server(self):
         port = _find_free_port()
-        server = await run_health_server(host="127.0.0.1", port=port)
+        with pytest.warns(DeprecationWarning, match="run_health_server"):
+            server = await run_health_server(host="127.0.0.1", port=port)
         try:
             status_code, body = await _http_request("127.0.0.1", port, "GET", "/health")
             assert status_code == 200
@@ -153,9 +154,10 @@ class TestRunHealthServer:
             def identity(self):
                 return "fake"
 
-        server = await run_health_server(
-            host="127.0.0.1", port=port, temporal_client=FakeClient()
-        )
+        with pytest.warns(DeprecationWarning, match="run_health_server"):
+            server = await run_health_server(
+                host="127.0.0.1", port=port, temporal_client=FakeClient()
+            )
         try:
             status_code, body = await _http_request("127.0.0.1", port, "GET", "/ready")
             assert status_code == 200

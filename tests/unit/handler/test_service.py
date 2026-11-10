@@ -48,6 +48,7 @@ from application_sdk.handler.service import (
     _wrap_response,
     create_app_handler_service,
 )
+from application_sdk.server.health import WorkerHealthServer
 from application_sdk.templates.contracts.sql_metadata import (  # entry-point annotations resolve at module level
     ExtractionInput,
     ExtractionOutput,
@@ -309,6 +310,48 @@ class TestHealthEndpoints:
         response = client.get("/ready")
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
+
+
+class TestReadyDelegatesToWorkerHealth:
+    """Combined mode: the handler's /ready mirrors the worker's (FND-4644)."""
+
+    @staticmethod
+    def _client(worker_health: WorkerHealthServer) -> TestClient:
+        app = create_app_handler_service(
+            _TestHandler(), app_name="test-app", worker_health=worker_health
+        )
+        return TestClient(app)
+
+    @pytest.mark.parametrize("path", ["/ready", "/server/ready"])
+    def test_not_ready_worker_returns_503(self, path: str) -> None:
+        # No Temporal client configured: the worker port's /ready is 503.
+        client = self._client(WorkerHealthServer(port=0))
+        response = client.get(path)
+        assert response.status_code == 503
+        body = response.json()
+        assert body["healthy"] is False
+        assert body["message"] == "Temporal client not configured"
+
+    @pytest.mark.parametrize("path", ["/ready", "/server/ready"])
+    def test_ready_worker_returns_worker_body(self, path: str) -> None:
+        class _Client:
+            identity = "worker-1"
+
+        worker_health = WorkerHealthServer(port=0)
+        worker_health.set_temporal_client(_Client())
+        client = self._client(worker_health)
+        response = client.get(path)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["healthy"] is True
+        assert body["details"]["identity"] == "worker-1"
+
+    def test_health_stays_static(self) -> None:
+        # /health is a process-up probe on both ports; only /ready delegates.
+        client = self._client(WorkerHealthServer(port=0))
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "healthy"}
 
 
 class TestAuthEndpoint:

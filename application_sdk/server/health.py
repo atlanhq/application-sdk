@@ -36,6 +36,8 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 from typing import Any, Protocol
 
+from typing_extensions import deprecated
+
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger("health")
@@ -565,6 +567,11 @@ def build_worker_health_server(
     return server
 
 
+@deprecated(
+    "run_health_server is deprecated; construct WorkerHealthServer (or call "
+    "build_worker_health_server) and start it with `async with` — will be "
+    "removed in v4.0.0."
+)
 async def run_health_server(
     *,
     host: str = "0.0.0.0",
@@ -576,6 +583,10 @@ async def run_health_server(
 
     Convenience function that creates a server, optionally sets the
     Temporal client, and starts it.
+
+    .. deprecated:: 3.56
+        Use :class:`WorkerHealthServer` directly (``async with``) or
+        :func:`build_worker_health_server`. Will be removed in v4.0.0.
 
     Args:
         host: Host to bind to.

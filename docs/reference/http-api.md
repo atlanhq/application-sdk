@@ -433,7 +433,13 @@ Handler liveness check. Returns `200 OK` unconditionally when the FastAPI proces
 
 ### `GET /ready` · `GET /server/ready`
 
-Handler readiness check. Returns `200 OK` with `{"status": "ok"}` when the process is up.
+Handler readiness check. In handler-only mode it returns `200 OK` with `{"status": "ok"}` when the process is up.
+
+In combined mode, where a worker runs in the same process, it returns the worker's readiness, the same response as `GET /ready` on the worker health port (`ATLAN_HEALTH_PORT`). That is `200` when the worker is ready and `503` when it is not, with this body:
+
+```json
+{ "healthy": true, "message": "Worker is ready", "details": { "identity": "...", "poller_counts": {...} }, "checked_at": "..." }
+```
 
 ### `GET /metrics`
 

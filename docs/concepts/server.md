@@ -30,6 +30,11 @@ Every handler service exposes health checks at two equivalent paths each:
 
 These are registered automatically. No configuration is needed.
 
+In combined mode, `/ready` returns the co-hosted worker's readiness. It sends
+the same body as the worker health port's `/ready`, and a 503 when the worker
+is not ready, so the two ports give the same answer about the pod. In
+handler-only mode it always returns `200 {"status": "ok"}`.
+
 ### Worker liveness window
 
 In worker and combined mode the SDK also runs a `WorkerHealthServer` that

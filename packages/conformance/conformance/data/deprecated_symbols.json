@@ -505,6 +505,15 @@
       "symbol": "StateStoreError"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "run_health_server is deprecated; construct WorkerHealthServer (or call build_worker_health_server) and start it with `async with` \u2014 will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.server.health",
+      "removal_version": "4.0.0",
+      "symbol": "run_health_server"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "JsonFileReader is deprecated and will be removed in v4.0. Migrate now: declare the upstream artifact as a FileReference field on your task's typed Input \u2014 the SDK's activity interceptor auto-materialises it to a local path before the task runs (with sha256 sidecar verification + parallel transfers), then read it directly with orjson / json. This reader coerces values through pandas (an int column with a missing key comes back as float, 3 \u2192 3.0; the missing key as NaN); orjson returns the values in the file. Fix callers that relied on the coercion: row.get(key) for an optional key (row[key] raises KeyError), `is None` for NaN checks, and record any value formatted into a published key or name, since 3.0 becomes 3. See docs/agents/coding-standards.md.",

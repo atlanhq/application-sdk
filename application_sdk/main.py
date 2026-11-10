@@ -2246,6 +2246,7 @@ async def run_combined_mode(
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
+        worker_health=health_server,
     )
 
     uvicorn_server = uvicorn.Server(
