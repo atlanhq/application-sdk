@@ -13,7 +13,10 @@ Subcommands (each one is a former inline ``run:`` block):
     fleet App token) has mirror-cloned them, and ``uv`` installs from those
     local mirrors. This step has no token in its environment, nor does any
     ancestor of ``uv``, so no build backend it starts can read one;
-    ``git_auth.run`` refuses to start if ``GIT_TOKEN`` is set.
+    ``git_auth.run`` refuses to start if ``GIT_TOKEN`` is set. A project with
+    a ``hosted-api-apps.toml`` (common-app-server) first runs its
+    ``scripts/stage_api_apps.py`` the same way: its pyproject depends on the
+    staged ``apps/<name>/`` by path, so ``uv sync`` fails without them.
 
 ``check-migration``
     v3 shape, warn-only. Runs ``tools.migrate_v3.check_migration`` from the SDK
@@ -45,7 +48,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import _bap
@@ -64,13 +67,19 @@ _MAX_LISTED_PATHS = 50
 
 
 INSTALL_COMMAND = ("uv", "sync", "--all-extras", "--all-groups", "--frozen")
+HOSTED_API_APPS = Path(git_auth.HOSTED_API_APPS_FILE)
+STAGE_COMMAND = (sys.executable, "scripts/stage_api_apps.py")
 
 
 def install_deps() -> int:
-    return git_auth.run(
-        INSTALL_COMMAND,
-        execute=lambda command, env: _bap.run(command, env=env).returncode,
-    )
+    def execute(command: Sequence[str], env: dict[str, str]) -> int:
+        return _bap.run(command, env=env).returncode
+
+    if HOSTED_API_APPS.is_file():
+        code = git_auth.run(STAGE_COMMAND, execute=execute)
+        if code != 0:
+            return code
+    return git_auth.run(INSTALL_COMMAND, execute=execute)
 
 
 def check_migration() -> int:
