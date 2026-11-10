@@ -67,6 +67,11 @@ outputs:
    - a **valid** value the creator rejects published a correct asset: never
      skip that record. With evidence, the site is a gap; without it, the
      creator's raise at run time is what exposes the gap.
+
+   Existing test inputs are evidence of what the source sends. Never change
+   them to make a creator accept a record: that hides the output change
+   instead of proving there is none. Optional parents come from what the
+   source record carries.
 5. **When 1 or 2 cannot be proven, hold the site and say what is missing.**
    Plan it as type `SDK` when pyatlan or the SDK must add something (name
    the type, the creator, the input), or as type `Decision` when an owner
@@ -176,9 +181,13 @@ A dict has no model checking its keys and no creator owning its identity, and
 outside `entity_bytes` it misses `status: ACTIVE`, so a soft-deleted entity
 that comes back stays deleted. End state: each publish entity is a pyatlan_v9
 asset (creator where the type has one, P028 applies to it) written with
-`entity_bytes`, with the output unchanged. A type pyatlan_v9 does not model
-keeps the dict with top-level `"status": "ACTIVE"` and
-`# conformance: ignore[P058] <type> is not modeled in pyatlan_v9`. An app
+`entity_bytes`, with the output unchanged. A publish entity whose literal
+type name pyatlan_v9 does not model (checked with
+`hasattr(pyatlan_v9.model.assets, "<Type>")`) keeps the dict with top-level
+`"status": "ACTIVE"` and
+`# conformance: ignore[P058] <type> is not modeled in pyatlan_v9`. That
+claim must be checkable: a type held in a variable, or a payload that is not
+publish output (principle 3), never gets this ignore. An app
 whose mappers all emit dicts moves as one unit.
 
 ### O004 — pyatlan_v9 models
@@ -332,7 +341,7 @@ sites planned with that `fix_shape` for a person.
 
 ```decided-defaults
 {"rule": "P028", "fix_shape": "creator-string", "decision": "Read the string from a memoized helper returning X.creator(...).qualified_name; when only the id is known pass it as name too and never emit that asset.", "why": "Reference shape: atlan-metabase-app app/qualified_names.py collection_qn; atlan-mysql-app app/mysql.py _database_qn.", "interface": false}
-{"rule": "P028", "fix_shape": "creator-blank-guard", "decision": "Use the creator; guard a blank or None input in the app before the creator, handling the record the way the app already handles a bad record (otherwise skip and log it), never with a fallback string; where the asset is valid without the value, use the creator's optional parents. Never skip a record whose value is valid.", "why": "pyatlan creators raise on every blank on purpose; each reachable blank produced a broken identity before (FND-3887: these are app guards). Source reality wins for blanks the source really sends (FND-3843).", "interface": false, "pr_note": true}
+{"rule": "P028", "fix_shape": "creator-blank-guard", "decision": "Use the creator; guard a blank or None input in the app before the creator, handling the record the way the app already handles a bad record (otherwise skip and log it), never with a fallback string; where the asset is valid without the value, use the creator's optional parents, as the source record carries them; never change existing test inputs to make a creator accept a record. Never skip a record whose value is valid.", "why": "pyatlan creators raise on every blank on purpose; each reachable blank produced a broken identity before (FND-3887: these are app guards). Source reality wins for blanks the source really sends (FND-3843).", "interface": false, "pr_note": true}
 {"rule": "P028", "fix_shape": "process-id", "decision": "generate_qualified_name(name=..., connection_qualified_name=..., inputs=[None], outputs=[None], process_id=<everything after the connection qualifiedName>) for Process, ColumnProcess and BIProcess. A blank name or connection qualifiedName raises; guard it as for creator-blank-guard.", "why": "Returns {connection_qualified_name}/{process_id}, the same string by construction. Reference shape: atlan-metabase-app app/qualified_names.py process_qn.", "interface": false}
 {"rule": "P028", "fix_shape": "not-identity-ignore", "decision": "# conformance: ignore[P028] <kind>, not a qualifiedName on the line above, where kind is match prefix, object-store key, lookup key or message text; only after following every reader of the value.", "why": "The rule's terminal state allows an ignore only for a string that is not an asset qualifiedName.", "suppress": true, "reason": "not a qualifiedName", "interface": false}
 {"rule": "P028", "fix_shape": "gap", "decision": "Leave the f-string in one helper per name shape, unsuppressed, and list it in the PR description; do not change the string.", "why": "No creator can produce this identity for a value the source is shown to send; changing the string changes asset identity and suppressing hides the gap."}
@@ -343,7 +352,7 @@ sites planned with that `fix_shape` for a person.
 {"rule": "P052", "fix_shape": "released-envelope", "decision": "Write the entity with entity_bytes and the envelope that matches what the app publishes today; delete only the code that rebuilds that envelope by hand; keep every other change the app makes, applied to the decoded entity_bytes output.", "why": "entity_bytes is the seam for central fixes; the envelope choice keeps the published output unchanged except the documented stamps.", "pr_note": true}
 {"rule": "P052", "fix_shape": "^hold$", "block": "Held: this site's identity or published output cannot be proven unchanged, or its payload is not publish output. The planner's reason for this site says what is missing.", "brief": "Add what the planner's reason names as missing, or answer its question, then re-run the unit."}
 {"rule": "P058", "fix_shape": "pyatlan-asset", "decision": "Build each publish entity as a pyatlan_v9 asset (the type's creator where it has one) and write it with entity_bytes so the published output is unchanged except the documented stamps.", "why": "A model checks the keys and a creator owns the identity; outside entity_bytes the entity misses status ACTIVE.", "pr_note": true}
-{"rule": "P058", "fix_shape": "unmodeled-ignore", "decision": "Keep the dict with top-level \"status\": \"ACTIVE\" on every non-delete upsert and add # conformance: ignore[P058] <type> is not modeled in pyatlan_v9.", "why": "The rule's terminal state allows an ignore only for a type pyatlan_v9 does not model.", "suppress": true, "reason": "is not modeled in pyatlan_v9"}
+{"rule": "P058", "fix_shape": "unmodeled-ignore", "decision": "Only for a publish entity whose literal type name pyatlan_v9 does not model (hasattr(pyatlan_v9.model.assets, \"<Type>\") is False): keep the dict with top-level \"status\": \"ACTIVE\" on every non-delete upsert and add # conformance: ignore[P058] <type> is not modeled in pyatlan_v9. Never for a type held in a variable or a payload that is not publish output.", "why": "The rule's terminal state allows an ignore only for a type pyatlan_v9 does not model.", "suppress": true, "reason": "is not modeled in pyatlan_v9"}
 {"rule": "P058", "fix_shape": "^hold$", "block": "Held: this site's identity or published output cannot be proven unchanged, or its payload is not publish output. The planner's reason for this site says what is missing.", "brief": "Add what the planner's reason names as missing, or answer its question, then re-run the unit."}
 {"rule": "O004", "fix_shape": "v9-import", "decision": "Import from pyatlan_v9.model.assets, moving the models together with the mapper's P052 and P058 sites when they feed a mapper.", "why": "The v9 classes reject attributes= and have no to_atlas_dict(), so the import alone breaks a mapper."}
 {"rule": "O004", "fix_shape": "^hold$", "block": "Held: this site's identity or published output cannot be proven unchanged, or its payload is not publish output. The planner's reason for this site says what is missing.", "brief": "Add what the planner's reason names as missing, or answer its question, then re-run the unit."}
