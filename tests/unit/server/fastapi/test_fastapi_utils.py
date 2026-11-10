@@ -1,19 +1,49 @@
-"""Unit tests for FastAPI utility functions."""
+"""Unit tests for the deprecated v2 FastAPI utility functions and models.
 
+The behaviour tests below pin what the deprecated names still do until their
+v4.0 removal; ``TestDeprecationNotices`` pins that each one warns. The
+``download_file_from_upload_response`` tests live with that function, in
+``tests/unit/common/test_utils.py``.
+"""
+
+import importlib
+import inspect
 import json
+import warnings
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import UploadFile
 
-from application_sdk.common.errors import JsonParseError, ResponseKeyMissingError
-from application_sdk.common.utils import download_file_from_upload_response
-from application_sdk.server.fastapi.models import FileUploadResponse
+from application_sdk.server.fastapi import models as v2_models
 from application_sdk.server.fastapi.utils import (
     _build_object_store_key,
     _resolve_extension,
     upload_file_to_object_store,
+)
+
+# The behaviour tests call deprecated names on purpose.
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
+_V2_MODELS = (
+    "TestAuthRequest",
+    "TestAuthResponse",
+    "MetadataType",
+    "FetchMetadataRequest",
+    "FetchMetadataResponse",
+    "PreflightCheckRequest",
+    "PreflightCheckResponse",
+    "WorkflowRequest",
+    "EventWorkflowRequest",
+    "WorkflowData",
+    "WorkflowResponse",
+    "EventWorkflowResponse",
+    "WorkflowConfigRequest",
+    "WorkflowConfigResponse",
+    "ConfigMapResponse",
+    "Subscription",
+    "FileUploadResponse",
 )
 
 
@@ -519,81 +549,68 @@ class TestUploadFileToObjectStore:
         assert result4.contentType == "text/csv"
 
 
-class TestDownloadFileFromUploadResponse:
-    """Test cases for download_file_from_upload_response utility function."""
+class TestDeprecationNotices:
+    """Every public name in the v2 server modules is deprecated for v4.0."""
 
-    @patch("application_sdk.storage.ops.download_file_chunked")
-    async def test_download_with_dict_input(self, mock_objectstore):
-        """Test download with a dict containing 'key'."""
+    def test_every_public_model_is_marked(self) -> None:
+        public = {
+            name
+            for name, obj in vars(v2_models).items()
+            if inspect.isclass(obj)
+            and name.isidentifier()
+            and not name.startswith("_")
+            and obj.__module__ == v2_models.__name__
+        }
+        assert public == set(_V2_MODELS)
+        for name in _V2_MODELS:
+            notice = getattr(v2_models, name).__deprecated__
+            assert "deprecated; use " in notice, name
+            assert "removed in v4.0" in notice, name
 
-        response = {"key": "workflow_file_upload/abc123.csv", "id": "abc123"}
-        result = await download_file_from_upload_response(response)
+    def test_importing_the_models_module_does_not_warn(self) -> None:
+        """A deprecated subclass of a deprecated model would warn at import."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            importlib.reload(v2_models)
 
-        mock_objectstore.assert_called_once()
-        call_args = mock_objectstore.call_args
-        assert call_args[1]["key"] == "workflow_file_upload/abc123.csv"
-        assert call_args[1]["key"].endswith("workflow_file_upload/abc123.csv")
+    def test_constructing_a_model_warns(self) -> None:
+        with pytest.warns(DeprecationWarning, match="TestAuthResponse is deprecated"):
+            v2_models.TestAuthResponse(success=True, message="ok")
 
-        assert result.endswith("workflow_file_upload/abc123.csv")
+    async def test_upload_file_to_object_store_warns_once(self) -> None:
+        mock_file = MagicMock(spec=UploadFile)
+        mock_file.filename = "a.csv"
+        mock_file.content_type = "text/csv"
+        mock_file.read = AsyncMock(return_value=b"x")
+        with (
+            patch("application_sdk.server.fastapi.utils.upload_file_from_bytes"),
+            warnings.catch_warnings(record=True) as caught,
+        ):
+            warnings.simplefilter("always")
+            await upload_file_to_object_store(file=mock_file)
+        messages = [str(w.message) for w in caught if w.category is DeprecationWarning]
+        assert len(messages) == 1
+        assert "upload_file_to_object_store is deprecated" in messages[0]
 
-    @patch("application_sdk.storage.ops.download_file_chunked")
-    async def test_download_with_string_input(self, mock_objectstore):
-        """Test download with a JSON string."""
+    def test_internal_server_error_handler_warns(self) -> None:
+        from application_sdk.server.fastapi.utils import internal_server_error_handler
 
-        response_dict = {"key": "workflow_file_upload/abc123.csv"}
-        response_str = json.dumps(response_dict)
-        result = await download_file_from_upload_response(response_str)
+        with pytest.warns(DeprecationWarning, match="internal_server_error_handler"):
+            internal_server_error_handler(None, Exception("boom"))
 
-        mock_objectstore.assert_called_once()
-        call_args = mock_objectstore.call_args
-        assert call_args[1]["key"] == "workflow_file_upload/abc123.csv"
-        assert result.endswith("workflow_file_upload/abc123.csv")
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "auth_credentials_strategy",
+            "metadata_strategy",
+            "payload_strategy",
+            "workflow_event_strategy",
+            "event_data_strategy",
+        ],
+    )
+    def test_hypothesis_strategies_warn_on_access(self, name: str) -> None:
+        from application_sdk.testing.hypothesis.strategies.server import fastapi
 
-    @patch("application_sdk.storage.ops.download_file_chunked")
-    async def test_download_with_file_upload_response(self, mock_objectstore):
-        """Test download with a FileUploadResponse object."""
-
-        response = FileUploadResponse(
-            id="abc123",
-            version="abc12345",
-            isActive=True,
-            createdAt=1000,
-            updatedAt=1000,
-            fileName="abc123.csv",
-            rawName="original.csv",
-            key="workflow_file_upload/abc123.csv",
-            extension=".csv",
-            contentType="text/csv",
-            fileSize=100,
-            isEncrypted=False,
-            redirectUrl="",
-            isUploaded=True,
-            uploadedAt="2024-01-01T00:00:00Z",
-            isArchived=False,
-        )
-        result = await download_file_from_upload_response(response)
-
-        mock_objectstore.assert_called_once()
-        call_args = mock_objectstore.call_args
-        assert call_args[1]["key"] == "workflow_file_upload/abc123.csv"
-        assert result.endswith("workflow_file_upload/abc123.csv")
-
-    async def test_download_missing_key_error(self):
-        """Test that ResponseKeyMissingError is raised when 'key' is missing from dict."""
-        with pytest.raises(ResponseKeyMissingError):
-            await download_file_from_upload_response({"id": "abc123"})
-
-    async def test_download_invalid_json_error(self):
-        """Test that JsonParseError is raised for invalid JSON string."""
-        with pytest.raises(JsonParseError):
-            await download_file_from_upload_response("not valid json")
-
-    @patch("application_sdk.storage.ops.download_file_chunked")
-    async def test_download_error_propagation(self, mock_objectstore):
-        """Test that ObjectStore download errors propagate."""
-        mock_objectstore.side_effect = Exception("Download failed")
-
-        with pytest.raises(Exception, match="Download failed"):
-            await download_file_from_upload_response(
-                {"key": "workflow_file_upload/abc123.csv"}
-            )
+        with pytest.warns(DeprecationWarning, match=f"{name} is deprecated"):
+            strategy = getattr(fastapi, name)
+        assert strategy is getattr(fastapi, f"_{name}")

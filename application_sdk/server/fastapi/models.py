@@ -1,41 +1,79 @@
-# Request/Response DTOs for workflows
+"""Request/response DTOs of the v2 FastAPI server.
+
+.. deprecated:: 3.56.0
+    Every model here is deprecated and removed in v4.0. The v2 server that
+    served them is gone; the v3 handler service owns those routes and their
+    typed contracts in :mod:`application_sdk.handler.contracts` (see each
+    model's notice for its replacement).
+
+Nothing in the SDK imports this module. ``FileUploadResponse`` was the last
+model in use, and :func:`application_sdk.common.utils.download_file_from_upload_response`
+now takes any pydantic model with a ``key`` field instead
+(:class:`application_sdk.handler.contracts.FileUploadResponse` is the one the
+handler returns).
+"""
 
 from enum import Enum
 from typing import Any, Callable, Coroutine, Dict, Optional, Union
 
 from pydantic import BaseModel, Field, RootModel
+from typing_extensions import deprecated
 
 from application_sdk.contracts.events import Event
 
 
+@deprecated(
+    "application_sdk.server.fastapi.models.TestAuthRequest is deprecated; use application_sdk.handler.contracts.AuthInput instead "
+    "— will be removed in v4.0."
+)
 class TestAuthRequest(RootModel[Dict[str, Any]]):
     root: Dict[str, Any] = Field(
         ..., description="Root JSON object containing database credentials"
     )
 
 
+@deprecated(
+    "application_sdk.server.fastapi.models.TestAuthResponse is deprecated; use application_sdk.handler.contracts.AuthOutput instead "
+    "— will be removed in v4.0."
+)
 class TestAuthResponse(BaseModel):
     success: bool
     message: str
 
 
+@deprecated(
+    "application_sdk.server.fastapi.models.MetadataType is deprecated; use application_sdk.handler.contracts.MetadataInput instead "
+    "— will be removed in v4.0."
+)
 class MetadataType(str, Enum):
     DATABASE = "database"
     SCHEMA = "schema"
     ALL = "all"
 
 
+@deprecated(
+    "application_sdk.server.fastapi.models.FetchMetadataRequest is deprecated; use application_sdk.handler.contracts.MetadataInput instead "
+    "— will be removed in v4.0."
+)
 class FetchMetadataRequest(RootModel[Dict[str, Any]]):
     root: Dict[str, Any] = Field(
         ..., description="Root JSON object containing the metadata and credentials"
     )
 
 
+@deprecated(
+    "application_sdk.server.fastapi.models.FetchMetadataResponse is deprecated; use application_sdk.handler.contracts.MetadataOutput instead "
+    "— will be removed in v4.0."
+)
 class FetchMetadataResponse(BaseModel):
     success: bool
     data: Any
 
 
+@deprecated(
+    "application_sdk.server.fastapi.models.PreflightCheckRequest is deprecated; use application_sdk.handler.contracts.PreflightInput instead "
+    "— will be removed in v4.0."
+)
 class PreflightCheckRequest(BaseModel):
     model_config = {
         "json_schema_extra": {
@@ -66,6 +104,10 @@ class PreflightCheckRequest(BaseModel):
     )
 
 
+@deprecated(
+    "application_sdk.server.fastapi.models.PreflightCheckResponse is deprecated; use application_sdk.handler.contracts.PreflightOutput instead "
+    "— will be removed in v4.0."
+)
 class PreflightCheckResponse(BaseModel):
     model_config = {
         "json_schema_extra": {
@@ -85,6 +127,11 @@ class PreflightCheckResponse(BaseModel):
     data: Dict[str, Any] = Field(..., description="Response data")
 
 
+@deprecated(
+    "application_sdk.server.fastapi.models.WorkflowRequest is deprecated; use the App's typed Input contract instead "
+    "(an application_sdk.contracts.base.Input subclass, which the handler's "
+    "/workflows/v1 routes accept) — will be removed in v4.0."
+)
 class WorkflowRequest(RootModel[Dict[str, Any]]):
     model_config = {
         "json_schema_extra": {
@@ -113,6 +160,10 @@ class WorkflowRequest(RootModel[Dict[str, Any]]):
     )
 
 
+@deprecated(
+    "application_sdk.server.fastapi.models.EventWorkflowRequest is deprecated; use application_sdk.handler.contracts.CloudEventEnvelope instead "
+    "— will be removed in v4.0."
+)
 class EventWorkflowRequest(BaseModel):
     event: Event = Field(alias="data", description="Event object")
     datacontenttype: str = Field(
@@ -126,12 +177,20 @@ class EventWorkflowRequest(BaseModel):
     topic: str = Field(alias="topic", description="Event topic")
 
 
+@deprecated(
+    "application_sdk.server.fastapi.models.WorkflowData is deprecated; use the handler's POST /workflows/v1/start response instead "
+    "(it carries workflow_id and run_id) — will be removed in v4.0."
+)
 class WorkflowData(BaseModel):
     workflow_id: str = Field(..., description="Unique identifier for the workflow")
     run_id: str = Field(..., description="Unique identifier for the workflow run")
 
 
-class WorkflowResponse(BaseModel):
+class _WorkflowResponseFields(BaseModel):
+    # The fields WorkflowResponse and EventWorkflowResponse share. A private,
+    # undecorated base because subclassing a @deprecated class warns at class
+    # definition — EventWorkflowResponse(WorkflowResponse) would fire on every
+    # import of this module, not on use.
     model_config = {
         "json_schema_extra": {
             "example": {
@@ -154,7 +213,19 @@ class WorkflowResponse(BaseModel):
     data: WorkflowData = Field(..., description="Details about the workflow and run")
 
 
-class EventWorkflowResponse(WorkflowResponse):
+@deprecated(
+    "application_sdk.server.fastapi.models.WorkflowResponse is deprecated; use the handler's POST "
+    "/workflows/v1/start response instead — will be removed in v4.0."
+)
+class WorkflowResponse(_WorkflowResponseFields):
+    """Response of the v2 server's workflow-start route."""
+
+
+@deprecated(
+    "application_sdk.server.fastapi.models.EventWorkflowResponse is deprecated; use the handler's "
+    "/events/v1/event/{event_id} route instead — will be removed in v4.0."
+)
+class EventWorkflowResponse(_WorkflowResponseFields):
     class Status(str, Enum):
         SUCCESS = "SUCCESS"
         RETRY = "RETRY"
@@ -165,12 +236,21 @@ class EventWorkflowResponse(WorkflowResponse):
     status: Status = Field(..., description="Status of the workflow")
 
 
+@deprecated(
+    "application_sdk.server.fastapi.models.WorkflowConfigRequest is deprecated; use the App's typed Input contract instead "
+    "(an application_sdk.contracts.base.Input subclass, which the handler's "
+    "/workflows/v1 routes accept) — will be removed in v4.0."
+)
 class WorkflowConfigRequest(RootModel[Dict[str, Any]]):
     root: Dict[str, Any] = Field(
         ..., description="Root JSON object containing workflow configuration"
     )
 
 
+@deprecated(
+    "application_sdk.server.fastapi.models.WorkflowConfigResponse is deprecated; use the handler's GET /workflows/v1/config/{config_id} route instead "
+    "— will be removed in v4.0."
+)
 class WorkflowConfigResponse(BaseModel):
     model_config = {
         "json_schema_extra": {
@@ -199,6 +279,10 @@ class WorkflowConfigResponse(BaseModel):
     data: Dict[str, Any] = Field(..., description="Workflow configuration")
 
 
+@deprecated(
+    "application_sdk.server.fastapi.models.ConfigMapResponse is deprecated; use the handler's GET /workflows/v1/configmap/{config_map_id} route instead "
+    "— will be removed in v4.0."
+)
 class ConfigMapResponse(BaseModel):
     model_config = {
         "json_schema_extra": {
@@ -227,6 +311,10 @@ class ConfigMapResponse(BaseModel):
     data: Dict[str, Any] = Field(..., description="Configuration map object")
 
 
+@deprecated(
+    "application_sdk.server.fastapi.models.Subscription is deprecated; use application_sdk.handler.contracts.SubscriptionConfig instead "
+    "— will be removed in v4.0."
+)
 class Subscription(BaseModel):
     """Subscription configuration for Dapr messaging.
 
@@ -288,6 +376,10 @@ class Subscription(BaseModel):
     dead_letter_topic: Optional[str] = None
 
 
+@deprecated(
+    "application_sdk.server.fastapi.models.FileUploadResponse is deprecated; use application_sdk.handler.contracts.FileUploadResponse instead "
+    "(snake_case attributes, serialised with the same camelCase aliases) — will be removed in v4.0."
+)
 class FileUploadResponse(BaseModel):
     """Response model for file upload endpoint matching heracles format.
 

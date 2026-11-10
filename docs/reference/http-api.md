@@ -382,6 +382,8 @@ Upload a file to be used as workflow input (e.g. CSV for file-based connectors).
 }
 ```
 
+In a workflow or activity, pass this response — as the dict, the JSON string, or an `application_sdk.handler.contracts.FileUploadResponse` — to `application_sdk.common.utils.download_file_from_upload_response` to fetch the file to a local path.
+
 ---
 
 ## Event Endpoints

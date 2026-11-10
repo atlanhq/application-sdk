@@ -1,24 +1,33 @@
-"""FastAPI utility functions.
+"""FastAPI utility functions of the v2 server.
 
-This module provides utility functions for FastAPI application, including
-error handlers and response formatters.
+.. deprecated:: 3.56.0
+    Every public function here is deprecated and removed in v4.0. The v3
+    handler service installs its own error handling and serves file uploads at
+    ``POST /workflows/v1/file``; nothing in the SDK imports this module.
 """
 
 import mimetypes
 import time
 import uuid
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from fastapi import UploadFile, status
 from fastapi.responses import JSONResponse
+from typing_extensions import deprecated
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.fastapi.models import FileUploadResponse
 from application_sdk.storage.batch import upload_file_from_bytes
 
 
+@deprecated(
+    "application_sdk.server.fastapi.utils.internal_server_error_handler is deprecated; use the v3 handler "
+    "service instead (application_sdk.handler), which installs its own "
+    "sanitised 500 handling — will be removed in v4.0."
+)
 def internal_server_error_handler(_, exc: Exception) -> JSONResponse:
     """Handle internal server errors in FastAPI applications.
 
@@ -62,6 +71,12 @@ def _build_object_store_key(stored_filename: str, prefix: Optional[str]) -> str:
     return stored_filename
 
 
+@deprecated(
+    "application_sdk.server.fastapi.utils.upload_file_to_object_store is deprecated; use the handler's "
+    "POST /workflows/v1/file route instead, or "
+    "application_sdk.storage.batch.upload_file_from_bytes to write the bytes "
+    "yourself — will be removed in v4.0."
+)
 async def upload_file_to_object_store(
     file: UploadFile,
     filename: Optional[str] = None,
@@ -104,21 +119,25 @@ async def upload_file_to_object_store(
 
     now_ms = int(time.time() * 1000)
 
-    return FileUploadResponse(
-        id=file_id,
-        version=file_id[:8],
-        isActive=True,
-        createdAt=now_ms,
-        updatedAt=now_ms,
-        fileName=stored_filename,
-        rawName=original_filename,
-        key=object_store_key,
-        extension=extension,
-        contentType=resolved_content_type,
-        fileSize=len(content_bytes),
-        isEncrypted=False,
-        redirectUrl="",
-        isUploaded=True,
-        uploadedAt=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        isArchived=False,
-    )
+    # The caller was already warned that this function is deprecated; do not
+    # warn a second time for the (equally deprecated) model it returns.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return FileUploadResponse(
+            id=file_id,
+            version=file_id[:8],
+            isActive=True,
+            createdAt=now_ms,
+            updatedAt=now_ms,
+            fileName=stored_filename,
+            rawName=original_filename,
+            key=object_store_key,
+            extension=extension,
+            contentType=resolved_content_type,
+            fileSize=len(content_bytes),
+            isEncrypted=False,
+            redirectUrl="",
+            isUploaded=True,
+            uploadedAt=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            isArchived=False,
+        )

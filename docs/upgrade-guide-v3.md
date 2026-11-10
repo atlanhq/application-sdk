@@ -1354,6 +1354,27 @@ asyncio.run(run_dev_combined(
 
 ---
 
+## v2 FastAPI server models and utilities (deprecated, removed in v4.0.0)
+
+`application_sdk.server.fastapi.models` and `application_sdk.server.fastapi.utils` are what is left of the v2 server, which v3 replaced with the handler service. Nothing in the SDK imports them any more. Every public name in both is deprecated and removed in v4.0.0, along with the v2 payload strategies in `application_sdk.testing.hypothesis.strategies.server.fastapi`. B001 flags each import.
+
+| Deprecated | Replacement |
+|---|---|
+| `server.fastapi.models.FileUploadResponse` | `application_sdk.handler.contracts.FileUploadResponse`. Its attributes are snake_case (`raw_name`, not `rawName`); it serialises with the same camelCase aliases. |
+| `server.fastapi.models.TestAuthRequest` / `TestAuthResponse` | `handler.contracts.AuthInput` / `AuthOutput` |
+| `server.fastapi.models.PreflightCheckRequest` / `PreflightCheckResponse` | `handler.contracts.PreflightInput` / `PreflightOutput` |
+| `server.fastapi.models.FetchMetadataRequest` / `FetchMetadataResponse`, `MetadataType` | `handler.contracts.MetadataInput` / `MetadataOutput` |
+| `server.fastapi.models.Subscription` | `handler.contracts.SubscriptionConfig` |
+| `server.fastapi.models.EventWorkflowRequest` | `handler.contracts.CloudEventEnvelope` |
+| `server.fastapi.models.WorkflowRequest`, `WorkflowConfigRequest`, `WorkflowResponse`, `WorkflowData`, `EventWorkflowResponse`, `WorkflowConfigResponse`, `ConfigMapResponse` | none; the handler's `/workflows/v1` and `/events/v1` routes own these shapes, and the App's typed `Input` contract replaces the request dicts |
+| `server.fastapi.utils.upload_file_to_object_store` | the handler's `POST /workflows/v1/file`, or `application_sdk.storage.batch.upload_file_from_bytes` |
+| `server.fastapi.utils.internal_server_error_handler` | none; the handler service installs its own sanitised 500 handling |
+| `testing.hypothesis.strategies.server.fastapi.*` | none; build strategies from your app's own models in its tests |
+
+`application_sdk.common.utils.download_file_from_upload_response` now accepts the handler's `FileUploadResponse`. Before this change it raised `ResponseTypeError: Unsupported response type: FileUploadResponse` for it, because it only recognised the v2 class.
+
+---
+
 ## Removed in v3.0.0
 
 All of the following were removed in v3.0.0. They no longer exist — importing them will raise `ImportError`. Use the v3 replacement listed in each row.
