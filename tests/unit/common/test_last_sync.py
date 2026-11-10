@@ -9,10 +9,12 @@ API surface; earlier dict-shaped helpers were removed in BLDX-1229).
 
 from __future__ import annotations
 
+import warnings
 from datetime import UTC
 
 import pytest
 
+from application_sdk.common import last_sync as _common_last_sync
 from application_sdk.common.last_sync import (
     LastSyncDetails,
     resolve_last_sync_details,
@@ -327,3 +329,44 @@ def test_legacy_transformers_path_re_exports_the_same_objects():
         legacy.set_last_sync_details_on_assets_bulk
         is set_last_sync_details_on_assets_bulk
     )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "LastSyncDetails",
+        "resolve_last_sync_details",
+        "set_last_sync_details_on_asset",
+        "set_last_sync_details_on_assets_bulk",
+    ],
+)
+def test_legacy_transformers_path_warns_on_access(name: str):
+    """Each legacy name warns, naming its new home and the removal version (FND-4690).
+
+    Before FND-4690 the alias was a plain re-export: the old path worked with
+    no per-name signal, and the manifest did not list it, so B001 could not
+    nudge a single app off it ahead of the v4.0 removal.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        import application_sdk.transformers.common.last_sync as legacy
+
+    with pytest.warns(DeprecationWarning) as record:
+        obj = getattr(legacy, name)
+
+    assert obj is getattr(_common_last_sync, name)
+    [warning] = [w for w in record if issubclass(w.category, DeprecationWarning)]
+    message = str(warning.message)
+    assert f"application_sdk.common.last_sync.{name}" in message
+    assert "removed in v4.0" in message
+    # stacklevel=2 attributes the warning to the caller's line, not the shim.
+    assert warning.filename == __file__
+
+
+def test_legacy_transformers_path_rejects_unknown_names():
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        import application_sdk.transformers.common.last_sync as legacy
+
+    with pytest.raises(AttributeError):
+        legacy.not_a_last_sync_name  # noqa: B018

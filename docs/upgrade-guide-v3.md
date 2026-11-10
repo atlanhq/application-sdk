@@ -1330,6 +1330,21 @@ asyncio.run(run_dev_combined(
 
 ---
 
+## Transformer helpers (deprecated, removed in v4.0.0)
+
+`application_sdk.transformers` is removed in v4.0.0, including its helper modules, which many apps import without using a transformer. Move these imports before v4.0.0; B001 flags each one.
+
+| Deprecated | Replacement |
+|---|---|
+| `application_sdk.transformers.common.utils.get_yaml_query_template_path_mappings` | `application_sdk.common.yaml_templates.yaml_template_paths` (resolves only your app's directory; copy any SDK default template you read into it) |
+| `application_sdk.transformers.common.utils.flatten_yaml_columns` | `application_sdk.common.yaml_templates.flatten_yaml_columns` |
+| `application_sdk.transformers.common.utils.build_atlas_qualified_name` | `<Asset>.creator(...).qualified_name` from `pyatlan_v9` |
+| `application_sdk.transformers.common.utils.build_phoenix_uri`, `process_text` | none; build the string in the app |
+| `application_sdk.transformers.common.last_sync.*` | `application_sdk.common.last_sync.*` |
+| `application_sdk.transformers.errors.TransformerNotImplementedError` | `application_sdk.errors.UnimplementedError` |
+
+---
+
 ## Removed in v3.0.0
 
 All of the following were removed in v3.0.0. They no longer exist — importing them will raise `ImportError`. Use the v3 replacement listed in each row.

@@ -30,6 +30,19 @@ For new connectors, and when upgrading existing ones, use the simpler pattern do
 
 The import rewriter (`tools/migrate_v3/rewrite_imports.py`) will leave `# TODO(upgrade-v3)` markers on transformer code because it cannot auto-convert this pattern; apply the migration manually.
 
+## Helper modules (deprecated, removed in v4.0)
+
+The helper modules under `application_sdk.transformers` are deprecated too. Each name warns when called or imported, and conformance rule **B001** flags its import:
+
+| Deprecated | Replacement |
+|---|---|
+| `transformers.common.utils.get_yaml_query_template_path_mappings` | `application_sdk.common.yaml_templates.yaml_template_paths` — resolves only your app's directory; copy any SDK default template you rely on into it |
+| `transformers.common.utils.flatten_yaml_columns` | `application_sdk.common.yaml_templates.flatten_yaml_columns` |
+| `transformers.common.utils.build_atlas_qualified_name` | the `pyatlan_v9` creator: `<Asset>.creator(...).qualified_name` |
+| `transformers.common.utils.build_phoenix_uri`, `process_text` | none; build the string in the app |
+| `transformers.common.last_sync.*` | `application_sdk.common.last_sync.*` (the same objects) |
+| `transformers.errors.TransformerNotImplementedError` | catch `application_sdk.errors.UnimplementedError`, its base |
+
 ## Legacy Reference (back-compat only)
 
 ### `AtlasTransformer`

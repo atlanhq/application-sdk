@@ -174,6 +174,20 @@ fixed in this skill, except the **owner decisions**.
     dataclasses. Replace a tuple unpack with `pair.marker` /
     `pair.next_marker`, and a dict read of the persist result with
     `result.s3_key` / `result.marker_timestamp`.
+  - `application_sdk.transformers.common.last_sync.<name>` →
+    `application_sdk.common.last_sync.<name>` (the same objects), and
+    `application_sdk.transformers.common.utils.flatten_yaml_columns` →
+    `application_sdk.common.yaml_templates.flatten_yaml_columns` (same
+    signature and output).
+  - `transformers.common.utils.get_yaml_query_template_path_mappings(path, assets)`
+    → `application_sdk.common.yaml_templates.yaml_template_paths(path, assets)`
+    **only when every key the app reads is a file under `path`**. The old
+    helper also merged in the SDK's bundled `QueryBasedTransformer` templates
+    (`TABLE`, `COLUMN`, `DATABASE`, `SCHEMA`, …); the new one does not. If the
+    app reads one of those without its own file, copy that template into the
+    app's directory in the same change, or it is a **live transformer** site.
+  - `TransformerNotImplementedError` in an `except` or `isinstance` →
+    `application_sdk.errors.UnimplementedError` (its base).
   - An SDK private that has a public alias for the same object, for example
     `application_sdk.templates.sql_app._orjson_default` →
     `application_sdk.common.asset_serialization.orjson_default`.
