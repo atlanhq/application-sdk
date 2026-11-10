@@ -296,6 +296,13 @@ def test_moved_names_resolve_to_the_same_objects_at_their_old_paths() -> None:
         for name in old._DEPRECATED_CONSTANTS:
             with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
                 assert getattr(old, name) is getattr(new, name), name
+        # ``import *`` reads __all__; it must still bind every moved name.
+        assert set(old.__all__) == set(old._DEPRECATED_CONSTANTS)
+        namespace: dict[str, object] = {}
+        with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+            exec(f"from {old.__name__} import *", namespace)  # noqa: S102
+        for name in old._DEPRECATED_CONSTANTS:
+            assert namespace[name] is getattr(new, name), name
     for name in (
         "PreflightSurface",
         "PreflightRowOutcome",

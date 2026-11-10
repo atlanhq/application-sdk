@@ -69,6 +69,12 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
+#: Kept so ``from <this module> import *`` still binds every moved name: a star
+#: import reads ``__all__`` and then resolves each entry through ``__getattr__``,
+#: so each name warns. Without it, ``__getattr__`` is never asked.
+__all__ = list(_DEPRECATED_CONSTANTS)  # pyright: ignore[reportUnsupportedDunderAll] — names are served by __getattr__
+
+
 def __getattr__(name: str) -> object:
     """Serve the moved names once more, with a deprecation warning (PEP 562)."""
     entry = _DEPRECATED_CONSTANTS.get(name)

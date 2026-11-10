@@ -3942,5 +3942,15 @@ def test_build_identity_probe_finds_the_module_at_either_sdk_path(
     monkeypatch.setattr(importlib.util, "find_spec", old_sdk)
     assert app._local_sdk_serves_build_identity() is True
 
+    # An SDK past v4.0.0, where only the common path is left.
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name: (
+            object() if name == "application_sdk.common.build_identity" else None
+        ),
+    )
+    assert app._local_sdk_serves_build_identity() is True
+
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
     assert app._local_sdk_serves_build_identity() is False
