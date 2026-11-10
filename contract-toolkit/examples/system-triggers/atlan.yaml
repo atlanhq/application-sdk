@@ -12,10 +12,10 @@ entrypoints:
 - name: rollup
   display_name: Rollup
   icon_url: https://assets.atlan.com/assets/ph-gear-light.svg
-  type: connector
+  type: utility
   marketplace_card: false
 - name: feed
   display_name: Feed
   icon_url: https://assets.atlan.com/assets/ph-gear-light.svg
-  type: connector
+  type: utility
   marketplace_card: false

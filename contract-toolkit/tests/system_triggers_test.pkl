@@ -6,6 +6,7 @@
 
 amends "pkl:test"
 
+import "../examples/scheduled/app.pkl" as Scheduled
 import "../examples/system-app/app.pkl" as systemApp
 import "../examples/system-bundle/app.pkl" as systemBundle
 import "../examples/system-bundle/digest.pkl" as Digest
@@ -15,7 +16,7 @@ import "../src/App.pkl" as App
 
 local triggersYaml: String = systemTriggers.output.files["atlan.yaml"].text
 
-local nightlyEp = new App.Entrypoint { name = "rollup"; contract = Rollup }
+local nightlyEp = new App.Entrypoint { name = "rollup"; type = "utility"; contract = Rollup }
 
 local function bundleOf(eps: Listing<App.Entrypoint>) = (systemTriggers) { entrypoints = eps }
 
@@ -41,13 +42,43 @@ facts {
     systemTriggers.output.files["app/generated/feed/manifest.json"].text.contains("\"events\"")
   }
 
-  ["Explicit metadata can still set marketplace_card"] {
+  ["Refuses a metadata marketplace_card other than false"] {
+    for (v in List(true, "yes")) {
+      module.catch(() -> bundleOf(new Listing {
+        (nightlyEp) { metadata { ["marketplace_card"] = v } }
+      }).output.files).contains("set metadata marketplace_card to a value other than false")
+    }
+  }
+
+  ["An explicit metadata marketplace_card = false renders once"] {
     bundleOf(new Listing {
-      new App.Entrypoint {
-        name = "rollup"; contract = Rollup
-        metadata { ["marketplace_card"] = true }
-      }
-    }).output.files["atlan.yaml"].text.contains("  marketplace_card: true\n")
+      (nightlyEp) { metadata { ["marketplace_card"] = false } }
+    }).output.files["atlan.yaml"].text.split("marketplace_card: false").length == 2
+  }
+
+  ["Refuses emitEntrypoints = false with trigger-bearing entrypoints"] {
+    module.catch(() -> (systemTriggers) { emitEntrypoints = false }.output.files)
+      .contains("emitEntrypoints = false, but entrypoint(s) List(\"rollup\", \"feed\") declare schedules or events")
+  }
+
+  ["A mixed system bundle lists only its trigger-bearing entrypoints"] {
+    let (yaml = bundleOf(new Listing {
+      nightlyEp
+      new App.Entrypoint { name = "digest"; contract = Digest }
+    }).output.files["atlan.yaml"].text)
+      yaml.contains("\nentrypoints:\n- name: rollup\n")
+        && !yaml.contains("name: digest")
+        && yaml.split("marketplace_card: false").length == 2
+  }
+
+  ["A non-system sub-contract with triggers in a system bundle is listed as a non-card"] {
+    let (yaml = bundleOf(new Listing {
+      new App.Entrypoint { name = "scheduled"; type = "utility"; contract = Scheduled }
+    }).output.files["atlan.yaml"].text)
+      yaml.contains("\nentrypoints:\n- name: scheduled\n")
+        && yaml.contains("  marketplace_card: false\n")
+        && !yaml.contains("marketplace_card: true")
+        && !yaml.contains("package_id:")
   }
 
   ["A system bundle with no triggers renders no entrypoints block"] {
@@ -61,10 +92,16 @@ facts {
     systemApp.output.files["atlan.yaml"].text == read("../examples/system-app/atlan.yaml").text
   }
 
-  ["Refuses Entrypoint.type = system when the block is emitted"] {
+  ["Refuses Entrypoint.type system or connector on a trigger-bearing entrypoint"] {
+    for (t in List("system", "connector")) {
+      module.catch(() -> bundleOf(new Listing {
+        (nightlyEp) { type = t }
+      }).output.files).contains("entrypoint(s) List(\"rollup (type = \\\"\(t)\\\")\") declare schedules or events")
+    }
+    // The default is connector, so leaving type unset is refused too.
     module.catch(() -> bundleOf(new Listing {
-      (nightlyEp) { type = "system" }
-    }).output.files).contains("entrypoint(s) List(\"rollup\") set Entrypoint.type = \"system\"")
+      new App.Entrypoint { name = "rollup"; contract = Rollup }
+    }).output.files).contains("Set `type = \"utility\"`")
   }
 
   ["Entrypoint.type = system is still accepted when no block is emitted"] {
@@ -82,6 +119,11 @@ facts {
 
   ["Refuses schedules or events on a single-entrypoint system app root"] {
     module.catch(() -> (systemApp) { schedules { schedule } }.output.files["atlan.yaml"].text)
+      .contains("declares schedules or events on its root contract")
+  }
+
+  ["Refuses root triggers even when atlan.yaml is not emitted"] {
+    module.catch(() -> (systemApp) { emitAtlanYaml = false; schedules { schedule } }.output.files)
       .contains("declares schedules or events on its root contract")
   }
 

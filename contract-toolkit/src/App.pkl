@@ -181,13 +181,15 @@ creatorOrg: String?
 ///     downstream as a card);
 ///   - except in a system bundle where an entrypoint's contract declares
 ///     `schedules` or `events`: the block is then emitted so Local Marketplace
-///     can reconcile those triggers, and every entrypoint in it renders
-///     `marketplace_card: false` and no `package_id`;
+///     can reconcile those triggers. It lists ONLY the trigger-bearing
+///     entrypoints, each with `marketplace_card: false` and no `package_id`;
 ///   - refuses `marketplaceCard = true` and any `Entrypoint.packageId`, both of
 ///     which would otherwise be dropped without a word;
-///   - refuses `schedules` / `events` on the system app's own root, on an
-///     entrypoint whose contract has no `uiConfig` (no manifest to carry them),
-///     and `Entrypoint.type = "system"` when the block is emitted.
+///   - refuses `schedules` / `events` on the system app's own root or on an
+///     entrypoint whose contract has no `uiConfig` (no manifest to carry them);
+///     `emitEntrypoints = false` with trigger-bearing entrypoints; a metadata
+///     `marketplace_card` other than `false`; and a trigger-bearing entrypoint
+///     whose `type` is `system` or `connector` (set `utility` or similar).
 ///
 /// It does not change `manifest.json`, the workflow configmap or `_input.py`:
 /// those still follow `uiConfig`, so a system app with a setup form keeps it.
@@ -261,6 +263,10 @@ marketplaceCard: Boolean = !isSystemApp
 metadata: Mapping<String, Any> = new Mapping {}
 
 /// Deep overrides applied to the rendered `atlan.yaml` after typed fields.
+///
+/// Caveat: overriding `entrypoints` away (or replacing it) in a system app with
+/// trigger-bearing entrypoints drops them from Local Marketplace's view, so
+/// their `schedules` / `events` are no longer reconciled. Nothing refuses this.
 atlanYamlOverrides: Mapping<String, Any> = new Mapping {}
 
 /// Whether to emit `atlan.yaml` in the output.
@@ -4937,13 +4943,15 @@ local function renderEntrypoint(e: Entrypoint): Mapping<String, Any> = new Mappi
     ["package_id"] = e.packageId
     ["marketplace_card"] = true
   }
-  // A system app's block exists only to carry trigger-bearing entrypoints to the
+  // A system app's block lists only its trigger-bearing entrypoints, for the
   // reconciler (see `emitsEntrypointsBlock`), so each one is an explicit non-card.
-  // `packageId` is refused in system mode, so this never meets the key above.
-  when (isSystemApp && !e.metadata.containsKey("marketplace_card")) {
+  // `packageId` is refused in system mode, so this never meets the key above, and
+  // `_systemAppCheck` refuses a metadata `marketplace_card` other than `false`;
+  // the key is dropped from the spread so an explicit `false` does not collide.
+  when (isSystemApp) {
     ["marketplace_card"] = false
   }
-  ...e.metadata
+  ...(if (isSystemApp) e.metadata.toMap().remove("marketplace_card") else e.metadata)
 }
 
 local function renderKedaConfig(k: KedaConfig): Mapping<String, Any> = new Mapping {
@@ -5116,10 +5124,13 @@ local systemTriggerEntrypoints: List<Entrypoint> =
 /// A non-system app always does (unless `emitEntrypoints = false`).
 ///
 /// A system app does only when at least one bundle entrypoint's contract
-/// declares `schedules` or `events`. Local Marketplace learns an app's
-/// entrypoints only from this block, and reconciles a trigger only for an
-/// entrypoint it knows, so without the block those triggers would never be
-/// created. In that block every entrypoint renders `marketplace_card: false`:
+/// declares `schedules` or `events`, and the block then lists ONLY those
+/// entrypoints. Local Marketplace learns an app's entrypoints only from this
+/// block, and reconciles a trigger only for an entrypoint it knows, so without
+/// the block those triggers would never be created. The other entrypoints are
+/// started by callers' DAG nodes (`?entrypoint=`) and may have no manifest, so
+/// listing them would have the reconciler fetch manifests that do not exist.
+/// Every listed entrypoint renders `marketplace_card: false`:
 /// downstream reads an entrypoint with no `marketplace_card` key as a card, and
 /// GM's `is_system_app` hides the app's own listing but not cards expanded from
 /// entrypoints. `marketplace_card: false` hides the card; the reconcile still runs.
@@ -5138,11 +5149,17 @@ local emitsEntrypointsBlock: Boolean =
 ///   - an entrypoint with triggers whose contract generates no `manifest.json`
 ///     (no `uiConfig`): the triggers live only in the manifest, so they would
 ///     be dropped;
-///   - an entrypoint `type = "system"` when the `entrypoints` block is emitted:
-///     GM and CI publish reject `system` as an entrypoint type.
+///   - an `Entrypoint.metadata` `marketplace_card` other than `false`: a system
+///     app never renders a card;
+///   - trigger-bearing entrypoints with `emitEntrypoints = false`: the block
+///     that carries them to Local Marketplace would be suppressed;
+///   - a trigger-bearing entrypoint with `type` `system` (GM and CI publish
+///     reject it) or `connector` (the default; a system app's entrypoint is not
+///     a connector): set `type = "utility"` or another non-connector type.
 ///
 /// Triggers on the system app's own root are refused by
-/// `_systemRootTriggersCheck`, which `atlan.yaml` forces.
+/// `_systemRootTriggersCheck`, forced by `atlan.yaml` (or by `output` when
+/// `emitAtlanYaml = false`).
 local _systemAppCheck: Any =
   if (!isSystemApp) null
   else if (marketplaceCard)
@@ -5151,21 +5168,30 @@ local _systemAppCheck: Any =
     let (_withPkg = entrypoints.toList().filter((ep) -> ep.packageId != null))
     let (_noManifest = systemTriggerEntrypoints
       .filter((ep) -> !ep.contract!!.output.files.containsKey("app/generated/manifest.json")))
-    let (_systemTyped = if (emitsEntrypointsBlock) entrypoints.toList().filter((ep) -> ep.type == "system") else List())
+    let (_cardMeta = entrypoints.toList()
+      .filter((ep) -> ep.metadata.containsKey("marketplace_card") && ep.metadata["marketplace_card"] != false))
+    let (_badType = systemTriggerEntrypoints.filter((ep) -> ep.type == "system" || ep.type == "connector"))
     if (!_withPkg.isEmpty)
       throw("App.pkl: type = \"system\" with packageId set on entrypoint(s) \(_withPkg.map((ep) -> ep.name)). A system app never renders a marketplace card, so the package_id and card would be dropped. Remove packageId, or use a non-system type if the entrypoint needs a marketplace card.")
+    else if (!_cardMeta.isEmpty)
+      throw("App.pkl: type = \"system\" entrypoint(s) \(_cardMeta.map((ep) -> ep.name)) set metadata marketplace_card to a value other than false. A system app never renders a marketplace card. Remove the key, or use a non-system type if the entrypoint needs a card.")
+    else if (!emitEntrypoints && !systemTriggerEntrypoints.isEmpty)
+      throw("App.pkl: type = \"system\" with emitEntrypoints = false, but entrypoint(s) \(systemTriggerEntrypoints.map((ep) -> ep.name)) declare schedules or events. Local Marketplace learns entrypoints only from atlan.yaml's `entrypoints` block, so their triggers would never be reconciled. Remove emitEntrypoints = false.")
     else if (!_noManifest.isEmpty)
       throw("App.pkl: type = \"system\" entrypoint(s) \(_noManifest.map((ep) -> ep.name)) declare schedules or events, but their contract generates no manifest.json (it has no uiConfig). Triggers render only into manifest.json, so they would be dropped. Give the entrypoint's contract a uiConfig, or remove its schedules and events.")
-    else if (!_systemTyped.isEmpty)
-      throw("App.pkl: type = \"system\" entrypoint(s) \(_systemTyped.map((ep) -> ep.name)) set Entrypoint.type = \"system\". This app's atlan.yaml carries an `entrypoints` block (an entrypoint declares schedules or events), and GM and CI publish reject `system` as an entrypoint type. Leave Entrypoint.type at its default or set a non-system type; the app-level `type = \"system\"` already marks the app.")
+    else if (!_badType.isEmpty)
+      throw("App.pkl: type = \"system\" entrypoint(s) \(_badType.map((ep) -> "\(ep.name) (type = \"\(ep.type)\")")) declare schedules or events, so they are listed in atlan.yaml's `entrypoints` block. GM and CI publish reject `system` as an entrypoint type, and a system app's entrypoint is not a `connector` (the default). Set `type = \"utility\"` or another non-connector type (miner, orchestrator, custom); the app-level `type = \"system\"` already marks the app.")
     else null
 
 /// Refuses `schedules` / `events` on a system app's own root contract. Its
 /// `atlan.yaml` never carries a root entrypoint (a single-entrypoint system app
 /// renders no `entrypoints` block, and a bundle root renders no manifest), so
-/// Local Marketplace would never reconcile them. Forced only when `atlan.yaml`
-/// renders: a system sub-contract's own `atlan.yaml` is discarded by its bundle,
-/// so the same contract is accepted as a bundle entrypoint.
+/// Local Marketplace would never reconcile them. Forced when `atlan.yaml`
+/// renders, or from `output` when `emitAtlanYaml = false`. A system
+/// sub-contract's own `atlan.yaml` is discarded by its bundle, so the same
+/// contract (with the default `emitAtlanYaml = true`) is accepted as a bundle
+/// entrypoint. Caveat: a sub-contract that sets `emitAtlanYaml = false` and
+/// declares triggers is refused too, since it cannot tell it is a sub-contract.
 local _systemRootTriggersCheck: Any =
   if (isSystemApp && (!schedules.isEmpty || !events.isEmpty))
     throw("App.pkl: type = \"system\" app declares schedules or events on its root contract. A system app's atlan.yaml carries no root entrypoint, so Local Marketplace would never reconcile them. Declare them on the `contract` of an entry in `entrypoints` (a system bundle) whose contract has a uiConfig; that entrypoint is then rendered with marketplace_card: false.")
@@ -5189,7 +5215,7 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   when (tags.toList().length > 0) { ["tags"] = tags }
   when (emitsEntrypointsBlock) {
     ["entrypoints"] = new Listing {
-      for (ep in effectiveEntrypoints) {
+      for (ep in if (isSystemApp) systemTriggerEntrypoints else effectiveEntrypoints) {
         renderEntrypoint(ep)
       }
     }
@@ -5709,6 +5735,8 @@ output =
   // Forced here because nothing that renders atlan.yaml reads it, so it would
   // otherwise never be evaluated.
   let (_sysAppCheck = _systemAppCheck)
+  // atlan.yaml forces this when it renders; without atlan.yaml nothing else does.
+  let (_sysRootTriggerCheck = if (emitAtlanYaml) null else _systemRootTriggersCheck)
   let (_inputsDeclCheck = _inputsCheck)
   // Forced here because a bundle root never evaluates manifestData, which is the only
   // other reader of legacyWorkflowTypes — the misplacement would otherwise stay lazy.
