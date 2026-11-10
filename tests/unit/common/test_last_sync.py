@@ -10,6 +10,7 @@ API surface; earlier dict-shaped helpers were removed in BLDX-1229).
 from __future__ import annotations
 
 import inspect
+import sys
 import warnings
 from datetime import UTC
 
@@ -379,10 +380,17 @@ def test_legacy_transformers_from_import_warns_once_on_the_import_line():
 
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
-        from application_sdk.transformers.common.last_sync import LastSyncDetails  # noqa: F401, I001
+        from application_sdk.transformers.common.last_sync import LastSyncDetails  # noqa: F401, I001  # from-import-under-test
 
-        import_line = inspect.currentframe().f_lineno - 1  # type: ignore[union-attr]
-
+    # Locate the statement by its marker, so formatter-inserted lines never
+    # shift the expectation.
+    import_line = next(
+        i
+        for i, line in enumerate(
+            inspect.getsource(sys.modules[__name__]).splitlines(), 1
+        )
+        if line.rstrip().endswith("# from-import-under-test")
+    )
     ours = [w for w in record if "last_sync.LastSyncDetails" in str(w.message)]
     assert len(ours) == 1
     assert ours[0].filename == __file__
