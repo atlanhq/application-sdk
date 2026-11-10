@@ -108,6 +108,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/behind-the-scenes/`](examples/behind-the-scenes/) — single-entrypoint app with `marketplaceCard = false`; routable but no marketplace card or `package_id` emitted.
 - [`examples/system-app/`](examples/system-app/) — `type = "system"`: an in-tenant app started by other apps' DAG nodes. No `entrypoints` block, no card, no credential config, no manifest. Typed `inputs` (string, number, enum, bounded list/map, nested object) render `_input.py` without a `uiConfig`. They also render `contract/generated/input.pkl`, the typed DAG node that is synced into the toolkit as `src/system/<name>.pkl` for callers to import.
 - [`examples/system-bundle/`](examples/system-bundle/) — `type = "system"` with two entrypoints, each a UI-less system sub-contract with its own `inputs`. Each renders `app/generated/<entrypoint_snake>/` (importable), `contract/generated/<entrypoint>/input.pkl`, and an `_e2e_base.py` extending `SystemAppE2ETest`.
+- [`examples/system-triggers/`](examples/system-triggers/) — `type = "system"` bundle whose entrypoints declare `schedules` and streaming `events`. `atlan.yaml` renders an `entrypoints` block with `marketplace_card: false` on each entrypoint, so Local Marketplace reconciles the triggers and no card appears.
 - [`examples/deploy/`](examples/deploy/) — single-pool deployment: KEDA, resources, env, and per-pool `overrides` under `deploy.pools["default"]`.
 - [`examples/pools/`](examples/pools/) — `pools` map (preferred): named hot/cold worker pools with per-pool KEDA `cooldownPeriod` and resources.
 - [`examples/connection-ref/`](examples/connection-ref/) — `ConnectionRefInput` widget, `pipeline.publish = null`.
@@ -541,6 +542,14 @@ See [`examples/bundle/`](examples/bundle/) for a runnable example.
 - Any system entrypoint's `_e2e_base.py` (with or without a `uiConfig`) extends `SystemAppE2ETest` and names no `argo_*`, `app_service_url` or `connector_config_name`: `type` decides the base class, as for a single-entrypoint system app. A UI-less one also has no `manifest_path`, `required_dag_nodes` or `expect_*` lines (it has no manifest or extract/publish DAG), a comment telling the suite to set `manifest_path` and `required_dag_nodes`, and `entrypoint = "<entrypoint>"`.
 
 See [`examples/system-bundle/`](examples/system-bundle/).
+
+**System app triggers:** a system bundle whose entrypoint contracts declare `schedules` or `events` renders an `entrypoints` block in `atlan.yaml`. Local Marketplace learns an app's entrypoints only from that block, and reconciles a trigger only for an entrypoint it knows, so without the block those triggers would never be created. Every entrypoint in the block renders `marketplace_card: false` and no `package_id`, so no card appears (an `Entrypoint.metadata` `marketplace_card` key still wins). A system app with no trigger-bearing entrypoint still renders no block, so existing system apps are unchanged. Refused at `pkl eval`:
+
+- `schedules` / `events` on the system app's own root contract (single-entrypoint or bundle root): its `atlan.yaml` carries no root entrypoint, so they would never be reconciled. Declare them on an entrypoint's `contract`. Checked when `atlan.yaml` renders, so the same system sub-contract is accepted inside a bundle.
+- Triggers on an entrypoint whose contract renders no `manifest.json` (no `uiConfig`): triggers render only into the manifest, so they would be dropped.
+- `Entrypoint.type = "system"` when the block is emitted: GM and CI publish reject `system` as an entrypoint type. Leave the default or set a non-system type.
+
+See [`examples/system-triggers/`](examples/system-triggers/).
 
 ## Widget Types
 

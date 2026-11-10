@@ -1,0 +1,21 @@
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+name: system-triggers
+display_name: System Triggers Example
+type: system
+execution_mode: native
+icon_url: https://assets.atlan.com/assets/ph-gear-light.svg
+visibility: public
+build_tag: v1
+self_deployed_runtime: true
+entrypoints:
+- name: rollup
+  display_name: Rollup
+  icon_url: https://assets.atlan.com/assets/ph-gear-light.svg
+  type: connector
+  marketplace_card: false
+- name: feed
+  display_name: Feed
+  icon_url: https://assets.atlan.com/assets/ph-gear-light.svg
+  type: connector
+  marketplace_card: false

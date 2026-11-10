@@ -1,0 +1,35 @@
+/// `rollup` entrypoint of the system-triggers example: a system
+/// sub-contract started by a cron schedule.
+amends "../../src/App.pkl"
+
+name = "rollup"
+displayName = "Rollup"
+icon = "https://assets.atlan.com/assets/ph-gear-light.svg"
+type = "system"
+
+pipeline {
+  publish = null
+}
+
+// Triggers render only into manifest.json, which a contract emits only with a
+// uiConfig. A system app has no user-facing setup form; this one only exists so
+// the manifest is generated.
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["window-days"] = new NumericInput {
+          title = "Window (days)"
+          default = 1
+        }
+      }
+    }
+  }
+}
+
+schedules {
+  new ScheduleSpec {
+    name = "nightly"
+    cronExpression = "0 2 * * *"
+  }
+}
