@@ -139,3 +139,5 @@ uv run pytest tests/unit/storage/test_file_ref_sync.py -v -s
 # Run tests matching a pattern
 uv run pytest -k "test_name_pattern" -v
 ```
+
+<!-- Dummy line to exercise lens on Model Gateway. Do not merge. -->
