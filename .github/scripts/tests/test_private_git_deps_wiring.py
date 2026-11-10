@@ -50,6 +50,7 @@ JOBS = [
     ("tests-reusable.yaml", "unit", "private-git-deps"),
     ("tests-reusable.yaml", "integration", "private-git-deps"),
     ("tests-reusable.yaml", "e2e", "private-git-deps"),
+    ("tests-reusable.yaml", "api-member", "private-git-deps"),
     ("checks-reusable.yaml", "pre-commit", "private-git-deps"),
     ("conformance-reusable.yaml", "suite", "private-git-deps"),
     ("release-version-bump.yaml", "bump-version", "private_git_auth"),
@@ -379,3 +380,19 @@ def test_secrets_interface_keeps_org_pat_and_declares_the_app(
     assert "ORG_PAT_GITHUB" in secrets
     for name in ("FLEET_APP_ID", "FLEET_APP_PRIVATE_KEY"):
         assert secrets[name]["required"] is False
+
+
+# ── Hosted api member: the member's wheel install clones the private deps ────
+
+
+def test_api_member_installs_through_git_auth_after_the_mirror() -> None:
+    steps = _steps("tests-reusable.yaml", "api-member")
+    names = [s.get("name") for s in steps]
+    mirror = names.index("Mirror private git dependencies")
+    install = names.index("Install the api member alone and mount it like the host")
+    assert mirror < install
+    assert _mirrors(steps[mirror])
+    assert "uv pip install" in steps[install]["run"]
+    assert re.search(
+        r"git_auth\.py run -- \\\n\s*uv pip install", steps[install]["run"]
+    ), "the member's install must run through git_auth.py"
