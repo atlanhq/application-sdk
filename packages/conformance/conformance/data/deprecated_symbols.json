@@ -757,6 +757,15 @@
       "symbol": "_resolve_credential_ref"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "legacy_credential_ref is deprecated; use application_sdk.credentials.ref.legacy_credential_ref \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "legacy_credential_ref"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": " subclasses SqlMetadataExtractor which is deprecated. Use application_sdk.templates.SqlApp instead. Will be removed in v4.0.0.",
@@ -766,6 +775,15 @@
       "symbol": "SqlMetadataExtractor"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "legacy_credential_ref is deprecated; use application_sdk.credentials.ref.legacy_credential_ref \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_metadata_extractor",
+      "removal_version": "4.0.0",
+      "symbol": "legacy_credential_ref"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": " subclasses SqlQueryExtractor which is deprecated. Use application_sdk.templates.SqlApp instead. Will be removed in v4.0.0.",
@@ -773,6 +791,15 @@
       "module": "application_sdk.templates.sql_query_extractor",
       "removal_version": "4.0.0",
       "symbol": "SqlQueryExtractor"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "legacy_credential_ref is deprecated; use application_sdk.credentials.ref.legacy_credential_ref \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_query_extractor",
+      "removal_version": "4.0.0",
+      "symbol": "legacy_credential_ref"
     },
     {
       "kind": "property",
