@@ -289,6 +289,18 @@ def test_default_width_is_capped_by_available_cpus(monkeypatch, cpus, expected):
     assert offload._default_process_pool_max_workers.__wrapped__() == expected
 
 
+@pytest.mark.parametrize(
+    ("cpus", "expected"), [(1, 16), (4, 16), (12, 16), (13, 17), (28, 32), (64, 32)]
+)
+def test_blocking_pool_width_follows_available_cpus(monkeypatch, cpus, expected):
+    """``sdk-blocking-`` is ``min(32, max(16, cpus + 4))`` of the pod's CPUs, not the node's.
+
+    Before FND-4646 a 1-CPU pod on a 64-core node got 32 threads; it now gets 16.
+    """
+    monkeypatch.setattr(offload, "available_cpus", lambda: cpus)
+    assert offload._blocking_pool_width() == expected
+
+
 def _write(tmp_path, name: str, contents: str) -> str:
     path = tmp_path / name
     path.write_text(contents)

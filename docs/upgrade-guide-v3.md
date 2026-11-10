@@ -717,6 +717,21 @@ class MyConnector(App):
     ...
 ```
 
+### Concurrency defaults follow the pod's limits
+
+The worker no longer defaults to 100 activity slots. Unless
+`TEMPORAL_MAX_CONCURRENT_ACTIVITIES` is set, it derives the slot count from the
+container: `min(100, 32 × CPUs, memory limit ÷ 64 MiB)`, never below 16. The
+`sdk-blocking-` thread pool behind `run_in_thread` is `min(32, max(16, CPUs + 4))` wide. In
+both, CPUs means the whole CPUs the process may use: the tighter of its CPU affinity
+and the pod's CFS quota (rounded down, never below 1), not the node's core count.
+
+Small pods therefore allow fewer activities at once than before: a half-CPU pod under
+1 GiB gets 16 slots and a 1-CPU, 2 GiB pod gets 32, instead of 100. Fleet usage peaks
+well below these, so most apps see no change in throughput. The startup log line `Activity slots: N (...)` shows the
+value and what it was derived from. If an app relied on the old width, set
+`TEMPORAL_MAX_CONCURRENT_ACTIVITIES` in its deployment, or raise the pod's limits.
+
 ---
 
 ## Step 7: Define Typed Contracts

@@ -19,6 +19,32 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
+#: Upper bound on the derived activity-slot default: the fixed default every
+#: worker ran with before it was derived, so no pod gets more slots than it had.
+_MAX_CONCURRENT_ACTIVITIES_CAP = 100
+
+#: Derived activity slots per whole CPU the container may use. Activities are
+#: mostly awaiting I/O, so a CPU carries many.
+_ACTIVITY_SLOTS_PER_CPU = 32
+
+#: Container memory budgeted per derived activity slot (64 MiB).
+_MEMORY_BYTES_PER_ACTIVITY_SLOT = 64 * 1024 * 1024
+
+#: The derived default never goes below this, however small the pod.
+#:
+#: The three factors were chosen against a week of fleet slot usage. Peak
+#: concurrent activities on default-configured workers were 0-2 for most and
+#: never above 30. Most pods are half a CPU with under 1 GiB, so tighter
+#: factors (10 per CPU, 256 MiB per slot, no floor) would have capped about
+#: one worker in ten below a peak it actually reached. These factors capped
+#: none. The point is a cap that follows the pod's resources rather than one
+#: fixed number, set generously enough that it limits a pod that cannot hold
+#: a burst without trimming normal load.
+_MIN_DERIVED_ACTIVITY_SLOTS = 16
+
+#: Env var that sets the activity-slot count outright, bypassing derivation.
+_MAX_CONCURRENT_ACTIVITIES_ENV = "TEMPORAL_MAX_CONCURRENT_ACTIVITIES"
+
 
 @dataclass(frozen=True)
 class ExecutionSettings:
@@ -33,8 +59,15 @@ class ExecutionSettings:
     task_queue: str = "application-sdk"
     """Default task queue for workers."""
 
-    max_concurrent_activities: int = 100
-    """Maximum concurrent activities per worker."""
+    max_concurrent_activities: int = _MAX_CONCURRENT_ACTIVITIES_CAP
+    """Maximum concurrent activities per worker.
+
+    ``TEMPORAL_MAX_CONCURRENT_ACTIVITIES`` when set, else 100. This loader
+    never reads the container's limits: a worker created without an explicit
+    value and without the env var derives its own default from them at
+    construction (``create_worker``), so the cgroup is read once per worker
+    start rather than on every settings load.
+    """
 
     graceful_shutdown_timeout_seconds: int = 3600
     """Seconds to wait for in-flight activities to complete during worker shutdown.
@@ -134,6 +167,30 @@ def _load_graceful_shutdown_timeout() -> int:
     return ExecutionSettings.graceful_shutdown_timeout_seconds
 
 
+def _derive_max_concurrent_activities(cpus: int, memory_bytes: int | None) -> int:
+    """Activity slots a container with these limits can run without oversubscribing.
+
+    ``min(100, 32 x cpus, memory_bytes // 64 MiB)``, never below 16. An unknown
+    memory limit (``None``) drops the memory term rather than guessing one.
+    """
+    slots = min(_MAX_CONCURRENT_ACTIVITIES_CAP, cpus * _ACTIVITY_SLOTS_PER_CPU)
+    if memory_bytes is not None:
+        slots = min(slots, memory_bytes // _MEMORY_BYTES_PER_ACTIVITY_SLOT)
+    return max(_MIN_DERIVED_ACTIVITY_SLOTS, slots)
+
+
+def _load_max_concurrent_activities() -> int:
+    """``TEMPORAL_MAX_CONCURRENT_ACTIVITIES``, else 100. Never reads the cgroup."""
+    explicit = _explicit_max_concurrent_activities()
+    return _MAX_CONCURRENT_ACTIVITIES_CAP if explicit is None else explicit
+
+
+def _explicit_max_concurrent_activities() -> int | None:
+    """``TEMPORAL_MAX_CONCURRENT_ACTIVITIES`` as an int, or ``None`` when unset or blank."""
+    explicit = os.environ.get(_MAX_CONCURRENT_ACTIVITIES_ENV, "").strip()
+    return int(explicit) if explicit else None
+
+
 def load_execution_settings() -> ExecutionSettings:
     """Load execution settings from environment variables."""
     # v2-compat: remove ATLAN_WORKFLOW_HOST/PORT fallbacks when all deployments use TEMPORAL_HOST.
@@ -145,9 +202,7 @@ def load_execution_settings() -> ExecutionSettings:
         host=os.environ.get("TEMPORAL_HOST", _v2_default),
         namespace=os.environ.get("TEMPORAL_NAMESPACE", "default"),
         task_queue=os.environ.get("TEMPORAL_TASK_QUEUE", "application-sdk"),
-        max_concurrent_activities=int(
-            os.environ.get("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", "100")
-        ),
+        max_concurrent_activities=_load_max_concurrent_activities(),
         graceful_shutdown_timeout_seconds=_load_graceful_shutdown_timeout(),
         default_versioning_behavior=_load_versioning_behavior(
             "TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR"

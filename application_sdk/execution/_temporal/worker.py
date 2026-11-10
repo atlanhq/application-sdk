@@ -20,6 +20,7 @@ from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVe
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 from typing_extensions import deprecated
 
+from application_sdk._runtime.cgroup import available_cpus
 from application_sdk.app.registry import (
     AppRegistry,
     TaskRegistry,
@@ -36,9 +37,12 @@ from application_sdk.execution._temporal.activities import get_all_task_activiti
 from application_sdk.execution._temporal.workflows import get_all_app_workflows
 from application_sdk.execution.sandbox import SandboxConfig
 from application_sdk.execution.settings import (
+    _derive_max_concurrent_activities,
+    _explicit_max_concurrent_activities,
     load_execution_settings,
     load_interceptor_settings,
 )
+from application_sdk.observability.cgroup import memory_limit_bytes
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -552,6 +556,33 @@ async def _emit_worker_start_event(
         logger.warning("Failed to emit worker_start event", exc_info=True)
 
 
+def _resolve_max_concurrent_activities(passed: int | None) -> int:
+    """Activity slots for this worker, logged once with where they came from.
+
+    The caller's value, else ``TEMPORAL_MAX_CONCURRENT_ACTIVITIES``, else
+    derived from the container's CPU and memory limits. Only the last reads the
+    cgroup, once per worker start: a handful of pseudo-file reads.
+    """
+    if passed is not None:
+        logger.info("Activity slots: %d (passed to create_worker)", passed)
+        return passed
+    explicit = _explicit_max_concurrent_activities()
+    if explicit is not None:
+        logger.info("Activity slots: %d (TEMPORAL_MAX_CONCURRENT_ACTIVITIES)", explicit)
+        return explicit
+    cpus = available_cpus()
+    memory = memory_limit_bytes()
+    slots = _derive_max_concurrent_activities(cpus, memory)
+    logger.info(
+        "Activity slots: %d (derived from %d available CPUs, memory limit %s"
+        " bytes; set TEMPORAL_MAX_CONCURRENT_ACTIVITIES to override)",
+        slots,
+        cpus,
+        memory,
+    )
+    return slots
+
+
 def create_worker(
     client: Client,
     task_queue: str = "application-sdk",
@@ -1047,8 +1078,9 @@ def create_worker(
         restrictions=config.to_temporal_restrictions()
     )
 
-    if max_concurrent_activities is None:
-        max_concurrent_activities = load_execution_settings().max_concurrent_activities
+    max_concurrent_activities = _resolve_max_concurrent_activities(
+        max_concurrent_activities
+    )
 
     if graceful_shutdown_timeout_seconds is None:
         graceful_shutdown_timeout_seconds = (

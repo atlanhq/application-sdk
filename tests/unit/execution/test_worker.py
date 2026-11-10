@@ -651,6 +651,108 @@ class TestCreateWorker:
         # and break worker construction. The param must be absent entirely.
         assert "max_concurrent_workflow_tasks" not in captured
 
+    # ── max_concurrent_activities default (FND-4646) ──────────────────────
+
+    def _create_capturing(self, **kwargs: int) -> tuple[dict, mock.MagicMock]:
+        class _SlotsApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured.update(kwargs)
+            return mock.MagicMock()
+
+        mock_logger = mock.MagicMock()
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.worker.Worker",
+                side_effect=capture_worker,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.worker.logger", mock_logger
+            ),
+        ):
+            create_worker(_make_mock_client(), **kwargs)
+        return captured, mock_logger
+
+    @staticmethod
+    def _slots_log(mock_logger: mock.MagicMock) -> str:
+        for call in mock_logger.info.call_args_list:
+            if call.args and str(call.args[0]).startswith("Activity slots"):
+                return str(call.args[0]) % call.args[1:]
+        raise AssertionError("no 'Activity slots' startup log")
+
+    def test_activity_slots_derived_from_a_small_pod(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 1-CPU, 512 MiB pod on a big node lands on the floor, 16, not 100."""
+        monkeypatch.delenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", raising=False)
+        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", "512Mi")
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.available_cpus", lambda: 1
+        )
+
+        captured, mock_logger = self._create_capturing()
+
+        assert captured["max_concurrent_activities"] == 16
+        line = self._slots_log(mock_logger)
+        assert "derived from 1 available CPUs" in line
+        assert str(512 * 1024**2) in line
+
+    def test_activity_slots_bounded_by_the_cgroup_memory_limit(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """The enforced cgroup limit, not only the env var, bounds the slots."""
+        from application_sdk.observability import cgroup
+
+        limit = tmp_path / "memory.max"
+        limit.write_text(str(3 * 1024**3))
+        monkeypatch.setattr(cgroup, "_MEMORY_LIMIT_PATHS", (str(limit),))
+        monkeypatch.delenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", raising=False)
+        monkeypatch.delenv("K8S_POD_MEMORY_LIMIT", raising=False)
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.available_cpus", lambda: 16
+        )
+
+        captured, _ = self._create_capturing()
+
+        # min(100, 32 x 16, 3 GiB // 64 MiB) = 48
+        assert captured["max_concurrent_activities"] == 48
+
+    def test_activity_slots_env_override_wins(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", "37")
+        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", "1Gi")
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.available_cpus", lambda: 1
+        )
+
+        captured, mock_logger = self._create_capturing()
+
+        assert captured["max_concurrent_activities"] == 37
+        assert self._slots_log(mock_logger) == (
+            "Activity slots: 37 (TEMPORAL_MAX_CONCURRENT_ACTIVITIES)"
+        )
+
+    def test_activity_slots_passed_by_caller_win_and_are_logged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", "37")
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.available_cpus",
+            mock.Mock(side_effect=AssertionError("must not read the cgroup")),
+        )
+
+        captured, mock_logger = self._create_capturing(max_concurrent_activities=5)
+
+        assert captured["max_concurrent_activities"] == 5
+        assert self._slots_log(mock_logger) == (
+            "Activity slots: 5 (passed to create_worker)"
+        )
+
     def test_max_concurrent_workflow_tasks_in_start_event_params(self) -> None:
         """The configured value lands in worker_start observability params."""
 

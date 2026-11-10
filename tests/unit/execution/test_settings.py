@@ -6,12 +6,16 @@ import pytest
 from temporalio.common import VersioningBehavior
 
 from application_sdk.constants import derive_shutdown_budget, load_shutdown_budget
+from application_sdk.execution import settings as settings_mod
 from application_sdk.execution.settings import (
     ExecutionSettings,
     InterceptorSettings,
     load_execution_settings,
     load_interceptor_settings,
 )
+
+_MIB = 1024 * 1024
+_GIB = 1024 * _MIB
 
 
 class TestExecutionSettingsDefaults:
@@ -71,6 +75,22 @@ class TestLoadExecutionSettingsFromEnv:
         monkeypatch.setenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", "50")
         settings = load_execution_settings()
         assert settings.max_concurrent_activities == 50
+
+    @pytest.mark.parametrize("unset", [None, "", "  "])
+    def test_max_concurrent_activities_loader_never_reads_the_container(
+        self, monkeypatch: pytest.MonkeyPatch, unset: str | None
+    ) -> None:
+        """Unset or blank, the loader returns 100 even on a tiny pod.
+
+        Derivation happens once in ``create_worker``; every other caller of the
+        loader keeps the old contract and does no cgroup reads.
+        """
+        if unset is None:
+            monkeypatch.delenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", raising=False)
+        else:
+            monkeypatch.setenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", unset)
+        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", "512Mi")
+        assert load_execution_settings().max_concurrent_activities == 100
 
     def test_graceful_shutdown_timeout_from_env(
         self, monkeypatch: pytest.MonkeyPatch
@@ -318,3 +338,30 @@ class TestShutdownBudget:
         monkeypatch.delenv("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", raising=False)
         monkeypatch.delenv("ATLAN_SHUTDOWN_GRACE_SECONDS", raising=False)
         assert load_execution_settings().graceful_shutdown_timeout_seconds == 3600
+
+
+class TestDeriveMaxConcurrentActivities:
+    """``min(100, 32 x cpus, memory // 64 MiB)``, floored at 16 (FND-4646)."""
+
+    @pytest.mark.parametrize(
+        ("cpus", "memory", "expected"),
+        [
+            # No known memory limit: CPU alone, capped at the old default.
+            (1, None, 32),
+            (2, None, 64),
+            (4, None, 100),
+            (64, None, 100),
+            # Memory is the tighter bound.
+            (4, 2 * _GIB, 32),
+            (8, 3 * _GIB, 48),
+            # CPU is the tighter bound.
+            (2, 16 * _GIB, 64),
+            # Both generous: the cap.
+            (32, 64 * _GIB, 100),
+            # The fleet's typical half-CPU, sub-GiB pod lands on the floor.
+            (1, 700 * _MIB, 16),
+            (1, 0, 16),
+        ],
+    )
+    def test_formula(self, cpus: int, memory: int | None, expected: int) -> None:
+        assert settings_mod._derive_max_concurrent_activities(cpus, memory) == expected

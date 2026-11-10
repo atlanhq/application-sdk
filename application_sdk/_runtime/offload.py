@@ -63,8 +63,28 @@ P = ParamSpec("P")
 # This single instance is created once at module import and intentionally
 # outlives individual calls.  Named threads ("sdk-blocking-N") make it
 # distinguishable from Temporal's "activity-pool-N" threads in stack traces.
+#
+# Width is the stdlib's own default formula, ``min(32, cpus + 4)``, with the
+# CPU count taken from the container's limit (``available_cpus``) rather than
+# ``os.cpu_count()``, and never below 16. Without the floor a 1-CPU pod would
+# drop from 32 threads to 5. These threads mostly wait on a database or the
+# network rather than use CPU, so a wide fan-out of blocking calls would queue
+# where it ran in parallel before. The floor still halves what a small pod on
+# a big node got.
+_MAX_BLOCKING_POOL_WIDTH = 32
+_MIN_BLOCKING_POOL_WIDTH = 16
+
+
+def _blocking_pool_width() -> int:
+    """Threads in ``_BLOCKING_EXECUTOR``: ``min(32, max(16, available_cpus() + 4))``."""
+    return min(
+        _MAX_BLOCKING_POOL_WIDTH,
+        max(_MIN_BLOCKING_POOL_WIDTH, available_cpus() + 4),
+    )
+
+
 _BLOCKING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
-    max_workers=min(32, (os.cpu_count() or 1) + 4),
+    max_workers=_blocking_pool_width(),
     thread_name_prefix="sdk-blocking-",
 )
 
@@ -526,9 +546,9 @@ def _auto_hold(label: str, timeout: float | None) -> Iterator[None]:
 #   the app's next calls queue behind them until the cap is reached. Unset (the
 #   default), nothing changes: calls queue
 #   exactly as before. A default cap would turn today's queueing into failures
-#   for any fan-out wider than the cap, and the pool width it would be derived
-#   from is not a reliable number — ``os.cpu_count()`` reports the node's
-#   cores, not the pod's CPU limit.
+#   for any fan-out wider than the cap. The pool width now follows the pod's
+#   CPU limit, so a derived default would at least be sized right, but that
+#   does not change the first reason.
 # * **A per-app stranded count**: calls whose caller stopped waiting while the
 #   thread kept running. Exported as the ``offload.stranded_threads`` gauge,
 #   labelled by app only, and logged once per strand with the callable's name.
