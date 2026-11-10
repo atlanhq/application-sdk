@@ -176,6 +176,8 @@ def check_sdk_names(input_files: list[Path]) -> list[str]:
         extraction,
         set(TreeSelectionExtractionInput.model_fields),
     )
+    if stray := sorted(set(names["fieldMinSdk"]) - extraction):
+        errors.append(f"fieldMinSdk: {stray} are not base-class fields")
     if "AppInputContract" not in module_names:
         errors.append("inputModuleNames: missing AppInputContract")
     for path in input_files:

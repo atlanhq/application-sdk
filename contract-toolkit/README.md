@@ -268,7 +268,7 @@ connector = Connectors.SNOWFLAKE  // { value = "snowflake"; category = "warehous
 
 ### `SdkNames.pkl` — SDK Names Copied Into the Toolkit
 
-The SDK names `App.pkl` needs to render `_input.py` without shadowing the SDK: the fields `Input` and `ExtractionInput` declare (a form field of one of these names generates no field, so the SDK's type and validators win), and the class-shaped names `_input.py` imports (a nested `ObjectField` class of one of these names is refused). `scripts/test-sdk-import.py` compares every set with the installed SDK in CI. When the SDK adds or renames a base-class field, update this module.
+The SDK names `App.pkl` needs to render `_input.py` without shadowing the SDK: the fields `Input` and `ExtractionInput` declare (a form field of one of these names generates no field, so the SDK's type and validators win), and the class-shaped names `_input.py` imports (a nested `ObjectField` class of one of these names is refused). In CI, `scripts/test-sdk-import.py` checks that the field sets equal the installed SDK models' fields, and that every class-shaped name a generated example's `_input.py` imports is reserved. The class-name check runs one way only: a reserved name that nothing imports any more is not flagged. When the SDK adds or renames a base-class field, update this module. If the new field is newer than some app's SDK pin, also add it to `fieldMinSdk` with the release that added it. When a generated `_input.py` skips such a field, it raises `ImportError` at import on an older SDK, instead of the base class silently dropping the form value.
 
 ### Legacy modules (reference only)
 

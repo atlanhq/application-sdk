@@ -28,6 +28,8 @@ local withBaseFields = (minimalApp) {
 
 local inputPy: String = withBaseFields.output.files["app/generated/_input.py"].text
 
+local plainInputPy: String = minimalApp.output.files["app/generated/_input.py"].text
+
 facts {
   ["a form field the SDK base declares generates no field"] {
     !inputPy.contains("exclude_table_regex:")
@@ -36,5 +38,15 @@ facts {
   }
   ["any other form field still generates one"] {
     inputPy.contains("sample_size:")
+  }
+  // An older SDK's base class drops a field it does not declare, so skipping
+  // one the SDK added recently is guarded at import (SdkNames.fieldMinSdk).
+  ["a skipped field newer than some SDK pins is checked at import"] {
+    inputPy.contains("_SDK_FLOOR_FIELDS = {\"exclude_table_regex\", \"workflow_slug\"}\n")
+    inputPy.contains("if not _SDK_FLOOR_FIELDS <= ExtractionInput.model_fields.keys():\n")
+    inputPy.contains("requires atlan-application-sdk>=3.39.1")
+  }
+  ["a field every supported SDK declares needs no import check"] {
+    !plainInputPy.contains("_SDK_FLOOR_FIELDS")
   }
 }

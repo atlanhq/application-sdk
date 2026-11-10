@@ -4033,8 +4033,13 @@ fields. UI properties whose Python names collide with parent fields are skipped
 so the SDK declarations and validators remain in effect. The parent's field
 names, and the class-shaped names `_input.py` imports (which a nested
 `ObjectField` class may not reuse), are copied from the SDK into
-`src/SdkNames.pkl`; `scripts/test-sdk-import.py` fails CI when a set no longer
-matches the installed SDK.
+`src/SdkNames.pkl`; `scripts/test-sdk-import.py` fails CI when a field set no
+longer equals the installed SDK's fields, or a generated example imports a
+class-shaped name that is not reserved. When a skipped UI field is one the SDK
+added recently (`SdkNames.fieldMinSdk`: `workflow_slug` from 3.32.0,
+`exclude_table_regex` from 3.39.1), the module checks at import that the
+installed base class declares it and raises `ImportError` naming the required
+SDK release otherwise, because an older base class would drop the form value.
 
 ```python
 # AUTO-GENERATED from app.pkl — DO NOT EDIT MANUALLY.
