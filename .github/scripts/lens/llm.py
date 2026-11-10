@@ -260,6 +260,63 @@ def gateway_cost(header: str | None, usage: dict[str, Any]) -> float | None:
     ) / 1e6
 
 
+# Responses stream events that end a stream with the whole response object, the
+# same object a non-streaming call returns; and the ones that end it with an error.
+_STREAM_DONE = frozenset({"response.completed", "response.incomplete"})
+_STREAM_FAILED = frozenset({"response.failed", "error"})
+_STREAM_PARAM = re.compile(r"\bstream(ing)?\b")
+
+
+def read_stream(lines: Any) -> tuple[int, str]:
+    """A Responses server-sent-event stream, read to its end, as (status, body).
+
+    The final `response.completed` (or `response.incomplete`) event carries the full
+    response object, so it is returned as the body a non-streaming call would have
+    returned and everything downstream is unchanged. A `response.failed` / `error`
+    event is a 502 (provider weather: retried). A stream that ends without either
+    is a transport failure (status 0: retried).
+
+    Model Gateway cuts a non-streaming request at 90 s, but keeps a stream alive
+    while the model is still reasoning; that is the reason to stream at all."""
+    final: Any = None
+    failed: Any = None
+    data: list[str] = []
+
+    def flush() -> None:
+        nonlocal final, failed
+        payload = "\n".join(data)
+        data.clear()
+        if not payload or payload == "[DONE]":
+            return
+        try:
+            event = json.loads(payload)
+        except ValueError:
+            return
+        if not isinstance(event, dict):
+            return
+        ev = cast(dict[str, Any], event)
+        kind = str(ev.get("type") or "")
+        if kind in _STREAM_DONE and isinstance(ev.get("response"), dict):
+            final = ev["response"]
+        elif kind in _STREAM_FAILED:
+            failed = ev
+
+    for raw in lines:
+        line = (
+            raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+        ).rstrip("\r\n")
+        if line.startswith("data:"):
+            data.append(line[5:].lstrip())
+        elif not line:
+            flush()
+    flush()
+    if final is not None:
+        return 200, json.dumps(final)
+    if failed is not None:
+        return 502, json.dumps(failed)
+    return 0, "transport: the stream ended before the response completed"
+
+
 def _least_remaining(data: Any) -> float | None:
     """The smallest `remaining` (nano-USD) across every budget that applies to
     the key, wherever the policies response nests them; None if it names none."""
@@ -411,10 +468,24 @@ class Client:
             method="POST",
         )
         try:
+            # `timeout` bounds each read, not the whole call: a stream that keeps
+            # sending events may run past it, which is the point of streaming.
             with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:  # noqa: S310 - fixed https base from config
+                headers = dict(resp.headers)
+                ctype = next(
+                    (v for k, v in headers.items() if k.lower() == "content-type"), ""
+                )
+                # A server that ignores `stream` answers with plain JSON: read it as before.
+                if (
+                    body.get("stream")
+                    and resp.status == 200
+                    and "text/event-stream" in ctype
+                ):
+                    status, text = read_stream(resp)
+                    return status, headers, text
                 return (
                     resp.status,
-                    dict(resp.headers),
+                    headers,
                     resp.read().decode("utf-8", "replace"),
                 )
         except urllib.error.HTTPError as e:
@@ -625,6 +696,11 @@ class Client:
             self.unsupported.add("include")
             body.pop("include")
             return True
+        # Matched as a word: "upstream" in a provider error must not turn streaming off.
+        if body.get("stream") and _STREAM_PARAM.search(low):
+            self.unsupported.add("stream")
+            body.pop("stream")
+            return True
         for p in self.DROPPABLE:
             if p in body and p in low:
                 self.unsupported.add(p)
@@ -696,6 +772,9 @@ class Client:
             "max_output_tokens": max_tokens,
             "store": False,  # stateless: nothing kept server-side; reasoning rides back encrypted
         }
+        if "stream" not in self.unsupported:
+            # Model Gateway cuts a non-streaming call at 90 s; a stream is kept alive.
+            body["stream"] = True
         if tools:
             body["tools"] = [{"type": "function", **t["function"]} for t in tools]
             body["tool_choice"] = (
