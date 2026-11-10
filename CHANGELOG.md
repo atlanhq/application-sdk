@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.55.3 (November 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.55.2...v3.55.3
+
+### Bug Fixes
+
+- bound every read of the Temporal core /metrics endpoint with one shared helper [FND-4643] (#4817) (by @cmgrote in [17899fc](https://github.com/atlanhq/application-sdk/commit/17899fc))
+- carry activity metrics on the activity result so other workers and replays keep them [FND-4649] (#4818) (by @cmgrote in [47d90aa](https://github.com/atlanhq/application-sdk/commit/47d90aa))
+- refresh the RDS IAM auth token on new SQL connections [FND-4647] (#4816) (by @cmgrote in [7af6581](https://github.com/atlanhq/application-sdk/commit/7af6581))
+- deprecate the unwired Heracles helpers and CapacityPool, record one @observability metric, and stop installing debug handlers at import [FND-4650] (#4820) (by @cmgrote in [fbcb5c0](https://github.com/atlanhq/application-sdk/commit/fbcb5c0))
+- derive every shutdown bound from one declared pod grace period [FND-4645] (#4821) (by @cmgrote in [cab7eb5](https://github.com/atlanhq/application-sdk/commit/cab7eb5))
+
+### Refactoring
+
+- run every periodic flush on one background loop with one shutdown bound [FND-4648] (#4819) (by @cmgrote in [cdfbbdb](https://github.com/atlanhq/application-sdk/commit/cdfbbdb))
+
+
 ## v3.55.2 (November 09, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.55.1...v3.55.2

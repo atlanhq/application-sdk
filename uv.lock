@@ -284,7 +284,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "3.55.2"
+version = "3.55.3"
 source = { editable = "." }
 default-groups = ["dev", "test"]
 dependencies = [
@@ -507,7 +507,7 @@ test = [
 
 [[package]]
 name = "atlan-application-sdk-api"
-version = "3.55.2"
+version = "3.55.3"
 source = { editable = "packages/api" }
 dependencies = [
     { name = "certifi" },
