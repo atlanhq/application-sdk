@@ -31,7 +31,7 @@ ref = api_key_ref("my-service")
 | `git_token_ref(name)` | `GitTokenCredential` | `token`, `expires_at` |
 | `atlan_api_token_ref(name)` | `AtlanApiToken` | `token`, `base_url`, `expires_at` |
 | `atlan_oauth_client_ref(name)` | `AtlanOAuthClient` | `client_id`, `client_secret`, `token_url`, `scopes`, `access_token`, `refresh_token`, `expires_at`, `base_url` |
-| `legacy_credential_ref(guid, credential_type="unknown")` | `RawCredential` | `data` (raw dict) — **deprecated**, removed in v4.0. Use `CredentialRef.resolve(input)`, which builds the same GUID ref |
+| `legacy_credential_ref(guid, credential_type="unknown")` | `RawCredential`, or the typed credential for `credential_type` | `data` (raw dict) — **deprecated**, removed in v4.0. See [the GUID route](#rawcredential-guid-route) for replacements |
 
 All factory functions accept an optional `store_name` keyword argument (default: `"default"`) to route to a specific `SecretStore`.
 
@@ -93,7 +93,14 @@ value = cred.data.get("some_field")
 
 !!! note "The `credential_guid` route is supported"
 
-    `credential_guid` is how the platform names the credential for every direct-mode (non-agent) run, so the GUID route is a supported production path, not a legacy one. The resolver reads the credential through `DaprCredentialVault`: its non-secret config from the object store, merged with its secrets from the secret store. Only the public `legacy_credential_ref()` constructor is deprecated (removed in v4.0). Build a GUID ref with `CredentialRef.resolve(input)` instead.
+    `credential_guid` is how the platform names the credential for every direct-mode (non-agent) run, so the GUID route is a supported production path, not a legacy one. The resolver reads the credential through `DaprCredentialVault`: its non-secret config from the object store, merged with its secrets from the secret store. Only the public `legacy_credential_ref()` constructor is deprecated (removed in v4.0). Replace it by what the call passes:
+
+| Old call | Replacement | Resolves to |
+|---|---|---|
+| `legacy_credential_ref(guid)` | `CredentialRef.resolve(input)` | `RawCredential` |
+| `legacy_credential_ref(guid, credential_type="api_key")` | `CredentialRef(name=guid, credential_type="api_key", credential_guid=guid)` | `ApiKeyCredential` (the registry parser for that type) |
+
+`CredentialRef.resolve(input)` always builds the GUID ref with `credential_type="unknown"`, so it only replaces the untyped call. A caller that passed a `credential_type` keeps typed resolution by constructing the `CredentialRef` directly, as in the second row.
 
 ---
 

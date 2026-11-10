@@ -551,8 +551,10 @@ ExtractionInput(credential_guid="abc-123")          # GUID route (direct mode)
 ExtractionInput(credential_ref=api_key_ref("prod")) # pre-built typed ref
 ```
 
-To build a GUID ref yourself, call `CredentialRef.resolve(input)`. The public
-`legacy_credential_ref()` constructor is deprecated and removed in v4.0.
+To build a GUID ref yourself, call `CredentialRef.resolve(input)`, or construct
+`CredentialRef(name=guid, credential_type=..., credential_guid=guid)` when you
+need a typed credential. The public `legacy_credential_ref()` constructor is
+deprecated and removed in v4.0.
 
 If you need to pass credentials to a legacy client that expects a raw dict:
 

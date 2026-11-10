@@ -444,20 +444,23 @@ Run these detections and report the bucket(s) before changing anything:
    derivation to input construction (see 2h). SDK-side fix tracked in CNCT-92.
 10. **Non-routable `extraction_method` class** — the credential router
     (`CredentialRef.resolve`) reads `extraction_method` as the routing
-    *selector* and accepts only `direct` (+ `credential_guid`) or `agent`
-    (+ populated `agent_json`); anything else raises `CredentialRoutingError`.
-    Query-extraction / miner-family manifests commonly set `extraction-method`
-    to an extraction *kind* instead — e.g. `query_history` — which names what is
-    extracted, not how creds are routed. Left as-is, the gate's `resolve()`
-    raises on every run and survives **only** via `resolve_or_none`'s
-    catch-and-fall-back to a GUID ref — so it looks like it works (a caught
-    `CredentialRoutingError` stacktrace on every run) until the app flips to
-    hard mode or runs without a `credential_guid`, at which point the gate
-    resolves `credentials=[]` and soft-skips or hard-aborts. Detect by grepping
-    the manifest (`app/generated/**/*.json`) and the input model for
-    `extraction-method` / `extraction_method` values that are not `direct` /
-    `agent`. Fix in phase 2 by normalizing it at input construction (see 2h).
-    Same SDK ticket: CNCT-92.
+    *selector*. It accepts `agent` (+ populated `agent_json`) or a value in
+    `GUID_ROUTED_EXTRACTION_METHODS` (`direct`, plus the miner kinds
+    `query_history` and `s3`) with a `credential_guid`; anything else raises
+    `CredentialRoutingError`. Query-extraction / miner-family manifests
+    sometimes set `extraction-method` to some other extraction *kind*, which
+    names what is extracted, not how creds are routed. Left as-is, the gate's
+    `resolve()` raises on every run. The gate resolves credentials through
+    `CredentialRef.resolve_or_none` in **both** soft and hard mode, and that
+    catches the error, logs a WARNING with the stacktrace, and falls back to a
+    GUID ref when a `credential_guid` is present. So with a guid the gate still
+    gets its credentials in either mode — the cost is a misleading stacktrace
+    on every run. Without a guid it resolves `credentials=[]`, and the gate
+    mode then decides the verdict (soft-skip or hard-abort). Detect by
+    grepping the manifest (`app/generated/**/*.json`) and the input model for
+    `extraction-method` / `extraction_method` values outside `agent` and
+    `GUID_ROUTED_EXTRACTION_METHODS`. Fix in phase 2 by normalizing it at input
+    construction (see 2h). Same SDK ticket: CNCT-92.
 
 ## Phase 1 — Bump and boot
 
@@ -893,10 +896,10 @@ when that lands, delete the validator.
 
 **Also normalize `extraction_method` if it isn't router-routable** (phase-0
 bucket 10). Lifting the guid is not enough if the router can't route it: the
-gate calls `CredentialRef.resolve`, which only accepts `direct` / `agent`. A
-manifest that sets `extraction-method` to an extraction *kind* (e.g.
-`query_history`) makes `resolve()` raise, and it limps along only on
-`resolve_or_none`'s GUID-ref fallback. Map it to the routing selector at
+gate calls `CredentialRef.resolve`, which only accepts `agent` or a value in
+`GUID_ROUTED_EXTRACTION_METHODS`. A manifest that sets `extraction-method` to
+any other extraction *kind* makes `resolve()` raise, and it limps along only
+on `resolve_or_none`'s GUID-ref fallback. Map it to the routing selector at
 construction, mirroring `resolve()`'s own precedence (agent creds win over a
 guid):
 
@@ -914,8 +917,9 @@ def _route_extraction_method_for_gate(self):
 
 Leave it untouched when there's nothing to route (no guid, no agent) — let the
 gate decide on an empty credential rather than inventing a route. When it bites
-if skipped: works today via the caught fallback, but breaks at SDK v4.0 (fallback
-removed) or the hard-mode flip (every run aborts). Nothing reads the extraction
+if skipped: works via the caught fallback while a `credential_guid` is present,
+in soft and hard mode alike, at the cost of a stacktrace on every run; a run
+without a guid resolves no credentials and the gate mode decides the verdict. Nothing reads the extraction
 *kind* value for behaviour, so remapping is safe — verify with a grep. Same
 durable SDK fix: `resolve()` should route "non-agent + guid → GUID" itself
 (CNCT-92), after which this validator is deleted too.
@@ -1021,10 +1025,12 @@ embedded Dapr locally) — not a real verdict, re-run. `source_unverifiable` on 
   anyway. Pair a large budget with `1`.
 - Mis-set `entrypoint` default in `preflight_check` → multi-entrypoint runs
   routed down the wrong branch (a miner silently running the crawler's checks).
-- `extraction_method` names an extraction *kind* (e.g. `query_history`), not a
-  routing selector → `CredentialRef.resolve` raises and the gate survives only
-  on `resolve_or_none`'s GUID-ref fallback / hard-aborts under hard mode. Reads green today because the error is caught — a
-  false all-clear. Normalize to `direct`/`agent` at input construction (phase-0
+- `extraction_method` names an extraction *kind* outside `agent` and
+  `GUID_ROUTED_EXTRACTION_METHODS`, not a routing selector →
+  `CredentialRef.resolve` raises and the gate survives only on
+  `resolve_or_none`'s GUID-ref fallback, in either gate mode. Without a
+  `credential_guid` it resolves no credentials and the mode decides the verdict.
+  Reads green because the error is caught — a false all-clear. Normalize to `direct`/`agent` at input construction (phase-0
   bucket 10, 2h).
 
 ## Agent protocol — stop points and what to report at each

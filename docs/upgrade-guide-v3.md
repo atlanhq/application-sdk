@@ -943,8 +943,12 @@ ExtractionInput(credential_ref=api_key_ref("prod-key"))  # pre-built typed ref
 ```
 
 If your code calls `legacy_credential_ref(guid)`, switch to
-`CredentialRef.resolve(input)`. The public constructor is deprecated and
-removed in v4.0; the GUID route it builds is not.
+`CredentialRef.resolve(input)`. If it passes a `credential_type`, build the ref
+directly to keep typed resolution:
+`CredentialRef(name=guid, credential_type="api_key", credential_guid=guid)`
+(`resolve()` always uses `credential_type="unknown"`, which resolves to
+`RawCredential`). The public constructor is deprecated and removed in v4.0; the
+GUID route it builds is not.
 
 If you need to call a legacy client that expects a raw dict, use
 `resolve_credential_raw()`:
