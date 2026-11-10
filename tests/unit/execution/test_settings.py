@@ -228,6 +228,19 @@ class TestShutdownBudget:
         if grace >= 4:
             assert b.drain_seconds + b.post_drain_seconds + b.headroom_seconds <= grace
 
+    def test_grace_too_short_for_the_drain_delay_is_rejected(self) -> None:
+        """A 1 s grace cannot even cover the 5 s delay before Temporal shutdown."""
+        with pytest.raises(ValueError, match="at least 6s"):
+            derive_shutdown_budget(1, drain_delay_seconds=5)
+        assert derive_shutdown_budget(6, drain_delay_seconds=5).drain_seconds == 0
+
+    def test_grace_too_short_warns_and_keeps_defaults(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "1")
+        with pytest.warns(UserWarning, match="ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS"):
+            assert load_shutdown_budget() is None
+
     def test_unset_grace_means_no_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("ATLAN_SHUTDOWN_GRACE_SECONDS", raising=False)
         assert load_shutdown_budget() is None

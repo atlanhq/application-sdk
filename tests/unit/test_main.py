@@ -3489,6 +3489,19 @@ class TestLogShutdownBudget:
         log.warning.assert_called_once()
         assert "overrun" in log.warning.call_args.args[0]
 
+    def test_overrun_counts_the_daprd_headroom(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """5 s delay + 18 s drain + 7 s post-drain fills a 30 s grace exactly,
+        leaving none of the 3 s kept back for daprd's stop."""
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "30")
+        monkeypatch.setenv("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", "18")
+        monkeypatch.delenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", raising=False)
+        with patch("application_sdk.main.logger") as log:
+            _log_shutdown_budget()
+        log.warning.assert_called_once()
+        assert 33 in log.warning.call_args.args
+
     def test_derived_bounds_fit_the_grace(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

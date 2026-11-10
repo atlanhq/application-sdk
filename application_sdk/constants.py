@@ -334,8 +334,21 @@ def derive_shutdown_budget(
     per-call HTTP timeout ≤ 1/8 of it (two calls), the pre-DELETE hold the
     remainder of that half. A 12 h grace therefore keeps the 120/10/35 s
     defaults and drains for ~12 h; a 30 s grace drains for 15 s.
+
+    Raises:
+        ValueError: The grace is shorter than the drain delay plus a 1 s
+            post-drain deadline, so no split can fit inside it.
     """
     grace = max(0, grace_seconds)
+    # The drain delay and a 1 s post-drain deadline are fixed costs: below
+    # their sum no split fits the grace, and a drain of 0 would still leave
+    # SIGKILL landing before the worker reached Temporal's shutdown.
+    minimum = math.ceil(drain_delay_seconds) + 1
+    if grace < minimum:
+        raise ValueError(
+            f"grace of {grace}s cannot fit the {drain_delay_seconds}s drain delay "
+            f"and a 1s post-drain deadline; it must be at least {minimum}s"
+        )
     headroom = min(_SHUTDOWN_HEADROOM_CAP_SECONDS, grace // 10)
     # Never 0: a non-positive post-drain timeout disables the deadline.
     post_drain = max(1, min(_DEFAULT_POST_DRAIN_SECONDS, grace // 4))
@@ -379,7 +392,16 @@ def load_shutdown_budget() -> ShutdownBudget | None:
         return None
     if grace <= 0:
         return None
-    return derive_shutdown_budget(grace)
+    try:
+        return derive_shutdown_budget(grace)
+    except ValueError as exc:
+        warnings.warn(
+            f"{SHUTDOWN_GRACE_SECONDS_ENV}={grace}: {exc}. Shutdown bounds keep "
+            "their fixed defaults; raise the grace or lower "
+            "ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS",
+            stacklevel=2,
+        )
+        return None
 
 
 _SHUTDOWN_BUDGET = load_shutdown_budget()

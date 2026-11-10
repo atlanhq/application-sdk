@@ -1356,16 +1356,20 @@ def _log_shutdown_budget() -> None:
         SHUTDOWN_DRAIN_DELAY_SECONDS
         + drain
         + (post_drain if post_drain > 0 else budget.post_drain_seconds)
+        # Kept back for daprd's stop after the process exits; eating into it
+        # leaves the sidecar to be SIGKILLed.
+        + budget.headroom_seconds
     )
     if total > budget.grace_seconds:
         logger.warning(
             "Shutdown bounds overrun the pod grace period: drain_delay %ss + "
-            "drain %ss + post_drain %ss = %ss > %s=%s; SIGKILL will land before "
-            "shutdown finishes. Unset the explicit overrides to derive them from "
-            "the grace",
+            "drain %ss + post_drain %ss + daprd headroom %ss = %ss > %s=%s; "
+            "SIGKILL will land before shutdown finishes. Unset the explicit "
+            "overrides to derive them from the grace",
             SHUTDOWN_DRAIN_DELAY_SECONDS,
             drain,
             post_drain,
+            budget.headroom_seconds,
             total,
             SHUTDOWN_GRACE_SECONDS_ENV,
             budget.grace_seconds,
