@@ -3210,7 +3210,7 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 #### `setup_tracer_provider`
 
 - **Import:** `from application_sdk.observability.traces_adaptor import setup_tracer_provider`
-- **Signature:** `setup_tracer_provider() -> Optional[TracerProvider]`
+- **Signature:** `setup_tracer_provider() -> Optional[trace.TracerProvider]`
 - **Summary:** Install the process-wide OpenTelemetry tracer provider, once.
 - **Defined in:** `application_sdk/observability/traces_adaptor.py`
 

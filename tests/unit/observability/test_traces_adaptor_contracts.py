@@ -3,27 +3,30 @@
 Targets the uncovered branches:
 - _reset_for_testing (ClassVar reset).
 - setup_tracer_provider: off, OTLP-only default, dev-only console exporter,
-  idempotence, exporter and provider failures.
+  idempotence, reuse of a pre-installed global, install races, concurrent
+  callers, exporter and provider failures.
 - the adapter binding to the shared provider.
 - export_record dispatch (TraceRecord vs other; ENABLE_OTLP_TRACES on/off).
 - _send_to_otel ERROR-status branch and exception swallow.
 - _log_to_console exception swallow.
 - record_trace re-raises after logging.
 
-``set_tracer_provider`` is always mocked so no test installs a process-wide
-provider; the exporter-wiring tests build a real ``TracerProvider`` so they
+OTel's global provider slot is faked (``otel_global``) so no test installs a
+process-wide provider; the exporter-wiring tests build a real ``TracerProvider`` so they
 check the processors actually attached.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 from unittest import mock
 
 import pytest
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import ConsoleSpanExporter
+from opentelemetry.trace import ProxyTracerProvider
 
 from application_sdk.observability import traces_adaptor as tracer_mod
 from application_sdk.observability.models import TraceRecord
@@ -67,10 +70,36 @@ class TestResetForTesting:
 
 @pytest.fixture(autouse=True)
 def _reset_installed_provider():
-    """Each test starts with no provider installed by this module."""
+    """Each test starts with no provider recorded by this module."""
     tracer_mod._tracer_provider = None
     yield
     tracer_mod._tracer_provider = None
+
+
+class _FakeGlobal:
+    """OTel's one-shot global provider slot, without touching the real one:
+    the first ``set`` wins, later ones are ignored (as OTel does)."""
+
+    def __init__(self) -> None:
+        self.provider: object = ProxyTracerProvider()
+        self.set = mock.MagicMock(side_effect=self._set)
+
+    def _set(self, provider: object) -> None:
+        if isinstance(self.provider, ProxyTracerProvider):
+            self.provider = provider
+
+    def get(self) -> object:
+        return self.provider
+
+
+@pytest.fixture
+def otel_global():
+    fake = _FakeGlobal()
+    with (
+        mock.patch.object(tracer_mod.trace, "set_tracer_provider", fake.set),
+        mock.patch.object(tracer_mod.trace, "get_tracer_provider", fake.get),
+    ):
+        yield fake
 
 
 def _exporters_on(provider: TracerProvider) -> list[object]:
@@ -80,15 +109,14 @@ def _exporters_on(provider: TracerProvider) -> list[object]:
 
 
 class TestSetupTracerProvider:
-    def test_noop_when_traces_disabled(self) -> None:
-        with (
-            mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", False),
-            mock.patch.object(tracer_mod.trace, "set_tracer_provider") as mock_set,
-        ):
+    def test_noop_when_traces_disabled(self, otel_global) -> None:
+        with mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", False):
             assert tracer_mod.setup_tracer_provider() is None
-        mock_set.assert_not_called()
+        otel_global.set.assert_not_called()
 
-    def test_installs_global_provider_with_otlp_only_by_default(self) -> None:
+    def test_installs_global_provider_with_otlp_only_by_default(
+        self, otel_global
+    ) -> None:
         """FND-4642: OTLP only — no ConsoleSpanExporter writing every span to
         stdout unless the dev-only flag asks for it."""
         with (
@@ -97,48 +125,119 @@ class TestSetupTracerProvider:
             mock.patch.object(
                 tracer_mod, "OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel:4317"
             ),
-            mock.patch.object(tracer_mod.trace, "set_tracer_provider") as mock_set,
         ):
             provider = tracer_mod.setup_tracer_provider()
 
         assert isinstance(provider, TracerProvider)
-        mock_set.assert_called_once_with(provider)
-        exporters = _exporters_on(provider)
-        assert [type(e) for e in exporters] == [OTLPSpanExporter]
+        otel_global.set.assert_called_once_with(provider)
+        assert otel_global.provider is provider
+        assert [type(e) for e in _exporters_on(provider)] == [OTLPSpanExporter]
         provider.shutdown()
 
-    def test_console_exporter_only_behind_dev_flag(self) -> None:
+    def test_console_exporter_only_behind_dev_flag(self, otel_global) -> None:
         with (
             mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
             mock.patch.object(tracer_mod, "ENABLE_TRACES_CONSOLE", True),
             mock.patch.object(
                 tracer_mod, "OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel:4317"
             ),
-            mock.patch.object(tracer_mod.trace, "set_tracer_provider"),
         ):
             provider = tracer_mod.setup_tracer_provider()
 
-        assert provider is not None
+        assert isinstance(provider, TracerProvider)
         exporters = _exporters_on(provider)
         assert [type(e) for e in exporters] == [OTLPSpanExporter, ConsoleSpanExporter]
         provider.shutdown()
 
-    def test_idempotent(self) -> None:
+    def test_idempotent(self, otel_global) -> None:
         """Called from run_main, the TraceInterceptor and the adapter: one
         provider, installed once."""
         with (
             mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
             mock.patch.object(tracer_mod, "OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-            mock.patch.object(tracer_mod.trace, "set_tracer_provider") as mock_set,
         ):
             first = tracer_mod.setup_tracer_provider()
             second = tracer_mod.setup_tracer_provider()
 
         assert first is not None
         assert first is second
-        mock_set.assert_called_once()
+        otel_global.set.assert_called_once()
 
-    def test_otlp_exporter_failure_does_not_add_console(self) -> None:
+    def test_reuses_a_provider_the_host_already_installed(self, otel_global) -> None:
+        """Lens F-5be9e9: OTel keeps the first global provider. When the host
+        installed one, return that one rather than a second provider Temporal
+        never uses — and don't build exporters for it."""
+        host_provider = TracerProvider()
+        otel_global.provider = host_provider
+        with (
+            mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
+            mock.patch.object(tracer_mod, "TracerProvider") as mock_build,
+        ):
+            assert tracer_mod.setup_tracer_provider() is host_provider
+            assert tracer_mod.setup_tracer_provider() is host_provider
+
+        mock_build.assert_not_called()
+        otel_global.set.assert_not_called()
+
+    def test_losing_an_install_race_returns_the_winner(self, otel_global) -> None:
+        """Lens F-5be9e9: if another provider becomes global between the check
+        and ``set_tracer_provider``, return the global one and shut ours."""
+        winner = TracerProvider()
+        ours = mock.MagicMock(spec=TracerProvider)
+
+        def _someone_else_wins(provider: object) -> None:
+            otel_global.provider = winner
+
+        otel_global.set.side_effect = _someone_else_wins
+        with (
+            mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
+            mock.patch.object(tracer_mod, "_build_tracer_provider", return_value=ours),
+        ):
+            assert tracer_mod.setup_tracer_provider() is winner
+
+        ours.shutdown.assert_called_once_with()
+        assert tracer_mod._tracer_provider is winner
+
+    def test_concurrent_calls_agree_on_one_global_provider(self, otel_global) -> None:
+        """Lens F-2ee0ca / F-c92eec: threads building workers at once must all
+        get the provider that is actually global, and only one is built.
+
+        A barrier holds every thread at provider construction; without the
+        lock each would build, and the losers would keep their own."""
+        n = 4
+        barrier = threading.Barrier(n, timeout=0.5)
+        built: list[TracerProvider] = []
+
+        def _build() -> TracerProvider:
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                pass  # serialised by the lock: the others never arrive
+            provider = TracerProvider()
+            built.append(provider)
+            return provider
+
+        results: list[object] = []
+        with (
+            mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
+            mock.patch.object(tracer_mod, "_build_tracer_provider", _build),
+        ):
+            threads = [
+                threading.Thread(
+                    target=lambda: results.append(tracer_mod.setup_tracer_provider())
+                )
+                for _ in range(n)
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+
+        assert len(results) == n
+        assert len(built) == 1
+        assert all(r is otel_global.provider for r in results)
+
+    def test_otlp_exporter_failure_does_not_add_console(self, otel_global) -> None:
         with (
             mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
             mock.patch.object(tracer_mod, "ENABLE_TRACES_CONSOLE", False),
@@ -149,15 +248,14 @@ class TestSetupTracerProvider:
                 tracer_mod, "OTLPSpanExporter", side_effect=RuntimeError("bad config")
             ),
             mock.patch.object(tracer_mod, "ConsoleSpanExporter") as mock_console,
-            mock.patch.object(tracer_mod.trace, "set_tracer_provider"),
         ):
             provider = tracer_mod.setup_tracer_provider()
 
-        assert provider is not None
+        assert isinstance(provider, TracerProvider)
         mock_console.assert_not_called()
         assert _exporters_on(provider) == []
 
-    def test_provider_failure_installs_nothing(self) -> None:
+    def test_provider_failure_installs_nothing(self, otel_global) -> None:
         """No console-only fallback: a failed setup leaves tracing off."""
         with (
             mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
@@ -165,12 +263,11 @@ class TestSetupTracerProvider:
                 tracer_mod, "TracerProvider", side_effect=RuntimeError("kaboom")
             ),
             mock.patch.object(tracer_mod, "ConsoleSpanExporter") as mock_console,
-            mock.patch.object(tracer_mod.trace, "set_tracer_provider") as mock_set,
         ):
             assert tracer_mod.setup_tracer_provider() is None
 
         mock_console.assert_not_called()
-        mock_set.assert_not_called()
+        otel_global.set.assert_not_called()
         assert tracer_mod._tracer_provider is None
 
 

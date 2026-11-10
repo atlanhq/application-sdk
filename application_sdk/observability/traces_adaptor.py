@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 from typing import Any, ClassVar, Dict, Optional
 
@@ -47,11 +48,14 @@ __all__ = ["TraceRecord", "AtlanTracesAdapter", "get_traces", "setup_tracer_prov
 _module_logger = get_logger(__name__)
 
 
-# The provider this module installed as the OTel global, once per process.
-_tracer_provider: Optional[TracerProvider] = None
+# The process-wide provider: the one this module installed as the OTel
+# global, or the one it found already installed. Guarded by the lock so
+# concurrent callers (run_main, TraceInterceptor, the adapter) agree on one.
+_tracer_provider: Optional[trace.TracerProvider] = None
+_tracer_provider_lock = threading.Lock()
 
 
-def setup_tracer_provider() -> Optional[TracerProvider]:
+def setup_tracer_provider() -> Optional[trace.TracerProvider]:
     """Install the process-wide OpenTelemetry tracer provider, once.
 
     Temporal's ``TracingInterceptor`` (behind ``TraceInterceptor``) emits spans
@@ -62,58 +66,87 @@ def setup_tracer_provider() -> Optional[TracerProvider]:
     Does nothing and returns ``None`` unless ``ATLAN_ENABLE_OTLP_TRACES`` is
     on. Spans export via OTLP to ``OTEL_EXPORTER_OTLP_ENDPOINT``; they are
     also printed to stdout only when ``ATLAN_ENABLE_TRACES_CONSOLE`` is on,
-    a development-only switch. Idempotent: later calls return the provider
-    the first call installed. If setup fails the error is logged, no
-    provider is installed and ``None`` is returned — there is no fallback
-    that would write spans to stdout instead.
+    a development-only switch.
+
+    The global provider is owned by whoever installs it first. If the host
+    process (or OTel auto-instrumentation) already installed one, it is
+    returned as is and the SDK's exporters are not attached: export is that
+    provider's job. Thread-safe and idempotent: every call returns the
+    provider that is actually global. If setup fails the error is logged,
+    nothing is installed and ``None`` is returned — there is no fallback that
+    would write spans to stdout instead.
 
     Returns:
-        The installed provider, or ``None`` when tracing is off or setup
-        failed.
+        The global provider, or ``None`` when tracing is off or setup failed.
     """
     global _tracer_provider
     if not ENABLE_OTLP_TRACES:
         return None
-    if _tracer_provider is not None:
-        return _tracer_provider
+    with _tracer_provider_lock:
+        if _tracer_provider is not None:
+            return _tracer_provider
 
-    try:
-        provider = TracerProvider(resource=build_otel_resource())
-        exporters: list[SpanExporter] = []
-        if OTEL_EXPORTER_OTLP_ENDPOINT:
-            try:
-                exporters.append(
-                    OTLPSpanExporter(
-                        endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
-                        timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
-                    )
+        existing = trace.get_tracer_provider()
+        if not isinstance(existing, trace.ProxyTracerProvider):
+            _module_logger.info(
+                "An OpenTelemetry tracer provider is already installed; spans "
+                "go through it and the SDK's span exporters are not attached"
+            )
+            _tracer_provider = existing
+            return existing
+
+        try:
+            provider = _build_tracer_provider()
+            trace.set_tracer_provider(provider)
+        except Exception:
+            _module_logger.error(
+                "Failed to set up the OpenTelemetry tracer provider; tracing disabled",
+                exc_info=True,
+            )
+            return None
+
+        installed = trace.get_tracer_provider()
+        if installed is not provider:
+            # Code outside this module installed a provider between the
+            # check above and ours; OTel kept theirs. Use it, and stop ours
+            # so its batch processors don't linger.
+            provider.shutdown()
+            _tracer_provider = installed
+            return installed
+
+        _tracer_provider = provider
+        return provider
+
+
+def _build_tracer_provider() -> TracerProvider:
+    """A ``TracerProvider`` with the configured span exporters attached."""
+    provider = TracerProvider(resource=build_otel_resource())
+    exporters: list[SpanExporter] = []
+    if OTEL_EXPORTER_OTLP_ENDPOINT:
+        try:
+            exporters.append(
+                OTLPSpanExporter(
+                    endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
+                    timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
                 )
-            except Exception:
-                _module_logger.warning(
-                    "Failed to set up the OTLP span exporter; spans will not be exported over OTLP",
-                    exc_info=True,
-                )
-        if ENABLE_TRACES_CONSOLE:
-            exporters.append(ConsoleSpanExporter())
-        if not exporters:
+            )
+        except Exception:
             _module_logger.warning(
-                "ATLAN_ENABLE_OTLP_TRACES=true but no span exporter is configured "
-                "(OTEL_EXPORTER_OTLP_ENDPOINT is empty or its exporter failed); "
-                "spans will be dropped"
+                "Failed to set up the OTLP span exporter; spans will not be exported over OTLP",
+                exc_info=True,
             )
-        for exporter in exporters:
-            provider.add_span_processor(
-                BatchSpanProcessor(exporter, schedule_delay_millis=OTEL_BATCH_DELAY_MS)
-            )
-        trace.set_tracer_provider(provider)
-    except Exception:
-        _module_logger.error(
-            "Failed to set up the OpenTelemetry tracer provider; tracing disabled",
-            exc_info=True,
+    if ENABLE_TRACES_CONSOLE:
+        exporters.append(ConsoleSpanExporter())
+    if not exporters:
+        _module_logger.warning(
+            "ATLAN_ENABLE_OTLP_TRACES=true but no span exporter is configured "
+            "(OTEL_EXPORTER_OTLP_ENDPOINT is empty or its exporter failed); "
+            "spans will be dropped"
         )
-        return None
-
-    _tracer_provider = provider
+    for exporter in exporters:
+        provider.add_span_processor(
+            BatchSpanProcessor(exporter, schedule_delay_millis=OTEL_BATCH_DELAY_MS)
+        )
     return provider
 
 
