@@ -1299,25 +1299,25 @@ class TestRunOrchestration:
         assert out.column_batches_executed == 12
         assert out.columns_extracted == 12
 
-    async def test_run_uses_legacy_credential_guid_inline_import(self) -> None:
-        """When credential_ref is None but credential_guid is set, run() inline-imports
-        legacy_credential_ref (line 813)."""
+    async def test_run_builds_guid_ref_from_credential_guid(self) -> None:
+        """When credential_ref is None but credential_guid is set, run() builds the
+        GUID ref through the private helper, not the deprecated public one."""
         from application_sdk.credentials.ref import CredentialRef
 
         ext = self._build_extractor()
         fake_ref = CredentialRef(credential_guid="some-guid")
         with (
             patch(
-                "application_sdk.credentials.legacy_credential_ref",
+                "application_sdk.credentials.ref._guid_credential_ref",
                 return_value=fake_ref,
-            ) as mock_legacy,
+            ) as mock_guid_ref,
             self._patch_workflow_info(),
         ):
             await IncrementalSqlMetadataExtractor.run(
                 ext,
                 self._input(credential_guid="some-guid"),
             )
-        mock_legacy.assert_called_once_with("some-guid")
+        mock_guid_ref.assert_called_once_with("some-guid")
 
     async def test_run_does_not_update_marker_when_no_next_marker(self) -> None:
         ext = self._build_extractor()

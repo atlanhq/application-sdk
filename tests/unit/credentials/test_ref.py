@@ -10,6 +10,7 @@ from application_sdk.credentials.errors import (
 from application_sdk.credentials.ref import (
     CredentialRef,
     CredentialResolvable,
+    _guid_credential_ref,
     api_key_ref,
     atlan_api_token_ref,
     atlan_oauth_client_ref,
@@ -95,16 +96,44 @@ class TestFactoryFunctions:
         ref = api_key_ref("my-cred", store_name="vault")
         assert ref.store_name == "vault"
 
-    def test_legacy_credential_ref(self):
-        ref = legacy_credential_ref("abc-123")
+    def test_guid_credential_ref(self):
+        ref = _guid_credential_ref("abc-123")
         assert ref.name == "abc-123"
         assert ref.credential_guid == "abc-123"
         assert ref.credential_type == "unknown"
 
-    def test_legacy_credential_ref_with_type(self):
-        ref = legacy_credential_ref("abc-123", credential_type="api_key")
+    def test_guid_credential_ref_with_type(self):
+        ref = _guid_credential_ref("abc-123", credential_type="api_key")
         assert ref.credential_type == "api_key"
         assert ref.credential_guid == "abc-123"
+
+    def test_legacy_credential_ref_is_deprecated(self):
+        with pytest.warns(DeprecationWarning, match="removed in v4.0"):
+            ref = legacy_credential_ref("abc-123", credential_type="api_key")
+        assert ref == _guid_credential_ref("abc-123", credential_type="api_key")
+
+
+class TestGuidRouteDoesNotWarn:
+    """The GUID route is supported: the SDK's own paths to it never emit the
+    deprecated ``legacy_credential_ref`` warning."""
+
+    def test_resolve_direct_mode_does_not_warn(self):
+        import warnings
+
+        src = ExtractionInput(extraction_method="direct", credential_guid="g-1")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            ref = CredentialRef.resolve(src)
+        assert ref == _guid_credential_ref("g-1")
+
+    def test_resolve_or_none_fallback_does_not_warn(self):
+        import warnings
+
+        src = ExtractionInput(extraction_method="bogus", credential_guid="g-1")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            ref = CredentialRef.resolve_or_none(src)
+        assert ref == _guid_credential_ref("g-1")
 
 
 class TestTemporalSerialization:
@@ -128,7 +157,7 @@ class TestTemporalSerialization:
     def test_legacy_ref_roundtrip(self):
         import json
 
-        ref = legacy_credential_ref("abc-123", "basic")
+        ref = _guid_credential_ref("abc-123", "basic")
         serialized = json.dumps(ref.model_dump())
         data = json.loads(serialized)
         restored = CredentialRef(**data)

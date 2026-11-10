@@ -1116,8 +1116,8 @@ class TestRunOrchestration:
         assert out.records_uploaded == 0
         ext.upload.assert_not_awaited()
 
-    async def test_run_uses_legacy_credential_guid_fallback(self) -> None:
-        """credential_ref None + credential_guid set → calls legacy_credential_ref."""
+    async def test_run_builds_guid_ref_from_credential_guid(self) -> None:
+        """credential_ref None + credential_guid set → builds the GUID ref."""
         from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
         from application_sdk.credentials.ref import CredentialRef
         from application_sdk.templates.contracts.sql_metadata import ExtractionInput
@@ -1132,15 +1132,15 @@ class TestRunOrchestration:
                 attributes=ConnectionAttributes(qualified_name="qn", name="n")
             ),
             output_path="/tmp/out",
-            credential_guid="legacy-guid",
+            credential_guid="guid-1",
         )
-        fake_ref = CredentialRef(credential_guid="legacy-guid")
+        fake_ref = CredentialRef(credential_guid="guid-1")
         with patch(
-            "application_sdk.templates.sql_metadata_extractor.legacy_credential_ref",
+            "application_sdk.templates.sql_metadata_extractor._guid_credential_ref",
             return_value=fake_ref,
-        ) as mock_legacy:
+        ) as mock_guid_ref:
             await SqlMetadataExtractor.run(ext, inp)
-        mock_legacy.assert_called_once_with("legacy-guid")
+        mock_guid_ref.assert_called_once_with("guid-1")
 
     async def test_run_raises_sql_metadata_extraction_error(self) -> None:
         from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef

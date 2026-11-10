@@ -114,8 +114,8 @@ from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPL
 from application_sdk.contracts.base import OutputStatus
 from application_sdk.contracts.storage import VerifyRefsInput
 from application_sdk.contracts.types import FileReference, StorageTier
-from application_sdk.credentials import CredentialResolver, legacy_credential_ref
-from application_sdk.credentials.ref import CredentialRef
+from application_sdk.credentials import CredentialResolver
+from application_sdk.credentials.ref import CredentialRef, _guid_credential_ref
 from application_sdk.errors import (
     AppError,
     FailureDetails,
@@ -1607,7 +1607,7 @@ class SqlApp(App):
 
         ref: CredentialRef | None = input.credential_ref
         if ref is None and input.credential_guid:
-            ref = legacy_credential_ref(input.credential_guid)
+            ref = _guid_credential_ref(input.credential_guid)
 
         if ref is not None:
             infra = get_infrastructure()
@@ -1700,7 +1700,7 @@ class SqlApp(App):
 
         Delegates to :meth:`CredentialRef.resolve_or_none` — prefers the input's
         own ``credential_ref``, routes direct (credential_guid) / agent
-        (agent_json) modes, and degrades to a legacy GUID ref or ``None`` on a
+        (agent_json) modes, and degrades to a GUID ref or ``None`` on a
         routing edge case.
         """
         return CredentialRef.resolve_or_none(input)

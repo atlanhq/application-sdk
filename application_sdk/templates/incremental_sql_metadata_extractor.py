@@ -1019,14 +1019,15 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         conn_qn = input.connection.attributes.qualified_name
         application_name = os.getenv("ATLAN_APPLICATION_NAME", "")
 
-        # TODO(v3-cleanup): remove credential_guid fallback when all connectors use credential_ref.
+        # Prefer a prebuilt credential_ref; otherwise build the GUID ref from
+        # credential_guid (the direct-mode route).
         cred_ref = input.credential_ref
         if cred_ref is None and input.credential_guid:
-            from application_sdk.credentials import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
-                legacy_credential_ref,
+            from application_sdk.credentials.ref import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+                _guid_credential_ref,
             )
 
-            cred_ref = legacy_credential_ref(input.credential_guid)
+            cred_ref = _guid_credential_ref(input.credential_guid)
 
         ctx = IncrementalRunContext(
             workflow_id=workflow_id,

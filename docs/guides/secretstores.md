@@ -37,7 +37,7 @@ All credential types are frozen Pydantic models available from `application_sdk.
 | `AtlanOAuthClient` | `client_id`, `client_secret`, `base_url` | `atlan_oauth_client_ref(name)` |
 | `GitSshCredential` | `key_data`, `passphrase` | `git_ssh_ref(name)` |
 | `GitTokenCredential` | `token` | `git_token_ref(name)` |
-| `RawCredential` | `data` (raw dict) | `legacy_credential_ref(guid)` — migration only |
+| `RawCredential` | `data` (raw dict) | `CredentialRef.resolve(input)` for a `credential_guid` input (`legacy_credential_ref(guid)` is deprecated, removed in v4.0) |
 
 ### Using credentials in a task
 
