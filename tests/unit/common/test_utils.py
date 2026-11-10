@@ -1143,6 +1143,24 @@ class TestDownloadFileFromUploadResponse:
         with pytest.raises(ResponseKeyMissingError):
             await download_file_from_upload_response(FileUploadResponse(id="abc"))
 
+    @pytest.mark.parametrize(
+        "response",
+        [
+            FileUploadResponse(id="abc").model_dump(by_alias=True),
+            json.dumps(FileUploadResponse(id="abc").model_dump(by_alias=True)),
+            {"key": None},
+        ],
+        ids=["dict", "json", "null-key"],
+    )
+    async def test_serialised_response_with_empty_key_is_missing_key(
+        self, response: dict | str
+    ) -> None:
+        """The dict/JSON form of an unset handler key must not reach the store."""
+        with patch(_DOWNLOAD) as mock_download:
+            with pytest.raises(ResponseKeyMissingError):
+                await download_file_from_upload_response(response)
+        mock_download.assert_not_called()
+
     async def test_download_missing_key_error(self) -> None:
         with pytest.raises(ResponseKeyMissingError):
             await download_file_from_upload_response({"id": "abc123"})

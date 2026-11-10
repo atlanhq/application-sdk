@@ -71,7 +71,9 @@ async def download_file_from_upload_response(
 
             raise ResponseKeyMissingError()
     elif isinstance(response, dict):
-        if "key" not in response:
+        # Same rule as the model branch: the dict/JSON form of a handler
+        # response with no key carries ``"key": ""``.
+        if not response.get("key"):
             from application_sdk.common.errors import (  # noqa: PLC0415
                 ResponseKeyMissingError,
             )
