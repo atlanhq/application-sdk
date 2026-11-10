@@ -162,3 +162,28 @@ def test_every_lazy_name_still_resolves() -> None:
         name for name in validation_pkg.__all__ if not hasattr(validation_pkg, name)
     ]
     assert not missing, f"{missing} are in __all__ but not reachable"
+
+
+def test_the_asset_submodules_are_still_package_attributes() -> None:
+    """``import ...validation as v; v.assets`` keeps working for existing callers.
+
+    Going lazy removes the eager ``from .assets import ...`` that incidentally bound
+    ``assets`` and ``asset_rules`` as attributes of the package. Downstream apps that
+    reach them that way would get an AttributeError, so ``lazy_getattr`` is given them
+    as *submodules* — imported on access, which keeps the floor low and the attribute
+    available.
+
+    Subprocess, because importing the submodule anywhere in this interpreter binds it
+    on the parent package and would make this pass for the wrong reason.
+    """
+    for sub in ("assets", "asset_rules"):
+        probe = (
+            f"import application_sdk.validation as v;getattr(v, {sub!r});print('ok')"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe], capture_output=True, text=True
+        )
+        assert result.returncode == 0 and result.stdout.strip() == "ok", (
+            f"application_sdk.validation.{sub} is no longer reachable as an "
+            f"attribute: {result.stderr.strip()[-300:]}"
+        )

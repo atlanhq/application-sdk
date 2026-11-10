@@ -262,9 +262,12 @@ __all__ = [
 ]
 
 
+_SUBMODULES = ("assets", "asset_rules")
+
+
 def __getattr__(name: str) -> Any:
-    return lazy_getattr(__name__, name, _LAZY, globals())
+    return lazy_getattr(__name__, name, _LAZY, globals(), _SUBMODULES)
 
 
 def __dir__() -> list[str]:
-    return sorted(set(globals()) | set(_LAZY))
+    return sorted(set(globals()) | set(_LAZY) | set(_SUBMODULES))
