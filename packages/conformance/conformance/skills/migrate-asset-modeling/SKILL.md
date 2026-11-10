@@ -43,24 +43,30 @@ outputs:
    one fix there reaches every app. Use a creator only where it gives the same
    string. A P028 finding the app cannot close yet is how the fleet finds a
    missing creator: never hide it.
-2. **Published output.** What the app publishes stays the same, key by key,
-   except the stamps `entity_bytes` adds by design: `connectionName`,
-   top-level `status: ACTIVE`, the placeholder guid every creator sets
-   removed (SDK 3.39.0). Those exist so every app gets central fixes, such as
-   a soft-deleted entity that comes back being restored.
+2. **Published output.** What the app publishes stays the same, value by
+   value (key order is not output), except the stamps `entity_bytes` adds by
+   design: `connectionName`, top-level `status: ACTIVE`, the placeholder guid
+   every creator sets removed (SDK 3.39.0). Those exist so every app gets
+   central fixes, such as a soft-deleted entity that comes back being
+   restored. The one other allowed change: a record whose blank input
+   published a broken identity is no longer published (principle 4).
 3. **`entity_bytes` is the seam for publish output only.** A payload that
    something else reads (the Atlan API, another publish lane, another
    service) is not fixed by moving it onto this seam.
 4. **Inputs are judged by their source.** An input matters when a real
    source can send it. Name where every input you test comes from; never
    make one up. Follow a value back to its producer (a guard, a validated
-   type, the code that builds it). A value that comes straight from the
-   source with no check can be any string, unless a source contract
-   committed in the repo (an API spec, a vendor schema, a fixture recorded
-   from the source) shows its format; cite it. A blank that reaches the site
-   through `.get(k)`, `.get(k, "")` or a `str = ""` field is an app bug only
-   when that evidence shows the source always sends the value; without it,
-   treat the blank as one the source can send.
+   type, the code that builds it). A value that comes from the source with
+   no check has the format the repo's fixtures, tests and golden data show;
+   only evidence of another format (a recorded fixture, a spec, a bug report)
+   makes a creator's rejection of it matter. Two cases differ:
+   - a **blank** that reaches the site already published a broken identity
+     (`{conn}//{schema}`, `…/None`): guard it in the app, unless the asset is
+     valid without that value (a Table with no schema), which the creator
+     must accept;
+   - a **valid** value the creator rejects published a correct asset: never
+     skip that record. With evidence, the site is a gap; without it, the
+     creator's raise at run time is what exposes the gap.
 5. **When 1 or 2 cannot be proven, hold the site and say what is missing.**
    Plan it as type `SDK` when pyatlan or the SDK must add something (name
    the type, the creator, the input), or as type `Decision` when an owner
@@ -91,6 +97,12 @@ without breaking 1 and 2, and how to prove it.
   and moves `relationshipAttributes` into `attributes` publishes
   `FLATTENED`. Judge the envelope by what the app publishes, never by the
   method it calls.
+- `FLATTENED` differs from a hand reshape of nested output in three places a
+  unit test rarely reaches: a reference set to `None` is written as
+  `attributes.<ref>: null`, which clears that relationship on publish (the
+  nested encoder omits it); `meanings` stays top-level only and loses
+  `semantic` (nested output also carries it under `relationshipAttributes`);
+  every set reference is emitted, including ones the app used to drop.
 - A reference built with `qualified_name=` gains an extra top-level
   `qualifiedName` key; `unique_attributes={"qualifiedName": ...}` writes the
   usual `{typeName, uniqueAttributes}` reference.
@@ -133,15 +145,12 @@ End state per site, from the rule's `full_description`:
 - a creator gives the same string: read it from a memoized
   `X.creator(...).qualified_name` helper; when only the id is known, pass it
   as `name` too and never emit that asset;
-- the same, but the creator raises on a blank input. pyatlan raises on every
-  blank on purpose: the f-string published a broken identity there
-  (`{conn}//{schema}`, `…/None`). A blank only an app bug produces gets an
-  app guard before the creator, handling the record the way the app already
-  handles a bad record (otherwise: skip it and log it); never a fallback
-  string. A blank the source really sends must be accepted by the creator:
-  check its optional parents first (a Table or Schema without a schema or
-  database, a nested Column); if it cannot, that is a gap. List each guard
-  and what it does with the record in the PR;
+- the same, but the creator raises on a blank input (pyatlan does, on
+  purpose): guard the blank in the app before the creator, handling the
+  record the way the app already handles a bad record (otherwise skip it and
+  log it), never with a fallback string; where the asset is valid without
+  the value, use the creator's optional parents instead (principle 4). List
+  each guard in the PR;
 - a Process, ColumnProcess or BIProcess `{connection_qn}/{suffix}`:
   `generate_qualified_name(..., process_id=<suffix>)`;
 - the string never reaches a `qualifiedName` field or a reference (follow
@@ -150,8 +159,8 @@ End state per site, from the rule's `full_description`:
 - no creator gives the same string for an input the source can send: a gap.
   The f-string stays in one helper per name shape, unsuppressed. Say which:
   the type has no creator, the creator gives another string, it needs an
-  input the source record lacks, or it rejects a value (blank or not) the
-  source can send.
+  input the source record lacks, or it rejects a valid value the source
+  sends (with evidence, principle 4).
 
 ### P052 — one serialization seam
 
@@ -222,9 +231,12 @@ Sites that share a mapper or an identity move in one unit.
    `uniqueAttributes.qualifiedName` in references, compared as multisets
    (counts), are equal before and after. P055 moves references by design:
    compare `(parent, child)` pairs instead.
-4. Output: every entity equal before and after, key by key, including where
-   relationships sit and the shape of each reference, except the stamps in
-   principle 2 and volatile `lastSync*` values.
+4. Output: every entity's values equal before and after, including where
+   relationships sit and the shape of each reference, except the changes
+   principle 2 allows and volatile `lastSync*` values. Recorded fixtures
+   rarely contain the cases in the envelope facts above: add one entity with
+   a reference set to `None`, one with `meanings`, and one with each
+   reference the app drops, and compare those too.
 5. Pin it: commit the before-snapshot next to the recorded fixture and
    assert `Counter` equality in the offline test. Break one grammar on
    purpose, see the test fail, revert.
@@ -320,14 +332,14 @@ sites planned with that `fix_shape` for a person.
 
 ```decided-defaults
 {"rule": "P028", "fix_shape": "creator-string", "decision": "Read the string from a memoized helper returning X.creator(...).qualified_name; when only the id is known pass it as name too and never emit that asset.", "why": "Reference shape: atlan-metabase-app app/qualified_names.py collection_qn; atlan-mysql-app app/mysql.py _database_qn.", "interface": false}
-{"rule": "P028", "fix_shape": "creator-blank-guard", "decision": "Use the creator; where a blank or None input only an app bug produces reaches it, guard the record before the creator the way the app already handles a bad record (otherwise skip and log it); no fallback string. A blank the source really sends goes through the creator's optional parents, or is a gap.", "why": "pyatlan creators raise on every blank on purpose; each reachable blank produced a broken identity before (FND-3887: these are app guards). Source reality wins for blanks the source really sends (FND-3843).", "interface": false, "pr_note": true}
+{"rule": "P028", "fix_shape": "creator-blank-guard", "decision": "Use the creator; guard a blank or None input in the app before the creator, handling the record the way the app already handles a bad record (otherwise skip and log it), never with a fallback string; where the asset is valid without the value, use the creator's optional parents. Never skip a record whose value is valid.", "why": "pyatlan creators raise on every blank on purpose; each reachable blank produced a broken identity before (FND-3887: these are app guards). Source reality wins for blanks the source really sends (FND-3843).", "interface": false, "pr_note": true}
 {"rule": "P028", "fix_shape": "process-id", "decision": "generate_qualified_name(name=..., connection_qualified_name=..., inputs=[None], outputs=[None], process_id=<everything after the connection qualifiedName>) for Process, ColumnProcess and BIProcess. A blank name or connection qualifiedName raises; guard it as for creator-blank-guard.", "why": "Returns {connection_qualified_name}/{process_id}, the same string by construction. Reference shape: atlan-metabase-app app/qualified_names.py process_qn.", "interface": false}
 {"rule": "P028", "fix_shape": "not-identity-ignore", "decision": "# conformance: ignore[P028] <kind>, not a qualifiedName on the line above, where kind is match prefix, object-store key, lookup key or message text; only after following every reader of the value.", "why": "The rule's terminal state allows an ignore only for a string that is not an asset qualifiedName.", "suppress": true, "reason": "not a qualifiedName", "interface": false}
-{"rule": "P028", "fix_shape": "gap", "decision": "Leave the f-string in one helper per name shape, unsuppressed, and list it in the PR description; do not change the string.", "why": "No creator, a different string, or a missing creator input is a pyatlan gap; changing the string changes asset identity and suppressing hides the gap."}
+{"rule": "P028", "fix_shape": "gap", "decision": "Leave the f-string in one helper per name shape, unsuppressed, and list it in the PR description; do not change the string.", "why": "No creator can produce this identity for a value the source is shown to send; changing the string changes asset identity and suppressing hides the gap."}
 {"rule": "P028", "match": "\\bhash\\(", "block": "The qualifiedName is built from Python's builtin hash(), which changes between interpreter processes, so the identity is not stable today. Any stable replacement changes asset identity.", "brief": "Pick the stable id that replaces hash() and accept the one-time identity change; until then the site stays open."}
-{"rule": "P028", "fix_shape": "^gap$", "block": "No creator produces this qualifiedName: the type has no creator in a usable pyatlan, the creator produces a different string, rejects a non-blank input the app accepts, or needs an input the app does not have. Changing the string changes asset identity.", "brief": "Add or fix the creator in pyatlan, then apply the creator fix to this site."}
-{"rule": "P028", "fix_shape": "^creator-string$", "block": "The app's lock resolves pyatlan below the version that carries the creators these sites need.", "brief": "Raise pyatlan to a version with these creators (a dependency update), then apply the creator fix.", "requires": {"package": "pyatlan", "min": "11.5.0"}}
-{"rule": "P028", "fix_shape": "^creator-blank-guard$", "block": "The app's lock resolves pyatlan below the version that carries the creators these sites need.", "brief": "Raise pyatlan to a version with these creators (a dependency update), then apply the creator fix.", "requires": {"package": "pyatlan", "min": "11.5.0"}}
+{"rule": "P028", "fix_shape": "^gap$", "block": "No creator produces this qualifiedName: the type has no creator in a usable pyatlan, the creator produces a different string, needs an input the source record lacks, or rejects a valid value the source is shown to send. Changing the string changes asset identity.", "brief": "Add or fix the creator in pyatlan, then apply the creator fix to this site."}
+{"rule": "P028", "fix_shape": "^creator-string$", "block": "The app's lock resolves pyatlan below the version that carries the creators these sites need.", "brief": "Raise pyatlan to a version with these creators (a dependency update), then apply the creator fix.", "requires": {"package": "pyatlan", "min": "11.7.0"}}
+{"rule": "P028", "fix_shape": "^creator-blank-guard$", "block": "The app's lock resolves pyatlan below the version that carries the creators these sites need.", "brief": "Raise pyatlan to a version with these creators (a dependency update), then apply the creator fix.", "requires": {"package": "pyatlan", "min": "11.7.0"}}
 {"rule": "P052", "fix_shape": "released-envelope", "decision": "Write the entity with entity_bytes and the envelope that matches what the app publishes today; delete only the code that rebuilds that envelope by hand; keep every other change the app makes, applied to the decoded entity_bytes output.", "why": "entity_bytes is the seam for central fixes; the envelope choice keeps the published output unchanged except the documented stamps.", "pr_note": true}
 {"rule": "P052", "fix_shape": "^hold$", "block": "Held: this site's identity or published output cannot be proven unchanged, or its payload is not publish output. The planner's reason for this site says what is missing.", "brief": "Add what the planner's reason names as missing, or answer its question, then re-run the unit."}
 {"rule": "P058", "fix_shape": "pyatlan-asset", "decision": "Build each publish entity as a pyatlan_v9 asset (the type's creator where it has one) and write it with entity_bytes so the published output is unchanged except the documented stamps.", "why": "A model checks the keys and a creator owns the identity; outside entity_bytes the entity misses status ACTIVE.", "pr_note": true}
