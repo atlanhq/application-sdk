@@ -283,6 +283,17 @@ ATLAN_ENABLE_OTLP_TRACES=true                      # export trace spans
 # The previous OTLP metric exporter was removed in PR #1573.
 ```
 
+`run_main` installs the process-wide tracer provider at startup, beside the meter provider, so the
+Temporal `TraceInterceptor` exports workflow and activity spans over OTLP. Spans go to OTLP only.
+To also print them to stdout while developing locally, set `ATLAN_ENABLE_TRACES_CONSOLE=true`; leave
+it off in deployed pods, where it would put every span on the log stream.
+
+**Who owns the tracer provider.** OpenTelemetry keeps exactly one global tracer provider per
+process, and the first one installed wins. If your process installs its own before `run_main` (or
+OTel auto-instrumentation does), the SDK uses that provider and attaches none of its exporters: spans
+go wherever your provider sends them. To supply your own, install it with
+`opentelemetry.trace.set_tracer_provider(...)` before calling `run_main`.
+
 In Kubernetes, set `OTEL_EXPORTER_OTLP_ENDPOINT` using the Downward API:
 
 ```yaml

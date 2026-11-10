@@ -84,7 +84,10 @@ match the rest of the surface.
 - `TraceInterceptor` — thin wrapper around
   `temporalio.contrib.opentelemetry.TracingInterceptor`, gated on
   `ATLAN_ENABLE_OTLP_TRACES` (default off, since production doesn't
-  yet support traces).
+  yet support traces). When on, `run_main` installs the global
+  `TracerProvider` (OTLP only; a console exporter only behind the
+  dev-only `ATLAN_ENABLE_TRACES_CONSOLE`) the upstream interceptor emits
+  through.
 - Product-feature interceptors stay separate — `OutputInterceptor` (UI
   artifacts merged into workflow output) and `EventInterceptor` (v3
   audit / dashboard event bus) are not observability and remain their

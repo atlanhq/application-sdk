@@ -12,7 +12,6 @@ the public worker stack uniform: ``LogInterceptor``, ``MetricsInterceptor``,
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from temporalio.worker import (
@@ -22,13 +21,10 @@ from temporalio.worker import (
     WorkflowInterceptorClassInput,
 )
 
+from application_sdk import constants
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
-
-
-def _traces_enabled() -> bool:
-    return os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true"
 
 
 class TraceInterceptor(Interceptor):
@@ -37,11 +33,22 @@ class TraceInterceptor(Interceptor):
     Delegates to ``temporalio.contrib.opentelemetry.TracingInterceptor`` when
     ``ATLAN_ENABLE_OTLP_TRACES=true``; otherwise behaves as an identity
     interceptor.
+
+    When enabled it also makes sure the process-wide tracer provider is
+    installed (``setup_tracer_provider`` is idempotent; ``run_main`` normally
+    did it already). The upstream interceptor emits through the global
+    provider, so a worker built with ``create_worker`` outside ``run_main``
+    would otherwise export nothing.
     """
 
     def __init__(self) -> None:
         self._delegate: Any = None
-        if _traces_enabled():
+        if constants.ENABLE_OTLP_TRACES:
+            from application_sdk.observability.traces_adaptor import (  # noqa: PLC0415 — only loaded when tracing is on; keeps the OTLP exporter off the default import path
+                setup_tracer_provider,
+            )
+
+            setup_tracer_provider()
             try:
                 from temporalio.contrib.opentelemetry import (  # noqa: PLC0415 — optional dependency soft-import; ImportError handled below
                     TracingInterceptor as _TracingInterceptor,
