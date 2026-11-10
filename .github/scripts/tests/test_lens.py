@@ -6770,3 +6770,65 @@ def test_a_streamed_http_response_is_read_as_events(monkeypatch: pytest.MonkeyPa
     assert comp.content == "hi" and comp.cost == pytest.approx(
         (10 * 0.1 + 2 * 0.5) / 1e6
     )
+
+
+def test_an_upper_case_event_stream_media_type_is_still_read_as_events(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import urllib.request  # noqa: PLC0415 - patched below
+
+    events = _sse({"type": "response.completed", "response": _FINAL})
+
+    class _Stream:
+        status = 200
+        headers = {"Content-Type": "Text/Event-Stream"}
+
+        def __iter__(self):
+            return iter(events)
+
+        def read(self):  # pragma: no cover - a stream must not be read whole
+            raise AssertionError("read() on a stream")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float | None = None):
+        return _Stream()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    c = Client(
+        model="m",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        base_url="https://gw.test/openai",
+        api_key="k",
+        api="responses",
+    )
+    comp = c.complete("x", [{"role": "user", "content": "hi"}], max_tokens=5)
+    assert comp.content == "hi"
+
+
+def test_a_stream_cut_mid_chunk_is_retried_as_transport_weather():
+    import http.client  # noqa: PLC0415 - the exception under test
+
+    calls: list[int] = []
+
+    def transport(body: dict[str, Any]) -> tuple[int, dict[str, str], str]:
+        calls.append(1)
+        if len(calls) == 1:
+            raise http.client.IncompleteRead(b"partial")
+        return _responses_reply([])
+
+    c = Client(
+        model="m",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=transport,
+        api="responses",
+        max_retries=1,
+    )
+    c.complete("x", [{"role": "user", "content": "hi"}], max_tokens=5)
+    assert len(calls) == 2

@@ -14,6 +14,7 @@ is the case this exists to make impossible.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
@@ -479,7 +480,7 @@ class Client:
                 if (
                     body.get("stream")
                     and resp.status == 200
-                    and "text/event-stream" in ctype
+                    and "text/event-stream" in ctype.lower()  # media types ignore case
                 ):
                     status, text = read_stream(resp)
                     return status, headers, text
@@ -881,7 +882,14 @@ class Client:
             t0 = time.monotonic()
             try:
                 status, headers, text = self._transport(body)
-            except (TimeoutError, urllib.error.URLError, OSError) as e:
+            # http.client.HTTPException covers IncompleteRead: a stream (or body) cut
+            # mid-chunk raises it, not OSError, and it is transport weather like a timeout.
+            except (
+                TimeoutError,
+                urllib.error.URLError,
+                OSError,
+                http.client.HTTPException,
+            ) as e:
                 status, headers, text = 0, {}, f"transport: {e}"
             latency_ms = int((time.monotonic() - t0) * 1000)
             if status == 200:
