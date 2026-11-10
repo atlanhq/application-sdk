@@ -1534,7 +1534,8 @@ Fix, by site:
   broken identity there).  Guard the blank in the app before the creator, never with a
   fallback string, and list each guard in the PR description.  Where the asset is valid
   without that value (a Table with no schema), use the creator's optional parents
-  instead (source reality wins).
+  instead (source reality wins); if the installed creator then raises or returns another
+  string, the site is a gap.
 - `Process` / `ColumnProcess` / `BIProcess`: call `generate_qualified_name(...,
   process_id=<everything after the connection qualifiedName>)`, which returns
   `{connection_qualified_name}/{process_id}`.  A blank `process_id` raises; never pass
