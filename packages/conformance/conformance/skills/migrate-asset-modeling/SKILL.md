@@ -48,8 +48,8 @@ outputs:
    design: `connectionName`, top-level `status: ACTIVE`, the placeholder guid
    every creator sets removed (SDK 3.39.0). Those exist so every app gets
    central fixes, such as a soft-deleted entity that comes back being
-   restored. The one other allowed change: a record whose blank input
-   published a broken identity is no longer published (principle 4).
+   restored. Any other change, such as a record a guard no longer publishes,
+   is listed per site in the PR for a person to accept.
 3. **`entity_bytes` is the seam for publish output only.** A payload that
    something else reads (the Atlan API, another publish lane, another
    service) is not fixed by moving it onto this seam.
@@ -60,15 +60,20 @@ outputs:
    no check has the format the repo's fixtures, tests and golden data show;
    only evidence of another format (a recorded fixture, a spec, a bug report)
    makes a creator's rejection of it matter. Two cases differ:
-   - a **blank** that reaches the site already published a broken identity
-     (`{conn}//{schema}`, `…/None`): guard it in the app, unless the asset is
-     valid without that value (a Table with no schema), which the creator
-     must accept. If the installed creator raises for that asset or returns
-     another string, the asset's identity would change (principle 1): the
+   - a **blank** (an empty string or `None` at the site, nothing else) already
+     published a broken identity (`{conn}//{schema}`, `…/None`), so it gets
+     an app guard (FND-3887). The guard does what the app already does with a
+     bad record; if the app has no such handling, hold the site for the owner
+     to choose. Where the asset is valid without that value (a Table with no
+     schema), the creator must accept it; if the installed creator raises or
+     returns another string, the identity would change (principle 1): the
      site is a gap, and the existing string stays;
-   - a **valid** value the creator rejects published a correct asset: never
-     skip that record. With evidence, the site is a gap; without it, the
-     creator's raise at run time is what exposes the gap.
+   - a **valid** value the creator rejects published a correct asset: it
+     must never be lost quietly. With evidence that the source sends it, the
+     site is a gap. Without evidence, say what a raise does in this app: if
+     the app catches it per record, the asset would vanish, so the site is a
+     gap; only where the raise fails the run visibly does the creator fix go
+     ahead.
 
    Existing test inputs are evidence of what the source sends. Never change
    them to make a creator accept a record: that hides the output change
@@ -109,7 +114,11 @@ without breaking 1 and 2, and how to prove it.
   `attributes.<ref>: null`, which clears that relationship on publish (the
   nested encoder omits it); `meanings` stays top-level only and loses
   `semantic` (nested output also carries it under `relationshipAttributes`);
-  every set reference is emitted, including ones the app used to drop.
+  every set reference is emitted, including ones the app used to drop. Both
+  encoders omit a field that was never set (`entity_envelope` module docs):
+  leave a reference unset when the source has none, never assign `None`.
+  For `meanings` and dropped references this skill has no tested answer:
+  where they appear, hold the site.
 - A reference built with `qualified_name=` gains an extra top-level
   `qualifiedName` key; `unique_attributes={"qualifiedName": ...}` writes the
   usual `{typeName, uniqueAttributes}` reference.
@@ -153,11 +162,8 @@ End state per site, from the rule's `full_description`:
   `X.creator(...).qualified_name` helper; when only the id is known, pass it
   as `name` too and never emit that asset;
 - the same, but the creator raises on a blank input (pyatlan does, on
-  purpose): guard the blank in the app before the creator, handling the
-  record the way the app already handles a bad record (otherwise skip it and
-  log it), never with a fallback string; where the asset is valid without
-  the value, use the creator's optional parents instead (principle 4). List
-  each guard in the PR;
+  purpose): a guard as principle 4 says, never a fallback string. List each
+  guard and what it does with the record in the PR;
 - a Process, ColumnProcess or BIProcess `{connection_qn}/{suffix}`:
   `generate_qualified_name(..., process_id=<suffix>)`;
 - the string never reaches a `qualifiedName` field or a reference (follow
@@ -189,8 +195,7 @@ type name pyatlan_v9 does not model (checked with
 `"status": "ACTIVE"` and
 `# conformance: ignore[P058] <type> is not modeled in pyatlan_v9`. That
 claim must be checkable: a type held in a variable, or a payload that is not
-publish output (principle 3), never gets this ignore. An app
-whose mappers all emit dicts moves as one unit.
+publish output (principle 3), never gets this ignore.
 
 ### O004 — pyatlan_v9 models
 
@@ -343,7 +348,7 @@ sites planned with that `fix_shape` for a person.
 
 ```decided-defaults
 {"rule": "P028", "fix_shape": "creator-string", "decision": "Read the string from a memoized helper returning X.creator(...).qualified_name; when only the id is known pass it as name too and never emit that asset.", "why": "Reference shape: atlan-metabase-app app/qualified_names.py collection_qn; atlan-mysql-app app/mysql.py _database_qn.", "interface": false}
-{"rule": "P028", "fix_shape": "creator-blank-guard", "decision": "Use the creator; guard a blank or None input in the app before the creator, handling the record the way the app already handles a bad record (otherwise skip and log it), never with a fallback string; where the asset is valid without the value, use the creator's optional parents, as the source record carries them, and where the installed creator then raises or returns another string the site is a gap; never change existing test inputs to make a creator accept a record. Never skip a record whose value is valid.", "why": "pyatlan creators raise on every blank on purpose; each reachable blank produced a broken identity before (FND-3887: these are app guards). Source reality wins for blanks the source really sends (FND-3843).", "interface": false, "pr_note": true}
+{"rule": "P028", "fix_shape": "creator-blank-guard", "decision": "Use the creator. Guard an empty or None input in the app before the creator (FND-3887), doing what the app already does with a bad record; if the app has no such handling, hold the site for the owner. Never a fallback string. Where the asset is valid without the value, use the creator's optional parents as the source record carries them; if the installed creator then raises or returns another string, the site is a gap. Never change existing test inputs to make a creator accept a record.", "why": "pyatlan creators raise on every blank on purpose; each reachable blank produced a broken identity before (FND-3887: these are app guards). Source reality wins for blanks the source really sends (FND-3843).", "interface": false, "pr_note": true}
 {"rule": "P028", "fix_shape": "process-id", "decision": "generate_qualified_name(name=..., connection_qualified_name=..., inputs=[None], outputs=[None], process_id=<everything after the connection qualifiedName>) for Process, ColumnProcess and BIProcess. A blank name or connection qualifiedName raises; guard it as for creator-blank-guard.", "why": "Returns {connection_qualified_name}/{process_id}, the same string by construction. Reference shape: atlan-metabase-app app/qualified_names.py process_qn.", "interface": false}
 {"rule": "P028", "fix_shape": "not-identity-ignore", "decision": "# conformance: ignore[P028] <kind>, not a qualifiedName on the line above, where kind is match prefix, object-store key, lookup key or message text; only after following every reader of the value.", "why": "The rule's terminal state allows an ignore only for a string that is not an asset qualifiedName.", "suppress": true, "reason": "not a qualifiedName", "interface": false}
 {"rule": "P028", "fix_shape": "gap", "decision": "Leave the f-string in one helper per name shape, unsuppressed, and list it in the PR description; do not change the string.", "why": "No creator can produce this identity for a value the source is shown to send; changing the string changes asset identity and suppressing hides the gap."}
