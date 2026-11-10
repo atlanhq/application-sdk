@@ -8,6 +8,7 @@ Most functions previously in this module have been moved to more logical homes:
 """
 
 import os
+import warnings
 
 import orjson
 from pydantic import BaseModel
@@ -104,3 +105,41 @@ async def download_file_from_upload_response(
     )
 
     return local_path
+
+
+#: name -> (replacement, why). Served by __getattr__ below (PEP 562).
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "FileUploadResponse": (
+        "application_sdk.handler.contracts.FileUploadResponse",
+        "this module only ever re-exported the v2 "
+        "application_sdk.server.fastapi.models.FileUploadResponse, which is "
+        "itself deprecated",
+    ),
+}
+
+
+def _deprecated_constant_value(name: str) -> object:
+    if name == "FileUploadResponse":
+        # Lazy: this module sits on the workflow-sandbox import chain
+        # (credentials → here) and must not pull the v2 server models in.
+        from application_sdk.server.fastapi.models import (  # noqa: PLC0415
+            FileUploadResponse,
+        )
+
+        return FileUploadResponse
+    raise AssertionError(name)
+
+
+def __getattr__(name: str) -> object:
+    """Serve the removed re-export once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _deprecated_constant_value(name)

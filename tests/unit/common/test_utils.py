@@ -1161,3 +1161,14 @@ class TestDownloadFileFromUploadResponse:
 
         with pytest.raises(Exception, match="Download failed"):
             await download_file_from_upload_response({"key": _KEY})
+
+    def test_common_utils_file_upload_response_is_a_deprecated_reexport(self) -> None:
+        """The v2 class was importable from here; it stays so, with a warning."""
+        import application_sdk.common.utils as common_utils
+        from application_sdk.server.fastapi import models as v2_models
+
+        with pytest.warns(
+            DeprecationWarning, match="handler.contracts.FileUploadResponse"
+        ):
+            reexported = common_utils.FileUploadResponse
+        assert reexported is v2_models.FileUploadResponse

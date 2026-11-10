@@ -244,6 +244,15 @@
       "symbol": "DataframeType.daft"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "FileUploadResponse is deprecated; use application_sdk.handler.contracts.FileUploadResponse \u2014 this module only ever re-exported the v2 application_sdk.server.fastapi.models.FileUploadResponse, which is itself deprecated. Will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.utils",
+      "removal_version": "4.0",
+      "symbol": "FileUploadResponse"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "ContractValidationError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
