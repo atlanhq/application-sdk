@@ -1,0 +1,85 @@
+/* SPDX-License-Identifier: Apache-2.0
+   Copyright 2024 Atlan Pte. Ltd. */
+
+/// Names the generated `_input.py` takes from the SDK.
+///
+/// `App.pkl` decides from these sets which generated fields to skip or refuse
+/// and which nested class names to refuse. Each set copies names the SDK
+/// declares, so it goes stale when the SDK adds or renames one.
+/// `scripts/test-sdk-import.py` evaluates this module and checks it against the
+/// installed SDK: the field sets must equal the SDK models' fields, and every
+/// class-shaped name a generated example's `_input.py` imports must be in
+/// `inputModuleNames`. A stale field set fails CI instead of letting a generated
+/// field shadow an SDK one.
+module com.atlan.app.contract.SdkNames
+
+/// Fields `application_sdk.contracts.base.Input` declares: a system app's
+/// generated base. All four are framework-populated.
+inputFields: Set<String> = Set(
+  "workflow_id",
+  "correlation_id",
+  "app_name",
+  "workflow_slug"
+)
+
+/// Fields `application_sdk.templates.contracts.ExtractionInput` declares: an
+/// extraction app's generated base. `TreeSelectionExtractionInput` declares the
+/// same set.
+///
+/// A generated UI field with one of these names is skipped, so the SDK's typed
+/// declaration and validators stay in effect. Redeclaring a framework-populated
+/// field (`workflow_id`, `correlation_id`, `app_name`, `workflow_slug`) is
+/// latent: codegen, `pkl test` and the import test all pass, and it fails only
+/// at dispatch, when the framework assigns the real value and Pydantic rejects
+/// it against the author's type.
+extractionInputFields: Set<String> = inputFields + Set(
+  "connection",
+  "credential_guid",
+  "credential_ref",
+  "extraction_method",
+  "agent_json",
+  "output_prefix",
+  "output_path",
+  "include_filter",
+  "exclude_filter",
+  "temp_table_regex",
+  "exclude_table_regex",
+  "source_tag_prefix"
+)
+
+/// The SDK release that first declares each base-class field newer than some
+/// apps' SDK pins.
+///
+/// Skipping a form field is safe only when the app's SDK declares it: on an
+/// older SDK the base class drops the submitted value as an unknown key. The
+/// toolkit cannot read an app's SDK pin, so when it skips one of these fields
+/// the generated `_input.py` checks at import that the base class declares it,
+/// and raises `ImportError` naming the required release if not. Add an entry
+/// whenever a field added to `inputFields` or `extractionInputFields` is newer
+/// than the oldest SDK an `App.pkl` app pins.
+fieldMinSdk: Mapping<String, String> = new {
+  ["workflow_slug"] = "3.32.0"
+  ["exclude_table_regex"] = "3.39.1"
+}
+
+/// Class-shaped names `_input.py` declares or imports at module level. A nested
+/// `ObjectField` class of one of these names would shadow it: an `Input` class,
+/// for one, would replace the SDK base `AppInputContract` extends.
+inputModuleNames: Set<String> = Set(
+  "AppInputContract",
+  "Input",
+  "ExtractionInput",
+  "TreeSelectionExtractionInput",
+  "BaseModel",
+  "ConfigDict",
+  "Field",
+  "ConnectionRef",
+  "FileReference",
+  "MaxItems",
+  "TreeSelection",
+  "CredentialRef",
+  "Annotated",
+  "Any",
+  "ClassVar",
+  "Literal"
+)

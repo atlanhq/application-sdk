@@ -831,9 +831,7 @@ workflowConfigIncludeTopLevelMetadata: Boolean = true
 
 /// Extra files to add to this module's generated output.
 ///
-/// Use this for explicit opt-in artifacts such as a customized
-/// `AgentConfig.pkl` output:
-/// `["atlan-connectors-agent.json"] = agentConfig.configFile`.
+/// Use this for explicit opt-in artifacts.
 additionalOutputFiles: Mapping<String, FileOutput> = new Mapping {}
 
 // ---------------------------------------------------------------------------
@@ -3299,7 +3297,8 @@ local function pyQuotedCsv(values: List<String>): String =
 /// from a uiConfig property is latent: codegen, `pkl test` and `test-sdk-import`
 /// all stay green, and it fails only at workflow dispatch when the framework
 /// assigns the real value and Pydantic rejects it against the author's type.
-/// Mirrors App.pkl — keep the two lists in sync.
+/// Frozen with this legacy module. `App.pkl` reads the maintained set from
+/// `SdkNames.pkl`, which CI checks against the SDK.
 local extractionInputProvidedFields: Listing<String> = new Listing {
   "workflow_id"
   "correlation_id"

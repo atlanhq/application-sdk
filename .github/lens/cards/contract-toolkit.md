@@ -1,5 +1,5 @@
 # contract-toolkit: Pkl app-contract toolkit
-- `contract-toolkit/src/App.pkl` is canonical; `NativeApp.pkl`, `NativeAppBundle.pkl`, `AgentConfig.pkl`, `Config.pkl`, `Credential.pkl`, `Renderers.pkl` are legacy. Each release regenerates every app: the `contract-toolkit/examples/` diff is the fleet diff.
+- `contract-toolkit/src/App.pkl` is canonical; `NativeApp.pkl`, `NativeAppBundle.pkl`, `Config.pkl`, `Credential.pkl`, `Renderers.pkl` are legacy. Each release regenerates every app: the `contract-toolkit/examples/` diff is the fleet diff.
 - Flag: a change to `NativeApp.pkl` (or another legacy module) with no equivalent in `App.pkl`; new features go in `App.pkl` only. Don't ask for `App.pkl` changes to be mirrored back.
 - Flag: default output changed for apps that don't opt in, unless the PR says what and why; a break with no `!` in the title.
 - Flag: an `inputs.args` key renamed/nested/flattened (dropped silently; K018 only warns); a `$.extract.outputs.<f>` the SDK Output lacks (K006); a `{{params.x}}` with no form field.

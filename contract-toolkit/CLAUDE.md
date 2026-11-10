@@ -30,8 +30,9 @@ Contracts generate — from one `pkl eval --project-dir contract -m . contract/a
 - `src/PyFormat.pkl`: lays every generated `.py` out as ruff does with default settings (import order, 88-column wrapping). Renderers emit plain one-line statements and pass the module through `format`. One exception: `fmtSubsField` keeps the one-argument-per-line layout (trailing comma) for long `_e2e_substitutions.py` fields, because ruff preserves it and apps already commit it; don't replace it with a one-line statement.
 - `src/Deployment.pkl`: deployment classes (`DeployConfig`, `Pool`, `KedaConfig`, `DaprComponents`, `ResourceConfig`, `VpaConfig`) re-exported from `App.pkl`.
 - `src/Connectors.pkl`: connector type registry (still imported explicitly by consumers).
+- `src/SdkNames.pkl`: SDK base-class field names and `_input.py` import names `App.pkl` must not shadow. `scripts/test-sdk-import.py` compares them with the SDK; update them when the SDK's base input classes change.
 - Legacy modules (reference only, not for new apps):
-  - `src/NativeApp.pkl`, `src/NativeAppBundle.pkl`, `src/AgentConfig.pkl`
+  - `src/NativeApp.pkl`, `src/NativeAppBundle.pkl`
   - `src/Config.pkl`, `src/Credential.pkl`, `src/Renderers.pkl`
 - `examples/*/app.pkl`: executable reference contracts.
 - `tests/*_test.pkl`: Pkl behavior tests.
