@@ -157,6 +157,12 @@ match the rest of the surface.
 from `otel.status_code`, `temporal.*.duration_ms`, and event count.
 Per-event `dimension` and `app_vitals=true` attributes are gone.
 
+The efficiency numbers survive as OTel histograms from `MetricsInterceptor`:
+`temporal.activity.cpu_seconds` and `temporal.activity.mem_gib_seconds`.
+They are process samples split evenly across the activities in flight, so
+they sum to the process total under concurrency (see
+[Monitoring](../concepts/monitoring.md#per-activity-cpu-and-memory)).
+
 ### Custom user metrics
 
 New module `application_sdk.observability.metrics` re-exports the

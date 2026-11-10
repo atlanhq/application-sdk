@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from application_sdk.observability.resource_sampler import (
+    ActivityShareLedger,
     ResourceSample,
     compute_deltas,
     parse_pod_memory_limit,
@@ -118,3 +119,98 @@ class TestComputeDeltas:
 )
 def test_parse_pod_memory_limit(raw: str, expected: int) -> None:
     assert parse_pod_memory_limit(raw) == expected
+
+
+class _FakeProcess:
+    """A process whose CPU and RSS the test sets; stands in for ``sample()``."""
+
+    def __init__(self, rss_bytes: int = 1024**3) -> None:
+        self.cpu_time_s = 0.0
+        self.rss_bytes = rss_bytes
+        self.fail = False
+
+    def sample(self) -> ResourceSample | None:
+        if self.fail:
+            return None
+        return ResourceSample(cpu_time_s=self.cpu_time_s, rss_bytes=self.rss_bytes)
+
+
+@pytest.fixture
+def proc():
+    fake = _FakeProcess()
+    with patch(
+        "application_sdk.observability.resource_sampler.sample", side_effect=fake.sample
+    ):
+        yield fake
+
+
+class TestActivityShareLedger:
+    def test_single_activity_matches_window_delta(self, proc):
+        """No overlap: the share is the whole-process window delta, unchanged."""
+        ledger = ActivityShareLedger()
+        mark = ledger.begin(0.0)
+        proc.cpu_time_s = 0.5
+        assert ledger.end(mark, 2.0) == pytest.approx((0.5, 2.0))
+        assert ledger.in_flight == 0
+
+    def test_overlapping_activities_sum_to_process_total(self, proc):
+        """The reported repro: 4 overlapping activities, 0.59 s of process CPU.
+
+        Per-window deltas summed to 2.12 s (3.6x); shares must sum to 0.59 s.
+        """
+        ledger = ActivityShareLedger()
+        marks = []
+        for i in range(4):
+            proc.cpu_time_s = 0.01 * i
+            marks.append(ledger.begin(float(i)))
+        results = []
+        for i, mark in enumerate(marks):
+            proc.cpu_time_s = 0.50 + 0.03 * i
+            results.append(ledger.end(mark, 10.0 + i))
+        process_cpu = proc.cpu_time_s  # started at 0.0
+
+        cpu_sum = sum(r[0] for r in results)
+        mem_sum = sum(r[1] for r in results)
+        assert cpu_sum == pytest.approx(process_cpu)
+        # 1 GiB resident across the busy span t=0..13.
+        assert mem_sum == pytest.approx(13.0)
+        # The old attribution, for contrast: each window charged the whole process.
+        windowed = sum((0.50 + 0.03 * i) - 0.01 * i for i in range(4))
+        assert windowed > 3 * process_cpu
+
+    def test_concurrent_shares_split_evenly(self, proc):
+        """Two activities fully overlapping one CPU second get half each."""
+        ledger = ActivityShareLedger()
+        a = ledger.begin(0.0)
+        b = ledger.begin(0.0)
+        proc.cpu_time_s = 1.0
+        assert ledger.end(a, 1.0) == pytest.approx((0.5, 0.5))
+        assert ledger.end(b, 1.0) == pytest.approx((0.5, 0.5))
+
+    def test_idle_time_is_not_attributed(self, proc):
+        """CPU burnt while nothing is in flight belongs to no activity."""
+        ledger = ActivityShareLedger()
+        ledger.end(ledger.begin(0.0), 1.0)
+        proc.cpu_time_s = 5.0  # idle-time CPU (polling, GC)
+        mark = ledger.begin(10.0)
+        proc.cpu_time_s = 5.25
+        assert ledger.end(mark, 11.0) == pytest.approx((0.25, 1.0))
+
+    def test_failed_start_sample_reports_nothing_but_holds_a_slot(self, proc):
+        ledger = ActivityShareLedger()
+        proc.fail = True
+        blind = ledger.begin(0.0)
+        proc.fail = False
+        seen = ledger.begin(0.0)
+        proc.cpu_time_s = 1.0
+        assert ledger.end(blind, 1.0) is None
+        # The blind activity still took its half of the overlap.
+        assert ledger.end(seen, 1.0) == pytest.approx((0.5, 0.5))
+        assert ledger.in_flight == 0
+
+    def test_failed_end_sample_reports_nothing_and_releases_slot(self, proc):
+        ledger = ActivityShareLedger()
+        mark = ledger.begin(0.0)
+        proc.fail = True
+        assert ledger.end(mark, 1.0) is None
+        assert ledger.in_flight == 0
