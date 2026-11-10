@@ -8,6 +8,9 @@ from typing import TYPE_CHECKING, cast
 
 from application_sdk._runtime.offload import run_in_thread, submit_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
+from application_sdk.common._arrow import (
+    arrow_table_from_pandas as _arrow_table_from_pandas,
+)
 from application_sdk.common.atomic import atomic_path
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
@@ -25,7 +28,6 @@ from application_sdk.storage.formats import (
 )
 from application_sdk.storage.formats.utils import (
     PARQUET_FILE_EXTENSION,
-    _arrow_table_from_pandas,
     _download_files,
     is_empty_dataframe,
     path_gen,

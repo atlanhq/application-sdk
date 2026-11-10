@@ -86,7 +86,7 @@ instead of the catalog is FND-1726, deliberately a separate, Local
 Marketplace-side fix.
 
 The envelope this module unwraps and the file-selection rule it applies are
-still read from :mod:`application_sdk.app._generated_tree`, the same
+still read from :mod:`application_sdk.common._generated_tree`, the same
 authority the app pod's own handler reads. Re-deriving either would compare
 one guess against another and drift the moment the exclusion vocabulary grew
 a prefix.
@@ -144,7 +144,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from application_sdk.app._generated_tree import form_configmap, generated_layout
+from application_sdk.common._generated_tree import form_configmap, generated_layout
 
 __all__ = [
     "DEFAULT_CATALOG_WAIT_SECONDS",
@@ -576,7 +576,7 @@ def read_entrypoints(
     """Read every entry point's committed workflow config.
 
     The entry-point *names* come from ``atlan.yaml`` and the *files* are located
-    through :func:`application_sdk.app._generated_tree.form_configmap`, so this
+    through :func:`application_sdk.common._generated_tree.form_configmap`, so this
     agrees with the endpoint that serves them by construction rather than by a
     second glob that could drift.
 

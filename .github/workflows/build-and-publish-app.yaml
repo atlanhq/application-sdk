@@ -1230,7 +1230,7 @@ jobs:
         # is stamped by .github/actions/build-app-image, which builds only the
         # e2e image and never runs here, so a released image could not answer
         # the build-identity route at all. Same value shape, same single reader
-        # (application_sdk.app.build_identity), so an e2e check and a released
+        # (application_sdk.common.build_identity), so an e2e check and a released
         # pod answer the same question the same way.
         env:
           GM_VERSION: ${{ needs.prepare.outputs.gm_version }}

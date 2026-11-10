@@ -2444,7 +2444,7 @@ class TestConfigMapEndpoints:
     def test_build_identity_is_served_from_the_image_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from application_sdk.app.build_identity import (
+        from application_sdk.common.build_identity import (
             BUILD_ID_ENV,
             BUILD_IDENTITY_CONFIGMAP_ID,
         )
@@ -2480,7 +2480,7 @@ class TestConfigMapEndpoints:
         answer as an SDK too old to serve the route, and the CI check decides
         differently on each.
         """
-        from application_sdk.app.build_identity import (
+        from application_sdk.common.build_identity import (
             BUILD_ID_ENV,
             BUILD_IDENTITY_CONFIGMAP_ID,
         )
@@ -2508,7 +2508,7 @@ class TestConfigMapEndpoints:
         ago, which is the whole reason this route exists — so an app that ships
         a file of this name must not be able to answer in the pod's place.
         """
-        from application_sdk.app.build_identity import (
+        from application_sdk.common.build_identity import (
             BUILD_ID_ENV,
             BUILD_IDENTITY_CONFIGMAP_ID,
         )
@@ -3157,7 +3157,7 @@ class TestConfigMapEndpoints:
         this endpoint has to move with it rather than quietly keep listing a
         file the rest of the SDK stopped calling a manifest.
         """
-        from application_sdk.app._generated_tree import MANIFEST_STEM
+        from application_sdk.common._generated_tree import MANIFEST_STEM
         from application_sdk.handler import service as svc_module
 
         assert svc_module.MANIFEST_STEM is MANIFEST_STEM

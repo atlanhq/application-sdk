@@ -79,8 +79,8 @@ def convert_json_to_parquet(file_path: str) -> str | None:
         import pandas as pd  # noqa: PLC0415 — optional dep: pandas
         import pyarrow.parquet as pq  # noqa: PLC0415 — optional dep: pyarrow
 
-        from application_sdk.storage.formats.utils import (  # noqa: PLC0415
-            _arrow_table_from_pandas,
+        from application_sdk.common._arrow import (  # noqa: PLC0415
+            arrow_table_from_pandas,
         )
 
         logger.info("Converting file to parquet: %s", file_path)
@@ -89,7 +89,7 @@ def convert_json_to_parquet(file_path: str) -> str | None:
         parquet_file_path = file_path.replace(".json", ".parquet")
         # preserve_index=None and snappy are what DataFrame.to_parquet passed.
         pq.write_table(
-            _arrow_table_from_pandas(df, preserve_index=None),
+            arrow_table_from_pandas(df, preserve_index=None),
             parquet_file_path,
             compression="snappy",
         )

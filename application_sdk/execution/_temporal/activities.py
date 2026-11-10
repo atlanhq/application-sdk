@@ -20,9 +20,9 @@ from uuid import uuid4
 from temporalio import activity
 
 from application_sdk._runtime.progress import ProgressTracker, bind_progress_tracker
-from application_sdk.app.build_identity import build_identity
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata
+from application_sdk.common.build_identity import build_identity
 from application_sdk.constants import LOCAL_WORKFLOW_ID, TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference

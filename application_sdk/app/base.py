@@ -1494,7 +1494,7 @@ class App(ABC):
         ``""`` when the image carries no stamp. NOT a substitute for
         :meth:`get_version`: that is the app's declared semver and is the same
         for every build of the same source, while this changes whenever the
-        image content does. See :mod:`application_sdk.app.build_identity`.
+        image content does. See :mod:`application_sdk.common.build_identity`.
         """
         return self._app_build_id
 
@@ -3751,10 +3751,6 @@ def generate_workflow_class(
     # execution (fast, non-retryable) instead of failing the workflow *task*
     # (retried by the server indefinitely). See _validate_workflow_input.
     async def _run(self, input_data: Any) -> Output:
-        # deferred imports: inside Temporal sandbox (workflow.unsafe.imports_passed_through context)
-        # BLDX-878: inter-app calls deactivated pending review.
-        # from application_sdk.app.client import WorkflowAppClient
-
         if alias_of_canonical:
             _safe_log(
                 "warning",

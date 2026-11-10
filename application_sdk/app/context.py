@@ -226,7 +226,7 @@ class AppContext:
     #: identical across every build of that source; this changes whenever the
     #: image content does, which is what makes it able to answer "is this pod
     #: running the build under test?". Defaulted so no existing construction site
-    #: has to change. See :mod:`application_sdk.app.build_identity`.
+    #: has to change. See :mod:`application_sdk.common.build_identity`.
     build_id: str = ""
     run_id: str = field(default_factory=lambda: str(uuid4()))
     workflow_id: str = field(default=LOCAL_WORKFLOW_ID)
