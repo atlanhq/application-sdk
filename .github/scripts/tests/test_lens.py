@@ -49,6 +49,7 @@ from lens.llm import (  # noqa: E402
     LLMError,
     Price,
     gateway_cost,
+    read_stream,
 )
 from lens.lock import BUSY_NOTE, JOB_TIMEOUT, older_active_run, run_name  # noqa: E402
 from lens.review import (  # noqa: E402
@@ -6623,3 +6624,211 @@ def test_github_repo_visibility_reads_the_api_and_never_raises():
     assert gh.repo_visibility("o/hidden") is None
     assert gh.repo_visibility("o/odd") is None
     assert calls == ["GET /repos/o/pub", "GET /repos/o/hidden", "GET /repos/o/odd"]
+
+
+# ---- streaming: Model Gateway cuts a non-streaming call at 90 s ------------------------------
+
+
+def _sse(*events: dict[str, Any], done: bool = True) -> list[bytes]:
+    out: list[bytes] = []
+    for e in events:
+        out.append(f"event: {e.get('type', '')}\n".encode())
+        out.append(f"data: {json.dumps(e)}\n".encode())
+        out.append(b"\n")
+    if done:
+        out.append(b"data: [DONE]\n\n")
+    return out
+
+
+_FINAL = {
+    "status": "completed",
+    "output": [{"type": "message", "content": [{"type": "output_text", "text": "hi"}]}],
+    "usage": {"input_tokens": 10, "output_tokens": 2},
+}
+
+
+def test_a_completed_stream_returns_the_final_response_object():
+    lines = _sse(
+        {"type": "response.created", "response": {"status": "in_progress"}},
+        {"type": "response.output_text.delta", "delta": "h"},
+        {"type": "response.completed", "response": _FINAL},
+    )
+    status, text = read_stream(lines)
+    assert status == 200 and json.loads(text) == _FINAL
+
+
+def test_an_incomplete_stream_still_returns_its_response():
+    partial = {**_FINAL, "status": "incomplete"}
+    status, text = read_stream(
+        _sse({"type": "response.incomplete", "response": partial})
+    )
+    assert status == 200 and json.loads(text)["status"] == "incomplete"
+
+
+def test_a_failed_stream_is_a_retryable_502():
+    failed = {
+        "type": "response.failed",
+        "response": {"error": {"code": "server_error"}},
+    }
+    status, text = read_stream(_sse(failed))
+    assert status == 502 and "server_error" in text
+
+
+def test_a_stream_cut_before_completion_is_a_transport_failure():
+    status, text = read_stream(
+        _sse({"type": "response.created", "response": {}}, done=False)
+    )
+    assert status == 0 and "before the response completed" in text
+
+
+def test_keepalive_comments_and_split_data_lines_are_tolerated():
+    payload = json.dumps({"type": "response.completed", "response": _FINAL}, indent=1)
+    lines = [b": keep-alive\n", b"\n"]
+    lines += [f"data: {part}\n".encode() for part in payload.splitlines()]
+    lines.append(b"\n")
+    # Two data lines of one event join with a newline, which JSON whitespace allows.
+    status, _ = read_stream(lines)
+    assert status == 200
+
+
+def test_responses_requests_ask_to_stream_and_a_refusal_turns_it_off_once():
+    refused = (400, {}, '{"error": {"message": "stream is not supported"}}')
+    sent = Script(refused, _responses_reply([]), _responses_reply([]))
+    c = Client(
+        model="m",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=sent,
+        api="responses",
+    )
+    c.complete("x", [{"role": "user", "content": "hi"}], max_tokens=5)
+    c.complete("x", [{"role": "user", "content": "hi"}], max_tokens=5)
+    assert [r.get("stream") for r in sent.requests] == [True, None, None]
+    assert "stream" in c.unsupported
+
+
+def test_an_upstream_error_does_not_turn_streaming_off():
+    upstream = (
+        400,
+        {},
+        '{"error": {"message": "upstream provider rejected the prompt"}}',
+    )
+    c = Client(
+        model="m",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=Script(upstream),
+        api="responses",
+    )
+    with pytest.raises(FatalRequestError):
+        c.complete("x", [{"role": "user", "content": "hi"}], max_tokens=5)
+    assert "stream" not in c.unsupported
+
+
+def test_a_streamed_http_response_is_read_as_events(monkeypatch: pytest.MonkeyPatch):
+    import urllib.request  # noqa: PLC0415 - patched below
+
+    events = _sse({"type": "response.completed", "response": _FINAL})
+
+    class _Stream:
+        status = 200
+        headers = {
+            "Content-Type": "text/event-stream; charset=utf-8",
+            "x-gateway-model-price": json.dumps({"input": 0.1, "output": 0.5}),
+        }
+
+        def __iter__(self):
+            return iter(events)
+
+        def read(self):  # pragma: no cover - a stream must not be read whole
+            raise AssertionError("read() on a stream")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    sent: list[dict[str, Any]] = []
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float | None = None):
+        data = req.data
+        sent.append(json.loads(data if isinstance(data, bytes) else b"{}"))
+        return _Stream()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    c = Client(
+        model="m",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        base_url="https://gw.test/openai",
+        api_key="k",
+        api="responses",
+    )
+    comp = c.complete("x", [{"role": "user", "content": "hi"}], max_tokens=5)
+    assert sent[0]["stream"] is True
+    assert comp.content == "hi" and comp.cost == pytest.approx(
+        (10 * 0.1 + 2 * 0.5) / 1e6
+    )
+
+
+def test_an_upper_case_event_stream_media_type_is_still_read_as_events(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import urllib.request  # noqa: PLC0415 - patched below
+
+    events = _sse({"type": "response.completed", "response": _FINAL})
+
+    class _Stream:
+        status = 200
+        headers = {"Content-Type": "Text/Event-Stream"}
+
+        def __iter__(self):
+            return iter(events)
+
+        def read(self):  # pragma: no cover - a stream must not be read whole
+            raise AssertionError("read() on a stream")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float | None = None):
+        return _Stream()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    c = Client(
+        model="m",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        base_url="https://gw.test/openai",
+        api_key="k",
+        api="responses",
+    )
+    comp = c.complete("x", [{"role": "user", "content": "hi"}], max_tokens=5)
+    assert comp.content == "hi"
+
+
+def test_a_stream_cut_mid_chunk_is_retried_as_transport_weather():
+    import http.client  # noqa: PLC0415 - the exception under test
+
+    calls: list[int] = []
+
+    def transport(body: dict[str, Any]) -> tuple[int, dict[str, str], str]:
+        calls.append(1)
+        if len(calls) == 1:
+            raise http.client.IncompleteRead(b"partial")
+        return _responses_reply([])
+
+    c = Client(
+        model="m",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=transport,
+        api="responses",
+        max_retries=1,
+    )
+    c.complete("x", [{"role": "user", "content": "hi"}], max_tokens=5)
+    assert len(calls) == 2
