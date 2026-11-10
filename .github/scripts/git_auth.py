@@ -56,7 +56,8 @@ A repository counts as private when an unauthenticated ``git ls-remote`` of it
 fails. The project's references are read from every ``pyproject.toml`` and
 ``uv.lock`` under the project directory (git sources: ``git = "..."`` and
 ``git+https://`` / ``git+ssh://`` requirements), so a sub-package's private
-dependency is found too.
+dependency is found too, and from common-app-server's ``hosted-api-apps.toml``
+(each ``repo = "atlanhq/<name>"``), whose apps the image build clones itself.
 
 Once one sync has populated the job's uv cache and venv, later ``uv sync`` /
 ``uv run`` / ``uv lock --check`` calls, and even a re-lock of a stale lock, do
@@ -92,6 +93,9 @@ REQUIRED_VAR = "PRIVATE_GIT_DEPS"
 
 #: Files that name a project's git dependencies.
 SCANNED_FILES = frozenset({"pyproject.toml", "uv.lock"})
+#: common-app-server's release pins. The image build clones each ``repo`` and
+#: stages it as a path dependency, so uv.lock never names it.
+HOSTED_API_APPS_FILE = "hosted-api-apps.toml"
 #: Never descended into, besides any dot-directory (.git, .venv, ...).
 SKIPPED_DIRS = frozenset({"node_modules", "__pycache__", "venv"})
 
@@ -101,6 +105,8 @@ _GIT_SOURCE = re.compile(
     r"""(?:\bgit\s*=\s*["']|\bgit\+)"""
     r"(?:https://|ssh://git@)github\.com/atlanhq/([A-Za-z0-9._-]+)"
 )
+#: A release pin in hosted-api-apps.toml: ``repo = "atlanhq/<name>"``.
+_HOSTED_REPO = re.compile(r"""^\s*repo\s*=\s*["']atlanhq/([A-Za-z0-9._-]+)["']""", re.M)
 
 #: The private atlanhq repositories an app may name as a git dependency, and so
 #: the most a private-dependency token is ever scoped to. A PR controls its own
@@ -194,15 +200,18 @@ def referenced_repos(project_dir: str | os.PathLike[str] = ".") -> list[str]:
         )
         for name in files:
             if name in SCANNED_FILES:
-                text = Path(root, name).read_text(encoding="utf-8", errors="replace")
-                # A commented-out source (`# x = { git = "..." }`) is not a
-                # dependency, and must not widen the token's scope.
-                live = "\n".join(
-                    line
-                    for line in text.splitlines()
-                    if not line.lstrip().startswith("#")
-                )
-                names.update(_repo_name(m) for m in _GIT_SOURCE.findall(live))
+                pattern = _GIT_SOURCE
+            elif name == HOSTED_API_APPS_FILE:
+                pattern = _HOSTED_REPO
+            else:
+                continue
+            text = Path(root, name).read_text(encoding="utf-8", errors="replace")
+            # A commented-out source (`# x = { git = "..." }`) is not a
+            # dependency, and must not widen the token's scope.
+            live = "\n".join(
+                line for line in text.splitlines() if not line.lstrip().startswith("#")
+            )
+            names.update(_repo_name(m) for m in pattern.findall(live))
     return sorted(n for n in names if n)
 
 
