@@ -498,3 +498,50 @@ def test_install_returns_uvs_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda cmd, **_: subprocess.CompletedProcess(cmd, 2, "", ""),
     )
     assert certify.install_deps() == 2
+
+
+def _record_runs(
+    monkeypatch: pytest.MonkeyPatch, codes: dict[str, int] | None = None
+) -> list[list[str]]:
+    runs: list[list[str]] = []
+
+    def fake_run(
+        command: list[str], env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        runs.append(list(command))
+        code = (codes or {}).get(command[0] if command[0] == "uv" else "stage", 0)
+        return subprocess.CompletedProcess(command, code)
+
+    monkeypatch.setattr(_bap, "run", fake_run)
+    monkeypatch.delenv("GIT_TOKEN", raising=False)
+    return runs
+
+
+def test_install_deps_syncs_only_without_hosted_api_apps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    runs = _record_runs(monkeypatch)
+    assert certify.install_deps() == 0
+    assert runs == [list(certify.INSTALL_COMMAND)]
+
+
+def test_install_deps_stages_hosted_api_apps_before_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # common-app-server's pyproject depends on apps/<name>/ by path.
+    (tmp_path / "hosted-api-apps.toml").write_text("")
+    monkeypatch.chdir(tmp_path)
+    runs = _record_runs(monkeypatch)
+    assert certify.install_deps() == 0
+    assert runs == [list(certify.STAGE_COMMAND), list(certify.INSTALL_COMMAND)]
+
+
+def test_install_deps_stops_when_staging_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "hosted-api-apps.toml").write_text("")
+    monkeypatch.chdir(tmp_path)
+    runs = _record_runs(monkeypatch, {"stage": 2})
+    assert certify.install_deps() == 2
+    assert runs == [list(certify.STAGE_COMMAND)]
