@@ -1,5 +1,10 @@
 """Redis-backed distributed capacity pool.
 
+.. deprecated:: 3.56
+    ``RedisCapacityPool`` is deprecated and will be removed in v4.0.0; the
+    framework never constructed one. See
+    :mod:`application_sdk.infrastructure.capacity`.
+
 Uses Lua scripts for atomic acquire/release/renew operations. Each holder
 gets a lease with a TTL — if the holder crashes or fails to renew, permits
 are automatically reclaimed when the TTL expires.
@@ -12,6 +17,8 @@ Redis data model:
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+
+from typing_extensions import deprecated
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -107,6 +114,12 @@ return 0
 """
 
 
+@deprecated(
+    "RedisCapacityPool is deprecated and "
+    "will be removed in v4.0.0. Nothing in the SDK configures or reads a "
+    "capacity pool; bound concurrency inside the app (for example an "
+    "asyncio.Semaphore) instead."
+)
 class RedisCapacityPool:
     """Distributed capacity pool backed by Redis.
 

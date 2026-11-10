@@ -1,5 +1,12 @@
 """Distributed capacity management for API rate limiting.
 
+.. deprecated:: 3.56
+    Every name in this module is deprecated and will be removed in v4.0.0.
+    The framework never configured a pool at startup and nothing in the SDK
+    reads one, so ``get_capacity_pool()`` returned ``None`` unless the app
+    called ``configure_capacity_pool()`` itself. Bound concurrency inside the
+    app instead (for example with an ``asyncio.Semaphore``).
+
 Provides a protocol for capacity pools that control how many concurrent
 operations can run across multiple workers. When Redis is available,
 permits are coordinated globally. Without Redis, falls back to local-only
@@ -14,13 +21,21 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from typing_extensions import deprecated
+
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 
+@deprecated(
+    "CapacityPool is deprecated and "
+    "will be removed in v4.0.0. Nothing in the SDK configures or reads a "
+    "capacity pool; bound concurrency inside the app (for example an "
+    "asyncio.Semaphore) instead."
+)
 class CapacityPool(Protocol):
-    """Protocol for distributed capacity management.
+    """Deprecated: protocol for distributed capacity management — removed in v4.0.0 (never wired by the framework).
 
     Implementations control how many concurrent operations (e.g., API calls)
     can run across all workers sharing the same pool.
@@ -76,8 +91,14 @@ class CapacityPool(Protocol):
         ...
 
 
+@deprecated(
+    "LocalCapacityPool is deprecated and "
+    "will be removed in v4.0.0. Nothing in the SDK configures or reads a "
+    "capacity pool; bound concurrency inside the app (for example an "
+    "asyncio.Semaphore) instead."
+)
 class LocalCapacityPool:
-    """Local-only capacity pool (no coordination).
+    """Deprecated: local-only capacity pool (no coordination) — removed in v4.0.0 (never wired by the framework).
 
     Always grants the full requested amount. Used when Redis is not
     configured (local development, single-worker deployments).
@@ -120,8 +141,14 @@ class LocalCapacityPool:
 _capacity_pool: CapacityPool | None = None
 
 
+@deprecated(
+    "configure_capacity_pool is deprecated and "
+    "will be removed in v4.0.0. Nothing in the SDK configures or reads a "
+    "capacity pool; bound concurrency inside the app (for example an "
+    "asyncio.Semaphore) instead."
+)
 def configure_capacity_pool(pool: CapacityPool) -> None:
-    """Configure the global capacity pool for distributed rate limiting.
+    """Deprecated: configure the global capacity pool — removed in v4.0.0 (never wired by the framework).
 
     Call this at worker startup to configure the capacity pool used
     by activities that need to coordinate concurrent API access.
@@ -142,8 +169,14 @@ def configure_capacity_pool(pool: CapacityPool) -> None:
     logger.debug("capacity pool configured pool_type={}", type(pool).__name__)
 
 
+@deprecated(
+    "get_capacity_pool is deprecated and "
+    "will be removed in v4.0.0. Nothing in the SDK configures or reads a "
+    "capacity pool; bound concurrency inside the app (for example an "
+    "asyncio.Semaphore) instead."
+)
 def get_capacity_pool() -> CapacityPool | None:
-    """Get the configured capacity pool.
+    """Deprecated: get the configured capacity pool — removed in v4.0.0 (never wired by the framework).
 
     Returns:
         The configured CapacityPool, or None if not configured.

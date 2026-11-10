@@ -223,7 +223,7 @@ Within each attempt of that budget, the Dapr HTTP client replays a failed GET up
 
 ## Redis (Capacity Lock)
 
-Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use `LocalCapacityPool` (default for local development when no Redis is configured).
+Used by the distributed lock (`RedisClient` / `RedisClientAsync`). Leave empty for local development. These variables do not configure a capacity pool: `RedisCapacityPool` is deprecated and the framework never constructed one.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

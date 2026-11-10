@@ -234,67 +234,21 @@ class BindingResponse:
 
 ---
 
-## CapacityPool
+## CapacityPool (deprecated)
 
-The `CapacityPool` Protocol governs concurrency limits — for example, capping the number of parallel database connections or API requests within a task.
+!!! warning "Deprecated — removal in v4.0.0"
 
-**Protocol:**
+    `CapacityPool`, `LocalCapacityPool`, `RedisCapacityPool`, `configure_capacity_pool()` and `get_capacity_pool()` are deprecated and emit a `DeprecationWarning`. The framework never configured a pool at startup — setting the `REDIS_*` env vars did not create one — and nothing in the SDK reads it, so `get_capacity_pool()` returned `None` unless the app called `configure_capacity_pool()` itself.
 
-```python
-class CapacityPool(Protocol):
-    async def acquire(
-        self,
-        pool_name: str,
-        requested: int,
-        *,
-        min_useful: int = 1,
-        holder_id: str = "",
-        ttl_seconds: int = 120,
-    ) -> int: ...   # returns slots granted
+    To cap parallel work inside a task, bound it in the app:
 
-    async def release(self, pool_name: str, holder_id: str) -> None: ...
-
-    async def renew(
-        self, pool_name: str, holder_id: str, ttl_seconds: int = 120
-    ) -> bool: ...
-```
-
-`CapacityPool` is accessed as a module-level singleton (not part of `InfrastructureContext`). Use `get_capacity_pool()`:
-
-**Using a capacity pool:**
-
-```python
-import uuid
-from application_sdk.infrastructure import get_capacity_pool
-
-@task(timeout_seconds=3600)
-async def parallel_fetch(self, input: FetchInput) -> FetchOutput:
-    pool = get_capacity_pool()
+    ```python
+    sem = asyncio.Semaphore(8)
 
     async def fetch_one(item_id: str) -> dict:
-        holder = str(uuid.uuid4())
-        if pool:
-            await pool.acquire("fetch-pool", requested=1, holder_id=holder)
-        try:
+        async with sem:
             return await self._fetch_item(item_id)
-        finally:
-            if pool:
-                await pool.release("fetch-pool", holder_id=holder)
-
-    results = await asyncio.gather(*(fetch_one(i) for i in input.item_ids))
-    return FetchOutput(results=results)
-```
-
-**Built-in implementations:**
-
-| Class | Backend | Use case |
-|---|---|---|
-| `LocalCapacityPool` | None (no-op) | Local dev / no-Redis fallback; always grants the full requested amount |
-| Redis-backed pool (internal) | Redis | Cross-pod, distributed concurrency |
-
-**Enabling the Redis-backed pool:**
-
-Set `REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` env vars and the framework configures a Redis-backed capacity pool automatically at startup — no code changes needed. See [Configuration](../configuration.md) for all Redis env vars.
+    ```
 
 ---
 
@@ -306,9 +260,9 @@ Set `REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` env vars and the framework 
 | `SecretStore` | Dapr secret store | `MockSecretStore` | `get_infrastructure().secret_store` | Credential resolution |
 | `Binding` | Dapr binding | `MockBinding` | `get_infrastructure().event_binding` | External I/O |
 | `PubSub` | `eventstore` (`EVENT_STORE_NAME`) | `MockPubSub` | Dapr client directly | Event emission/subscription |
-| `CapacityPool` | Redis (optional) | `LocalCapacityPool` | `get_capacity_pool()` | Concurrency limits |
+| `CapacityPool` (deprecated) | — | `LocalCapacityPool` | `get_capacity_pool()` | Deprecated; removal in v4.0.0 |
 
-`StateStore`, `SecretStore`, and `Binding` are held in `InfrastructureContext` and accessed via `get_infrastructure()`. `PubSub` is accessed via the Dapr client directly. `CapacityPool` is a separate module-level singleton accessed via `get_capacity_pool()`. See [Infrastructure](infrastructure.md) for the test fixture pattern and `set_infrastructure()` / `clear_infrastructure()` usage.
+`StateStore`, `SecretStore`, and `Binding` are held in `InfrastructureContext` and accessed via `get_infrastructure()`. `PubSub` is accessed via the Dapr client directly. `CapacityPool` is deprecated (see [above](#capacitypool-deprecated)). See [Infrastructure](infrastructure.md) for the test fixture pattern and `set_infrastructure()` / `clear_infrastructure()` usage.
 
 ## See Also
 
@@ -316,4 +270,4 @@ Set `REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` env vars and the framework 
 - [Credentials](credentials.md) — `SecretStore` in the credential resolution flow
 - [Secret Stores](../guides/secretstores.md) — Dapr component configuration (K8s, AWS, Vault)
 - [Storage](storage.md) — `upload_file`/`download_file` for object storage
-- [Configuration](../configuration.md) — Redis lock, Dapr component names, capacity pool env vars
+- [Configuration](../configuration.md) — Redis lock, Dapr component names

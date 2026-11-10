@@ -16,6 +16,18 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
+FUNCTION_CALLS_METRIC = "function_calls"
+"""Counter every ``@observability`` function records once per call.
+
+One metric for every decorated function, labelled ``function`` (the
+function's ``__name__``), ``outcome`` (``success`` / ``failure``) and
+``error_type`` (the exception class name, or ``none`` on success). The
+label key set is the same on both paths, as the exporter requires for one
+metric name."""
+
+_NO_ERROR = "none"
+_FUNCTION_CALLS_DESCRIPTION = "Calls to functions decorated with @observability"
+
 
 def _record_success_observability(
     logger: "AtlanLoggerAdapter",
@@ -65,11 +77,15 @@ def _record_success_observability(
     try:
         # Record success metric
         metrics.record_metric(
-            name=f"{func_name}_success",
+            name=FUNCTION_CALLS_METRIC,
             value=1,
             metric_type=MetricType.COUNTER,
-            labels={"function": func_name},
-            description=f"Successful {func_name}",
+            labels={
+                "function": func_name,
+                "outcome": "success",
+                "error_type": _NO_ERROR,
+            },
+            description=_FUNCTION_CALLS_DESCRIPTION,
             unit="count",
         )
         logger.debug("Successfully recorded metric: %s", func_name)
@@ -127,11 +143,15 @@ def _record_error_observability(
     try:
         # Record failure metric
         metrics.record_metric(
-            name=f"{func_name}_failure",
+            name=FUNCTION_CALLS_METRIC,
             value=1,
             metric_type=MetricType.COUNTER,
-            labels={"function": func_name, "error": type(error).__name__},
-            description=f"Failed {func_name}",
+            labels={
+                "function": func_name,
+                "outcome": "failure",
+                "error_type": type(error).__name__,
+            },
+            description=_FUNCTION_CALLS_DESCRIPTION,
             unit="count",
         )
         logger.debug("Successfully recorded error metric: %s", func_name)

@@ -218,6 +218,7 @@ canonical bounded label set is:
 | `hold_label` | same | Same set. `run_in_thread` holds are labelled by the offloaded callable's qualname, never by an argument |
 | `watchdog_mode` | same | `off`, `warn`, `enforce` |
 | `hold_bounded` / `hold_lapsed` | same | `true`, `false` — **lowercase**, since dashboard panels and alert rules filter on those literals |
+| `function` / `outcome` | `@observability` decorator | `function` is a decorated function's `__name__` — bounded by the code, never by input; `outcome` is `success` or `failure` |
 
 Any new label not on this list needs justification: prove it's bounded.
 
@@ -230,9 +231,21 @@ Names emitted by the consolidated SDK surface (all use OTel base units
 — seconds for durations, bytes for sizes — and snake_case with the
 `_total` suffix on counters):
 
+!!! note "Name new metrics in snake_case"
+
+    Two spellings exist in the source today: `MetricsInterceptor` creates
+    OTel instruments with dotted names (`temporal.activity.executions`) and
+    `record_metric()` callers use snake_case (`storage_transfer_total`).
+    The Prometheus exporter rewrites dots to underscores, so both arrive as
+    the snake_case names in this table. Write new names in snake_case so the
+    name in the code is the name you query. Never put a variable part — a
+    function, table or format — in the name: make it a label
+    (`function_calls_total{function="..."}`, not `<function>_success_total`).
+
 | Metric | Type | Source |
 |---|---|---|
 | `chunks_written_total` | counter | `record_metric()` in `storage/formats/` |
+| `function_calls_total` | counter | `@observability` decorator — one increment per call of a decorated function, labels `function` (`__name__`), `outcome` (`success`/`failure`), `error_type` (exception class, `none` on success). Replaces the per-function `<function>_success` / `<function>_failure` counters |
 | `write_records_total` | counter | same |
 | `write_errors_total` | counter | same |
 | `temporal_activity_executions_total` | counter | `MetricsInterceptor` |

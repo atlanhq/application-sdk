@@ -31,7 +31,7 @@ All fields are optional (`None` by default). Accessing a `None` field raises a c
 
 **Two-store architecture:** `storage` and `upstream_storage` serve distinct purposes. `storage` is the customer-owned deployment store used by the activity interceptor for task-to-task `FileReference` durability — intermediate data stays inside the customer's perimeter. `upstream_storage` is an Atlan-owned store provisioned by the atlan-configurator in SDR deployments; `App.upload()` routes through it so Atlan system apps (publish, QI, lineage) can read connector artifacts. When `upstream_storage` is `None` (local dev, Atlan-hosted), `App.upload()` falls back to `storage`. See [ADR-0014](../adr/0014-two-store-storage-architecture.md) and [Storage](storage.md) for full details.
 
-`PubSub` and `CapacityPool` are separate infrastructure capabilities managed by their own module-level singletons — see [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md) for usage.
+`PubSub` and the deprecated `CapacityPool` are separate infrastructure capabilities managed by their own module-level singletons — see [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md) for usage.
 
 ---
 
@@ -114,7 +114,7 @@ Wraps Dapr output bindings (queues, storage, SMTP, etc.). Accessed via `get_infr
 
 ### CapacityPool
 
-Distributes concurrency slots across workers. In production the framework auto-configures a Redis-backed pool (controlled by the `REDIS_*` env vars); `LocalCapacityPool` is the public implementation for tests and single-process dev. See [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool) for the full Protocol, configuration, and usage examples.
+**Deprecated — removal in v4.0.0.** The framework never configured a pool and nothing in the SDK reads one; the `REDIS_*` env vars do not create one. See [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool-deprecated) for what to use instead.
 
 ---
 

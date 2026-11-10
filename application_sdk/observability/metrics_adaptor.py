@@ -314,6 +314,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             metric_type (str): Type of metric (counter, gauge, or histogram)
             labels: Key-value pairs for metric dimensions. Values must be
                 str/int/float/bool — OTel attributes do not accept other types.
+                Not modified: the context labels from ``get_metric_labels()``
+                are merged into a copy.
             description (Optional[str]): Optional description of the metric
             unit (Optional[str]): Optional unit of measurement
 
@@ -325,7 +327,9 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         Raises:
             Exception: If recording fails, logs error and continues
         """
-        labels.update(get_metric_labels())
+        # Merge into a copy: callers often reuse one labels dict across calls,
+        # and the context labels of one call must not leak into the next.
+        merged_labels = {**labels, **get_metric_labels()}
 
         try:
             # Create metric record
@@ -334,7 +338,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 name=name,
                 value=value,
                 type=metric_type,
-                labels=labels,
+                labels=merged_labels,
                 description=description,
                 unit=unit,
             )

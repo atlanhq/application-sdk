@@ -52,6 +52,8 @@ if _importlib_util.find_spec("application_sdk.handler.base") is None:
         "pip install --force-reinstall --no-deps atlan-application-sdk-api"
     )
 
+from application_sdk.app.base import _pascal_to_kebab
+from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.common import restart_marker
 from application_sdk.common._env import env_int as _env_int
 from application_sdk.common.backoff import Backoff
@@ -73,9 +75,6 @@ from application_sdk.main_errors import (
     UnknownModeError,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-
-# Enable faulthandler so C-level crashes dump a traceback to stderr.
-faulthandler.enable()
 
 # Module-level reference to the running event loop (set in worker/combined mode).
 # Used by the SIGUSR1 debug handler to snapshot asyncio tasks.
@@ -111,8 +110,17 @@ def _debug_dump_handler(signum: int, frame: object) -> None:
     print(f"Debug dump written to {dump_path}", file=sys.stderr, flush=True)
 
 
-if hasattr(signal, "SIGUSR1"):
-    signal.signal(signal.SIGUSR1, _debug_dump_handler)
+def _install_debug_handlers() -> None:
+    """Enable crash tracebacks and the SIGUSR1 debug dump for this process.
+
+    Called from :func:`main` only, so importing this module (dev scripts that
+    call :func:`run_dev_combined`, tests) leaves the process's fault and
+    signal handlers alone.
+    """
+    # C-level crashes dump a traceback to stderr.
+    faulthandler.enable()
+    if hasattr(signal, "SIGUSR1"):
+        signal.signal(signal.SIGUSR1, _debug_dump_handler)
 
 
 def _log_process_memory_baseline() -> None:
@@ -885,10 +893,6 @@ async def _create_infrastructure(
 def _derive_service_name(app_module: str) -> str:
     """Convert "my_package.apps:MyApp" to "my-app" (kebab-case)."""
     if ":" in app_module:
-        from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
-            _pascal_to_kebab,
-        )
-
         return _pascal_to_kebab(app_module.split(":")[1])
     return "application-sdk"
 
@@ -1609,10 +1613,6 @@ async def run_worker_mode(
     global _worker_event_loop
     _worker_event_loop = asyncio.get_running_loop()
 
-    from application_sdk.app.registry import (  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
-        AppRegistry,
-        TaskRegistry,
-    )
     from application_sdk.execution._temporal.backend import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_temporal_client,
     )
@@ -1937,10 +1937,6 @@ async def run_combined_mode(
 
     import uvicorn  # noqa: PLC0415 — cold path: uvicorn only loaded in worker/handler runtime modes
 
-    from application_sdk.app.registry import (  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
-        AppRegistry,
-        TaskRegistry,
-    )
     from application_sdk.execution._temporal.backend import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_temporal_client,
     )
@@ -2587,6 +2583,7 @@ Examples:
 
 def main() -> NoReturn:
     """CLI entry point."""
+    _install_debug_handlers()
     _install_excepthook()
 
     args = parse_args()
