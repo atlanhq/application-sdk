@@ -1,9 +1,10 @@
 """The container's CPU limit, readable from the bottom layer (ADR-0019).
 
 ``os.cpu_count()`` reports the node's cores, not the pod's: a worker limited to
-one CPU on a 16-core node sees 16. Anything the substrate sizes by CPU — the
-fault-isolation process pool in :mod:`application_sdk._runtime.offload` — reads
-the limit here instead. :mod:`application_sdk.observability.cgroup` reports the
+one CPU on a 16-core node sees 16. Anything sized by CPU — the ``sdk-blocking-``
+thread pool and the fault-isolation process pool in
+:mod:`application_sdk._runtime.offload`, and the worker's default activity slots
+— reads the limit here instead. :mod:`application_sdk.observability.cgroup` reports the
 same number for sizing telemetry and delegates to this module, so the two can
 never disagree about what the limit is.
 

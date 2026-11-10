@@ -20,6 +20,7 @@ from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVe
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 from typing_extensions import deprecated
 
+from application_sdk._runtime.cgroup import available_cpus
 from application_sdk.app.registry import (
     AppRegistry,
     TaskRegistry,
@@ -39,6 +40,7 @@ from application_sdk.execution.settings import (
     load_execution_settings,
     load_interceptor_settings,
 )
+from application_sdk.observability.cgroup import memory_limit_bytes
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -1049,6 +1051,22 @@ def create_worker(
 
     if max_concurrent_activities is None:
         max_concurrent_activities = load_execution_settings().max_concurrent_activities
+        # The default is derived from the container's limits unless the env var
+        # sets it, so say which: a pod that gets fewer slots than its owner
+        # expected should be explainable from its startup log alone.
+        if os.environ.get("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", "").strip():
+            logger.info(
+                "Activity slots: %d (TEMPORAL_MAX_CONCURRENT_ACTIVITIES)",
+                max_concurrent_activities,
+            )
+        else:
+            logger.info(
+                "Activity slots: %d (derived from %d CPUs, memory limit %s bytes;"
+                " set TEMPORAL_MAX_CONCURRENT_ACTIVITIES to override)",
+                max_concurrent_activities,
+                available_cpus(),
+                memory_limit_bytes(),
+            )
 
     if graceful_shutdown_timeout_seconds is None:
         graceful_shutdown_timeout_seconds = (

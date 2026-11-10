@@ -6,12 +6,16 @@ import pytest
 from temporalio.common import VersioningBehavior
 
 from application_sdk.constants import derive_shutdown_budget, load_shutdown_budget
+from application_sdk.execution import settings as settings_mod
 from application_sdk.execution.settings import (
     ExecutionSettings,
     InterceptorSettings,
     load_execution_settings,
     load_interceptor_settings,
 )
+
+_MIB = 1024 * 1024
+_GIB = 1024 * _MIB
 
 
 class TestExecutionSettingsDefaults:
@@ -71,6 +75,40 @@ class TestLoadExecutionSettingsFromEnv:
         monkeypatch.setenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", "50")
         settings = load_execution_settings()
         assert settings.max_concurrent_activities == 50
+
+    def test_max_concurrent_activities_env_wins_over_small_limits(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", "200")
+        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", "512Mi")
+        monkeypatch.setattr(settings_mod, "available_cpus", lambda: 1)
+        assert load_execution_settings().max_concurrent_activities == 200
+
+    @pytest.mark.parametrize("unset", [None, "", "  "])
+    def test_max_concurrent_activities_derived_when_env_unset_or_blank(
+        self, monkeypatch: pytest.MonkeyPatch, unset: str | None
+    ) -> None:
+        """A 1-CPU pod on a 64-core node gets 10 slots, not 100."""
+        if unset is None:
+            monkeypatch.delenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", raising=False)
+        else:
+            monkeypatch.setenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", unset)
+        monkeypatch.delenv("K8S_POD_MEMORY_LIMIT", raising=False)
+        monkeypatch.setattr(settings_mod, "available_cpus", lambda: 1)
+        assert load_execution_settings().max_concurrent_activities == 10
+
+    def test_max_concurrent_activities_reads_the_cgroup_memory_limit(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """The enforced cgroup limit, not only the env var, bounds the slots."""
+        from application_sdk.observability import cgroup
+
+        limit = tmp_path / "memory.max"
+        limit.write_text(str(2 * 1024**3))
+        monkeypatch.setattr(cgroup, "_MEMORY_LIMIT_PATHS", (str(limit),))
+        monkeypatch.delenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", raising=False)
+        monkeypatch.setattr(settings_mod, "available_cpus", lambda: 16)
+        assert load_execution_settings().max_concurrent_activities == 8
 
     def test_graceful_shutdown_timeout_from_env(
         self, monkeypatch: pytest.MonkeyPatch
@@ -318,3 +356,29 @@ class TestShutdownBudget:
         monkeypatch.delenv("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", raising=False)
         monkeypatch.delenv("ATLAN_SHUTDOWN_GRACE_SECONDS", raising=False)
         assert load_execution_settings().graceful_shutdown_timeout_seconds == 3600
+
+
+class TestDeriveMaxConcurrentActivities:
+    """``min(100, 10 x cpus, memory // 256 MiB)``, floored at 1 (FND-4646)."""
+
+    @pytest.mark.parametrize(
+        ("cpus", "memory", "expected"),
+        [
+            # No known memory limit: CPU alone, capped at the old default.
+            (1, None, 10),
+            (4, None, 40),
+            (64, None, 100),
+            # Memory is the tighter bound.
+            (4, 2 * _GIB, 8),
+            (1, 512 * _MIB, 2),
+            # CPU is the tighter bound.
+            (2, 16 * _GIB, 20),
+            # Both generous: the cap.
+            (32, 64 * _GIB, 100),
+            # Below one slot's budget still runs one activity.
+            (1, 100 * _MIB, 1),
+            (1, 0, 1),
+        ],
+    )
+    def test_formula(self, cpus: int, memory: int | None, expected: int) -> None:
+        assert settings_mod._derive_max_concurrent_activities(cpus, memory) == expected

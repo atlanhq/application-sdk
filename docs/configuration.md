@@ -146,6 +146,7 @@ unavailable the poll state is reported as *unknown*, never as zero.
 | `ATLAN_HANDLER_MODULE` | _(empty)_ | Handler class to load (`module:ClassName`). Auto-discovered from the app module when unset. |
 | `ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS` | `5` | Event-loop yield (seconds) before tearing down the worker transport, giving in-flight activity completion RPCs a chance to flush. Distinct from `TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT`. |
 | `TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT` | `3600`, or derived from `ATLAN_SHUTDOWN_GRACE_SECONDS` | Seconds the Temporal worker waits for in-flight activities to finish on shutdown before cancelling them. |
+| `TEMPORAL_MAX_CONCURRENT_ACTIVITIES` | derived from the container's limits | Activity slots per worker. Unset or blank, the SDK derives it as `min(100, 10 × CPUs, memory limit ÷ 256 MiB)`, never below 1. CPUs are the container's CPU limit (the CFS quota, rounded down), not the node's cores. The memory limit is the cgroup's, falling back to `K8S_POD_MEMORY_LIMIT`; with neither, only the CPU term applies. A 1-CPU, 2 GiB pod gets 8 slots, and a pod with no limits on a large node gets 100. The worker logs the value and its inputs at startup. Set this to use an exact number instead. |
 
 ## Blocking offload (`run_in_thread`)
 

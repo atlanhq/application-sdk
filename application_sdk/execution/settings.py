@@ -14,10 +14,27 @@ from dataclasses import dataclass
 # direction without providing any real isolation.
 from temporalio.common import VersioningBehavior
 
+from application_sdk._runtime.cgroup import available_cpus
 from application_sdk.constants import load_shutdown_budget
+from application_sdk.observability.cgroup import memory_limit_bytes
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+#: Upper bound on the derived activity-slot default: the fixed default every
+#: worker ran with before it was derived, so no pod gets more slots than it had.
+_MAX_CONCURRENT_ACTIVITIES_CAP = 100
+
+#: Derived activity slots per whole CPU the container may use. Activities are
+#: mostly awaiting I/O, so a CPU carries several; past this, CPU-bound work in
+#: one activity starts delaying the event loop that heartbeats for the others.
+_ACTIVITY_SLOTS_PER_CPU = 10
+
+#: Container memory budgeted per derived activity slot (256 MiB).
+_MEMORY_BYTES_PER_ACTIVITY_SLOT = 256 * 1024 * 1024
+
+#: Env var that sets the activity-slot count outright, bypassing derivation.
+_MAX_CONCURRENT_ACTIVITIES_ENV = "TEMPORAL_MAX_CONCURRENT_ACTIVITIES"
 
 
 @dataclass(frozen=True)
@@ -33,8 +50,15 @@ class ExecutionSettings:
     task_queue: str = "application-sdk"
     """Default task queue for workers."""
 
-    max_concurrent_activities: int = 100
-    """Maximum concurrent activities per worker."""
+    max_concurrent_activities: int = _MAX_CONCURRENT_ACTIVITIES_CAP
+    """Maximum concurrent activities per worker.
+
+    ``TEMPORAL_MAX_CONCURRENT_ACTIVITIES`` when set; otherwise
+    :func:`load_execution_settings` derives it from the container's limits:
+    ``min(100, 10 x CPUs, memory limit // 256 MiB)``, never below 1, dropping
+    the memory term when no limit is known. The bare dataclass default is the
+    cap, 100.
+    """
 
     graceful_shutdown_timeout_seconds: int = 3600
     """Seconds to wait for in-flight activities to complete during worker shutdown.
@@ -134,6 +158,26 @@ def _load_graceful_shutdown_timeout() -> int:
     return ExecutionSettings.graceful_shutdown_timeout_seconds
 
 
+def _derive_max_concurrent_activities(cpus: int, memory_bytes: int | None) -> int:
+    """Activity slots a container with these limits can run without oversubscribing.
+
+    ``min(100, 10 x cpus, memory_bytes // 256 MiB)``, never below 1. An unknown
+    memory limit (``None``) drops the memory term rather than guessing one.
+    """
+    slots = min(_MAX_CONCURRENT_ACTIVITIES_CAP, cpus * _ACTIVITY_SLOTS_PER_CPU)
+    if memory_bytes is not None:
+        slots = min(slots, memory_bytes // _MEMORY_BYTES_PER_ACTIVITY_SLOT)
+    return max(1, slots)
+
+
+def _load_max_concurrent_activities() -> int:
+    """Explicit ``TEMPORAL_MAX_CONCURRENT_ACTIVITIES``, else derived from the container."""
+    explicit = os.environ.get(_MAX_CONCURRENT_ACTIVITIES_ENV, "").strip()
+    if explicit:
+        return int(explicit)
+    return _derive_max_concurrent_activities(available_cpus(), memory_limit_bytes())
+
+
 def load_execution_settings() -> ExecutionSettings:
     """Load execution settings from environment variables."""
     # v2-compat: remove ATLAN_WORKFLOW_HOST/PORT fallbacks when all deployments use TEMPORAL_HOST.
@@ -145,9 +189,7 @@ def load_execution_settings() -> ExecutionSettings:
         host=os.environ.get("TEMPORAL_HOST", _v2_default),
         namespace=os.environ.get("TEMPORAL_NAMESPACE", "default"),
         task_queue=os.environ.get("TEMPORAL_TASK_QUEUE", "application-sdk"),
-        max_concurrent_activities=int(
-            os.environ.get("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", "100")
-        ),
+        max_concurrent_activities=_load_max_concurrent_activities(),
         graceful_shutdown_timeout_seconds=_load_graceful_shutdown_timeout(),
         default_versioning_behavior=_load_versioning_behavior(
             "TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR"
