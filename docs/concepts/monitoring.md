@@ -89,15 +89,18 @@ ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS=30
 ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN=true            # default
 ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START=true          # default
 ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS=300        # default
-ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS=10            # default
-ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS=35   # default
+ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS=10            # default; derived from ATLAN_SHUTDOWN_GRACE_SECONDS when set
+ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS=35   # default; derived from ATLAN_SHUTDOWN_GRACE_SECONDS when set
 ```
 
 Hardening behaviors that ship by default: graceful exits DELETE the
 group from the gateway (no leak); each new worker sweeps stale
 predecessor groups left by OOM/eviction; every gateway HTTP call is
 bounded to 10 s; the final push is held for 35 s before DELETE so
-Prometheus has a full scrape window. See [ADR-0012](../adr/0012-observability-consolidation.md)
+Prometheus has a full scrape window. The final push, hold and DELETE run
+under the post-drain exit deadline. When the pod's grace period is
+declared (`ATLAN_SHUTDOWN_GRACE_SECONDS`), the timeout and hold are derived
+from it, so a short grace shrinks them and SIGKILL does not land mid-hold. See [ADR-0012](../adr/0012-observability-consolidation.md)
 for the design rationale.
 
 ### Available Temporal SDK metrics

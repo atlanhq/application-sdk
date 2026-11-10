@@ -296,9 +296,10 @@ class SegmentClient:
         sent when close() cancels the worker task — call close() after flush()
         for a complete drain.
         Bridges to the worker's dedicated event loop via asyncio.wrap_future.
-        Times out after 10 s to keep shutdown bounded (matches the
-        Pushgateway per-call budget; two 10 s calls fit within K8s'
-        default 30 s terminationGracePeriodSeconds).
+        Times out after 10 s to keep shutdown bounded. At process exit it
+        runs under the post-drain exit deadline, which is derived with the
+        rest of the shutdown bounds from the pod's grace period (see
+        ``application_sdk.constants.ShutdownBudget``).
 
         No-op when any of these hold:
 

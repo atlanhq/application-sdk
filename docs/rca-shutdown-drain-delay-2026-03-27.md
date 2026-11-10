@@ -97,4 +97,4 @@ These are separate issues that amplified the impact but are not addressed in thi
 
 2. **Atlas `appWorkflowRunDag` 100K character limit** — the activity that triggered the race fails deterministically for large DAGs. All 3 retry attempts fail with the same error.
 
-3. **`terminationGracePeriodSeconds: 43230`** (12 hours) — matches `graceful_shutdown_timeout` but means the pod lingers in Terminating state for the full duration of the deadlock.
+3. **`terminationGracePeriodSeconds: 43230`** (12 hours) — matches `graceful_shutdown_timeout` but means the pod lingers in Terminating state for the full duration of the deadlock. (Later note, FND-4645: the SDK's own drain default is 3600 s, not 12 h. The two only agree when a deployment sets `TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT` explicitly, or declares its grace through `ATLAN_SHUTDOWN_GRACE_SECONDS` so the drain is derived from it.)

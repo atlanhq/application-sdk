@@ -258,9 +258,10 @@ class PushGatewayClient:
             # to read the just-pushed final batch. Without this, the DELETE
             # fires within milliseconds of the push and Prometheus' next scrape
             # finds nothing — the last interval of metrics (often the failure
-            # increments that triggered scale-down) is lost. Worker
-            # terminationGracePeriodSeconds is 12h so the wait is negligible
-            # against the kill timeout.
+            # increments that triggered scale-down) is lost. This runs under
+            # the post-drain exit deadline, and the delay is derived from the
+            # pod's grace period when one is declared, so a short grace
+            # shrinks it rather than letting SIGKILL land mid-hold.
             if self._shutdown_delete_delay_s > 0:
                 logger.info(
                     "Holding Pushgateway group for %.0fs before DELETE so "

@@ -29,10 +29,13 @@
 #                                     --max-request-body-size (default: 1024Mi)
 #   DAPR_SCHEDULER_HOST_ADDRESS     - DAPR scheduler address (default: empty = disabled)
 #   DAPR_GRACEFUL_SHUTDOWN_SECONDS  - How long daprd waits for in-flight requests after
-#                                     receiving SIGTERM (default: 3600). Must be >=
-#                                     APP_GRACEFUL_SHUTDOWN_TIMEOUT.
+#                                     receiving SIGTERM (default: 3600). daprd is only
+#                                     signalled once the Python app has exited, so in
+#                                     practice DAPR_STOP_TIMEOUT_SECONDS bounds it.
 #   DAPR_STOP_TIMEOUT_SECONDS       - How long to wait for daprd to exit once the Python
-#                                     app has exited, before killing it (default: 30)
+#                                     app has exited, before killing it (default: 30).
+#                                     The app's shutdown budget (ATLAN_SHUTDOWN_GRACE_SECONDS)
+#                                     keeps up to 30s of the pod grace for this step.
 
 set -eu
 
@@ -55,8 +58,8 @@ export DAPR_METRICS_PORT="${DAPR_METRICS_PORT:-3100}"
 export DAPR_MAX_BODY_SIZE="${DAPR_MAX_BODY_SIZE:-1024Mi}"
 export DAPR_SCHEDULER_HOST_ADDRESS="${DAPR_SCHEDULER_HOST_ADDRESS:-}"
 # How long daprd waits for in-flight requests to complete after receiving SIGTERM.
-# Must be >= APP_GRACEFUL_SHUTDOWN_TIMEOUT and < terminationGracePeriodSeconds
-# so Kubernetes always gets the last word.
+# daprd is signalled only after the Python app exits (see forward_signal), and
+# DAPR_STOP_TIMEOUT_SECONDS then caps the wait, so this never extends shutdown.
 export DAPR_GRACEFUL_SHUTDOWN_SECONDS="${DAPR_GRACEFUL_SHUTDOWN_SECONDS:-3600}"
 DAPR_STOP_TIMEOUT_SECONDS="${DAPR_STOP_TIMEOUT_SECONDS:-30}"
 

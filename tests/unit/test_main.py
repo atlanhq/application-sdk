@@ -25,10 +25,12 @@ from application_sdk.main import (
     _install_graceful_signal_handlers,
     _log_dapr_components,
     _log_process_memory_baseline,
+    _log_shutdown_budget,
     _loop_exception_handler,
     _observe_worker_poll_state,
     _parse_all_component_yamls,
     _parse_workflow_max_timeout_hours,
+    _PostDrainExitArm,
     _run_worker_with_restart,
     _start_post_drain_exit_deadline,
     main,
@@ -3420,6 +3422,91 @@ class TestPostDrainExitDeadline:
         finally:
             assert timer is not None
             timer.cancel()
+
+    def test_bound_derives_from_declared_grace(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 30 s grace cannot afford the fixed 120 s post-drain bound."""
+        monkeypatch.delenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", raising=False)
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "30")
+        timer = _start_post_drain_exit_deadline(exit_fn=MagicMock())
+        try:
+            assert timer is not None and timer.interval == 7
+        finally:
+            assert timer is not None
+            timer.cancel()
+
+    def test_explicit_bound_beats_declared_grace(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", "0")
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "30")
+        assert _start_post_drain_exit_deadline(exit_fn=MagicMock()) is None
+
+
+class TestPostDrainExitArm:
+    """Arms the post-drain deadline when the drain ends, once, on shutdown only."""
+
+    def test_drained_on_shutdown_arms_once(self) -> None:
+        event = asyncio.Event()
+        event.set()
+        arm = _PostDrainExitArm(enabled=True, shutdown_event=event)
+        with patch("application_sdk.main._start_post_drain_exit_deadline") as start:
+            arm.on_worker_drained()
+            arm.on_worker_drained()
+            arm.start()
+        start.assert_called_once_with()
+
+    def test_drained_without_shutdown_signal_does_not_arm(self) -> None:
+        """A supervised restart drains the worker too; it must not end the process."""
+        arm = _PostDrainExitArm(enabled=True, shutdown_event=asyncio.Event())
+        with patch("application_sdk.main._start_post_drain_exit_deadline") as start:
+            arm.on_worker_drained()
+        start.assert_not_called()
+
+    def test_disabled_never_arms(self) -> None:
+        event = asyncio.Event()
+        event.set()
+        arm = _PostDrainExitArm(enabled=False, shutdown_event=event)
+        with patch("application_sdk.main._start_post_drain_exit_deadline") as start:
+            arm.on_worker_drained()
+            arm.start()
+        start.assert_not_called()
+
+
+class TestLogShutdownBudget:
+    """The effective shutdown bounds are visible at startup."""
+
+    def test_warns_when_explicit_bounds_overrun_grace(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "30")
+        monkeypatch.setenv("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", "3600")
+        monkeypatch.delenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", raising=False)
+        with patch("application_sdk.main.logger") as log:
+            _log_shutdown_budget()
+        log.info.assert_called_once()
+        log.warning.assert_called_once()
+        assert "overrun" in log.warning.call_args.args[0]
+
+    def test_derived_bounds_fit_the_grace(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "30")
+        monkeypatch.delenv("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", raising=False)
+        monkeypatch.delenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", raising=False)
+        with patch("application_sdk.main.logger") as log:
+            _log_shutdown_budget()
+        log.warning.assert_not_called()
+
+    def test_undeclared_grace_logs_without_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ATLAN_SHUTDOWN_GRACE_SECONDS", raising=False)
+        with patch("application_sdk.main.logger") as log:
+            _log_shutdown_budget()
+        assert "undeclared" in log.info.call_args.args
+        log.warning.assert_not_called()
 
 
 class TestFatalTeardownWatchdog:

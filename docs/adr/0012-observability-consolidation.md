@@ -124,7 +124,8 @@ match the rest of the surface.
   call (push, sweep GET, sweep DELETE, final push, final DELETE).
   Without this, a downed gateway would burn the prometheus_client
   default 30s × 2 calls at shutdown and exhaust Kubernetes'
-  `terminationGracePeriodSeconds`.
+  `terminationGracePeriodSeconds`. (Amended by FND-4645: the timeout
+  is derived from `ATLAN_SHUTDOWN_GRACE_SECONDS` when that is set.)
 - **Metrics is best-effort, never blocks the worker.**
   `_start_metrics_push` is wrapped in `try/except` at the worker's
   `__aenter__` / `run()` boundary so any unexpected metrics failure
@@ -139,9 +140,12 @@ match the rest of the surface.
   triggered the scale-down) would be lost. The default of 35s is one
   full 30s scrape interval (the cluster's vmagent default applied to
   the Pushgateway scrape — confirmed by inspecting the rendered
-  `vmagent.env.yaml`) plus a 5s jitter buffer. Worker pods have a 12h
-  `terminationGracePeriodSeconds`, so the extra wait is negligible
-  against the kill timeout.
+  `vmagent.env.yaml`) plus a 5s jitter buffer. (Amended by FND-4645:
+  the original note assumed a 12h `terminationGracePeriodSeconds`. Not
+  every deployment has one; SDR installs can run with 30s. The hold now
+  runs under the post-drain exit deadline, and it is derived from
+  `ATLAN_SHUTDOWN_GRACE_SECONDS` when that is set, so it shrinks with a
+  short grace.)
 
 ### App Vitals
 

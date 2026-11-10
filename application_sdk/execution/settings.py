@@ -14,6 +14,7 @@ from dataclasses import dataclass
 # direction without providing any real isolation.
 from temporalio.common import VersioningBehavior
 
+from application_sdk.constants import load_shutdown_budget
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -36,7 +37,13 @@ class ExecutionSettings:
     """Maximum concurrent activities per worker."""
 
     graceful_shutdown_timeout_seconds: int = 3600
-    """Seconds to wait for in-flight activities to complete during worker shutdown."""
+    """Seconds to wait for in-flight activities to complete during worker shutdown.
+
+    ``TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT`` when set; otherwise derived from the
+    pod's grace period (``ATLAN_SHUTDOWN_GRACE_SECONDS``, see
+    :class:`application_sdk.constants.ShutdownBudget`) when that is set;
+    otherwise 3600.
+    """
 
     default_versioning_behavior: VersioningBehavior = VersioningBehavior.PINNED
     """Default Worker Deployment versioning behavior for workflows that do not
@@ -112,6 +119,21 @@ def _load_versioning_behavior(env_var: str) -> VersioningBehavior:
     return VersioningBehavior.PINNED
 
 
+def _load_graceful_shutdown_timeout() -> int:
+    """Explicit ``TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT``, else the grace-derived drain.
+
+    With neither set the drain stays 3600 s, the value every deployment ran
+    with before the shutdown budget existed.
+    """
+    explicit = os.environ.get("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT")
+    if explicit is not None:
+        return int(explicit)
+    budget = load_shutdown_budget()
+    if budget is not None:
+        return budget.drain_seconds
+    return ExecutionSettings.graceful_shutdown_timeout_seconds
+
+
 def load_execution_settings() -> ExecutionSettings:
     """Load execution settings from environment variables."""
     # v2-compat: remove ATLAN_WORKFLOW_HOST/PORT fallbacks when all deployments use TEMPORAL_HOST.
@@ -126,9 +148,7 @@ def load_execution_settings() -> ExecutionSettings:
         max_concurrent_activities=int(
             os.environ.get("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", "100")
         ),
-        graceful_shutdown_timeout_seconds=int(
-            os.environ.get("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", "3600")
-        ),
+        graceful_shutdown_timeout_seconds=_load_graceful_shutdown_timeout(),
         default_versioning_behavior=_load_versioning_behavior(
             "TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR"
         ),
