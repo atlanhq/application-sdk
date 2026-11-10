@@ -1531,10 +1531,10 @@ Fix, by site:
   memoized helper; when the caller has only the id, pass it as `name` too and never emit
   that asset.
 - The creator raises on a blank or `None` input (on purpose: the f-string published a
-  broken identity there).  Guard the blank (an empty string or `None`) in the app before
-  the creator, doing what the app already does with a bad record; where the app has no
-  such handling, the site holds for the owner.  Never a fallback string; list each guard
-  in the PR description.  Where the asset is valid without that value (a Table with no
+  broken identity there).  The blank (an empty string or `None`) needs an app guard
+  before the creator, never a fallback string.  What the guard does with the record
+  changes the output and is the owner's choice: until it is decided, the site holds with
+  the proposed guard.  Where the asset is valid without that value (a Table with no
   schema), use the creator's optional parents instead (source reality wins); if the
   installed creator then raises or returns another string, the site is a gap.
 - `Process` / `ColumnProcess` / `BIProcess`: call `generate_qualified_name(...,

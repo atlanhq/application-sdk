@@ -62,9 +62,10 @@ outputs:
    makes a creator's rejection of it matter. Two cases differ:
    - a **blank** (an empty string or `None` at the site, nothing else) already
      published a broken identity (`{conn}//{schema}`, `…/None`), so it gets
-     an app guard (FND-3887). The guard does what the app already does with a
-     bad record; if the app has no such handling, hold the site for the owner
-     to choose. Where the asset is valid without that value (a Table with no
+     an app guard (FND-3887). What the guard does with the record (skip it,
+     fail the run, or something else) changes the output and no owner has
+     decided it: hold the site, and in the plan propose the guard and what it
+     would do with the record. Where the asset is valid without that value (a Table with no
      schema), the creator must accept it; if the installed creator raises or
      returns another string, the identity would change (principle 1): the
      site is a gap, and the existing string stays;
@@ -162,8 +163,8 @@ End state per site, from the rule's `full_description`:
   `X.creator(...).qualified_name` helper; when only the id is known, pass it
   as `name` too and never emit that asset;
 - the same, but the creator raises on a blank input (pyatlan does, on
-  purpose): a guard as principle 4 says, never a fallback string. List each
-  guard and what it does with the record in the PR;
+  purpose): hold the site and propose the guard (principle 4); never a
+  fallback string;
 - a Process, ColumnProcess or BIProcess `{connection_qn}/{suffix}`:
   `generate_qualified_name(..., process_id=<suffix>)`;
 - the string never reaches a `qualifiedName` field or a reference (follow
@@ -348,14 +349,14 @@ sites planned with that `fix_shape` for a person.
 
 ```decided-defaults
 {"rule": "P028", "fix_shape": "creator-string", "decision": "Read the string from a memoized helper returning X.creator(...).qualified_name; when only the id is known pass it as name too and never emit that asset.", "why": "Reference shape: atlan-metabase-app app/qualified_names.py collection_qn; atlan-mysql-app app/mysql.py _database_qn.", "interface": false}
-{"rule": "P028", "fix_shape": "creator-blank-guard", "decision": "Use the creator. Guard an empty or None input in the app before the creator (FND-3887), doing what the app already does with a bad record; if the app has no such handling, hold the site for the owner. Never a fallback string. Where the asset is valid without the value, use the creator's optional parents as the source record carries them; if the installed creator then raises or returns another string, the site is a gap. Never change existing test inputs to make a creator accept a record.", "why": "pyatlan creators raise on every blank on purpose; each reachable blank produced a broken identity before (FND-3887: these are app guards). Source reality wins for blanks the source really sends (FND-3843).", "interface": false, "pr_note": true}
+{"rule": "P028", "fix_shape": "creator-blank-guard", "decision": "Plan the site as type Decision: propose the app guard for the empty or None input (FND-3887: blanks get app guards, never a fallback string) and what it would do with the record. Where the asset is valid without the value, use the creator's optional parents as the source record carries them; if the installed creator then raises or returns another string, the site is a gap. Never change existing test inputs to make a creator accept a record.", "why": "pyatlan creators raise on every blank on purpose; each reachable blank produced a broken identity before (FND-3887: these are app guards). Source reality wins for blanks the source really sends (FND-3843).", "pr_note": true}
+{"rule": "P028", "fix_shape": "^creator-blank-guard$", "block": "A blank or None input reaches a creator that raises on it. FND-3887 decides that blanks get an app guard; what the guard does with the record (skip it, fail the run, or the app's own bad-record path) changes the published output and has no owner decision yet.", "brief": "Choose what the proposed guard does with the record, for this app or for the fleet; then the creator fix applies."}
 {"rule": "P028", "fix_shape": "process-id", "decision": "generate_qualified_name(name=..., connection_qualified_name=..., inputs=[None], outputs=[None], process_id=<everything after the connection qualifiedName>) for Process, ColumnProcess and BIProcess. A blank name or connection qualifiedName raises; guard it as for creator-blank-guard.", "why": "Returns {connection_qualified_name}/{process_id}, the same string by construction. Reference shape: atlan-metabase-app app/qualified_names.py process_qn.", "interface": false}
 {"rule": "P028", "fix_shape": "not-identity-ignore", "decision": "# conformance: ignore[P028] <kind>, not a qualifiedName on the line above, where kind is match prefix, object-store key, lookup key or message text; only after following every reader of the value.", "why": "The rule's terminal state allows an ignore only for a string that is not an asset qualifiedName.", "suppress": true, "reason": "not a qualifiedName", "interface": false}
 {"rule": "P028", "fix_shape": "gap", "decision": "Leave the f-string in one helper per name shape, unsuppressed, and list it in the PR description; do not change the string.", "why": "No creator can produce this identity for a value the source is shown to send; changing the string changes asset identity and suppressing hides the gap."}
 {"rule": "P028", "match": "\\bhash\\(", "block": "The qualifiedName is built from Python's builtin hash(), which changes between interpreter processes, so the identity is not stable today. Any stable replacement changes asset identity.", "brief": "Pick the stable id that replaces hash() and accept the one-time identity change; until then the site stays open."}
 {"rule": "P028", "fix_shape": "^gap$", "block": "No creator produces this qualifiedName: the type has no creator in a usable pyatlan, the creator produces a different string, needs an input the source record lacks, or rejects a valid value the source is shown to send. Changing the string changes asset identity.", "brief": "Add or fix the creator in pyatlan, then apply the creator fix to this site."}
 {"rule": "P028", "fix_shape": "^creator-string$", "block": "The app's lock resolves pyatlan below the version that carries the creators these sites need.", "brief": "Raise pyatlan to a version with these creators (a dependency update), then apply the creator fix.", "requires": {"package": "pyatlan", "min": "11.7.0"}}
-{"rule": "P028", "fix_shape": "^creator-blank-guard$", "block": "The app's lock resolves pyatlan below the version that carries the creators these sites need.", "brief": "Raise pyatlan to a version with these creators (a dependency update), then apply the creator fix.", "requires": {"package": "pyatlan", "min": "11.7.0"}}
 {"rule": "P028", "fix_shape": "^hold$", "block": "Held: this site's identity or published output cannot be proven unchanged, or its payload is not publish output. The planner's reason for this site says what is missing.", "brief": "Add what the planner's reason names as missing, or answer its question, then re-run the unit."}
 {"rule": "P052", "fix_shape": "released-envelope", "decision": "Write the entity with entity_bytes and the envelope that matches what the app publishes today; delete only the code that rebuilds that envelope by hand; keep every other change the app makes, applied to the decoded entity_bytes output.", "why": "entity_bytes is the seam for central fixes; the envelope choice keeps the published output unchanged except the documented stamps.", "pr_note": true}
 {"rule": "P052", "fix_shape": "^hold$", "block": "Held: this site's identity or published output cannot be proven unchanged, or its payload is not publish output. The planner's reason for this site says what is missing.", "brief": "Add what the planner's reason names as missing, or answer its question, then re-run the unit."}
