@@ -765,31 +765,85 @@ WORKER_EVICTION_MAX_RETRIES = _load_worker_eviction_max_retries()
 #: activity is recorded and a positive window would kill a healthy worker.
 #: Malformed or non-finite values (e.g. ``"abc"``, ``"inf"``, ``"nan"``) fall
 #: back to 0.
-def _load_worker_liveness_max_idle_seconds() -> float:
-    raw = os.getenv("ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS", "0")
+def _load_non_negative_finite_float(name: str, default: float) -> float:
+    """Read a non-negative, finite float env var, falling back to ``default``.
+
+    Malformed and non-finite values warn and fall back to ``default``; negative
+    values clamp to ``0``. Non-finite values are rejected because an ``inf``
+    bound is set but can never trip (``x > inf`` is always False), and ``nan``
+    comparisons are always False too — both are silently useless.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
     try:
         value = float(raw)
     except ValueError:
         warnings.warn(
-            f"ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS={raw!r} is not a valid number; "
-            "falling back to 0 (disabled)",
-            stacklevel=2,
+            f"{name}={raw!r} is not a valid number; falling back to {default:g}",
+            stacklevel=3,
         )
-        return 0.0
-    # Reject inf/nan: an ``inf`` window is set but can never trip (``idle > inf``
-    # is always False), and ``nan`` comparisons are always False too — both are
-    # silently useless. Fall back to 0 (disabled) with a warning instead.
+        return default
     if not math.isfinite(value):
         warnings.warn(
-            f"ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS={raw!r} is not finite; "
-            "falling back to 0 (disabled)",
-            stacklevel=2,
+            f"{name}={raw!r} is not finite; falling back to {default:g}",
+            stacklevel=3,
         )
-        return 0.0
+        return default
     return max(0.0, value)
 
 
+def _load_worker_liveness_max_idle_seconds() -> float:
+    return _load_non_negative_finite_float(
+        "ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS", 0.0
+    )
+
+
 WORKER_LIVENESS_MAX_IDLE_SECONDS = _load_worker_liveness_max_idle_seconds()
+
+
+#: Consecutive definitive zero-poller readings after which the worker ``/live``
+#: probe fails (FND-4641). sdk-core's ``temporal_num_pollers`` gauge reads zero
+#: only when no poll loop is running; a legitimately idle worker still reads
+#: its configured poller count, so unlike the idle window this does not
+#: false-positive on a quiet queue. ``unknown`` readings (gauge unreadable)
+#: never count. Readings come from the poll-state observer, so the wall-clock
+#: time to trip is this count times ``ATLAN_WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS``
+#: (default 5 x 60s, about 5 minutes). ``0`` disables this check.
+def _load_worker_liveness_max_zero_poller_readings() -> int:
+    # A reading count is a whole number. Parse it as one: a float parse would
+    # let ``0.5`` truncate to ``0`` and silently disable this default-on check,
+    # so any non-integer warns and keeps the default instead.
+    name = "ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS"
+    default = 5
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        warnings.warn(
+            f"{name}={raw!r} is not a valid integer; falling back to {default}",
+            stacklevel=2,
+        )
+        return default
+    return max(0, value)
+
+
+WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS = (
+    _load_worker_liveness_max_zero_poller_readings()
+)
+
+#: Seconds the worker ``/live`` probe tolerates a fatal poll error with no sign
+#: of recovery before it fails (FND-4641). Recovery means a later ``polling``
+#: reading of sdk-core's poller gauge, which the in-process restart supervisor
+#: produces once it rebuilds a worker that polls again. When the gauge cannot be
+#: read (exporter or observer disabled) no recovery can be seen, so a fatal
+#: always fails ``/live`` after this bound and the pod restarts. ``0`` disables
+#: this check.
+WORKER_LIVENESS_FATAL_RECOVERY_SECONDS = _load_non_negative_finite_float(
+    "ATLAN_WORKER_LIVENESS_FATAL_RECOVERY_SECONDS", 600.0
+)
 
 
 #: How long a worker whose pod already restarted waits before it starts polling.

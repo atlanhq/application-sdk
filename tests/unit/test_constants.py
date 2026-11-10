@@ -7,10 +7,12 @@ from application_sdk.constants import (
     _load_application_version,
     _load_commit_sha,
     _load_dirty_restart_max_wait_seconds,
+    _load_non_negative_finite_float,
     _load_oom_restart_check,
     _load_storage_lock_wait_progress_seconds,
     _load_use_server_side_cursor,
     _load_worker_liveness_max_idle_seconds,
+    _load_worker_liveness_max_zero_poller_readings,
 )
 
 
@@ -44,6 +46,58 @@ class TestLoadWorkerLivenessMaxIdleSeconds:
         monkeypatch.setenv("ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS", "nan")
         with pytest.warns(UserWarning, match="not finite"):
             assert _load_worker_liveness_max_idle_seconds() == 0.0
+
+
+class TestLoadWorkerLivenessPollLoopChecks:
+    """Cover the FND-4641 ``/live`` poll-loop env loaders."""
+
+    def test_zero_poller_readings_default(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv(
+            "ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS", raising=False
+        )
+        assert _load_worker_liveness_max_zero_poller_readings() == 5
+
+    @pytest.mark.parametrize(("raw", "expected"), [("0", 0), ("8", 8), ("-2", 0)])
+    def test_zero_poller_readings_values(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str, expected: int
+    ):
+        monkeypatch.setenv("ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS", raw)
+        assert _load_worker_liveness_max_zero_poller_readings() == expected
+
+    @pytest.mark.parametrize("raw", ["five", "0.5", "2.9", "inf", "nan"])
+    def test_non_integer_keeps_the_check_on(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ):
+        """A typo or a fraction must not silently disable a default-on check.
+
+        Regression: a float parse truncated ``0.5`` to ``0`` (disabled).
+        """
+        monkeypatch.setenv("ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS", raw)
+        with pytest.warns(UserWarning, match="not a valid integer"):
+            assert _load_worker_liveness_max_zero_poller_readings() == 5
+
+    def test_fatal_recovery_default(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv(
+            "ATLAN_WORKER_LIVENESS_FATAL_RECOVERY_SECONDS", raising=False
+        )
+        assert (
+            _load_non_negative_finite_float(
+                "ATLAN_WORKER_LIVENESS_FATAL_RECOVERY_SECONDS", 600.0
+            )
+            == 600.0
+        )
+
+    def test_fatal_recovery_inf_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("ATLAN_WORKER_LIVENESS_FATAL_RECOVERY_SECONDS", "inf")
+        with pytest.warns(UserWarning, match="not finite"):
+            assert (
+                _load_non_negative_finite_float(
+                    "ATLAN_WORKER_LIVENESS_FATAL_RECOVERY_SECONDS", 600.0
+                )
+                == 600.0
+            )
 
 
 class TestUseServerSideCursor:

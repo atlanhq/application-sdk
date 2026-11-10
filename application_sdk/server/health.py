@@ -7,7 +7,7 @@ lightweight HTTP server (using asyncio) that runs alongside the worker.
 Endpoints:
     GET /health - Always returns 200 (container is running)
     GET /ready  - Returns 200 only if Temporal client is connected
-    GET /live   - Returns 200 if worker is responsive
+    GET /live   - Returns 200 unless the worker's poll loop is confirmed dead
 
 Usage::
 
@@ -118,6 +118,8 @@ class WorkerHealthServer:
         host: str = "0.0.0.0",
         port: int = 8081,
         max_idle_seconds: float | None = None,
+        max_zero_poller_readings: int = 0,
+        fatal_recovery_seconds: float = 0,
     ) -> None:
         """Initialize the health server.
 
@@ -137,6 +139,14 @@ class WorkerHealthServer:
                 window without heartbeating will trip ``/live`` mid-execution, so
                 set the window strictly larger than the longest non-heartbeating
                 activity.
+            max_zero_poller_readings: When positive, ``check_live`` reports
+                unhealthy once this many consecutive definitive zero-poller
+                readings have been recorded (FND-4641). ``unknown`` and
+                ``polling`` readings reset the count. ``0`` disables the check.
+            fatal_recovery_seconds: When positive, ``check_live`` reports
+                unhealthy once a fatal poll error has gone this many seconds
+                without a later ``polling`` reading (FND-4641). ``0`` disables
+                the check.
         """
         self.host = host
         self.port = port
@@ -145,16 +155,27 @@ class WorkerHealthServer:
         self._started_at: datetime | None = None
         self._last_activity: datetime | None = None
         self._request_count: int = 0
-        # Poll-loop diagnostics (ARUN-1127). These are observational only: none
-        # of them flips a probe, because the mechanism behind a parked poll loop
-        # is not yet established and a probe that acts on a guess can kill a
-        # healthy worker. They exist so the mechanism can be read off a live
-        # tenant. See ``main.py::_observe_worker_poll_state``.
+        # Poll-loop diagnostics (ARUN-1127), served on ``/ready`` and ``/live``.
+        # Two of them also gate ``/live`` (FND-4641): a sustained definitive
+        # zero-poller reading, and a fatal poll error with no recovery. Both fail
+        # open on anything that is not definitive evidence of a dead poll loop.
+        # See ``main.py::_observe_worker_poll_state`` for the readings.
         self._last_fatal_at: datetime | None = None
         self._last_fatal_type: str | None = None
         self._fatal_count: int = 0
         self._last_poller_counts: dict[str, float] | None = None
         self._last_poller_read_at: datetime | None = None
+        self._consecutive_zero_readings: int = 0
+        # Set on the first fatal since the last ``polling`` reading, cleared by
+        # the next one. Kept at the first fatal so a crash loop that never
+        # recovers cannot keep pushing the bound out.
+        self._fatal_unrecovered_since: datetime | None = None
+        self._max_zero_poller_readings: int = max(0, int(max_zero_poller_readings))
+        self._fatal_recovery_seconds: float | None = (
+            fatal_recovery_seconds
+            if fatal_recovery_seconds > 0 and math.isfinite(fatal_recovery_seconds)
+            else None
+        )
         # Reject non-finite windows to match the env loader
         # (``_load_worker_liveness_max_idle_seconds``): an ``inf`` window is set
         # but can never trip (``idle > inf`` is always False) and ``nan``
@@ -191,18 +212,30 @@ class WorkerHealthServer:
         chain goes to the logs instead, because the probe payload is served over
         HTTP and a gRPC status repr can carry response metadata.
         """
-        self._last_fatal_at = _utc_now()
+        now = _utc_now()
+        self._last_fatal_at = now
         self._last_fatal_type = type(exc).__name__
         self._fatal_count += 1
+        if self._fatal_unrecovered_since is None:
+            self._fatal_unrecovered_since = now
 
     def record_poller_counts(self, counts: dict[str, float] | None) -> None:
         """Record sdk-core's live poller gauge, keyed by poller type.
 
         ``None`` means the gauge could not be read (unknown), which is recorded
-        as such and never as zero.
+        as such and never as zero. Only a definitive all-zero reading extends
+        the zero streak; any positive reading also counts as recovery from a
+        prior fatal poll error.
         """
         self._last_poller_counts = counts
         self._last_poller_read_at = _utc_now()
+        if counts is None:
+            self._consecutive_zero_readings = 0
+        elif sum(counts.values()) > 0:
+            self._consecutive_zero_readings = 0
+            self._fatal_unrecovered_since = None
+        else:
+            self._consecutive_zero_readings += 1
 
     def _poll_diagnostics(self) -> dict[str, Any]:
         """Poll-loop diagnostic fields shared by ``/ready`` and ``/live``."""
@@ -218,7 +251,29 @@ class WorkerHealthServer:
             ),
             "last_fatal_type": self._last_fatal_type,
             "fatal_count": self._fatal_count,
+            "consecutive_zero_poller_readings": self._consecutive_zero_readings,
+            "fatal_unrecovered_since": (
+                self._fatal_unrecovered_since.isoformat()
+                if self._fatal_unrecovered_since
+                else None
+            ),
         }
+
+    def _poll_loop_failure(self) -> str | None:
+        """Why ``/live`` should fail on poll-loop evidence, or ``None``."""
+        if (
+            self._max_zero_poller_readings
+            and self._consecutive_zero_readings >= self._max_zero_poller_readings
+        ):
+            return "Worker reports zero active pollers"
+        if (
+            self._fatal_recovery_seconds is not None
+            and self._fatal_unrecovered_since is not None
+            and (_utc_now() - self._fatal_unrecovered_since).total_seconds()
+            > self._fatal_recovery_seconds
+        ):
+            return "Worker poll loop failed fatally and has not recovered"
+        return None
 
     async def check_health(self) -> HealthStatus:
         """Basic health check - is the process running?
@@ -266,12 +321,18 @@ class WorkerHealthServer:
     async def check_live(self) -> HealthStatus:
         """Liveness check - is the worker still doing work?
 
-        Kubernetes uses this to decide whether to restart the pod. Fails only
-        when a liveness window is configured (``max_idle_seconds``) and no
-        worker activity has been recorded within it — an opt-in proxy for a
-        silently stalled poll loop, disabled by default because it
-        false-positives on legitimately idle queues (see BLDX-1552). The
-        restart supervisor in ``main.py`` already recovers a worker whose
+        Kubernetes uses this to decide whether to restart the pod. Fails when:
+
+        * sdk-core's poller gauge has read a definitive zero for
+          ``max_zero_poller_readings`` consecutive readings (FND-4641);
+        * a fatal poll error has gone ``fatal_recovery_seconds`` without a
+          later ``polling`` reading (FND-4641); or
+        * a liveness window is configured (``max_idle_seconds``) and no worker
+          activity has been recorded within it — an opt-in proxy for a silently
+          stalled poll loop, disabled by default because it false-positives on
+          legitimately idle queues (see BLDX-1552).
+
+        The restart supervisor in ``main.py`` already recovers a worker whose
         ``run()`` returns/raises, so this probe targets the harder case where
         the poll loop parks without the worker ever exiting.
 
@@ -280,6 +341,19 @@ class WorkerHealthServer:
         last_activity_iso = (
             self._last_activity.isoformat() if self._last_activity else None
         )
+
+        poll_failure = self._poll_loop_failure()
+        if poll_failure is not None:
+            return HealthStatus(
+                healthy=False,
+                message=poll_failure,
+                details={
+                    "last_activity": last_activity_iso,
+                    "max_zero_poller_readings": self._max_zero_poller_readings,
+                    "fatal_recovery_seconds": self._fatal_recovery_seconds,
+                    **self._poll_diagnostics(),
+                },
+            )
 
         if self._max_idle_seconds is not None and self._last_activity is not None:
             idle_seconds = (_utc_now() - self._last_activity).total_seconds()
@@ -459,7 +533,9 @@ def build_worker_health_server(
     Shared by ``run_worker_mode`` and ``run_combined_mode`` (``main.py``) so the
     liveness-window wiring (BLDX-1552) lives beside ``WorkerHealthServer`` rather
     than growing ``main.py``. The window comes from
-    ``ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS`` (default disabled). The per-mode
+    ``ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS`` (default disabled); the
+    poll-loop checks (FND-4641) from ``ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS``
+    and ``ATLAN_WORKER_LIVENESS_FATAL_RECOVERY_SECONDS``. The per-mode
     ``on_activity`` recorder is wired separately in each ``_build_worker()``
     closure, since it depends on the mode's worker.
 
@@ -474,12 +550,16 @@ def build_worker_health_server(
     # (evaluated at constants-module import time) until a worker/combined boot
     # actually builds the health server.
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker/combined boot only
+        WORKER_LIVENESS_FATAL_RECOVERY_SECONDS,
         WORKER_LIVENESS_MAX_IDLE_SECONDS,
+        WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS,
     )
 
     server = WorkerHealthServer(
         port=port,
         max_idle_seconds=WORKER_LIVENESS_MAX_IDLE_SECONDS,
+        max_zero_poller_readings=WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS,
+        fatal_recovery_seconds=WORKER_LIVENESS_FATAL_RECOVERY_SECONDS,
     )
     server.set_temporal_client(client)
     return server
