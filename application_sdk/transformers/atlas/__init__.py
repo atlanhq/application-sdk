@@ -25,7 +25,9 @@ from application_sdk.common.last_sync import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers import TransformerInterface
-from application_sdk.transformers.common.utils import process_text
+from application_sdk.transformers.common.utils import (
+    _process_text as process_text,
+)
 
 warnings.warn(
     "application_sdk.transformers.atlas is deprecated; use the connector-side "

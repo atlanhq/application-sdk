@@ -40,7 +40,8 @@ from application_sdk.common.sql_filters import (
 )
 from application_sdk.contracts.storage import UploadInput
 from application_sdk.contracts.types import StorageTier
-from application_sdk.credentials import CredentialResolver, legacy_credential_ref
+from application_sdk.credentials import CredentialResolver
+from application_sdk.credentials.ref import _guid_credential_ref
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates._template_errors import (
@@ -175,7 +176,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         infra = get_infrastructure()
 
         ref = input.credential_ref or (
-            legacy_credential_ref(cred_guid) if cred_guid else None
+            _guid_credential_ref(cred_guid) if cred_guid else None
         )
         if ref is None:
             raise SqlCredentialRefMissingError()
@@ -460,11 +461,11 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         logger.info("Starting SQL metadata extraction: %s", workflow_id)
 
         try:
-            # TODO(v3-cleanup): remove credential_guid fallback when all connectors use credential_ref.
-            # Prefer credential_ref; fall back to legacy credential_guid
+            # Prefer a prebuilt credential_ref; otherwise build the GUID ref
+            # from credential_guid (the direct-mode route).
             cred_ref = input.credential_ref
             if cred_ref is None and input.credential_guid:
-                cred_ref = legacy_credential_ref(input.credential_guid)
+                cred_ref = _guid_credential_ref(input.credential_guid)
 
             # Fetch all metadata types in parallel
             (

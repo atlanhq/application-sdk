@@ -13,11 +13,11 @@ if TYPE_CHECKING:
     import pandas as pd
     import pyarrow as pa
 
+from application_sdk.common.yaml_templates import flatten_yaml_columns
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.common.utils import (
-    flatten_yaml_columns,
-    get_yaml_query_template_path_mappings,
+    _get_yaml_query_template_path_mappings as get_yaml_query_template_path_mappings,
 )
 from application_sdk.transformers.query.errors import (
     BuildStructLevelRequiredError as BuildStructLevelRequiredError,

@@ -43,12 +43,12 @@ Root `atlan.yaml` is still required in app repos. A generated `app/generated/atl
 src/
 |-- NativeApp.pkl          # Main native app contract module
 |-- NativeAppBundle.pkl    # Multi-entrypoint bundle + atlan.yaml renderer
-|-- AgentConfig.pkl        # Shared secure-agent configmap contract
 |-- Config.pkl             # Workflow UI widget types
 |-- Credential.pkl         # Legacy Argo-era credential module
 |-- Connectors.pkl         # Connector constants
 |-- Renderers.pkl          # Legacy renderers
 |-- PyFormat.pkl           # Lays generated Python out as ruff does (default settings)
+|-- SdkNames.pkl           # SDK field/class names App.pkl must not shadow (CI-checked)
 `-- PklProject             # Package metadata
 scripts/
 |-- regenerate-all.sh
@@ -71,7 +71,7 @@ tests/
 
 - `NativeApp.pkl` is the primary module for new native app contracts.
 - `NativeAppBundle.pkl` is for one deployed app exposing multiple marketplace cards or SDK entrypoints.
-- `AgentConfig.pkl` owns the shared `atlan-connectors-agent` payload. Apps reference it from `AgentSelector`; it is emitted only when explicitly generated or added through `additionalOutputFiles`.
+- Apps reference the shared `atlan-connectors-agent` configmap from `AgentSelector`; the toolkit does not generate its payload.
 - Native credentials use `FieldSpec`, `AuthOption`, `ConditionalFieldSpec`, `NamedWidget`, and `NamedProperty` from `NativeApp.pkl`.
 - `Credential.pkl` is legacy. Do not use it for new native app credential config.
 - Workflow UI uses `Config.pkl` widgets inside `uiConfig.tasks`.
@@ -187,7 +187,6 @@ find examples -maxdepth 2 -name app.pkl | sort
 
 - `NativeApp.pkl`: main native contract renderer. Changes affect most apps.
 - `NativeAppBundle.pkl`: bundle layout, root `atlan.yaml`, shared credentials, per-entrypoint output.
-- `AgentConfig.pkl`: shared secure-agent config only.
 - `Config.pkl`: workflow widgets. Add new widget types here.
 - `Credential.pkl`: legacy only; modify for backward compatibility.
 - `Renderers.pkl`: legacy renderers; do not add native rendering here.

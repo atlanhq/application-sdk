@@ -33,6 +33,7 @@ import "Deployment.pkl" as DeploymentPkg
 import "InputContract.pkl" as InputContractPkg
 import "Inputs.pkl" as InputsPkg
 import "PyFormat.pkl" as PyFormatPkg
+import "SdkNames.pkl" as SdkNamesPkg
 import "Widgets.pkl"
 
 // ── CONNECTOR RE-EXPORT ───────────────────────────────────────────────────────
@@ -530,8 +531,23 @@ local inputBaseClass: String =
 /// (Derived) Fields the base input class already declares. A generated field
 /// with one of these names is skipped (UI) or refused (`inputs`).
 local inputBaseProvidedFields: Set<String> =
-  if (isSystemApp) Set("workflow_id", "correlation_id", "app_name", "workflow_slug")
-  else extractionInputProvidedFields.toList().toSet()
+  if (isSystemApp) SdkNamesPkg.inputFields
+  else SdkNamesPkg.extractionInputFields
+
+/// (Derived) Skipped form fields the base class declares only from a recent SDK
+/// release (`SdkNames.fieldMinSdk`). On an older SDK the base class would drop
+/// such a value as an unknown key, and the toolkit cannot see the app's SDK pin,
+/// so `_input.py` checks at import that the base class declares each one and
+/// raises `ImportError` naming `sdkFloorVersion` if not.
+local sdkFloorFields: List<String> = (uiConfig?.properties ?? Map())
+  .filter((k, u) -> u.includeInInput && inputBaseProvidedFields.contains(toPyFieldName(k))
+    && SdkNamesPkg.fieldMinSdk.containsKey(toPyFieldName(k)))
+  .keys.map((k) -> toPyFieldName(k)).toList().distinct.sort()
+
+/// (Derived) The newest `fieldMinSdk` release among `sdkFloorFields`, or null.
+local sdkFloorVersion: String? = sdkFloorFields
+  .map((f) -> SdkNamesPkg.fieldMinSdk[f]!!)
+  .maxByOrNull((v) -> v.split(".").map((p) -> p.padStart(6, "0")).join("."))
 
 /// (Derived) Every nested object `inputs` needs, dependencies first.
 local inputAllObjects: List<InputsPkg.ObjectField> =
@@ -585,16 +601,6 @@ hidden inputContractAppName: String = name
 /// bundle's queue. See `inputContractAppName`.
 hidden inputContractTaskQueue: String = "\(taskQueuePrefix)-{deployment_name}"
 
-/// (Derived) Names `_input.py` declares or imports at module level. A nested
-/// object class of one of these names would shadow it: an `Input` class, for
-/// one, would replace the SDK base `AppInputContract` extends.
-local inputReservedClassNames: Set<String> = Set(
-  "AppInputContract", "Input", "ExtractionInput", "TreeSelectionExtractionInput",
-  "BaseModel", "ConfigDict",
-  "Field", "ConnectionRef", "FileReference", "MaxItems", "TreeSelection",
-  "CredentialRef", "Annotated", "Any", "ClassVar", "Literal"
-)
-
 /// Refuses `inputs` declarations that would be dropped or would clash.
 local _inputsCheck: Any =
   if (inputs.isEmpty) null
@@ -612,7 +618,7 @@ local _inputsCheck: Any =
       + (if (events.toList().any((e) -> e.triggerConfig.streaming.enabled)) Set("batch_key") else Set()))
     let (clashUi = keys.filter((k) -> uiNames.contains(k)))
     let (clashBase = keys.filter((k) -> reserved.contains(k)))
-    let (clashPyNames = inputAllObjects.map((o) -> o.className).toSet().filter((c) -> inputReservedClassNames.contains(c)))
+    let (clashPyNames = inputAllObjects.map((o) -> o.className).toSet().filter((c) -> SdkNamesPkg.inputModuleNames.contains(c)))
     let (dupClasses = inputAllObjects
       .filter((o) -> inputAllObjects.any((p) -> p.className == o.className && p != o))
       .map((o) -> o.className).toSet())
@@ -4067,39 +4073,6 @@ local function pyQuotedCsv(values: List<String>): String =
     if (acc == "") "\"\(value)\"" else "\(acc), \"\(value)\""
   )
 
-/// Field names already declared by the SDK's base input contract. A generated UI
-/// field with one of these Python names is skipped so the SDK's typed declaration
-/// and validators stay in effect instead of being shadowed by a uiConfig-derived
-/// redeclaration (which would also change the field's type).
-///
-/// The first three are framework-populated rather than tenant-supplied:
-/// `workflow_id` (set at dispatch), `correlation_id` (caller-supplied trace id),
-/// and `app_name` (per-node log identity, CNCT-93). Redeclaring one of them
-/// from a uiConfig property is latent: codegen, `pkl test` and `test-sdk-import`
-/// all stay green, and it fails only at workflow dispatch when the framework
-/// assigns the real value and Pydantic rejects it against the author's type.
-///
-/// `app_name` is additionally rejected outright by `reservedUiFieldInvariant`, so
-/// its entry here is defence in depth; `correlation_id` is load-bearing on its own
-/// (a property with that name generates, and without this entry it shadows the
-/// base field).
-local extractionInputProvidedFields: Listing<String> = new Listing {
-  "workflow_id"
-  "correlation_id"
-  "app_name"
-  "connection"
-  "credential_guid"
-  "credential_ref"
-  "extraction_method"
-  "agent_json"
-  "output_prefix"
-  "output_path"
-  "include_filter"
-  "exclude_filter"
-  "temp_table_regex"
-  "source_tag_prefix"
-}
-
 local function generateInputClassPy(): FileOutput = new FileOutput {
   local props = uiConfig?.properties ?? Map()
   local skipFields: Set<String> = inputBaseProvidedFields
@@ -4137,6 +4110,13 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     "                return parsed\n" +
     "        return value\n\n"
   else ""
+  local sdkFloorBlock: String = if (sdkFloorVersion == null) "" else
+    "# \(inputBaseClass) declares these fields only from atlan-application-sdk\n" +
+    "# \(sdkFloorVersion!!). On an older SDK the form values would be dropped, so fail\n" +
+    "# at import instead.\n" +
+    "_SDK_FLOOR_FIELDS = {\(pyQuotedCsv(sdkFloorFields))}\n" +
+    "if not _SDK_FLOOR_FIELDS <= \(inputBaseClass).model_fields.keys():\n" +
+    "    raise ImportError(\"This input contract requires atlan-application-sdk>=\(sdkFloorVersion!!)\")\n\n\n"
   local nestedClassText: String =
     inputNestedClasses.fold("", (acc: String, o: InputsPkg.ObjectField) -> acc + InputsPkg.renderClass(o) + "\n\n")
   // Everything the module declares, for import detection.
@@ -4289,12 +4269,13 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     sdkImportLines +
     // One blank line before the module-level logger assignment (if any),
     // two before the class itself — matches ruff/isort canonical spacing.
-    (if (!loggerModuleLine.isEmpty) "\n" else "\n\n")
+    (if (!loggerModuleLine.isEmpty || !sdkFloorBlock.isEmpty) "\n" else "\n\n")
   text = PyFormatPkg.format(
     "# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.\n" +
     "# To regenerate: pkl eval -m . contract/app.pkl\n" +
     inputImportBlock +
     loggerModuleLine +
+    sdkFloorBlock +
     nestedClassText +
     "class AppInputContract(\(inputBaseClass)):\n" +
     (if (classBody.isEmpty) "    pass\n" else classBody))

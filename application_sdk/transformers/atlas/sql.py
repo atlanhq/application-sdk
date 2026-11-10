@@ -23,7 +23,9 @@ from application_sdk.transformers.atlas.errors import (
     TransformTableError,
     TransformTagAttachmentError,
 )
-from application_sdk.transformers.common.utils import build_atlas_qualified_name
+from application_sdk.transformers.common.utils import (
+    _build_atlas_qualified_name as build_atlas_qualified_name,
+)
 
 logger = get_logger(__name__)
 

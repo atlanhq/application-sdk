@@ -415,6 +415,15 @@
       "symbol": "effective_token_url"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "legacy_credential_ref() is deprecated and will be removed in v4.0. Use CredentialRef.resolve(input) instead.",
+      "migration_target": true,
+      "module": "application_sdk.credentials.ref",
+      "removal_version": "4.0",
+      "symbol": "legacy_credential_ref"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "DiscoveryError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
@@ -845,6 +854,96 @@
       "module": "application_sdk.transformers.atlas",
       "removal_version": "4.0",
       "symbol": "AtlasTransformer"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "LastSyncDetails is deprecated; use application_sdk.common.last_sync.LastSyncDetails \u2014 the same class, re-homed out of the deprecated transformers package. Will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.transformers.common.last_sync",
+      "removal_version": "4.0",
+      "symbol": "LastSyncDetails"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "resolve_last_sync_details is deprecated; use application_sdk.common.last_sync.resolve_last_sync_details \u2014 the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.transformers.common.last_sync",
+      "removal_version": "4.0",
+      "symbol": "resolve_last_sync_details"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "set_last_sync_details_on_asset is deprecated; use application_sdk.common.last_sync.set_last_sync_details_on_asset \u2014 the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.transformers.common.last_sync",
+      "removal_version": "4.0",
+      "symbol": "set_last_sync_details_on_asset"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "set_last_sync_details_on_assets_bulk is deprecated; use application_sdk.common.last_sync.set_last_sync_details_on_assets_bulk \u2014 the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.transformers.common.last_sync",
+      "removal_version": "4.0",
+      "symbol": "set_last_sync_details_on_assets_bulk"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.transformers.common.utils.build_atlas_qualified_name is deprecated; use the pyatlan_v9 creator instead (<Asset>.creator(...).qualified_name), which owns the qualifiedName grammar \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.transformers.common.utils",
+      "removal_version": "4.0",
+      "symbol": "build_atlas_qualified_name"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.transformers.common.utils.build_phoenix_uri is deprecated; use an f-string in the app instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.transformers.common.utils",
+      "removal_version": "4.0",
+      "symbol": "build_phoenix_uri"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.transformers.common.utils.flatten_yaml_columns is deprecated; use application_sdk.common.yaml_templates.flatten_yaml_columns instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.transformers.common.utils",
+      "removal_version": "4.0",
+      "symbol": "flatten_yaml_columns"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.transformers.common.utils.get_yaml_query_template_path_mappings is deprecated; use application_sdk.common.yaml_templates.yaml_template_paths instead, which resolves only your app's template directory (copy any SDK default template you rely on into it) \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.transformers.common.utils",
+      "removal_version": "4.0",
+      "symbol": "get_yaml_query_template_path_mappings"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.transformers.common.utils.process_text is deprecated; use the connector-side asset-mapper pattern (typed records \u2192 map_<entity>() \u2192 pyatlan_v9 Asset) and clean text in the mapper instead \u2014 will be removed in v4.0. See docs/upgrade-guide-v3.md.",
+      "migration_target": true,
+      "module": "application_sdk.transformers.common.utils",
+      "removal_version": "4.0",
+      "symbol": "process_text"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.transformers.errors.TransformerNotImplementedError is deprecated; catch application_sdk.errors.UnimplementedError (its base) instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.transformers.errors",
+      "removal_version": "4.0",
+      "symbol": "TransformerNotImplementedError"
     },
     {
       "kind": "class",

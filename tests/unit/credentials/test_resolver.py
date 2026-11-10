@@ -11,9 +11,9 @@ from application_sdk.credentials.errors import (
 )
 from application_sdk.credentials.ref import (
     CredentialRef,
+    _guid_credential_ref,
     api_key_ref,
     basic_ref,
-    legacy_credential_ref,
 )
 from application_sdk.credentials.resolver import CredentialResolver
 from application_sdk.credentials.types import (
@@ -174,7 +174,7 @@ class TestGuidResolutionPath:
             vault_return={"host": "vault.example.com", "port": 5432}
         )
         with p_vault, p_dapr:
-            ref = legacy_credential_ref("guid-abc")
+            ref = _guid_credential_ref("guid-abc")
             raw = await resolver.resolve_raw(ref)
 
         assert raw["host"] == "vault.example.com"
@@ -207,7 +207,7 @@ class TestGuidResolutionPath:
                 MagicMock(return_value=mock_dapr),
             ),
         ):
-            ref = legacy_credential_ref("abc-123")
+            ref = _guid_credential_ref("abc-123")
             raw = await resolver.resolve_raw(ref)
 
         assert captured == ["abc-123"], f"Expected string guid, got: {captured}"
@@ -221,7 +221,7 @@ class TestGuidResolutionPath:
             vault_return={"api_key": "secret-from-vault"}
         )
         with p_vault, p_dapr:
-            ref = legacy_credential_ref("abc-123", credential_type="api_key")
+            ref = _guid_credential_ref("abc-123", credential_type="api_key")
             cred = await resolver.resolve(ref)
 
         assert isinstance(cred, ApiKeyCredential)
@@ -233,7 +233,7 @@ class TestGuidResolutionPath:
             vault_return={"host": "db.example.com", "username": "u"}
         )
         with p_vault, p_dapr:
-            ref = legacy_credential_ref("abc-123")
+            ref = _guid_credential_ref("abc-123")
             cred = await resolver.resolve(ref)
 
         assert isinstance(cred, RawCredential)
@@ -252,7 +252,7 @@ class TestGuidResolutionPath:
             vault_side_effect=RuntimeError("Dapr state store unavailable")
         )
         with p_vault, p_dapr:
-            ref = legacy_credential_ref("abc-123")
+            ref = _guid_credential_ref("abc-123")
             with pytest.raises(CredentialNotFoundError):
                 await getattr(resolver, method)(ref)
 
@@ -284,7 +284,7 @@ class TestGuidResolutionPath:
             )
         )
         with p_vault, p_dapr:
-            ref = legacy_credential_ref("abc-123")
+            ref = _guid_credential_ref("abc-123")
             with pytest.raises(CredentialVaultError):
                 await getattr(resolver, method)(ref)
 
@@ -309,7 +309,7 @@ class TestGuidResolutionPath:
             )
         )
         with p_vault, p_dapr:
-            ref = legacy_credential_ref("abc-123")
+            ref = _guid_credential_ref("abc-123")
             with pytest.raises(CredentialNotFoundError):
                 await getattr(resolver, method)(ref)
 

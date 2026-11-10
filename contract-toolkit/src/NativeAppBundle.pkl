@@ -138,9 +138,7 @@ emitGeneratedArtifacts: Boolean = true
 
 /// Extra files to add at the bundle root.
 ///
-/// Use this for explicit opt-in shared artifacts such as a customized
-/// `AgentConfig.pkl` output:
-/// `["atlan-connectors-agent.json"] = agentConfig.configFile`.
+/// Use this for explicit opt-in shared artifacts.
 additionalOutputFiles: Mapping<String, FileOutput> = new Mapping {}
 
 // ---------------------------------------------------------------------------

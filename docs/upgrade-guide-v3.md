@@ -929,17 +929,26 @@ assert isinstance(cred, ApiKeyCredential)
 headers = cred.to_headers()  # {"X-API-Key": "secret"}
 ```
 
-### Backward compatibility
+### `credential_guid` and `credential_ref`
 
 Both `credential_guid` and `credential_ref` work on `ExtractionInput` and
-`QueryExtractionInput`. When only `credential_guid` is provided, the SDK
-auto-wraps it via `legacy_credential_ref()`:
+`QueryExtractionInput`. `credential_guid` is a supported route, not a legacy
+one: it is how the platform names the credential for a direct-mode run. When
+only `credential_guid` is provided, the SDK builds the GUID ref itself:
 
 ```python
 # These are both valid:
-ExtractionInput(credential_guid="abc-123")       # legacy — still works
-ExtractionInput(credential_ref=api_key_ref("prod-key"))  # new typed path
+ExtractionInput(credential_guid="abc-123")       # GUID route (direct mode)
+ExtractionInput(credential_ref=api_key_ref("prod-key"))  # pre-built typed ref
 ```
+
+If your code calls `legacy_credential_ref(guid)`, switch to
+`CredentialRef.resolve(input)`. If it passes a `credential_type`, build the ref
+directly to keep typed resolution:
+`CredentialRef(name=guid, credential_type="api_key", credential_guid=guid)`
+(`resolve()` always uses `credential_type="unknown"`, which resolves to
+`RawCredential`). The public constructor is deprecated and removed in v4.0; the
+GUID route it builds is not.
 
 If you need to call a legacy client that expects a raw dict, use
 `resolve_credential_raw()`:
@@ -1327,6 +1336,21 @@ asyncio.run(run_dev_combined(
                  "username": "dev", "password": "test-value"},
 ))
 ```
+
+---
+
+## Transformer helpers (deprecated, removed in v4.0.0)
+
+`application_sdk.transformers` is removed in v4.0.0, including its helper modules, which many apps import without using a transformer. Move these imports before v4.0.0; B001 flags each one.
+
+| Deprecated | Replacement |
+|---|---|
+| `application_sdk.transformers.common.utils.get_yaml_query_template_path_mappings` | `application_sdk.common.yaml_templates.yaml_template_paths` (resolves only your app's directory; copy any SDK default template you read into it) |
+| `application_sdk.transformers.common.utils.flatten_yaml_columns` | `application_sdk.common.yaml_templates.flatten_yaml_columns` |
+| `application_sdk.transformers.common.utils.build_atlas_qualified_name` | `<Asset>.creator(...).qualified_name` from `pyatlan_v9` |
+| `application_sdk.transformers.common.utils.build_phoenix_uri`, `process_text` | none; build the string in the app |
+| `application_sdk.transformers.common.last_sync.*` | `application_sdk.common.last_sync.*` |
+| `application_sdk.transformers.errors.TransformerNotImplementedError` | `application_sdk.errors.UnimplementedError` |
 
 ---
 

@@ -1,9 +1,16 @@
-"""Validate that every generated _input.py and _e2e_*.py imports cleanly against the SDK.
+"""Validate generated Python against the SDK.
+
+Every generated _input.py and _e2e_*.py must import cleanly, and the SDK names
+``src/SdkNames.pkl`` copies by hand must match the installed SDK.
 
 Requires: pip install git+https://github.com/atlanhq/application-sdk.git@main
 """
 
+import ast
 import importlib.util
+import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -13,6 +20,10 @@ logger = get_logger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES_DIR = REPO_ROOT / "examples"
+SDK_NAMES_PKL = REPO_ROOT / "src" / "SdkNames.pkl"
+
+# Inputs.pkl's ClassName: the only names a nested ObjectField class can take.
+_CLASS_NAME_RE = re.compile(r"[A-Z][A-Za-z0-9]*")
 
 
 def _load_module(path: Path) -> tuple[object | None, str | None]:
@@ -103,6 +114,81 @@ def test_e2e(path: Path) -> bool:
     return True
 
 
+def _imported_class_names(path: Path) -> set[str]:
+    """Class-shaped names a generated module imports at module level."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                name = alias.asname or alias.name.split(".")[0]
+                if _CLASS_NAME_RE.fullmatch(name):
+                    names.add(name)
+    return names
+
+
+def _diff(label: str, pkl: set[str], sdk: set[str]) -> list[str]:
+    errors = []
+    if missing := sorted(sdk - pkl):
+        errors.append(f"{label}: SDK declares {missing}, SdkNames.pkl does not")
+    if extra := sorted(pkl - sdk):
+        errors.append(f"{label}: SdkNames.pkl lists {extra}, the SDK does not declare")
+    return errors
+
+
+def check_sdk_names(input_files: list[Path]) -> list[str]:
+    """Compare SdkNames.pkl's hand-copied names with the installed SDK.
+
+    App.pkl skips a generated field the base class already declares and refuses
+    a nested class that would shadow a module-level name of ``_input.py``. A
+    stale set does not break the import test: the generated field silently
+    shadows the SDK's (losing its type and validators), or a nested class
+    replaces an imported name.
+    """
+    from application_sdk.contracts.base import Input
+    from application_sdk.templates.contracts import (
+        ExtractionInput,
+        TreeSelectionExtractionInput,
+    )
+
+    result = subprocess.run(
+        ["pkl", "eval", "-f", "json", str(SDK_NAMES_PKL)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return [f"pkl eval {SDK_NAMES_PKL} failed: {result.stderr.strip()}"]
+    names = json.loads(result.stdout)
+    extraction = set(names["extractionInputFields"])
+    module_names = set(names["inputModuleNames"])
+
+    errors = _diff(
+        "inputFields vs Input", set(names["inputFields"]), set(Input.model_fields)
+    )
+    errors += _diff(
+        "extractionInputFields vs ExtractionInput",
+        extraction,
+        set(ExtractionInput.model_fields),
+    )
+    errors += _diff(
+        "extractionInputFields vs TreeSelectionExtractionInput",
+        extraction,
+        set(TreeSelectionExtractionInput.model_fields),
+    )
+    if stray := sorted(set(names["fieldMinSdk"]) - extraction):
+        errors.append(f"fieldMinSdk: {stray} are not base-class fields")
+    if "AppInputContract" not in module_names:
+        errors.append("inputModuleNames: missing AppInputContract")
+    for path in input_files:
+        if unlisted := sorted(_imported_class_names(path) - module_names):
+            errors.append(
+                f"inputModuleNames: {path.relative_to(REPO_ROOT)} imports {unlisted}, "
+                "which a nested ObjectField class of the same name would shadow"
+            )
+    return errors
+
+
 def main() -> int:
     failed = 0
 
@@ -122,9 +208,21 @@ def main() -> int:
             if not test_e2e(path):
                 failed += 1
 
+    logger.info(":: Comparing SdkNames.pkl with the SDK...")
+    name_errors = check_sdk_names(input_files)
+    for err in name_errors:
+        logger.error("FAIL: %s", err)
+    if not name_errors:
+        logger.info("  OK: SdkNames.pkl matches the SDK")
+
     total = len(input_files) + len(e2e_files)
-    if failed:
-        logger.error("%d/%d files failed import test.", failed, total)
+    if failed or name_errors:
+        logger.error(
+            "%d/%d files failed import test; %d SdkNames.pkl mismatch(es).",
+            failed,
+            total,
+            len(name_errors),
+        )
         return 1
 
     logger.info("All %d files imported successfully.", total)
