@@ -38,6 +38,13 @@ def test_yaml_template_paths_filters_to_assets(tmp_path: Path):
     }
 
 
+def test_yaml_template_paths_empty_assets_selects_nothing(tmp_path: Path):
+    """``assets=[]`` is an explicit empty selection, not "no filter"."""
+    _touch(tmp_path / "table.yaml")
+
+    assert yaml_template_paths(str(tmp_path), assets=[]) == {}
+
+
 def test_yaml_template_paths_does_not_merge_sdk_default_templates(tmp_path: Path):
     """The old helper merged in ``QueryBasedTransformer``'s bundled SQL templates.
 

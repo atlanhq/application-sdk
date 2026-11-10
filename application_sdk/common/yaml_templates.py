@@ -46,7 +46,8 @@ def yaml_template_paths(
     files = sorted(
         glob.glob(os.path.join(templates_path, "**", "*.yaml"), recursive=True)
     )
-    wanted = set(assets) if assets else None
+    # ``[]`` selects nothing; only ``None`` means "no filter".
+    wanted = set(assets) if assets is not None else None
     result: dict[str, str] = {}
     for file in files:
         key = os.path.basename(file).upper().removesuffix(".YAML")

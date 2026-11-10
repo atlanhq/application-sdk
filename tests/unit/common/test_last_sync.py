@@ -9,6 +9,7 @@ API surface; earlier dict-shaped helpers were removed in BLDX-1229).
 
 from __future__ import annotations
 
+import inspect
 import warnings
 from datetime import UTC
 
@@ -361,6 +362,31 @@ def test_legacy_transformers_path_warns_on_access(name: str):
     assert "removed in v4.0" in message
     # stacklevel=2 attributes the warning to the caller's line, not the shim.
     assert warning.filename == __file__
+
+
+def test_legacy_transformers_from_import_warns_once_on_the_import_line():
+    """The common form, ``from <old path> import <name>``, warns exactly once,
+    attributed to the importing line.
+
+    ``last_sync`` is a plain module, not a package, so the import system's
+    from-list ``hasattr`` probe (which runs only for modules with ``__path__``)
+    never reaches ``__getattr__``; the only call is ``IMPORT_FROM``'s attribute
+    fetch, made from the importer's own frame.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        import application_sdk.transformers.common.last_sync  # noqa: F401
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        from application_sdk.transformers.common.last_sync import LastSyncDetails  # noqa: F401, I001
+
+        import_line = inspect.currentframe().f_lineno - 1  # type: ignore[union-attr]
+
+    ours = [w for w in record if "last_sync.LastSyncDetails" in str(w.message)]
+    assert len(ours) == 1
+    assert ours[0].filename == __file__
+    assert ours[0].lineno == import_line
 
 
 def test_legacy_transformers_path_rejects_unknown_names():
