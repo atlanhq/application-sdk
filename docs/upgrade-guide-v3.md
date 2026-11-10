@@ -723,7 +723,8 @@ The worker no longer defaults to 100 activity slots. Unless
 `TEMPORAL_MAX_CONCURRENT_ACTIVITIES` is set, it derives the slot count from the
 container: `min(100, 10 × CPUs, memory limit ÷ 256 MiB)`, never below 1. The
 `sdk-blocking-` thread pool behind `run_in_thread` is `min(32, CPUs + 4)` wide. In
-both, CPUs means the pod's CPU limit, not the node's core count.
+both, CPUs means the whole CPUs the process may use: the tighter of its CPU affinity
+and the pod's CFS quota (rounded down, never below 1), not the node's core count.
 
 Small pods therefore run fewer activities at once than before: a 1-CPU, 2 GiB pod
 gets 8 slots instead of 100. The startup log line `Activity slots: N (...)` shows the

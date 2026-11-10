@@ -172,8 +172,8 @@ cancelled activity, the preflight gate's handler budget) while its thread runs o
   - It is **off by default.** Any default would turn today's queueing into failures
     for fan-outs wider than the cap. (When this was written the pool width was not
     reliable either, because it came from `os.cpu_count()`, the node's cores. Since
-    FND-4646 the width is `min(32, available_cpus() + 4)`, the pod's CPU limit, but
-    the first reason still stands.)
+    FND-4646 the width is `min(32, available_cpus() + 4)`, where `available_cpus()` is
+    the tighter of CPU affinity and the CFS quota, but the first reason still stands.)
   - On the host, keep it at or below the app's `blocking_threads`. Above that, hung
     calls fill the app's pool first and its next calls queue behind them until the
     cap is reached, which is the queueing the cap exists to replace.

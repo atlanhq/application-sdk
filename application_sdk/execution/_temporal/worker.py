@@ -37,6 +37,8 @@ from application_sdk.execution._temporal.activities import get_all_task_activiti
 from application_sdk.execution._temporal.workflows import get_all_app_workflows
 from application_sdk.execution.sandbox import SandboxConfig
 from application_sdk.execution.settings import (
+    _derive_max_concurrent_activities,
+    _explicit_max_concurrent_activities,
     load_execution_settings,
     load_interceptor_settings,
 )
@@ -554,6 +556,33 @@ async def _emit_worker_start_event(
         logger.warning("Failed to emit worker_start event", exc_info=True)
 
 
+def _resolve_max_concurrent_activities(passed: int | None) -> int:
+    """Activity slots for this worker, logged once with where they came from.
+
+    The caller's value, else ``TEMPORAL_MAX_CONCURRENT_ACTIVITIES``, else
+    derived from the container's CPU and memory limits. Only the last reads the
+    cgroup, once per worker start: a handful of pseudo-file reads.
+    """
+    if passed is not None:
+        logger.info("Activity slots: %d (passed to create_worker)", passed)
+        return passed
+    explicit = _explicit_max_concurrent_activities()
+    if explicit is not None:
+        logger.info("Activity slots: %d (TEMPORAL_MAX_CONCURRENT_ACTIVITIES)", explicit)
+        return explicit
+    cpus = available_cpus()
+    memory = memory_limit_bytes()
+    slots = _derive_max_concurrent_activities(cpus, memory)
+    logger.info(
+        "Activity slots: %d (derived from %d available CPUs, memory limit %s"
+        " bytes; set TEMPORAL_MAX_CONCURRENT_ACTIVITIES to override)",
+        slots,
+        cpus,
+        memory,
+    )
+    return slots
+
+
 def create_worker(
     client: Client,
     task_queue: str = "application-sdk",
@@ -1049,24 +1078,9 @@ def create_worker(
         restrictions=config.to_temporal_restrictions()
     )
 
-    if max_concurrent_activities is None:
-        max_concurrent_activities = load_execution_settings().max_concurrent_activities
-        # The default is derived from the container's limits unless the env var
-        # sets it, so say which: a pod that gets fewer slots than its owner
-        # expected should be explainable from its startup log alone.
-        if os.environ.get("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", "").strip():
-            logger.info(
-                "Activity slots: %d (TEMPORAL_MAX_CONCURRENT_ACTIVITIES)",
-                max_concurrent_activities,
-            )
-        else:
-            logger.info(
-                "Activity slots: %d (derived from %d CPUs, memory limit %s bytes;"
-                " set TEMPORAL_MAX_CONCURRENT_ACTIVITIES to override)",
-                max_concurrent_activities,
-                available_cpus(),
-                memory_limit_bytes(),
-            )
+    max_concurrent_activities = _resolve_max_concurrent_activities(
+        max_concurrent_activities
+    )
 
     if graceful_shutdown_timeout_seconds is None:
         graceful_shutdown_timeout_seconds = (

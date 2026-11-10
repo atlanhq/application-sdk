@@ -369,7 +369,7 @@ Every offload is automatically wrapped in an unbounded progress hold, so a long 
 
 ### Cancelling a blocking call at the driver
 
-Cancelling the task that awaits `run_in_thread` hands the event loop back at once, but the worker thread runs on: Python cannot kill a thread. Until the call returns by itself it holds a slot in the shared `sdk-blocking-` pool (`min(32, cpus + 4)` wide, where `cpus` is the pod's CPU limit, not the node's core count), a database connection, and warehouse compute. Enough abandoned calls fill the pool, and every other offload queues behind them.
+Cancelling the task that awaits `run_in_thread` hands the event loop back at once, but the worker thread runs on: Python cannot kill a thread. Until the call returns by itself it holds a slot in the shared `sdk-blocking-` pool (`min(32, cpus + 4)` wide, where `cpus` is the tighter of the process's CPU affinity and the pod's CFS quota, rounded down, not the node's core count), a database connection, and warehouse compute. Enough abandoned calls fill the pool, and every other offload queues behind them.
 
 If the driver can stop the call from another thread, pass a `CancelHandle` and register the driver's cancel on it **from inside the worker thread**, at the moment the driver handle exists:
 

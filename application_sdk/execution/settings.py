@@ -14,9 +14,7 @@ from dataclasses import dataclass
 # direction without providing any real isolation.
 from temporalio.common import VersioningBehavior
 
-from application_sdk._runtime.cgroup import available_cpus
 from application_sdk.constants import load_shutdown_budget
-from application_sdk.observability.cgroup import memory_limit_bytes
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -53,11 +51,11 @@ class ExecutionSettings:
     max_concurrent_activities: int = _MAX_CONCURRENT_ACTIVITIES_CAP
     """Maximum concurrent activities per worker.
 
-    ``TEMPORAL_MAX_CONCURRENT_ACTIVITIES`` when set; otherwise
-    :func:`load_execution_settings` derives it from the container's limits:
-    ``min(100, 10 x CPUs, memory limit // 256 MiB)``, never below 1, dropping
-    the memory term when no limit is known. The bare dataclass default is the
-    cap, 100.
+    ``TEMPORAL_MAX_CONCURRENT_ACTIVITIES`` when set, else 100. This loader
+    never reads the container's limits: a worker created without an explicit
+    value and without the env var derives its own default from them at
+    construction (``create_worker``), so the cgroup is read once per worker
+    start rather than on every settings load.
     """
 
     graceful_shutdown_timeout_seconds: int = 3600
@@ -171,11 +169,15 @@ def _derive_max_concurrent_activities(cpus: int, memory_bytes: int | None) -> in
 
 
 def _load_max_concurrent_activities() -> int:
-    """Explicit ``TEMPORAL_MAX_CONCURRENT_ACTIVITIES``, else derived from the container."""
+    """``TEMPORAL_MAX_CONCURRENT_ACTIVITIES``, else 100. Never reads the cgroup."""
+    explicit = _explicit_max_concurrent_activities()
+    return _MAX_CONCURRENT_ACTIVITIES_CAP if explicit is None else explicit
+
+
+def _explicit_max_concurrent_activities() -> int | None:
+    """``TEMPORAL_MAX_CONCURRENT_ACTIVITIES`` as an int, or ``None`` when unset or blank."""
     explicit = os.environ.get(_MAX_CONCURRENT_ACTIVITIES_ENV, "").strip()
-    if explicit:
-        return int(explicit)
-    return _derive_max_concurrent_activities(available_cpus(), memory_limit_bytes())
+    return int(explicit) if explicit else None
 
 
 def load_execution_settings() -> ExecutionSettings:

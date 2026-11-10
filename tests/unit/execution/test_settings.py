@@ -76,39 +76,21 @@ class TestLoadExecutionSettingsFromEnv:
         settings = load_execution_settings()
         assert settings.max_concurrent_activities == 50
 
-    def test_max_concurrent_activities_env_wins_over_small_limits(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", "200")
-        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", "512Mi")
-        monkeypatch.setattr(settings_mod, "available_cpus", lambda: 1)
-        assert load_execution_settings().max_concurrent_activities == 200
-
     @pytest.mark.parametrize("unset", [None, "", "  "])
-    def test_max_concurrent_activities_derived_when_env_unset_or_blank(
+    def test_max_concurrent_activities_loader_never_reads_the_container(
         self, monkeypatch: pytest.MonkeyPatch, unset: str | None
     ) -> None:
-        """A 1-CPU pod on a 64-core node gets 10 slots, not 100."""
+        """Unset or blank, the loader returns 100 even on a tiny pod.
+
+        Derivation happens once in ``create_worker``; every other caller of the
+        loader keeps the old contract and does no cgroup reads.
+        """
         if unset is None:
             monkeypatch.delenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", raising=False)
         else:
             monkeypatch.setenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", unset)
-        monkeypatch.delenv("K8S_POD_MEMORY_LIMIT", raising=False)
-        monkeypatch.setattr(settings_mod, "available_cpus", lambda: 1)
-        assert load_execution_settings().max_concurrent_activities == 10
-
-    def test_max_concurrent_activities_reads_the_cgroup_memory_limit(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path
-    ) -> None:
-        """The enforced cgroup limit, not only the env var, bounds the slots."""
-        from application_sdk.observability import cgroup
-
-        limit = tmp_path / "memory.max"
-        limit.write_text(str(2 * 1024**3))
-        monkeypatch.setattr(cgroup, "_MEMORY_LIMIT_PATHS", (str(limit),))
-        monkeypatch.delenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", raising=False)
-        monkeypatch.setattr(settings_mod, "available_cpus", lambda: 16)
-        assert load_execution_settings().max_concurrent_activities == 8
+        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", "512Mi")
+        assert load_execution_settings().max_concurrent_activities == 100
 
     def test_graceful_shutdown_timeout_from_env(
         self, monkeypatch: pytest.MonkeyPatch

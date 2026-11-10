@@ -653,7 +653,7 @@ class TestCreateWorker:
 
     # ── max_concurrent_activities default (FND-4646) ──────────────────────
 
-    def _create_capturing(self) -> tuple[dict, mock.MagicMock]:
+    def _create_capturing(self, **kwargs: int) -> tuple[dict, mock.MagicMock]:
         class _SlotsApp(App):
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
@@ -674,7 +674,7 @@ class TestCreateWorker:
                 "application_sdk.execution._temporal.worker.logger", mock_logger
             ),
         ):
-            create_worker(_make_mock_client())
+            create_worker(_make_mock_client(), **kwargs)
         return captured, mock_logger
 
     @staticmethod
@@ -691,9 +691,6 @@ class TestCreateWorker:
         monkeypatch.delenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", raising=False)
         monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", "1Gi")
         monkeypatch.setattr(
-            "application_sdk.execution.settings.available_cpus", lambda: 1
-        )
-        monkeypatch.setattr(
             "application_sdk.execution._temporal.worker.available_cpus", lambda: 1
         )
 
@@ -701,8 +698,27 @@ class TestCreateWorker:
 
         assert captured["max_concurrent_activities"] == 4
         line = self._slots_log(mock_logger)
-        assert "derived from 1 CPUs" in line
+        assert "derived from 1 available CPUs" in line
         assert str(1024**3) in line
+
+    def test_activity_slots_bounded_by_the_cgroup_memory_limit(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """The enforced cgroup limit, not only the env var, bounds the slots."""
+        from application_sdk.observability import cgroup
+
+        limit = tmp_path / "memory.max"
+        limit.write_text(str(2 * 1024**3))
+        monkeypatch.setattr(cgroup, "_MEMORY_LIMIT_PATHS", (str(limit),))
+        monkeypatch.delenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", raising=False)
+        monkeypatch.delenv("K8S_POD_MEMORY_LIMIT", raising=False)
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.available_cpus", lambda: 16
+        )
+
+        captured, _ = self._create_capturing()
+
+        assert captured["max_concurrent_activities"] == 8
 
     def test_activity_slots_env_override_wins(
         self, monkeypatch: pytest.MonkeyPatch
@@ -710,7 +726,7 @@ class TestCreateWorker:
         monkeypatch.setenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", "37")
         monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", "1Gi")
         monkeypatch.setattr(
-            "application_sdk.execution.settings.available_cpus", lambda: 1
+            "application_sdk.execution._temporal.worker.available_cpus", lambda: 1
         )
 
         captured, mock_logger = self._create_capturing()
@@ -718,6 +734,22 @@ class TestCreateWorker:
         assert captured["max_concurrent_activities"] == 37
         assert self._slots_log(mock_logger) == (
             "Activity slots: 37 (TEMPORAL_MAX_CONCURRENT_ACTIVITIES)"
+        )
+
+    def test_activity_slots_passed_by_caller_win_and_are_logged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", "37")
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.available_cpus",
+            mock.Mock(side_effect=AssertionError("must not read the cgroup")),
+        )
+
+        captured, mock_logger = self._create_capturing(max_concurrent_activities=5)
+
+        assert captured["max_concurrent_activities"] == 5
+        assert self._slots_log(mock_logger) == (
+            "Activity slots: 5 (passed to create_worker)"
         )
 
     def test_max_concurrent_workflow_tasks_in_start_event_params(self) -> None:
