@@ -64,10 +64,16 @@ class TestLoadWorkerLivenessPollLoopChecks:
         monkeypatch.setenv("ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS", raw)
         assert _load_worker_liveness_max_zero_poller_readings() == expected
 
-    def test_malformed_keeps_the_check_on(self, monkeypatch: pytest.MonkeyPatch):
-        """A typo must not silently disable a default-on safety check."""
-        monkeypatch.setenv("ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS", "five")
-        with pytest.warns(UserWarning, match="not a valid number"):
+    @pytest.mark.parametrize("raw", ["five", "0.5", "2.9", "inf", "nan"])
+    def test_non_integer_keeps_the_check_on(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ):
+        """A typo or a fraction must not silently disable a default-on check.
+
+        Regression: a float parse truncated ``0.5`` to ``0`` (disabled).
+        """
+        monkeypatch.setenv("ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS", raw)
+        with pytest.warns(UserWarning, match="not a valid integer"):
             assert _load_worker_liveness_max_zero_poller_readings() == 5
 
     def test_fatal_recovery_default(self, monkeypatch: pytest.MonkeyPatch):

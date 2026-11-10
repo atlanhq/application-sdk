@@ -811,11 +811,23 @@ WORKER_LIVENESS_MAX_IDLE_SECONDS = _load_worker_liveness_max_idle_seconds()
 #: time to trip is this count times ``ATLAN_WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS``
 #: (default 5 x 60s, about 5 minutes). ``0`` disables this check.
 def _load_worker_liveness_max_zero_poller_readings() -> int:
-    return int(
-        _load_non_negative_finite_float(
-            "ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS", 5.0
+    # A reading count is a whole number. Parse it as one: a float parse would
+    # let ``0.5`` truncate to ``0`` and silently disable this default-on check,
+    # so any non-integer warns and keeps the default instead.
+    name = "ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS"
+    default = 5
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        warnings.warn(
+            f"{name}={raw!r} is not a valid integer; falling back to {default}",
+            stacklevel=2,
         )
-    )
+        return default
+    return max(0, value)
 
 
 WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS = (
