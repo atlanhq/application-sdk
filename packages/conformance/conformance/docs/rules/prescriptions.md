@@ -1532,11 +1532,12 @@ Fix, by site:
   that asset.
 - The creator raises on a blank or `None` input (on purpose: the f-string published a
   broken identity there).  The blank (an empty string or `None`) needs an app guard
-  before the creator, never a fallback string.  What the guard does with the record
-  changes the output and is the owner's choice: until it is decided, the site holds with
-  the proposed guard.  Where the asset is valid without that value (a Table with no
-  schema), use the creator's optional parents instead (source reality wins); if the
-  installed creator then raises or returns another string, the site is a gap.
+  before the creator, never a fallback string.  The guard uses the app's existing
+  bad-record handling; if the app has none, it skips the record and logs a warning that
+  names it.  List each guard and what it does with the record in the PR description.
+  Where the asset is valid without that value (a Table with no schema), use the
+  creator's optional parents instead (source reality wins); if the installed creator
+  then raises or returns another string, the site is a gap.
 - `Process` / `ColumnProcess` / `BIProcess`: call `generate_qualified_name(...,
   process_id=<everything after the connection qualifiedName>)`, which returns
   `{connection_qualified_name}/{process_id}`.  A blank `process_id` raises; never pass
