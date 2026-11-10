@@ -341,25 +341,26 @@ class TestShutdownBudget:
 
 
 class TestDeriveMaxConcurrentActivities:
-    """``min(100, 10 x cpus, memory // 256 MiB)``, floored at 1 (FND-4646)."""
+    """``min(100, 32 x cpus, memory // 64 MiB)``, floored at 16 (FND-4646)."""
 
     @pytest.mark.parametrize(
         ("cpus", "memory", "expected"),
         [
             # No known memory limit: CPU alone, capped at the old default.
-            (1, None, 10),
-            (4, None, 40),
+            (1, None, 32),
+            (2, None, 64),
+            (4, None, 100),
             (64, None, 100),
             # Memory is the tighter bound.
-            (4, 2 * _GIB, 8),
-            (1, 512 * _MIB, 2),
+            (4, 2 * _GIB, 32),
+            (8, 3 * _GIB, 48),
             # CPU is the tighter bound.
-            (2, 16 * _GIB, 20),
+            (2, 16 * _GIB, 64),
             # Both generous: the cap.
             (32, 64 * _GIB, 100),
-            # Below one slot's budget still runs one activity.
-            (1, 100 * _MIB, 1),
-            (1, 0, 1),
+            # The fleet's typical half-CPU, sub-GiB pod lands on the floor.
+            (1, 700 * _MIB, 16),
+            (1, 0, 16),
         ],
     )
     def test_formula(self, cpus: int, memory: int | None, expected: int) -> None:

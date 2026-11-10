@@ -66,14 +66,21 @@ P = ParamSpec("P")
 #
 # Width is the stdlib's own default formula, ``min(32, cpus + 4)``, with the
 # CPU count taken from the container's limit (``available_cpus``) rather than
-# ``os.cpu_count()``: a 1-CPU pod on a 64-core node would otherwise get 32
-# threads contending for one core with the event loop that sends heartbeats.
+# ``os.cpu_count()``, and never below 16. Without the floor a 1-CPU pod would
+# drop from 32 threads to 5. These threads mostly wait on a database or the
+# network rather than use CPU, so a wide fan-out of blocking calls would queue
+# where it ran in parallel before. The floor still halves what a small pod on
+# a big node got.
 _MAX_BLOCKING_POOL_WIDTH = 32
+_MIN_BLOCKING_POOL_WIDTH = 16
 
 
 def _blocking_pool_width() -> int:
-    """Threads in ``_BLOCKING_EXECUTOR``: ``min(32, available_cpus() + 4)``."""
-    return min(_MAX_BLOCKING_POOL_WIDTH, available_cpus() + 4)
+    """Threads in ``_BLOCKING_EXECUTOR``: ``min(32, max(16, available_cpus() + 4))``."""
+    return min(
+        _MAX_BLOCKING_POOL_WIDTH,
+        max(_MIN_BLOCKING_POOL_WIDTH, available_cpus() + 4),
+    )
 
 
 _BLOCKING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(

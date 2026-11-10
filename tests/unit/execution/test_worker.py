@@ -687,19 +687,19 @@ class TestCreateWorker:
     def test_activity_slots_derived_from_a_small_pod(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A 1-CPU, 1 GiB pod on a big node gets 4 slots, not 100."""
+        """A 1-CPU, 512 MiB pod on a big node lands on the floor, 16, not 100."""
         monkeypatch.delenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", raising=False)
-        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", "1Gi")
+        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", "512Mi")
         monkeypatch.setattr(
             "application_sdk.execution._temporal.worker.available_cpus", lambda: 1
         )
 
         captured, mock_logger = self._create_capturing()
 
-        assert captured["max_concurrent_activities"] == 4
+        assert captured["max_concurrent_activities"] == 16
         line = self._slots_log(mock_logger)
         assert "derived from 1 available CPUs" in line
-        assert str(1024**3) in line
+        assert str(512 * 1024**2) in line
 
     def test_activity_slots_bounded_by_the_cgroup_memory_limit(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
@@ -708,7 +708,7 @@ class TestCreateWorker:
         from application_sdk.observability import cgroup
 
         limit = tmp_path / "memory.max"
-        limit.write_text(str(2 * 1024**3))
+        limit.write_text(str(3 * 1024**3))
         monkeypatch.setattr(cgroup, "_MEMORY_LIMIT_PATHS", (str(limit),))
         monkeypatch.delenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", raising=False)
         monkeypatch.delenv("K8S_POD_MEMORY_LIMIT", raising=False)
@@ -718,7 +718,8 @@ class TestCreateWorker:
 
         captured, _ = self._create_capturing()
 
-        assert captured["max_concurrent_activities"] == 8
+        # min(100, 32 x 16, 3 GiB // 64 MiB) = 48
+        assert captured["max_concurrent_activities"] == 48
 
     def test_activity_slots_env_override_wins(
         self, monkeypatch: pytest.MonkeyPatch

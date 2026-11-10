@@ -24,12 +24,23 @@ logger = get_logger(__name__)
 _MAX_CONCURRENT_ACTIVITIES_CAP = 100
 
 #: Derived activity slots per whole CPU the container may use. Activities are
-#: mostly awaiting I/O, so a CPU carries several; past this, CPU-bound work in
-#: one activity starts delaying the event loop that heartbeats for the others.
-_ACTIVITY_SLOTS_PER_CPU = 10
+#: mostly awaiting I/O, so a CPU carries many.
+_ACTIVITY_SLOTS_PER_CPU = 32
 
-#: Container memory budgeted per derived activity slot (256 MiB).
-_MEMORY_BYTES_PER_ACTIVITY_SLOT = 256 * 1024 * 1024
+#: Container memory budgeted per derived activity slot (64 MiB).
+_MEMORY_BYTES_PER_ACTIVITY_SLOT = 64 * 1024 * 1024
+
+#: The derived default never goes below this, however small the pod.
+#:
+#: The three factors were chosen against a week of fleet slot usage. Peak
+#: concurrent activities on default-configured workers were 0-2 for most and
+#: never above 30. Most pods are half a CPU with under 1 GiB, so tighter
+#: factors (10 per CPU, 256 MiB per slot, no floor) would have capped about
+#: one worker in ten below a peak it actually reached. These factors capped
+#: none. The point is a cap that follows the pod's resources rather than one
+#: fixed number, set generously enough that it limits a pod that cannot hold
+#: a burst without trimming normal load.
+_MIN_DERIVED_ACTIVITY_SLOTS = 16
 
 #: Env var that sets the activity-slot count outright, bypassing derivation.
 _MAX_CONCURRENT_ACTIVITIES_ENV = "TEMPORAL_MAX_CONCURRENT_ACTIVITIES"
@@ -159,13 +170,13 @@ def _load_graceful_shutdown_timeout() -> int:
 def _derive_max_concurrent_activities(cpus: int, memory_bytes: int | None) -> int:
     """Activity slots a container with these limits can run without oversubscribing.
 
-    ``min(100, 10 x cpus, memory_bytes // 256 MiB)``, never below 1. An unknown
+    ``min(100, 32 x cpus, memory_bytes // 64 MiB)``, never below 16. An unknown
     memory limit (``None``) drops the memory term rather than guessing one.
     """
     slots = min(_MAX_CONCURRENT_ACTIVITIES_CAP, cpus * _ACTIVITY_SLOTS_PER_CPU)
     if memory_bytes is not None:
         slots = min(slots, memory_bytes // _MEMORY_BYTES_PER_ACTIVITY_SLOT)
-    return max(1, slots)
+    return max(_MIN_DERIVED_ACTIVITY_SLOTS, slots)
 
 
 def _load_max_concurrent_activities() -> int:
