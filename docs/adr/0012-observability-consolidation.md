@@ -89,6 +89,12 @@ match the rest of the surface.
   artifacts merged into workflow output) and `EventInterceptor` (v3
   audit / dashboard event bus) are not observability and remain their
   own interceptors gated by their own settings.
+  `OutputInterceptor` carries each activity's metrics and artifacts back
+  to the workflow on the activity's own result (the `metrics` /
+  `artifacts` fields of `Output`, or a reserved `_atlan_outputs` key on a
+  dict result), not
+  through process memory, so they survive an activity running on another
+  replica or pool queue and a workflow replay on another worker.
 
 ### Pushgateway for short-lived workers
 
@@ -118,7 +124,8 @@ match the rest of the surface.
   call (push, sweep GET, sweep DELETE, final push, final DELETE).
   Without this, a downed gateway would burn the prometheus_client
   default 30s × 2 calls at shutdown and exhaust Kubernetes'
-  `terminationGracePeriodSeconds`.
+  `terminationGracePeriodSeconds`. (Amended by FND-4645: the timeout
+  is derived from `ATLAN_SHUTDOWN_GRACE_SECONDS` when that is set.)
 - **Metrics is best-effort, never blocks the worker.**
   `_start_metrics_push` is wrapped in `try/except` at the worker's
   `__aenter__` / `run()` boundary so any unexpected metrics failure
@@ -133,9 +140,12 @@ match the rest of the surface.
   triggered the scale-down) would be lost. The default of 35s is one
   full 30s scrape interval (the cluster's vmagent default applied to
   the Pushgateway scrape — confirmed by inspecting the rendered
-  `vmagent.env.yaml`) plus a 5s jitter buffer. Worker pods have a 12h
-  `terminationGracePeriodSeconds`, so the extra wait is negligible
-  against the kill timeout.
+  `vmagent.env.yaml`) plus a 5s jitter buffer. (Amended by FND-4645:
+  the original note assumed a 12h `terminationGracePeriodSeconds`. Not
+  every deployment has one; SDR installs can run with 30s. The hold now
+  runs under the post-drain exit deadline, and it is derived from
+  `ATLAN_SHUTDOWN_GRACE_SECONDS` when that is set, so it shrinks with a
+  short grace.)
 
 ### App Vitals
 
@@ -271,3 +281,36 @@ this dual-export.
   Temporal `OpenTelemetryConfig` instead of Prometheus). Rejected for
   the same OTel-collector reason; the loopback Prometheus + bridging
   collector pattern works without new infra.
+
+## Addendum: one background loop for every periodic flush (FND-4648)
+
+The sinks used to start their periodic flushes three different ways: a task
+on whatever loop was running, else an `asyncio.run` thread (metrics, traces);
+a `new_event_loop` + `run_forever` thread (logs); a hand-built loop on a thread
+(sizing). The Segment client ran a fourth thread with its own loop and waited
+up to 5 s for it to come up. Each had its own cadence and its own shutdown, or
+none, so no single bound covered the final flushes at exit.
+
+Now `application_sdk.observability.background_loop` owns one daemon thread
+(`atlan-observability-loop`) running one event loop, started on first use.
+Every sink starts its periodic flush through
+`AtlanObservability._start_periodic_flush()`, always on that loop, and the
+Segment sender runs there as a task. One `atexit` shutdown, bounded by
+`ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS` (default 10 s), cancels each
+started task once (its `CancelledError` handler makes the final flush or sends
+the last batch), awaits any other task on the loop without cancelling it
+(cancelling a batch flush deletes its half-written file), then stops the loop.
+Tasks stop in stages: the periodic flushes first, then the Segment worker, so
+the metrics final flush drains the Segment queue through an HTTP client that
+is still open. A cancel that arrives before a task's first step is deferred
+until the task has started, so its final flush still runs.
+
+After `fork()`, the child replaces the loop's lock, forgets the parent's
+loop, drops each Segment client's worker, and restarts every sink's periodic
+flush on its own loop. Without that, the child inherits the "flush started"
+guards but not the thread, and nothing in it would flush.
+
+Two pieces of background work stay off the loop on purpose. The console writer
+is a plain thread because its job is a blocking `write()` to stdout; on the
+shared loop a stalled pipe would stall every flush. The OTLP exporter's batch
+thread belongs to the OpenTelemetry SDK.

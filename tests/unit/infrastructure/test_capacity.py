@@ -2,13 +2,45 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from application_sdk.infrastructure.capacity import (
+    CapacityPool,
     LocalCapacityPool,
     configure_capacity_pool,
     get_capacity_pool,
 )
+
+# The whole module is deprecated (removal v4.0.0); the behaviour tests below
+# keep the deprecated surface working until then. TestDeprecation pins the
+# warnings themselves.
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
+
+class TestDeprecation:
+    """Every capacity-pool name warns: the framework never wired a pool."""
+
+    def test_local_capacity_pool_warns(self) -> None:
+        with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+            LocalCapacityPool()
+
+    def test_configure_capacity_pool_warns(self) -> None:
+        pool = LocalCapacityPool()
+        with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+            configure_capacity_pool(pool)
+
+    def test_get_capacity_pool_warns(self) -> None:
+        with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+            get_capacity_pool()
+
+    def test_implementing_capacity_pool_protocol_warns(self) -> None:
+        with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+
+            class _Pool(CapacityPool):  # pyright: ignore[reportUnusedClass]
+                async def acquire(self, *args: Any, **kwargs: Any) -> int:
+                    return 0
 
 
 class TestLocalCapacityPool:

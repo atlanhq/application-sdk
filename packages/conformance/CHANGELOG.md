@@ -2,6 +2,26 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.56.1] - 2026-11-09
+
+### Bug fixes
+
+- certify gates fail closed (deps install, whole-tree contract drift via SDK regeneration), keep the GitHub token out of app code across certify and the CI reusables, and move conditional shell out of run: blocks [FND-4244] (#4731) ([c33607d](https://github.com/atlanhq/application-sdk/commit/c33607d))
+- document orjson depth and integer limits in O001 (#4798) ([377cd57](https://github.com/atlanhq/application-sdk/commit/377cd57))
+- update ruff to v0.17.4 (#4799) ([b1af4c0](https://github.com/atlanhq/application-sdk/commit/b1af4c0))
+
+## [0.56.0] - 2026-11-05
+
+### Features
+
+- P064/P065 flag offloaded work a cancel cannot stop [FND-4711] (#4770) ([2ed7a20](https://github.com/atlanhq/application-sdk/commit/2ed7a20))
+
+### Bug fixes
+
+- route SDR disk pressure to the host volume operator (#4755) ([b74ec61](https://github.com/atlanhq/application-sdk/commit/b74ec61))
+- require the deployment object store and fail startup with a named config error (#4780) ([d95a018](https://github.com/atlanhq/application-sdk/commit/d95a018))
+- D017 false positive on compliant code (1 repo) (#4769) ([4c8085a](https://github.com/atlanhq/application-sdk/commit/4c8085a))
+
 ## [0.55.0] - 2026-11-05
 
 ### Features

@@ -29,19 +29,17 @@
 # .github/scripts/check_symbol_removals.py per docs/standards/ci.md; the run:
 # block below is one straight-line call.
 #
-# NOT YET A REQUIRED CHECK — and it has to become one to be worth anything.
+# A REQUIRED CHECK. The `main` ruleset (id 16702782) lists the context
+# `Symbol Removal Check` alongside Pre-commit Checks, Capability Manifest Drift,
+# Validate PR title, SDK Gate, Connector Tests Gate and Guard release-owned
+# files (FND-4653). It ran advisory from 2026-09-19, and in that window a red
+# run did not stop a merge. That is the failure mode the gate was written to
+# close: 3.36.1, 3.36.2 and 3.36.3 all shipped within 28 h of 3.36.0 to put
+# back names #3685 removed.
 #
-# As of this commit the `main` ruleset (id 16702782) requires: Pre-commit
-# Checks, Capability Manifest Drift, Validate PR title, SDK Gate, Connector
-# Tests Gate, Guard release-owned files.
-# This job is not among them and no aggregator rolls it up, so today a PR that
-# removes an un-deprecated public name gets a red advisory check and merges
-# anyway — the precise failure mode the gate was written to close. Wiring it up
-# is an admin change to the ruleset, made deliberately and separately from
-# landing the code.
-#
-# The job is written to BE required, and the two rules below follow from
-# branch-protection semantics, both learned the hard way elsewhere in this repo:
+# Because it is required, the two rules below are load-bearing. Both follow
+# from branch-protection semantics, and both were learned the hard way
+# elsewhere in this repo:
 #
 #   1. NO job-level `if`. GitHub does not treat a "skipped" job as "success" for
 #      a required status check, so a job-level skip leaves the check pending
@@ -70,10 +68,10 @@ permissions:
 jobs:
   surface-diff:
     # Job name deliberately identical to the workflow name. The required-check
-    # context a ruleset matches is the JOB name, not the workflow's, so having
-    # the two differ invites someone wiring this up to add "Symbol Removal
-    # Check" to the ruleset and produce a required context that matches no
-    # check run — which blocks every PR indefinitely. One string, one meaning.
+    # context the ruleset matches is the JOB name, not the workflow's. Renaming
+    # this job leaves the ruleset's `Symbol Removal Check` context matching no
+    # check run, which blocks every PR indefinitely. Change it only together
+    # with the ruleset. One string, one meaning.
     name: Symbol Removal Check
     runs-on: ubuntu-latest
     timeout-minutes: 10

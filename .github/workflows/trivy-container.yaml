@@ -28,16 +28,17 @@
 # login step is now conditional, so the SDK's own pull_request.yaml job keeps
 # using its repo-level credentials while callers here need nothing.
 #
-# The remaining secret is declared `required: false` on purpose and validated by
-# the "Verify secret contract" step instead. `required: true` turns a caller
-# that omits it into a workflow-parse error: the run ends as `startup_failure`
-# with zero jobs and therefore no check run at all, which no required check can
-# gate on and nobody can see. That is what hid cause 1 for months. See
-# .github/scripts/check_trivy_secret_contract.py for the full rationale.
+# The fleet App secrets are declared `required: false` on purpose.
+# `required: true` turns a caller that omits them into a workflow-parse error:
+# the run ends as `startup_failure` with zero jobs and therefore no check run at
+# all, which no required check can gate on and nobody can see. That is what hid
+# cause 1 for months. Declared optional, a caller without them fails the
+# "Mint fleet App token" step instead: a normal red step.
 #
-# This workflow mints a fleet App token (falling back to the caller's
-# ORG_PAT_GITHUB) for the cross-repo allowlist checkout and the
-# private-dependency BuildKit secret.
+# This workflow mints a fleet App token for the cross-repo allowlist checkout
+# and the private-dependency BuildKit secret. There is no ORG_PAT_GITHUB
+# fallback (FND-4652): the mint fails the job rather than degrading silently
+# to the broader org credential.
 
 name: Atlan Application Trivy container scan
 
@@ -46,7 +47,7 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: false
-        description: "Fallback PAT, used if the fleet App token can't be minted. Enforced by the 'Verify secret contract' step, and only when the App token did not mint -- nothing reads it otherwise."
+        description: "Unused. It was the fallback for a fleet App token that failed to mint; the mint now fails the job instead (FND-4652). Still declared so a caller that passes it explicitly does not fail to parse."
       FLEET_APP_ID:
         required: false
         description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
@@ -101,7 +102,6 @@ jobs:
         # dependency repo varies per caller, same as build-and-scan.yaml's
         # git_token mint.
         id: app-token
-        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -118,18 +118,7 @@ jobs:
             .security
             .github/scripts
           path: _sdk
-          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
-
-      # Turns a missing secret into a normal red step with an actionable
-      # message. Runs after the _sdk checkout because that is where the script
-      # comes from; a missing ORG_PAT_GITHUB with no minted App token already
-      # reds that checkout loudly, which is the outcome this whole change is
-      # after -- a visible failure carrying a check run, not startup_failure.
-      - name: Verify secret contract
-        env:
-          ORG_PAT_GITHUB: ${{ secrets.ORG_PAT_GITHUB }}
-          APP_TOKEN_MINTED: ${{ steps.app-token.outputs.token }}
-        run: python3 _sdk/.github/scripts/check_trivy_secret_contract.py
+          token: ${{ steps.app-token.outputs.token }}
 
       # Composite handles build, Trivy JSON+SARIF scan, SARIF upload.
       # fail-on-vulns is disabled here — the allowlist gate below takes over.
@@ -139,7 +128,7 @@ jobs:
           # No chainguard-* here on purpose: the login is skipped, since no
           # caller of this workflow builds from cgr.dev and none could supply
           # the credentials anyway. See the header.
-          github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ steps.app-token.outputs.token }}
           skip-files: ${{ inputs.skip-files }}
           fail-on-vulns: 'false'
 

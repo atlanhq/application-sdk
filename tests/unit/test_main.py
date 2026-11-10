@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import signal
 import sys
 import threading
@@ -24,10 +25,12 @@ from application_sdk.main import (
     _install_graceful_signal_handlers,
     _log_dapr_components,
     _log_process_memory_baseline,
+    _log_shutdown_budget,
     _loop_exception_handler,
     _observe_worker_poll_state,
     _parse_all_component_yamls,
     _parse_workflow_max_timeout_hours,
+    _PostDrainExitArm,
     _run_worker_with_restart,
     _start_post_drain_exit_deadline,
     main,
@@ -1560,6 +1563,12 @@ class TestInstallExcepthook:
 class TestMainEntryPoint:
     """Tests for the main() CLI entry point."""
 
+    @pytest.fixture(autouse=True)
+    def _no_process_debug_handlers(self) -> Any:
+        """Keep main() from installing SIGUSR1/faulthandler in the test process."""
+        with patch("application_sdk.main._install_debug_handlers"):
+            yield
+
     def _patch_run(self, **kwargs: object) -> mock.MagicMock:
         return mock.MagicMock(**kwargs)
 
@@ -1659,6 +1668,65 @@ class TestMainEntryPoint:
         ):
             main()
         assert order == ["hook", "run"]
+
+
+class TestDebugHandlers:
+    """faulthandler and the SIGUSR1 dump are installed by main(), not by import."""
+
+    def test_import_installs_neither_faulthandler_nor_sigusr1(self) -> None:
+        """Importing the module (dev scripts, tests) must not touch process handlers."""
+        import subprocess  # noqa: PLC0415 — only this test spawns a process
+
+        probe = (
+            "import faulthandler, signal\n"
+            "import application_sdk.main as m\n"
+            "usr1 = getattr(signal, 'SIGUSR1', None)\n"
+            "installed = usr1 is not None and "
+            "signal.getsignal(usr1) is m._debug_dump_handler\n"
+            "print(faulthandler.is_enabled(), installed)\n"
+        )
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONFAULTHANDLER"}
+        result = subprocess.run(  # noqa: S603 — fixed argv: this interpreter + a literal probe
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+            check=True,
+        )
+        assert result.stdout.split() == ["False", "False"]
+
+    def test_install_debug_handlers_enables_both(self) -> None:
+        """main()'s installer enables faulthandler and binds SIGUSR1 to the dump."""
+        import application_sdk.main as main_mod  # noqa: PLC0415 — module handle for private_stdlib
+
+        with (
+            private_stdlib(main_mod, "faulthandler") as local_fh,
+            private_stdlib(main_mod, "signal") as local_signal,
+            patch.object(local_fh, "enable") as enable,
+            patch.object(local_signal, "signal") as bind,
+        ):
+            main_mod._install_debug_handlers()
+        enable.assert_called_once_with()
+        if hasattr(signal, "SIGUSR1"):
+            bind.assert_called_once_with(signal.SIGUSR1, main_mod._debug_dump_handler)
+        else:
+            bind.assert_not_called()
+
+    def test_main_installs_debug_handlers(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The CLI entry point is where the handlers get installed."""
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        monkeypatch.setattr(sys, "argv", ["prog", "--mode", "worker"])
+        with (
+            patch("application_sdk.main._install_debug_handlers") as install,
+            patch("application_sdk.main._install_excepthook"),
+            patch("application_sdk.main.run_main"),
+            pytest.raises(SystemExit),
+        ):
+            main()
+        install.assert_called_once_with()
 
 
 # --------------------------------------------------------------------------- #
@@ -2485,9 +2553,6 @@ class TestInlineImportSymbols:
             ("application_sdk.infrastructure._dapr.client", "DaprStateStore"),
             ("application_sdk.infrastructure._dapr.http", "AsyncDaprClient"),
             ("application_sdk.infrastructure._dapr.http", "wait_for_dapr_sidecar"),
-            ("application_sdk.app.registry", "AppRegistry"),
-            ("application_sdk.app.registry", "TaskRegistry"),
-            ("application_sdk.app.base", "_pascal_to_kebab"),
             ("application_sdk.observability.observability", "AtlanObservability"),
             ("application_sdk.server.health", "WorkerHealthServer"),
             ("application_sdk.storage", "create_store_from_binding_with_put_attrs"),
@@ -3357,6 +3422,104 @@ class TestPostDrainExitDeadline:
         finally:
             assert timer is not None
             timer.cancel()
+
+    def test_bound_derives_from_declared_grace(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 30 s grace cannot afford the fixed 120 s post-drain bound."""
+        monkeypatch.delenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", raising=False)
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "30")
+        timer = _start_post_drain_exit_deadline(exit_fn=MagicMock())
+        try:
+            assert timer is not None and timer.interval == 8
+        finally:
+            assert timer is not None
+            timer.cancel()
+
+    def test_explicit_bound_beats_declared_grace(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", "0")
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "30")
+        assert _start_post_drain_exit_deadline(exit_fn=MagicMock()) is None
+
+
+class TestPostDrainExitArm:
+    """Arms the post-drain deadline when the drain ends, once, on shutdown only."""
+
+    def test_drained_on_shutdown_arms_once(self) -> None:
+        event = asyncio.Event()
+        event.set()
+        arm = _PostDrainExitArm(enabled=True, shutdown_event=event)
+        with patch("application_sdk.main._start_post_drain_exit_deadline") as start:
+            arm.on_worker_drained()
+            arm.on_worker_drained()
+            arm.start()
+        start.assert_called_once_with()
+
+    def test_drained_without_shutdown_signal_does_not_arm(self) -> None:
+        """A supervised restart drains the worker too; it must not end the process."""
+        arm = _PostDrainExitArm(enabled=True, shutdown_event=asyncio.Event())
+        with patch("application_sdk.main._start_post_drain_exit_deadline") as start:
+            arm.on_worker_drained()
+        start.assert_not_called()
+
+    def test_disabled_never_arms(self) -> None:
+        event = asyncio.Event()
+        event.set()
+        arm = _PostDrainExitArm(enabled=False, shutdown_event=event)
+        with patch("application_sdk.main._start_post_drain_exit_deadline") as start:
+            arm.on_worker_drained()
+            arm.start()
+        start.assert_not_called()
+
+
+class TestLogShutdownBudget:
+    """The effective shutdown bounds are visible at startup."""
+
+    def test_warns_when_explicit_bounds_overrun_grace(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "30")
+        monkeypatch.setenv("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", "3600")
+        monkeypatch.delenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", raising=False)
+        with patch("application_sdk.main.logger") as log:
+            _log_shutdown_budget()
+        log.info.assert_called_once()
+        log.warning.assert_called_once()
+        assert "overrun" in log.warning.call_args.args[0]
+
+    def test_overrun_counts_the_daprd_headroom(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """5 s delay + 18 s drain + 8 s post-drain overruns a 30 s grace even
+        before the 2 s kept back for daprd's stop is counted."""
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "30")
+        monkeypatch.setenv("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", "18")
+        monkeypatch.delenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", raising=False)
+        with patch("application_sdk.main.logger") as log:
+            _log_shutdown_budget()
+        log.warning.assert_called_once()
+        assert 33 in log.warning.call_args.args
+
+    def test_derived_bounds_fit_the_grace(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "30")
+        monkeypatch.delenv("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", raising=False)
+        monkeypatch.delenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", raising=False)
+        with patch("application_sdk.main.logger") as log:
+            _log_shutdown_budget()
+        log.warning.assert_not_called()
+
+    def test_undeclared_grace_logs_without_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ATLAN_SHUTDOWN_GRACE_SECONDS", raising=False)
+        with patch("application_sdk.main.logger") as log:
+            _log_shutdown_budget()
+        assert "undeclared" in log.info.call_args.args
+        log.warning.assert_not_called()
 
 
 class TestFatalTeardownWatchdog:

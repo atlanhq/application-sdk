@@ -37,6 +37,38 @@ are stubbed, `git` runs against a throwaway repo in `tmp_path`, and every
 branch (opt-in gate, missing input, eval-failure fallback, no-change
 short-circuit) has a case.
 
+### Enforced by a test (FND-4244)
+
+`.github/scripts/tests/test_no_conditional_run_blocks.py` walks every workflow
+under `.github/workflows/` and every composite `action.y*ml` under
+`.github/actions/` (which actionlint does not lint), and fails on any `run:`
+block that branches: an `if`/`for`/`while`/`until`/`case`/`select` in command
+position, or a test chained into the next command (`[ … ] && x`,
+`test -n "$X" || { …; }`). Comments, quoted strings and `${{ … }}` expressions
+are blanked first (whole-line and trailing comments alike), and backslash
+continuations are joined, so prose in an `echo` does not count and a chain
+split across lines does. A heredoc interpreter
+(`python3 - <<EOF`) is scanned too: logic in it is still untested.
+
+Blocks that predate the guard are listed in
+`.github/scripts/conditional_run_allowlist.txt`, keyed
+`<file>::jobs.<job>.<step id|name>` (or `::runs.<step>` for a composite
+action). Two checks keep it from growing:
+
+* An entry whose block is gone or no longer branches fails as stale, so a
+  migration deletes its line in the same PR.
+* The entry count must equal `ALLOWLIST_CEILING` in the test. Removing an
+  entry means lowering the ceiling in the same PR, so the ceiling only goes
+  down.
+
+This is a shrinking size cap, not a frozen set. CI does not stop a PR that
+removes a migrated entry and adds a different one in its place at the same
+count. That shows up as an added line in the allowlist diff, and review should
+refuse it.
+
+A new step that needs to decide something gets a script, not an allowlist
+entry.
+
 ## Running the script tests
 
 The `CI script tests` workflow (`.github/workflows/scripts-tests.yaml`) runs
@@ -757,8 +789,16 @@ build-args: |
 
 # RIGHT — the value is available during the RUN and nowhere after it
 secrets: |
-  git_token=${{ secrets.ORG_PAT_GITHUB }}
+  git_token=${{ steps.image-git-token.outputs.token }}
 ```
+
+The token itself is a read-only fleet App token minted in the same job,
+scoped to the private atlanhq repositories the app names as git dependencies
+(the mint steps below), never `ORG_PAT_GITHUB`. When
+the app names none, nothing is minted and no secret is passed. A secret mount
+keeps the token out of the image, but not out of the `RUN`: every build backend
+that `uv sync` runs can read it, which is why it is scoped to what the build
+needs. `test_image_build_git_token.py` pins this.
 
 ```dockerfile
 RUN --mount=type=secret,id=git_token,uid=1000 \
@@ -791,6 +831,125 @@ against a private git dependency fails on the next build rather than at merge.
 **Scope note:** this covers credentials only. Non-secret build inputs — a
 version string, a target arch, a base-image reference — are what `build-args`
 are for, and recording those in image history is a feature.
+
+## Never let a GitHub token reach uv or app code
+
+An app with a private atlanhq git dependency needs a GitHub token for the
+`uv sync` or `uv lock` that clones it. Do not hand it over with
+`git config --global url.<authed>.insteadOf`, and do not put it in job-level
+`env:`. Both leave the token readable by every later step: tests, pre-commit
+hooks, conformance series and anything else that imports app code.
+
+Do not put it in uv's environment either, not even as a `GIT_CONFIG_*`
+rewrite on the `uv` process alone. `uv sync` and `uv lock` run PEP 517 build
+backends and build hooks, and they inherit uv's environment.
+
+Instead:
+
+1. Mint the token in four inline steps, gated on the caller's opt-in input:
+   check out the app; sparse-check-out `.github/scripts/git_auth.py` from
+   `ref: ${{ job.workflow_sha }}` at `.sdk-git-auth`; run
+   `git_auth.py repos` to list the private atlanhq repositories the app names
+   as git dependencies (every `pyproject.toml` and `uv.lock` in the checkout),
+   then `rm -rf .sdk-git-auth`; and mint a read-only fleet App token
+   (`continue-on-error: true`) scoped to exactly that list. When the list is
+   empty, skip the mint: `create-github-app-token` with no `repositories`
+   grants the whole installation. The list is also capped by
+   `ALLOWED_PRIVATE_DEPS` in `git_auth.py`: a PR controls its own
+   `pyproject.toml` and `uv.lock`, so an app naming any other private repo
+   fails closed (`repos` and `mirror` both refuse it). Only aggregator repos in
+   `AGGREGATOR_REPOS` (common-app-server), matched on `GITHUB_REPOSITORY`, may
+   name any. Never fall back to `ORG_PAT_GITHUB`. Inline,
+   not a composite: callers pin composites `@main`, so a new one cannot run
+   before it merges, and composite steps cannot `continue-on-error`.
+   `.github/scripts/tests/_scoped_mint.py` pins the shape.
+2. Follow it with a guard step that fails, naming `FLEET_APP_ID` and
+   `FLEET_APP_PRIVATE_KEY`, when the opt-in is set, the app names a private
+   repository (`outputs.repositories != ''`) and the token is empty.
+3. Hand the token to a step of its own that runs `git_auth.py mirror`, and
+   run the fetching command through `git_auth.py run` in a later step with no
+   token:
+
+   ```yaml
+   - name: Mirror private git dependencies
+     if: inputs.private-git-deps
+     env:
+       GIT_TOKEN: ${{ steps.git-deps-token.outputs.token }}
+       PRIVATE_GIT_DEPS: "true"
+     run: python3 path/to/git_auth.py mirror
+
+   - run: python3 path/to/git_auth.py run -- uv sync
+   ```
+
+   `mirror` mirror-clones each private repository into
+   `$RUNNER_TEMP/git-mirrors` (a bare `git clone --mirror` runs no repository
+   code, and git keeps the remote URL as written, so the token is not stored
+   in the mirror) and exits. `run` points those remotes at the mirrors with a
+   token-free rewrite. The split is the point: a build backend can read the
+   environment of every ancestor process (`/proc/<pid>/environ`), so the token
+   must not be in the env of the step that starts uv, not only out of uv's own
+   env. `run` refuses to start when `GIT_TOKEN` is set. A composite takes the
+   token as its `git-auth-token` input and does the same inside (`setup-deps`
+   mirrors; later `git_auth.py run` steps in the job reuse the mirrors).
+
+An image build is the one place the token reaches caller code: the app's
+Dockerfile reads the `git_token` BuildKit secret. That token comes from the
+same composite, so it is scoped to the repositories the app names, and absent
+when it names none.
+
+Only the first install needs the token. Once it has populated the uv cache and
+venv, later `uv sync`, `uv run`, `uv lock --check` and even a re-lock of a
+stale lock fetch nothing. `uv run --isolated` and a re-resolve on a cold cache
+do fetch, so give them the token too, through `git_auth.py`.
+
+Used by `tests-reusable.yaml` (unit, integration, e2e), `checks-reusable.yaml`,
+`conformance-reusable.yaml`, `release-version-bump.yaml` and the certify gate
+in `build-and-publish-app.yaml` (see `docs/standards/app-certification.md`).
+`test_private_git_deps_wiring.py` pins the shape (FND-4740).
+
+## A fleet App token that fails to mint fails the job
+
+**Rule:** a `Mint fleet App token` step has no `continue-on-error`, and its
+token is never combined with `ORG_PAT_GITHUB` (no
+`steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB`, in either order).
+
+```yaml
+# WRONG — a broken App credential silently runs on the org-admin PAT
+- name: Mint fleet App token
+  id: app-token
+  continue-on-error: true
+  uses: actions/create-github-app-token@<sha> # v3
+- uses: actions/checkout@<sha>
+  with:
+    token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+
+# RIGHT — the mint step goes red and names the problem
+- name: Mint fleet App token
+  id: app-token
+  uses: actions/create-github-app-token@<sha> # v3
+- uses: actions/checkout@<sha>
+  with:
+    token: ${{ steps.app-token.outputs.token }}
+```
+
+The fallback hid every App credential failure behind the broader credential,
+so nothing ever went red, and the PAT could not be revoked because no one could
+tell which runs still depended on it (FND-4652). A caller without
+`FLEET_APP_ID` / `FLEET_APP_PRIVATE_KEY` now fails at the mint step; the fix is
+`secrets: inherit`. The reusables still declare both secrets
+`required: false`, so an omitting caller gets that red step rather than a
+`startup_failure` with no check run.
+
+A job that also runs on fork or Dependabot PRs, which get no Actions secrets,
+skips the mint for both (`head.repo.fork != true` and
+`user.login != 'dependabot[bot]'`) and hands the consumer `github.token` on
+those runs (see `sdk-tests-reusable.yaml`). Never the PAT.
+
+Out of scope: GHCR login and push still use `ORG_PAT_GITHUB`, because fleet
+packages are org-level and the App only has repo-level Packages permission.
+The scoped `git-deps-token` / `image-git-token` mints stay `continue-on-error`:
+they have no PAT fallback, and the install or build that needs the token fails
+when it is empty. `test_app_token_fails_closed.py` pins all of this.
 
 ## Renovate release freeze
 
@@ -1038,6 +1197,48 @@ the classifier that reads them — because the driver runs as a bare `python3` o
 the fleet runner and cannot import the conformance package. A test in
 `.github/scripts/tests/` pins the two equal; without it, adding a reason to the
 writer alone would silently make the alarm stop firing.
+
+## Renovate release-age windows
+
+The org security baseline (§5) sets a 7-day release-age cooldown. Renovate
+holds third-party updates for 7 days or 3 days depending on the lane. The 3-day
+lanes are a deliberate exception to the baseline, recorded here (FND-4651).
+
+| Lane | Window | Where it is set |
+|---|---|---|
+| Third-party GitHub Actions, and the toolchains `actions/setup-*` and `astral-sh/setup-uv` install | 7 days | `renovate-config/default.json`, github-actions release-age rule |
+| The uv cache-key literal in `setup-deps` | 7 days | `renovate.json`, astral-sh/uv release-age rule |
+| Third-party PyPI (major, minor, patch) | 3 days | `renovate-config/default.json`, PyPI release-age rule |
+| Lock refresh (`lockFileMaintenance`), fleet | 3 days | `renovate-config/self-hosted.js`, `--window P3D` |
+| Lock refresh, application-sdk itself | 3 days | `.github/workflows/renovate-lock-cooldown.yaml`, `--window P3D` |
+| pkl toolchain | 3 days | `renovate.json`, pkl release-age rule |
+| pre-commit hooks | 3 days | `renovate.json`, pre-commit release-age rule |
+
+First-party packages (`atlan-application-sdk`, `-conformance`, `pyatlan`, the
+app-contract-toolkit, and `atlanhq/**` actions and reusable workflows) have no
+window. We publish them, and holding them would hold every SDK fix.
+
+**Why 3 days on the library and tool lanes.** The security team confirmed that
+the detection window they work to is 2 to 3 days. 3 is the conservative end. A
+longer hold adds no detection time, and it delays the fix in an upstream release
+that ships before its advisory, because that release looks like any other.
+
+**Why 7 days on GitHub Actions.** The exception does not extend to actions. An
+action runs inside a workflow that holds the org token, so a compromised release
+reaches a credential on its first run. A library reaches a test environment
+first. Action majors are also not auto-merged: a human reviews and merges the
+`renovate/major-github-actions` PR. Minor, patch and digest bumps still
+auto-merge once they are 7 days old.
+
+**What this record is not.** It is not a change to the org baseline. Security
+owns the baseline, and they need to amend it or acknowledge this exception
+there. Until then, `checks/dep-cooldown` (from the `atlan-security` App) keeps
+enforcing 7 days and reports adoptions aged 3 to 7 days. See
+[What `checks/dep-cooldown` still reports](#what-checksdep-cooldown-still-reports-and-why-that-is-not-a-bug-here).
+
+**Changing a window.** Change this table first, then every place it names.
+`.github/scripts/tests/test_renovate_release_age_policy.py` checks that the
+configs match the table's windows, and that action majors are not auto-merged.
 
 ## The release-age bound on application-sdk's own lock refresh
 
@@ -1403,6 +1604,52 @@ removed `build-apps-image.yaml` and `publish-app.yaml` (replaced by
 removed the `ae-workflow` composite and its `ae-workflow-register.yaml`
 wrapper, whose single consumer had pinned them to a commit and not run them in
 five months.
+
+### Retiring a reusable that a bootstrap shim called
+
+**Rule:** when bootstrap retires a shim (`RETIRED_FILES` in
+`packages/conformance/conformance/bootstrap/render.py`), the application-sdk
+reusable that shim called stays until C002 reports zero copies of the shim
+across the fleet. Delete the reusable after that, never before, and in the same
+PR add it to `DELETED_RETIRED_REUSABLES` with the C002 count (date and source).
+
+**Why:** bootstrap removes a retired shim from a consumer repo only when that
+repo next runs it, so copies linger for weeks. Each copy calls the reusable at
+`@main`. Once the reusable is gone, every trigger of that copy fails at startup:
+no jobs, no logs, a red run. The `auto-fix-vulnerabilities.yaml` reusable was
+deleted (#4717) while 8 app clones still carried `auto-fix.yml`, and those apps
+fail on every PR comment until they resync.
+
+**Enforced by:** `.github/scripts/tests/test_reusable_retirement.py`. Every
+retired workflow must be listed in `RETIRED_SHIM_REUSABLES` (with the reusable it
+called) or `RETIRED_SHIMS_WITHOUT_REUSABLE`. A reusable named there must still
+exist and declare `workflow_call`, unless `DELETED_RETIRED_REUSABLES` records
+its deletion as a `ReusableDeletion` with `c002_copies=0`, an ISO
+`counted_on` date and a `source`. `PREMATURE_REUSABLE_DELETIONS` holds the one
+deletion made without that count (`auto-fix-vulnerabilities.yaml`); the test
+pins it to that entry, so it cannot be used to skip the count. `test_self_reference_pinning.py` cannot catch this case: once the
+shim template is gone, nothing in this tree calls the reusable.
+
+The test cannot read the fleet. The C002 count is the evidence a reviewer
+checks against the deletion record.
+
+### Consumers stay on `@main`, not a moving major tag
+
+FND-4654 counted 886 consumer references to our reusables across the local app
+clones; 869 were `@main`. A moving major tag (`@v3`) would let a breaking edit
+to `tests-reusable.yaml` or `build-and-publish-app.yaml` land on `main` without
+reaching 65+ repos in the same minute. We are not adopting one:
+
+* It protects nothing inside the reusable. Composite actions and checkouts
+  inside our reusables resolve `@main` (see "Self-references are `@main`"), so
+  a tagged reusable still runs `main`'s composites.
+* Every consumer ref would have to be rewritten, and moving the tag on each
+  release is one more release step that can be missed.
+* The failures we have actually had came from retirement order, which the rule
+  above fixes, not from edits reaching consumers too quickly.
+
+Breaking edits to a reusable go through the same path as any other: keep old
+inputs working until callers move, and test on a consumer before merge.
 
 ## `concurrency:` is not a lock, and not a queue
 

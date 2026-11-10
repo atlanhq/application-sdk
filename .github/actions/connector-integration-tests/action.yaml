@@ -214,6 +214,15 @@ inputs:
     required: false
     default: ""
 
+  git-auth-token:
+    required: false
+    description: |
+      Read-only GitHub token for a PRIVATE atlanhq git dependency, passed to
+      setup-deps and to the SDK repin's `uv sync`, each through
+      `.github/scripts/git_auth.py` so no git config is written (FND-4740).
+      Empty (the default) installs without one.
+    default: ""
+
 runs:
   using: "composite"
   steps:
@@ -221,6 +230,7 @@ runs:
       uses: atlanhq/application-sdk/.github/actions/setup-deps@main
       with:
         python-version: ${{ inputs.python-version }}
+        git-auth-token: ${{ inputs.git-auth-token }}
 
     - name: Pin application-sdk to dispatched ref
       if: inputs.application-sdk-ref != ''
@@ -230,7 +240,7 @@ runs:
       run: |
         chmod +x "${{ github.action_path }}/repin-application-sdk.sh"
         "${{ github.action_path }}/repin-application-sdk.sh"
-        uv sync --all-extras --all-groups
+        python3 "${{ github.action_path }}/../../scripts/git_auth.py" run -- uv sync --all-extras --all-groups
 
     # Regenerate app/generated/** (incl. manifest.json — the AE DAG) from
     # contract/app.pkl before the app server boots, so the host harness exercises

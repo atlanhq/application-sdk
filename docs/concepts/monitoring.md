@@ -54,7 +54,10 @@ The FastAPI `/metrics` endpoint (or a worker push) merges:
   histograms emitted by activity/workflow execution) plus, when enabled
   and reachable, the Rust-core families proxied from `127.0.0.1:9464`
   (`temporal_request_*`, `temporal_workflow_task_*`,
-  `temporal_sticky_cache_*`, `temporal_num_pollers`, etc.)
+  `temporal_sticky_cache_*`, `temporal_num_pollers`, etc.). Every read of
+  that endpoint (this proxy, the worker's `TemporalCoreCollector` and the
+  poll-state diagnostic) is capped at `ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES`;
+  an oversize body is skipped, never read whole
 - **`prometheus_client` defaults** (`process_*`, `python_gc_*`,
   `python_info`)
 
@@ -86,15 +89,18 @@ ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS=30
 ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN=true            # default
 ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START=true          # default
 ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS=300        # default
-ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS=10            # default
-ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS=35   # default
+ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS=10            # default; derived from ATLAN_SHUTDOWN_GRACE_SECONDS when set
+ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS=35   # default; derived from ATLAN_SHUTDOWN_GRACE_SECONDS when set
 ```
 
 Hardening behaviors that ship by default: graceful exits DELETE the
 group from the gateway (no leak); each new worker sweeps stale
 predecessor groups left by OOM/eviction; every gateway HTTP call is
 bounded to 10 s; the final push is held for 35 s before DELETE so
-Prometheus has a full scrape window. See [ADR-0012](../adr/0012-observability-consolidation.md)
+Prometheus has a full scrape window. The final push, hold and DELETE run
+under the post-drain exit deadline. When the pod's grace period is
+declared (`ATLAN_SHUTDOWN_GRACE_SECONDS`), the timeout and hold are derived
+from it, so a short grace shrinks them and SIGKILL does not land mid-hold. See [ADR-0012](../adr/0012-observability-consolidation.md)
 for the design rationale.
 
 ### Available Temporal SDK metrics
@@ -774,6 +780,12 @@ ATLAN_LOG_FLUSH_INTERVAL_SECONDS=10
 ```
 
 See [Configuration](../configuration.md#logging) for all observability variables.
+
+### The background flush loop
+
+Every periodic flush (logs, metrics, traces, sizing) and the Segment sender run on one daemon thread, `atlan-observability-loop`, with one event loop. It starts on first use, not at import. At interpreter exit it stops everything within one bound, `ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS` (default 10): each periodic flush makes its final flush, then the Segment sender sends its last batch, and a batch flush already writing is waited for, not cancelled. A process forked after the loop started gets its own loop, with every sink's periodic flush restarted on it. Past the bound the rest is abandoned and the process exits.
+
+The console writer stays a separate thread on purpose. It does blocking writes to stdout and stderr, and on the shared loop a stalled pipe would stall every flush.
 
 ### Flushing under failure
 

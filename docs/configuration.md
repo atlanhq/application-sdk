@@ -70,6 +70,7 @@ before changing either value.
 | `ATLAN_TEMPORAL_HOST` | `localhost:7233` | Temporal server address (`host:port`). **v2-compat fallback:** if unset, the SDK constructs the address from `ATLAN_WORKFLOW_HOST` + `ATLAN_WORKFLOW_PORT` (deprecated; remove when all deployments set `ATLAN_TEMPORAL_HOST`). |
 | `ATLAN_TEMPORAL_NAMESPACE` | `default` | Temporal namespace. **v2-compat fallback:** `ATLAN_WORKFLOW_NAMESPACE`. |
 | `ATLAN_TASK_QUEUE` | _(derived)_ | Temporal task queue name. Defaults to `atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}` when both are set, or just the bare app name (**no** `atlan-` prefix) when only `ATLAN_APPLICATION_NAME` is set, or `{ClassName}-queue` (kebab-case) when neither is set. Setting this explicitly also changes the queue the served manifest advertises, so a worker on an overridden queue and the Automation Engine stay in step. See [Task-queue naming](#task-queue-naming). |
+| `APPLICATION_SDK_ENABLE_OUTPUT_INTERCEPTOR` | `true` | Collect `get_outputs()` metrics and artifacts and merge them into the workflow result. Each activity carries its outputs back on its own result (`metrics` / `artifacts` on an `Output`, or a reserved `_atlan_outputs` key on a dict result, which the workflow strips from its own dict result), so they arrive whichever worker runs the activity. An activity returning anything else (e.g. `None`) cannot carry them: they are dropped with a warning. Set it on workflow **and** activity workers alike. |
 | `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `127.0.0.1:9464` | Bind address for the Temporal SDK Prometheus endpoint (~40 built-in metrics). Loopback-only by default — operators should not scrape this port directly; combined-mode FastAPI `/metrics` proxies it in-process. See [Monitoring](concepts/monitoring.md). |
 
 ### Task-queue naming
@@ -114,9 +115,10 @@ Bounds the restart supervisor that rebuilds the worker after a fatal poll error 
 | `ATLAN_WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS` | `60` | How often (seconds) to read Temporal core's live poller gauge and log a state transition, so a worker that is alive but claiming no work is visible in logs and in the `/live` / `/ready` probe details. Purely observational — it never restarts the worker and never flips a probe. Set to `0` to disable. |
 | `ATLAN_WORKER_ZERO_POLLER_READINGS_BEFORE_STALE` | `3` | Consecutive definitive zero-poller readings before this worker stops emitting `token_refresh` health events. At the default 60s observer interval that is ~3 minutes of confirmed-parked polling. `unknown` / `polling` never accumulate toward this threshold. |
 | `ATLAN_WORKER_FATAL_TEARDOWN_TIMEOUT_SECONDS` | graceful shutdown timeout + `60` | Upper bound (seconds) on temporalio's own worker teardown after a fatal poll error. The supervisor regains control only when that teardown returns; if it has not returned within this bound the process exits with code 1 so the pod or container restart policy brings up a fresh worker. `0` or negative disables the bound. |
-| `ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS` | `120` | Upper bound (seconds) on shutdown after the worker has drained on a shutdown signal: closing infrastructure, flushing telemetry and interpreter exit hooks. No activity is in flight by then; if these steps have not finished within the bound the process exits with code 3, so a stuck telemetry flush cannot hold the pod for its whole grace period. The container entrypoint passes code 3 through as the container's exit code. Applies when the app is started through the SDK's entry point (`python -m application_sdk.main`); awaiting `run_worker_mode` / `run_combined_mode` directly does not start it unless `bound_post_drain_exit=True`. `0` or negative disables the bound. |
+| `ATLAN_SHUTDOWN_GRACE_SECONDS` | unset | The pod's `terminationGracePeriodSeconds`. Kubernetes' Downward API cannot expose that field, so the chart sets this env var from the same value. When set, the drain (`TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT`), the post-drain deadline (`ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS`) and the Pushgateway shutdown bounds (`ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS`, `ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS`) default to values derived from it. The drain comes first: in-flight activities are the one step that is not best-effort, and daprd stays up for the whole drain because the entrypoint stops it only after Python exits. The steps after the drain (post-drain deadline and daprd's stop) would ideally get min(120, grace/4) + min(30, grace/10). They never take that from a drain of up to `TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT` (or its 3600 s default): they get what the grace leaves beyond that drain, but never less than 10 s, and the drain gets the rest after `ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS`. A 12 h grace keeps 120/10/35 s and drains for ~12 h. A 3660 s grace keeps the full 3600 s drain, and the Pushgateway hold shrinks into the 55 s left. A 30 s grace drains for 15 s. An explicit value for any single bound still wins. At startup the worker logs the effective budget, and logs a WARNING when explicit bounds add up to more than the grace. Unset, every bound keeps its fixed default. A grace too short to cover `ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS` plus a 1 s post-drain deadline also keeps the defaults, with a warning. The WARNING about explicit bounds counts the daprd headroom too. |
+| `ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS` | `120`, or derived from `ATLAN_SHUTDOWN_GRACE_SECONDS` | Upper bound (seconds) on shutdown after the worker has drained on a shutdown signal. It is armed as soon as the Temporal drain returns, so it also covers the worker's own cleanup: credential directories, sizing rows, and the Pushgateway final push, hold and DELETE. It also covers closing infrastructure, flushing telemetry and interpreter exit hooks. No activity is in flight by then; if these steps have not finished within the bound the process exits with code 3, so a stuck telemetry flush cannot hold the pod for its whole grace period. The container entrypoint passes code 3 through as the container's exit code. Applies when the app is started through the SDK's entry point (`python -m application_sdk.main`); awaiting `run_worker_mode` / `run_combined_mode` directly does not start it unless `bound_post_drain_exit=True`. `0` or negative disables the bound. |
 | `DAPR_STOP_TIMEOUT_SECONDS` | `30` | Read by the container entrypoint. How long to wait for daprd to exit once the Python app has exited before killing it. Once the app has exited, daprd has nothing left to do: inbound pub/sub and bindings have no app to deliver to, and the app has no outbound call in flight. |
-| `ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES` | `1048576` | Upper bound (bytes) on the metrics payload read from the loopback endpoint when reading Temporal core's poller gauge for the poll-state diagnostic. Guards the observer against an unbounded allocation if the local exporter misbehaves or grows high-cardinality. An oversize payload is reported as *unknown*, never as zero. |
+| `ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES` | `1048576` | Upper bound (bytes) on every read of Temporal core's loopback metrics endpoint: the poll-state diagnostic, the combined-mode `/metrics` proxy and the worker's Pushgateway `TemporalCoreCollector`. Guards each reader against an unbounded allocation if the local exporter misbehaves or grows high-cardinality. An oversize payload is skipped: the diagnostic reports *unknown* (never zero), `/metrics` is served without Temporal core series and counts `temporal_core_metrics_proxy_failures_total{reason="oversize"}`, and the collector skips that push. |
 
 Reading the poller gauge requires Temporal core's Prometheus exporter, bound by
 `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` (default `127.0.0.1:9464`). When it is
@@ -143,6 +145,7 @@ unavailable the poll state is reported as *unknown*, never as zero.
 | `ATLAN_HEALTH_PORT` | `8081` | Port for the worker health endpoint. |
 | `ATLAN_HANDLER_MODULE` | _(empty)_ | Handler class to load (`module:ClassName`). Auto-discovered from the app module when unset. |
 | `ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS` | `5` | Event-loop yield (seconds) before tearing down the worker transport, giving in-flight activity completion RPCs a chance to flush. Distinct from `TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT`. |
+| `TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT` | `3600`, or derived from `ATLAN_SHUTDOWN_GRACE_SECONDS` | Seconds the Temporal worker waits for in-flight activities to finish on shutdown before cancelling them. |
 
 ## Blocking offload (`run_in_thread`)
 
@@ -222,7 +225,7 @@ Within each attempt of that budget, the Dapr HTTP client replays a failed GET up
 
 ## Redis (Capacity Lock)
 
-Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use `LocalCapacityPool` (default for local development when no Redis is configured).
+Used by the distributed lock (`RedisClient` / `RedisClientAsync`). Leave empty for local development. These variables do not configure a capacity pool: `RedisCapacityPool` is deprecated and the framework never constructed one.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -249,6 +252,14 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAN_SQL_USE_SERVER_SIDE_CURSOR` | `true` | Use server-side cursors for SQL queries. Reduces memory for large result sets by streaming data row-by-row. Default: enabled. To disable, set the variable to any value other than `true` (e.g. `ATLAN_SQL_USE_SERVER_SIDE_CURSOR=false`). Matching is case-insensitive and surrounding whitespace is ignored. |
+
+---
+
+## DuckDB (incremental extraction, query transformer)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAN_DUCKDB_MEMORY_LIMIT` | _(derived)_ | Memory limit for a `DuckDBConnectionManager` opened without an explicit `memory_limit`, as a DuckDB size string (e.g. `1GB`, `768MiB`). When unset it is half of the container's free memory (limit minus current usage) at open time, split evenly with the other DuckDB connections open in the process, between 256 MiB and 2 GB; 2 GB when no container limit is known. Above the limit DuckDB spills to its temp directory, which lowers the risk of growing the worker into an OOM kill. |
 
 ---
 
@@ -288,6 +299,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | `ATLAN_LOG_DIAGNOSE` | `false` | Annotate console tracebacks with the **values** of the names on each frame's source line (loguru's `diagnose`). Off by default, unlike loguru's own default: those values print verbatim, so a credential dict passed to a failing call has its contents rendered onto stderr. Useful locally; leave off anywhere real credentials exist. Independent of `ATLAN_LOG_LEVEL` by design — raising verbosity to `DEBUG` does not re-enable it. Traceback frames are unaffected either way. |
 | `ATLAN_LOG_BATCH_SIZE` | `100` | Records buffered before flushing to the object-store sink. |
 | `ATLAN_LOG_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between object-store sink flushes. |
+| `ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS` | `10` | Upper bound, in seconds, on stopping the observability background loop at process exit. Covers the final flush of every periodic sink (logs, metrics, traces, sizing) and the Segment sender's last batch together. Past it, the remaining work is abandoned. See [Monitoring](concepts/monitoring.md#the-background-flush-loop). |
 | `ATLAN_LOG_RETENTION_DAYS` | `30` | Days to retain log files in the object store before cleanup. |
 | `ATLAN_LOG_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old log files. Any non-empty string value (including `"false"`) is treated as `true` by `bool()`; unset or empty to disable. |
 | `ATLAN_LOG_FILE_NAME` | `log.parquet` | Signal-type discriminator used internally to route records to the correct observability sub-path (logs / metrics / traces). **The default is kept as `log.parquet` for back-compat; the on-disk and object-store format is gzip-compressed NDJSON (`.json.gz`), not parquet.** |
@@ -308,8 +320,8 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN` | `true` | DELETE the worker's group from the gateway on graceful shutdown so stopped pods don't leave sticky data. |
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START` | `true` | On worker startup, sweep stale `{job=mine, instance=other}` groups left by predecessors that died ungracefully. |
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS` | `300` | Don't reap groups whose last push is more recent than this. Protects live siblings during rolling deploys. |
-| `ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS` | `10` | Per-request HTTP timeout for every Pushgateway call. |
-| `ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS` | `35` | Sleep between final push and DELETE on shutdown so Prometheus has at least one scrape window to read the final batch. |
+| `ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS` | `10`, or derived from `ATLAN_SHUTDOWN_GRACE_SECONDS` | Per-request HTTP timeout for every Pushgateway call. |
+| `ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS` | `35`, or derived from `ATLAN_SHUTDOWN_GRACE_SECONDS` | Sleep between final push and DELETE on shutdown so Prometheus has at least one scrape window to read the final batch. |
 | `ATLAN_TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS` | `5.0` | Per-request HTTP timeout (seconds) for the in-process FastAPI `/metrics` proxy fetching Temporal Rust-core series from `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` when the proxy is enabled. Increase if the loopback fetch times out under heavy load. |
 
 ---

@@ -37,10 +37,15 @@ from prometheus_client.exposition import default_handler
 from prometheus_client.parser import text_string_to_metric_families
 
 from application_sdk._runtime.offload import run_in_thread
+from application_sdk.constants import TEMPORAL_CORE_METRICS_MAX_BYTES
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.pushgateway_errors import (
     PushGatewayJobRequiredError,
     PushGatewayUrlRequiredError,
+)
+from application_sdk.observability.temporal_core_metrics import (
+    CoreMetricsUnavailable,
+    fetch_core_metrics_blocking,
 )
 
 #: Regex extracting ``push_time_seconds{labels} value`` lines from a
@@ -69,17 +74,38 @@ class TemporalCoreCollector:
     sidecar to break the entire metrics pipeline.
     """
 
-    def __init__(self, url: str, timeout_s: float = 1.0) -> None:
+    def __init__(
+        self,
+        url: str,
+        timeout_s: float = 1.0,
+        max_bytes: int | None = None,
+    ) -> None:
         self._url = url
         self._timeout_s = timeout_s
+        # None → ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES, the cap shared by
+        # every reader of the core endpoint.
+        self._max_bytes = (
+            TEMPORAL_CORE_METRICS_MAX_BYTES if max_bytes is None else max_bytes
+        )
 
     def collect(self) -> Iterable[Metric]:
         try:
-            with httpx.Client(timeout=self._timeout_s) as client:
-                resp = client.get(self._url)
-            if resp.status_code != 200:
+            # Bounded read: a high-cardinality core exporter must not make
+            # every push allocate an unbounded body.
+            read = fetch_core_metrics_blocking(
+                self._url, timeout_s=self._timeout_s, max_bytes=self._max_bytes
+            )
+            if isinstance(read, CoreMetricsUnavailable):
+                logger.debug(
+                    "Temporal-core metric scrape of %s unusable (%s, cap %d bytes); skipping this cycle",
+                    self._url,
+                    read.reason,
+                    self._max_bytes,
+                )
                 return
-            yield from text_string_to_metric_families(resp.text)
+            yield from text_string_to_metric_families(
+                read.body.decode("utf-8", errors="replace")
+            )
         # conformance: ignore[E004] best-effort scrape; exc_info already present; transient hiccup must not poison the push
         except Exception:
             # Best-effort — a transient Temporal core hiccup must not poison the push.
@@ -232,9 +258,10 @@ class PushGatewayClient:
             # to read the just-pushed final batch. Without this, the DELETE
             # fires within milliseconds of the push and Prometheus' next scrape
             # finds nothing — the last interval of metrics (often the failure
-            # increments that triggered scale-down) is lost. Worker
-            # terminationGracePeriodSeconds is 12h so the wait is negligible
-            # against the kill timeout.
+            # increments that triggered scale-down) is lost. This runs under
+            # the post-drain exit deadline, and the delay is derived from the
+            # pod's grace period when one is declared, so a short grace
+            # shrinks it rather than letting SIGKILL land mid-hold.
             if self._shutdown_delete_delay_s > 0:
                 logger.info(
                     "Holding Pushgateway group for %.0fs before DELETE so "

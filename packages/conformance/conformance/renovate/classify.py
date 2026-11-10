@@ -27,7 +27,9 @@ Auto-merge policy mirrors renovate-config/default.json:
   - sdk-package:         automerge=true  (FND-359 — an SDK release must reach
                          the fleet in minutes; majors are `enabled: false`
                          upstream, so they raise no PR to classify)
-  - github-actions:      automerge=true  (all update types, incl. major)
+  - github-actions:      automerge=true  (minor, patch, digest)
+  - github-actions-major: automerge=false (FND-4651 — branch
+                         renovate/major-github-actions; a human merges)
   - contract-toolkit:    automerge=true  (majors are `enabled: false` in the
                          preset, so a contract-toolkit major PR never exists)
   - conformance-package: automerge=true  for EVERY update type, majors included
@@ -314,6 +316,12 @@ def categorize(pr: RenovatePR) -> Category:
         "Lock file maintenance"
     ):
         return Category.LOCK_MAINTENANCE
+    # Before the plain github-actions arm, which the major slug also contains.
+    # separateMajorMinor names the major branch of the preset's "github-actions"
+    # group renovate/major-github-actions, and the preset does not auto-merge it
+    # (FND-4651).
+    if "major-github-actions" in branch:
+        return Category.GITHUB_ACTIONS_MAJOR
     if "github-actions" in branch:
         return Category.GITHUB_ACTIONS
     if (
@@ -470,7 +478,11 @@ def auto_merge_expected(
     2026-09-17.
 
     lock-maintenance → always auto (uv.lock refresh, in-range)
-    github-actions   → always auto (incl. major; validated by CI gate)
+    github-actions   → always auto (minor, patch, digest)
+    github-actions-major → always human (FND-4651: an action major is a
+                       control-plane change; the preset does not auto-merge it,
+                       and reading it as auto would have the hourly re-arm job
+                       turn auto-merge back on)
     contract-toolkit → always auto (majors are `enabled: false` upstream)
     conformance-pkg  → always auto (every update type — FND-378)
     sdk-package      → always auto for minor/patch (FND-359); majors are
@@ -525,7 +537,7 @@ def auto_merge_expected(
         return True
     if category == Category.ATLAN_PLATFORM:
         return True
-    # python-dep, unknown
+    # github-actions-major, python-dep, unknown
     return False
 
 

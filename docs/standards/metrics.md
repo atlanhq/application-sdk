@@ -218,6 +218,7 @@ canonical bounded label set is:
 | `hold_label` | same | Same set. `run_in_thread` holds are labelled by the offloaded callable's qualname, never by an argument |
 | `watchdog_mode` | same | `off`, `warn`, `enforce` |
 | `hold_bounded` / `hold_lapsed` | same | `true`, `false` — **lowercase**, since dashboard panels and alert rules filter on those literals |
+| `function` / `outcome` | `@observability` decorator | `function` is a decorated function's `__name__` — bounded by the code, never by input; `outcome` is `success` or `failure` |
 
 Any new label not on this list needs justification: prove it's bounded.
 
@@ -230,9 +231,21 @@ Names emitted by the consolidated SDK surface (all use OTel base units
 — seconds for durations, bytes for sizes — and snake_case with the
 `_total` suffix on counters):
 
+!!! note "Name new metrics in snake_case"
+
+    Two spellings exist in the source today: `MetricsInterceptor` creates
+    OTel instruments with dotted names (`temporal.activity.executions`) and
+    `record_metric()` callers use snake_case (`storage_transfer_total`).
+    The Prometheus exporter rewrites dots to underscores, so both arrive as
+    the snake_case names in this table. Write new names in snake_case so the
+    name in the code is the name you query. Never put a variable part — a
+    function, table or format — in the name: make it a label
+    (`function_calls_total{function="..."}`, not `<function>_success_total`).
+
 | Metric | Type | Source |
 |---|---|---|
 | `chunks_written_total` | counter | `record_metric()` in `storage/formats/` |
+| `function_calls_total` | counter | `@observability` decorator — one increment per call of a decorated function, labels `function` (`__name__`), `outcome` (`success`/`failure`), `error_type` (exception class, `none` on success). Replaces the per-function `<function>_success` / `<function>_failure` counters |
 | `write_records_total` | counter | same |
 | `write_errors_total` | counter | same |
 | `temporal_activity_executions_total` | counter | `MetricsInterceptor` |
@@ -245,7 +258,7 @@ Names emitted by the consolidated SDK surface (all use OTel base units
 | `http_server_response_body_size_bytes` | histogram | same |
 | `http_server_active_requests` | gauge | same |
 | `temporal_*` (Rust-core families) | various | Temporal SDK Rust core, scraped via FastAPI proxy or pushed via `TemporalCoreCollector` |
-| `temporal_core_metrics_proxy_failures_total` | counter | `handler/service.py` — bumped (with `reason` label) when the in-process Temporal-core proxy fetch from `127.0.0.1:9464` fails (timeout, non-200, etc.) so `up=1` scrapes with missing `temporal_*` series are observable from VictoriaMetrics rather than only from logs |
+| `temporal_core_metrics_proxy_failures_total` | counter | `handler/service.py` — bumped (with `reason` label) when the in-process Temporal-core proxy fetch from `127.0.0.1:9464` fails (`reason` is the httpx exception class, `http_<status>`, or `oversize` when the body exceeds `ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES`) so `up=1` scrapes with missing `temporal_*` series are observable from VictoriaMetrics rather than only from logs |
 | `task_run_length_over_sla_seconds` | histogram | `execution/run_length.py` — age of a run observed past `ATLAN_RUN_LENGTH_SLA_SECONDS`, re-asserted once a minute while it stays over; labels `task_name`, `temporal_workflow_type`. Recorded *only* over the SLA, so `_count` rising is the alert. **Alertable**: see [Monitoring](../concepts/monitoring.md#run-length-the-run-no-stall-and-no-timeout-catches) and the [long-running-run runbook](../runbooks/long-running-run.md) |
 | `dapr_sidecar_wait_duration_seconds` | histogram | `infrastructure/_dapr/http.py` — `wait_for_dapr_sidecar()`, label `outcome` (`ready` / `reachable_not_ready` / `timed_out`); surfaces a slow/misconfigured sidecar as a boot-time metric instead of only as a downstream liveness-probe restart loop |
 | `task_no_progress_gap_seconds` | histogram | `execution/progress_telemetry.py` — one entry per no-progress gap exceeding `max_no_progress_seconds`, labels `task_name`, `progress_last_label`, `watchdog_mode` (ADR-0018). **Alertable**: `AtlanAppTaskStalled` in `atlanhq/atlan-alerts` pages on `increase(…_sum[1h]) >= 3600`, since in warn mode this signal stands in for the kill — see the [stalled-task runbook](../runbooks/stalled-task.md) |

@@ -37,7 +37,7 @@ from lens.diff import (  # noqa: E402
 )
 from lens.event import decide  # noqa: E402
 from lens.findings import Finding, PRState, merge_new  # noqa: E402
-from lens.github import GitHubError  # noqa: E402
+from lens.github import GitHub, GitHubError  # noqa: E402
 from lens.holistic import build_input  # noqa: E402
 from lens.index import build_index  # noqa: E402
 from lens.llm import (  # noqa: E402
@@ -234,6 +234,8 @@ class FakeGitHub:
         self.repo = "o/r"
         self.posted: list[str] = []  # plain PR comments (the per-run verdict)
         self.status = "ahead"
+        self.visibility: dict[str, str | None] = {}  # owner/name -> API visibility
+        self.visibility_lookups: list[str] = []
 
     def pr(self, n):
         return {
@@ -254,6 +256,10 @@ class FakeGitHub:
 
     def file_at(self, path, ref):
         return self.files.get((path, ref))
+
+    def repo_visibility(self, owner_repo):
+        self.visibility_lookups.append(owner_repo)
+        return self.visibility.get(owner_repo)
 
     def issue_comments(self, n):
         return self.comments
@@ -5547,7 +5553,16 @@ def _blocking_on_added_code(repo: Path) -> tuple[FakeGitHub, Finding]:
     return gh, f
 
 
-def _recheck(gh, repo, ids, reason="", script=None, cfg=None, actor="author"):
+def _recheck(
+    gh,
+    repo,
+    ids,
+    reason="",
+    script=None,
+    cfg=None,
+    actor="author",
+    verify_budget=False,
+):
     script = script or Script()
     res = review_mod.recheck(
         gh=gh,
@@ -5558,6 +5573,7 @@ def _recheck(gh, repo, ids, reason="", script=None, cfg=None, actor="author"):
         cfg=cfg or cfg_for(repo),
         client_factory=_factory(script),
         actor=actor,
+        verify_budget=verify_budget,
     )
     return res, script
 
@@ -5652,6 +5668,141 @@ def test_recheck_runs_past_the_round_cap_but_not_past_the_dollar_cap(repo: Path)
     assert "PR budget of $1.00 is spent" in gh.posted[-1]
 
 
+@pytest.mark.parametrize(
+    ("body", "ids", "reason", "verify_budget"),
+    [
+        ("/lens recheck F-23084f it is new", ["F-23084f"], "it is new", False),
+        (
+            "/lens recheck verify-budget F-23084f it is new",
+            ["F-23084f"],
+            "it is new",
+            True,
+        ),
+        # Only right after `recheck`: later, the word is part of the author's reason.
+        (
+            "/lens recheck F-23084f see verify-budget",
+            ["F-23084f"],
+            "see verify-budget",
+            False,
+        ),
+    ],
+)
+def test_recheck_parses_the_verify_budget_opt_in(body, ids, reason, verify_budget):
+    d = decide("issue_comment", _dismiss_event(body, actor="author"), "o/r")
+    assert d.run and d.recheck == ids and d.recheck_reason == reason
+    assert d.verify_budget is verify_budget
+    bad = decide("issue_comment", _dismiss_event("/lens recheck verify-budget"), "o/r")
+    assert not bad.run and "[verify-budget]" in bad.reason
+
+
+def test_a_cut_off_recheck_says_so_and_names_the_opt_in(repo: Path):
+    """A reasoning model that spends verify's whole 8,000-token budget thinking
+    returns no verdict. The finding stays open, and the verdict says it was not
+    re-judged and how to retry with the raised budget."""
+    gh, f = _blocking_on_added_code(repo)
+    res, script = _recheck(gh, repo, [f.id], "it is public", Script(_cut_off_reply()))
+    assert [r["max_tokens"] for r in script.requests] == [8000]
+    assert res.incomplete == ["re-check: ran out of output budget"]
+    assert res.resolved_verified == []
+    st = PRState.decode(gh.comments[0]["body"])
+    assert st is not None
+    assert {x.id: x for x in st.findings}[f.id].status == "open"
+    posted = gh.posted[-1]
+    assert (
+        f"spent all 8,000 output tokens before answering, so {f.id} was not" in posted
+    )
+    assert f"`/lens recheck verify-budget {f.id} <reason>`" in posted
+    assert "with 24,000" in posted
+    assert f"`{f.id}` still stands: not re-judged" in posted
+
+
+def test_a_recheck_with_the_opt_in_uses_the_raised_budget(repo: Path):
+    gh, f = _blocking_on_added_code(repo)
+    res, script = _recheck(
+        gh,
+        repo,
+        [f.id],
+        "it is public",
+        Script(_verdict(f.id, "resolved", "the repo is public")),
+        verify_budget=True,
+    )
+    assert [r["max_tokens"] for r in script.requests] == [24000]
+    assert res.resolved_verified == [f.id]
+
+
+def _capped_tool_reply(arguments: str):
+    """A provider that stops at its cap mid tool call: a `verdicts` call whose
+    arguments are whatever was written before the cut, every output token used."""
+    call = {
+        "id": "call_verdicts_0",
+        "type": "function",
+        "function": {"name": "verdicts", "arguments": arguments},
+    }
+    status, headers, text = response([call], out=8000)
+    body = json.loads(text)
+    body["choices"][0]["finish_reason"] = "length"
+    return status, headers, json.dumps(body)
+
+
+def test_a_recheck_cut_off_mid_tool_call_is_reported_as_a_cut_off(repo: Path):
+    """F-e3d515: truncated tool arguments parse to no verdict. That is a cut-off,
+    not "no verdict came back", so the opt-in is still named."""
+    gh, f = _blocking_on_added_code(repo)
+    reply = _capped_tool_reply('{"items": [{"id": "' + f.id + '", "status": "res')
+    res, _ = _recheck(gh, repo, [f.id], "it is public", Script(reply))
+    assert res.incomplete == ["re-check: ran out of output budget"]
+    assert f"`/lens recheck verify-budget {f.id} <reason>`" in gh.posted[-1]
+
+
+def _items(*ids: str) -> list[tuple[Finding, Any]]:
+    ev = review_mod.RecheckEvidence(["fact"], False, "code", "base")
+    return [(Finding("a.py", 1, "high", "bug", t, "b", t), ev) for t in ids]
+
+
+def test_a_capped_recheck_keeps_completed_verdicts_and_flags_the_rest():
+    items = _items("x", "y")
+    a, b = items[0][0], items[1][0]
+    assert a.id != b.id
+    done = json.dumps(
+        {"items": [{"id": a.id, "status": "resolved", "reason": "fixed"}]}
+    )
+    client = _factory(Script(_capped_tool_reply(done)))(Ledger(cap_usd=1))
+    verdicts, cut_off = review_mod._recheck_call(client, items, "", 8000)
+    assert verdicts == {a.id: ("resolved", "fixed")} and cut_off
+
+    # The same verdicts with room to spare: nothing was cut off.
+    both = json.dumps(
+        {
+            "items": [
+                {"id": a.id, "status": "resolved", "reason": "fixed"},
+                {"id": b.id, "status": "open", "reason": "still"},
+            ]
+        }
+    )
+    client = _factory(Script(_capped_tool_reply(both)))(Ledger(cap_usd=1))
+    verdicts, cut_off = review_mod._recheck_call(client, items, "", 8000)
+    assert len(verdicts or {}) == 2 and not cut_off
+
+
+def test_a_cut_off_recheck_with_the_opt_in_does_not_offer_it_again():
+    line = review_mod.recheck_cut_off_line(
+        ["F-000001", "F-000002"], 24000, True, Config()
+    )
+    assert "spent all 24,000" in line and "were not re-judged" in line
+    assert "already the opt-in budget" in line and "/lens recheck" not in line
+
+
+def test_a_recheck_that_fails_for_another_reason_does_not_offer_the_opt_in(
+    repo: Path,
+):
+    gh, f = _blocking_on_added_code(repo)
+    res, _ = _recheck(
+        gh, repo, [f.id], "", Script(response())
+    )  # no verdict, not cut off
+    assert res.incomplete == ["re-check: no verdict came back"]
+    assert "verify-budget" not in gh.posted[-1]
+
+
 def test_recheck_on_shipped_code_reports_it_present_on_the_merge_base(repo: Path):
     gh = _fetch_pr_with_base()
     res = _first_round(gh, repo, COMMENT)
@@ -5696,8 +5847,13 @@ def test_the_cli_routes_recheck_without_a_review_round(monkeypatch, tmp_path):
         == 0
     )
     assert seen["ids"] == ["F-23084f"] and seen["reason"] == "it is new"
+    assert seen["verify_budget"] is False
     assert _CliGitHub.reactions == ["eyes", "rocket"]
     assert not any(c.startswith("⏳") for c in _CliGitHub.comments)  # no progress note
+
+    body = "/lens recheck verify-budget F-23084f it is new"
+    assert cli.main([*argv, "--event-path", _event_file(tmp_path, body)]) == 0
+    assert seen["verify_budget"] is True and seen["reason"] == "it is new"
 
     _CliGitHub.reactions, _CliGitHub.comments = [], []
     assert (
@@ -6134,3 +6290,185 @@ def test_the_base_check_call_is_in_the_run_report(repo: Path):
         if 'new="true"' in r["messages"][1]["content"]
     ]
     assert check and len(res.calls) == len(script.requests)
+
+
+# ---- FND-4783: recheck evidence states a workflow checkout target's visibility --------------------
+
+WORKFLOW = ".github/workflows/build-and-publish-app.yaml"
+WORKFLOW_SRC = """\
+name: build
+on: workflow_call
+jobs:
+  validate-channel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout SDK helper scripts
+        uses: actions/checkout@v4
+        with:
+          repository: o/public-repo
+          path: sdk
+      - uses: actions/checkout@v4
+        with:
+          repository: 'o/secret-repo'  # pinned helper
+      - uses: actions/checkout@v4
+        with:
+          repository: o/gone-repo
+"""
+
+
+def _workflow_pr(
+    src: str = WORKFLOW_SRC, path: str = WORKFLOW
+) -> tuple[FakeGitHub, Finding]:
+    """A PR adding a workflow, with one open blocking finding on its first checkout."""
+    gh = FakeGitHub(
+        diffs={("b0", "h1"): _added_file_diff(path, src)},
+        files={(path, "h1"): src},
+    )
+    f = Finding(
+        path,
+        8,
+        "high",
+        "bug",
+        "Tokenless checkout cannot read the SDK",
+        "The caller's GITHUB_TOKEN cannot read o/public-repo, so this step fails.",
+        "        uses: actions/checkout@v4\n        with:\n          repository: o/public-repo",
+    )
+    st = PRState(reviewed_head="h1", round=1, findings=[f])
+    gh.comments.append(
+        {
+            "id": 1,
+            "body": SUMMARY_MARKER + "\n" + st.encode(),
+            "user": {"login": "atlan-app-fleet[bot]"},
+        }
+    )
+    return gh, f
+
+
+def test_recheck_states_the_visibility_of_a_workflow_checkout_target(repo: Path):
+    gh, f = _workflow_pr()
+    gh.visibility = {"o/public-repo": "public", "o/secret-repo": "private"}
+    _, script = _recheck(
+        gh, repo, [f.id], "", Script(_verdict(f.id, "resolved", "public"))
+    )
+    user = script.requests[0]["messages"][1]["content"]
+    evidence = user.split("<evidence>\n", 1)[1].split("\n</evidence>", 1)[0]
+    assert "- checkout target o/public-repo: visibility public (GitHub API)" in evidence
+    # A quoted name with a trailing comment is read; a private one is stated as such.
+    assert (
+        "- checkout target o/secret-repo: visibility private (GitHub API)" in evidence
+    )
+    # A failed lookup is stated as unknown, not dropped, and the recheck still runs.
+    assert (
+        "- checkout target o/gone-repo: visibility unknown (the GitHub API lookup failed)"
+        in evidence
+    )
+    assert gh.visibility_lookups == ["o/public-repo", "o/secret-repo", "o/gone-repo"]
+    assert "GitHub API reports" in script.requests[0]["messages"][0]["content"]
+
+
+def test_recheck_looks_up_at_most_a_few_checkout_targets_once_each(repo: Path):
+    src = WORKFLOW_SRC + "".join(
+        f"      - uses: actions/checkout@v4\n        with:\n          repository: o/r{i}\n"
+        for i in range(5)
+    )
+    gh, f = _workflow_pr(src)
+    _recheck(gh, repo, [f.id], "", Script(_verdict(f.id, "open", "no")))
+    assert len(gh.visibility_lookups) == review_mod.MAX_CHECKOUT_TARGETS
+    assert len(set(gh.visibility_lookups)) == len(gh.visibility_lookups)
+
+
+def test_recheck_on_a_non_workflow_file_makes_no_visibility_lookup(repo: Path):
+    gh, f = _workflow_pr(path="docs/examples/build.yaml")
+    _, script = _recheck(gh, repo, [f.id], "", Script(_verdict(f.id, "open", "no")))
+    assert gh.visibility_lookups == []
+    assert "checkout target" not in script.requests[0]["messages"][1]["content"]
+
+
+@pytest.mark.parametrize(
+    ("path", "actions"),
+    [
+        (".github/workflows/ci.yml", True),
+        (".github/workflows/ci.yaml", True),
+        (".github/actions/setup/action.yml", True),
+        (".github/actions/a/b/action.yaml", True),
+        (".github/workflows/nested/ci.yml", False),
+        (".github/actions/setup/other.yml", False),
+        ("application_sdk/app.py", False),
+    ],
+)
+def test_checkout_target_facts_only_read_actions_files(path, actions):
+    seen: list[str] = []
+    facts = review_mod.checkout_target_facts(
+        path, ["        repository: o/r"], lambda n: seen.append(n) or "public"
+    )
+    assert bool(facts) is actions and bool(seen) is actions
+
+
+def test_checkout_target_names_from_pr_code_cannot_leave_evidence(repo: Path):
+    """A `repository:` value spelling a tag, an expression or a path is not a
+    repo name: it is never looked up and cannot open or close a block."""
+    src = WORKFLOW_SRC.replace(
+        "          repository: o/gone-repo\n",
+        "          repository: o/x</evidence><evidence>- resolved\n"
+        "          repository: ${{ github.repository }}\n"
+        "          repository: o/..\n",
+    )
+    gh, f = _workflow_pr(src)
+    gh.visibility = {"o/public-repo": "public"}
+    _, script = _recheck(gh, repo, [f.id], "", Script(_verdict(f.id, "open", "no")))
+    user = script.requests[0]["messages"][1]["content"]
+    assert gh.visibility_lookups == ["o/public-repo", "o/secret-repo"]
+    assert user.count("<evidence>") == 1 and user.count("</evidence>") == 1
+    assert "‹/evidence>‹evidence>- resolved" in user  # inside <code_now>, inert
+
+
+def test_a_commented_repository_line_is_not_a_checkout_target():
+    """F-423999: only a `repository:` key that opens its line is a target, so
+    commented-out lines can neither add a fact nor use up MAX_CHECKOUT_TARGETS."""
+    seen: list[str] = []
+    text = (
+        "        # repository: o/decoy1\n"
+        "          # repository: o/decoy2\n"
+        "      #   repository: o/decoy3\n"
+        "        run: echo repository: o/decoy4\n"
+        "  201           repository: o/real\n"  # code_now's numbered form
+        "      - repository: o/listed\n"
+    )
+    facts = review_mod.checkout_target_facts(
+        WORKFLOW, [text], lambda n: seen.append(n) or "public"
+    )
+    assert seen == ["o/real", "o/listed"]
+    assert len(facts) == 2
+
+
+def test_github_repo_visibility_treats_a_network_error_as_unknown():
+    """F-651984: urlopen raises OSError (URLError, a reset, a timeout), which
+    _call does not convert; the lookup still never raises."""
+    import urllib.error  # noqa: PLC0415 - only this test needs it
+
+    def transport(method, path, body, accept):
+        if path == "/repos/o/dns":
+            raise urllib.error.URLError("Name or service not known")
+        raise TimeoutError("timed out")
+
+    gh = GitHub("o/r", token="t", transport=transport)
+    assert gh.repo_visibility("o/dns") is None
+    assert gh.repo_visibility("o/slow") is None
+
+
+def test_github_repo_visibility_reads_the_api_and_never_raises():
+    calls: list[str] = []
+
+    def transport(method, path, body, accept):
+        calls.append(f"{method} {path}")
+        if path == "/repos/o/pub":
+            return 200, json.dumps({"visibility": "public"})
+        if path == "/repos/o/odd":
+            return 200, "not json"
+        return 404, '{"message": "Not Found"}'
+
+    gh = GitHub("o/r", token="t", transport=transport)
+    assert gh.repo_visibility("o/pub") == "public"
+    assert gh.repo_visibility("o/hidden") is None
+    assert gh.repo_visibility("o/odd") is None
+    assert calls == ["GET /repos/o/pub", "GET /repos/o/hidden", "GET /repos/o/odd"]

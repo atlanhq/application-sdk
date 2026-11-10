@@ -2,6 +2,7 @@ import asyncio
 import base64
 import logging
 import threading
+import weakref
 from collections import deque
 from datetime import datetime
 from typing import Any
@@ -15,6 +16,11 @@ from application_sdk.constants import (
     SEGMENT_BATCH_TIMEOUT_SECONDS,
     SEGMENT_DEFAULT_USER_ID,
     SEGMENT_WRITE_KEY,
+)
+from application_sdk.observability.background_loop import (
+    BackgroundTask,
+    observability_loop,
+    register_after_fork,
 )
 from application_sdk.observability.models import MetricRecord
 from application_sdk.observability.utils import in_temporal_workflow
@@ -90,7 +96,8 @@ class SegmentClient:
     """Async Segment client with queue-based event processing.
 
     This client uses an asyncio queue to batch and send metrics to Segment API
-    asynchronously, avoiding blocking operations and thread creation overhead.
+    asynchronously. The queue worker runs on the shared observability loop
+    (``background_loop``), not on a thread of its own.
 
     The client is automatically enabled when a valid write key is provided.
     No separate boolean flag is needed - the presence of the key determines
@@ -100,7 +107,8 @@ class SegmentClient:
         enabled (bool): Whether Segment client is enabled (has valid write key)
         _queue (asyncio.Queue): Queue for pending metric events
         _client (httpx.AsyncClient): Async HTTP client for API calls
-        _worker_task (Optional[asyncio.Task]): Background task processing the queue
+        _worker (BackgroundTask | None): Handle to the queue worker on the
+            shared observability loop
     """
 
     def __init__(
@@ -144,15 +152,15 @@ class SegmentClient:
         self._max_queue_size = max_queue_size or _DEFAULT_MAX_QUEUE_SIZE
         self._queue: asyncio.Queue[MetricRecord] | None = None
         self._client: httpx.AsyncClient | None = None
-        self._worker_task: asyncio.Task | None = None
+        # The queue worker, running on the shared observability loop
+        # (``background_loop``), and that loop.
+        self._worker: BackgroundTask | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._worker_thread: threading.Thread | None = None
-        self._initialized_event = threading.Event()
-        # Serialises worker-thread start: concurrent ``send_metric`` calls that
-        # all see a dead thread would otherwise each start one.
+        # Serialises worker start: concurrent ``send_metric`` calls that all
+        # see no live worker would otherwise each start one.
         self._start_lock = threading.Lock()
         # Set by ``close()``. A closed client drops events instead of starting a
-        # worker thread nothing will ever join.
+        # worker nothing will ever stop.
         self._closed = False
         # Hand-off from ``send_metric`` (any thread) to the worker loop. Capped
         # at ``_max_queue_size`` at admission, so a worker loop that falls
@@ -178,8 +186,9 @@ class SegmentClient:
             )
             return
 
-        # Start background thread with event loop for async operations
-        self._start_worker_thread()
+        _live_clients.add(self)
+        # Start the queue worker on the shared observability loop
+        self._start_worker()
 
         logging.info(
             "Segment metrics client initialized (batch_size=%d, batch_timeout=%ss)",
@@ -187,48 +196,54 @@ class SegmentClient:
             self._batch_timeout_seconds,
         )
 
+    def _reset_after_fork(self) -> None:
+        """In a forked child, drop the worker that ran on the parent's loop.
+
+        The next ``send_metric`` starts a worker on the child's loop. Locks
+        are replaced because a parent thread may have held one at the fork;
+        events handed off to the parent's loop are dropped with it.
+        """
+        self._start_lock = threading.Lock()
+        self._ingress_lock = threading.Lock()
+        self._ingress.clear()
+        self._drain_scheduled = False
+        self._worker = None
+        self._loop = None
+        self._queue = None
+        self._client = None
+
     @property
     def dropped_count(self) -> int:
         """Events dropped because the hand-off or the queue was at ``max_queue_size``."""
         return self._dropped_count
 
-    def _start_worker_thread(self) -> None:
-        """Start a background thread with event loop for async operations.
+    def _start_worker(self) -> None:
+        """Start the queue worker on the shared observability loop.
 
-        No-op if the worker is alive or the client is closed. Serialised by
-        ``_start_lock`` so concurrent callers start at most one thread.
+        No-op if the worker is running or the client is closed. Serialised by
+        ``_start_lock`` so concurrent callers start at most one worker.
+
+        The queue and HTTP client are built here, on the caller's thread:
+        neither binds to a loop until first awaited, so ``send_metric`` can
+        hand off to the queue as soon as this returns, with no wait for the
+        worker to come up.
         """
         with self._start_lock:
             if self._closed:
                 return
-            if self._worker_thread and self._worker_thread.is_alive():
+            if self._worker is not None and not self._worker.done():
                 return
-            self._start_worker_thread_locked()
-
-    def _start_worker_thread_locked(self) -> None:
-        # Clear initialization event before starting new thread
-        # This ensures we wait for the new thread to actually initialize
-        self._initialized_event.clear()
-
-        # Reset references to prevent using stale objects from dead thread
-        self._loop = None
-        self._queue = None
-        self._client = None
-        self._worker_task = None
-
-        def run_worker():
-            """Run async worker in dedicated thread."""
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            self._loop = loop
-
-            # Initialize queue and client in the event loop
-            self._queue = asyncio.Queue(maxsize=self._max_queue_size)
+            if observability_loop.closed:
+                # The observability loop has shut down: nothing can send.
+                return
             from application_sdk.constants import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
                 _HTTP_POOL_TIMEOUT_SECONDS,
             )
 
-            self._client = httpx.AsyncClient(
+            queue: asyncio.Queue[MetricRecord] = asyncio.Queue(
+                maxsize=self._max_queue_size
+            )
+            client = httpx.AsyncClient(
                 timeout=httpx.Timeout(30.0, pool=_HTTP_POOL_TIMEOUT_SECONDS),
                 limits=httpx.Limits(
                     max_connections=10,
@@ -236,39 +251,42 @@ class SegmentClient:
                     keepalive_expiry=30.0,
                 ),
             )
-
-            # Signal that initialization is complete
-            self._initialized_event.set()
-
-            # Create and run worker task
-            self._worker_task = loop.create_task(self._process_queue())
-
-            # Run event loop until task completes, then tear down the httpx
-            # client in the same thread that created it. Doing teardown here
-            # (rather than in close()) guarantees the CancelledError handler
-            # has finished sending the final batch before the client closes.
-            try:
-                loop.run_until_complete(self._worker_task)
-            except Exception:
-                logging.warning(
-                    "Segment worker thread loop exited with exception", exc_info=True
-                )
-            finally:
-                if self._client:
-                    try:
-                        loop.run_until_complete(self._client.aclose())
-                    except Exception:
-                        logging.warning("Error closing httpx client", exc_info=True)
-                loop.close()
-
-        self._worker_thread = threading.Thread(target=run_worker, daemon=True)
-        self._worker_thread.start()
-
-        # Wait for thread to complete initialization (with timeout)
-        if not self._initialized_event.wait(timeout=5.0):
-            logging.error(
-                "Segment client worker thread failed to initialize within timeout"
+            # Stopped in a later stage than the periodic flushes: the metrics
+            # final flush drains this queue through this HTTP client, which
+            # the worker closes as it exits.
+            worker = observability_loop.start(
+                self._run_worker(queue, client),
+                name="segment-worker",
+                stop_order=1,
             )
+            if worker is None:
+                # The observability loop has shut down: nothing can send.
+                self._loop = None
+                self._queue = None
+                self._client = None
+                self._worker = None
+                return
+            self._queue = queue
+            self._client = client
+            self._loop = worker.loop
+            self._worker = worker
+
+    async def _run_worker(
+        self, queue: "asyncio.Queue[MetricRecord]", client: httpx.AsyncClient
+    ) -> None:
+        """Process the queue until cancelled, then close the HTTP client.
+
+        The client is closed here, after ``_process_queue``'s
+        ``CancelledError`` handler has sent the final batch, so the connection
+        pool is never torn down mid-request.
+        """
+        try:
+            await self._process_queue(queue, client)
+        finally:
+            try:
+                await client.aclose()
+            except Exception:
+                logging.warning("Error closing httpx client", exc_info=True)
 
     async def flush(self) -> None:
         """Flush queued events to Segment.
@@ -278,9 +296,10 @@ class SegmentClient:
         sent when close() cancels the worker task — call close() after flush()
         for a complete drain.
         Bridges to the worker's dedicated event loop via asyncio.wrap_future.
-        Times out after 10 s to keep shutdown bounded (matches the
-        Pushgateway per-call budget; two 10 s calls fit within K8s'
-        default 30 s terminationGracePeriodSeconds).
+        Times out after 10 s to keep shutdown bounded. At process exit it
+        runs under the post-drain exit deadline, which is derived with the
+        rest of the shutdown bounds from the pod's grace period (see
+        ``application_sdk.constants.ShutdownBudget``).
 
         No-op when any of these hold:
 
@@ -300,6 +319,17 @@ class SegmentClient:
             return
 
         if in_temporal_workflow():
+            return
+
+        if asyncio.get_running_loop() is self._loop:
+            # Already on the worker's loop (the metrics adapter's periodic
+            # flush runs there): no bridge needed.
+            try:
+                await asyncio.wait_for(self._flush_queue(), timeout=10.0)
+            except TimeoutError:
+                logging.warning("Segment queue flush timed out", exc_info=True)
+            except Exception:
+                logging.warning("Error flushing Segment queue", exc_info=True)
             return
 
         future = asyncio.run_coroutine_threadsafe(self._flush_queue(), self._loop)
@@ -327,15 +357,11 @@ class SegmentClient:
         if not self._should_send_metric(metric_record):
             return
 
-        # Ensure worker thread is running
-        if not self._worker_thread or not self._worker_thread.is_alive():
-            self._start_worker_thread()
+        # Ensure the worker is running
+        if self._worker is None or self._worker.done():
+            self._start_worker()
             if self._closed:
                 return
-
-        # Wait for initialization to complete before sending metrics
-        if not self._initialized_event.wait(timeout=1.0):
-            return
 
         if not self._loop or not self._queue:
             return
@@ -412,13 +438,13 @@ class SegmentClient:
         if warn:
             self._warn_dropping()
 
-    async def _process_queue(self) -> None:
+    async def _process_queue(
+        self, queue: "asyncio.Queue[MetricRecord]", client: httpx.AsyncClient
+    ) -> None:
         """Background worker that processes metrics from the queue.
 
         Continuously processes metrics from the queue and sends them to Segment API in batches.
         """
-        if not self._queue or not self._client:
-            return
 
         batch: list[MetricRecord] = []
         last_send_time = asyncio.get_running_loop().time()
@@ -432,11 +458,9 @@ class SegmentClient:
 
                 # Get metric from queue (with timeout)
                 try:
-                    metric_record = await asyncio.wait_for(
-                        self._queue.get(), timeout=timeout
-                    )
+                    metric_record = await asyncio.wait_for(queue.get(), timeout=timeout)
                     batch.append(metric_record)
-                    self._queue.task_done()
+                    queue.task_done()
                 except TimeoutError:  # conformance: ignore[E002,E014] queue.get timeout = flush the partial batch now
                     pass
 
@@ -449,7 +473,7 @@ class SegmentClient:
                 )
 
                 if should_send and batch:
-                    await self._send_batch_to_segment(batch)
+                    await self._send_batch_to_segment(batch, client)
                     batch = []
                     last_send_time = asyncio.get_running_loop().time()
 
@@ -457,7 +481,7 @@ class SegmentClient:
                 # Worker task cancelled - send remaining batch before exit
                 if batch:
                     try:
-                        await self._send_batch_to_segment(batch)
+                        await self._send_batch_to_segment(batch, client)
                     except Exception:
                         logging.warning("Error sending final batch", exc_info=True)
                 break
@@ -538,14 +562,18 @@ class SegmentClient:
         )
 
     async def _send_batch_to_segment(
-        self, metric_records: list["MetricRecord"]
+        self,
+        metric_records: list["MetricRecord"],
+        client: httpx.AsyncClient | None = None,
     ) -> None:
         """Send a batch of metrics to Segment API.
 
         Args:
             metric_records: List of metric records to send
+            client: HTTP client to send with; defaults to the current worker's.
         """
-        if not self._client or not metric_records:
+        client = client or self._client
+        if not client or not metric_records:
             return
 
         try:
@@ -566,7 +594,7 @@ class SegmentClient:
             }
 
             # Send HTTP request with validated batch payload
-            response = await self._client.post(
+            response = await client.post(
                 self._api_url,
                 json=batch_payload.model_dump(),
                 headers=headers,
@@ -584,40 +612,30 @@ class SegmentClient:
     def close(self) -> None:
         """Close the Segment client and cleanup resources.
 
-        Cancels the worker task (allowing the CancelledError handler to send
-        the final batch) then waits for the worker thread to exit. The httpx
-        client is closed inside the worker thread after the final batch is sent,
-        ensuring the HTTP connection pool is never torn down mid-request.
+        Cancels the worker (its ``CancelledError`` handler sends the final
+        batch, then the HTTP client is closed) and waits up to 10 s for it to
+        finish. At process exit the observability loop's own shutdown does the
+        same for every worker, so this is for callers that close a client
+        earlier.
 
-        Marks the client closed first, so a later ``send_metric`` (e.g. a
-        metric emitted after the ``atexit`` close) is dropped rather than
-        starting a worker thread nothing would join.
+        Marks the client closed first, so a later ``send_metric`` is dropped
+        rather than starting a worker nothing would stop.
         """
         if not self.enabled:
             return
 
         with self._start_lock:
             self._closed = True
+            worker = self._worker
 
-        # Signal cancellation; the CancelledError handler in _process_queue
-        # sends any remaining batch before the task exits.
-        if self._loop and self._worker_task and not self._worker_task.done():
-            try:
-                self._loop.call_soon_threadsafe(self._worker_task.cancel)
-            except Exception:
-                logging.warning("Error cancelling worker task", exc_info=True)
-
-        # Wait for the worker thread to finish — guarantees the final batch
-        # has been sent and the httpx client closed before we return.
-        if self._worker_thread and self._worker_thread.is_alive():
-            try:
-                self._worker_thread.join(timeout=10.0)
-                if self._worker_thread.is_alive():
-                    logging.warning(
-                        "SegmentClient worker thread did not terminate within timeout"
-                    )
-            except Exception:
-                logging.warning("Error joining worker thread", exc_info=True)
+        if worker is None or worker.done():
+            return
+        worker.cancel()
+        if observability_loop.in_loop_thread():
+            # Waiting here would block the loop the worker needs to finish.
+            return
+        if not worker.wait(timeout=10.0):
+            logging.warning("SegmentClient worker did not terminate within timeout")
 
     def _should_send_metric(self, metric_record: "MetricRecord") -> bool:
         """Determine if a metric should be sent to Segment.
@@ -635,3 +653,15 @@ class SegmentClient:
         # Check for explicit send_to_segment label
         send_to_segment = metric_record.labels.get("send_to_segment", "").lower()
         return send_to_segment == "true"
+
+
+# Enabled clients, so a forked child can drop each one's parent-loop worker.
+_live_clients: "weakref.WeakSet[SegmentClient]" = weakref.WeakSet()
+
+
+def _reset_clients_after_fork() -> None:
+    for client in list(_live_clients):
+        client._reset_after_fork()
+
+
+register_after_fork(_reset_clients_after_fork)

@@ -581,6 +581,13 @@ when set. `tokenSeparators { ", "; "," }` splits a pasted comma list into tags
 (the frontend does not trim the parts). See `docs/reference.md` for each
 setting and for what is not supported yet.
 
+The user and group pickers (`MultipleUsers`, `SingleUser`, `MultipleGroups`,
+`SingleGroup`), `APITokenSelector`, `KeygenInput`, `ApiTreeSelect`, `SqlTree`
+and `DsnTreeMap` take an optional `placeholderText`, rendered as
+`ui.placeholder`. Unset emits no key, so output is unchanged and the frontend
+shows its own default (for example "Users"). Use it to keep a legacy form's
+placeholders when migrating it. See `docs/reference.md`.
+
 ### Connection & Credential
 
 | Class | Widget | Python Type |

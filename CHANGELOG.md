@@ -1,5 +1,60 @@
 # Changelog
 
+## v3.55.3 (November 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.55.2...v3.55.3
+
+### Bug Fixes
+
+- bound every read of the Temporal core /metrics endpoint with one shared helper [FND-4643] (#4817) (by @cmgrote in [17899fc](https://github.com/atlanhq/application-sdk/commit/17899fc))
+- carry activity metrics on the activity result so other workers and replays keep them [FND-4649] (#4818) (by @cmgrote in [47d90aa](https://github.com/atlanhq/application-sdk/commit/47d90aa))
+- refresh the RDS IAM auth token on new SQL connections [FND-4647] (#4816) (by @cmgrote in [7af6581](https://github.com/atlanhq/application-sdk/commit/7af6581))
+- deprecate the unwired Heracles helpers and CapacityPool, record one @observability metric, and stop installing debug handlers at import [FND-4650] (#4820) (by @cmgrote in [fbcb5c0](https://github.com/atlanhq/application-sdk/commit/fbcb5c0))
+- derive every shutdown bound from one declared pod grace period [FND-4645] (#4821) (by @cmgrote in [cab7eb5](https://github.com/atlanhq/application-sdk/commit/cab7eb5))
+
+### Refactoring
+
+- run every periodic flush on one background loop with one shutdown bound [FND-4648] (#4819) (by @cmgrote in [cdfbbdb](https://github.com/atlanhq/application-sdk/commit/cdfbbdb))
+
+
+## v3.55.2 (November 09, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.55.1...v3.55.2
+
+### Bug Fixes
+
+- stop flush_all spinning on a finished, still-tracked flush task [FND-4782] (#4801) (by @cmgrote in [e1d22e8](https://github.com/atlanhq/application-sdk/commit/e1d22e8))
+
+### Chores
+
+- update the pinned pkl toolchain to v0.33.0 (#4800) (by @renovate[bot] in [88748aa](https://github.com/atlanhq/application-sdk/commit/88748aa))
+
+
+## v3.55.1 (November 06, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.55.0...v3.55.1
+
+### Bug Fixes
+
+- let a cancelled run_in_thread call stop its own thread, make is_cancelled report activity and per-call cancels, and stop the SDK's own offloads on cancel [FND-4707] (#4766) (by @sharma-shreyas in [5cffce6](https://github.com/atlanhq/application-sdk/commit/5cffce6))
+- require the deployment object store and fail startup with a named config error (#4780) (by @connectivity-ai[bot] in [d95a018](https://github.com/atlanhq/application-sdk/commit/d95a018))
+- route SDR disk pressure to the host volume operator (#4755) (by @connectivity-ai[bot] in [b74ec61](https://github.com/atlanhq/application-sdk/commit/b74ec61))
+- When memory_limit is not passed, compute it from observability.cgroup.memory_limit_bytes(): min(2GiB, m (#4791) (by @mothership-ai[bot] in [ae784b1](https://github.com/atlanhq/application-sdk/commit/ae784b1))
+
+### Chores
+
+- update github-actions (#4749) (by @renovate[bot] in [24d3984](https://github.com/atlanhq/application-sdk/commit/24d3984))
+- clear 3 vulnerabilities (authlib) (#4772) (by @connectivity-ai[bot] in [22553d3](https://github.com/atlanhq/application-sdk/commit/22553d3))
+- replace fastapi[standard] with fastapi, uvicorn[standard] and python-multipart (#4774) (by @cmgrote in [90d3911](https://github.com/atlanhq/application-sdk/commit/90d3911))
+- stop the Windows WinError 32 flake in the file-converter integration tests (#4782) (by @cmgrote in [908f162](https://github.com/atlanhq/application-sdk/commit/908f162))
+- update github-actions (#4783) (by @renovate[bot] in [02b95ea](https://github.com/atlanhq/application-sdk/commit/02b95ea))
+- update github-actions (#4786) (by @renovate[bot] in [bad9972](https://github.com/atlanhq/application-sdk/commit/bad9972))
+
+### Other Changes
+
+- [mitigation] fix(CONAT-7045): confirm a HEAD miss with a listing before rejecting a verify_refs handoff (#4767) (by @connectivity-ai[bot] in [5bda82e](https://github.com/atlanhq/application-sdk/commit/5bda82e))
+
+
 ## v3.55.0 (November 05, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.54.0...v3.55.0

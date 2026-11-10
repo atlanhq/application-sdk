@@ -1,4 +1,3 @@
-import threading
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime
@@ -13,6 +12,7 @@ from application_sdk.observability.metrics_adaptor import (
     get_metrics,
 )
 from application_sdk.observability.models import MetricRecord, MetricType
+from application_sdk.observability.utils import get_metric_labels
 
 
 @pytest.fixture
@@ -48,7 +48,7 @@ def create_metrics_adapter() -> Generator[AtlanMetricsAdapter, None, None]:
                 "ATLAN_METRICS_FILE_NAME": "metrics.parquet",
             },
         ),
-        mock.patch.object(AtlanMetricsAdapter, "_spawn_flush_thread"),
+        mock.patch.object(AtlanMetricsAdapter, "_start_periodic_flush"),
         mock.patch.object(
             AtlanMetricsAdapter, "_periodic_flush", new_callable=mock.AsyncMock
         ),
@@ -168,42 +168,52 @@ def test_record_metric_with_various_inputs(
         else:
             assert buffered_metric["value"] == value
         assert buffered_metric["type"] == metric_type.value
-        assert buffered_metric["labels"] == labels
+        assert buffered_metric["labels"] == {**labels, **get_metric_labels()}
+        assert labels == {"test": "label"}
         assert buffered_metric["description"] == description
         assert buffered_metric["unit"] == unit
 
 
-def _flusher_threads(thread_cls: mock.MagicMock) -> list[object]:
-    """Targets of the threads that would run the metrics flush loop.
+def test_record_metric_does_not_mutate_caller_labels():
+    """Context labels are merged into a copy, never into the caller's dict."""
+    caller_labels: dict[str, str | int | float | bool] = {"format": "parquet"}
+    with (
+        create_metrics_adapter() as metrics_adapter,
+        mock.patch(
+            "application_sdk.observability.metrics_adaptor.get_metric_labels",
+            return_value={"workflow_type": "wf", "activity_type": "act"},
+        ),
+    ):
+        metrics_adapter.record_metric(
+            name="chunks_written",
+            value=1,
+            metric_type=MetricType.COUNTER,
+            labels=caller_labels,
+        )
+        buffered = metrics_adapter._buffer[0]
 
-    OTel and executors start their own threads, so only threads whose target
-    is ``AtlanMetricsAdapter._start_asyncio_flush`` count.
-    """
-    targets = [c.kwargs.get("target") for c in thread_cls.call_args_list]
-    return [
-        t
-        for t in targets
-        if getattr(t, "__func__", None) is AtlanMetricsAdapter._start_asyncio_flush
-    ]
+    assert caller_labels == {"format": "parquet"}
+    assert buffered["labels"] == {
+        "format": "parquet",
+        "workflow_type": "wf",
+        "activity_type": "act",
+    }
 
 
-def test_init_without_loop_starts_flusher_through_spawn_seam():
-    """Outside a running loop, ``__init__`` starts the flusher only via
-    ``_spawn_flush_thread``, the seam ``create_metrics_adapter`` stubs out."""
+def test_init_starts_flusher_on_the_shared_loop():
+    """``__init__`` starts the flush on the shared observability loop
+    (FND-4648), not on a thread of its own, and starts it once."""
     previous_flush_task_started = AtlanMetricsAdapter._flush_task_started
     AtlanMetricsAdapter._flush_task_started = False
     try:
-        with (
-            mock.patch.object(AtlanMetricsAdapter, "_spawn_flush_thread") as spawn,
-            mock.patch(
-                "application_sdk.observability.metrics_adaptor.threading.Thread",
-                wraps=threading.Thread,
-            ) as thread_cls,
-        ):
+        with mock.patch(
+            "application_sdk.observability.observability.observability_loop"
+        ) as shared_loop:
+            AtlanMetricsAdapter()
             AtlanMetricsAdapter()
 
-        spawn.assert_called_once_with()
-        assert _flusher_threads(thread_cls) == []
+        shared_loop.start.assert_called_once()
+        shared_loop.start.call_args.args[0].close()
         assert AtlanMetricsAdapter._flush_task_started is True
     finally:
         AtlanMetricsAdapter._flush_task_started = previous_flush_task_started
@@ -216,13 +226,12 @@ def test_create_metrics_adapter_starts_no_flusher_and_restores_flag():
     AtlanMetricsAdapter._flush_task_started = False
     try:
         with mock.patch(
-            "application_sdk.observability.metrics_adaptor.threading.Thread",
-            wraps=threading.Thread,
-        ) as thread_cls:
+            "application_sdk.observability.observability.observability_loop"
+        ) as shared_loop:
             with create_metrics_adapter():
                 pass
 
-        assert _flusher_threads(thread_cls) == []
+        shared_loop.start.assert_not_called()
         assert AtlanMetricsAdapter._flush_task_started is False
     finally:
         AtlanMetricsAdapter._flush_task_started = previous_flush_task_started

@@ -4,7 +4,6 @@ A histogram bucket cannot give you ``peak_per_input_byte`` per execution.
 
 from __future__ import annotations
 
-import asyncio
 import threading
 from dataclasses import asdict
 from time import time
@@ -19,6 +18,7 @@ from application_sdk.constants import (
     SIZING_FLUSH_INTERVAL_SECONDS,
     SIZING_RETENTION_DAYS,
 )
+from application_sdk.observability.background_loop import BackgroundTask
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.sizing import SIZING_SCHEMA_VERSION
@@ -34,17 +34,16 @@ class SizingObservabilitySink(AtlanObservability[Any]):
 
     _flush_task_started: ClassVar[bool] = False
     # Kept so ``_reset_for_testing`` can stop the flush: a reset that only
-    # clears the flag leaves the old loop flushing a dropped sink's rows later,
-    # against whatever store the environment then names.
-    _flush_task: ClassVar["asyncio.Task[None] | None"] = None
-    _flush_thread: ClassVar[threading.Thread | None] = None
+    # clears the flag leaves the old flush running on the shared loop,
+    # writing a dropped sink's rows later against whatever store the
+    # environment then names.
+    _flush_task: ClassVar[BackgroundTask | None] = None
 
     @classmethod
     def _reset_for_testing(cls) -> None:
         """Stop the flush and drop every sizing sink's unflushed rows."""
-        task, thread = cls._flush_task, cls._flush_thread
+        task = cls._flush_task
         cls._flush_task = None
-        cls._flush_thread = None
         cls._flush_task_started = False
         for instance in list(AtlanObservability._instances):
             if isinstance(instance, cls):
@@ -52,52 +51,23 @@ class SizingObservabilitySink(AtlanObservability[Any]):
                     instance._buffer = []
                 AtlanObservability._instances.remove(instance)
         if task is not None:
-            try:
-                task.get_loop().call_soon_threadsafe(task.cancel)
-            except RuntimeError:
-                # Its loop is already closed, so the task can never run again.
-                logger.debug("sizing flush loop already closed", exc_info=True)
-        if thread is not None:
+            task.cancel()
             # Waits out a flush already in progress, which may be uploading.
-            thread.join(timeout=30)
+            task.wait(timeout=30)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         if SizingObservabilitySink._flush_task_started:
             return
         try:
-            # Loop-or-thread, as the traces adaptor does: built lazily inside an
-            # activity, but must also work when constructed off a loop.
-            try:
-                task = asyncio.get_running_loop().create_task(self._periodic_flush())
-            except RuntimeError:
-                # The task is made here, not in the thread, so a reset that
-                # runs before the thread is scheduled still has it to cancel.
-                task = asyncio.new_event_loop().create_task(self._periodic_flush())
-                thread = threading.Thread(
-                    target=self._flush_forever, args=(task,), daemon=True
-                )
-                thread.start()
-                SizingObservabilitySink._flush_thread = thread
-            SizingObservabilitySink._flush_task = task
+            # On the shared observability loop, whatever thread builds the
+            # sink: it is built lazily inside an activity, but must also work
+            # off a loop.
+            SizingObservabilitySink._flush_task = self._start_periodic_flush()
             SizingObservabilitySink._flush_task_started = True
         # conformance: ignore[E004] telemetry; a sink that cannot start its flush must not stop collection
         except Exception:
             logger.warning("could not start the sizing flush task", exc_info=True)
-
-    def _flush_forever(self, task: "asyncio.Task[None]") -> None:
-        """Run the periodic flush on its own loop, for the no-running-loop case."""
-        loop = task.get_loop()
-        try:
-            loop.run_until_complete(task)
-        except asyncio.CancelledError:
-            # Only ``_reset_for_testing`` cancels this task.
-            logger.debug("sizing flush loop stopped by a reset")
-        # conformance: ignore[E004] background thread; must not take the process down
-        except Exception:
-            logger.warning("sizing flush loop stopped", exc_info=True)
-        finally:
-            loop.close()
 
     def process_record(self, record: Any) -> dict[str, Any]:
         """Flatten one observation into a row. ``app``/``deployment`` are stamped

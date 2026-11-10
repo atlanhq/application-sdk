@@ -44,6 +44,7 @@ from application_sdk.constants import (
 # observability package would otherwise import this module mid-boot and deadlock
 # on the module lock (_DeadlockError at startup when the log level is DEBUG).
 from application_sdk.errors.base import redact_secrets
+from application_sdk.observability.background_loop import BackgroundTask
 from application_sdk.observability.console_sink import (
     console_writer,
     flush_console_logs,
@@ -915,7 +916,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
     """
 
     _flush_task_started: ClassVar[bool] = False
-    _flush_task: ClassVar[Any] = None
+    _flush_task: ClassVar[BackgroundTask | None] = None
     _initialized: ClassVar[bool] = False
     # The adapter whose bound ``_log_sink`` loguru calls. The sink is
     # registered once, so this adapter's buffer is the only one records land
@@ -1156,13 +1157,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 and not AtlanLoggerAdapter._flush_task_started
             ):
                 try:
-                    try:
-                        loop = asyncio.get_running_loop()
-                        AtlanLoggerAdapter._flush_task = loop.create_task(
-                            self._periodic_flush()
-                        )
-                    except RuntimeError:
-                        self._spawn_flush_thread()
+                    AtlanLoggerAdapter._flush_task = self._start_periodic_flush()
                     AtlanLoggerAdapter._flush_task_started = True
                 except Exception:
                     logging.error("Failed to start flush task", exc_info=True)
@@ -1262,28 +1257,6 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             body=record["message"],
             attributes=attributes,
         )
-
-    def _spawn_flush_thread(self) -> None:
-        """Spawn a daemon thread to run the asyncio flush loop.
-
-        Extracted for testability — lets tests assert this specific call without
-        patching threading.Thread globally (which would also capture OTel internals).
-        """
-        threading.Thread(target=self._start_asyncio_flush, daemon=True).start()
-
-    def _start_asyncio_flush(self):
-        """Start an asyncio event loop for periodic log flushing.
-
-        Creates a new event loop and runs the periodic flush task in the background.
-        This is used when no existing event loop is available.
-        """
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            AtlanLoggerAdapter._flush_task = loop.create_task(self._periodic_flush())
-            loop.run_forever()
-        finally:
-            loop.close()
 
     def process(self, msg: Any, kwargs: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         """Process log message with temporal and request context.

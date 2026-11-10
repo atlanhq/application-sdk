@@ -444,7 +444,10 @@ response merges all in-process metric sources:
 - HTTP server instrumentation (FastAPIInstrumentor, stable OTel HTTP
   semantic conventions: `http.request.method`, `http.route`, etc.)
 - Temporal SDK Rust-core families when enabled and reachable (proxied
-  in-process from `127.0.0.1:9464` in combined mode)
+  in-process from `127.0.0.1:9464` in combined mode). The proxied body is
+  capped at `ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES`; an oversize body is
+  dropped from the response and counted in
+  `temporal_core_metrics_proxy_failures_total{reason="oversize"}`
 - `prometheus_client` defaults (`process_*`, `python_*`)
 
 See [Monitoring](../concepts/monitoring.md) for the full architecture

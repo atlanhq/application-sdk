@@ -77,6 +77,8 @@ module.exports = {
   // still. Keep the regex in step with the preset's command string, exactly.
   allowedCommands: [
     "^renovate-pkl-sync --contract-dir contract --regenerate (true|false) --no-commit$",
+    // P3D is the recorded 3-day exception to the org baseline's 7 days; see
+    // docs/standards/ci.md, "Renovate release-age windows" (FND-4651).
     // Fully literal, deliberately: the window and the exempt set are policy, so
     // changing either must edit this file as well as the preset, and the guard
     // test fails until both agree. Avoid character classes and backslashes in

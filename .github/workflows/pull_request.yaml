@@ -155,7 +155,9 @@ jobs:
       - uses: "./.github/actions/docstring-coverage"
         with:
           module-name: application_sdk
-          fail-under: "30"
+          # A floor just under the measured coverage (80.2% on 2026-11-09), so
+          # it catches a real drop. It was 30, which nothing could fail.
+          fail-under: "75"
 
   trivy-container:
     name: Trivy Container Scan
@@ -166,7 +168,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Mint fleet App token
         id: app-token
-        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -177,7 +178,7 @@ jobs:
         with:
           chainguard-username: ${{ secrets.CHAINGUARD_USERNAME }}
           chainguard-password: ${{ secrets.CHAINGUARD_PASSWORD }}
-          github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ steps.app-token.outputs.token }}
           fail-on-vulns: 'true'
 
   # NOTE: SDK unit / integration / storage-emulator tests moved to
@@ -335,7 +336,6 @@ jobs:
           password: ${{ secrets.CHAINGUARD_PASSWORD }}
       - name: Mint fleet App token
         id: app-token
-        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -370,7 +370,7 @@ jobs:
           cache-from: type=gha,scope=sdk-base-${{ matrix.arch }}
           # `ignore-error=true`: see build-and-scan.yaml — a cache-service hiccup must not fail a build.
           cache-to: type=gha,mode=min,scope=sdk-base-${{ matrix.arch }},ignore-error=true
-          github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ steps.app-token.outputs.token }}
         env:
           DOCKER_CLIENT_TIMEOUT: 600
           COMPOSE_HTTP_TIMEOUT: 600

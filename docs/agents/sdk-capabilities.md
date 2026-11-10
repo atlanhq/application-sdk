@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.55.0
-source-sha:    c5f8977a074ffe2af0ad8777e7e015b6527626d9
-source-date:   2026-11-05T12:07:15Z
+sdk-version:   3.55.2
+source-sha:    063c23a98e81dc1183f7ec85d7b4553d97153887
+source-date:   2026-11-09T23:34:24Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2800,7 +2800,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import CapacityPool`
 - **Signature:** `class CapacityPool`
-- **Summary:** Protocol for distributed capacity management.
+- **Summary:** Deprecated: protocol for distributed capacity management — removed in v4.0.0 (never wired by the framework).
 - **Defined in:** `application_sdk/infrastructure/capacity.py`
 
 #### `CredentialVault`
@@ -2877,7 +2877,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import LocalCapacityPool`
 - **Signature:** `class LocalCapacityPool`
-- **Summary:** Local-only capacity pool (no coordination).
+- **Summary:** Deprecated: local-only capacity pool (no coordination) — removed in v4.0.0 (never wired by the framework).
 - **Defined in:** `application_sdk/infrastructure/capacity.py`
 
 #### `Message`
@@ -2984,14 +2984,14 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import configure_capacity_pool`
 - **Signature:** `configure_capacity_pool(pool: CapacityPool)`
-- **Summary:** Configure the global capacity pool for distributed rate limiting.
+- **Summary:** Deprecated: configure the global capacity pool — removed in v4.0.0 (never wired by the framework).
 - **Defined in:** `application_sdk/infrastructure/capacity.py`
 
 #### `get_capacity_pool`
 
 - **Import:** `from application_sdk.infrastructure import get_capacity_pool`
 - **Signature:** `get_capacity_pool()`
-- **Summary:** Get the configured capacity pool.
+- **Summary:** Deprecated: get the configured capacity pool — removed in v4.0.0 (never wired by the framework).
 - **Defined in:** `application_sdk/infrastructure/capacity.py`
 
 #### `get_deployment_secret`
@@ -3104,7 +3104,7 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 #### `TemporalCoreCollector`
 
 - **Import:** `from application_sdk.observability.pushgateway import TemporalCoreCollector`
-- **Signature:** `class TemporalCoreCollector(url: str, timeout_s: float = 1.0) -> None`
+- **Signature:** `class TemporalCoreCollector(url: str, timeout_s: float = 1.0, max_bytes: int | None = None) -> None`
 - **Summary:** Bridge Temporal's Rust-core Prometheus endpoint into the OTel registry.
 - **Defined in:** `application_sdk/observability/pushgateway.py`
 

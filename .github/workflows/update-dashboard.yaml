@@ -5,8 +5,11 @@
 # installs the per-repo `update-dashboard.yml` shim that calls this, and
 # `bootstrap --resync` deletes existing copies (RETIRED_FILES). This file stays
 # only so a repo that has not resynced yet keeps working rather than failing
-# at startup. Delete it once no fleet repo still carries the shim. Do not add
-# callers.
+# at startup. Delete it only once C002 reports zero copies of the shim across
+# the fleet, and in the same PR record that count in the conformance package's
+# bootstrap/render.py `DELETED_RETIRED_REUSABLES`;
+# .github/scripts/tests/test_reusable_retirement.py fails the deletion
+# otherwise (docs/standards/ci.md, "Retiring a reusable"). Do not add callers.
 #
 # While both run, they write the same S3 keys. That is harmless: the docs have
 # the same shape, and both history paths keep one line per date.

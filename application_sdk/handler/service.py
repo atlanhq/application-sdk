@@ -241,7 +241,8 @@ def _record_proxy_failure(
     Increments the ``temporal_core_metrics_proxy_failures_total`` counter
     so failures are observable from VictoriaMetrics (and not just buried
     in the logs), and emits a bounded diagnostic. ``reason`` should be a
-    bounded label value — exception class name or ``http_<status>``."""
+    bounded label value — exception class name, ``http_<status>`` or
+    ``oversize``."""
     from application_sdk.observability import (  # noqa: PLC0415 — cold path: only on proxy failure
         metrics as _metrics_module,
     )
@@ -2130,6 +2131,7 @@ def create_app_handler_service(
         )
 
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when /metrics is hit
+            TEMPORAL_CORE_METRICS_MAX_BYTES,
             TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS,
             TEMPORAL_PROMETHEUS_BIND_ADDRESS,
         )
@@ -2143,21 +2145,20 @@ def create_app_handler_service(
             temporal_metrics_url = f"http://{temporal_bind_address}/metrics"
             import httpx  # noqa: PLC0415 — cold path: only when Temporal Rust-core proxy enabled
 
+            from application_sdk.observability.temporal_core_metrics import (  # noqa: PLC0415 — cold path: only when Temporal Rust-core proxy enabled
+                CoreMetricsBody,
+                fetch_core_metrics,
+            )
+
             try:
-                async with httpx.AsyncClient(
-                    timeout=TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS
-                ) as client:
-                    resp = await client.get(temporal_metrics_url)
-                    if resp.status_code == 200:
-                        temporal_metrics_body = resp.content
-                    else:
-                        _record_proxy_failure(
-                            f"http_{resp.status_code}",
-                            "Temporal core metrics proxy returned HTTP %s from %s; serving /metrics without Temporal core series",
-                            resp.status_code,
-                            temporal_metrics_url,
-                        )
-            except httpx.RequestError as exc:
+                # Bounded read: a high-cardinality core exporter must not
+                # balloon handler memory on every scrape.
+                read = await fetch_core_metrics(
+                    temporal_metrics_url,
+                    timeout_s=TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS,
+                    max_bytes=TEMPORAL_CORE_METRICS_MAX_BYTES,
+                )
+            except httpx.HTTPError as exc:
                 # Handler-only mode disables this proxy; enabled proxy failures are unexpected.
                 _record_proxy_failure(
                     type(exc).__name__,
@@ -2165,6 +2166,17 @@ def create_app_handler_service(
                     temporal_metrics_url,
                     exc_info=True,
                 )
+            else:
+                if isinstance(read, CoreMetricsBody):
+                    temporal_metrics_body = read.body
+                else:
+                    _record_proxy_failure(
+                        read.reason,
+                        "Temporal core metrics proxy got %s from %s (cap %d bytes); serving /metrics without Temporal core series",
+                        read.reason,
+                        temporal_metrics_url,
+                        TEMPORAL_CORE_METRICS_MAX_BYTES,
+                    )
 
         body = generate_latest(REGISTRY)
         if temporal_metrics_body:

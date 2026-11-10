@@ -52,6 +52,8 @@ if _importlib_util.find_spec("application_sdk.handler.base") is None:
         "pip install --force-reinstall --no-deps atlan-application-sdk-api"
     )
 
+from application_sdk.app.base import _pascal_to_kebab
+from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.common import restart_marker
 from application_sdk.common._env import env_int as _env_int
 from application_sdk.common.backoff import Backoff
@@ -73,9 +75,6 @@ from application_sdk.main_errors import (
     UnknownModeError,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-
-# Enable faulthandler so C-level crashes dump a traceback to stderr.
-faulthandler.enable()
 
 # Module-level reference to the running event loop (set in worker/combined mode).
 # Used by the SIGUSR1 debug handler to snapshot asyncio tasks.
@@ -111,8 +110,17 @@ def _debug_dump_handler(signum: int, frame: object) -> None:
     print(f"Debug dump written to {dump_path}", file=sys.stderr, flush=True)
 
 
-if hasattr(signal, "SIGUSR1"):
-    signal.signal(signal.SIGUSR1, _debug_dump_handler)
+def _install_debug_handlers() -> None:
+    """Enable crash tracebacks and the SIGUSR1 debug dump for this process.
+
+    Called from :func:`main` only, so importing this module (dev scripts that
+    call :func:`run_dev_combined`, tests) leaves the process's fault and
+    signal handlers alone.
+    """
+    # C-level crashes dump a traceback to stderr.
+    faulthandler.enable()
+    if hasattr(signal, "SIGUSR1"):
+        signal.signal(signal.SIGUSR1, _debug_dump_handler)
 
 
 def _log_process_memory_baseline() -> None:
@@ -885,10 +893,6 @@ async def _create_infrastructure(
 def _derive_service_name(app_module: str) -> str:
     """Convert "my_package.apps:MyApp" to "my-app" (kebab-case)."""
     if ":" in app_module:
-        from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
-            _pascal_to_kebab,
-        )
-
         return _pascal_to_kebab(app_module.split(":")[1])
     return "application-sdk"
 
@@ -1251,16 +1255,125 @@ class _FatalTeardownWatchdog:
 
 
 # Upper bound on what runs after the worker has drained on a shutdown signal:
-# closing infrastructure, flushing telemetry and the interpreter's exit hooks.
-# No activity is in flight by then, yet these steps have been seen to block for
-# the whole pod grace period when a telemetry endpoint is unreachable, holding
-# the pod's requests and its node. 0 or negative disables the bound.
+# the worker wrapper's cleanup (credential directories, sizing rows, the
+# Pushgateway final push, hold and DELETE), closing infrastructure, flushing
+# telemetry and the interpreter's exit hooks. No activity is in flight by then,
+# yet these steps have been seen to block for the whole pod grace period when a
+# telemetry endpoint is unreachable, holding the pod's requests and its node.
+# 0 or negative disables the bound. Unset, it is derived from
+# ATLAN_SHUTDOWN_GRACE_SECONDS when that is set (ShutdownBudget), else 120.
 # The exit code is non-zero and distinct (1 is the fatal-teardown watchdog, 2 is
 # argparse) so a cut-short shutdown shows in the container's last exit code
 # instead of passing as a clean stop.
 _POST_DRAIN_EXIT_TIMEOUT_ENV = "ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS"
 _POST_DRAIN_EXIT_TIMEOUT_DEFAULT_SECONDS = 120
 _POST_DRAIN_EXIT_CODE = 3
+
+
+def _post_drain_exit_timeout_seconds() -> int:
+    """Explicit env override, else the grace-derived bound, else 120 s."""
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: shutdown only
+        load_shutdown_budget,
+    )
+
+    budget = load_shutdown_budget()
+    default = (
+        budget.post_drain_seconds
+        if budget is not None
+        else _POST_DRAIN_EXIT_TIMEOUT_DEFAULT_SECONDS
+    )
+    return _env_int(_POST_DRAIN_EXIT_TIMEOUT_ENV, default)
+
+
+class _PostDrainExitArm:
+    """Starts the post-drain exit deadline at most once, and only on shutdown.
+
+    Armed from the worker's ``on_drained`` hook the moment the Temporal drain
+    returns — so the worker wrapper's own cleanup, including the Pushgateway's
+    pre-DELETE hold and two HTTP calls, runs under the deadline — and again
+    after the supervisor returns, as a fallback for a stop that never reached
+    the hook. A worker that stops without a shutdown signal (a supervised
+    restart after a fatal error) never arms it.
+    """
+
+    def __init__(self, *, enabled: bool, shutdown_event: asyncio.Event) -> None:
+        self._enabled = enabled
+        self._shutdown_event = shutdown_event
+        self._lock = threading.Lock()
+        self._started = False
+
+    def on_worker_drained(self) -> None:
+        if self._shutdown_event.is_set():
+            self.start()
+
+    def start(self) -> None:
+        if not self._enabled:
+            return
+        with self._lock:
+            if self._started:
+                return
+            self._started = True
+        _start_post_drain_exit_deadline()
+
+
+def _log_shutdown_budget() -> None:
+    """Log the effective shutdown bounds once, and warn when they overrun the grace.
+
+    Every bound has its own env override, so the effective values can disagree
+    with the declared grace. A sum past the grace means SIGKILL lands before
+    shutdown finishes; logging it at startup makes that visible before it
+    happens instead of after.
+    """
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker startup only
+        PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS,
+        PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS,
+        SHUTDOWN_DRAIN_DELAY_SECONDS,
+        SHUTDOWN_GRACE_SECONDS_ENV,
+        load_shutdown_budget,
+    )
+    from application_sdk.execution.settings import (  # noqa: PLC0415 — cold path: worker startup only
+        load_execution_settings,
+    )
+
+    budget = load_shutdown_budget()
+    drain = load_execution_settings().graceful_shutdown_timeout_seconds
+    post_drain = _post_drain_exit_timeout_seconds()
+    logger.info(
+        "Shutdown budget: grace=%s drain_delay=%ss drain=%ss post_drain=%ss "
+        "pushgateway_http_timeout=%ss pushgateway_delete_delay=%ss",
+        budget.grace_seconds if budget is not None else "undeclared",
+        SHUTDOWN_DRAIN_DELAY_SECONDS,
+        drain,
+        post_drain,
+        PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS,
+        PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS,
+    )
+    if budget is None:
+        return
+    # A disabled post-drain deadline (<= 0) is unbounded; count the derived
+    # value so the check still reflects what the grace was split for.
+    total = (
+        SHUTDOWN_DRAIN_DELAY_SECONDS
+        + drain
+        + (post_drain if post_drain > 0 else budget.post_drain_seconds)
+        # Kept back for daprd's stop after the process exits; eating into it
+        # leaves the sidecar to be SIGKILLed.
+        + budget.headroom_seconds
+    )
+    if total > budget.grace_seconds:
+        logger.warning(
+            "Shutdown bounds overrun the pod grace period: drain_delay %ss + "
+            "drain %ss + post_drain %ss + daprd headroom %ss = %ss > %s=%s; "
+            "SIGKILL will land before shutdown finishes. Unset the explicit "
+            "overrides to derive them from the grace",
+            SHUTDOWN_DRAIN_DELAY_SECONDS,
+            drain,
+            post_drain,
+            budget.headroom_seconds,
+            total,
+            SHUTDOWN_GRACE_SECONDS_ENV,
+            budget.grace_seconds,
+        )
 
 
 def _start_post_drain_exit_deadline(
@@ -1277,9 +1390,7 @@ def _start_post_drain_exit_deadline(
     it dies with the process. It writes to stderr directly because the logging
     pipeline is one of the things that can be stuck.
     """
-    timeout = _env_int(
-        _POST_DRAIN_EXIT_TIMEOUT_ENV, _POST_DRAIN_EXIT_TIMEOUT_DEFAULT_SECONDS
-    )
+    timeout = _post_drain_exit_timeout_seconds()
     if timeout <= 0:
         return None
 
@@ -1609,10 +1720,6 @@ async def run_worker_mode(
     global _worker_event_loop
     _worker_event_loop = asyncio.get_running_loop()
 
-    from application_sdk.app.registry import (  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
-        AppRegistry,
-        TaskRegistry,
-    )
     from application_sdk.execution._temporal.backend import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_temporal_client,
     )
@@ -1763,6 +1870,7 @@ async def run_worker_mode(
             enable_pushgateway=True,
             on_activity=health_server.record_activity,
             on_fatal_error=_on_worker_fatal,
+            on_drained=post_drain_arm.on_worker_drained,
         )
 
     # Log registrations
@@ -1783,6 +1891,12 @@ async def run_worker_mode(
     def _signal_handler() -> None:
         logger.info("Shutdown signal received")
         shutdown_event.set()
+
+    # Read by _build_worker's on_drained hook, which only runs after this point.
+    post_drain_arm = _PostDrainExitArm(
+        enabled=bound_post_drain_exit, shutdown_event=shutdown_event
+    )
+    _log_shutdown_budget()
 
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
@@ -1812,8 +1926,8 @@ async def run_worker_mode(
         # leaves the marker in place, which is what makes the next start a restart.
         restart_marker.clear()
 
-    if bound_post_drain_exit:
-        _start_post_drain_exit_deadline()
+    # Normally already armed by the worker's on_drained hook; idempotent.
+    post_drain_arm.start()
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         close_infrastructure,
@@ -1937,10 +2051,6 @@ async def run_combined_mode(
 
     import uvicorn  # noqa: PLC0415 — cold path: uvicorn only loaded in worker/handler runtime modes
 
-    from application_sdk.app.registry import (  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
-        AppRegistry,
-        TaskRegistry,
-    )
     from application_sdk.execution._temporal.backend import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_temporal_client,
     )
@@ -2095,6 +2205,7 @@ async def run_combined_mode(
             handler=handler,
             on_activity=health_server.record_activity,
             on_fatal_error=_on_worker_fatal,
+            on_drained=post_drain_arm.on_worker_drained,
         )
 
     for registered_app in AppRegistry.get_instance().list_apps():
@@ -2156,6 +2267,12 @@ async def run_combined_mode(
         shutdown_event.set()
         uvicorn_server.should_exit = True
 
+    # Read by _build_worker's on_drained hook, which only runs after this point.
+    post_drain_arm = _PostDrainExitArm(
+        enabled=bound_post_drain_exit, shutdown_event=shutdown_event
+    )
+    _log_shutdown_budget()
+
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
@@ -2183,8 +2300,8 @@ async def run_combined_mode(
             ),
         )
 
-    if bound_post_drain_exit:
-        _start_post_drain_exit_deadline()
+    # Normally already armed by the worker's on_drained hook; idempotent.
+    post_drain_arm.start()
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         close_infrastructure,
@@ -2587,6 +2704,7 @@ Examples:
 
 def main() -> NoReturn:
     """CLI entry point."""
+    _install_debug_handlers()
     _install_excepthook()
 
     args = parse_args()

@@ -6,7 +6,6 @@ Targets the uncovered branches:
 - _setup_otel_traces fallback when OTLPSpanExporter raises.
 - _setup_otel_traces full-failure → console-only fallback.
 - _setup_console_only_traces success and failure.
-- _start_asyncio_flush helper.
 - export_record dispatch (TraceRecord vs other; ENABLE_OTLP_TRACES on/off).
 - _send_to_otel ERROR-status branch and exception swallow.
 - _log_to_console exception swallow.
@@ -26,12 +25,11 @@ import pytest
 from application_sdk.observability import traces_adaptor as tracer_mod
 from application_sdk.observability.models import TraceRecord
 from application_sdk.observability.traces_adaptor import AtlanTracesAdapter, get_traces
-from tests.unit.private_stdlib import private_stdlib
 
 
 def _adapter_with_otel_disabled() -> AtlanTracesAdapter:
     """Build an adapter with OTLP disabled and the flush task suppressed."""
-    AtlanTracesAdapter._flush_task_started = True  # don't start a thread
+    AtlanTracesAdapter._flush_task_started = True  # don't start the flush
     with mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", False):
         return AtlanTracesAdapter()
 
@@ -46,6 +44,17 @@ class TestResetForTesting:
         AtlanTracesAdapter._flush_task_started = True
         AtlanTracesAdapter._reset_for_testing()
         assert AtlanTracesAdapter._flush_task_started is False
+
+    def test_reset_for_testing_stops_the_running_flush(self) -> None:
+        """A reset stops the old flush, so the next construction does not
+        leave two running side by side on the shared loop."""
+        task = mock.MagicMock()
+        AtlanTracesAdapter._flush_task = task
+        AtlanTracesAdapter._flush_task_started = True
+        AtlanTracesAdapter._reset_for_testing()
+        task.cancel.assert_called_once_with()
+        task.wait.assert_called_once_with(timeout=5)
+        assert AtlanTracesAdapter._flush_task is None
 
 
 # ---------------------------------------------------------------------------
@@ -155,27 +164,6 @@ class TestSetupConsoleOnlyTraces:
         # Tracer provider attribute exists but is None (no half-init).
         assert adapter.tracer_provider is None
         assert adapter.tracer is None
-
-
-# ---------------------------------------------------------------------------
-# _start_asyncio_flush
-# ---------------------------------------------------------------------------
-
-
-class TestStartAsyncioFlush:
-    def test_start_asyncio_flush_runs_periodic_flush(self) -> None:
-        adapter = _adapter_with_otel_disabled()
-        sentinel = object()
-        sync_periodic = mock.MagicMock(return_value=sentinel)
-
-        with (
-            private_stdlib(tracer_mod, "asyncio") as local_asyncio,
-            mock.patch.object(local_asyncio, "run") as mock_run,
-            mock.patch.object(adapter, "_periodic_flush", new=sync_periodic),
-        ):
-            adapter._start_asyncio_flush()
-            sync_periodic.assert_called_once_with()
-            mock_run.assert_called_once_with(sentinel)
 
 
 # ---------------------------------------------------------------------------

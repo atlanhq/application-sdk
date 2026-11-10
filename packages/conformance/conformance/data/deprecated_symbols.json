@@ -253,6 +253,24 @@
       "symbol": "ContractValidationError"
     },
     {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "AtlanOAuthClient.build_token_request_data is deprecated and will be removed in v4.0.0. No SDK token exchange sends this payload (OAuthTokenService always form-encodes, and the Atlan OAuth exchange runs in pyatlan's token manager), so ATLAN_INTERNAL_HERACLES_URL has no effect through it. Use create_async_atlan_client().",
+      "migration_target": true,
+      "module": "application_sdk.credentials.atlan",
+      "removal_version": "4.0.0",
+      "symbol": "build_token_request_data"
+    },
+    {
+      "kind": "property",
+      "marker_via": "decorator",
+      "message": "AtlanOAuthClient.effective_token_url is deprecated and will be removed in v4.0.0. Nothing in the SDK exchanges an AtlanOAuthClient against this URL: create_async_atlan_client() hands client_id/client_secret to pyatlan's AsyncAtlanClient, whose token manager resolves the token endpoint itself. Use create_async_atlan_client().",
+      "migration_target": true,
+      "module": "application_sdk.credentials.atlan",
+      "removal_version": "4.0.0",
+      "symbol": "effective_token_url"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "DiscoveryError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
@@ -407,12 +425,57 @@
     },
     {
       "kind": "class",
+      "marker_via": "decorator",
+      "message": "RedisCapacityPool is deprecated and will be removed in v4.0.0. Nothing in the SDK configures or reads a capacity pool; bound concurrency inside the app (for example an asyncio.Semaphore) instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure._redis.capacity",
+      "removal_version": "4.0.0",
+      "symbol": "RedisCapacityPool"
+    },
+    {
+      "kind": "class",
       "marker_via": "warn",
       "message": "BindingError is deprecated; use application_sdk.errors.DependencyUnavailableError \u2014 will be removed in v4.0",
       "migration_target": true,
       "module": "application_sdk.infrastructure.bindings",
       "removal_version": "4.0",
       "symbol": "BindingError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "CapacityPool is deprecated and will be removed in v4.0.0. Nothing in the SDK configures or reads a capacity pool; bound concurrency inside the app (for example an asyncio.Semaphore) instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.capacity",
+      "removal_version": "4.0.0",
+      "symbol": "CapacityPool"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "LocalCapacityPool is deprecated and will be removed in v4.0.0. Nothing in the SDK configures or reads a capacity pool; bound concurrency inside the app (for example an asyncio.Semaphore) instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.capacity",
+      "removal_version": "4.0.0",
+      "symbol": "LocalCapacityPool"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "configure_capacity_pool is deprecated and will be removed in v4.0.0. Nothing in the SDK configures or reads a capacity pool; bound concurrency inside the app (for example an asyncio.Semaphore) instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.capacity",
+      "removal_version": "4.0.0",
+      "symbol": "configure_capacity_pool"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_capacity_pool is deprecated and will be removed in v4.0.0. Nothing in the SDK configures or reads a capacity pool; bound concurrency inside the app (for example an asyncio.Semaphore) instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.capacity",
+      "removal_version": "4.0.0",
+      "symbol": "get_capacity_pool"
     },
     {
       "kind": "class",

@@ -118,7 +118,6 @@ jobs:
 
       - name: Mint fleet App token
         id: app-token
-        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -149,7 +148,7 @@ jobs:
           # `ignore-error=true`: see build-and-scan.yaml — a cache-service hiccup must not fail a build.
           cache-to: type=gha,mode=min,scope=${{ matrix.platform }},ignore-error=true
           tags: ${{ needs.prepare.outputs.staging_base }}:sha-${{ needs.prepare.outputs.sha }}-${{ matrix.arch }}
-          github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ steps.app-token.outputs.token }}
         env:
           DOCKER_CLIENT_TIMEOUT: 600
           COMPOSE_HTTP_TIMEOUT: 600

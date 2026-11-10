@@ -111,6 +111,7 @@ def _WorkerWrapperForDrain(*, shutdown_drain_delay_seconds: float = 0.0):
     w._credential_sweeper = None
     w._start_event_params = {}
     w._shutdown_drain_delay_seconds = shutdown_drain_delay_seconds
+    w._on_drained = None
     return w
 
 
@@ -1195,6 +1196,93 @@ class TestShutdownDrainDelay:
         )
         assert app_worker._shutdown_drain_delay_seconds == SHUTDOWN_DRAIN_DELAY_SECONDS
         assert SHUTDOWN_DRAIN_DELAY_SECONDS > 0
+
+
+class TestOnDrained:
+    """``on_drained`` fires when the Temporal drain ends, before the wrapper's own
+    cleanup, so the post-drain deadline armed from it covers the Pushgateway's
+    final push, pre-DELETE hold and DELETE (FND-4645).
+    """
+
+    @pytest.mark.asyncio
+    async def test_fires_after_drain_and_before_pushgateway_stop(self) -> None:
+        order: list[str] = []
+        inner = mock.AsyncMock()
+
+        async def _drain(*_: object) -> None:
+            order.append("drain")
+
+        inner.__aexit__ = _drain
+        app_worker = AppWorker(
+            inner,
+            start_event_params=_MINIMAL_START_PARAMS,
+            shutdown_drain_delay_seconds=0,
+            on_drained=lambda: order.append("drained"),
+        )
+        pusher = mock.MagicMock()
+
+        async def _stop() -> None:
+            order.append("pushgateway_stop")
+
+        pusher.stop = _stop
+        app_worker._pusher = pusher
+
+        await app_worker.__aexit__(None, None, None)
+
+        assert order == ["drain", "drained", "pushgateway_stop"]
+
+    @pytest.mark.asyncio
+    async def test_fires_when_drain_raises(self) -> None:
+        inner = mock.AsyncMock()
+        inner.__aexit__ = mock.AsyncMock(side_effect=RuntimeError("teardown"))
+        drained = mock.MagicMock()
+        app_worker = AppWorker(
+            inner,
+            start_event_params=_MINIMAL_START_PARAMS,
+            shutdown_drain_delay_seconds=0,
+            on_drained=drained,
+        )
+
+        with pytest.raises(RuntimeError):
+            await app_worker.__aexit__(None, None, None)
+
+        drained.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    async def test_failing_callback_does_not_skip_cleanup(self) -> None:
+        inner = mock.AsyncMock()
+        inner.__aexit__ = mock.AsyncMock(return_value=None)
+        app_worker = AppWorker(
+            inner,
+            start_event_params=_MINIMAL_START_PARAMS,
+            shutdown_drain_delay_seconds=0,
+            on_drained=mock.MagicMock(side_effect=RuntimeError("boom")),
+        )
+        pusher = mock.MagicMock()
+        pusher.stop = mock.AsyncMock()
+        app_worker._pusher = pusher
+
+        await app_worker.__aexit__(None, None, None)
+
+        pusher.stop.assert_awaited_once()
+
+    def test_create_worker_forwards_on_drained(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+        try:
+
+            class _DrainApp(App):
+                async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                    return _WorkerOutput()
+
+            client = _make_mock_client()
+            drained = mock.MagicMock()
+            with mock.patch("application_sdk.execution._temporal.worker.Worker"):
+                worker = create_worker(client, on_drained=drained)
+            assert worker._on_drained is drained
+        finally:
+            AppRegistry.reset()
+            TaskRegistry.reset()
 
 
 class TestWorkerPoolQueueResolution:

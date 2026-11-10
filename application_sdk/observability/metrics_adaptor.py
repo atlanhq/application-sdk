@@ -1,7 +1,4 @@
-import asyncio
-import atexit
 import logging
-import threading
 from time import time
 from typing import Any, ClassVar
 
@@ -22,6 +19,7 @@ from application_sdk.constants import (
     SEGMENT_WRITE_KEY,
     SERVICE_NAME,
 )
+from application_sdk.observability.background_loop import BackgroundTask
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.models import MetricRecord, MetricType
 from application_sdk.observability.observability import AtlanObservability
@@ -52,12 +50,20 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     """
 
     _flush_task_started: ClassVar[bool] = False
+    # Kept so ``_reset_for_testing`` can stop the flush: otherwise the next
+    # construction starts a second one beside it on the shared loop.
+    _flush_task: ClassVar[BackgroundTask | None] = None
     _otel_setup_failed_logged: ClassVar[bool] = False
 
     @classmethod
     def _reset_for_testing(cls) -> None:
         """Reset initialization state for test isolation."""
+        task = cls._flush_task
+        cls._flush_task = None
         cls._flush_task_started = False
+        if task is not None:
+            task.cancel()
+            task.wait(timeout=5)
         cls._otel_setup_failed_logged = False
 
     def __init__(self):
@@ -91,17 +97,13 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             batch_size=SEGMENT_BATCH_SIZE,
             batch_timeout_seconds=SEGMENT_BATCH_TIMEOUT_SECONDS,
         )
-        # Register cleanup handler to close SegmentClient on shutdown
-        atexit.register(self.segment_client.close)
+        # No atexit close for the Segment client: its worker runs on the shared
+        # observability loop, whose one shutdown at exit sends the last batch.
 
         # Start periodic flush task if not already started
         if not AtlanMetricsAdapter._flush_task_started:
             try:
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(self._periodic_flush())
-                except RuntimeError:
-                    self._spawn_flush_thread()
+                AtlanMetricsAdapter._flush_task = self._start_periodic_flush()
                 AtlanMetricsAdapter._flush_task_started = True
             except Exception:
                 logging.error("Failed to start metrics flush task", exc_info=True)
@@ -157,22 +159,6 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     async def _flush_buffer(self, force=False):
         await super()._flush_buffer(force=force)
         await self.segment_client.flush()
-
-    def _spawn_flush_thread(self) -> None:
-        """Spawn a daemon thread to run the asyncio flush loop.
-
-        Extracted for testability — lets tests assert this specific call without
-        patching threading.Thread globally (which would also capture OTel internals).
-        """
-        threading.Thread(target=self._start_asyncio_flush, daemon=True).start()
-
-    def _start_asyncio_flush(self):
-        """Start an asyncio event loop for periodic metric flushing.
-
-        Creates a new event loop and runs the periodic flush task in the background.
-        This is used when no existing event loop is available.
-        """
-        asyncio.run(self._periodic_flush())
 
     def process_record(self, record: Any) -> dict[str, Any]:
         """Process a metric record into a standardized dictionary format.
@@ -328,6 +314,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             metric_type (str): Type of metric (counter, gauge, or histogram)
             labels: Key-value pairs for metric dimensions. Values must be
                 str/int/float/bool — OTel attributes do not accept other types.
+                Not modified: the context labels from ``get_metric_labels()``
+                are merged into a copy.
             description (Optional[str]): Optional description of the metric
             unit (Optional[str]): Optional unit of measurement
 
@@ -339,7 +327,9 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         Raises:
             Exception: If recording fails, logs error and continues
         """
-        labels.update(get_metric_labels())
+        # Merge into a copy: callers often reuse one labels dict across calls,
+        # and the context labels of one call must not leak into the next.
+        merged_labels = {**labels, **get_metric_labels()}
 
         try:
             # Create metric record
@@ -348,7 +338,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 name=name,
                 value=value,
                 type=metric_type,
-                labels=labels,
+                labels=merged_labels,
                 description=description,
                 unit=unit,
             )

@@ -29,6 +29,11 @@ from application_sdk.constants import (
     TRACES_FILE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
 )
+from application_sdk.observability.background_loop import (
+    BackgroundTask,
+    observability_loop,
+    register_after_fork,
+)
 from application_sdk.observability.utils import in_temporal_workflow
 
 
@@ -203,6 +208,9 @@ class AtlanObservability(Generic[T], ABC):
         # number can be capped. Guarded by ``_buffer_lock``: ``add_record`` runs
         # on any thread that has a running loop.
         self._flush_tasks: set[asyncio.Task[None]] = set()
+        # This sink's periodic flush on the shared observability loop, if it
+        # started one; a forked child restarts it on its own loop.
+        self._periodic_flush_task: BackgroundTask | None = None
 
         # Ensure data directory exists
         os.makedirs(data_dir, exist_ok=True)
@@ -239,22 +247,41 @@ class AtlanObservability(Generic[T], ABC):
 
         Tasks bound to another loop cannot be awaited from here; that loop's
         own shutdown path flushes them.
+
+        Only tasks that are not done yet are waited on. A finished task stays in
+        ``_flush_tasks`` until its ``_discard_flush_task`` callback runs, and
+        that callback only runs once the loop turns. ``gather`` over finished
+        tasks completes without yielding to the loop (Python 3.12+), so waiting
+        on one would re-check forever, never letting the callback run, with the
+        loop stalled and a core pinned (ARUN-1391). A task that is not done
+        cannot finish without the loop turning, so every pass of this loop
+        yields to it. A finished task is removed here instead, and its failure,
+        if any, reported the same way as a waited-on one's.
         """
         loop = asyncio.get_running_loop()
         while True:
             with self._buffer_lock:
-                pending = [t for t in self._flush_tasks if t.get_loop() is loop]
-            if not pending:
-                return
-            # ``_flush_records`` handles its own errors; gather only so one
-            # unexpected failure cannot hide the others.
-            results = await asyncio.gather(*pending, return_exceptions=True)
-            for result in results:
-                if isinstance(result, Exception):
+                owned = [t for t in self._flush_tasks if t.get_loop() is loop]
+                finished = [t for t in owned if t.done()]
+                pending = [t for t in owned if not t.done()]
+                # Removed now so the next pass, or the next call, does not
+                # report it again; the queued callback then finds it gone.
+                self._flush_tasks.difference_update(finished)
+            failures = [
+                t.exception() for t in finished if not t.cancelled() and t.exception()
+            ]
+            if pending:
+                # ``_flush_records`` handles its own errors; gather only so one
+                # unexpected failure cannot hide the others.
+                failures.extend(await asyncio.gather(*pending, return_exceptions=True))
+            for failure in failures:
+                if isinstance(failure, Exception):
                     logging.warning(
                         "Observability batch flush failed",
-                        exc_info=(type(result), result, result.__traceback__),
+                        exc_info=(type(failure), failure, failure.__traceback__),
                     )
+            if not pending:
+                return
 
     def _discard_flush_task(self, task: "asyncio.Task[None]") -> None:
         with self._buffer_lock:
@@ -417,6 +444,46 @@ class AtlanObservability(Generic[T], ABC):
 
         This is an abstract method that must be implemented by subclasses.
         """
+
+    def _start_periodic_flush(self) -> BackgroundTask | None:
+        """Start :meth:`_periodic_flush` on the shared observability loop.
+
+        Every sink starts its periodic flush here, on the one background loop
+        (see ``background_loop``), whatever thread or loop the sink is built
+        on. That loop's shutdown at exit cancels the flush, whose
+        ``CancelledError`` handler makes the final flush, within one bound.
+
+        Returns the task's handle, or ``None`` when the loop has already shut
+        down.
+        """
+        handle = observability_loop.start(
+            self._periodic_flush(),
+            name=f"observability-{self._get_signal_type()}-flush",
+        )
+        self._periodic_flush_task = handle
+        return handle
+
+    @classmethod
+    def _restart_periodic_flushes_after_fork(cls) -> None:
+        """In a forked child, restart each sink's periodic flush on the child's loop.
+
+        The child inherits the sinks and their "flush started" guards, but not
+        the thread that ran the flushes, so without this nothing in the child
+        would flush. The buffer lock is replaced first: a parent thread may
+        have held it at the moment of the fork.
+        """
+        for instance in list(cls._instances):
+            instance._buffer_lock = threading.Lock()
+            instance._flush_tasks = set()
+            old = instance._periodic_flush_task
+            if old is None:
+                continue
+            new = instance._start_periodic_flush()
+            # Logs, metrics, traces and sizing keep a class-level handle to
+            # stop the flush with; point it at the child's task.
+            owner = type(instance)
+            if getattr(owner, "_flush_task", None) is old:
+                owner._flush_task = new  # type: ignore[attr-defined]  # — set only on classes that declare it
 
     async def _periodic_flush(self):
         """Periodically flush the buffer to storage.
@@ -787,3 +854,8 @@ class AtlanObservability(Generic[T], ABC):
 
         except Exception:
             logging.error("Error adding record", exc_info=True)
+
+
+register_after_fork(
+    AtlanObservability._restart_periodic_flushes_after_fork, restarts_work=True
+)

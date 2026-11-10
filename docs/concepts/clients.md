@@ -45,6 +45,7 @@ Both SQL client classes are typically **subclassed** for specific database types
     *   Called with a `credentials` dictionary.
     *   Builds the final SQLAlchemy connection string using `DB_CONFIG` and `credentials` (including authentication handling).
     *   Creates the SQLAlchemy engine (`self.engine`) and connection (`self.connection`).
+    *   **RDS IAM auth (`authType` `iam_user` or `iam_role`):** the token `load()` puts in the engine URL is accepted by RDS for new connections for only 15 minutes. `load()` therefore registers a `do_connect` listener on the engine (an async client's `sync_engine`): once the token is 10 minutes old, the next new connection calls `get_sqlalchemy_connection_string()` again (for `iam_role`, another STS `AssumeRole`) and connects with the fresh token, which later connections reuse until it ages in turn. The call runs on a worker thread; on `AsyncBaseSQLClient` it is offloaded, so the event loop stays free while STS answers. Connections opened during a refresh wait for it rather than calling STS again. Open pooled connections are unaffected. A connector that overrides `get_sqlalchemy_connection_string()` gets its override called for the refresh too, so for IAM auth the override must be safe to call repeatedly, from any thread, and must return a fresh token each time. A password set in `DB_CONFIG.connect_args` is left as is.
 
 3.  **Executing Queries (`run_query` method):**
     *   Takes a SQL query string, an optional `batch_size` and optional `params`.
@@ -242,7 +243,7 @@ class MyApiClient(BaseClient):
 
 ## Redis Client (`redis.py`)
 
-`RedisClient` and `RedisClientAsync` are distributed-lock helpers — they implement a low-level acquire/release lock protocol via Redis. The internal lock primitives (`_acquire_lock`, `_release_lock`) are exposed by the higher-level `CapacityPool` abstraction, which is the recommended interface for managing concurrency slots across pods. See [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool).
+`RedisClient` and `RedisClientAsync` are distributed-lock helpers — they implement a low-level acquire/release lock protocol via Redis, and back the SDK's task lock activities (`execution/_temporal/lock_activities.py`). They are unrelated to the deprecated `CapacityPool` (see [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool-deprecated)).
 
 Requires the `[distributed_lock]` extra: `uv add 'atlan-application-sdk[distributed_lock]'`.
 

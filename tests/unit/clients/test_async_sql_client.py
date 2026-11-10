@@ -379,3 +379,164 @@ async def test_run_query_wrap_is_retryable_client_side(
             pass
 
     assert exc_info.value.effective_retryable is True
+
+
+_IAM_URL = "postgresql+psycopg://u:{token}@127.0.0.1:1/db"
+
+
+class _StopConnect(Exception):
+    """Raised by the recorder so no connect ever reaches a socket."""
+
+
+def _record_connect_params(sync_engine: Any) -> list[dict[str, Any]]:
+    from sqlalchemy import event
+
+    seen: list[dict[str, Any]] = []
+
+    def _record(
+        dialect: object, conn_rec: object, cargs: object, cparams: dict[str, Any]
+    ) -> None:
+        seen.append(dict(cparams))
+        raise _StopConnect
+
+    event.listen(sync_engine, "do_connect", _record)
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_an_async_refresh_builds_the_token_off_the_event_loop() -> None:
+    """An async engine connects on the loop; the STS-bound build must not run there."""
+    pytest.importorskip("psycopg")
+    from sqlalchemy import event
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from application_sdk.clients.sql import _FreshIamToken
+    from tests.unit.loop_probe import LoopProbe
+
+    probe = LoopProbe()
+    now = [1000.0]
+
+    def _build() -> str:
+        probe.block()  # stands in for the STS AssumeRole
+        return _IAM_URL.format(token="token-1")
+
+    engine = create_async_engine(_IAM_URL.format(token="token-0"))
+    event.listen(
+        engine.sync_engine,
+        "do_connect",
+        _FreshIamToken(
+            _build,
+            _IAM_URL.format(token="token-0"),
+            now[0],
+            on_loop=True,
+            clock=lambda: now[0],
+        ),
+    )
+    seen = _record_connect_params(engine.sync_engine)
+    now[0] += 11 * 60
+
+    async def _connect() -> None:
+        with pytest.raises(_StopConnect):
+            async with engine.connect():
+                pass
+
+    await probe.run(_connect)
+
+    probe.assert_loop_stayed_free("refreshing the RDS IAM token on an async connect")
+    assert seen[0]["password"] == "token-1"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_load_installs_the_on_loop_refresh_on_the_sync_engine() -> None:
+    pytest.importorskip("psycopg")
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from application_sdk.clients.sql import _FreshIamToken
+
+    class _IamAsyncClient(AsyncBaseSQLClient):
+        DB_CONFIG = DatabaseConfig(template="unused://{host}", required=["host"])
+
+        def get_sqlalchemy_connection_string(self) -> str:
+            return _IAM_URL.format(token="token-0")
+
+    real = create_async_engine(_IAM_URL.format(token="token-0"))
+
+    class _Ping:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    async_engine = MagicMock()
+    async_engine.sync_engine = real.sync_engine
+    async_engine.connect = MagicMock(return_value=_Ping())
+    async_engine.dispose = AsyncMock()
+
+    client = _IamAsyncClient()
+    with patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=async_engine):
+        await client.load({"host": "h", "authType": "iam_role"})
+
+    listeners = [
+        fn
+        for fn in real.sync_engine.dialect.dispatch.do_connect
+        if isinstance(fn, _FreshIamToken)
+    ]
+    assert len(listeners) == 1
+    assert listeners[0]._on_loop is True
+    await real.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_waiter_does_not_break_the_shared_refresh() -> None:
+    """Cancelling a connect that waits on another's refresh must not cancel that refresh."""
+    pytest.importorskip("psycopg")
+    import asyncio
+    import threading
+
+    from sqlalchemy import event
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from application_sdk.clients.sql import _FreshIamToken
+
+    now = [1000.0]
+    release = threading.Event()
+
+    def _build() -> str:
+        assert release.wait(10)
+        return _IAM_URL.format(token="token-1")
+
+    engine = create_async_engine(_IAM_URL.format(token="token-0"))
+    listener = _FreshIamToken(
+        _build,
+        _IAM_URL.format(token="token-0"),
+        now[0],
+        on_loop=True,
+        clock=lambda: now[0],
+    )
+    event.listen(engine.sync_engine, "do_connect", listener)
+    seen = _record_connect_params(engine.sync_engine)
+    now[0] += 11 * 60
+
+    async def _connect() -> None:
+        async with engine.connect():
+            pass
+
+    owner = asyncio.ensure_future(_connect())
+    while listener._refreshing is None:
+        await asyncio.sleep(0)
+    refreshing = listener._refreshing
+    waiter = asyncio.ensure_future(_connect())
+    # The waiter is parked once it has subscribed to the shared refresh.
+    while not refreshing._done_callbacks:  # type: ignore[attr-defined]
+        await asyncio.sleep(0)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    release.set()
+
+    with pytest.raises(_StopConnect):
+        await owner
+    assert seen[-1]["password"] == "token-1"
+    await engine.dispose()

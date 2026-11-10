@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "atlan-application-sdk-conformance"
-version = "0.55.0"
+version = "0.56.1"
 description = "Conformance suite, remediation programs, and CLI for the Atlan Application SDK"
 license = "Apache-2.0"
 authors = [
@@ -76,7 +76,7 @@ testpaths = ["tests"]
 # root dev group's pin and the ruff-pre-commit rev (FND-4247, enforced by
 # .github/scripts/tests/test_lint_guards.py).
 [dependency-groups]
-dev = ["ruff==0.17.3"]
+dev = ["ruff==0.17.4"]
 
 [tool.ruff.lint]
 # This file is the nearest ruff config for packages/conformance/, so the root

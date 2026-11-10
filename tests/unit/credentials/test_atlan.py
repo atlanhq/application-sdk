@@ -3,9 +3,10 @@
 Covers:
 - AtlanApiToken.validate (success + missing token / base_url)
 - AtlanOAuthClient.validate (success + missing field branches)
-- effective_token_url (token_url set / Heracles override / base_url derived /
-  empty fallback)
-- build_token_request_data (Keycloak vs Heracles, with/without scopes)
+- effective_token_url (deprecated; token_url set / Heracles override /
+  base_url derived / empty fallback)
+- build_token_request_data (deprecated; Keycloak vs Heracles, with/without
+  scopes)
 - with_new_token preserves AtlanOAuthClient subclass + base_url
 - _parse_atlan_api_token / _parse_atlan_oauth_client (round-trips)
 - BLDX-1129 anchor: inline ``pyatlan_v9.client.aio.AsyncAtlanClient`` and
@@ -158,11 +159,13 @@ class TestAtlanOAuthClientProperties:
     def test_credential_type(self):
         assert self._make().credential_type == "atlan_oauth_client"
 
+    @pytest.mark.filterwarnings("ignore::DeprecationWarning")
     def test_effective_token_url_uses_explicit_value(self, monkeypatch):
         monkeypatch.delenv("ATLAN_INTERNAL_HERACLES_URL", raising=False)
         cred = self._make(token_url="https://override/oauth/token")
         assert cred.effective_token_url == "https://override/oauth/token"
 
+    @pytest.mark.filterwarnings("ignore::DeprecationWarning")
     def test_effective_token_url_uses_internal_heracles(self, monkeypatch):
         monkeypatch.setenv(
             "ATLAN_INTERNAL_HERACLES_URL", "http://heracles.svc.cluster.local/"
@@ -172,6 +175,7 @@ class TestAtlanOAuthClientProperties:
             cred.effective_token_url == "http://heracles.svc.cluster.local/oauth/token"
         )
 
+    @pytest.mark.filterwarnings("ignore::DeprecationWarning")
     def test_effective_token_url_uses_base_url(self, monkeypatch):
         monkeypatch.delenv("ATLAN_INTERNAL_HERACLES_URL", raising=False)
         cred = self._make(base_url="https://t.atlan.com/")
@@ -179,11 +183,13 @@ class TestAtlanOAuthClientProperties:
             "https://t.atlan.com/auth/realms/default/protocol/openid-connect/token"
         )
 
+    @pytest.mark.filterwarnings("ignore::DeprecationWarning")
     def test_effective_token_url_empty_when_nothing_set(self, monkeypatch):
         monkeypatch.delenv("ATLAN_INTERNAL_HERACLES_URL", raising=False)
         cred = self._make(base_url="")
         assert cred.effective_token_url == ""
 
+    @pytest.mark.filterwarnings("ignore::DeprecationWarning")
     def test_build_token_request_data_keycloak_form(self, monkeypatch):
         monkeypatch.delenv("ATLAN_INTERNAL_HERACLES_URL", raising=False)
         cred = self._make()
@@ -195,6 +201,7 @@ class TestAtlanOAuthClientProperties:
             "grant_type": "client_credentials",
         }
 
+    @pytest.mark.filterwarnings("ignore::DeprecationWarning")
     def test_build_token_request_data_keycloak_form_with_scopes(self, monkeypatch):
         monkeypatch.delenv("ATLAN_INTERNAL_HERACLES_URL", raising=False)
         cred = self._make(scopes=("read", "write"))
@@ -202,6 +209,7 @@ class TestAtlanOAuthClientProperties:
         assert use_json is False
         assert data["scope"] == "read write"
 
+    @pytest.mark.filterwarnings("ignore::DeprecationWarning")
     def test_build_token_request_data_heracles_json(self, monkeypatch):
         monkeypatch.setenv(
             "ATLAN_INTERNAL_HERACLES_URL", "http://heracles.svc.cluster.local"
@@ -216,6 +224,7 @@ class TestAtlanOAuthClientProperties:
             "scope": "read",
         }
 
+    @pytest.mark.filterwarnings("ignore::DeprecationWarning")
     def test_build_token_request_data_heracles_no_scopes(self, monkeypatch):
         monkeypatch.setenv(
             "ATLAN_INTERNAL_HERACLES_URL", "http://heracles.svc.cluster.local"
@@ -224,6 +233,22 @@ class TestAtlanOAuthClientProperties:
         data, use_json = cred.build_token_request_data()
         assert use_json is True
         assert "scope" not in data
+
+    def test_effective_token_url_is_deprecated(self, monkeypatch):
+        """No SDK exchange reads it — pyatlan's token manager owns the URL."""
+        monkeypatch.delenv("ATLAN_INTERNAL_HERACLES_URL", raising=False)
+        cred = self._make(token_url="https://override/oauth/token")
+        with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+            assert cred.effective_token_url == "https://override/oauth/token"
+
+    def test_build_token_request_data_is_deprecated(self, monkeypatch):
+        """No SDK exchange sends it — OAuthTokenService always form-encodes."""
+        monkeypatch.setenv(
+            "ATLAN_INTERNAL_HERACLES_URL", "http://heracles.svc.cluster.local"
+        )
+        with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+            _, use_json = self._make().build_token_request_data()
+        assert use_json is True
 
     def test_with_new_token_preserves_subclass_and_base_url(self):
         """Override returns AtlanOAuthClient (not OAuthClientCredential),

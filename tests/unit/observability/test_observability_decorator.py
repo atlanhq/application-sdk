@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from application_sdk.observability.decorators.observability_decorator import (
+    FUNCTION_CALLS_METRIC,
     _record_error_observability,
     _record_success_observability,
     observability,
@@ -51,7 +52,12 @@ class TestSyncWrapper:
 
         metrics.record_metric.assert_called_once()
         m_kwargs = metrics.record_metric.call_args.kwargs
-        assert m_kwargs["name"] == "add_success"
+        assert m_kwargs["name"] == FUNCTION_CALLS_METRIC
+        assert m_kwargs["labels"] == {
+            "function": "add",
+            "outcome": "success",
+            "error_type": "none",
+        }
         assert m_kwargs["metric_type"] == MetricType.COUNTER
         assert m_kwargs["value"] == 1
 
@@ -74,7 +80,42 @@ class TestSyncWrapper:
         assert events[0]["attributes"]["error"] == "ValueError"
 
         metrics.record_metric.assert_called_once()
-        assert metrics.record_metric.call_args.kwargs["name"] == "boom_failure"
+        assert metrics.record_metric.call_args.kwargs["name"] == FUNCTION_CALLS_METRIC
+        assert metrics.record_metric.call_args.kwargs["labels"] == {
+            "function": "boom",
+            "outcome": "failure",
+            "error_type": "ValueError",
+        }
+
+    def test_one_metric_name_and_label_keys_across_functions_and_outcomes(
+        self,
+    ) -> None:
+        """Every decorated function shares one metric name and one label key set.
+
+        Per-function names (``{func}_success``) mint a new metric family per
+        decorated function; differing key sets split one name into two
+        families, which the Prometheus exporter rejects.
+        """
+        logger, metrics, traces = _mock_components()
+
+        @observability(logger=logger, metrics=metrics, traces=traces)
+        def first() -> None:
+            return None
+
+        @observability(logger=logger, metrics=metrics, traces=traces)
+        def second() -> None:
+            raise KeyError("x")
+
+        first()
+        with pytest.raises(KeyError):
+            second()
+
+        calls = [c.kwargs for c in metrics.record_metric.call_args_list]
+        assert {c["name"] for c in calls} == {FUNCTION_CALLS_METRIC}
+        assert {frozenset(c["labels"]) for c in calls} == {
+            frozenset({"function", "outcome", "error_type"})
+        }
+        assert {c["description"] for c in calls} == {calls[0]["description"]}
 
     def test_sync_swallows_trace_exception_but_returns_result(self) -> None:
         """A failure inside traces.record_trace must not break the wrapped function."""
@@ -125,7 +166,7 @@ class TestAsyncWrapper:
         traces.record_trace.assert_called_once()
         assert traces.record_trace.call_args.kwargs["status_code"] == "OK"
         metrics.record_metric.assert_called_once()
-        assert metrics.record_metric.call_args.kwargs["name"] == "add_success"
+        assert metrics.record_metric.call_args.kwargs["name"] == FUNCTION_CALLS_METRIC
 
     @pytest.mark.asyncio
     async def test_async_failure_records_error_and_reraises(self) -> None:
@@ -140,12 +181,12 @@ class TestAsyncWrapper:
         traces.record_trace.assert_called_once()
         assert traces.record_trace.call_args.kwargs["status_code"] == "ERROR"
         metrics.record_metric.assert_called_once()
-        assert metrics.record_metric.call_args.kwargs["name"] == "boom_failure"
-        # PR #1601 (BLDX-1186): metric "error" label now carries the
-        # exception class name, not the raw message — avoids leaking
-        # PII / credentials and prevents high-cardinality blow-up.
+        assert metrics.record_metric.call_args.kwargs["name"] == FUNCTION_CALLS_METRIC
+        # The error_type label carries the exception class name, never the
+        # raw message — avoids leaking PII and high-cardinality blow-up.
         labels = metrics.record_metric.call_args.kwargs["labels"]
-        assert labels["error"] == "RuntimeError"
+        assert labels["error_type"] == "RuntimeError"
+        assert labels["outcome"] == "failure"
 
     @pytest.mark.asyncio
     async def test_async_swallows_trace_failure_in_error_path(self) -> None:

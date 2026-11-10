@@ -124,6 +124,13 @@ def test_category_github_actions_fallback() -> None:
     assert pr.category is Category.GITHUB_ACTIONS
 
 
+def test_category_github_actions_major_branch() -> None:
+    """separateMajorMinor puts the github-actions group's majors on
+    renovate/major-github-actions, which also contains "github-actions"."""
+    pr = classify(make_pr(labels=[], branch="renovate/major-github-actions"))
+    assert pr.category is Category.GITHUB_ACTIONS_MAJOR
+
+
 def test_category_contract_toolkit_fallback() -> None:
     pr = classify(make_pr(labels=[], branch="renovate/app-contract-toolkit-1.x"))
     assert pr.category is Category.CONTRACT_TOOLKIT
@@ -219,6 +226,14 @@ def test_auto_merge_expected_lock_maintenance() -> None:
 def test_auto_merge_expected_github_actions() -> None:
     pr = classify(make_pr(branch="renovate/github-actions"))
     assert pr.auto_merge_expected is True
+
+
+def test_auto_merge_expected_github_actions_major_is_human() -> None:
+    """FND-4651: the preset does not auto-merge action majors. Reading the lane
+    as auto would classify a green, unarmed major PR as automerge_not_armed and
+    the hourly re-arm job would turn auto-merge back on."""
+    pr = classify(make_pr(branch="renovate/major-github-actions"))
+    assert pr.auto_merge_expected is False
 
 
 def test_auto_merge_expected_contract_toolkit() -> None:

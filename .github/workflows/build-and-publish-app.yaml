@@ -114,6 +114,11 @@ on:
         required: false
         type: boolean
         default: false
+      apt_packages:
+        description: "Space-separated Ubuntu packages apt-installed in the certify gate before `uv sync`, for an app whose Python dependencies build a native extension the runner lacks headers for (e.g. hive's pykerberos needs libkrb5-dev). Default none. Each name is matched against a strict Debian package-name allowlist before install; anything else fails the gate. Mirrors tests-reusable.yaml's `apt-packages`, so pass the same list."
+        required: false
+        type: string
+        default: ""
       unit_test_shards:
         description: "Opt-in: split the certify gate's `tests/unit` across this many parallel runners (2-10). Default 1 = no split: `certify` runs the tests itself in one job, exactly as before, and no extra jobs start. Any value outside 1-10 fails the run. When set, pytest-split balances the runners from the app's committed `.test_durations` if it has one, else splits evenly by count. See docs/standards/app-certification.md."
         required: false
@@ -132,10 +137,10 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: true
-        description: "Org-level PAT for GHCR login (the fleet App only has repo-level Packages permission; these packages are org-level) and, in the build job specifically, everything else that job needs too (the private-dependency git_token BuildKit secret) since it's already using the PAT for GHCR anyway. Also a fallback if the App token can't be minted elsewhere. Cross-repo checkout/dispatch steps in jobs that never touch GHCR (certify, leak-scan, app-deployment-dispatcher) use a minted atlan-app-fleet token instead — see the 'Mint fleet App token' steps."
+        description: "Org-level PAT for GHCR login and push (the fleet App only has repo-level Packages permission; these packages are org-level). Not the private-dependency git_token BuildKit secret: the build job mints a read-only fleet App token for that, because every build backend the Dockerfile's `uv sync` runs can read it (FND-4744). Never a fallback for the App token (FND-4652). Cross-repo checkout/dispatch steps in jobs that never touch GHCR (certify, leak-scan, app-deployment-dispatcher) use a minted atlan-app-fleet token instead — see the 'Mint fleet App token' steps."
       FLEET_APP_ID:
         required: false
-        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit', which every caller already uses. Declared here so the contract is self-documenting; a caller using explicit named secrets instead of inherit would need to list this too."
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit', which every caller already uses. Declared here so the contract is self-documenting; a caller using explicit named secrets instead of inherit would need to list this too. Effectively required: every 'Mint fleet App token' step fails the job without it, with no ORG_PAT_GITHUB fallback (FND-4652). Declared optional only so an omitting caller gets a red step rather than a startup_failure."
       FLEET_APP_PRIVATE_KEY:
         required: false
         description: "atlan-app-fleet App private key (org secret). Same inherit-only availability as FLEET_APP_ID above."
@@ -215,79 +220,31 @@ jobs:
     runs-on: ubuntu-slim
     timeout-minutes: 2
     steps:
+      # No `token:` needed: atlanhq/application-sdk is a PUBLIC repo, so the
+      # calling app's GITHUB_TOKEN can clone it from this reusable workflow.
+      # build-decision's identical tokenless checkout already runs on main in
+      # every consumer app's Build & Publish and succeeds. Only the PRIVATE
+      # repos (app deps, the private-dependency mirror) need an App token.
+      - name: Checkout SDK helper scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: .sdk-entrypoint
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      # Tag-ref bypass, tenants/channel resolution, and the main-only check:
+      # .sdk-entrypoint/.github/scripts/build_and_publish/publish.py channel-gate.
       - name: Enforce main-branch invariant for channel='all'
         env:
-          # REF and CHANNEL/TENANTS are passed via env (not interpolated into
-          # the script body) — protects against shell injection from branch
-          # names containing backticks/$().
+          # Passed via env, never interpolated into the command line: a branch
+          # name can contain backticks or $().
           REF: ${{ inputs.ref || github.ref }}
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-        run: |
-          set -euo pipefail
-
-          # Strip any trailing CR/LF that GitHub expression evaluation can inject.
-          RELEASE_TAG="${RELEASE_TAG//$'\r'/}"
-          RELEASE_TAG="${RELEASE_TAG//$'\n'/}"
-
-          # Bypass the main-branch gate only when the ref is actually the
-          # matching tag ref. Checking release_tag alone is insufficient:
-          # a caller could pass any non-empty value from a feature branch
-          # to skip the channel='all' protection.
-          if [ -n "${RELEASE_TAG}" ] && [ "${REF}" = "refs/tags/${RELEASE_TAG}" ]; then
-            echo "Tagged release (${RELEASE_TAG}) — main-branch gate skipped."
-            exit 0
-          fi
-
-          # Mirror the channel-resolution rules used at publish time:
-          #   tenants  -> specific  (skip gate)
-          #   channel='' or 'all' -> all  (enforce gate)
-          #   beta/staging/anything else -> skip gate
-          #
-          # Channel is lowercased before comparison so a stray 'ALL'/'All'
-          # can't slip past — the downstream API treats target_channel
-          # case-sensitively, so we normalize here.
-          if [ -n "${TENANTS}" ]; then
-            echo "Tenants targeting (${TENANTS}) — main-branch gate skipped."
-            exit 0
-          fi
-          EFFECTIVE_CHANNEL="${CHANNEL:-all}"
-          EFFECTIVE_CHANNEL="${EFFECTIVE_CHANNEL,,}"  # bash 4+ lowercase
-          if [ "${EFFECTIVE_CHANNEL}" != "all" ]; then
-            echo "Channel '${EFFECTIVE_CHANNEL}' — main-branch gate skipped."
-            exit 0
-          fi
-
-          # Accept both the short ('main') and qualified ('refs/heads/main')
-          # forms. Anything else falls through to the reject arm, including:
-          #   - feature branches (refs/heads/feat-foo, feat/foo, …)
-          #   - bare tag refs without release_tag (release_tag is handled above;
-          #     bare tags without it are rejected)
-          case "${REF}" in
-            main|refs/heads/main)
-              echo "Channel 'all' on main — proceeding."
-              ;;
-            *)
-              echo "::error title=Publish blocked::Channel 'all' requires the main branch — got ref '${REF}'."
-              {
-                echo "### Publish blocked"
-                echo ""
-                echo "Releases to the **all** channel must be built from the **main** branch."
-                echo ""
-                echo "| Field | Value |"
-                echo "|-------|-------|"
-                echo "| Ref | \`${REF}\` |"
-                echo "| Channel | \`${EFFECTIVE_CHANNEL}\` |"
-                echo ""
-                echo "Re-run with one of:"
-                echo "- \`channel: beta\` or \`channel: staging\` (non-prod)"
-                echo "- \`tenants: <comma-separated-ids>\` (targeted to specific tenants)"
-                echo "- merge to \`main\` and let the push-trigger run"
-              } >> "${GITHUB_STEP_SUMMARY}"
-              exit 1
-              ;;
-          esac
+        run: python3 .sdk-entrypoint/.github/scripts/build_and_publish/publish.py channel-gate
 
   # ── Job 0b: Unit-tests gate ──────────────────────────────────────────────────
   # Block publish unless the app's `unit_tests_workflow_file` has completed
@@ -326,6 +283,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Checkout SDK helper scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: .sdk-entrypoint
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      # Find a run of the app's tests workflow on the publish SHA, or dispatch
+      # one: build_and_publish/unit_tests_gate.py prepare.
       - name: Resolve SHA, find or dispatch tests run
         id: prepare
         env:
@@ -340,83 +308,7 @@ jobs:
           DISPATCH_REF: ${{ inputs.ref || github.ref_name }}
           WORKFLOW_FILE: ${{ inputs.unit_tests_workflow_file }}
           REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          SHA=$(gh api "/repos/${REPO}/commits/${REF}" --jq '.sha')
-          echo "Resolved '${REF}' → ${SHA}"
-
-          # Look for an existing run of this workflow on this commit. Any
-          # conclusion — the next step will inspect the result.
-          EXISTING=$(gh run list \
-            --repo "${REPO}" \
-            --workflow "${WORKFLOW_FILE}" \
-            --commit "${SHA}" \
-            --limit 1 \
-            --json databaseId \
-            --jq '.[0].databaseId // empty')
-
-          if [ -n "${EXISTING}" ]; then
-            echo "Found existing run ${EXISTING} of '${WORKFLOW_FILE}' on ${SHA} — reusing."
-            echo "run_id=${EXISTING}" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-
-          # No prior run on this SHA. Dispatch fresh on the publish ref.
-          # `gh workflow run` doesn't return the new run's ID, so capture
-          # it by listing recent dispatches after the trigger.
-          echo "No existing run of '${WORKFLOW_FILE}' on ${SHA}. Dispatching on '${DISPATCH_REF}'..."
-          # `gh run list --branch` compares against the short headBranch (e.g. 'main'),
-          # not the full ref ('refs/heads/main'). Strip the prefix so the filter actually
-          # matches the dispatched run.
-          DISPATCH_BRANCH="${DISPATCH_REF#refs/heads/}"
-          DISPATCH_BRANCH="${DISPATCH_BRANCH#refs/tags/}"
-          BEFORE=$(date -u +%FT%TZ)
-          if ! gh workflow run "${WORKFLOW_FILE}" --repo "${REPO}" --ref "${DISPATCH_REF}"; then
-            {
-              echo "### Publish blocked: failed to dispatch '${WORKFLOW_FILE}'"
-              echo ""
-              echo "The gate tried to dispatch \`${WORKFLOW_FILE}\` on \`${DISPATCH_REF}\` for SHA \`${SHA}\` but the dispatch failed."
-              echo ""
-              echo "Common causes:"
-              echo "- The workflow does not declare \`workflow_dispatch:\` in its \`on:\` block."
-              echo "- The file does not exist at \`.github/workflows/${WORKFLOW_FILE}\`."
-              echo "- The branch \`${DISPATCH_REF}\` does not exist."
-              echo ""
-              echo "Contract + template: <https://github.com/atlanhq/application-sdk/blob/main/docs/standards/unit-tests-gate.md>"
-            } >> "${GITHUB_STEP_SUMMARY}"
-            echo "::error title=Publish blocked::Failed to dispatch '${WORKFLOW_FILE}'. See workflow summary."
-            exit 1
-          fi
-
-          # Poll for up to 60 seconds for the dispatched run to register.
-          # GitHub usually surfaces it within ~5–10s; allow margin for slow
-          # API replication.
-          echo "Dispatched. Polling for the new run to appear..."
-          RUN_ID=""
-          for i in $(seq 1 12); do
-            sleep 5
-            RUN_ID=$(gh run list \
-              --repo "${REPO}" \
-              --workflow "${WORKFLOW_FILE}" \
-              --branch "${DISPATCH_BRANCH}" \
-              --event workflow_dispatch \
-              --created ">${BEFORE}" \
-              --limit 1 \
-              --json databaseId \
-              --jq '.[0].databaseId // empty')
-            if [ -n "${RUN_ID}" ]; then
-              echo "New run registered after ${i} attempt(s): ${RUN_ID}"
-              break
-            fi
-            echo "Attempt ${i}/12 — run not yet visible, retrying..."
-          done
-
-          if [ -z "${RUN_ID}" ]; then
-            echo "::error title=Publish blocked::Dispatched '${WORKFLOW_FILE}' but the new run never registered within 60s."
-            exit 1
-          fi
-
-          echo "run_id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
+        run: python3 .sdk-entrypoint/.github/scripts/build_and_publish/unit_tests_gate.py prepare
 
       - name: Wait for tests run to complete
         id: wait
@@ -424,27 +316,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_ID: ${{ steps.prepare.outputs.run_id }}
           REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          echo "Polling run ${RUN_ID} every 30s (timeout 30m)..."
-          # Loop bound covers the 30-min job timeout. The job-level
-          # timeout-minutes already enforces an outer cap; this inner cap
-          # avoids tight infinite loops if `gh run view` ever returns junk.
-          for i in $(seq 1 70); do
-            RESULT=$(gh run view "${RUN_ID}" --repo "${REPO}" --json status,conclusion,url)
-            STATUS=$(echo "${RESULT}" | jq -r '.status')
-            CONCLUSION=$(echo "${RESULT}" | jq -r '.conclusion // ""')
-            URL=$(echo "${RESULT}" | jq -r '.url')
-            echo "  iteration ${i}: status=${STATUS} conclusion=${CONCLUSION}"
-            if [ "${STATUS}" = "completed" ]; then
-              echo "conclusion=${CONCLUSION}" >> "${GITHUB_OUTPUT}"
-              echo "url=${URL}" >> "${GITHUB_OUTPUT}"
-              exit 0
-            fi
-            sleep 25
-          done
-          echo "::error title=Publish blocked::Tests run ${RUN_ID} did not complete within the gate timeout."
-          exit 1
+        run: python3 .sdk-entrypoint/.github/scripts/build_and_publish/unit_tests_gate.py wait
 
       # Enforcement (DISTR-456 flip): a non-success conclusion exits non-zero,
       # so `prepare`'s `if: !failure()` skips the whole build + publish chain.
@@ -533,15 +405,49 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Mint fleet App token
-        # Same as certify's: authenticates the app's private atlanhq deps.
-        id: app-token
+      # Scoped to the private atlanhq repos the app names (git_auth.py
+      # repos: its pyproject.toml / uv.lock files, public repos dropped).
+      # No mint when it names none: create-github-app-token with no
+      # `repositories` would grant the whole installation. The script comes
+      # from this workflow's own commit (job.workflow_sha), so it is the
+      # version that matches the workflow running it.
+      - name: Checkout SDK git_auth.py (private git deps)
+        if: inputs.private_git_auth
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/git_auth.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-git-auth
+          persist-credentials: false
+
+      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
+        id: git-deps-repos
+        if: inputs.private_git_auth
+        run: |
+          set -euo pipefail
+          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir app
+          # Out of the workspace: it is the image build context and the tree
+          # conformance and pre-commit look at.
+          rm -rf .sdk-git-auth
+
+      - name: Mint read-only token for private git dependencies
+        id: git-deps-token
+        if: inputs.private_git_auth && steps.git-deps-repos.outputs.repositories != ''
+        # A failed mint leaves the token empty; see the guard below.
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
+          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
+          # workflow's own commit, never the PR's tree: the repos step above
+          # fails the job for any private repo not on it, so a PR's
+          # pyproject.toml / uv.lock cannot widen this scope.
+          repositories: ${{ steps.git-deps-repos.outputs.repositories }}
+          permission-contents: read
 
       - name: Checkout SDK helper scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -549,28 +455,74 @@ jobs:
           repository: atlanhq/application-sdk
           ref: main
           path: sdk
-          sparse-checkout: .github/scripts
+          # The Dockerfile too: it holds the golden tag the Python pin reads.
+          sparse-checkout: |
+            .github/scripts
+            /Dockerfile
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      # Certify on the Python the app image ships, not the runner's system
+      # python3 (3.14 on ubuntu-latest, while the golden base is 3.13). Unpinned,
+      # an app with no .python-version certified on 3.14 and failed to install
+      # deps with no cp314 wheels. UV_PYTHON outranks an app's .python-version,
+      # so certify always tests what the image runs. The SDK Dockerfile's golden
+      # tag is the single source (container_python_version.py, CNCT-85).
+      - name: Pin Python to the app image's version
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 sdk/.github/scripts/container_python_version.py print-version)
+          echo "UV_PYTHON=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.7"
 
-      - name: Configure git auth for private dependencies
-        if: ${{ inputs.private_git_auth }}
+      # Before `uv sync`: a dependency that builds a native extension (hive's
+      # pykerberos needs libkrb5-dev) cannot install without its headers, and
+      # an app whose deps do not install fails certification. The guard is
+      # byte-identical to tests-reusable.yaml's (pinned by
+      # test_build_and_publish_certify_wiring.py): the value is unquoted for
+      # word-splitting, so it is matched whole against a Debian package-name
+      # allowlist first, failing closed.
+      - name: Install system packages (apt_packages)
+        if: inputs.apt_packages != ''
         env:
-          GIT_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          APT_PACKAGES: ${{ inputs.apt_packages }}
         run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+          set -euo pipefail
+          echo "Validating and installing apt packages: $APT_PACKAGES"
+          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
+            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
+      # The only step that holds the token: it mirror-clones the app's private
+      # atlanhq deps into $RUNNER_TEMP/git-mirrors and exits, so neither uv nor
+      # any ancestor of it has the token when a build backend runs (lens
+      # rounds 5-6). App token only, no ORG_PAT_GITHUB fallback. continue-on-error:
+      # a failed mirror fails the install below, which the verdict blocks on.
+      - name: Mirror private git dependencies
+        id: app_mirror
+        continue-on-error: true
+        if: inputs.private_git_auth
+        working-directory: app
+        env:
+          GIT_TOKEN: ${{ steps.git-deps-token.outputs.token }}
+          PRIVATE_GIT_DEPS: "true"
+        run: python3 ../sdk/.github/scripts/git_auth.py mirror
+
+      # No token in this step: `uv sync` installs the private deps from the
+      # mirrors, so no build backend, and no later test or coverage step, can
+      # read one.
       - name: Install app dependencies
         id: app_install
         continue-on-error: true
         working-directory: app
-        run: uv sync --all-extras --frozen
+        env:
+          PRIVATE_GIT_AUTH: ${{ inputs.private_git_auth }}
+        run: python3 ../sdk/.github/scripts/build_and_publish/certify.py install-deps
 
       # --all-groups (inside the script) so the app's test dependency group
       # (pytest plugins like pytest-asyncio) is installed: `uv run` otherwise
@@ -622,6 +574,11 @@ jobs:
     if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Runs app code (build backends, pytest), so, as in certify-unit, the job
+    # token is read-only and no checkout leaves a token in .git/config.
+    # Artifact download uses the runner's own token, not this one.
+    permissions:
+      contents: read
     steps:
       - name: Checkout app
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -629,36 +586,93 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
           path: app
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Mint fleet App token
-        # Not scoped to a single repo: also used below to authenticate git
-        # config for the consumer app's own (arbitrary) private atlanhq deps.
-        # continue-on-error + the `|| secrets.ORG_PAT_GITHUB` fallback below:
-        # FLEET_APP_ID/FLEET_APP_PRIVATE_KEY are declared optional (every real
-        # caller uses secrets: inherit, so they're always available in
-        # practice) -- this is defense-in-depth so a caller that somehow
-        # doesn't provide them degrades to the old PAT instead of hard-failing.
+        # For the SDK checkout only. No continue-on-error and no
+        # ORG_PAT_GITHUB fallback (FND-4652): a caller without
+        # FLEET_APP_ID/FLEET_APP_PRIVATE_KEY (pass `secrets: inherit`) fails
+        # here, by name, instead of silently running on the org PAT. The
+        # private-deps install uses its own scoped token below.
         id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+          permission-contents: read
+
+      # Scoped to the private atlanhq repos the app names (git_auth.py
+      # repos: its pyproject.toml / uv.lock files, public repos dropped).
+      # No mint when it names none: create-github-app-token with no
+      # `repositories` would grant the whole installation. The script comes
+      # from this workflow's own commit (job.workflow_sha), so it is the
+      # version that matches the workflow running it.
+      - name: Checkout SDK git_auth.py (private git deps)
+        if: inputs.private_git_auth
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/git_auth.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-git-auth
+          persist-credentials: false
+
+      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
+        id: git-deps-repos
+        if: inputs.private_git_auth
+        run: |
+          set -euo pipefail
+          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir app
+          # Out of the workspace: it is the image build context and the tree
+          # conformance and pre-commit look at.
+          rm -rf .sdk-git-auth
+
+      - name: Mint read-only token for private git dependencies
+        id: git-deps-token
+        if: inputs.private_git_auth && steps.git-deps-repos.outputs.repositories != ''
+        # A failed mint leaves the token empty; see the guard below.
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
+          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
+          # workflow's own commit, never the PR's tree: the repos step above
+          # fails the job for any private repo not on it, so a PR's
+          # pyproject.toml / uv.lock cannot widen this scope.
+          repositories: ${{ steps.git-deps-repos.outputs.repositories }}
+          permission-contents: read
 
       - name: Checkout application-sdk (migration tooling)
         # tools.migrate_v3 ships in the SDK repo, not the published package —
         # pinned to main so the check tracks the latest released rules.
-        # A token is required because this workflow runs in the context
-        # of a consumer app repo whose GITHUB_TOKEN is scoped to that repo and
-        # cannot read other org repos (even public ones via cross-repo reusable
-        # workflow invocations). The fleet App token grants the necessary read access.
+        # application-sdk is public, so the caller's GITHUB_TOKEN could clone
+        # it (as every tokenless "Checkout SDK helper scripts" step does); the
+        # token below (the SDK-scoped App token minted above) is not what makes
+        # this checkout work, and is kept only because it was already here.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: main
           path: sdk
-          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+
+      # Certify on the Python the app image ships, not the runner's system
+      # python3 (3.14 on ubuntu-latest, while the golden base is 3.13). Unpinned,
+      # an app with no .python-version certified on 3.14 and failed to install
+      # deps with no cp314 wheels. UV_PYTHON outranks an app's .python-version,
+      # so certify always tests what the image runs. The SDK Dockerfile's golden
+      # tag is the single source (container_python_version.py, CNCT-85).
+      - name: Pin Python to the app image's version
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 sdk/.github/scripts/container_python_version.py print-version)
+          echo "UV_PYTHON=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -672,92 +686,81 @@ jobs:
         working-directory: sdk
         run: uv sync --all-extras
 
+      # Warn-only until FND-4785 flips it (see app-certification.md, Exit plan).
       - name: "v3 shape — check_migration"
         id: check_migration
         if: steps.sdk_install.outcome == 'success'
         continue-on-error: true
         working-directory: sdk
-        run: |
-          set -euo pipefail
-          if uv run python -m tools.migrate_v3.check_migration --no-color ../app; then
-            echo "check_migration: no FAILs"
-          else
-            echo "::warning::check_migration reported FAILs — see output above"
-            exit 1
-          fi
+        run: python3 .github/scripts/build_and_publish/certify.py check-migration
 
       # ── 2. App dependencies ───────────────────────────────────────────────────
-      - name: Configure git auth for private dependencies
-        if: ${{ inputs.private_git_auth }}
+      # Before `uv sync`: a dependency that builds a native extension (hive's
+      # pykerberos needs libkrb5-dev) cannot install without its headers, and
+      # an app whose deps do not install fails certification. The guard is
+      # byte-identical to tests-reusable.yaml's (pinned by
+      # test_build_and_publish_certify_wiring.py): the value is unquoted for
+      # word-splitting, so it is matched whole against a Debian package-name
+      # allowlist first, failing closed.
+      - name: Install system packages (apt_packages)
+        if: inputs.apt_packages != ''
         env:
-          GIT_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          APT_PACKAGES: ${{ inputs.apt_packages }}
         run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+          set -euo pipefail
+          echo "Validating and installing apt packages: $APT_PACKAGES"
+          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
+            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
+      # The only step that holds the token: it mirror-clones the app's private
+      # atlanhq deps into $RUNNER_TEMP/git-mirrors and exits, so neither uv nor
+      # any ancestor of it has the token when a build backend runs (lens
+      # rounds 5-6). App token only, no ORG_PAT_GITHUB fallback. continue-on-error:
+      # a failed mirror fails the install below, which the verdict blocks on.
+      - name: Mirror private git dependencies
+        id: app_mirror
+        continue-on-error: true
+        if: inputs.private_git_auth
+        working-directory: app
+        env:
+          GIT_TOKEN: ${{ steps.git-deps-token.outputs.token }}
+          PRIVATE_GIT_DEPS: "true"
+        run: python3 ../sdk/.github/scripts/git_auth.py mirror
+
+      # No token in this step: `uv sync` installs the private deps from the
+      # mirrors, so no build backend, and no later test or coverage step, can
+      # read one.
       - name: Install app dependencies
         id: app_install
         continue-on-error: true
         working-directory: app
-        run: uv sync --all-extras --frozen
+        env:
+          PRIVATE_GIT_AUTH: ${{ inputs.private_git_auth }}
+        run: python3 ../sdk/.github/scripts/build_and_publish/certify.py install-deps
 
-      # PKL is required by pkl-based apps' `poe generate` (run in the Contract
-      # drift step below, which does `rm -rf app/generated && pkl eval ...`).
-      # The contract-toolkit-* workflows install it but this Certify job did
-      # not, so for pkl apps `poe generate` failed with `pkl: not found` AFTER
-      # wiping app/generated — breaking the enforced unit-test step.
+      # The contract-drift step regenerates with `pkl eval`, so it needs pkl.
+      # It does not need the app's dependencies, so neither step waits on
+      # app_install: drift is checked even when the app does not install.
       # Absolute ref, not `./…`: this is a reusable workflow, so a relative
       # action path would resolve against the CONSUMER repo's workspace, which
       # has no copy of the SDK's actions.
       - name: Install PKL
-        if: steps.app_install.outcome == 'success'
         uses: atlanhq/application-sdk/.github/actions/install-pkl@main
 
-      # Most app `poe generate` tasks invoke `pkl eval --ca-certificates
-      # ~/.pkl-ca-bundle.pem ...` — that path is Atlan's local-dev convention
-      # (per atlan-cli's defaultCert and ~20 connector pyproject.toml files)
-      # for honoring the corporate proxy/VPN CA. GitHub runners have no such
-      # file, so pkl fails with "Cannot find CA certificate file" BEFORE it
-      # can resolve `@app-contract-toolkit/NativeApp.pkl` over HTTPS. Seed
-      # ~/.pkl-ca-bundle.pem from the runner's system trust store so every
-      # app's `--ca-certificates ~/.pkl-ca-bundle.pem` resolves to a valid
-      # bundle in CI without app-side changes.
-      - name: Seed pkl CA bundle from system trust store
-        if: steps.app_install.outcome == 'success'
-        run: |
-          set -euo pipefail
-          SYSTEM_CA="/etc/ssl/certs/ca-certificates.crt"
-          if [ ! -f "$SYSTEM_CA" ]; then
-            echo "::warning::System CA bundle $SYSTEM_CA not found; skipping pkl CA seed."
-            exit 0
-          fi
-          cp "$SYSTEM_CA" "$HOME/.pkl-ca-bundle.pem"
-          echo "Seeded $HOME/.pkl-ca-bundle.pem from $SYSTEM_CA"
-
       # ── 3. Contract drift (enforced) ─────────────────────────────────────────
+      # Regenerates with the SDK's own regeneration (the function the
+      # generated-freshness check and Renovate's toolkit bump use), never the
+      # app's `poe generate`, and requires a clean working tree afterwards.
       # Failure here exits non-zero and (via the standard step-fail cascade)
       # also fails the job. The unit-test fan-in + coverage below use `always()`
       # so they still run and report — the user sees every signal in one pass —
       # even though the job's final status is already failed.
-      - name: "Contract drift — poe generate must be a no-op"
+      - name: "Contract drift — regenerating the contract must be a no-op"
         id: contract_drift
-        if: steps.app_install.outcome == 'success'
         working-directory: app
-        run: |
-          set -euo pipefail
-          if [ ! -f contract/app.pkl ]; then
-            echo "No contract/app.pkl — skipping contract-drift check."
-            exit 0
-          fi
-          if ! uv run poe --help >/dev/null 2>&1; then
-            echo "::warning::'poe' task runner not available — cannot run drift check."
-            exit 0
-          fi
-          uv run poe generate || { echo "::error::'poe generate' failed"; exit 1; }
-          if ! git diff --exit-code -- generated/; then
-            echo "::error::generated/ is stale — run 'poe generate' locally and commit."
-            exit 1
-          fi
+        run: python3 ../sdk/.github/scripts/build_and_publish/certify.py contract-drift
 
       # ── 4. Unit tests (enforced) + coverage threshold (warn-only) ───────────────
       # Default (`unit_test_shards` 1): run the tests here as one shard — the
@@ -809,6 +812,7 @@ jobs:
 
       # Each shard measured its own slice (one shard when not opted in);
       # combine them before the threshold.
+      # Warn-only until FND-4784 flips it (see app-certification.md, Exit plan).
       - name: "Coverage threshold (>=85%)"
         id: coverage_threshold
         if: always() && steps.unit.outputs.outcome == 'success'
@@ -816,14 +820,18 @@ jobs:
         working-directory: app
         run: |
           set -euo pipefail
-          uv run --all-groups --with coverage coverage combine --data-file=.coverage ../certify-shards/coverage.shard-*
-          uv run --all-groups --with coverage coverage report --data-file=.coverage --fail-under=85
+          uv run --frozen --all-groups --with coverage coverage combine --data-file=.coverage ../certify-shards/coverage.shard-*
+          uv run --frozen --all-groups --with coverage coverage report --data-file=.coverage --fail-under=85
 
       # ── Verdict ───────────────────────────────────────────────────────────────
       # Unit test pass/fail (UT) and contract drift (CD) ENFORCE: a ❌ exits
       # non-zero, trips `prepare`'s `if: !failure()`, and skips build + publish.
       # (CD's enforcement comes from the step itself — no continue-on-error.
       # The verdict re-checks CD only to render the summary correctly.)
+      # App deps that did not install (APP_INSTALL here, or UT=install_failed
+      # from a shard's own runner) also block: contract drift and unit tests
+      # could not run, and an uncertified app must not publish. An app with no
+      # tests/unit (UT=skipped) still passes.
       # Coverage threshold (COV) and v3 shape (CM) are warn-only — they
       # annotate but do not block.
       - name: Certification verdict
@@ -835,65 +843,7 @@ jobs:
           COV: ${{ steps.coverage_threshold.outcome }}
           SDK_INSTALL: ${{ steps.sdk_install.outcome }}
           APP_INSTALL: ${{ steps.app_install.outcome }}
-        run: |
-          set -euo pipefail
-          render() {
-            case "$2" in
-              success) icon="✅" ;;
-              failure) icon="❌" ;;
-              skipped) icon="➖" ;;
-              *)       icon="❓" ;;
-            esac
-            echo "- $icon **$1** — $2"
-          }
-          cm_label="v3 shape (check_migration) — warn-only"
-          [ "$SDK_INSTALL" != "success" ] && cm_label="$cm_label (sdk install failed)"
-          app_label=""
-          [ "$APP_INSTALL" != "success" ] && app_label=" (app install failed)"
-          {
-            echo "### App certification"
-            echo ""
-            render "$cm_label" "$CM"
-            render "Contract drift (poe generate) — enforced${app_label}" "$CD"
-            render "Unit tests — enforced${app_label}" "$UT"
-            render "Coverage (>=85%) — warn-only" "$COV"
-            echo ""
-            echo "**Unit tests and contract drift block publish on ❌.** Coverage threshold and v3 shape are warn-only during rollout. See [docs/standards/app-certification.md](https://github.com/atlanhq/application-sdk/blob/main/docs/standards/app-certification.md)."
-          } >> "${GITHUB_STEP_SUMMARY}"
-          if [ "$SDK_INSTALL" != "success" ]; then
-            echo "::warning title=Certification incomplete::SDK install failed, so check_migration did not run."
-          fi
-          if [ "$APP_INSTALL" != "success" ]; then
-            echo "::warning title=Certification incomplete::App install failed; contract drift and unit tests did not run."
-          fi
-          if [ "$CM" = "failure" ]; then
-            echo "::warning title=Certification warning (warn-only)::v3 shape failed; publish proceeded (warn-only)."
-          fi
-          if [ "$COV" = "failure" ]; then
-            echo "::warning title=Certification warning (warn-only)::Coverage below 85%; publish proceeded (warn-only)."
-          fi
-          if [ "$CD" = "failure" ]; then
-            {
-              echo ""
-              echo "### ❌ Publish blocked — contract drift"
-              echo ""
-              echo "\`poe generate\` either failed or produced changes in \`app/generated/\`. Run it locally and commit the diff."
-            } >> "${GITHUB_STEP_SUMMARY}"
-            echo "::error title=Publish blocked::Contract drift detected. Build and publish blocked."
-          fi
-          if [ "$UT" = "failure" ]; then
-            {
-              echo ""
-              echo "### ❌ Publish blocked — unit tests failed"
-              echo ""
-              echo "Fix the failing tests and re-run."
-            } >> "${GITHUB_STEP_SUMMARY}"
-            echo "::error title=Publish blocked::Unit tests failed. Build and publish blocked."
-          fi
-          if [ "$CD" = "failure" ] || [ "$UT" = "failure" ]; then
-            exit 1
-          fi
-          exit 0
+        run: python3 sdk/.github/scripts/build_and_publish/certify.py verdict
 
   # ── Job 0d: Credential-leak gate ──────────────────────────────────────────────
   # Two deterministic layers (no LLM, no token), run before any build minutes:
@@ -934,7 +884,6 @@ jobs:
 
       - name: Mint fleet App token
         id: app-token
-        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -958,7 +907,7 @@ jobs:
           # files rather than the repo.
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
-          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
 
       # ── Layer 1: deterministic hardcoded-secret scan (gitleaks) ───────────────
       - name: Install gitleaks
@@ -985,71 +934,13 @@ jobs:
       - name: gitleaks — hardcoded secrets
         id: gitleaks
         working-directory: app
-        run: |
-          set -euo pipefail
-          # Scan the working tree, not git history: a publish checkout is a
-          # single shallow commit. Drop .git so gitleaks doesn't walk internals.
-          rm -rf .git
-          # Test fixtures and CI wiring are out of scope for THIS layer (FND-678).
-          # Hermetic fixtures are *built* out of credential-shaped strings — a
-          # generated golden dossier of fake API keys is indistinguishable from a
-          # leak to a value-shaped detector, and blocked atlan-microstrategy-app's
-          # publish on 148 `generic-api-key` hits in a single file. Every app
-          # would otherwise owe the same hand-written `.gitleaks.toml`, one
-          # false-positive shape at a time, on a config schema that fails silently
-          # on the pinned 8.21.2 (FND-679).
-          #
-          # This is a deliberate narrowing of the gate, not a false-positive
-          # filter: a real credential committed under these paths is no longer
-          # reported by gitleaks. It is the tradeoff chosen for the noise. Pruning
-          # rather than allowlisting keeps this immune to gitleaks config-schema
-          # skew and needs no merge with an app's own `.gitleaks.toml` below.
-          #
-          # Prune a COPY, never `app/` itself: the warn-only creds-into-logs layer
-          # below scans `--root app` afterwards, and deleting in place would
-          # silently narrow that layer too. Scanning `.` from inside the copy keeps
-          # reported paths repo-relative (`app/foo.py`), so the summary and Slack
-          # locations are unchanged.
-          SCAN_DIR=/tmp/gitleaks-scan
-          rm -rf "$SCAN_DIR"
-          mkdir -p "$SCAN_DIR"
-          cp -a . "$SCAN_DIR"/
-          rm -rf "$SCAN_DIR/tests" "$SCAN_DIR/test" "$SCAN_DIR/.github"
-          cd "$SCAN_DIR"
-          CONFIG_ARGS=()
-          if [ -f .gitleaks.toml ]; then
-            echo "Using app-level .gitleaks.toml allowlist"
-            CONFIG_ARGS=(--config .gitleaks.toml)
-          fi
-          set +e
-          # --redact: replace secret values with "REDACTED" in the report, so
-          # the raw secret never lands on disk. The summary/Slack steps read only
-          # File/StartLine/RuleID anyway, but this is defense-in-depth.
-          gitleaks dir \
-            --redact \
-            --report-format json \
-            --report-path /tmp/gitleaks-report.json \
-            "${CONFIG_ARGS[@]}" \
-            .
-          RC=$?
-          set -e
-          COUNT=$(jq 'length' /tmp/gitleaks-report.json 2>/dev/null || echo 0)
-          if [ "$RC" -ne 0 ] || [ "$COUNT" -gt 0 ]; then
-            # Emit redacted finding LOCATIONS only — never the secret value
-            # (the report's Secret/Match fields are not printed or uploaded).
-            {
-              echo "### ❌ Publish blocked — hardcoded secret(s) detected"
-              echo ""
-              echo "gitleaks found ${COUNT} hardcoded secret(s) in shipped application source (\`tests/\`, \`test/\` and \`.github/\` are not scanned). Locations only (values withheld):"
-              echo ""
-              jq -r '.[] | "- `\(.File):\(.StartLine)` — rule: \(.RuleID)"' /tmp/gitleaks-report.json 2>/dev/null || true
-              echo ""
-              echo "Remove the secret(s), **rotate** any that were committed, and re-run. Allowlist confirmed false positives in \`.gitleaks.toml\`."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error title=Publish blocked::gitleaks found ${COUNT} hardcoded secret(s). See workflow summary."
-            exit 1
-          fi
-          echo "gitleaks: no hardcoded secrets found."
+        # Scans a COPY of the working tree with `tests/`, `test/` and `.github/`
+        # pruned (FND-678): hermetic fixtures are built from credential-shaped
+        # strings no value-shaped detector can tell from a leak. A deliberate
+        # narrowing, not a false-positive filter. The copy keeps the warn-only
+        # layer below scanning all of `app/`. Locations only, never values.
+        # See build_and_publish/leak_scan.py gitleaks.
+        run: python3 ../sdk/.github/scripts/build_and_publish/leak_scan.py gitleaks
 
       - name: Notify Slack on hardcoded-secret block
         # The gitleaks layer hard-blocks the publish — alert Slack too. Runs only
@@ -1061,51 +952,16 @@ jobs:
           WEBHOOK: ${{ secrets.SLACK_LEAK_SCAN_WEBHOOK }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          if [ -z "${WEBHOOK:-}" ]; then
-            echo "::notice::SLACK_LEAK_SCAN_WEBHOOK not set — skipping Slack notification."
-            exit 0
-          fi
-          case "$WEBHOOK" in
-            https://hooks.slack.com/*) ;;
-            *) echo "::warning::SLACK_LEAK_SCAN_WEBHOOK is not a hooks.slack.com URL — refusing to send."; exit 0 ;;
-          esac
-          R=/tmp/gitleaks-report.json
-          COUNT=$(jq 'length' "$R" 2>/dev/null || echo "?")
-          # Top 10 locations only — the report's Secret/Match fields are never read.
-          LOCS=$(jq -r '.[] | "• `\(.File):\(.StartLine)` — \(.RuleID)"' "$R" 2>/dev/null | head -10)
-          TEXT=$(printf ':no_entry: *Publish BLOCKED — hardcoded secret(s)*\n*App repo:* `%s`\ngitleaks found %s secret(s) in source. Remove and *rotate* them — locations below (values withheld):\n%s\n<%s|View workflow run>' \
-            "$REPO" "$COUNT" "$LOCS" "$RUN_URL")
-          jq -n --arg t "$TEXT" '{text: $t}' \
-            | curl -sS --fail --max-time 10 -X POST -H 'Content-type: application/json' --data @- "$WEBHOOK" \
-            || echo "::warning::Slack notification failed (non-blocking)."
+        run: python3 sdk/.github/scripts/build_and_publish/leak_scan.py notify-gitleaks
 
       # ── Layer 2: creds-into-logs scan (regex, no LLM) — WARN-ONLY ─────────────
+      # End state (block on CRITICAL, or warn-only for good) is FND-4786.
       - name: Creds-into-logs scan (warn-only)
         id: credscan
         # `|| true`: this layer never fails the job. scan.py exits non-zero when
         # it finds CRITICAL/HIGH, but here that is advisory — only gitleaks
         # (Layer 1) blocks the publish. The verdict JSON is the source of truth.
-        run: |
-          set -uo pipefail
-          python3 sdk/.github/scripts/credential-leak-gate/scan.py \
-            --root app \
-            --report /tmp/leak-gate-verdict.json || true
-          # Surface counts for the summary + Slack steps. Defaults are safe if
-          # the scan errored (warn-only — an operational failure must not block).
-          V=/tmp/leak-gate-verdict.json
-          if [ -f "$V" ] && jq empty "$V" 2>/dev/null; then
-            echo "findings=$(jq -r '.summary.total_findings // 0' "$V")" >> "$GITHUB_OUTPUT"
-            echo "blocking=$(jq -r '.summary.blocking // 0' "$V")" >> "$GITHUB_OUTPUT"
-            echo "critical=$(jq -r '.summary.critical // 0' "$V")" >> "$GITHUB_OUTPUT"
-            echo "high=$(jq -r '.summary.high // 0' "$V")" >> "$GITHUB_OUTPUT"
-            echo "medium=$(jq -r '.summary.medium // 0' "$V")" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning title=Creds-into-logs scan incomplete::No valid verdict produced; reporting 0 (warn-only, publish not blocked)."
-            echo "findings=0" >> "$GITHUB_OUTPUT"
-            echo "blocking=0" >> "$GITHUB_OUTPUT"
-          fi
+        run: python3 sdk/.github/scripts/build_and_publish/leak_scan.py credscan
 
       - name: Creds-into-logs report (run summary)
         if: always() && steps.gitleaks.outcome == 'success'
@@ -1114,29 +970,7 @@ jobs:
           CRIT: ${{ steps.credscan.outputs.critical || '0' }}
           HIGH: ${{ steps.credscan.outputs.high || '0' }}
           MED: ${{ steps.credscan.outputs.medium || '0' }}
-        run: |
-          set -euo pipefail
-          V=/tmp/leak-gate-verdict.json
-          if [ "${WARN}" -gt 0 ]; then
-            {
-              echo "### ⚠️ Credential leak warnings (non-blocking)"
-              echo ""
-              echo "gitleaks: ✅ no hardcoded secrets (blocking layer passed)."
-              echo ""
-              echo "Creds-into-logs found ${WARN} likely finding(s) (${CRIT} critical, ${HIGH} high). **This does not block the publish** — review and fix, or allowlist confirmed false positives in \`.credential-leak-allow\`. Locations only (values never recorded):"
-              echo ""
-              jq -r '.findings[]? | select(.severity=="CRITICAL" or .severity=="HIGH") | "- `\(.file):\(.line)` — \(.pattern_id) (var: \(.variable_name), \(.severity))"' "$V"
-              echo ""
-              echo "See docs/standards/credential-leak-gate.md."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning title=Credential-leak warnings::${WARN} credential(s) may reach a log/CLI sink (non-blocking). See run summary."
-          else
-            {
-              echo "### ✅ Credential leak gate"
-              echo ""
-              echo "gitleaks: ✅ no hardcoded secrets (blocking). Creds-into-logs: ✅ no warnings (${MED} medium, non-blocking)."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+        run: python3 sdk/.github/scripts/build_and_publish/leak_scan.py credscan-report
 
       - name: Notify Slack on warnings
         # Warn-only signal → Slack. Gated on the step OUTPUT (not the secret):
@@ -1149,28 +983,9 @@ jobs:
           HIGH: ${{ steps.credscan.outputs.high }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          if [ -z "${WEBHOOK:-}" ]; then
-            echo "::notice::SLACK_LEAK_SCAN_WEBHOOK not set — skipping Slack notification."
-            exit 0
-          fi
-          # Host allowlist: refuse to send if the secret is ever tampered to
-          # point somewhere other than Slack.
-          case "$WEBHOOK" in
-            https://hooks.slack.com/*) ;;
-            *) echo "::warning::SLACK_LEAK_SCAN_WEBHOOK is not a hooks.slack.com URL — refusing to send."; exit 0 ;;
-          esac
-          V=/tmp/leak-gate-verdict.json
-          # Top 10 locations only — never secret values.
-          LOCS=$(jq -r '.findings[]? | select(.severity=="CRITICAL" or .severity=="HIGH") | "• `\(.file):\(.line)` — \(.pattern_id) (\(.severity))"' "$V" | head -10)
-          TEXT=$(printf ':warning: *Credential-leak warning — publish NOT blocked*\n*App repo:* `%s`\n%s critical, %s high credential(s) reaching log/CLI sinks — locations below (values withheld):\n%s\n<%s|View workflow run>' \
-            "$REPO" "$CRIT" "$HIGH" "$LOCS" "$RUN_URL")
-          # jq builds the JSON so the message is safely escaped. --fail/--max-time
-          # so a hung Slack endpoint can't stall or fail the job (warn-only).
-          jq -n --arg t "$TEXT" '{text: $t}' \
-            | curl -sS --fail --max-time 10 -X POST -H 'Content-type: application/json' --data @- "$WEBHOOK" \
-            || echo "::warning::Slack notification failed (non-blocking)."
+        # Host allowlist (hooks.slack.com only), top 10 locations, never values:
+        # build_and_publish/leak_scan.py notify-credscan.
+        run: python3 sdk/.github/scripts/build_and_publish/leak_scan.py notify-credscan
 
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
@@ -1305,21 +1120,13 @@ jobs:
         if: steps.manifest.outputs.enable_sdr == 'true'
         env:
           HAS_PAT: ${{ secrets.DOCKER_HUB_PAT_RW != '' && 'true' || 'false' }}
-        run: |
-          if [ "$HAS_PAT" != "true" ]; then
-            echo "::error::atlan.yaml sets self_deployed_runtime=true but DOCKER_HUB_PAT_RW secret is not set in this repo."
-            exit 1
-          fi
+        run: python3 .sdk-entrypoint/.github/scripts/build_and_publish/prepare.py sdr-secrets
 
       - name: Validate publish secrets
         if: inputs.publish
         env:
           HAS_TOKEN: ${{ secrets.APP_PUBLISH_TOKEN != '' && 'true' || 'false' }}
-        run: |
-          if [ "$HAS_TOKEN" != "true" ]; then
-            echo "::error::publish=true but APP_PUBLISH_TOKEN secret is not set in this repo."
-            exit 1
-          fi
+        run: python3 .sdk-entrypoint/.github/scripts/build_and_publish/prepare.py publish-secrets
 
       - name: Read app/generated/ for app_configs
         # Glob the connector form JSON files the app ships under app/generated/
@@ -1331,121 +1138,18 @@ jobs:
         # ship app/generated/ produce an empty output and the publish step
         # omits the field entirely.
         id: app_configs
-        run: |
-          python3 - <<'PYEOF'
-          import base64, json, os, pathlib, sys
-          generated_dir = pathlib.Path("app/generated")
-          form_files = {}
-          if generated_dir.is_dir():
-              for f in sorted(generated_dir.rglob("*.json")):
-                  try:
-                      form_files[f.name] = json.loads(f.read_text())
-                  except json.JSONDecodeError as e:
-                      # Hard-fail with a GitHub Actions error annotation. Silently
-                      # dropping the file would publish an app_configs missing a
-                      # connector form, which surfaces later as a broken install
-                      # on tenants. Better to block the publish here.
-                      print(f"::error file={f}::Invalid JSON in connector form: {e}")
-                      sys.exit(1)
-          if form_files:
-              value = base64.b64encode(json.dumps(form_files).encode("utf-8")).decode("ascii")
-          else:
-              value = ""
-          print(f"[app_configs] found {len(form_files)} files: {list(form_files.keys())}")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
-              print(f"app_configs={value}", file=fh)
-          PYEOF
+        run: python3 .sdk-entrypoint/.github/scripts/build_and_publish/prepare.py app-configs
 
       - name: Compute image tags
         id: tags
         env:
           REPO: ${{ github.event.repository.name }}
           REF: ${{ inputs.ref || github.ref }}
-        run: |
-          # Resolve SHA from the checked-out HEAD rather than github.sha.
-          # github.sha is always the trigger branch (main), not the ref input —
-          # so for entrypoint_dispatch with a custom ref, github.sha would be wrong.
-          SHA=$(git rev-parse HEAD)
-          if ! [[ "$REF" =~ ^(refs/heads/|refs/tags/)?[a-zA-Z0-9/_.-]+$ ]]; then
-            echo "::error::Invalid ref format: ${REF}"
-            exit 1
-          fi
-
-          BRANCH=$(echo "$REF" | sed 's|refs/heads/||' | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '_' '-')
-
-          # Release builds arrive with ref=refs/tags/v*, producing a slug like
-          # refs-tags-v0.3.0 for the immutable/branch image tags in GHCR.
-          # Override to 'main' so those tags are clean — the release tag was
-          # cut from main by tag-and-release.yaml, so this is semantically correct.
-          RELEASE_TAG_EARLY="${{ inputs.release_tag }}"
-          RELEASE_TAG_EARLY="${RELEASE_TAG_EARLY//$'\r'/}"
-          RELEASE_TAG_EARLY="${RELEASE_TAG_EARLY//$'\n'/}"
-          if [ -n "${RELEASE_TAG_EARLY}" ] && [ "${REF}" = "refs/tags/${RELEASE_TAG_EARLY}" ]; then
-            BRANCH="main"
-          fi
-
-          IMAGE_TAG="${SHA:0:7}"
-
-          GHCR_BASE="ghcr.io/atlanhq/${REPO}"
-          GHCR_IMAGE="${GHCR_BASE}:${BRANCH}-${IMAGE_TAG}"
-          GHCR_BRANCH_TAG="${GHCR_BASE}:${BRANCH}"
-
-          DOCKERHUB_BASE="atlanhq/${REPO}"
-          DOCKERHUB_IMAGE="${DOCKERHUB_BASE}:${BRANCH}-${IMAGE_TAG}"
-
-          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
-          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
-          echo "ghcr_base=${GHCR_BASE}" >> "$GITHUB_OUTPUT"
-          echo "ghcr_image=${GHCR_IMAGE}" >> "$GITHUB_OUTPUT"
-          echo "ghcr_branch_tag=${GHCR_BRANCH_TAG}" >> "$GITHUB_OUTPUT"
-          echo "dockerhub_image=${DOCKERHUB_IMAGE}" >> "$GITHUB_OUTPUT"
-
-          # Release-event tag ladder: version-pinned + :latest (stable) or version-only (pre-release)
-          RELEASE_TAG="${{ inputs.release_tag }}"
-          # Strip any accidental whitespace/newlines and validate semver format
-          RELEASE_TAG="${RELEASE_TAG//$'\r'/}"
-          RELEASE_TAG="${RELEASE_TAG//$'\n'/}"
-          RELEASE_TAGS=""
-          if [ -n "${RELEASE_TAG}" ]; then
-            if [[ ! "${RELEASE_TAG}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-              echo "::error::Invalid release_tag format: '${RELEASE_TAG}'"
-              exit 1
-            fi
-            VERSION="${RELEASE_TAG#v}"
-            MAJOR=$(echo "$VERSION" | cut -d. -f1)
-            MINOR=$(echo "$VERSION" | cut -d. -f1-2)
-            if echo "$VERSION" | grep -qvF '-'; then
-              RELEASE_TAGS=$(printf '%s\n' \
-                "${GHCR_BASE}:latest" \
-                "${GHCR_BASE}:${VERSION}" \
-                "${GHCR_BASE}:${MINOR}" \
-                "${GHCR_BASE}:${MAJOR}" \
-                "${GHCR_BASE}:sha-${IMAGE_TAG}")
-            else
-              RELEASE_TAGS=$(printf '%s\n' \
-                "${GHCR_BASE}:${VERSION}" \
-                "${GHCR_BASE}:sha-${IMAGE_TAG}")
-            fi
-          fi
-          DELIM=$(openssl rand -hex 8)
-          { echo "release_tags<<${DELIM}"; printf '%s\n' "${RELEASE_TAGS}"; echo "${DELIM}"; } >> "$GITHUB_OUTPUT"
-
-          # Identity the image carries and reports back (baked into
-          # app/atlan_build.json by the build job, sent as `version` by
-          # publish). gm_version is the exact string GM stores in
-          # versions.version, so a worker's self-report matches byte for byte:
-          # the release tag for semver apps, the sha7 for CD apps.
-          GM_VERSION="${RELEASE_TAG_EARLY:-${IMAGE_TAG}}"
-          echo "gm_version=${GM_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "commit_sha=${SHA}" >> "$GITHUB_OUTPUT"
-
-          echo "Branch: ${BRANCH}"
-          echo "GM version: ${GM_VERSION}"
-          echo "Commit: ${SHA}"
-          echo "Immutable image: ${GHCR_IMAGE}"
-          echo "Mutable branch tag: ${GHCR_BRANCH_TAG}"
-          echo "DockerHub image: ${DOCKERHUB_IMAGE}"
-          if [ -n "${RELEASE_TAGS}" ]; then printf 'Release tags:\n%s\n' "${RELEASE_TAGS}"; fi
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        # SHA from the checked-out HEAD (github.sha is the trigger branch, not
+        # the `ref` input), branch slug (`main` for a release tag ref), image
+        # tags, and the release tag ladder: build_and_publish/prepare.py.
+        run: python3 .sdk-entrypoint/.github/scripts/build_and_publish/prepare.py compute-tags
 
       # Candidate mode (bump-version PR, FND-3328): every tag this run pushes
       # becomes `candidate-<tree>[-<arch>]`, and the identity baked into the
@@ -1556,6 +1260,55 @@ jobs:
           print(json.dumps(info))
           PYEOF
 
+      # The `git_token` build secret below (FND-4744): a read-only fleet App
+      # token, not ORG_PAT_GITHUB. Minted on every build, not on
+      # `private_git_auth`: that flag gates certify, several callers build
+      # private-dependency images without it, and a Dockerfile without the
+      # secret mount ignores it. `continue-on-error` and no PAT fallback: an
+      # empty secret is skipped with a warning by build-push-action, so only a
+      # build that needs the token fails, at its clone.
+      # Scoped to the private atlanhq repos the app names (git_auth.py
+      # repos: its pyproject.toml / uv.lock files, public repos dropped).
+      # No mint when it names none: create-github-app-token with no
+      # `repositories` would grant the whole installation. The script comes
+      # from this workflow's own commit (job.workflow_sha), so it is the
+      # version that matches the workflow running it.
+      - name: Checkout SDK git_auth.py (image build)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/git_auth.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-git-auth
+          persist-credentials: false
+
+      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
+        id: image-git-repos
+        run: |
+          set -euo pipefail
+          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
+          # Out of the workspace: it is the image build context and the tree
+          # conformance and pre-commit look at.
+          rm -rf .sdk-git-auth
+
+      - name: Mint read-only token for the image build
+        id: image-git-token
+        if: steps.image-git-repos.outputs.repositories != ''
+        # A failed mint leaves the token empty; see the guard below.
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
+          # workflow's own commit, never the PR's tree: the repos step above
+          # fails the job for any private repo not on it, so a PR's
+          # pyproject.toml / uv.lock cannot widen this scope.
+          repositories: ${{ steps.image-git-repos.outputs.repositories }}
+          permission-contents: read
+
       - name: Build and push arch image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
@@ -1601,7 +1354,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.prepare.outputs.commit_sha }}
-          # The org PAT reaches the build ONLY as a BuildKit secret, never as a
+          # The git token reaches the build ONLY as a BuildKit secret, never as a
           # build arg. Build args are recorded in image config and are readable
           # via `docker history` by anyone who can pull the image, so the
           # `ACCESS_TOKEN_USR`/`ACCESS_TOKEN_PWD` args this step used to pass
@@ -1609,12 +1362,11 @@ jobs:
           # `--mount=type=secret` is never written to a layer or to history.
           #
           # Dockerfiles cloning a private git dependency (e.g. atlan-query-redaction)
-          # read it via `--mount=type=secret,id=git_token`. This job already logs
-          # into GHCR with the PAT above, so there's no benefit to minting a
-          # separate App token just for this -- the PAT is already in play either
-          # way.
+          # read it via `--mount=type=secret,id=git_token`. It is the read-only
+          # App token minted above, not the PAT this job logs into GHCR with:
+          # every build backend the Dockerfile's `uv sync` runs can read it.
           secrets: |
-            git_token=${{ secrets.ORG_PAT_GITHUB }}
+            git_token=${{ steps.image-git-token.outputs.token }}
 
   # ── Job 3: Merge arch digests into a single multi-arch manifest ───────────────
   merge:
@@ -1658,6 +1410,22 @@ jobs:
           username: atlanhq
           password: ${{ secrets.DOCKER_HUB_PAT_RW }}
 
+      - name: Checkout SDK helper scripts
+        # manifest.py, mirror_tags_dockerhub.py and release_candidate.py live in
+        # the SDK repo, not the caller repo — this job has no checkout of its
+        # own (unlike prepare/certify/leak-scan), so the scripts must be pulled
+        # in explicitly before they're invoked below. Unconditional: every run
+        # of this job either assembles the manifest or promotes a candidate.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: .sdk-entrypoint
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      # Tags: the immutable and mutable branch tags, plus the release ladder
+      # on a release build. See build_and_publish/manifest.py.
       - name: Create and push multi-arch manifest
         if: needs.prepare.outputs.promote_source == ''
         env:
@@ -1667,42 +1435,7 @@ jobs:
           BRANCH:          ${{ needs.prepare.outputs.branch }}
           IMAGE_TAG:       ${{ needs.prepare.outputs.image_tag }}
           RELEASE_TAGS:    ${{ needs.prepare.outputs.release_tags }}
-        run: |
-          # Build --tag args: always include immutable + mutable branch tags,
-          # plus the version-tag ladder if this is a release build.
-          TAG_ARGS=(--tag "${GHCR_IMAGE}" --tag "${GHCR_BRANCH_TAG}")
-          if [ -n "${RELEASE_TAGS}" ]; then
-            while IFS= read -r tag; do
-              [ -n "$tag" ] && TAG_ARGS+=(--tag "$tag")
-            done <<< "${RELEASE_TAGS}"
-          fi
-
-          docker buildx imagetools create \
-            "${TAG_ARGS[@]}" \
-            "${GHCR_BASE}:${BRANCH}-${IMAGE_TAG}-amd64" \
-            "${GHCR_BASE}:${BRANCH}-${IMAGE_TAG}-arm64"
-
-          echo "Multi-arch manifest pushed:"
-          echo "  Immutable: ${GHCR_IMAGE}"
-          echo "  Branch:    ${GHCR_BRANCH_TAG}"
-          if [ -n "${RELEASE_TAGS}" ]; then
-            echo "  Release tags:"
-            while IFS= read -r tag; do [ -n "$tag" ] && echo "    ${tag}"; done <<< "${RELEASE_TAGS}"
-          fi
-
-      - name: Checkout SDK helper scripts
-        # mirror_tags_dockerhub.py and release_candidate.py live in the SDK
-        # repo, not the caller repo — this job has no checkout of its own
-        # (unlike prepare/certify/leak-scan), so the scripts must be pulled in
-        # explicitly before they're invoked below.
-        if: needs.prepare.outputs.enable_sdr == 'true' || needs.prepare.outputs.promote_source != '' || inputs.candidate
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: main
-          path: .sdk-entrypoint
-          sparse-checkout: .github/scripts
-          sparse-checkout-cone-mode: false
+        run: python3 .sdk-entrypoint/.github/scripts/build_and_publish/manifest.py
 
       # Release with a scanned candidate (FND-3328): instead of a manifest
       # assembled from fresh per-arch builds, copy the scanned candidate's
@@ -1855,7 +1588,6 @@ jobs:
     steps:
       - name: Mint fleet App token
         id: app-token
-        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -1866,7 +1598,7 @@ jobs:
       - name: Repository Dispatch
         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
         with:
-          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
           repository: ${{ matrix.repo }}
           event-type: dispatch_app_builder_workflow
           client-payload: |-
@@ -1948,160 +1680,10 @@ jobs:
           # attributes a merge-to-main publish to the human who merged the PR
           # rather than to the bot that opened it.
           CREATED_BY: ${{ steps.release_actor.outputs.created_by }}
-        run: |
-          set -euo pipefail
-
-          # Strip CR/LF that GitHub expression evaluation can inject.
-          RELEASE_TAG="${RELEASE_TAG//$'\r'/}"
-          RELEASE_TAG="${RELEASE_TAG//$'\n'/}"
-          RELEASE_MODEL="${RELEASE_MODEL//$'\r'/}"
-          RELEASE_MODEL="${RELEASE_MODEL//$'\n'/}"
-
-          # Semver-release gate: apps that opt in via release_model=semver
-          # must supply an explicit release_tag for any channel='all' publish.
-          # Merge-to-main builds the image (already in GHCR) but does not publish
-          # to all tenants — only a GitHub Release (which sets release_tag) does.
-          # Tenant-targeted and non-all-channel publishes are unrestricted.
-          EFFECTIVE_CHANNEL="${CHANNEL:-all}"
-          EFFECTIVE_CHANNEL="${EFFECTIVE_CHANNEL,,}"
-          if [ "${RELEASE_MODEL}" = "semver" ] && [ -z "${RELEASE_TAG}" ] && [ -z "${TENANTS}" ] && [ "${EFFECTIVE_CHANNEL}" = "all" ]; then
-            echo "::error title=Publish blocked::App declares release_model=semver — publishing to channel='all' requires an explicit release tag. The image is already in GHCR; cut a GitHub Release from main to publish to all tenants."
-            {
-              echo "### Publish blocked — semver release required"
-              echo ""
-              echo "This app has \`release_model: semver\` in \`atlan.yaml\`."
-              echo "Publishing to the **all** channel requires an explicit GitHub Release."
-              echo ""
-              echo "| Field | Value |"
-              echo "|-------|-------|"
-              echo "| Built image | \`${GHCR_IMAGE}\` |"
-              echo "| Channel | \`${EFFECTIVE_CHANNEL}\` |"
-              echo ""
-              echo "**Next step:** create a GitHub Release from \`main\` — the image above is already built and ready."
-            } >> "${GITHUB_STEP_SUMMARY}"
-            exit 1
-          fi
-
-          # Build JSON payload matching the CLI's registerInMarketplace format
-          BODY=$(python3 - <<'PYEOF'
-          import json, os
-
-          # Prefer release_tag (e.g. v0.3.0) over commit SHA for the GM version.
-          # Backward compatible: apps that don't pass release_tag get SHA as before.
-          release_tag = os.environ.get("RELEASE_TAG", "").strip()
-          # Same string the build job baked into the image (app/atlan_build.json),
-          # so the worker's self-reported app_version equals versions.version.
-          version = os.environ.get("GM_VERSION", "").strip() or (
-              release_tag if release_tag else os.environ["IMAGE_TAG"]
-          )
-
-          # Semver apps send the plain version tag (e.g. :0.3.0) as the image
-          # so the GM's semver gate accepts it. The release ladder strips the
-          # leading 'v' (v0.3.0 → 0.3.0), so we do the same here to reference
-          # a tag that actually exists in GHCR. CD apps always send the immutable
-          # branch-sha tag regardless of whether release_tag is set.
-          release_model = os.environ.get("RELEASE_MODEL", "").strip()
-          ghcr_image = os.environ["GHCR_IMAGE"]
-          if release_tag and release_model == "semver":
-              image_base = ghcr_image.rsplit(":", 1)[0]
-              version_tag = release_tag.lstrip("v")  # match release ladder: v0.3.0 → 0.3.0
-              image = f"{image_base}:{version_tag}"
-          else:
-              image = ghcr_image
-
-          body = {
-              "app_id": os.environ["APP_ID"],
-              "image": image,
-              "version": version,
-              "branch": os.environ["BRANCH"],
-              "repo": os.environ["REPO_URL"],
-              "source": "ci_publish",
-          }
-
-          # Full git SHA the image was built from. GM stores it on the version so
-          # a worker's baked commit_sha resolves to a release even for semver apps,
-          # whose `version`/`image` carry no SHA.
-          commit_sha = os.environ.get("COMMIT_SHA", "").strip()
-          if commit_sha:
-              body["commit_sha"] = commit_sha
-
-          config = os.environ.get("DEPLOY_CONFIG", "").strip()
-          # SDR capability rides inside the opaque config YAML — GM stores
-          # versions.config as raw TEXT and echoes it back in the tenant
-          # catalog, so LM can gate "Install on more environments" per app
-          # without a GM schema change. Only injected when true: absence
-          # means not SDR-capable (keeps non-SDR configs byte-identical).
-          if os.environ.get("ENABLE_SDR", "").strip() == "true":
-              config = f"self_deployed_runtime: true\n{config}".strip()
-          if config:
-              body["config"] = config
-
-          sdk = os.environ.get("SDK_VERSION", "").strip()
-          if sdk:
-              body["sdk_version"] = sdk
-
-          # entrypoints: native multi-package declarations from atlan.yaml.
-          # Absent → GM falls back to App.argo_package_names for entrypoint expansion.
-          wp = os.environ.get("ENTRYPOINTS", "").strip()
-          if wp:
-              body["entrypoints"] = json.loads(wp)
-
-          tenants = os.environ.get("TENANTS", "").strip()
-          if tenants:
-              body["allowed_tenants"] = [t.strip() for t in tenants.split(",") if t.strip()]
-          else:
-              body["target_channel"] = os.environ.get("CHANNEL", "all") or "all"
-
-          created_by = os.environ.get("CREATED_BY", "").strip()
-          if created_by:
-              body["created_by"] = created_by
-
-          if release_model:
-              body["release_model"] = release_model
-
-          # Base64-encoded JSON blob of connector form files (see prepare job).
-          # GM's VersionBody validator decodes this back to the JSON string.
-          app_configs = os.environ.get("APP_CONFIGS", "").strip()
-          if app_configs:
-              body["app_configs"] = app_configs
-
-          print(json.dumps(body))
-          PYEOF
-          )
-
-          echo "Publishing ${APP_NAME} (${IMAGE_TAG}) to marketplace..."
-
-          RESPONSE=$(curl -sS --fail-with-body -X POST \
-            "${BASE_URL}/api/service/marketplace/publish" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${APP_PUBLISH_TOKEN}" \
-            -d "$BODY") || { echo "Publish failed: $RESPONSE"; exit 1; }
-
-          echo "$RESPONSE" | python3 -c "
-          import json, sys
-          r = json.load(sys.stdin)
-          d = r.get('data', {})
-          vid = d.get('version_id', 'N/A')
-          rid = d.get('release_id', 'N/A')
-          aid = d.get('app_id', 'N/A')
-          print(f'Version: {vid}')
-          print(f'Release: {rid}')
-          print(f'App ID:  {aid}')
-          "
-
-          CHANNEL_USED="${CHANNEL:-all}"
-          if [ -n "$TENANTS" ]; then
-            CHANNEL_USED="tenants: $TENANTS"
-          fi
-          if [ "$CHANNEL_USED" = "all" ]; then
-            echo "Channel 'all' creates a draft release — admin approval required"
-          fi
-
-          echo "### Publish complete" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Published \`${APP_NAME}\` version \`${IMAGE_TAG}\` to \`${CHANNEL_USED}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Refer to [Global Marketplace](https://globalmarketplaceui.atlan.com/admin/) for approval." >> $GITHUB_STEP_SUMMARY
+        # Semver-release gate (a release_model=semver app needs a release tag
+        # to publish to channel='all'), the publish body, the POST, and the
+        # summary: build_and_publish/publish.py publish.
+        run: python3 .sdk-entrypoint/.github/scripts/build_and_publish/publish.py publish
 
       # The publish route creates a version and has no `tags` field, so app-level
       # tags (marketplace search keywords) are synced with the app update that

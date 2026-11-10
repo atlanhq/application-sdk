@@ -18,6 +18,7 @@ Usage::
 from __future__ import annotations
 
 import importlib.resources as _ir
+from typing import NamedTuple
 
 import jinja2
 
@@ -95,7 +96,8 @@ SARIF_UPLOAD_WORKFLOW = "conformance-upload-sarif.yaml"
 # fired it up to three times with up to three jobs each. Those dashboards are
 # now pulled for the whole fleet by application-sdk's scheduled
 # ``update-fleet-dashboards.yaml``, so the per-repo push has nothing left to do.
-# Its reusable stays in application-sdk until resync has removed every copy.
+# Its reusable stays in application-sdk until C002 reports zero copies of the
+# shim (see ``RETIRED_SHIM_REUSABLES`` below).
 #
 # ``renovate-auto-approve.yml``: a ``workflow_run`` shim that posted an
 # atlan-ci approval on green Renovate and resync PRs, to satisfy a
@@ -143,6 +145,66 @@ RETIRED_WORKFLOWS: tuple[str, ...] = tuple(
     for path in RETIRED_FILES
     if path.startswith(".github/workflows/")
 )
+
+# Retiring a shim and retiring the application-sdk reusable it called are two
+# steps, in that order (FND-4654). Bootstrap deletes a retired shim only when a
+# consumer next runs it, so copies linger for weeks. Each lingering copy still
+# calls the reusable, and a call to a reusable that no longer exists fails at
+# startup on every trigger. So the reusable stays until C002 (which reports
+# every retired shim still on disk) shows zero copies across the fleet.
+#
+# ``auto-fix.yml`` is why this registry exists: its reusable was deleted
+# while 8 app clones still carried the shim, and those apps fail at startup on
+# every PR comment until they resync.
+#
+# ``.github/scripts/tests/test_reusable_retirement.py`` enforces the order:
+# every retired workflow in ``RETIRED_FILES`` must appear in exactly one of
+# the two tables below, and each reusable named here must still exist in
+# application-sdk unless ``DELETED_RETIRED_REUSABLES`` records a zero-copy
+# deletion (or it is the one historical ``PREMATURE_REUSABLE_DELETIONS`` entry).
+#
+# Retired shim (relative to ``.github/workflows/``) -> the application-sdk
+# reusable workflow it called.
+RETIRED_SHIM_REUSABLES: dict[str, str] = {
+    "auto-fix.yml": "auto-fix-vulnerabilities.yaml",
+    "update-dashboard.yml": "update-dashboard.yaml",
+    # application-sdk keeps this reusable for its own caller; it is not a
+    # retirement candidate.
+    "renovate-auto-approve.yml": "renovate-auto-approve-reusable.yml",
+}
+
+# Retired workflows that never called an application-sdk reusable, with why.
+RETIRED_SHIMS_WITHOUT_REUSABLE: dict[str, str] = {
+    "docstring-coverage.yaml": "its target reusable never existed",
+    "porter-bundle-cnab.yaml": "never bootstrap-managed; called no SDK reusable",
+}
+
+
+class ReusableDeletion(NamedTuple):
+    """The C002 fleet count that allowed a retired shim's reusable to go."""
+
+    # Copies of the retired shim C002 found across the fleet. Must be 0.
+    c002_copies: int
+    # ISO date the count was taken, e.g. "2026-12-01".
+    counted_on: str
+    # Where the count came from: the fleet ledger query or report, by name.
+    source: str
+
+
+# Reusable (relative to application-sdk's ``.github/workflows/``) -> the
+# count that allowed its deletion. Add an entry in the same PR that deletes
+# the reusable. An entry is history; never remove one.
+DELETED_RETIRED_REUSABLES: dict[str, ReusableDeletion] = {}
+
+# Reusables deleted before C002 reported zero copies. Closed: the test pins
+# this to exactly the entries below, so it cannot become a way around
+# ``DELETED_RETIRED_REUSABLES``.
+PREMATURE_REUSABLE_DELETIONS: dict[str, str] = {
+    "auto-fix-vulnerabilities.yaml": (
+        "Deleted 2026-11-03 (#4717) with no C002 count: 8 app clones still "
+        "carried auto-fix.yml and fail at startup until they resync."
+    ),
+}
 
 # Non-workflow files that must also be vendored into every consumer repo,
 # keyed by (repo-root-relative dest path, template filename in templates/).

@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 144,
-    "warning": 6072
+    "warning": 6052
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -404,9 +404,6 @@
     },
     ".github/scripts/tests/test_check_symbol_removals.py": {
       "warning:reportUnknownMemberType": 6
-    },
-    ".github/scripts/tests/test_check_trivy_secret_contract.py": {
-      "warning:reportUnknownMemberType": 20
     },
     ".github/scripts/tests/test_complete_check_run.py": {
       "error:reportOptionalSubscript": 1,

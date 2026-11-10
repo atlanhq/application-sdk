@@ -43,66 +43,80 @@ def client():
 
 
 class TestTemporalCoreCollector:
-    def _make_collector(self):
-        return TemporalCoreCollector(url="http://127.0.0.1:9464/metrics")
+    def _make_collector(self, max_bytes: int | None = None):
+        return TemporalCoreCollector(
+            url="http://127.0.0.1:9464/metrics", max_bytes=max_bytes
+        )
 
-    def _mock_httpx_response(
-        self, status_code: int = 200, text: str = _PROMETHEUS_TEXT
-    ):
-        mock_resp = MagicMock()
-        mock_resp.status_code = status_code
-        mock_resp.text = text
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.get.return_value = mock_resp
-        return mock_client
+    @staticmethod
+    def _transport(handler):
+        """Route the collector's ``httpx.Client`` through a MockTransport."""
+        real_client = httpx.Client
+        transport = httpx.MockTransport(handler)
+
+        def _client(*args: object, **kwargs: object) -> httpx.Client:
+            return real_client(*args, transport=transport, **kwargs)  # type: ignore[arg-type]
+
+        return patch(
+            "application_sdk.observability.pushgateway.httpx.Client",
+            side_effect=_client,
+        )
 
     def test_collect_yields_metrics_on_200(self):
         collector = self._make_collector()
-        mock_client = self._mock_httpx_response(status_code=200)
-        with patch(
-            "application_sdk.observability.pushgateway.httpx.Client",
-            return_value=mock_client,
-        ):
+        body = _PROMETHEUS_TEXT.encode()
+        with self._transport(lambda _r: httpx.Response(200, content=body)):
             result = list(collector.collect())
         assert len(result) > 0
 
     def test_collect_returns_empty_on_non_200(self):
         collector = self._make_collector()
-        mock_client = self._mock_httpx_response(status_code=503)
-        with patch(
-            "application_sdk.observability.pushgateway.httpx.Client",
-            return_value=mock_client,
-        ):
+        with self._transport(lambda _r: httpx.Response(503)):
             result = list(collector.collect())
         assert result == []
 
     def test_collect_returns_empty_on_connect_error(self):
         collector = self._make_collector()
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.get.side_effect = httpx.ConnectError("refused")
-        with patch(
-            "application_sdk.observability.pushgateway.httpx.Client",
-            return_value=mock_client,
-        ):
+
+        def _refuse(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("refused", request=request)
+
+        with self._transport(_refuse):
             result = list(collector.collect())
         assert result == []
 
     def test_collect_swallows_any_exception(self):
         collector = self._make_collector()
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.get.side_effect = RuntimeError("unexpected")
-        with patch(
-            "application_sdk.observability.pushgateway.httpx.Client",
-            return_value=mock_client,
-        ):
+
+        def _boom(_request: httpx.Request) -> httpx.Response:
+            raise RuntimeError("unexpected")
+
+        with self._transport(_boom):
             result = list(collector.collect())
         assert result == []
+
+    def test_collect_skips_oversize_body_without_draining_it(self):
+        """A high-cardinality core exporter must not be read whole every push."""
+        cap = 1024
+        pulled = 0
+
+        class _Chunks(httpx.SyncByteStream):
+            def __iter__(self):
+                nonlocal pulled
+                while pulled < cap * 100:
+                    pulled += 64
+                    yield b"#" * 64
+
+        collector = self._make_collector(max_bytes=cap)
+        with self._transport(lambda _r: httpx.Response(200, stream=_Chunks())):
+            result = list(collector.collect())
+        assert result == []
+        assert pulled < cap * 3
+
+    def test_default_cap_is_the_shared_constant(self):
+        from application_sdk.constants import TEMPORAL_CORE_METRICS_MAX_BYTES
+
+        assert self._make_collector()._max_bytes == TEMPORAL_CORE_METRICS_MAX_BYTES
 
 
 class TestPushGatewayClientInit:
