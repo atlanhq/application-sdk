@@ -1548,9 +1548,11 @@ Fix, by site:
 - No creator for the type, a creator that produces a different string, a creator that
   needs an input the app does not have, or a creator that rejects a valid value the
   source is shown to send: keep the f-string in one helper per name shape and leave it
-  unsuppressed. A valid value is never skipped to make a creator fit.  Without evidence
-  of such a value, a raise the app catches per record would lose the asset quietly:
-  there the site is a gap too.
+  unsuppressed. State which reason applies, with its proof (the creator check on the
+  installed pyatlan, both strings for one real input, the missing argument, or the
+  rejected value with its source and error). A valid value is never skipped to make a
+  creator fit.  Without evidence of such a value, a raise the app catches per record
+  would lose the asset quietly: there the site is a gap too.
 - Not a qualifiedName at all: `# conformance: ignore[P028] <reason>` (see the terminal
   state).
 
