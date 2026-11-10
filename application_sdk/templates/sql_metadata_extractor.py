@@ -40,10 +40,7 @@ from application_sdk.common.sql_filters import (
 )
 from application_sdk.contracts.storage import UploadInput
 from application_sdk.contracts.types import StorageTier
-from application_sdk.credentials import (
-    CredentialResolver,
-    legacy_credential_ref,  # noqa: F401 — deprecated re-export (was importable here in v3.55.3; removed in v4.0)
-)
+from application_sdk.credentials import CredentialResolver
 from application_sdk.credentials.ref import _guid_credential_ref
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger

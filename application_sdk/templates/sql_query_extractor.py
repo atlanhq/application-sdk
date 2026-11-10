@@ -23,7 +23,6 @@ import warnings
 from typing import Any, ClassVar
 
 from application_sdk.app.task import task
-from application_sdk.credentials import legacy_credential_ref  # noqa: F401 — deprecated re-export (was importable here in v3.55.3; removed in v4.0)
 from application_sdk.credentials.ref import _guid_credential_ref
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates._template_errors import (
