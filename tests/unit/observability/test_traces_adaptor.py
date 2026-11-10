@@ -289,4 +289,6 @@ def test_enabled_traces_give_temporal_interceptor_a_recording_tracer():
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip().endswith("ok")
+    # The SDK logger also writes to stdout and may flush after the marker,
+    # so look for the marker line rather than requiring it last.
+    assert "ok" in result.stdout.splitlines(), result.stdout
