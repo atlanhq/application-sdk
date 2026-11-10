@@ -68,12 +68,12 @@ from typing import TYPE_CHECKING, Annotated, Any, get_args, get_origin
 
 import orjson
 
-from application_sdk.app._generated_tree import (
+from application_sdk.common._generated_tree import (
     ARTIFACT_SCHEMAS_STEM,
     GeneratedLayout,
+    entrypoint_dirs,
     generated_layout,
 )
-from application_sdk.common._generated_tree import entrypoint_dirs
 from application_sdk.constants import CONTRACT_GENERATED_DIR
 from application_sdk.contracts.types import FileReference, asset_artifact_marker
 from application_sdk.observability.logger_adaptor import get_logger
@@ -83,7 +83,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ARTIFACT_SCHEMA_REMOVAL_VERSION",
-    # Re-exported from application_sdk.app._generated_tree, which owns the
+    # Re-exported from application_sdk.common._generated_tree, which owns the
     # classification. Kept as a name here because this module's docstrings and
     # `_declared_artifact_schema_keys`'s signature are written in terms of it.
     "GeneratedLayout",
@@ -97,7 +97,7 @@ _logger = get_logger(__name__)
 #: reader never has to go looking for the deadline.
 ARTIFACT_SCHEMA_REMOVAL_VERSION = "4.0"
 
-#: Derived from the stem :mod:`application_sdk.app._generated_tree` owns, so
+#: Derived from the stem :mod:`application_sdk.common._generated_tree` owns, so
 #: the file this guard reads and the file form discovery must *skip* can never
 #: be two different names (FND-1682).
 _ARTIFACT_SCHEMAS_FILENAME = f"{ARTIFACT_SCHEMAS_STEM}.json"
@@ -140,7 +140,7 @@ class _Declarations:
 def _generated_layout() -> GeneratedLayout:
     """Classify this app's committed generated tree.
 
-    Thin wrapper over :func:`application_sdk.app._generated_tree.generated_layout`
+    Thin wrapper over :func:`application_sdk.common._generated_tree.generated_layout`
     applied to :data:`~application_sdk.constants.CONTRACT_GENERATED_DIR`, which
     is the authority — ``handler.service``'s configmap fallback and the
     tenant-side route check read the same classifier, so the same app cannot get

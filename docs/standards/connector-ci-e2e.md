@@ -886,7 +886,7 @@ minted after every committed artifact exists. So it enters at image build time:
    an ENV, and an ARG is not inherited across `FROM`, so the two lines have to be
    in the connector's own file. Nothing is written back to any repo, and a
    connector that adopts the lines itself is left alone.
-3. `application_sdk.app.build_identity` reads the ENV at app registration, so
+3. `application_sdk.common.build_identity` reads the ENV at app registration, so
    every app inherits it with no per-app change (`App._app_build_id`,
    `AppContext.build_id`).
 4. The handler answers the reserved id `atlan-build-identity` on the
@@ -897,7 +897,7 @@ The stamp above covers the **e2e** image, which is the only one this action
 builds. A released image comes from `build-and-publish-app.yaml`, which never
 calls this action; it carries the same identity in the `build_id` key of the
 `app/atlan_build.json` it bakes into the build context, and
-`application_sdk.app.build_identity` falls back to it when the ENV is absent.
+`application_sdk.common.build_identity` falls back to it when the ENV is absent.
 Same reader, same value shape — see
 [`release-flow.md`](release-flow.md#build_id-and-its-relationship-to-atlan_build_id).
 The ENV keeps precedence, so nothing on this path changes: an e2e build derives
@@ -1446,7 +1446,7 @@ The same race is waited for one step earlier, on the build-identity route — se
 
 The check is `application_sdk/testing/setup_routes.py`; the CI shell around it is [`verify_setup_routes.py`](../../.github/actions/sdr-e2e/verify_setup_routes.py) in the composite. The split is not arbitrary:
 
-- The SDK is on **both** sides of the join being asserted. `/api/service/configmaps/<name>` is Heracles proxying to the app pod's own `GET /workflows/v1/configmap/{id}`, so the response envelope, the form-file selection rule and the generated-tree layout are read from `application_sdk/app/_generated_tree.py` — the same authority the server reads. A second copy would let the server serve one file while the check compared against another, and that mismatch would read as a contract regression.
+- The SDK is on **both** sides of the join being asserted. `/api/service/configmaps/<name>` is Heracles proxying to the app pod's own `GET /workflows/v1/configmap/{id}`, so the response envelope, the form-file selection rule and the generated-tree layout are read from `application_sdk/common/_generated_tree.py` — the same authority the server reads. A second copy would let the server serve one file while the check compared against another, and that mismatch would read as a contract regression.
 - It therefore needs the SDK importable, which rules out `prepare-tenant`: that job runs a bare `python3` with no `uv sync`. By this point in `sdr-e2e` the app's environment is synced.
 - The `e2e` job that invokes this composite has `prepare-tenant` in its `needs:`, so every step here is strictly after the install.
 

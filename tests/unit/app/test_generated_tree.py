@@ -18,15 +18,15 @@ from pathlib import Path
 
 import pytest
 
-from application_sdk.app._generated_tree import (
+from application_sdk.common._generated_tree import (
     ARTIFACT_SCHEMAS_STEM,
+    entrypoint_dirs,
     form_configmap,
     generated_layout,
     is_form_configmap,
     names_entrypoint,
     pick_form_configmap,
 )
-from application_sdk.common._generated_tree import entrypoint_dirs
 
 
 def _write(directory: Path, *names: str) -> None:

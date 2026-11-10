@@ -27,7 +27,7 @@ def load_build_info(path: str | None = None) -> dict[str, str]:
     Missing or malformed file → ``{}``; callers fall back to the env vars.
     ``ATLAN_BUILD_INFO_PATH`` overrides the lookup for non-template layouts.
 
-    Public because :mod:`application_sdk.app.build_identity` reads the same file
+    Public because :mod:`application_sdk.common.build_identity` reads the same file
     through it. A second parser there would be a second place for the key names
     to drift from what CI writes.
     """

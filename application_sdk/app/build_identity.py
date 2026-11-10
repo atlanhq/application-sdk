@@ -1,21 +1,60 @@
-"""Re-export of :mod:`application_sdk.common.build_identity`.
+"""Deprecated alias of :mod:`application_sdk.common.build_identity`.
 
 The implementation moved out of the ``app`` package (FND-3280) so the handler
 can serve the build identity without importing ``application_sdk.app``, whose
-``__init__`` loads the worker. This path keeps working and resolves to the same
-objects.
+``__init__`` loads the worker. Every name here still resolves to the same object
+as its ``common`` counterpart, with a ``DeprecationWarning`` on access.
+
+.. deprecated:: 3.56
+    Import from :mod:`application_sdk.common.build_identity`. Will be removed in
+    v4.0.0.
 """
 
-from application_sdk.common.build_identity import (
-    BUILD_ID_ENV,
-    BUILD_IDENTITY_CONFIGMAP_ID,
-    BUILD_INFO_BUILD_ID_KEY,
-    build_identity,
-)
+from __future__ import annotations
 
-__all__ = [
-    "BUILD_ID_ENV",
-    "BUILD_IDENTITY_CONFIGMAP_ID",
-    "BUILD_INFO_BUILD_ID_KEY",
-    "build_identity",
-]
+import warnings
+
+#: name -> (replacement, why). Served by ``__getattr__`` below (PEP 562), which
+#: returns the ``common`` object itself so a patch or an identity check sees one
+#: object, not two.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "BUILD_ID_ENV": (
+        "application_sdk.common.build_identity.BUILD_ID_ENV",
+        "the implementation moved to common (FND-3280)",
+    ),
+    "BUILD_IDENTITY_CONFIGMAP_ID": (
+        "application_sdk.common.build_identity.BUILD_IDENTITY_CONFIGMAP_ID",
+        "the implementation moved to common (FND-3280)",
+    ),
+    "BUILD_INFO_BUILD_ID_KEY": (
+        "application_sdk.common.build_identity.BUILD_INFO_BUILD_ID_KEY",
+        "the implementation moved to common (FND-3280)",
+    ),
+    "build_identity": (
+        "application_sdk.common.build_identity.build_identity",
+        "the implementation moved to common (FND-3280)",
+    ),
+}
+
+
+#: Kept so ``from <this module> import *`` still binds every moved name: a star
+#: import reads ``__all__`` and then resolves each entry through ``__getattr__``,
+#: so each name warns. Without it, ``__getattr__`` is never asked.
+__all__ = list(_DEPRECATED_CONSTANTS)  # pyright: ignore[reportUnsupportedDunderAll] — names are served by __getattr__
+
+
+def __getattr__(name: str) -> object:
+    """Serve the moved names once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated here; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    from application_sdk.common import build_identity as _target  # noqa: PLC0415
+
+    return getattr(_target, name)

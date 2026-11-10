@@ -78,6 +78,7 @@ import asyncio
 import dataclasses
 import os
 import time
+import warnings
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, Union
@@ -2074,3 +2075,33 @@ class SqlApp(App):
             total_record_count=count,
             transformed_file=transformed_ref,
         )
+
+
+# ── Deprecated re-exports ────────────────────────────────────────────────────
+#: name -> (replacement, why). This module imported ``legacy_credential_ref``
+#: until FND-4691 switched it to the private GUID constructor, which left the
+#: name importable from here only by accident of that import. Served once more
+#: by ``__getattr__`` below (PEP 562) so the removal waits for v4.0.0.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "legacy_credential_ref": (
+        "application_sdk.credentials.ref.legacy_credential_ref",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the removed re-exports once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated here; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    from application_sdk.credentials import ref as _ref  # noqa: PLC0415
+
+    return getattr(_ref, name)

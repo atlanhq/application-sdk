@@ -3,7 +3,9 @@ from typing import Any, Dict
 
 import pyarrow.parquet as pq
 
-from application_sdk.storage.formats.utils import _arrow_table_from_pandas
+from application_sdk.common._arrow import (
+    arrow_table_from_pandas as _arrow_table_from_pandas,
+)
 
 from .base import OutputFormatHandler
 

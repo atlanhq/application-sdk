@@ -115,7 +115,7 @@ Require Apps to directly import each other's App classes.
 
 > _Historical context — see Resolution above._
 
-Child workflow invocation was implemented in `application_sdk/app/client.py`. The `App` exposed it through `self.context` inside `run()`. Import only the target app's contract models — not the app class itself — to maintain type safety while keeping deployments independent:
+Child workflow invocation was implemented in `application_sdk/app/client.py` (deactivated pending BLDX-878, then deleted in FND-4693). The `App` exposed it through `self.context` inside `run()`. Import only the target app's contract models — not the app class itself — to maintain type safety while keeping deployments independent:
 
 > **⚠️ Historical — do not copy.** `call_by_name()` was permanently removed. Use [Automation Engine DAG orchestration](../guides/multi-app-coordination.md) instead.
 

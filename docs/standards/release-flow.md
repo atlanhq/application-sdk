@@ -343,7 +343,7 @@ called by `build-and-publish-app.yaml`, so a **released** image carried no build
 identity at all and answered the build-identity route with `""`.
 
 There is one reader for both carriers,
-`application_sdk.app.build_identity.build_identity()`, which prefers the ENV:
+`application_sdk.common.build_identity.build_identity()`, which prefers the ENV:
 
 | Built by | Carrier | Reported by |
 |---|---|---|

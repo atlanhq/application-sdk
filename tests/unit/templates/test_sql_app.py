@@ -3616,3 +3616,22 @@ class TestTransformAppliesTheEnvelope:
         entity = _one_entity(tmp_path, "table")
         assert "defaultCatalogName" not in entity
         assert "defaultSchemaName" not in entity
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        "application_sdk.templates.sql_app",
+        "application_sdk.templates.sql_metadata_extractor",
+        "application_sdk.templates.sql_query_extractor",
+    ],
+)
+def test_legacy_credential_ref_reexport_is_a_deprecated_alias(module_name: str) -> None:
+    """FND-4691 dropped the import; the name stays importable, warning, until v4.0.0."""
+    import importlib
+
+    from application_sdk.credentials import ref
+
+    module = importlib.import_module(module_name)
+    with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+        assert module.legacy_credential_ref is ref.legacy_credential_ref
