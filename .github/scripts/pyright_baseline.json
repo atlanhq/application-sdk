@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 144,
-    "warning": 6052
+    "warning": 6050
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -167,7 +167,7 @@
       "warning:reportUnknownMemberType": 7
     },
     ".github/scripts/lens/llm.py": {
-      "warning:reportUnknownMemberType": 34
+      "warning:reportUnknownMemberType": 32
     },
     ".github/scripts/lens/review.py": {
       "warning:reportUnknownMemberType": 28
