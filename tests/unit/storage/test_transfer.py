@@ -1528,22 +1528,24 @@ class TestUploadOnTheSharedEngine:
 
 
 class TestDeprecatedReexports:
-    """FND-3796: four names ``transfer`` no longer imports stay importable.
+    """FND-3796 left ``transfer``'s old imports importable; FND-4693 trimmed them.
 
-    A fleet audit found no app using them from here, so each is a deprecated
-    no-op until v4.0 rather than a working alias new code could adopt.
+    ``InternalError`` stays as a deprecated inert subclass until v4.0. The three
+    deprecated no-ops are gone: answering ``False`` or ``[]`` looked like a real
+    result, so a caller now gets an ImportError that points at the real function.
     """
 
-    async def test_each_name_warns_and_does_nothing(self, tmp_path) -> None:
+    def test_internal_error_is_inert(self) -> None:
         from application_sdk.errors import InternalError as RealInternalError
         from application_sdk.storage import transfer
 
-        (tmp_path / "a.json").write_bytes(b"{}")
-        with pytest.warns(DeprecationWarning, match="removed in v4.0"):
-            assert transfer.is_sidecar_key("a.json.sha256") is False
-        with pytest.warns(DeprecationWarning, match="removed in v4.0"):
-            assert transfer.safe_list_directory(tmp_path) == []
-        with pytest.warns(DeprecationWarning, match="removed in v4.0"):
-            assert await transfer.list_data_keys("", create_memory_store()) == []
         # Inert as a catch target: the SDK raises the real class.
         assert not issubclass(RealInternalError, transfer.InternalError)
+
+    @pytest.mark.parametrize(
+        "name", ["is_sidecar_key", "list_data_keys", "safe_list_directory"]
+    )
+    def test_the_wrong_answer_no_ops_are_gone(self, name: str) -> None:
+        from application_sdk.storage import transfer
+
+        assert not hasattr(transfer, name)

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import builtins
+import importlib.util
 import json
 import sys
 import time
@@ -3919,3 +3920,27 @@ def test_a_stubbed_sleep_still_moves_the_clock() -> None:
     before = time.monotonic()
     time.sleep(120)
     assert time.monotonic() - before >= 120
+
+
+# ── Build-identity module probe ──────────────────────────────────────────────
+
+
+def test_build_identity_probe_finds_the_module_at_either_sdk_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An SDK predating ``application_sdk.common`` still counts as serving it.
+
+    ``find_spec`` raises for a missing parent package; that must not end the
+    scan before the older ``application_sdk.app`` path is asked.
+    """
+
+    def old_sdk(name: str) -> object | None:
+        if name.startswith("application_sdk.common"):
+            raise ModuleNotFoundError(name)
+        return object() if name == "application_sdk.app.build_identity" else None
+
+    monkeypatch.setattr(importlib.util, "find_spec", old_sdk)
+    assert app._local_sdk_serves_build_identity() is True
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    assert app._local_sdk_serves_build_identity() is False

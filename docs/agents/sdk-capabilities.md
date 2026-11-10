@@ -265,13 +265,6 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Wrap @task methods on an instance to execute as Temporal activities.
 - **Defined in:** `application_sdk/app/base.py`
 
-#### `build_identity`
-
-- **Import:** `from application_sdk.app.build_identity import build_identity`
-- **Signature:** `build_identity()`
-- **Summary:** Return this image's build identity, or ``""`` when it carries none.
-- **Defined in:** `application_sdk/common/build_identity.py`
-
 #### `canonical_workflow_type`
 
 - **Import:** `from application_sdk.app import canonical_workflow_type`
@@ -315,27 +308,6 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Signature:** `_app_state_lock`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/app/base.py`
-
-#### `BUILD_ID_ENV`
-
-- **Import:** `from application_sdk.app.build_identity import BUILD_ID_ENV`
-- **Signature:** `BUILD_ID_ENV`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/common/build_identity.py`
-
-#### `BUILD_IDENTITY_CONFIGMAP_ID`
-
-- **Import:** `from application_sdk.app.build_identity import BUILD_IDENTITY_CONFIGMAP_ID`
-- **Signature:** `BUILD_IDENTITY_CONFIGMAP_ID`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/common/build_identity.py`
-
-#### `BUILD_INFO_BUILD_ID_KEY`
-
-- **Import:** `from application_sdk.app.build_identity import BUILD_INFO_BUILD_ID_KEY`
-- **Signature:** `BUILD_INFO_BUILD_ID_KEY`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/common/build_identity.py`
 
 #### `InteractionUnfinishedPolicy`
 

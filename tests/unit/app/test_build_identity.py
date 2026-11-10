@@ -1,4 +1,4 @@
-"""Tests for application_sdk.app.build_identity (FND-1684).
+"""Tests for application_sdk.common.build_identity (FND-1684).
 
 The build identity is the one fact a running pod can report that distinguishes
 the image built by a given CI run from an image built months ago. Everything
@@ -20,7 +20,7 @@ from unittest import mock
 
 import pytest
 
-from application_sdk.app.build_identity import (
+from application_sdk.common.build_identity import (
     BUILD_ID_ENV,
     BUILD_IDENTITY_CONFIGMAP_ID,
     BUILD_INFO_BUILD_ID_KEY,

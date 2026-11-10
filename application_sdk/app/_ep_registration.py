@@ -11,7 +11,6 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, get_type_hints
 
 from application_sdk.app._artifact_schema_guard import warn_undeclared_artifact_schemas
-from application_sdk.app.build_identity import build_identity
 from application_sdk.app.entrypoint import (
     EntryPointContractError,
     EntryPointMetadata,
@@ -20,6 +19,7 @@ from application_sdk.app.entrypoint import (
 )
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import get_task_metadata, is_task
+from application_sdk.common.build_identity import build_identity
 from application_sdk.contracts.base import Input, Output
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -293,7 +293,7 @@ def _apply_app_registration(
     # every build of the same source; this is the identity of the IMAGE, stamped
     # at build time, and it is the only thing a running pod can report that
     # distinguishes the build under test from one shipped months ago. "" when the
-    # image carries no stamp — see application_sdk.app.build_identity.
+    # image carries no stamp — see application_sdk.common.build_identity.
     cls._app_build_id = build_identity()
     cls._input_type = input_type
     cls._output_type = output_type

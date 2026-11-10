@@ -50,7 +50,7 @@ import sys
 from pathlib import Path
 
 #: The build-arg / env-var name. Must match
-#: ``application_sdk.app.build_identity.BUILD_ID_ENV``; the SDK side is the
+#: ``application_sdk.common.build_identity.BUILD_ID_ENV``; the SDK side is the
 #: reader and this is the writer, and a divergent spelling here degrades the
 #: check to "the pod reports no build identity" rather than failing loudly — so
 #: the wiring test asserts the two agree.

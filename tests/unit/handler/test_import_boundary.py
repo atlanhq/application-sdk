@@ -24,6 +24,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 #: The handler surface that must load without the worker. Listed explicitly
 #: rather than discovered by walking the package: a new entry point should be a
 #: conscious decision. ``_runtime.offload`` is here because the handler calls
@@ -285,8 +287,15 @@ def test_moved_names_resolve_to_the_same_objects_at_their_old_paths() -> None:
         base_errors.SecretStoreNotConfiguredError
         is secrets.SecretStoreNotConfiguredError
     )
-    assert build_identity.build_identity is new_build_identity.build_identity
-    assert old_tree.choose_form_configmap is _generated_tree.choose_form_configmap
+    for old, new in (
+        (build_identity, new_build_identity),
+        (old_tree, _generated_tree),
+    ):
+        # Deprecated aliases (FND-4693): every name warns, and still resolves
+        # to the common object rather than a copy.
+        for name in old._DEPRECATED_CONSTANTS:
+            with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+                assert getattr(old, name) is getattr(new, name), name
     for name in (
         "PreflightSurface",
         "PreflightRowOutcome",

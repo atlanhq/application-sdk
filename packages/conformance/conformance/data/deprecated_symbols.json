@@ -1,6 +1,114 @@
 {
   "symbols": [
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ARTIFACT_SCHEMAS_STEM is deprecated; use application_sdk.common._generated_tree.ARTIFACT_SCHEMAS_STEM \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app._generated_tree",
+      "removal_version": "4.0.0",
+      "symbol": "ARTIFACT_SCHEMAS_STEM"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CREDENTIAL_TEMPLATE_PREFIXES is deprecated; use application_sdk.common._generated_tree.CREDENTIAL_TEMPLATE_PREFIXES \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app._generated_tree",
+      "removal_version": "4.0.0",
+      "symbol": "CREDENTIAL_TEMPLATE_PREFIXES"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "GeneratedLayout is deprecated; use application_sdk.common._generated_tree.GeneratedLayout \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app._generated_tree",
+      "removal_version": "4.0.0",
+      "symbol": "GeneratedLayout"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "MANIFEST_STEM is deprecated; use application_sdk.common._generated_tree.MANIFEST_STEM \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app._generated_tree",
+      "removal_version": "4.0.0",
+      "symbol": "MANIFEST_STEM"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "NON_FORM_STEMS is deprecated; use application_sdk.common._generated_tree.NON_FORM_STEMS \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app._generated_tree",
+      "removal_version": "4.0.0",
+      "symbol": "NON_FORM_STEMS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "choose_form_configmap is deprecated; use application_sdk.common._generated_tree.choose_form_configmap \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app._generated_tree",
+      "removal_version": "4.0.0",
+      "symbol": "choose_form_configmap"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "eligible_form_configmaps is deprecated; use application_sdk.common._generated_tree.eligible_form_configmaps \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app._generated_tree",
+      "removal_version": "4.0.0",
+      "symbol": "eligible_form_configmaps"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "form_configmap is deprecated; use application_sdk.common._generated_tree.form_configmap \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app._generated_tree",
+      "removal_version": "4.0.0",
+      "symbol": "form_configmap"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "generated_layout is deprecated; use application_sdk.common._generated_tree.generated_layout \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app._generated_tree",
+      "removal_version": "4.0.0",
+      "symbol": "generated_layout"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "is_form_configmap is deprecated; use application_sdk.common._generated_tree.is_form_configmap \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app._generated_tree",
+      "removal_version": "4.0.0",
+      "symbol": "is_form_configmap"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "names_entrypoint is deprecated; use application_sdk.common._generated_tree.names_entrypoint \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app._generated_tree",
+      "removal_version": "4.0.0",
+      "symbol": "names_entrypoint"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "pick_form_configmap is deprecated; use application_sdk.common._generated_tree.pick_form_configmap \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app._generated_tree",
+      "removal_version": "4.0.0",
+      "symbol": "pick_form_configmap"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "application_sdk.app.AppError is deprecated; use application_sdk.errors.AppError \u2014 will be removed in v4.0",
@@ -8,6 +116,42 @@
       "module": "application_sdk.app.base",
       "removal_version": "4.0",
       "symbol": "AppError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "BUILD_IDENTITY_CONFIGMAP_ID is deprecated; use application_sdk.common.build_identity.BUILD_IDENTITY_CONFIGMAP_ID \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.build_identity",
+      "removal_version": "4.0.0",
+      "symbol": "BUILD_IDENTITY_CONFIGMAP_ID"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "BUILD_ID_ENV is deprecated; use application_sdk.common.build_identity.BUILD_ID_ENV \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.build_identity",
+      "removal_version": "4.0.0",
+      "symbol": "BUILD_ID_ENV"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "BUILD_INFO_BUILD_ID_KEY is deprecated; use application_sdk.common.build_identity.BUILD_INFO_BUILD_ID_KEY \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.build_identity",
+      "removal_version": "4.0.0",
+      "symbol": "BUILD_INFO_BUILD_ID_KEY"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "build_identity is deprecated; use application_sdk.common.build_identity.build_identity \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.build_identity",
+      "removal_version": "4.0.0",
+      "symbol": "build_identity"
     },
     {
       "kind": "class",
@@ -557,33 +701,6 @@
       "module": "application_sdk.storage.transfer",
       "removal_version": "4.0",
       "symbol": "InternalError"
-    },
-    {
-      "kind": "function",
-      "marker_via": "decorator",
-      "message": "application_sdk.storage.transfer.is_sidecar_key is deprecated, does nothing, and will be removed in v4.0. Use application_sdk.storage.integrity.is_sidecar_key instead.",
-      "migration_target": true,
-      "module": "application_sdk.storage.transfer",
-      "removal_version": "4.0",
-      "symbol": "is_sidecar_key"
-    },
-    {
-      "kind": "function",
-      "marker_via": "decorator",
-      "message": "application_sdk.storage.transfer.list_data_keys is deprecated, does nothing, and will be removed in v4.0. Use application_sdk.storage.batch.list_data_keys instead.",
-      "migration_target": true,
-      "module": "application_sdk.storage.transfer",
-      "removal_version": "4.0",
-      "symbol": "list_data_keys"
-    },
-    {
-      "kind": "function",
-      "marker_via": "decorator",
-      "message": "application_sdk.storage.transfer.safe_list_directory is deprecated, does nothing, and will be removed in v4.0. Use os.walk instead; the SDK's own walker is private.",
-      "migration_target": true,
-      "module": "application_sdk.storage.transfer",
-      "removal_version": "4.0",
-      "symbol": "safe_list_directory"
     },
     {
       "kind": "class",

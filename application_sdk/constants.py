@@ -104,7 +104,7 @@ DOMAIN_NAME = os.getenv("ATLAN_DOMAIN_NAME", "atlan.com")
 # The file is the *publish* path's half of the build identity FND-1684 already
 # established for the e2e path as the ``ATLAN_BUILD_ID`` image ENV. Both answer
 # "which build is this pod running?", so they are deliberately one contract with
-# one reader (:func:`application_sdk.app.build_identity.build_identity`) rather
+# one reader (:func:`application_sdk.common.build_identity.build_identity`) rather
 # than two: the file carries a ``build_id`` key holding the same immutable image
 # tag the ENV carries, and the reader prefers the ENV so an e2e build stamped by
 # ``.github/actions/build-app-image`` keeps reporting exactly what it reports

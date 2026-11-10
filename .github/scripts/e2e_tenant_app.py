@@ -451,7 +451,7 @@ _DESCRIBE_MAX_PODS = 6
 
 #: The configmap id the app pod answers with its build identity (FND-1684).
 #:
-#: Must match ``application_sdk.app.build_identity.BUILD_IDENTITY_CONFIGMAP_ID``.
+#: Must match ``application_sdk.common.build_identity.BUILD_IDENTITY_CONFIGMAP_ID``.
 #: Spelled here as a literal rather than imported, because this script must stay
 #: stdlib-only: ``install`` runs on the runner's system Python, where the SDK is
 #: not importable at all. ``test_build_identity_ids_agree`` asserts the two
@@ -488,9 +488,14 @@ DEFAULT_POD_WAIT_SECONDS = 300
 _POD_POLL_SECONDS = 10
 
 #: Where the SDK's build-identity module lives, for the diagnostic probe in
-#: :func:`_local_sdk_serves_build_identity`. A dotted path rather than an import:
-#: see that function for why it must not import anything.
-_BUILD_IDENTITY_MODULE = "application_sdk.app.build_identity"
+#: :func:`_local_sdk_serves_build_identity`. Dotted paths rather than imports:
+#: see that function for why it must not import anything. Both, because the
+#: harness SDK can be older than the move to ``common`` (FND-3280), and the
+#: ``app`` path is a deprecated alias that goes away in v4.0.0.
+_BUILD_IDENTITY_MODULES = (
+    "application_sdk.common.build_identity",
+    "application_sdk.app.build_identity",
+)
 
 #: Keys carrying a deployment id in an ``/apps/{id}/info`` payload. LM does not
 #: document the shape, so this reads whichever of them is present rather than
@@ -908,10 +913,20 @@ def _local_sdk_serves_build_identity() -> bool:
     runner's bare system Python, where ``install`` runs and no SDK exists.
     ``ModuleNotFoundError`` is what a missing PARENT package raises.
     """
+    return any(_module_exists(module) for module in _BUILD_IDENTITY_MODULES)
+
+
+def _module_exists(module: str) -> bool:
+    """``find_spec(module) is not None``, with a missing parent package as False.
+
+    Per module rather than around the whole scan: an SDK that predates
+    ``application_sdk.common`` raises for the first path and must still be asked
+    about the second.
+    """
     try:
         import importlib.util  # noqa: PLC0415 — lazy: diagnostic-only, and this module must import on a bare interpreter
 
-        return importlib.util.find_spec(_BUILD_IDENTITY_MODULE) is not None
+        return importlib.util.find_spec(module) is not None
     except (ImportError, ValueError):
         return False
 
