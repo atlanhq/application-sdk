@@ -271,6 +271,15 @@
       "symbol": "effective_token_url"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "legacy_credential_ref() is deprecated and will be removed in v4.0. Use CredentialRef.resolve(input) instead.",
+      "migration_target": true,
+      "module": "application_sdk.credentials.ref",
+      "removal_version": "4.0",
+      "symbol": "legacy_credential_ref"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "DiscoveryError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",

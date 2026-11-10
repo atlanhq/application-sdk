@@ -449,10 +449,10 @@ Run these detections and report the bucket(s) before changing anything:
     Query-extraction / miner-family manifests commonly set `extraction-method`
     to an extraction *kind* instead — e.g. `query_history` — which names what is
     extracted, not how creds are routed. Left as-is, the gate's `resolve()`
-    raises on every run and survives **only** via the deprecated
-    `legacy_credential_ref` fallback (removed in SDK v4.0) — so it looks like it
-    works (a caught `CredentialRoutingError` stacktrace on every run) until v4.0
-    removes the fallback or the app flips to hard mode, at which point the gate
+    raises on every run and survives **only** via `resolve_or_none`'s
+    catch-and-fall-back to a GUID ref — so it looks like it works (a caught
+    `CredentialRoutingError` stacktrace on every run) until the app flips to
+    hard mode or runs without a `credential_guid`, at which point the gate
     resolves `credentials=[]` and soft-skips or hard-aborts. Detect by grepping
     the manifest (`app/generated/**/*.json`) and the input model for
     `extraction-method` / `extraction_method` values that are not `direct` /
@@ -895,8 +895,8 @@ when that lands, delete the validator.
 bucket 10). Lifting the guid is not enough if the router can't route it: the
 gate calls `CredentialRef.resolve`, which only accepts `direct` / `agent`. A
 manifest that sets `extraction-method` to an extraction *kind* (e.g.
-`query_history`) makes `resolve()` raise, and it limps along only on the
-deprecated `legacy_credential_ref` fallback. Map it to the routing selector at
+`query_history`) makes `resolve()` raise, and it limps along only on
+`resolve_or_none`'s GUID-ref fallback. Map it to the routing selector at
 construction, mirroring `resolve()`'s own precedence (agent creds win over a
 guid):
 
@@ -1023,8 +1023,7 @@ embedded Dapr locally) — not a real verdict, re-run. `source_unverifiable` on 
   routed down the wrong branch (a miner silently running the crawler's checks).
 - `extraction_method` names an extraction *kind* (e.g. `query_history`), not a
   routing selector → `CredentialRef.resolve` raises and the gate survives only
-  on the deprecated `legacy_credential_ref` fallback (removed in v4.0) / hard-
-  aborts under hard mode. Reads green today because the error is caught — a
+  on `resolve_or_none`'s GUID-ref fallback / hard-aborts under hard mode. Reads green today because the error is caught — a
   false all-clear. Normalize to `direct`/`agent` at input construction (phase-0
   bucket 10, 2h).
 

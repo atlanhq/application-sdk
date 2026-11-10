@@ -543,13 +543,16 @@ headers = cred.to_headers()  # {"X-API-Key": "secret"}
 | `AtlanApiToken` | `atlan_api_token_ref(name)` | `to_auth_header()`, `validate()` |
 | `AtlanOAuthClient` | `atlan_oauth_client_ref(name)` | `to_headers()`, `validate()` |
 
-**Backward compatibility** — `credential_guid` still works. When only a GUID is present in
-the input, the SDK auto-wraps it via `legacy_credential_ref()`, so you can upgrade gradually:
+**`credential_guid` is supported** — it is how the platform names the credential for a
+direct-mode run. When only a GUID is present in the input, the SDK builds the GUID ref itself:
 
 ```python
-ExtractionInput(credential_guid="abc-123")          # legacy — still works
-ExtractionInput(credential_ref=api_key_ref("prod")) # new typed path
+ExtractionInput(credential_guid="abc-123")          # GUID route (direct mode)
+ExtractionInput(credential_ref=api_key_ref("prod")) # pre-built typed ref
 ```
+
+To build a GUID ref yourself, call `CredentialRef.resolve(input)`. The public
+`legacy_credential_ref()` constructor is deprecated and removed in v4.0.
 
 If you need to pass credentials to a legacy client that expects a raw dict:
 

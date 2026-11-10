@@ -6,6 +6,7 @@ import warnings
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
+from typing_extensions import deprecated
 
 from application_sdk._logging import get_logger
 from application_sdk.credentials.spec import AgentCredentialSpec
@@ -57,11 +58,11 @@ class CredentialRef(BaseModel, frozen=True):
       the bundle at ``secret-path`` via the injected
       :class:`~application_sdk.infrastructure.secrets.SecretStore`,
       substitutes ref-keys for real values, and returns the result.
-    * ``credential_guid`` non-empty → legacy GUID resolution.  The
-      resolver checks the local secret store first (for in-process
-      inline credentials stored by the handler layer in combined-mode /
-      local dev), then falls back to ``DaprCredentialVault`` for
-      platform-issued GUIDs.
+    * ``credential_guid`` non-empty → GUID resolution, the route every
+      direct-mode (non-agent) extraction takes.  The resolver reads the
+      platform-issued credential through ``DaprCredentialVault``: the
+      non-secret config from the object store merged with its secrets
+      from the secret store.
     * neither → named-path resolution via ``secret_store.get(name)``
       with registry-based typed parsing.
     """
@@ -79,7 +80,7 @@ class CredentialRef(BaseModel, frozen=True):
     """Type identifier used to look up the parser in the registry
     (e.g. ``"basic"``, ``"api_key"``).
 
-    Optional for the ``resolve_raw`` path (agent + legacy GUID both
+    Optional for the ``resolve_raw`` path (agent + GUID both
     return raw dicts regardless of type).  Required for the typed
     ``resolve`` path — for agent refs the resolver falls back to the
     ``auth_type`` field on the spec when ``credential_type``
@@ -168,11 +169,7 @@ class CredentialRef(BaseModel, frozen=True):
 
         guid = source.credential_guid or ""
         if method in GUID_ROUTED_EXTRACTION_METHODS and guid:
-            return cls(
-                name=guid,
-                credential_type="unknown",
-                credential_guid=guid,
-            )
+            return _guid_credential_ref(guid)
 
         from application_sdk.credentials.errors import (  # noqa: PLC0415
             CredentialRoutingError,
@@ -187,7 +184,7 @@ class CredentialRef(BaseModel, frozen=True):
         Prefers a ref the source already carries on its ``credential_ref``
         attribute; otherwise routes via :meth:`resolve`. Returns ``None`` when
         the source carries no credential routing at all (e.g. a source-less app
-        input). On a routing/type error, falls back to a legacy GUID ref when a
+        input). On a routing/type error, falls back to a GUID ref when a
         ``credential_guid`` is present, else ``None``.
 
         Shared by the extraction task path and the injected preflight gate so
@@ -211,10 +208,10 @@ class CredentialRef(BaseModel, frozen=True):
             return cls.resolve(source)
         except (CredentialResolvableTypeError, CredentialRoutingError):
             logger.warning(
-                "CredentialRef.resolve failed; falling back to legacy GUID ref or None",
+                "CredentialRef.resolve failed; falling back to GUID ref or None",
                 exc_info=True,
             )
-            return legacy_credential_ref(guid) if guid else None
+            return _guid_credential_ref(guid) if guid else None
 
     @classmethod
     def from_workflow_args(cls, workflow_args: dict[str, Any]) -> CredentialRef:
@@ -237,9 +234,9 @@ class CredentialRef(BaseModel, frozen=True):
         +=======================+=============+==================+=============+
         | ``"agent"``           | populated   | any              | agent       |
         +-----------------------+-------------+------------------+-------------+
-        | ``"agent"``           | empty/``{}``| set              | legacy GUID |
+        | ``"agent"``           | empty/``{}``| set              | GUID        |
         +-----------------------+-------------+------------------+-------------+
-        | anything else         | any         | set              | legacy GUID |
+        | anything else         | any         | set              | GUID        |
         +-----------------------+-------------+------------------+-------------+
         | (none applies)        |             |                  | ValueError  |
         +-----------------------+-------------+------------------+-------------+
@@ -358,19 +355,31 @@ def atlan_oauth_client_ref(name: str, *, store_name: str = "default") -> Credent
     )
 
 
+def _guid_credential_ref(guid: str, credential_type: str = "unknown") -> CredentialRef:
+    """Build the GUID-routed :class:`CredentialRef` for a platform-issued GUID.
+
+    The SDK's own constructor for the ``credential_guid`` route — used by
+    :meth:`CredentialRef.resolve`, :meth:`CredentialRef.resolve_or_none` and the
+    templates' fallback for an input that carries a GUID but no prebuilt
+    ``credential_ref``. Private so the SDK can build a GUID ref without going
+    through the deprecated public :func:`legacy_credential_ref`.
+    """
+    return CredentialRef(
+        name=guid, credential_type=credential_type, credential_guid=guid
+    )
+
+
+@deprecated(
+    "legacy_credential_ref() is deprecated and will be removed in v4.0. "
+    "Use CredentialRef.resolve(input) instead.",
+    category=DeprecationWarning,
+)
 def legacy_credential_ref(guid: str, credential_type: str = "unknown") -> CredentialRef:
     """Create a CredentialRef from a platform-issued credential GUID.
 
     .. deprecated::
-        Use :meth:`CredentialRef.resolve` instead. This function only
-        supports direct (GUID) mode and will be removed in a future release.
+        Use :meth:`CredentialRef.resolve` instead, which routes a direct-mode
+        input to this same GUID ref. Removed in v4.0. The GUID route itself is
+        supported; only this public constructor is going away.
     """
-    warnings.warn(
-        "legacy_credential_ref() is deprecated and will be removed in v4.0. "
-        "Use CredentialRef.resolve(input) instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return CredentialRef(
-        name=guid, credential_type=credential_type, credential_guid=guid
-    )
+    return _guid_credential_ref(guid, credential_type)

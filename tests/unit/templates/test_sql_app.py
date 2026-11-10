@@ -189,6 +189,42 @@ class TestBuildTaskInput:
         assert result.credential_ref.credential_guid == "test-guid"
 
 
+class TestInitSqlClientGuidRoute:
+    """A task input with only ``credential_guid`` resolves through the GUID
+    route without tripping the deprecated public ``legacy_credential_ref``."""
+
+    async def test_guid_only_input_resolves_guid_ref_without_deprecation_warning(
+        self, app
+    ):
+        import warnings
+
+        resolver = MagicMock()
+        resolver.resolve_raw = AsyncMock(return_value={"username": "u"})
+        infra = MagicMock()
+        with (
+            patch(
+                "application_sdk.templates.sql_app.get_infrastructure",
+                return_value=infra,
+            ),
+            patch(
+                "application_sdk.templates.sql_app.CredentialResolver",
+                return_value=resolver,
+            ),
+            warnings.catch_warnings(),
+        ):
+            warnings.simplefilter("error", DeprecationWarning)
+            client = await app._init_sql_client(
+                ExtractionTaskInput(credential_guid="guid-1")
+            )
+
+        assert client.loaded
+        resolver.resolve_raw.assert_awaited_once_with(
+            CredentialRef(
+                name="guid-1", credential_type="unknown", credential_guid="guid-1"
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # extract_* tasks — SQL stream → raw JSONL (no parquet)
 # ---------------------------------------------------------------------------

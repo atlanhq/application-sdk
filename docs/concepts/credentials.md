@@ -31,7 +31,7 @@ ref = api_key_ref("my-service")
 | `git_token_ref(name)` | `GitTokenCredential` | `token`, `expires_at` |
 | `atlan_api_token_ref(name)` | `AtlanApiToken` | `token`, `base_url`, `expires_at` |
 | `atlan_oauth_client_ref(name)` | `AtlanOAuthClient` | `client_id`, `client_secret`, `token_url`, `scopes`, `access_token`, `refresh_token`, `expires_at`, `base_url` |
-| `legacy_credential_ref(guid, credential_type="unknown")` | `RawCredential` | `data` (raw dict, legacy fallback) — **deprecated**, emits `DeprecationWarning` |
+| `legacy_credential_ref(guid, credential_type="unknown")` | `RawCredential` | `data` (raw dict) — **deprecated**, removed in v4.0. Use `CredentialRef.resolve(input)`, which builds the same GUID ref |
 
 All factory functions accept an optional `store_name` keyword argument (default: `"default"`) to route to a specific `SecretStore`.
 
@@ -80,13 +80,20 @@ cred: OAuthClientCredential = await self.context.resolve_credential(oauth_client
 # cred.needs_refresh() → bool (True if access_token is absent or expired)
 ```
 
-### RawCredential (legacy fallback)
+### RawCredential (GUID route)
+
+A `credential_guid` resolves to a `RawCredential` unless the ref names a `credential_type`.
 
 ```python
-cred: RawCredential = await self.context.resolve_credential(legacy_credential_ref(guid))
-value = cred.data.get("some_field")  # dict access — use only when migrating v2 code
+ref = CredentialRef.resolve(input)  # direct mode + credential_guid → GUID ref
+cred: RawCredential = await self.context.resolve_credential(ref)
+value = cred.data.get("some_field")
 # or equivalently: cred.get("some_field")
 ```
+
+!!! note "The `credential_guid` route is supported"
+
+    `credential_guid` is how the platform names the credential for every direct-mode (non-agent) run, so the GUID route is a supported production path, not a legacy one. The resolver reads the credential through `DaprCredentialVault`: its non-secret config from the object store, merged with its secrets from the secret store. Only the public `legacy_credential_ref()` constructor is deprecated (removed in v4.0). Build a GUID ref with `CredentialRef.resolve(input)` instead.
 
 ---
 

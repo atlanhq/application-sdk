@@ -73,13 +73,13 @@ class CredentialResolver:
         if ref.agent_spec:
             return await self._resolve_agent(ref)
         if ref.credential_guid:
-            return await self._resolve_legacy(ref)
+            return await self._resolve_guid(ref)
         return await self._resolve_new(ref)
 
     async def resolve_raw(self, ref: CredentialRef) -> dict[str, Any]:
         """Resolve a CredentialRef to a raw dict.
 
-        This bridge method lets legacy clients that expect ``dict[str, Any]``
+        This bridge method lets clients that expect ``dict[str, Any]``
         consume a ``CredentialRef`` without rewriting their internals.
 
         Args:
@@ -188,7 +188,7 @@ class CredentialResolver:
 
         return data
 
-    async def _resolve_legacy(self, ref: CredentialRef) -> Credential:
+    async def _resolve_guid(self, ref: CredentialRef) -> Credential:
         data = await self._resolve_by_guid(ref)
         if ref.credential_type == "unknown":
             from application_sdk.credentials.types import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
