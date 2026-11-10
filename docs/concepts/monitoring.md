@@ -799,9 +799,9 @@ Segment metrics are bounded twice: at most 10,000 events (`max_queue_size`) wait
 
 ## Per-Activity CPU and Memory
 
-`MetricsInterceptor` emits `temporal_activity_cpu_seconds` and `temporal_activity_mem_gib_seconds` for every activity. A worker runs many activities in one process, and the OS cannot say which of them used a given CPU second, so these are **fair shares**: the process is sampled at every activity start and end, and what it consumed between two boundaries is split evenly across the activities in flight.
+`MetricsInterceptor` emits `temporal_activity_cpu_seconds` and `temporal_activity_mem_gib_seconds` for every activity whose start and end could both be sampled; where process sampling is unavailable (Windows), neither is emitted. A worker runs many activities in one process, and the OS cannot say which of them used a given CPU second, so these are **fair shares**: the process is sampled at every activity start and end, and what it consumed between two boundaries is split evenly across the activities in flight.
 
-- Summed over activities, they equal what the process used while at least one activity ran. They never exceed the process total, so they are safe to add up for cost.
+- They never exceed the process total, so they are safe to add up for cost. When every boundary sample succeeds, the sum equals what the process used while at least one activity ran. A failed sample drops that activity's value while it still counted toward the split, so the sum falls short by its share.
 - With one activity at a time the value is exact. Under concurrency, a CPU-heavy activity running beside idle ones is under-charged and the idle ones over-charged: read per-type values as an even split, not a profile.
 - For what one activity needs from its container (peak memory, throttling), use [Activity Sizing Telemetry](#activity-sizing-telemetry) below and its `is_attributable` flag.
 
