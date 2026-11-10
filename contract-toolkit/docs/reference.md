@@ -1351,9 +1351,9 @@ generation with an explicit error naming the offending property. Rename the fiel
 (e.g. `source-app-name`); if you meant to change the node's log identity, set
 `name` or `node.appName` instead.
 
-`app_name` and `correlation_id` are also **framework-populated input fields**: both
-are declared on the SDK's base `Input`, so — like `workflow_id` — they are skipped
-by `_input.py` codegen and never redeclared from a `uiConfig` property.
+`app_name`, `correlation_id` and `workflow_slug` are also **framework-populated input
+fields**: all are declared on the SDK's base `Input`, so — like `workflow_id` — they are
+skipped by `_input.py` codegen and never redeclared from a `uiConfig` property.
 
 > **`appName` must match `taskQueue`.** `appName` and `taskQueue` are independent
 > properties; a raw `DAGNode` defaults `appName` to `"automation-engine"`. If you
@@ -1415,7 +1415,7 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | `publishNodeErrorHandling` | ErrorHandlingConfig? | `startToCloseTimeoutSeconds = 259200` (72h) | Workflow-safe retry / timeout policy for the toolkit-generated default publish node. Defaults to 72h so connectors don't silently inherit AE's 2h default. Override as needed. For `extraNodes["publish"]`, set `errorHandling` on that `PublishNode` directly (it also defaults to 72h). `heartbeatTimeoutSeconds` is invalid for the default publish node. |
 | `credentialFieldName` | String? | `"{name}_credential"` | Credential ref field in Input class. Null to omit. |
 | `workflowConfigName` | String | `name` | Workflow configmap name / output filename. |
-| `additionalOutputFiles` | Mapping<String, FileOutput> | `{}` | Explicit opt-in files to emit with this contract, for example a customized `AgentConfig.pkl` output. |
+| `additionalOutputFiles` | Mapping<String, FileOutput> | `{}` | Explicit opt-in files to emit with this contract. |
 | `extraNodes` | Mapping<String, DAGNode> | `{}` | Custom DAG nodes. Use `DAGNode` for arbitrary workflows, `PublishNode` for the standard Atlas publish step, `QueryIntelligenceNode` for native QI, `PopularityNode` for popularity metrics, `LineageNode` for the Lineage app, or `LineagePublishNode` for lineage publish. Key `"publish"` replaces auto-generated publish. |
 | `manifestTopLevelArgs` | Mapping<String, String> | `{"credential_guid": "credential-guid", "connection": "connection"}` | Explicit top-level extract args. These remain top-level in either manifest shape. |
 
@@ -1473,7 +1473,7 @@ contract/app.pkl
 
 Each `{entrypoint}/_input.py` uses the same per-entrypoint class naming and `AppInputContract` alias as an `App.pkl` bundle (see [Multi-Entrypoint Bundle](#multi-entrypoint-bundle)).
 
-`atlan-connectors-agent.json` is intentionally not part of this app output shape. Apps reference that shared configmap from `AgentSelector.agentConfigEntries`; the canonical payload is owned by `AgentConfig.pkl` and generated separately.
+`atlan-connectors-agent.json` is intentionally not part of this app output shape. Apps reference that shared configmap from `AgentSelector.agentConfigEntries`; the toolkit does not generate its payload.
 
 ### Bundle Properties
 
@@ -1495,7 +1495,7 @@ Each `{entrypoint}/_input.py` uses the same per-entrypoint class naming and `App
 | `emitAtlanYaml` | Boolean | `true` | Emit `atlan.yaml`. Set `false` when using the bundle only for generated artifact layout / credential hoisting. |
 | `emitEntrypoints` | Boolean | `true` | Emit the `entrypoints:` block. Set `false` for marketplace paths that do not support entrypoint passthrough. |
 | `emitGeneratedArtifacts` | Boolean | `true` | Re-export entrypoint contract files. Credential configmaps are hoisted to the bundle root and deduped by filename; other files are emitted under `{entrypoint.name}/`. |
-| `additionalOutputFiles` | Mapping<String, FileOutput> | `{}` | Explicit root-level files to emit with the bundle, for example a customized `AgentConfig.pkl` output. |
+| `additionalOutputFiles` | Mapping<String, FileOutput> | `{}` | Explicit root-level files to emit with the bundle. |
 | `deploy` | Mapping<String, Any> | `{}` | Current flat deployment config. Unknown keys are passed through by local marketplace. |
 
 ### Entrypoint Properties
@@ -1625,81 +1625,6 @@ atlanYamlOverrides {
       ["eventstore"] = true
     }
   }
-}
-```
-
----
-
-## AgentConfig.pkl — Shared Secure-Agent Config
-
-`AgentConfig.pkl` owns the shared secure-agent configmap payload that previously lived in `marketplace-packages/packages/atlan/connectors/configmaps/agent.yaml`.
-
-Apps should reference it by name from `AgentSelector.agentConfigEntries`:
-
-```pkl
-new Listing { "atlan-connectors-agent" }
-```
-
-The module is intentionally not included in every `NativeApp.pkl` or `NativeAppBundle.pkl` output. It represents a shared/global configmap, so app-generated folders only contain app-specific workflow, credential, manifest, and input artifacts unless the app opts in with `additionalOutputFiles`.
-
-### AgentConfig Properties
-
-| Property | Type | Default | Description |
-|---|---|---|---|
-| `name` | String | `"atlan-connectors-agent"` | Configmap name and output filename prefix. |
-| `agentSelectorProperty` | String | `"agent-json"` | Workflow form field used by conditional secure-agent rules. |
-| `newAppFrameworkAgentType` | String | `"new-app-framework"` | Agent type value used by secure-agent visibility rules. |
-| `docsUrl` | String | `"https://ask.atlan.com/"` | Docs link used by generated banners. |
-| `secretManagerValues` / `secretManagerLabels` | Listing<String> | default secure-agent stores | Secret-store values and labels. |
-| `awsRegionValues` / `awsRegionLabels` | Listing<String> | supported AWS regions | AWS region values and labels. |
-| `awsAuthMethodValues` / `awsAuthMethodLabels` | Listing<String> | IAM, assume-role, access-key | AWS auth method values and labels. |
-| `azureAuthMethodValues` / `azureAuthMethodLabels` | Listing<String> | managed identity, service principal | Azure auth method values and labels. |
-| `keyTypeValues` / `keyTypeLabels` | Listing<String> | multi-key, single-key | Key type values and labels. |
-| `propertyOverrides` | Mapping<String, Any> | `{}` | Deep patches merged into existing secure-agent properties. |
-| `extraProperties` | Mapping<String, Any> | `{}` | Additional fields appended under `properties`. |
-| `extraAnyOf` | Listing<Any> | `[]` | Additional conditional requirement branches appended to `anyOf`. |
-| `extraConfig` | Mapping<String, Any> | `{}` | Additional top-level keys appended to the generated config payload. |
-| `configFile` | FileOutput | generated | JSON file output for `additionalOutputFiles` or direct module output. |
-
-Generate the shared artifact directly when packaging or publishing that global configmap:
-
-```bash
-pkl eval -m generated src/AgentConfig.pkl
-```
-
-Output:
-
-```text
-generated/
-└── atlan-connectors-agent.json
-```
-
-Apps can also amend and emit a customized copy:
-
-```pkl
-import "@app-contract-toolkit/AgentConfig.pkl" as AgentConfig
-
-local agentConfig = (AgentConfig) {
-  propertyOverrides {
-    ["secret-path"] {
-      ["ui"] {
-        ["label"] = "Secret Name"
-        ["placeholder"] = "Enter secret name"
-      }
-    }
-  }
-  extraProperties {
-    ["custom-agent-field"] = new Mapping {
-      ["type"] = "string"
-      ["ui"] = new Mapping {
-        ["label"] = "Custom Agent Field"
-      }
-    }
-  }
-}
-
-additionalOutputFiles {
-  ["\(agentConfig.name).json"] = agentConfig.configFile
 }
 ```
 
@@ -3826,7 +3751,7 @@ new Mapping {
 When combining `ConditionalInput` and `AgentSelector`, add a targeted example or
 Pkl test for the generated workflow JSON.
 
-The `atlan-connectors-agent` entry above is a reference to the shared secure-agent configmap. It does not cause app contract generation to emit `atlan-connectors-agent.json`; use `AgentConfig.pkl` when that global artifact needs to be generated.
+The `atlan-connectors-agent` entry above is a reference to the shared secure-agent configmap. It does not cause app contract generation to emit `atlan-connectors-agent.json`; the toolkit does not generate that shared configmap.
 
 ---
 
@@ -4105,7 +4030,11 @@ Generated as a Pydantic model extending
 writing the escape hatch into connector-owned code), AE-payload normalization
 (`metadata.{...}` to top level, hyphenated keys to underscores), and typed SDK
 fields. UI properties whose Python names collide with parent fields are skipped
-so the SDK declarations and validators remain in effect.
+so the SDK declarations and validators remain in effect. The parent's field
+names, and the class-shaped names `_input.py` imports (which a nested
+`ObjectField` class may not reuse), are copied from the SDK into
+`src/SdkNames.pkl`; `scripts/test-sdk-import.py` fails CI when a set no longer
+matches the installed SDK.
 
 ```python
 # AUTO-GENERATED from app.pkl — DO NOT EDIT MANUALLY.

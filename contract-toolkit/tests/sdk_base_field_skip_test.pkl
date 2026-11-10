@@ -1,0 +1,40 @@
+/// A form field named like a field the SDK base input class declares generates
+/// no field of its own, so the SDK's typed declaration and validators stay in
+/// effect instead of being shadowed.
+///
+/// `exclude_table_regex` and `workflow_slug` were declared by the SDK's
+/// `ExtractionInput` but missing from the toolkit's hand-copied list, so a form
+/// field of either name redeclared it. `scripts/test-sdk-import.py` now compares
+/// `src/SdkNames.pkl` with the SDK; this test pins the skip itself.
+amends "pkl:test"
+
+import "../examples/minimal/app.pkl" as minimalApp
+import "../src/Widgets.pkl"
+
+local withBaseFields = (minimalApp) {
+  uiConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["exclude-table-regex"] = new Widgets.TextInput { title = "Exclude regex for tables & views" }
+          ["workflow-slug"] = new Widgets.TextInput { title = "Workflow slug" }
+          ["correlation-id"] = new Widgets.TextInput { title = "Correlation id" }
+          ["sample-size"] = new Widgets.TextInput { title = "Sample size" }
+        }
+      }
+    }
+  }
+}
+
+local inputPy: String = withBaseFields.output.files["app/generated/_input.py"].text
+
+facts {
+  ["a form field the SDK base declares generates no field"] {
+    !inputPy.contains("exclude_table_regex:")
+    !inputPy.contains("workflow_slug:")
+    !inputPy.contains("correlation_id:")
+  }
+  ["any other form field still generates one"] {
+    inputPy.contains("sample_size:")
+  }
+}

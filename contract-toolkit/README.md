@@ -266,9 +266,15 @@ import "@app-contract-toolkit/Connectors.pkl"
 connector = Connectors.SNOWFLAKE  // { value = "snowflake"; category = "warehouse" }
 ```
 
+### `SdkNames.pkl` — SDK Names Copied Into the Toolkit
+
+The SDK names `App.pkl` needs to render `_input.py` without shadowing the SDK: the fields `Input` and `ExtractionInput` declare (a form field of one of these names generates no field, so the SDK's type and validators win), and the class-shaped names `_input.py` imports (a nested `ObjectField` class of one of these names is refused). `scripts/test-sdk-import.py` compares every set with the installed SDK in CI. When the SDK adds or renames a base-class field, update this module.
+
 ### Legacy modules (reference only)
 
 The following modules are frozen and are not used by new contracts. They remain resolvable so existing apps on `NativeApp.pkl` continue to work without changes during the v0.10.x transition period.
+
+**Removal plan.** The legacy family will be deleted once no app imports it. Each remaining app moves to `App.pkl` with the `baseline-app` skill; conformance rules K001 and K002 flag every app still on a legacy module. Fix legacy behaviour here only for backward compatibility: `NativeApp.pkl` keeps its own frozen copy of the base-class field list and does not follow `SdkNames.pkl`.
 
 | Module | Status |
 |---|---|
@@ -277,7 +283,6 @@ The following modules are frozen and are not used by new contracts. They remain 
 | `Config.pkl` | Legacy — widget catalog superseded by `Widgets.pkl` |
 | `Credential.pkl` | Legacy — Argo-era credential module |
 | `Renderers.pkl` | Legacy — Argo-era output renderers |
-| `AgentConfig.pkl` | Legacy — agent config emission; opt-in via `agentConfig` block in `App.pkl` |
 
 ## Pipeline Block
 
