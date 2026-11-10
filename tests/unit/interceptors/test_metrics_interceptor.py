@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -592,3 +593,72 @@ class TestMetricsInterceptor:
         mock_next = MagicMock()
         result = interceptor.intercept_activity(mock_next)
         assert isinstance(result, _MetricsActivityInboundInterceptor)
+
+
+class TestConcurrentActivityCostAttribution:
+    """Overlapping activities through the real interceptor path.
+
+    Charging each activity the whole-process delta over its own window summed to
+    the concurrency factor times the process total. The sum must be bounded by it.
+    """
+
+    async def test_overlapping_activity_cpu_sums_to_process_total(self):
+        process = {"cpu": 0.0}
+
+        def fake_sample() -> ResourceSample:
+            return ResourceSample(cpu_time_s=process["cpu"], rss_bytes=1024**3)
+
+        release = asyncio.Event()
+        started = 0
+
+        async def busy_activity(_input):
+            nonlocal started
+            started += 1
+            await release.wait()
+            # Each activity burns 0.5 s, and they all run at once.
+            process["cpu"] += 0.5
+            await asyncio.sleep(0)
+            return "ok"
+
+        nxt = AsyncMock()
+        nxt.execute_activity = AsyncMock(side_effect=busy_activity)
+        interceptor = _MetricsActivityInboundInterceptor(nxt)
+        cpu_hist, mem_hist = MagicMock(), MagicMock()
+        n = 4
+
+        with (
+            patch(
+                "application_sdk.execution._temporal.interceptors.metrics.activity"
+            ) as mock_act,
+            patch.object(
+                metrics_mod.resource_sampler, "sample", side_effect=fake_sample
+            ),
+            patch.object(
+                metrics_mod.resource_sampler,
+                "ACTIVITY_SHARES",
+                metrics_mod.resource_sampler.ActivityShareLedger(),
+            ),
+            patch.object(metrics_mod, "_activity_cpu_seconds", return_value=cpu_hist),
+            patch.object(
+                metrics_mod, "_activity_mem_gib_seconds", return_value=mem_hist
+            ),
+            patch(_METER_TARGET, return_value=MagicMock()),
+        ):
+            mock_act.info.return_value = MockActivityInfo()
+            tasks = [
+                asyncio.create_task(
+                    interceptor.execute_activity(MockExecuteActivityInput())
+                )
+                for _ in range(n)
+            ]
+            while started < n:
+                await asyncio.sleep(0)
+            release.set()
+            await asyncio.gather(*tasks)
+
+        cpu_values = [c.args[0] for c in cpu_hist.record.call_args_list]
+        assert len(cpu_values) == n
+        process_cpu = process["cpu"]
+        assert process_cpu == pytest.approx(2.0)
+        assert sum(cpu_values) == pytest.approx(process_cpu)
+        assert len(mem_hist.record.call_args_list) == n

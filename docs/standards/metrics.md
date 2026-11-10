@@ -251,6 +251,8 @@ Names emitted by the consolidated SDK surface (all use OTel base units
 | `temporal_activity_executions_total` | counter | `MetricsInterceptor` |
 | `temporal_activity_errors_total` | counter | same (label `exception_type=type(e).__name__`) |
 | `temporal_activity_duration_seconds` | histogram | same |
+| `temporal_activity_cpu_seconds` | histogram | same — the activity's **fair share** of process CPU: the process is sampled at every activity start and end, and the consumption between two boundaries is split evenly across the activities in flight. Values sum to the process's busy CPU, so `sum(rate(…_sum))` never exceeds what the worker used. Exact with one activity at a time; an even split, not a per-task measurement, under concurrency |
+| `temporal_activity_mem_gib_seconds` | histogram | same — the activity's fair share of process RSS integrated over wall-clock time (GiB·s), split the same way |
 | `temporal_workflow_executions_total` | counter | same |
 | `temporal_workflow_duration_seconds` | histogram | same |
 | `http_server_request_duration_seconds` | histogram | FastAPIInstrumentor (stable HTTP semconv) |

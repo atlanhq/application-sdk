@@ -142,10 +142,12 @@ def _activity_cpu_seconds():
             "temporal.activity.cpu_seconds",
             unit="s",
             description=(
-                "CPU time (user + system) consumed per activity execution. "
-                "Process-level delta between activity start and end — accurate "
-                "for workers running one activity at a time; over-attributes "
-                "per activity when activities run concurrently (sum is always correct)."
+                "CPU time (user + system) attributed to one activity execution. "
+                "The process's CPU is sampled at every activity boundary and "
+                "split evenly across the activities in flight, so values sum to "
+                "the process's busy CPU and never exceed it. Exact for a worker "
+                "running one activity at a time; a fair share, not a "
+                "measurement, under concurrency."
             ),
         )
     return _INSTRUMENTS["act_cpu"]
@@ -157,9 +159,10 @@ def _activity_mem_gib_seconds():
             "temporal.activity.mem_gib_seconds",
             unit="GiBy.s",
             description=(
-                "Memory-time integral per activity execution: average RSS in GiB "
-                "multiplied by wall-clock duration in seconds. Same process-level "
-                "scope caveat as temporal.activity.cpu_seconds."
+                "Memory-time integral attributed to one activity execution: "
+                "process RSS in GiB integrated over wall-clock seconds, split "
+                "evenly across the activities in flight. Same fair-share "
+                "attribution as temporal.activity.cpu_seconds."
             ),
         )
     return _INSTRUMENTS["act_mem"]
@@ -193,6 +196,30 @@ def _classify_failure(exc: BaseException | None) -> dict[str, str]:
         "failure.audience": Audience.APP_OWNER.value,
         "failure.classified": CLASSIFIED_UNTYPED,
     }
+
+
+def _begin_share(now_ns: int) -> resource_sampler.ShareMark | None:
+    """Open this activity's slot in the process share ledger. Never raises."""
+    # conformance: ignore[E004] best-effort observability; a sampling failure must never fail the activity it measures
+    try:
+        return resource_sampler.ACTIVITY_SHARES.begin(now_ns / 1_000_000_000)
+    # conformance: ignore[E004] best-effort observability; a sampling failure must never fail the activity it measures
+    except Exception:
+        return None
+
+
+def _end_share(
+    mark: resource_sampler.ShareMark | None, now_ns: int
+) -> tuple[float, float] | None:
+    """Close the slot opened by :func:`_begin_share`; its ``(cpu_s, mem_gib_s)``."""
+    if mark is None:
+        return None
+    # conformance: ignore[E004] best-effort observability; a sampling failure must never fail the activity it measures
+    try:
+        return resource_sampler.ACTIVITY_SHARES.end(mark, now_ns / 1_000_000_000)
+    # conformance: ignore[E004] best-effort observability; a sampling failure must never fail the activity it measures
+    except Exception:
+        return None
 
 
 class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
@@ -240,7 +267,7 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
             "temporal.task_queue": info.task_queue or "",
         }
         start_ns = time.monotonic_ns()
-        start_sample = resource_sampler.sample()
+        share_mark = _begin_share(start_ns)
         status = "OK"
         exception_class = ""
         try:
@@ -251,8 +278,11 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
             exception_class = type(exc).__name__
             raise
         finally:
-            duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
-            end_sample = resource_sampler.sample()
+            end_ns = time.monotonic_ns()
+            duration_s = (end_ns - start_ns) / 1_000_000_000
+            # Before any emission: the in-flight slot must be released even if
+            # emission fails, or every later activity's share is diluted.
+            shares = _end_share(share_mark, end_ns)
             tagged = {**attrs, "otel.status_code": status}
             # conformance: ignore[E004] best-effort observability; metric emission must never block or raise in an activity finally block
             try:
@@ -266,10 +296,8 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
                             "exception.type": exception_class or "Unknown",
                         },
                     )
-                if start_sample is not None and end_sample is not None:
-                    cpu_s, mem_gib_s = resource_sampler.compute_deltas(
-                        start_sample, end_sample, duration_s
-                    )
+                if shares is not None:
+                    cpu_s, mem_gib_s = shares
                     _activity_cpu_seconds().record(cpu_s, tagged)
                     _activity_mem_gib_seconds().record(mem_gib_s, tagged)
             # conformance: ignore[E004] best-effort observability; metric emission must never block or raise in an activity finally block
@@ -290,8 +318,10 @@ class MetricsInterceptor(Interceptor):
       * ``temporal.activity.executions`` (counter)
       * ``temporal.activity.duration`` (histogram, seconds)
       * ``temporal.activity.errors`` (counter, partitioned by ``exception.type``)
-      * ``temporal.activity.cpu_seconds`` (histogram) — CPU time consumed per activity
-      * ``temporal.activity.mem_gib_seconds`` (histogram) — memory-time integral per activity
+      * ``temporal.activity.cpu_seconds`` (histogram) — the activity's fair share
+        of process CPU time (see :class:`~application_sdk.observability.resource_sampler.ActivityShareLedger`)
+      * ``temporal.activity.mem_gib_seconds`` (histogram) — the activity's fair
+        share of the process memory-time integral
 
     Independent of, and complementary to, Temporal's Rust-core metrics —
     those measure scheduling / cache / poll latencies; these measure business
