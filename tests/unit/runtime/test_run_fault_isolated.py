@@ -296,7 +296,6 @@ def test_blocking_pool_width_follows_available_cpus(monkeypatch, cpus, expected)
     Before FND-4646 a 1-CPU pod on a 64-core node got 32 threads.
     """
     monkeypatch.setattr(offload, "available_cpus", lambda: cpus)
-    monkeypatch.setattr(offload.os, "cpu_count", lambda: 64)
     assert offload._blocking_pool_width() == expected
 
 
