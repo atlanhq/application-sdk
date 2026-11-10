@@ -1,0 +1,24 @@
+from typing import Any, Dict
+
+import orjson
+
+from .base import OutputFormatHandler
+
+
+class JsonFormatHandler(OutputFormatHandler):
+    file_extension = "json"
+
+    def initialize_file(self, table_name: str) -> None:
+        file_path = self.get_file_path(table_name)
+        self.file_handlers[table_name] = open(file_path, "w", encoding="utf-8")
+
+    def write_record(
+        self, table_name: str, record: Dict[str, Any], is_last: bool = False
+    ) -> None:
+        if table_name not in self.file_handlers:
+            self.initialize_file(table_name)
+        self.file_handlers[table_name].write(orjson.dumps(record).decode() + "\n")
+
+    def close_files(self) -> None:
+        for handler in self.file_handlers.values():
+            handler.close()

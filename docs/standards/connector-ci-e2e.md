@@ -1444,7 +1444,7 @@ The same race is waited for one step earlier, on the build-identity route — se
 
 ### Where the logic lives, and why
 
-The check is `application_sdk/testing/setup_routes.py`; the CI shell around it is [`verify_setup_routes.py`](../../.github/actions/sdr-e2e/verify_setup_routes.py) in the composite. The split is not arbitrary:
+The check is `application_sdk/testing/_setup_routes.py`; the CI shell around it is [`verify_setup_routes.py`](../../.github/actions/sdr-e2e/verify_setup_routes.py) in the composite. It is private because it is SDK CI tooling, not app API (FND-4660): the public `application_sdk.testing.setup_routes` is a deprecated alias of it until v4.0.0, when the implementation moves under `.github/` and leaves the wheel. The shell probes the private module first and falls back to the public one, so an app pinned to an SDK from before the move still runs the check. The split is not arbitrary:
 
 - The SDK is on **both** sides of the join being asserted. `/api/service/configmaps/<name>` is Heracles proxying to the app pod's own `GET /workflows/v1/configmap/{id}`, so the response envelope, the form-file selection rule and the generated-tree layout are read from `application_sdk/common/_generated_tree.py` — the same authority the server reads. A second copy would let the server serve one file while the check compared against another, and that mismatch would read as a contract regression.
 - It therefore needs the SDK importable, which rules out `prepare-tenant`: that job runs a bare `python3` with no `uv sync`. By this point in `sdr-e2e` the app's environment is synced.

@@ -1,63 +1,129 @@
-import argparse
-import os
-import shutil
-import time
-from dataclasses import dataclass
+"""Deprecated: part of the retired scale data generator.
 
-from application_sdk.observability.logger_adaptor import get_logger
+No app and no CI job uses the generator, so it leaves the package. The
+implementation lives in :mod:`application_sdk.testing._scale_data_generator`;
+every name here still resolves to the same object, with a ``DeprecationWarning``
+on access.
 
-from .config_loader import ConfigLoader
-from .data_generator import DataGenerator
+.. deprecated:: 3.56
+    Use faker directly in your own fixture script instead. Will be removed in
+    v4.0.0 along with the ``[scale_data_generator]`` extra (FND-4660).
+"""
 
-logger = get_logger(__name__)
+from __future__ import annotations
 
+import importlib
+import warnings
+from typing import TYPE_CHECKING
 
-@dataclass
-class DriverArgs:
-    config_path: str
-    output_format: str
-    output_dir: str
-
-
-def driver(args: DriverArgs):
-    # cleanup output directory
-    if os.path.exists(args.output_dir):
-        shutil.rmtree(args.output_dir)
-
-    start_time = time.time()
-    config_loader = ConfigLoader(args.config_path)
-    generator = DataGenerator(config_loader)
-    generator.generate_data(args.output_format, args.output_dir)
-    generator.generate_duckdb_tables(args.output_dir)
-    end_time = time.time()
-    logger.info(
-        "Data generated successfully format=%s dir=%s duration=%.1fs",
-        args.output_format,
-        args.output_dir,
-        end_time - start_time,
+if TYPE_CHECKING:
+    # Type checkers only: binds nothing at runtime, so every access below still
+    # goes through ``__getattr__`` and warns. It is also what lets the symbol
+    # gate follow each name to its definition, methods included.
+    from application_sdk.testing._scale_data_generator.driver import (  # noqa: F401
+        ConfigLoader,
+        DataGenerator,
+        DriverArgs,
+        driver,
+        get_logger,
+        logger,
     )
+
+#: name -> (replacement, why). Served by ``__getattr__`` below (PEP 562), which
+#: returns the private implementation's object itself, so a patch or an
+#: ``isinstance`` check sees one object, not two.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "get_logger": (
+        "application_sdk.observability.logger_adaptor.get_logger",
+        "the scale data generator has no callers and leaves the package (FND-4660)",
+    ),
+    "ConfigLoader": (
+        "faker directly in your own fixture script",
+        "the scale data generator has no callers and leaves the package (FND-4660)",
+    ),
+    "DataGenerator": (
+        "faker directly in your own fixture script",
+        "the scale data generator has no callers and leaves the package (FND-4660)",
+    ),
+    "logger": (
+        "faker directly in your own fixture script",
+        "the scale data generator has no callers and leaves the package (FND-4660)",
+    ),
+    "DriverArgs": (
+        "faker directly in your own fixture script",
+        "the scale data generator has no callers and leaves the package (FND-4660)",
+    ),
+    "driver": (
+        "faker directly in your own fixture script",
+        "the scale data generator has no callers and leaves the package (FND-4660)",
+    ),
+}
+
+
+#: name -> (defining module, attribute): where ``__getattr__`` fetches each name
+#: from. The symbol gate reads it too, to follow each name to its definition so
+#: a moved class keeps its methods on this module's surface.
+_LAZY: dict[str, tuple[str, str]] = {
+    "get_logger": (
+        "application_sdk.testing._scale_data_generator.driver",
+        "get_logger",
+    ),
+    "ConfigLoader": (
+        "application_sdk.testing._scale_data_generator.driver",
+        "ConfigLoader",
+    ),
+    "DataGenerator": (
+        "application_sdk.testing._scale_data_generator.driver",
+        "DataGenerator",
+    ),
+    "logger": ("application_sdk.testing._scale_data_generator.driver", "logger"),
+    "DriverArgs": (
+        "application_sdk.testing._scale_data_generator.driver",
+        "DriverArgs",
+    ),
+    "driver": ("application_sdk.testing._scale_data_generator.driver", "driver"),
+}
+
+
+#: Kept so ``from <this module> import *`` still binds every moved name: a star
+#: import reads ``__all__`` and then resolves each entry through ``__getattr__``,
+#: so each name warns. A literal, because the symbol gate reads it statically.
+__all__ = [
+    "get_logger",
+    "ConfigLoader",
+    "DataGenerator",
+    "logger",
+    "DriverArgs",
+    "driver",
+]
+
+
+def __getattr__(name: str) -> object:
+    """Serve the moved names once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    module, attr = _LAZY[name]
+    return getattr(importlib.import_module(module), attr)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Generate scaled test data based on configuration"
+    warnings.warn(
+        "python -m application_sdk.testing.scale_data_generator.driver is "
+        "deprecated; use faker directly in your own fixture script instead. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=1,
     )
-    parser.add_argument(
-        "--config-path",
-        help="Path to the YAML configuration file",
-        default="application_sdk/testing/scale_data_generator/examples/config.yaml",
-    )
-    parser.add_argument(
-        "--output-format",
-        choices=["csv", "json", "parquet"],
-        help="Output format for generated data",
-        default="json",
-    )
-    parser.add_argument(
-        "--output-dir",
-        help="Directory to save generated files",
-        default="application_sdk/testing/scale_data_generator/output",
+    from application_sdk.testing._scale_data_generator.driver import (  # noqa: PLC0415
+        _main,
     )
 
-    args = parser.parse_args()
-    driver(DriverArgs(**vars(args)))
+    _main()

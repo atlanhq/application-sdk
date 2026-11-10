@@ -3,11 +3,8 @@
 Compares transformed metadata output from two extraction runs (baseline vs candidate)
 and reports ADDED, REMOVED, and MODIFIED assets per category.
 
-Usage as CLI:
-    python -m application_sdk.testing.parity \\
-        --baseline ./baseline/ --candidate ./candidate/
-
-Usage as library:
+Usage (the ``python -m application_sdk.testing.parity`` CLI is deprecated and is
+removed in v4.0.0; call the library from a script of your own instead):
     from application_sdk.testing.parity import run_comparison, generate_markdown
 
     results = run_comparison(baseline_dir, candidate_dir)

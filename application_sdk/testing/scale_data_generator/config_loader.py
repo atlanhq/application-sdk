@@ -1,97 +1,100 @@
-from dataclasses import dataclass
-from enum import Enum
-from pathlib import Path
-from typing import Any, ClassVar
+"""Deprecated: part of the retired scale data generator.
 
-import yaml
+No app and no CI job uses the generator, so it leaves the package. The
+implementation lives in :mod:`application_sdk.testing._scale_data_generator`;
+every name here still resolves to the same object, with a ``DeprecationWarning``
+on access.
 
-from application_sdk.errors.leaves import InvalidInputError
+.. deprecated:: 3.56
+    Use faker directly in your own fixture script instead. Will be removed in
+    v4.0.0 along with the ``[scale_data_generator]`` extra (FND-4660).
+"""
+
+from __future__ import annotations
+
+import importlib
+import warnings
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Type checkers only: binds nothing at runtime, so every access below still
+    # goes through ``__getattr__`` and warns. It is also what lets the symbol
+    # gate follow each name to its definition, methods included.
+    from application_sdk.testing._scale_data_generator.config_loader import (  # noqa: F401
+        ConfigLoader,
+        InvalidInputError,
+        OutputFormat,
+        ScaleDataConfigError,
+    )
+
+#: name -> (replacement, why). Served by ``__getattr__`` below (PEP 562), which
+#: returns the private implementation's object itself, so a patch or an
+#: ``isinstance`` check sees one object, not two.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "InvalidInputError": (
+        "application_sdk.errors.leaves.InvalidInputError",
+        "the scale data generator has no callers and leaves the package (FND-4660)",
+    ),
+    "ScaleDataConfigError": (
+        "faker directly in your own fixture script",
+        "the scale data generator has no callers and leaves the package (FND-4660)",
+    ),
+    "OutputFormat": (
+        "faker directly in your own fixture script",
+        "the scale data generator has no callers and leaves the package (FND-4660)",
+    ),
+    "ConfigLoader": (
+        "faker directly in your own fixture script",
+        "the scale data generator has no callers and leaves the package (FND-4660)",
+    ),
+}
 
 
-@dataclass(kw_only=True)
-class ScaleDataConfigError(InvalidInputError):
-    """Scale-data generator YAML config is missing or malformed."""
+#: name -> (defining module, attribute): where ``__getattr__`` fetches each name
+#: from. The symbol gate reads it too, to follow each name to its definition so
+#: a moved class keeps its methods on this module's surface.
+_LAZY: dict[str, tuple[str, str]] = {
+    "InvalidInputError": (
+        "application_sdk.testing._scale_data_generator.config_loader",
+        "InvalidInputError",
+    ),
+    "ScaleDataConfigError": (
+        "application_sdk.testing._scale_data_generator.config_loader",
+        "ScaleDataConfigError",
+    ),
+    "OutputFormat": (
+        "application_sdk.testing._scale_data_generator.config_loader",
+        "OutputFormat",
+    ),
+    "ConfigLoader": (
+        "application_sdk.testing._scale_data_generator.config_loader",
+        "ConfigLoader",
+    ),
+}
 
-    code: ClassVar[str] = "INVALID_INPUT_SCALE_DATA_CONFIG"
-    field: str | None = "config_yaml"
+
+#: Kept so ``from <this module> import *`` still binds every moved name: a star
+#: import reads ``__all__`` and then resolves each entry through ``__getattr__``,
+#: so each name warns. A literal, because the symbol gate reads it statically.
+__all__ = [
+    "InvalidInputError",
+    "ScaleDataConfigError",
+    "OutputFormat",
+    "ConfigLoader",
+]
 
 
-class OutputFormat(Enum):
-    CSV = "csv"
-    JSON = "json"
-    PARQUET = "parquet"
-
-
-class ConfigLoader:
-    def __init__(self, config_path: str):
-        self.config_path = Path(config_path)
-        self.config: dict[str, Any] | None = None
-        self._load_config()
-
-    def _load_config(self) -> None:
-        """Load and validate the YAML configuration file."""
-        try:
-            with open(self.config_path, "r", encoding="utf-8") as file:
-                self.config = yaml.safe_load(file)
-            self._validate_config()
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Config file not found at: {self.config_path}")
-        except yaml.YAMLError as e:
-            raise ScaleDataConfigError(
-                message="Invalid YAML format",
-                constraint="yaml_format",
-            ) from e
-
-    def _validate_config(self) -> None:
-        """Validate the configuration structure."""
-        required_sections = ["database", "hierarchy", "schema"]
-        for section in required_sections:
-            if section not in self.config:
-                raise ScaleDataConfigError(
-                    message=f"Missing required section: {section}",
-                    constraint="missing_section",
-                    value_summary=section,
-                )
-
-        # Validate schema references
-        schema_tables = {schema["name"] for schema in self.config["schema"]}
-        hierarchy_tables = self._get_hierarchy_tables(self.config["hierarchy"][0])
-
-        if schema_tables != hierarchy_tables:
-            raise ScaleDataConfigError(
-                message="Mismatch between schema and hierarchy table definitions",
-                constraint="schema_hierarchy_mismatch",
-            )
-
-    def _get_hierarchy_tables(
-        self, hierarchy: dict[str, Any], tables: set[str] | None = None
-    ) -> set[str]:
-        """Recursively get all table names from hierarchy."""
-        if tables is None:
-            tables = set()
-
-        tables.add(hierarchy["name"])
-        if "children" in hierarchy:
-            for child in hierarchy["children"]:
-                self._get_hierarchy_tables(child, tables)
-
-        return tables
-
-    def get_table_schema(self, table_name: str) -> dict[str, Any]:
-        """Get schema definition for a specific table."""
-        for schema in self.config["schema"]:
-            if schema["name"] == table_name:
-                return schema
-        raise ScaleDataConfigError(
-            message=f"Schema not found for table: {table_name}",
-            constraint="schema_not_found",
-            value_summary=table_name,
-        )
-
-    def get_hierarchy(self) -> dict[str, Any]:
-        """Get the hierarchy configuration."""
-        return self.config["hierarchy"][0]
-
-    def get_database(self) -> dict[str, Any]:
-        """Get the database configuration."""
-        return self.config["database"][0]
+def __getattr__(name: str) -> object:
+    """Serve the moved names once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    module, attr = _LAZY[name]
+    return getattr(importlib.import_module(module), attr)

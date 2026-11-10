@@ -1,6 +1,6 @@
 """Proves the workflow-setup route check actually bites.
 
-The check in :mod:`application_sdk.testing.setup_routes` only runs against a
+The check in :mod:`application_sdk.testing._setup_routes` only runs against a
 tenant with the app installed, so on its own there is no way to know its central
 assertion would fail on the regression it exists to catch. These tests pin that
 offline, on every PR.
@@ -21,7 +21,7 @@ this file.
 
 :class:`TestServedFormRoundTrip` is the other load-bearing part, and it tests
 something no amount of shape-fixture assertion can: that
-:func:`~application_sdk.testing.setup_routes.served_form` really inverts the
+:func:`~application_sdk.testing._setup_routes.served_form` really inverts the
 envelope the SDK's own configmap endpoint builds. It drives the live FastAPI
 route rather than a hand-written dict, so the two sides of the join are pinned
 against each other in-repo — the committed generated file and the response a
@@ -43,8 +43,8 @@ from typing import Any
 
 import pytest
 
-from application_sdk.testing import setup_routes
-from application_sdk.testing.setup_routes import (
+from application_sdk.testing import _setup_routes as setup_routes
+from application_sdk.testing._setup_routes import (
     AppIdentity,
     Card,
     Entrypoint,
@@ -1588,7 +1588,7 @@ class TestVerify:
         never exercised the immediately-post-install path — so a single read
         would be flaky-by-construction on exactly the path CI takes.
         """
-        from application_sdk.testing import setup_routes as module
+        from application_sdk.testing import _setup_routes as module
 
         _write_bundle(tmp_path)
         both = _both_cards()
@@ -1620,7 +1620,7 @@ class TestVerify:
         The LAST reason, not the first: an early read that saw no card at all is
         less informative than a late one that saw all but one.
         """
-        from application_sdk.testing import setup_routes as module
+        from application_sdk.testing import _setup_routes as module
 
         _write_bundle(tmp_path)
         routes = _FakeRoutes(
@@ -1762,7 +1762,7 @@ class TestCatalogTruncation:
         # Re-implements the real `catalog()` guard path rather than the fake's
         # shortcut, so the assertion is against the shipped code.
         def catalog(self) -> list[dict[str, Any]]:
-            from application_sdk.testing.setup_routes import TenantRoutes
+            from application_sdk.testing._setup_routes import TenantRoutes
 
             self.catalog_reads += 1
             body = {"total": self._total, "apps": self._catalogs[0]}
@@ -2382,7 +2382,7 @@ class TestRedirectsAreDeclined:
     def _get(
         self, monkeypatch: pytest.MonkeyPatch, opener: object
     ) -> tuple[int, object]:
-        from application_sdk.testing import setup_routes as module
+        from application_sdk.testing import _setup_routes as module
 
         monkeypatch.setattr(module, "_OPENER", opener)
         routes = module.TenantRoutes.__new__(module.TenantRoutes)
@@ -2392,7 +2392,7 @@ class TestRedirectsAreDeclined:
 
     def test_a_302_stays_a_302(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The finding, pinned: following it would report 200 for a login page."""
-        from application_sdk.testing.setup_routes import _NoRedirect
+        from application_sdk.testing._setup_routes import _NoRedirect
 
         opener = urllib.request.build_opener(self._transport(302), _NoRedirect)
 
@@ -2421,7 +2421,7 @@ class TestRedirectsAreDeclined:
 
     def test_a_200_is_still_a_200(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Declining redirects must not disturb the ordinary path."""
-        from application_sdk.testing.setup_routes import _NoRedirect
+        from application_sdk.testing._setup_routes import _NoRedirect
 
         opener = urllib.request.build_opener(self._transport(200), _NoRedirect)
 
@@ -2436,7 +2436,7 @@ class TestRedirectsAreDeclined:
         Without it they would prove `_NoRedirect` works while `TenantRoutes`
         quietly used a default opener.
         """
-        from application_sdk.testing.setup_routes import _OPENER, _NoRedirect
+        from application_sdk.testing._setup_routes import _OPENER, _NoRedirect
 
         assert any(isinstance(h, _NoRedirect) for h in _OPENER.handlers)
 
@@ -2447,7 +2447,7 @@ class TestRedirectsAreDeclined:
         that discriminates unknown names, which is the vacuous state the
         control exists to detect.
         """
-        from application_sdk.testing.setup_routes import _REJECTION_STATUSES
+        from application_sdk.testing._setup_routes import _REJECTION_STATUSES
 
         for redirect in (301, 302, 303, 307, 308):
             assert redirect not in _REJECTION_STATUSES
@@ -2489,7 +2489,7 @@ class TestUnlabelledBundleCard:
         `atlan.yaml` and `manifest.json` alike — so the module must contain no
         such computation to drift back into use.
         """
-        import application_sdk.testing.setup_routes as module
+        import application_sdk.testing._setup_routes as module
 
         source = Path(module.__file__).read_text(encoding="utf-8")
 

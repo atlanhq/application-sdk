@@ -185,6 +185,8 @@ tests = [
 harness = [
     "kubernetes>=36.0.3,<38.0.0",
 ]
+# Deprecated, removed in v4.0.0 with application_sdk.testing.scale_data_generator,
+# which no app or CI job uses (FND-4660). Use faker directly instead.
 scale_data_generator = [
     "faker>=40.44.0,<41.0.0",
 ]
@@ -440,7 +442,7 @@ typeCheckingMode = "standard"
 extraPaths = []
 exclude = [
     "application_sdk/test_utils/**",
-    "application_sdk/testing/scale_data_generator/**",
+    "application_sdk/testing/_scale_data_generator/**",
     ".github/**",
     "tests",
 ]
@@ -492,6 +494,7 @@ omit = [
     "tests/**",
     "application_sdk/test_utils/**",
     "application_sdk/testing/scale_data_generator/**",
+    "application_sdk/testing/_scale_data_generator/**",
     "application_sdk/testing/integration/**",
     "application_sdk/testing/e2e/**",
     "application_sdk/testing/hypothesis/**",

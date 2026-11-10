@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CLI shell for the workflow-setup route check (FND-1667).
 
-All the logic lives in :mod:`application_sdk.testing.setup_routes`, which is
+All the logic lives in :mod:`application_sdk.testing._setup_routes`, which is
 pure and unit-tested offline. This file is the shell around it: argument
 parsing, reading the token from the environment, flushing progress, and turning
 its three outcomes into an exit code and a GitHub annotation.
@@ -47,6 +47,7 @@ The skew closes on its own as apps bump, with no second change here.
 from __future__ import annotations
 
 import argparse
+import importlib
 import importlib.util
 import os
 import sys
@@ -61,21 +62,39 @@ from pathlib import Path
 #: will report). An ``ImportError`` from inside a module that DOES exist is
 #: deliberately not caught here: that is a real defect in a new-enough SDK and
 #: must surface as a failure rather than a skip.
-try:
-    _HAS_CHECK = (
-        importlib.util.find_spec("application_sdk.testing.setup_routes") is not None
-    )
-except ModuleNotFoundError:
-    _HAS_CHECK = False
+#:
+#: Two homes, newest first. FND-4660 moved the check to the private
+#: ``_setup_routes`` and left ``setup_routes`` as a deprecated alias of it, so a
+#: current SDK is read from the private module (no deprecation warning in every
+#: e2e log), and an app pinned between FND-1667 and FND-4660 still finds the
+#: public one. Same objects either way.
+_CHECK_MODULES = (
+    "application_sdk.testing._setup_routes",
+    "application_sdk.testing.setup_routes",
+)
 
-if _HAS_CHECK:
-    from application_sdk.testing.setup_routes import (
-        DEFAULT_CATALOG_WAIT_SECONDS,
-        RouteCheckSkipped,
-        SetupRouteError,
-        TenantRoutes,
-        verify,
-    )
+
+def _find_check_module() -> str | None:
+    """The first of :data:`_CHECK_MODULES` this runner's SDK carries, else None."""
+    for name in _CHECK_MODULES:
+        try:
+            if importlib.util.find_spec(name) is not None:
+                return name
+        except ModuleNotFoundError:
+            return None
+    return None
+
+
+_CHECK_MODULE = _find_check_module()
+_HAS_CHECK = _CHECK_MODULE is not None
+
+if _CHECK_MODULE is not None:
+    _check = importlib.import_module(_CHECK_MODULE)
+    DEFAULT_CATALOG_WAIT_SECONDS = _check.DEFAULT_CATALOG_WAIT_SECONDS
+    RouteCheckSkipped = _check.RouteCheckSkipped
+    SetupRouteError = _check.SetupRouteError
+    TenantRoutes = _check.TenantRoutes
+    verify = _check.verify
 else:  # pragma: no cover — exercised by the wiring test in a stripped env
     DEFAULT_CATALOG_WAIT_SECONDS = 120
 
@@ -141,7 +160,8 @@ def main(argv: list[str] | None = None) -> int:
         # disappears when the pin moves.
         print(
             "::notice::workflow-setup route check skipped: this app's pinned "
-            "atlan-application-sdk predates application_sdk.testing.setup_routes. "
+            "atlan-application-sdk predates the check (application_sdk.testing."
+            "setup_routes). "
             "The check ships with the SDK and runs automatically once this repo's "
             "SDK pin is bumped past the release that added it; nothing needs "
             "doing in this repo.",

@@ -1,93 +1,120 @@
-"""CLI entry point for parity comparison.
+"""Deprecated CLI entry point: ``python -m application_sdk.testing.parity``.
 
-Usage:
-    python -m application_sdk.testing.parity \\
-        --baseline ./baseline/ --candidate ./candidate/ \\
-        [--output-json report.json] [--output-md report.md]
+Still runs, with a ``DeprecationWarning``. The comparator itself is not
+deprecated: call :func:`application_sdk.testing.parity.run_comparison` and
+:func:`application_sdk.testing.parity.generate_markdown` (or
+:func:`~application_sdk.testing.parity.generate_json_report`) from a short
+script of your own instead. The implementation lives in
+:mod:`application_sdk.testing.parity._cli`.
 
-Exit codes:
-    0 = parity (no differences)
-    1 = differences found
-    2 = input error
+.. deprecated:: 3.56
+    Use the library API above. Will be removed in v4.0.0 (FND-4660).
 """
 
-import argparse
-import sys
-from pathlib import Path
+from __future__ import annotations
 
-import orjson
+import importlib
+import warnings
+from typing import TYPE_CHECKING
 
-from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.testing.parity.comparator import run_comparison
-from application_sdk.testing.parity.report import (
-    generate_json_report,
-    generate_markdown,
-)
-
-logger = get_logger(__name__)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Parity Test — Compare extraction outputs"
+if TYPE_CHECKING:
+    # Type checkers only: binds nothing at runtime, so every access below still
+    # goes through ``__getattr__`` and warns. It is also what lets the symbol
+    # gate follow each name to its definition, methods included.
+    from application_sdk.testing.parity._cli import (  # noqa: F401
+        generate_json_report,
+        generate_markdown,
+        get_logger,
+        logger,
+        main,
+        run_comparison,
     )
-    parser.add_argument(
-        "--baseline", required=True, help="Path to baseline transformed output"
+
+#: name -> (replacement, why). Served by ``__getattr__`` below (PEP 562), which
+#: returns the private implementation's object itself, so a patch or an
+#: ``isinstance`` check sees one object, not two.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "main": (
+        "application_sdk.testing.parity.run_comparison with generate_markdown or generate_json_report",
+        "the parity CLI entry point is retired; the library API stays (FND-4660)",
+    ),
+    "get_logger": (
+        "application_sdk.observability.logger_adaptor.get_logger",
+        "the parity CLI entry point is retired; the library API stays (FND-4660)",
+    ),
+    "logger": (
+        "a logger of your own from application_sdk.observability.logger_adaptor.get_logger",
+        "the parity CLI entry point is retired; the library API stays (FND-4660)",
+    ),
+    "run_comparison": (
+        "application_sdk.testing.parity.run_comparison",
+        "the parity CLI entry point is retired; the library API stays (FND-4660)",
+    ),
+    "generate_markdown": (
+        "application_sdk.testing.parity.generate_markdown",
+        "the parity CLI entry point is retired; the library API stays (FND-4660)",
+    ),
+    "generate_json_report": (
+        "application_sdk.testing.parity.generate_json_report",
+        "the parity CLI entry point is retired; the library API stays (FND-4660)",
+    ),
+}
+
+
+#: name -> (defining module, attribute): where ``__getattr__`` fetches each name
+#: from. The symbol gate reads it too, to follow each name to its definition so
+#: a moved class keeps its methods on this module's surface.
+_LAZY: dict[str, tuple[str, str]] = {
+    "main": ("application_sdk.testing.parity._cli", "main"),
+    "get_logger": ("application_sdk.testing.parity._cli", "get_logger"),
+    "logger": ("application_sdk.testing.parity._cli", "logger"),
+    "run_comparison": ("application_sdk.testing.parity._cli", "run_comparison"),
+    "generate_markdown": ("application_sdk.testing.parity._cli", "generate_markdown"),
+    "generate_json_report": (
+        "application_sdk.testing.parity._cli",
+        "generate_json_report",
+    ),
+}
+
+
+#: Kept so ``from <this module> import *`` still binds every moved name: a star
+#: import reads ``__all__`` and then resolves each entry through ``__getattr__``,
+#: so each name warns. A literal, because the symbol gate reads it statically.
+__all__ = [
+    "main",
+    "get_logger",
+    "logger",
+    "run_comparison",
+    "generate_markdown",
+    "generate_json_report",
+]
+
+
+def __getattr__(name: str) -> object:
+    """Serve the moved names once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
     )
-    parser.add_argument(
-        "--candidate", required=True, help="Path to candidate transformed output"
-    )
-    parser.add_argument("--output-json", help="Write JSON report to file")
-    parser.add_argument("--output-md", help="Write markdown report to file")
-    parser.add_argument(
-        "--baseline-ref", default="main", help="Git ref for baseline (for report)"
-    )
-    parser.add_argument(
-        "--candidate-ref", default="PR", help="Git ref for candidate (for report)"
-    )
-    args = parser.parse_args()
-
-    baseline_dir = Path(args.baseline)
-    candidate_dir = Path(args.candidate)
-
-    if not baseline_dir.exists():
-        logger.error("Baseline directory not found: %s", baseline_dir)
-        sys.exit(2)
-    if not candidate_dir.exists():
-        logger.error("Candidate directory not found: %s", candidate_dir)
-        sys.exit(2)
-
-    logger.info(
-        "Comparing: %s (baseline) vs %s (candidate)", baseline_dir, candidate_dir
-    )
-    results = run_comparison(baseline_dir, candidate_dir)
-
-    md_report = generate_markdown(results, args.baseline_ref, args.candidate_ref)
-    json_report = generate_json_report(results, args.baseline_ref, args.candidate_ref)
-
-    # conformance: ignore[L005] primary CLI output: the markdown report is written to stdout for capture/piping; routing it through the logger would corrupt the tool's output contract
-    print(md_report)  # noqa: T201
-
-    if args.output_md:
-        Path(args.output_md).write_text(md_report, encoding="utf-8")
-        logger.info("Markdown report written to %s", args.output_md)
-
-    if args.output_json:
-        Path(args.output_json).write_text(
-            orjson.dumps(json_report, option=orjson.OPT_INDENT_2, default=str).decode(),
-            encoding="utf-8",
-        )
-        logger.info("JSON report written to %s", args.output_json)
-
-    is_parity = not any(r.has_diffs for r in results)
-    if is_parity:
-        logger.info("PARITY: No differences found.")
-        sys.exit(0)
-    else:
-        total = sum(len(r.added) + len(r.removed) + len(r.modified) for r in results)
-        logger.error("PARITY BROKEN: %s differences found.", total)
-        sys.exit(1)
+    module, attr = _LAZY[name]
+    return getattr(importlib.import_module(module), attr)
 
 
 if __name__ == "__main__":
-    main()
+    warnings.warn(
+        "python -m application_sdk.testing.parity is deprecated; use "
+        "application_sdk.testing.parity.run_comparison with generate_markdown or "
+        "generate_json_report from a script of your own instead. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=1,
+    )
+    from application_sdk.testing.parity._cli import main as _main  # noqa: PLC0415
+
+    _main()
