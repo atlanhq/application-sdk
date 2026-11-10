@@ -83,6 +83,14 @@ two auto-fixable rules:
 - **O001 OrjsonOverStdlibJson** — the site calls `json.dumps(...)` or
   `json.loads(...)` on the stdlib module.  `orjson` is **not** a drop-in, so
   this is never mechanical:
+  - **Code that runs outside the app venv stays on stdlib `json`.**  O001 no
+    longer reports files under `contract/templates/` (contract build hooks the
+    freshness workflow runs with the system `python3` before the venv exists);
+    a finding there from an older suite is a false positive: change nothing.
+    A script the Dockerfile runs with system `python3` before `uv sync` is the
+    same case and is still reported: an `orjson` import there fails the build
+    with `ModuleNotFoundError`, so leave it on stdlib and add
+    `# conformance: ignore[O001] <reason>` naming that Dockerfile step.
   - A compatibility fallback is already compliant: keep `json.dumps(obj)` when
     it is in an `except TypeError` handler for a `try` body that attempts
     `orjson.dumps(obj)` with the same argument expression. The normal path uses
@@ -180,15 +188,20 @@ two auto-fixable rules:
       `NaN` token; `orjson.dumps` writes `null`, and `orjson.loads` rejects the
       `NaN` token.  Usually an improvement (downstream JSON parsers reject
       `NaN` too), but data written by the old code and read back by the new
-      one will now fail to parse where it holds that token — say so, and make
-      sure the reader's fallback covers it.
+      one will now fail to parse where it holds that token — say so.  If the
+      site must keep reading or writing those tokens, leave it on stdlib
+      `json` and residue it: never hand-write a tokenizer, pre-processor or
+      post-processor around orjson to reproduce `NaN`/`Infinity`, big
+      integers or stdlib's separators.
     - *Integers beyond 64 bits.*  stdlib encodes any `int`; `orjson.dumps`
       raises `JSONEncodeError` above 2**64 (`OPT_STRICT_INTEGER` lowers the
       limit to 2**53).  Confirm the field's range before swapping.
   - The swap also changes whitespace (`{"x":2}`, not `{"x": 2}`).  A test that
-    pins the exact encoded string must be updated to the new output — that is
-    the output genuinely changing, not gaming the gate — and a round-trip test
-    is the stronger assertion to add beside it.
+    pins the exact encoded string is evidence that the bytes matter to someone:
+    do not rewrite its assertion to the new output.  Trace the consumer with the
+    bullets above; if the string leaves the app, the site stays on stdlib.  A
+    fix that rewrites an existing assertion only to reformat JSON output
+    (spacing, escapes, `null` for `NaN`) is sent back.
   - `orjson.JSONDecodeError` subclasses `json.JSONDecodeError` and
     `ValueError`, so an existing `except json.JSONDecodeError` still catches;
     switch the name to `orjson.JSONDecodeError` when `import json` goes away.

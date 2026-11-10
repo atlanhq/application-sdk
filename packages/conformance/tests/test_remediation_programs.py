@@ -854,6 +854,27 @@ def test_o001_prose_leaves_an_externally_byte_consumed_dumps_on_stdlib() -> None
         assert needle in bullet, f"O001's prescription does not say {needle!r}"
 
 
+def test_o001_prose_keeps_pre_venv_code_and_test_assertions_unchanged() -> None:
+    """Three lane O001 fixes changed behaviour that its gates passed (FND-4827):
+    a persisted attribute string re-encoded with its test assertions rewritten
+    to bless the new bytes, a hand-written NaN tokenizer around orjson, and an
+    orjson import in a contract build hook run before the venv exists. The
+    prescription must no longer tell the lane to update an exact-string
+    assertion, must forbid the tokenizer, and must name the pre-venv carve-out.
+    """
+    bullet = " ".join(_rule_bullet("optimizations", "O001").split())
+    assert "must be updated to the new output" not in bullet
+    assert "make sure the reader's fallback covers it" not in bullet
+    for needle in (
+        "do not rewrite its assertion to the new output",
+        "never hand-write a tokenizer, pre-processor or post-processor around orjson",
+        "Code that runs outside the app venv stays on stdlib `json`",
+        "`contract/templates/`",
+        "before `uv sync`",
+    ):
+        assert needle in bullet, f"O001's prescription does not say {needle!r}"
+
+
 def test_o001_prose_writes_the_exact_bytes_directive_only_in_strict_mode() -> None:
     """``remediate-finding`` offers ``outcome = "suppress"`` only for a WARNING in
     strict mode, and default mode never targets O001 (a WARN rule). The

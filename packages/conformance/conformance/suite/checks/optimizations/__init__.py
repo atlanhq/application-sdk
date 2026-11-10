@@ -41,6 +41,14 @@ tier; documented rather than silently capped):
 * **False negatives (not chased — same limitation the E-series accepts):**
   ``from json import *`` then bare ``dumps(...)``; rebinding ``j = json`` then
   ``j.dumps(...)``; storing the callable (``fn = json.dumps; fn(...)``).
+* **Out of scope by path:** O001 does not scan ``contract/templates/**``.
+  Those files are contract build hooks (for example ``merge.py``) that the
+  contract freshness workflow runs with the system ``python3`` before the app
+  venv exists, so ``orjson`` cannot be imported there and stdlib ``json`` is
+  the only correct choice.  The other O-series rules still scan those files.
+  Scripts a Dockerfile runs with system ``python3`` before ``uv sync`` are the
+  same case but are not detected (tracing a ``COPY`` destination back to a
+  pre-venv ``RUN`` step is not reliable); they keep an inline suppression.
 * **Rare false positive:** a module-level ``import json`` *and* a function
   parameter also named ``json`` — a ``json.dumps`` inside that function is
   flagged even though it refers to the parameter.  WARN-tier and suppressible;
@@ -68,6 +76,7 @@ from ._stdlib_json import (
     OrjsonOverStdlibJsonChecker,
     _collect_json_bindings,
     _collect_json_fallback_calls,
+    runs_outside_app_venv,
 )
 
 SERIES = "O"
@@ -89,19 +98,22 @@ def scan_text(text: str, file: str) -> list[Finding]:
     except SyntaxError:
         return []
 
-    module_names, func_names = _collect_json_bindings(tree)
-    fallback_calls = _collect_json_fallback_calls(tree, module_names, func_names)
     directives = _parse_directives(text)
-    checker = OrjsonOverStdlibJsonChecker(
-        filename=file,
-        directives=directives,
-        json_module_names=module_names,
-        json_func_names=func_names,
-        fallback_calls=fallback_calls,
-    )
-    checker.visit(tree)
+    o001: list[Finding] = []
+    if not runs_outside_app_venv(file):
+        module_names, func_names = _collect_json_bindings(tree)
+        fallback_calls = _collect_json_fallback_calls(tree, module_names, func_names)
+        checker = OrjsonOverStdlibJsonChecker(
+            filename=file,
+            directives=directives,
+            json_module_names=module_names,
+            json_func_names=func_names,
+            fallback_calls=fallback_calls,
+        )
+        checker.visit(tree)
+        o001 = checker._findings
     return (
-        checker._findings
+        o001
         + check_o002(tree, file, directives)
         + check_o003(tree, file, directives)
         + check_o004(tree, file, directives)

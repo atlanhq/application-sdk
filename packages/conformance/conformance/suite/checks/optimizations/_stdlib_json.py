@@ -3,6 +3,11 @@
 ``orjson`` is a core SDK dependency and ~10x faster than stdlib ``json``; on hot
 paths it is the recommended serialiser.  Only ``json.dumps`` / ``json.loads``
 call sites are flagged, and only when ``json`` resolves to the stdlib module.
+
+Files under ``contract/templates/`` are not scanned for O001: they are contract
+build hooks the freshness workflow runs with the system ``python3`` before the
+app venv exists, where ``orjson`` is not importable (see
+:func:`runs_outside_app_venv`).
 """
 
 from __future__ import annotations
@@ -15,6 +20,26 @@ from conformance.suite.checks._ast_common import (
     make_finding,
 )
 from conformance.suite.schema.findings import Finding
+
+# Repo-relative directories whose Python files run outside the app venv, so
+# stdlib ``json`` is the only importable serialiser there.  ``contract/templates/``
+# holds the contract build hooks (e.g. ``merge.py``) that the contract freshness
+# workflow runs with the system ``python3`` before ``uv sync``.
+_PRE_VENV_DIRS: tuple[str, ...] = ("contract/templates/",)
+
+
+def runs_outside_app_venv(filename: str) -> bool:
+    """Return whether *filename* (repo-relative) is a file O001 must not flag.
+
+    Anchored on the repo-root prefix: ``contract/templates/merge.py`` matches,
+    ``app/templates/x.py`` and ``app/contract/templates/x.py`` do not.  A
+    leading ``./`` is tolerated and Windows separators are normalised.
+    """
+    path = filename.replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    return path.startswith(_PRE_VENV_DIRS)
+
 
 # json.<attr> call sites worth flagging.  orjson provides drop-in equivalents
 # only for these two; json.dump/json.load (file-object APIs) have no orjson

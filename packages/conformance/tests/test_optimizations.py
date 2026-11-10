@@ -175,6 +175,62 @@ def test_o001_prescription_names_the_accepted_typeerror_fallback() -> None:
         assert needle in bullet, f"O001's prescription does not say {needle!r}"
 
 
+_JSON_SRC = "import json\n\ndef f(s):\n    return json.dumps(json.loads(s))\n"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "contract/templates/merge.py",
+        "contract/templates/nested/hook.py",
+        "./contract/templates/merge.py",
+        "contract\\templates\\merge.py",
+    ],
+)
+def test_o001_silent_in_contract_templates_build_hooks(path: str) -> None:
+    """contract/templates/ hooks run with system python3 before the app venv
+    exists, so orjson cannot be imported there (FND-4827)."""
+    assert [f.rule_id for f in scan_text(_JSON_SRC, path)] == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "app/handler.py",
+        "app/templates/merge.py",
+        "app/contract/templates/merge.py",
+        "contract/merge.py",
+        "contract/templates_old/merge.py",
+        "scripts/atlan_tls_policy.py",
+    ],
+)
+def test_o001_still_fires_outside_contract_templates(path: str) -> None:
+    assert [f.rule_id for f in scan_text(_JSON_SRC, path)] == ["O001", "O001"]
+
+
+def test_other_o_rules_still_scan_contract_templates() -> None:
+    """Only O001 is scoped off contract/templates/; O004 still fires there."""
+    src = "import json\nfrom pyatlan.model.assets import Table\n\njson.dumps({})\n"
+    ids = [f.rule_id for f in scan_text(src, "contract/templates/merge.py")]
+    assert "O001" not in ids
+    assert "O004" in ids
+
+
+def test_o001_contract_templates_scope_applies_through_scan_path(
+    tmp_path: Path,
+) -> None:
+    from conformance.suite.checks.optimizations import scan_path
+
+    hook = tmp_path / "contract" / "templates" / "merge.py"
+    hook.parent.mkdir(parents=True)
+    hook.write_text(_JSON_SRC, encoding="utf-8")
+    app = tmp_path / "app" / "handler.py"
+    app.parent.mkdir(parents=True)
+    app.write_text(_JSON_SRC, encoding="utf-8")
+    assert scan_path(hook, tmp_path) == []
+    assert [f.rule_id for f in scan_path(app, tmp_path)] == ["O001", "O001"]
+
+
 def test_o001_silent_on_response_json_method() -> None:
     # resp.json() is an attribute call on an arbitrary object, not stdlib json.
     src = "def f(resp):\n    return resp.json()\n"
