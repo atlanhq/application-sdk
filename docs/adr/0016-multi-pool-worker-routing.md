@@ -343,6 +343,11 @@ Tracking:
   `maxConcurrentActivities`, and `terminationGracePeriodSeconds` are chart-side
   pool knobs with no typed contract field yet, and app-level `vpa` /
   `workerResources` still reach `atlan.yaml` only via `deploy.overrides`.
+  When the chart sets a pool's `terminationGracePeriodSeconds`, it should
+  also set `ATLAN_SHUTDOWN_GRACE_SECONDS` on that pool's pods to the same
+  value. The SDK derives that pool's drain, post-drain and telemetry
+  shutdown bounds from it (FND-4645). Without it the fixed defaults apply,
+  whatever the pool's grace.
 - Option 3 escalation backstop — separate lower-priority follow-up.
 
 ---

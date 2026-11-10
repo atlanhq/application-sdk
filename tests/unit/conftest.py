@@ -145,6 +145,9 @@ def _no_post_drain_exit_deadline(monkeypatch):
     process two minutes later.
     """
     monkeypatch.setenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", "0")
+    # A grace declared in the developer's shell would re-derive every shutdown
+    # bound a test reads; tests that want one set it themselves.
+    monkeypatch.delenv("ATLAN_SHUTDOWN_GRACE_SECONDS", raising=False)
 
 
 @pytest.fixture(autouse=True)

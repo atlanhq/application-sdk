@@ -54,6 +54,7 @@ Example:
 import math
 import os
 import warnings
+from dataclasses import dataclass
 from enum import Enum
 
 import httpx
@@ -275,6 +276,181 @@ TEMPORAL_CORE_METRICS_MAX_BYTES: int = int(
     os.getenv("ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES", str(1024 * 1024))
 )
 
+# Shutdown budget
+#: Delay before initiating worker shutdown after receiving a termination signal.
+#: This gives the event loop time to flush in-flight activity completions
+#: (e.g. RespondActivityTaskFailed/Completed RPCs) that are already queued
+#: but haven't been sent yet. Without this, a SIGTERM that arrives right
+#: after an activity fails can preempt the _run_activity coroutine before
+#: it reaches complete_activity_task(), leaving the SDK with a phantom
+#: "in-use" task slot that blocks shutdown for the entire
+#: graceful_shutdown_timeout.
+SHUTDOWN_DRAIN_DELAY_SECONDS = int(os.getenv("ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS", 5))
+
+#: Env var naming the pod's ``terminationGracePeriodSeconds``. The Downward API
+#: cannot expose that field, so the chart sets this from the same value.
+SHUTDOWN_GRACE_SECONDS_ENV = "ATLAN_SHUTDOWN_GRACE_SECONDS"
+
+# Defaults used when no grace is declared — the bounds every deployment ran
+# with before the budget existed. They are also the caps on a derived budget.
+_DEFAULT_DRAIN_SECONDS = 3600
+_DEFAULT_POST_DRAIN_SECONDS = 120
+_DEFAULT_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS = 10.0
+_DEFAULT_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS = 35.0
+# Headroom kept back from the grace for what runs after the Python process
+# exits: the entrypoint stops daprd for up to DAPR_STOP_TIMEOUT_SECONDS (30 s).
+_SHUTDOWN_HEADROOM_CAP_SECONDS = 30
+# The least the drain ever leaves for the steps after it, so the observability
+# flush (10 s bound) still has a chance when the drain takes almost the whole
+# grace.
+_MIN_SHUTDOWN_TAIL_SECONDS = 10
+# Read here as well as in ExecutionSettings because the tail after the drain is
+# whatever the drain leaves; an explicit drain changes that remainder.
+_DRAIN_ENV = "TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT"
+
+
+@dataclass(frozen=True)
+class ShutdownBudget:
+    """Every shutdown bound, derived from one grace period.
+
+    A graceful stop runs, in order: the drain delay
+    (:data:`SHUTDOWN_DRAIN_DELAY_SECONDS`), the Temporal drain
+    (``drain_seconds``), then everything after the drain under one deadline
+    (``post_drain_seconds``) — the Pushgateway final push, pre-DELETE hold and
+    DELETE, closing infrastructure, the observability flush and interpreter exit
+    hooks. ``headroom_seconds`` is left for daprd's stop after the process exits.
+
+    The drain comes first. In-flight activities are the only step whose loss is
+    not best-effort, and daprd stays up for the whole drain (the entrypoint only
+    stops it after Python exits), so activities keep Dapr access to the end.
+    The steps after the drain take what is left.
+    """
+
+    grace_seconds: int
+    drain_seconds: int
+    post_drain_seconds: int
+    headroom_seconds: int
+    pushgateway_http_timeout_seconds: float
+    pushgateway_shutdown_delete_delay_seconds: float
+
+
+def derive_shutdown_budget(
+    grace_seconds: int,
+    drain_delay_seconds: float = SHUTDOWN_DRAIN_DELAY_SECONDS,
+    preferred_drain_seconds: int = _DEFAULT_DRAIN_SECONDS,
+) -> ShutdownBudget:
+    """Split a pod grace period into the bounds each shutdown step gets, drain first.
+
+    The tail after the drain would ideally get a post-drain deadline of a
+    quarter of the grace and daprd headroom of a tenth, capped at 120 s and
+    30 s. It never takes that from a drain of up to ``preferred_drain_seconds``
+    (the explicit or default drain): it then gets only what the grace leaves
+    beyond that drain, and never less than 10 s. The drain gets the rest. Inside
+    the tail, daprd gets up to a quarter (capped at 30 s) and the post-drain
+    deadline the remainder (capped at 120 s). The Pushgateway gets at most half
+    of the post-drain deadline: per-call HTTP timeout ≤ 1/8 of it (two calls),
+    the pre-DELETE hold the rest of that half.
+
+    So a 12 h grace keeps the 120/10/35 s defaults and drains for ~12 h; a
+    3660 s grace keeps the full 3600 s drain and squeezes the 55 s left over; a
+    30 s grace drains for 15 s.
+
+    Raises:
+        ValueError: The grace is shorter than the drain delay plus a 1 s
+            post-drain deadline, so no split can fit inside it.
+    """
+    grace = max(0, grace_seconds)
+    delay = math.ceil(drain_delay_seconds)
+    # The drain delay and a 1 s post-drain deadline are fixed costs: below
+    # their sum no split fits the grace, and a drain of 0 would still leave
+    # SIGKILL landing before the worker reached Temporal's shutdown.
+    minimum = delay + 1
+    if grace < minimum:
+        raise ValueError(
+            f"grace of {grace}s cannot fit the {drain_delay_seconds}s drain delay "
+            f"and a 1s post-drain deadline; it must be at least {minimum}s"
+        )
+    ideal_tail = min(_DEFAULT_POST_DRAIN_SECONDS, grace // 4) + min(
+        _SHUTDOWN_HEADROOM_CAP_SECONDS, grace // 10
+    )
+    beyond_preferred_drain = grace - delay - max(0, preferred_drain_seconds)
+    tail = min(
+        ideal_tail,
+        max(min(ideal_tail, _MIN_SHUTDOWN_TAIL_SECONDS), beyond_preferred_drain),
+    )
+    # Never 0: a non-positive post-drain timeout disables the deadline.
+    tail = min(max(1, tail), grace - delay)
+    headroom = min(_SHUTDOWN_HEADROOM_CAP_SECONDS, tail // 4)
+    post_drain = max(1, min(_DEFAULT_POST_DRAIN_SECONDS, tail - headroom))
+    drain = max(0, grace - delay - post_drain - headroom)
+    http_timeout = min(_DEFAULT_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS, post_drain / 8)
+    delete_delay = max(
+        0.0,
+        min(
+            _DEFAULT_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS,
+            post_drain / 2 - 2 * http_timeout,
+        ),
+    )
+    return ShutdownBudget(
+        grace_seconds=grace,
+        drain_seconds=drain,
+        post_drain_seconds=post_drain,
+        headroom_seconds=headroom,
+        pushgateway_http_timeout_seconds=http_timeout,
+        pushgateway_shutdown_delete_delay_seconds=delete_delay,
+    )
+
+
+def _preferred_drain_seconds() -> int:
+    """The explicit drain if one is set and parses, else the 3600 s default.
+
+    A value that does not parse is left for ``load_execution_settings`` to
+    reject, as it always has; here it only falls back to the default.
+    """
+    raw = os.environ.get(_DRAIN_ENV, "").strip()
+    try:
+        return int(raw) if raw else _DEFAULT_DRAIN_SECONDS
+    except ValueError:
+        return _DEFAULT_DRAIN_SECONDS
+
+
+def load_shutdown_budget() -> ShutdownBudget | None:
+    """Read ``ATLAN_SHUTDOWN_GRACE_SECONDS`` and derive the budget from it.
+
+    ``None`` when unset or not a positive integer: every bound then keeps its
+    fixed default, so a deployment that declares nothing behaves as before.
+    Read on each call so settings loaders and tests see the current env.
+    """
+    raw = os.environ.get(SHUTDOWN_GRACE_SECONDS_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        grace = int(raw)
+    except ValueError:
+        warnings.warn(
+            f"{SHUTDOWN_GRACE_SECONDS_ENV}={raw!r} is not an integer; "
+            "shutdown bounds keep their fixed defaults",
+            stacklevel=2,
+        )
+        return None
+    if grace <= 0:
+        return None
+    try:
+        return derive_shutdown_budget(
+            grace, preferred_drain_seconds=_preferred_drain_seconds()
+        )
+    except ValueError as exc:
+        warnings.warn(
+            f"{SHUTDOWN_GRACE_SECONDS_ENV}={grace}: {exc}. Shutdown bounds keep "
+            "their fixed defaults; raise the grace or lower "
+            "ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS",
+            stacklevel=2,
+        )
+        return None
+
+
+_SHUTDOWN_BUDGET = load_shutdown_budget()
+
 # Prometheus Pushgateway (worker-only deployments)
 #: Pushgateway URL workers push to. Empty disables push (combined-mode
 #: server+worker deployments leave this unset; ``/metrics`` covers
@@ -311,13 +487,19 @@ PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS = float(
 )
 #: Per-request HTTP timeout for every Pushgateway call (push, DELETE,
 #: sweep GET, sweep per-group DELETE). The prometheus_client default of 30s
-#: is too generous for our shape: at shutdown, two back-to-back 30s hangs
-#: (final push + DELETE_ON_SHUTDOWN) would exceed Kubernetes' default 30s
-#: terminationGracePeriodSeconds and SIGKILL the pod before cleanup runs.
-#: 10s leaves 2/3 of the push interval for actual work and ~10s of slack
-#: inside the grace period for the rest of worker shutdown.
+#: is too generous: the final push and DELETE_ON_SHUTDOWN run back to back
+#: under the post-drain deadline, which they share with the rest of shutdown.
+#: Default 10s; when ``ATLAN_SHUTDOWN_GRACE_SECONDS`` is set and this is not,
+#: derived from the grace (see :class:`ShutdownBudget`).
 PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS = float(
-    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS", "10")
+    os.getenv(
+        "ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS",
+        str(
+            _SHUTDOWN_BUDGET.pushgateway_http_timeout_seconds
+            if _SHUTDOWN_BUDGET is not None
+            else _DEFAULT_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS
+        ),
+    )
 )
 #: Sleep interval between the final push and the DELETE_ON_SHUTDOWN call
 #: so Prometheus has at least one scrape opportunity to read the final
@@ -326,11 +508,19 @@ PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS = float(
 #: particular, the activity-failure increments that often trigger the
 #: scale-down — never reaches Prometheus. Default 35s = one full 30s
 #: scrape interval (the cluster default for the Pushgateway scrape, see
-#: vmagent's rendered config) plus a 5s jitter buffer. Worker pods have a
-#: 12h terminationGracePeriodSeconds, so the extra wait doesn't approach
-#: the kill timeout. Set to 0 to disable.
+#: vmagent's rendered config) plus a 5s jitter buffer. It runs under the
+#: post-drain deadline, so when ``ATLAN_SHUTDOWN_GRACE_SECONDS`` is set and
+#: this is not, it is derived from the grace and shrinks with a short one
+#: (see :class:`ShutdownBudget`). Set to 0 to disable.
 PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS = float(
-    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS", "35")
+    os.getenv(
+        "ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS",
+        str(
+            _SHUTDOWN_BUDGET.pushgateway_shutdown_delete_delay_seconds
+            if _SHUTDOWN_BUDGET is not None
+            else _DEFAULT_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS
+        ),
+    )
 )
 
 # REMOVED: ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING, WORKFLOW_UI_HOST,
@@ -538,16 +728,8 @@ WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
 #   ATLAN_RUN_LENGTH_SLA_SECONDS → RUN_LENGTH_SLA_SECONDS (default 86400, 0 disables)
 # ExecutionSettings owns the graceful shutdown timeout:
 #   - ExecutionSettings.graceful_shutdown_timeout_seconds (TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT)
-
-#: Delay before initiating worker shutdown after receiving a termination signal.
-#: This gives the event loop time to flush in-flight activity completions
-#: (e.g. RespondActivityTaskFailed/Completed RPCs) that are already queued
-#: but haven't been sent yet. Without this, a SIGTERM that arrives right
-#: after an activity fails can preempt the _run_activity coroutine before
-#: it reaches complete_activity_task(), leaving the SDK with a phantom
-#: "in-use" task slot that blocks shutdown for the entire
-#: graceful_shutdown_timeout.
-SHUTDOWN_DRAIN_DELAY_SECONDS = int(os.getenv("ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS", 5))
+#     — derived from ATLAN_SHUTDOWN_GRACE_SECONDS when that is set; see
+#     ShutdownBudget above.
 
 
 #: Maximum re-dispatches per activity caused by worker pod eviction (SIGTERM

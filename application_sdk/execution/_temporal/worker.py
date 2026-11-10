@@ -250,6 +250,12 @@ class AppWorker:
     seconds each asleep proving something about the *drain*, not about the
     delay. The delay's own behaviour is asserted separately, by driving a worker
     built with a non-zero value (FND-962).
+
+    ``on_drained`` fires once the Temporal worker has stopped — its drain is
+    over — and before the wrapper's own cleanup (credential directories, sizing
+    rows, the Pushgateway final push, hold and DELETE). The main entry point
+    arms its post-drain exit deadline from it, so that cleanup runs under the
+    deadline instead of before it.
     """
 
     def __init__(
@@ -261,6 +267,7 @@ class AppWorker:
         primary_app_name: str = "",
         task_queue: str = "",
         shutdown_drain_delay_seconds: float = SHUTDOWN_DRAIN_DELAY_SECONDS,
+        on_drained: Callable[[], None] | None = None,
     ) -> None:
         self._worker = worker
         self._start_event_params = start_event_params
@@ -268,6 +275,7 @@ class AppWorker:
         self._primary_app_name = primary_app_name
         self._task_queue = task_queue
         self._shutdown_drain_delay_seconds = shutdown_drain_delay_seconds
+        self._on_drained = on_drained
         self._pusher: PushGatewayClient | None = None
         self._credential_sweeper: asyncio.Task[None] | None = None
 
@@ -370,6 +378,16 @@ class AppWorker:
             finally:
                 self._pusher = None
 
+    def _notify_drained(self) -> None:
+        """Run ``on_drained``; a failing callback must not stop the cleanup."""
+        if self._on_drained is None:
+            return
+        try:
+            self._on_drained()
+        # conformance: ignore[E004] shutdown path; a failed callback is logged and the remaining cleanup still runs
+        except Exception:
+            logger.warning("Worker on_drained callback failed", exc_info=True)
+
     async def _drain_sizing(self) -> None:
         """Flush buffered sizing rows before the process ends — these pools scale to
         zero, so the last batch would otherwise be lost. Best-effort.
@@ -412,6 +430,7 @@ class AppWorker:
             await asyncio.sleep(self._shutdown_drain_delay_seconds)
             await self._worker.__aexit__(exc_type, *args)
         finally:
+            self._notify_drained()
             await self._stop_credential_sweeper()
             await self._drain_sizing()
             await self._stop_metrics_push()
@@ -431,6 +450,7 @@ class AppWorker:
         try:
             await self._worker.run()
         finally:
+            self._notify_drained()
             await self._stop_credential_sweeper()
             await self._drain_sizing()
             await self._stop_metrics_push()
@@ -548,6 +568,7 @@ def create_worker(
     on_activity: Callable[[], None] | None = None,
     on_fatal_error: Callable[[BaseException], None] | None = None,
     shutdown_drain_delay_seconds: float = SHUTDOWN_DRAIN_DELAY_SECONDS,
+    on_drained: Callable[[], None] | None = None,
 ) -> AppWorker:
     """Create a Temporal worker for registered Apps.
 
@@ -583,7 +604,9 @@ def create_worker(
             same value as ``max_concurrent_activities`` so the active sandbox
             count stays bounded by what the worker can actually drain.
         graceful_shutdown_timeout_seconds: Seconds to allow in-flight activities to
-            complete after SIGTERM before cancelling them.
+            complete after SIGTERM before cancelling them. Defaults to
+            ``ExecutionSettings.graceful_shutdown_timeout_seconds``, which is
+            derived from ``ATLAN_SHUTDOWN_GRACE_SECONDS`` when that is set.
         interceptors: Additional Temporal interceptors to register. Log /
             Metrics / Trace observability interceptors are always prepended;
             Output and Event interceptors are prepended based on settings.
@@ -606,6 +629,12 @@ def create_worker(
             ``SHUTDOWN_DRAIN_DELAY_SECONDS``. A test whose worker only exits
             after the workflow result has returned has no such RPC in flight
             and can pass ``0``.
+        on_drained: Optional callback fired once the Temporal worker has
+            stopped, before the wrapper's post-drain cleanup (including the
+            Pushgateway final push, hold and DELETE). Fired on every stop,
+            including a restart after a fatal error; the callback decides
+            whether that stop is a shutdown. The main entry point arms its
+            post-drain exit deadline from it.
 
     Returns:
         AppWorker wrapping a configured Temporal Worker (not yet started).
@@ -1144,6 +1173,7 @@ def create_worker(
         primary_app_name=primary_app_name,
         task_queue=task_queue,
         shutdown_drain_delay_seconds=shutdown_drain_delay_seconds,
+        on_drained=on_drained,
     )
 
 
