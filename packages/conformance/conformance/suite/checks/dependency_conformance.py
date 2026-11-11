@@ -47,6 +47,11 @@ Rules in this check module:
   reference whose version specifier admits a release where the SDK removes a
   deprecated shim extra (v4.0.0 or later).
 
+* **D018 SdkTestExtraInRuntimeDependencies** — an
+  ``atlan-application-sdk[...]`` requirement in ``[project.dependencies]``
+  names a test-only SDK extra (``[tests]``, ``[harness]``), so a production
+  sync installs the SDK's test tooling in the runtime image.
+
 * **D012 UnpinnedPackageIndex** — the repo's root ``pyproject.toml`` must pin
   PyPI as the resolver's default index (``[[tool.uv.index]]`` with
   ``default = true``).  Without it a machine-wide default index — the Endor
@@ -61,7 +66,7 @@ Rules in this check module:
   dependency install with ``401 Unauthorized``.
 
 D004/D005 are metadata-based (need the SDK importable) like D002;
-D006/D007/D008/D009/D017 are pure-text.  D010 is cross-file (source imports + lock/pyproject) and runs in
+D006/D007/D008/D009/D017/D018 are pure-text.  D010 is cross-file (source imports + lock/pyproject) and runs in
 ``scan_all``.
 
 Self-check exemption: any pyproject whose ``[project].name`` starts with
@@ -118,6 +123,7 @@ RULE_D014 = "D014"
 RULE_D015 = "D015"
 RULE_D016 = "D016"
 RULE_D017 = "D017"
+RULE_D018 = "D018"
 
 SDK_PACKAGE = "atlan-application-sdk"
 # The conformance suite itself (D011).  Apps declare it in a dev group so
@@ -211,6 +217,21 @@ DEPRECATED_SDK_EXTRAS: Mapping[str, DeprecatedSdkExtra] = {
     "daft": DeprecatedSdkExtra(removed_in="4.0.0", replacement="sql"),
     "sqlalchemy": DeprecatedSdkExtra(removed_in="4.0.0", replacement="sql"),
     "pandas": DeprecatedSdkExtra(removed_in="4.0.0", replacement="sql"),
+}
+
+# SDK extras that install test tooling only (D018), keyed by PEP 503-normalised
+# name, mapped to what they add beyond the SDK's core dependencies. ``[tests]``
+# carries pytest, pytest-asyncio, pandera and httpx2 for
+# ``application_sdk.testing``; ``[harness]`` carries the
+# kubernetes client the e2e harness imports under the e2e/scenario markers.
+# Neither is on a production code path, so neither belongs in the array a
+# production sync installs. Kept honest by
+# ``test_d018_test_extras_match_sdk_pyproject``, which re-reads the SDK's
+# pyproject.toml and fails if an entry is no longer published or the packages
+# it names drift from what the extra adds.
+TEST_ONLY_SDK_EXTRAS: Mapping[str, str] = {
+    "tests": "pytest, pytest-asyncio, pandera and httpx2",
+    "harness": "the kubernetes client",
 }
 
 # A PEP 508 / requirement-string fragment. Captures the package *name*; the
@@ -1280,6 +1301,58 @@ def scan_text(
                     ),
                     suppressions=suppressions,
                     discriminator=_normalise_name(extra),
+                )
+            )
+
+    # ── D018: test-only SDK extra in the runtime array (pure-text) ──────────
+    # Only [project.dependencies] is graded: a production sync installs it and
+    # skips both dependency groups and optional-dependencies arrays, so those
+    # are where a test extra belongs.  Only the ``dev`` group counts as already
+    # providing the extra: it is the one ``uv sync`` / ``uv run`` select by
+    # default, so dropping the runtime reference is safe only when ``dev``
+    # carries it.  Another group (``lint``, ``test``) may not be installed by
+    # the app's test job, so it still gets the "add it to dev" guidance.
+    dev_group_extras = {
+        _normalise_name(extra)
+        for entry in group_entries
+        if entry.name == sdk_norm and entry.array_path == "dependency-groups.dev"
+        for extra in _sdk_extras_in(entry.raw)
+    }
+    for entry in sdk_entries:
+        for extra in _sdk_extras_in(entry.raw):
+            norm_extra = _normalise_name(extra)
+            installs = TEST_ONLY_SDK_EXTRAS.get(norm_extra)
+            if installs is None:
+                continue
+            if norm_extra in dev_group_extras:
+                group_action = (
+                    f"[dependency-groups].dev already pulls in "
+                    f"'{SDK_PACKAGE}[{extra}]', so only the runtime "
+                    f"reference has to go."
+                )
+            else:
+                group_action = (
+                    f"Then add '{SDK_PACKAGE}[{extra}]' with the same version "
+                    f"range to [dependency-groups].dev so tests still get it."
+                )
+            findings.append(
+                _make_finding(
+                    rule_id=RULE_D018,
+                    file=file,
+                    line=entry.line,
+                    column=entry.column,
+                    message=(
+                        f"'{SDK_PACKAGE}[{extra}]' in [project.dependencies] "
+                        f"installs the SDK's test tooling ({installs}) in the "
+                        f"production image: a production sync installs "
+                        f"[project.dependencies] and skips dependency groups. "
+                        f"Remove '{extra}' from this requirement's extras "
+                        f"(keep the version range and any other extras; drop "
+                        f"the brackets if it was the only one). "
+                        f"{group_action} Then run `uv lock`."
+                    ),
+                    suppressions=suppressions,
+                    discriminator=norm_extra,
                 )
             )
 

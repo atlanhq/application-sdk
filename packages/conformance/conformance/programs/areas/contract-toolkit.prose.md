@@ -54,6 +54,10 @@ description: >
   K029 (deploy.dapr.objectstore is false, so the chart drops the object store the
   SDK requires) is fixed in contract/app.pkl by setting objectstore = true in the
   dapr block and regenerating, verified by the pkl-eval gate.
+  K030 (deploy.dapr.secretstore is false on an app that resolves credentials, so
+  every credential lookup fails) is fixed in contract/app.pkl by removing the
+  explicit false or setting secretstore = true and regenerating, verified by the
+  pkl-eval gate.
   K009, K011, K012, and K015 are
   BLOCK-tier (they fail the gate in default mode); the rest of the K-series is WARN.
 ---
@@ -75,10 +79,10 @@ K009 (unresolved scaffold placeholder), K011 (missing `app_id`), K012
 finding is present — those are FAILING results
 that fail the gate and must be remediated in default mode.  In **strict** mode
 the fingerprint-set also includes the unsuppressed WARNING results
-(K004/K005/K007/K008/K010/K014/K016/K017/K018/K019/K020/K021/K029), which is where the rest
+(K004/K005/K007/K008/K010/K014/K016/K017/K018/K019/K020/K021/K029/K030), which is where the rest
 of K-series remediation runs.
 
-The active scope decides which rules can appear: K001–K021, K027 and K029 are all `scope=APP`,
+The active scope decides which rules can appear: K001–K021, K027, K029 and K030 are all `scope=APP`,
 so they surface only on consumer app repos.  The runner auto-detects scope, so
 the SDK repo sees 0 findings.
 
@@ -138,7 +142,7 @@ generated artifact directly** — those are outputs of `pkl eval`, and K004/K005
 catch the staleness that hand-editing causes.  The *only* sanctioned way to
 change a generated artifact is to regenerate it from the contract.  After every
 edit to `contract/**/*.pkl`, `contract/PklProject`, or the Pkl lock (K001–K005,
-K007–K011, K013, K016, K017, K029), the `pkl-eval` gate runs `pkl eval` to verify the contract compiled
+K007–K011, K013, K016, K017, K029, K030), the `pkl-eval` gate runs `pkl eval` to verify the contract compiled
 and regenerated cleanly.  **K006 and K012 are the exceptions**: K006's fix is a
 plain Python edit and K012's is a `pyproject.toml` edit (both see below), neither
 involving `.pkl` or generated artifacts, so both are verified by the standard
@@ -1085,15 +1089,54 @@ other Dapr component was enabled.
 
 If `pkl` is unavailable, route to residue with a regenerate-locally note.
 
+**K030 CredentialSecretStoreDisabled** — the app resolves credentials (a
+contract amending `App.pkl` keeps `hasCredentialConfig` on, which is the default
+unless `type = "system"`, or declares `additionalCredentialConfigs`), but its
+contract sets `secretstore = false` in `deploy.dapr`, or its generated
+`atlan.yaml` carries `deploy.dapr.secretstore: false`. The deployer then leaves
+out the Dapr secret store, and every credential lookup fails with HTTP 500.
+`classification = "mechanical"`. **requires `pkl`** (the artifact is regenerated,
+never hand-edited).
+
+The finding anchors on the explicit assignment in `contract/**/*.pkl` when there
+is one, and otherwise on the `secretstore:` line of `atlan.yaml` — a
+contract-toolkit release that defaulted `objectstore` to `true` but `secretstore`
+to `false` rendered it for every contract with a `deploy` block.
+
+*Procedure:*
+
+1. In `contract/app.pkl`, make the `dapr` block say `secretstore = true`:
+   change an explicit `false`, or add the assignment beside `objectstore`:
+
+   ```
+   deploy = new DeployConfig {
+     dapr { objectstore = true; secretstore = true }
+   }
+   ```
+   (On a contract-toolkit whose `secretstore` default follows the app's
+   credentials, removing the explicit `false` is enough.)
+2. Regenerate with the repo's generate task (`uv run poe generate`, or
+   `pkl eval -m . contract/app.pkl`) and stage the result; set `touched_files` the
+   K003-step-4 way. Confirm `atlan.yaml` now carries
+   `deploy.dapr.secretstore: true`. **Never hand-edit `atlan.yaml`.**
+3. Verification is the `pkl-eval` gate.
+4. Suppression is almost never correct — an app with credentials cannot resolve
+   them without the store. If one is justified,
+   `// conformance: ignore[K030] <reason>` on the contract line (or
+   `# conformance: ignore[K030] <reason>` on the `atlan.yaml` line) and route to
+   residue.
+
+If `pkl` is unavailable, route to residue with a regenerate-locally note.
+
 ---
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline suppression comment — `// conformance: ignore[Kxxx]
 <8–40 word justification>` for the `.pkl`-source / `PklProject`-anchored rules
-(K001–K005, K007, K008, K010, K029 contract; `//` comments) or `# conformance: ignore[Kxxx]
+(K001–K005, K007, K008, K010, K029 and K030 contract; `//` comments) or `# conformance: ignore[Kxxx]
 <8–40 word justification>` for the artifact/Python-anchored rules (K006, K016 and
 K017 Python, K018, K021, K027,
-K009 text artifact, K014 and K029 `atlan.yaml`; `#` comments) — on the violating line or
+K009 text artifact, K014, K029 and K030 `atlan.yaml`; `#` comments) — on the violating line or
 the comment-only
 line directly above it when a legitimate exception exists (e.g. a K001 finding on
 a contract intentionally kept at the legacy module during a phased migration with

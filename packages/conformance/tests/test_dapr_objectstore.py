@@ -171,3 +171,14 @@ def test_runner_exclude_drops_findings_anchored_under_the_prefix(
 
     assert uris() == {"contract/app.pkl"}
     assert uris("--exclude", "contract/") == set()
+
+
+def test_objectstore_false_inside_a_string_is_not_flagged(tmp_path: Path) -> None:
+    contract = (
+        'amends "@app-contract-toolkit/App.pkl"\n'
+        'longDescription = """\n'
+        "Do not set objectstore = false.\n"
+        '"""\n'
+        "/* objectstore = false */\n"
+    )
+    assert _active(_scan(tmp_path, contract=contract, atlan=_atlan("true"))) == []

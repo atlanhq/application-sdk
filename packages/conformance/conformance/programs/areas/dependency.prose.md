@@ -18,7 +18,7 @@ findings in the working tree, as reported by `suite.runner --series D`.
 
 The fingerprint-set of all unsuppressed FAILING D-series results.  Extends to
 include WARNING results in strict mode —
-D002/D003/D004/D006/D007/D008/D012/D013/D014/D015/D016/D017 are WARN-tier, so they are
+D002/D003/D004/D006/D007/D008/D012/D013/D014/D015/D016/D017/D018 are WARN-tier, so they are
 processed in strict mode; D001, D005, D009, D010 and D011 are BLOCK-tier and
 processed in both modes.
 
@@ -228,6 +228,24 @@ fix.  The re-detection gate is authoritative for this area — see
   the shim installed but can add others (`[pandas]` alone gains `sqlalchemy`
   and `duckdb`), so classify that edit `judgment` and route it to residue
   when the SDK's other extras did not already include `sql`.
+
+- **D018 SdkTestExtraInRuntimeDependencies** (`classification = "mechanical"`,
+  except the runtime-import case below) — `finding.line` points at the
+  `atlan-application-sdk[...]` entry in `[project.dependencies]`; the finding's
+  discriminator names the test-only extra (`tests` or `harness`).  Remove that
+  extra from the runtime entry, keeping the version specifier, marker and every
+  other extra; remove the brackets when the list ends up empty.  If no
+  `[dependency-groups]` entry already requests the extra (the message says
+  which), add `"atlan-application-sdk[<extra>]<same specifier>"` to
+  `[dependency-groups].dev`, creating the table if needed:
+  `"atlan-application-sdk[sql,tests]>=3.33,<4"` in `[project.dependencies]` →
+  `"atlan-application-sdk[sql]>=3.33,<4"` there plus
+  `"atlan-application-sdk[tests]>=3.33,<4"` in `[dependency-groups].dev`.
+  State in the edit description that `uv lock` must be re-run and its diff
+  reviewed.  If app source outside the test tree imports a package the extra
+  provides (`pandera`, `pytest`, `kubernetes`), classify the edit `judgment`
+  and route it to residue: that package has to be declared directly in
+  `[project.dependencies]` first.
 
 - **D007 NonStandardBuildBackend** — set `build-backend` to `"hatchling.build"`
   in `[build-system]` and ensure `requires = ["hatchling"]`.  Build-affecting:
@@ -518,7 +536,7 @@ When `mode == "strict"` and `finding.disposition == "warning"`, the model may
 propose an inline suppression instead of a fix if the deviation is a deliberate,
 justified exception for this app.  Applicable rules and notes:
 
-- **D002 / D004 / D005 / D006 / D007 / D008 / D010 / D016 / D017** — standard inline
+- **D002 / D004 / D005 / D006 / D007 / D008 / D010 / D016 / D017 / D018** — standard inline
   suppression.
   TOML uses `#` for comments, so the directive trails the entry or sits on the
   line above it:

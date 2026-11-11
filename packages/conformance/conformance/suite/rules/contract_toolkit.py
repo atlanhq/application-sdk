@@ -2271,4 +2271,87 @@ RULES: tuple[RuleDefinition, ...] = (
             target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
+    RuleDefinition(
+        id="K030",
+        canonical_reference=(
+            "atlan-mysql-app contract/app.pkl — its deploy block's `dapr` sets "
+            "`objectstore = true` and `secretstore = true`, which renders "
+            "`deploy.dapr.secretstore: true` in atlan.yaml so the deployer mounts "
+            "the secret store the SDK resolves credentials through."
+        ),
+        rule_interactions=(
+            "Sibling of K029 (the object store). When the finding anchors on "
+            "atlan.yaml, the file is generated: a hand-edit is erased by the next "
+            "regeneration and trips the freshness gate (K005). Fix contract/app.pkl "
+            "(or bump the toolkit, whose default follows the app's credentials) and "
+            "run the repo's own generate task."
+        ),
+        fix_locus=FixLocus.CONTRACT,
+        scope=RuleScope.APP,
+        name="CredentialSecretStoreDisabled",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=True,
+        since="0.57.0",
+        orthogonal_gate="pkl-eval",
+        rationale=(
+            "The SDK resolves every credential through the Dapr secret store: "
+            "preflight, resolve_credential_raw and context.get_secret all read it. "
+            "The Local Marketplace deployer fills each Dapr component atlan.yaml "
+            "leaves out with its own default, which turns the secret store on, but "
+            "honours an explicit deploy.dapr.secretstore: false. Once contract-toolkit "
+            "defaulted objectstore to true, every contract with a deploy block "
+            "rendered a full dapr block, including secretstore: false, so a "
+            "credential app lost its secret store on its next regeneration. The rule "
+            "moves that failure from the tenant to the PR. WARN while the fleet's "
+            "existing findings are counted and fixed; a candidate for BLOCK once "
+            "they are. "
+            "Customer impact: every credential lookup returns HTTP 500, so preflight "
+            "and every workflow run of the app fail until the contract is fixed and "
+            "the app redeployed."
+        ),
+        short_description=(
+            "deploy.dapr.secretstore is false on an app that resolves credentials — "
+            "every credential lookup fails"
+        ),
+        full_description=(
+            "The app resolves credentials — a contract under ``contract/`` that "
+            "amends ``App.pkl`` keeps ``hasCredentialConfig`` on (the default "
+            'unless ``type = "system"``) or declares '
+            "``additionalCredentialConfigs`` — but its contract sets "
+            "``secretstore = false`` in ``deploy.dapr``, or its generated "
+            "``atlan.yaml`` carries ``deploy.dapr.secretstore: false``. The "
+            "deployer then leaves out the Dapr secret store, and every credential "
+            "lookup fails with HTTP 500.\n"
+            "\n"
+            "The finding anchors on the explicit assignment in ``contract/*.pkl`` "
+            "when there is one, and otherwise on ``atlan.yaml`` — the case where a "
+            "contract-toolkit release rendered ``secretstore: false`` because the "
+            "contract did not set it.\n"
+            "\n"
+            "**Fix:** remove the explicit ``false`` (contract-toolkit renders "
+            "``true`` for an app with credentials) or set it to ``true``, then "
+            "regenerate with the repo's generate task and commit the updated "
+            "``atlan.yaml``:\n"
+            "\n"
+            "    deploy = new DeployConfig {\n"
+            "      dapr { objectstore = true; secretstore = true }\n"
+            "    }\n"
+            "\n"
+            "**Suppress** with ``// conformance: ignore[K030] <reason>`` on the "
+            "``secretstore = false`` line of the contract (or the comment-only line "
+            "above it), or ``# conformance: ignore[K030] <reason>`` on the "
+            "``secretstore:`` line of ``atlan.yaml``. A suppression is almost never "
+            "correct: an app with credentials cannot resolve them without the store.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k030"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
+    ),
 )
