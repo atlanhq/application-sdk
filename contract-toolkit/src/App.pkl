@@ -5003,9 +5003,18 @@ local function renderWorkerPool(poolName: String, p: Pool): Mapping<String, Any>
   when (!p.envOverrides.isEmpty) { ["envOverrides"] = p.envOverrides }
 }
 
-local function renderDapr(d: DaprComponents): Mapping<String, Any> = new Mapping {
+/// Whether the app resolves credentials through the Dapr secret store: the
+/// default for `deploy.dapr.secretstore` when the contract leaves it unset.
+/// A bundle root counts its entrypoints' contracts, since they own the forms.
+local usesCredentials: Boolean =
+  hasCredentialConfig
+  || !additionalCredentialConfigs.isEmpty
+  || entrypoints.toList().any((e) -> e.contract != null
+    && (e.contract!!.hasCredentialConfig || !e.contract!!.additionalCredentialConfigs.isEmpty))
+
+local function renderDapr(d: DaprComponents, secretstore: Boolean): Mapping<String, Any> = new Mapping {
   ["objectstore"] = d.objectstore
-  ["secretstore"] = d.secretstore
+  ["secretstore"] = secretstore
   ["statestore"] = d.statestore
   ["eventstore"] = d.eventstore
   ["subscription"] = d.subscription
@@ -5017,13 +5026,14 @@ local function renderDapr(d: DaprComponents): Mapping<String, Any> = new Mapping
 }
 
 local function renderDeployYaml(d: DeployConfig): Mapping<String, Any> =
-  let (hasDapr = d.dapr.objectstore || d.dapr.secretstore || d.dapr.statestore ||
+  let (secretstore = d.dapr.secretstore ?? usesCredentials)
+  let (hasDapr = d.dapr.objectstore || secretstore || d.dapr.statestore ||
         d.dapr.eventstore || d.dapr.subscription || d.dapr.configurationstore ||
         d.dapr.lock || !d.dapr.customComponents.isEmpty)
   let (globalFields: Mapping<String, Any> = new Mapping {
     ["execution_mode"] = d.executionMode
     ["splitDeploymentEnabled"] = d.splitDeployment
-    when (hasDapr) { ["dapr"] = renderDapr(d.dapr) }
+    when (hasDapr) { ["dapr"] = renderDapr(d.dapr, secretstore) }
   })
   if (d.pools.isEmpty)
     deepMergeMapping(globalFields, d.overrides)

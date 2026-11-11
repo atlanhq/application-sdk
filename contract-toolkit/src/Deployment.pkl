@@ -10,11 +10,24 @@ class DaprComponents {
   /// `false` is flagged by conformance rule K029.
   ///
   /// Because it defaults to `true`, every contract with a `deploy` block emits
-  /// a `dapr:` block carrying `objectstore: true`. The atlan-app chart enables
-  /// no Dapr component unless `atlan.yaml` asks for it, so omitting the block
-  /// would leave the app without the store.
+  /// a `dapr:` block carrying `objectstore: true`. (With no `dapr:` block the
+  /// Local Marketplace deployer would also turn the store on: it fills each
+  /// component `atlan.yaml` leaves out with its own default, `true` for
+  /// `objectstore` and `secretstore` and `false` for the rest. An explicit
+  /// value always wins, which is why the toolkit renders every component.)
   objectstore: Boolean = true
-  secretstore: Boolean = false
+  /// The Dapr secret store the SDK resolves credentials through (preflight,
+  /// `resolve_credential_raw`, `context.get_secret`).
+  ///
+  /// Leave it unset (null, the default) and the toolkit renders `true` when the
+  /// app resolves credentials — `hasCredentialConfig`, a non-empty
+  /// `additionalCredentialConfigs`, or either on any entrypoint's contract —
+  /// and `false` otherwise. Every `deploy` block emits a full `dapr:` block
+  /// (because `objectstore` is on), and the deployer honours each value in it,
+  /// so a credential app rendering `secretstore: false` gets no secret store
+  /// and every credential lookup fails with HTTP 500. An explicit value is rendered as written; setting it to `false` on
+  /// an app with credentials is flagged by conformance rule K030.
+  secretstore: Boolean? = null
   statestore: Boolean = false
   eventstore: Boolean = false
   subscription: Boolean = false

@@ -39,7 +39,15 @@ from conformance.suite.schema.findings import Finding
 SERIES = "K"
 _RULE_ID = "K029"
 
-__all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
+__all__ = [
+    "SERIES",
+    "contract_files",
+    "deploy_dapr_false_line",
+    "discover",
+    "main",
+    "scan_all",
+    "scan_path",
+]
 
 # ``objectstore = false`` anywhere on a pkl line, including the one-line form
 # ``dapr { objectstore = false; secretstore = true }``. Matched against the
@@ -67,7 +75,7 @@ def discover(root: Path) -> list[Path]:
     return [root] if (root / "contract").is_dir() else []
 
 
-def _contract_files(root: Path) -> list[Path]:
+def contract_files(root: Path) -> list[Path]:
     """Hand-written ``contract/**/*.pkl``, skipping hidden dirs (pkl caches)."""
     contract_dir = root / "contract"
     return sorted(
@@ -79,7 +87,7 @@ def _contract_files(root: Path) -> list[Path]:
 
 def _contract_findings(root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    for path in _contract_files(root):
+    for path in contract_files(root):
         text = safe_read_text(path)
         if text is None:
             continue
@@ -111,12 +119,13 @@ def _contract_findings(root: Path) -> list[Finding]:
     return findings
 
 
-def _deploy_dapr_objectstore_false_line(text: str) -> int | None:
-    """1-based line of ``objectstore: false`` under top-level ``deploy:`` → ``dapr:``.
+def deploy_dapr_false_line(text: str, component: str) -> int | None:
+    """1-based line of ``<component>: false`` under top-level ``deploy:`` → ``dapr:``.
 
     An indentation walk rather than a YAML parse: the package carries no YAML
     dependency, and the line number is what the finding anchors on. Only the
-    block path ``deploy.dapr.objectstore`` counts — the chart reads nothing else.
+    block path ``deploy.dapr.<component>`` counts — the deployer reads nothing
+    else. Shared with K030 (``secretstore``).
     """
     path: list[tuple[int, str]] = []  # (indent, key) of the open mappings
     for lineno, raw in enumerate(text.splitlines(), start=1):
@@ -131,7 +140,7 @@ def _deploy_dapr_objectstore_false_line(text: str) -> int | None:
         key = m.group("key")
         value = m.group("value").split(" #", 1)[0].strip()
         keys = [k for _, k in path]
-        if keys == ["deploy", "dapr"] and key == "objectstore":
+        if keys == ["deploy", "dapr"] and key == component:
             return lineno if value in _YAML_FALSE else None
         if not value:
             path.append((indent, key))
@@ -143,7 +152,7 @@ def _atlan_yaml_findings(root: Path) -> list[Finding]:
     if not atlan.is_file():
         return []
     text = safe_read_text(atlan) or ""
-    line = _deploy_dapr_objectstore_false_line(text)
+    line = deploy_dapr_false_line(text, "objectstore")
     if line is None:
         return []
     return [

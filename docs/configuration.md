@@ -215,6 +215,23 @@ The error does not depend on `ATLAN_ENABLE_OBJECTSTORE`: the chart sets that var
 on the env-seeder init container, not the app container, so the app usually sees it
 unset. When it is visible and `false`, the error message says so.
 
+### Which Dapr components a deployed app gets
+
+The Local Marketplace deployer turns the `deploy.dapr` block of `atlan.yaml` into the
+atlan-app chart's `dapr.components.<name>.enabled` values. It fills each component the
+block leaves out (or the whole block, when there is none) with its own default: `true`
+for `objectstore` and `secretstore`, `false` for the rest. A value the block states
+always wins, including `false`. The chart's own values have every component off, so
+these deployer defaults are what an app without a `dapr` block runs with.
+
+contract-toolkit renders every component once a contract has a `deploy` block, so the
+contract decides each one. `secretstore` defaults to `true` for an app that resolves
+credentials (`hasCredentialConfig` or `additionalCredentialConfigs`, on the app or any
+entrypoint): the SDK resolves every credential through it, and without it each lookup
+fails with HTTP 500 from `/v1.0/secrets/<store>/<guid>`. Conformance rule
+[K030](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/contract-toolkit.md#k030)
+flags `secretstore: false` on such an app.
+
 ### Dapr Sidecar Readiness / Cold-Start Retry
 
 | Variable | Default | Description |
