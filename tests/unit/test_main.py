@@ -27,6 +27,7 @@ from application_sdk.main import (
     _log_process_memory_baseline,
     _log_shutdown_budget,
     _loop_exception_handler,
+    _LoopStallWatchdog,
     _observe_worker_poll_state,
     _parse_all_component_yamls,
     _parse_workflow_max_timeout_hours,
@@ -1877,6 +1878,40 @@ class TestRunWorkerMode:
 
         start.assert_not_called()
 
+    async def test_stall_watchdog_runs_until_the_drain(
+        self, worker_patches, wait_patch
+    ) -> None:
+        """Armed before the worker polls, handed over to the post-drain deadline."""
+        order: list[str] = []
+        watchdog = MagicMock(spec=_LoopStallWatchdog)
+        watchdog.start.side_effect = lambda: order.append("watchdog on")
+        watchdog.stop.side_effect = lambda: order.append("watchdog off")
+        health_cm = worker_patches["health"].return_value
+        health_cm.__aexit__.side_effect = lambda *_: order.append("drained")
+
+        with (
+            patch.object(_LoopStallWatchdog, "from_settings", return_value=watchdog),
+            patch(
+                "application_sdk.main._start_post_drain_exit_deadline",
+                side_effect=lambda: order.append("deadline"),
+            ),
+        ):
+            await run_worker_mode(
+                AppConfig(mode="worker", app_module="pkg:FakeApp"),
+                bound_post_drain_exit=True,
+            )
+
+        assert order == ["watchdog on", "drained", "watchdog off", "deadline"]
+
+    async def test_stall_watchdog_off_when_awaited_directly(
+        self, worker_patches, wait_patch
+    ) -> None:
+        """It ends the process, so a caller that keeps the process gets none."""
+        with patch.object(_LoopStallWatchdog, "from_settings") as from_settings:
+            await run_worker_mode(AppConfig(mode="worker", app_module="pkg:FakeApp"))
+
+        from_settings.assert_not_called()
+
     async def test_auth_enabled_acquires_token(
         self, worker_patches, auth_manager, wait_patch
     ) -> None:
@@ -2329,6 +2364,40 @@ class TestRunCombinedMode:
             )
 
         start.assert_not_called()
+
+    async def test_stall_watchdog_runs_until_the_drain(self, combined_patches) -> None:
+        """Armed before the worker polls, handed over to the post-drain deadline."""
+        order: list[str] = []
+        watchdog = MagicMock(spec=_LoopStallWatchdog)
+        watchdog.start.side_effect = lambda: order.append("watchdog on")
+        watchdog.stop.side_effect = lambda: order.append("watchdog off")
+        health_cm = combined_patches["health"].return_value
+        health_cm.__aexit__.side_effect = lambda *_: order.append("drained")
+
+        with (
+            patch.object(_LoopStallWatchdog, "from_settings", return_value=watchdog),
+            patch(
+                "application_sdk.main._start_post_drain_exit_deadline",
+                side_effect=lambda: order.append("deadline"),
+            ),
+        ):
+            await run_combined_mode(
+                AppConfig(mode="combined", app_module="pkg:FakeApp"),
+                bound_post_drain_exit=True,
+            )
+
+        assert order == ["watchdog on", "drained", "watchdog off", "deadline"]
+
+    async def test_stall_watchdog_off_when_awaited_directly(
+        self, combined_patches
+    ) -> None:
+        """It ends the process, so a caller that keeps the process gets none."""
+        with patch.object(_LoopStallWatchdog, "from_settings") as from_settings:
+            await run_combined_mode(
+                AppConfig(mode="combined", app_module="pkg:FakeApp")
+            )
+
+        from_settings.assert_not_called()
 
     async def test_reuses_existing_infrastructure(self, combined_patches) -> None:
         """If infra is already set, _create_infrastructure must NOT be called."""

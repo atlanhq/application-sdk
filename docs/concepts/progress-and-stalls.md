@@ -71,9 +71,14 @@ Three clarifications, because each is a real misread:
   task takes a long time", the knob you actually want is a hold at the one call site
   that goes quiet.
 - **`heartbeat_timeout_seconds` did not change meaning.** It still means "nothing is
-  beating", it is still 60s, and it is still the only detector for a fully blocked
-  event loop — which the in-process watchdog structurally cannot see, because a
-  starved loop never runs the watchdog either. The two cover each other's blind spot.
+  beating", it is still 60s, and it is still the server-side detector for a fully
+  blocked event loop — which the in-process watchdog structurally cannot see, because
+  a starved loop never runs the watchdog either. The two cover each other's blind spot.
+  Failing the attempt does not stop the worker process, though: a blocked loop also
+  never runs the shutdown handler, while Temporal's core keeps taking tasks on its own
+  threads. The worker's event-loop stall watchdog
+  (`ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS`, default 300s; see
+  [configuration](../configuration.md)) ends that process with a stack dump.
 
 There is a fourth setting, `progress_watchdog`, which is a mode rather than a
 duration: `off`, `warn` or `enforce`. See [Modes](#modes-off-warn-enforce).

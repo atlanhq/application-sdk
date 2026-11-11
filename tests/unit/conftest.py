@@ -138,13 +138,18 @@ def _safe_patch(target, side_effect=None, mock_obj=None):
 
 @pytest.fixture(autouse=True)
 def _no_post_drain_exit_deadline(monkeypatch):
-    """Disable the post-drain exit deadline unless a test turns it on.
+    """Disable the post-drain exit deadline and the event-loop stall watchdog
+    unless a test turns them on.
 
     Run modes start it after the worker drains, and its expiry calls
     ``os._exit``: left on, a test that runs a mode would end the pytest
     process two minutes later.
     """
     monkeypatch.setenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", "0")
+    # The event-loop stall watchdog ends the process the same way, and
+    # faulthandler holds one such timer per process, shared by every test the
+    # xdist worker runs.
+    monkeypatch.setenv("ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS", "0")
     # A grace declared in the developer's shell would re-derive every shutdown
     # bound a test reads; tests that want one set it themselves.
     monkeypatch.delenv("ATLAN_SHUTDOWN_GRACE_SECONDS", raising=False)

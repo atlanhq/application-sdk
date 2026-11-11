@@ -802,6 +802,20 @@ def _load_worker_liveness_max_idle_seconds() -> float:
 WORKER_LIVENESS_MAX_IDLE_SECONDS = _load_worker_liveness_max_idle_seconds()
 
 
+#: Seconds the worker's event loop may go without running before the process
+#: dumps every thread's stack to stderr and exits with code 1. Shutdown signals
+#: are handled on the loop, so a blocked loop would otherwise never stop: the
+#: Temporal core keeps polling on its own threads and takes tasks it can never
+#: run until the pod's grace period ends. Far above any legitimate loop block;
+#: activity heartbeats already fail after a much shorter one. ``0`` disables
+#: the watchdog. Malformed or non-finite values fall back to 300. Read when the
+#: worker starts, not at import, like the other shutdown bounds.
+def load_worker_loop_stall_timeout_seconds() -> float:
+    return _load_non_negative_finite_float(
+        "ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS", 300.0
+    )
+
+
 #: Consecutive definitive zero-poller readings after which the worker ``/live``
 #: probe fails (FND-4641). sdk-core's ``temporal_num_pollers`` gauge reads zero
 #: only when no poll loop is running; a legitimately idle worker still reads
