@@ -810,6 +810,20 @@ def test_d018_says_dev_group_entry_already_exists() -> None:
     assert "add '" not in findings[0].message
 
 
+@pytest.mark.parametrize("group", ["lint", "test"])
+def test_d018_non_dev_group_entry_still_asks_for_dev(group: str) -> None:
+    """Only ``dev`` is synced by default; another group may never reach tests."""
+    text = (
+        _write_pyproject(deps='    "atlan-application-sdk[tests]>=3.33,<4",\n')
+        + "[dependency-groups]\n"
+        + f'{group} = ["atlan-application-sdk[tests]>=3.33,<4"]\n'
+    )
+    findings = _d018(text)
+    assert len(findings) == 1
+    assert "already pulls in" not in findings[0].message
+    assert "[dependency-groups].dev so tests still get it" in findings[0].message
+
+
 @pytest.mark.parametrize("extras", ["", "[sql]", "[mcp,sql]", "[incremental]"])
 def test_d018_silent_on_runtime_extras(extras: str) -> None:
     text = _write_pyproject(deps=f'    "atlan-application-sdk{extras}>=3.33,<4",\n')

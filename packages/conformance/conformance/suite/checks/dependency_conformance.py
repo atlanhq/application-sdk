@@ -1307,11 +1307,15 @@ def scan_text(
     # ── D018: test-only SDK extra in the runtime array (pure-text) ──────────
     # Only [project.dependencies] is graded: a production sync installs it and
     # skips both dependency groups and optional-dependencies arrays, so those
-    # are where a test extra belongs.
+    # are where a test extra belongs.  Only the ``dev`` group counts as already
+    # providing the extra: it is the one ``uv sync`` / ``uv run`` select by
+    # default, so dropping the runtime reference is safe only when ``dev``
+    # carries it.  Another group (``lint``, ``test``) may not be installed by
+    # the app's test job, so it still gets the "add it to dev" guidance.
     dev_group_extras = {
         _normalise_name(extra)
         for entry in group_entries
-        if entry.name == sdk_norm
+        if entry.name == sdk_norm and entry.array_path == "dependency-groups.dev"
         for extra in _sdk_extras_in(entry.raw)
     }
     for entry in sdk_entries:
@@ -1322,7 +1326,7 @@ def scan_text(
                 continue
             if norm_extra in dev_group_extras:
                 group_action = (
-                    f"A [dependency-groups] entry already pulls in "
+                    f"[dependency-groups].dev already pulls in "
                     f"'{SDK_PACKAGE}[{extra}]', so only the runtime "
                     f"reference has to go."
                 )
