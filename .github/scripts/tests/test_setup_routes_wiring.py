@@ -202,7 +202,7 @@ def test_the_shell_holds_no_check_logic() -> None:
     """
     source = _SHELL.read_text(encoding="utf-8")
 
-    assert "from application_sdk.testing.setup_routes import" in source
+    assert '"application_sdk.testing._setup_routes"' in source
     # The vocabulary that must NOT be restated here.
     for leaked in ("atlan-connectors-", "csa-connectors-", "manifest.json"):
         assert leaked not in source, (
@@ -363,3 +363,80 @@ def test_the_probe_is_an_import_check_not_a_version_comparison() -> None:
             f"{version_gate!r} suggests a version comparison; the guard is "
             "deliberately an import probe (see the module docstring)"
         )
+
+
+# ── Two homes: the private module first, the deprecated public one second ────
+#
+# FND-4660 moved the check to `application_sdk.testing._setup_routes` and left
+# `setup_routes` as a deprecated alias. The shell must read the private module
+# from a current SDK (so every e2e log is not a DeprecationWarning), and still
+# find the public one in an SDK pinned between FND-1667 and FND-4660.
+
+_STUB_CHECK = """
+DEFAULT_CATALOG_WAIT_SECONDS = 120
+
+
+class SetupRouteError(RuntimeError):
+    pass
+
+
+class RouteCheckSkipped(RuntimeError):
+    pass
+
+
+class TenantRoutes:
+    def __init__(self, base_url, bearer):
+        pass
+
+
+def verify(*args, **kwargs):
+    raise RouteCheckSkipped("served by HOME")
+"""
+
+
+def _fake_sdk(root: Path, modules: dict[str, str]) -> Path:
+    """An `application_sdk` whose `testing` carries exactly *modules*."""
+    package = root / "application_sdk"
+    (package / "testing").mkdir(parents=True)
+    (package / "__init__.py").write_text('__version__ = "3.0.0"\n')
+    (package / "testing" / "__init__.py").write_text("")
+    for name, body in modules.items():
+        (package / "testing" / f"{name}.py").write_text(body)
+    return root
+
+
+def test_a_pre_fnd4660_pin_still_runs_the_check(tmp_path: Path) -> None:
+    """An SDK with only the public module is read from the public module."""
+    root = _fake_sdk(tmp_path, {"setup_routes": _STUB_CHECK.replace("HOME", "public")})
+
+    result = _run_shell(
+        {"PYTHONPATH": str(root), "ATLAN_API_KEY": "unused"},
+        "--base-url",
+        "https://tenant.invalid",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "served by public" in result.stdout
+
+
+def test_a_current_sdk_is_read_from_the_private_module(tmp_path: Path) -> None:
+    """With both present, the shell never touches the deprecated alias.
+
+    The public stub fails on import, so reaching it at all fails the run.
+    """
+    root = _fake_sdk(
+        tmp_path,
+        {
+            "_setup_routes": _STUB_CHECK.replace("HOME", "private"),
+            "setup_routes": "raise ImportError('the deprecated alias was read')\n",
+        },
+    )
+
+    result = _run_shell(
+        {"PYTHONPATH": str(root), "ATLAN_API_KEY": "unused"},
+        "--base-url",
+        "https://tenant.invalid",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "served by private" in result.stdout

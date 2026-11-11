@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.55.3
-source-sha:    26a76e6b4a8fcb400ae3cc267681ab4ee3bd5f7b
-source-date:   2026-11-10T21:06:16Z
+source-sha:    da17157895692a3f70dddc7199454c9783ebda8a
+source-date:   2026-11-10T23:57:03Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 425 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 441 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 85 |
 
 ## Subpackage Details
@@ -3852,9 +3852,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `AppIdentity`
 
 - **Import:** `from application_sdk.testing.setup_routes import AppIdentity`
-- **Signature:** `class AppIdentity(name: str, display_name: str = '') -> None`
+- **Signature:** `class AppIdentity(name: str, display_name: str = '')`
 - **Summary:** The committed names a marketplace card may be listed under.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `AppNotReadyError`
 
@@ -4042,9 +4042,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `Card`
 
 - **Import:** `from application_sdk.testing.setup_routes import Card`
-- **Signature:** `class Card(id: str = '', name: str = '', entrypoint: str = '') -> None`
+- **Signature:** `class Card(id: str = '', name: str = '', entrypoint: str = '')`
 - **Summary:** One marketplace card, trimmed to the fields the check reads.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `CategoryResult`
 
@@ -4066,6 +4066,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class ClusterReadFailedError(*, ...)`
 - **Summary:** A cluster read reached the API server and did not come back with data.
 - **Defined in:** `application_sdk/testing/harness/cluster/_errors.py`
+
+#### `ConfigLoader`
+
+- **Import:** `from application_sdk.testing.scale_data_generator.config_loader import ConfigLoader`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.data_generator`, `application_sdk.testing.scale_data_generator.driver`
+- **Signature:** `class ConfigLoader(config_path: str)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/_scale_data_generator/config_loader.py`
 
 #### `ConnectionDeletePlan`
 
@@ -4094,6 +4102,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class CoreReads`
 - **Summary:** The read verbs this backend uses from ``CoreV1Api``.
 - **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
+
+#### `CsvFormatHandler`
+
+- **Import:** `from application_sdk.testing.scale_data_generator.data_generator import CsvFormatHandler`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.output_handler.csv_handler`
+- **Signature:** `class CsvFormatHandler(output_dir: str)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/csv_handler.py`
 
 #### `CursorPage`
 
@@ -4191,6 +4207,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The integration source's credential fields, read uniformly from env.
 - **Defined in:** `application_sdk/testing/integration/source.py`
 
+#### `DataGenerator`
+
+- **Import:** `from application_sdk.testing.scale_data_generator.data_generator import DataGenerator`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.driver`
+- **Signature:** `class DataGenerator(config_loader: ConfigLoader)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/_scale_data_generator/data_generator.py`
+
 #### `DeleteType`
 
 - **Import:** `from application_sdk.testing.harness.teardown import DeleteType`
@@ -4213,6 +4237,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** How strictly a typename's diff is gated.
 - **Defined in:** `application_sdk/testing/golden.py`
 
+#### `DriverArgs`
+
+- **Import:** `from application_sdk.testing.scale_data_generator.driver import DriverArgs`
+- **Signature:** `class DriverArgs(config_path: str, output_format: str, output_dir: str)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/_scale_data_generator/driver.py`
+
 #### `DuplicateKeyPolicy`
 
 - **Import:** `from application_sdk.testing import DuplicateKeyPolicy`
@@ -4226,7 +4257,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.setup_routes import Entrypoint`
 - **Signature:** `class Entrypoint(name: str, ...)`
 - **Summary:** One entry point, as the committed artifacts describe it.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `EvidenceBundle`
 
@@ -4328,9 +4359,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `FormStep`
 
 - **Import:** `from application_sdk.testing.setup_routes import FormStep`
-- **Signature:** `class FormStep(id: str, properties: frozenset[str] = frozenset()) -> None`
+- **Signature:** `class FormStep(id: str, properties: frozenset[str] = frozenset())`
 - **Summary:** One panel of the setup wizard, as the served schema describes it.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `FullDAGOutcome`
 
@@ -4467,6 +4498,21 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class IntegrationTestClient(host: str, version: str = 'v1', workflow_endpoint: str = '/start', timeout: int = 30)`
 - **Summary:** Client for integration testing of the Core 3 APIs.
 - **Defined in:** `application_sdk/testing/integration/client.py`
+
+#### `InvalidInputError`
+
+- **Import:** `from application_sdk.testing.scale_data_generator.config_loader import InvalidInputError`
+- **Signature:** `class InvalidInputError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `JsonFormatHandler`
+
+- **Import:** `from application_sdk.testing.scale_data_generator.data_generator import JsonFormatHandler`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.output_handler.json_handler`
+- **Signature:** `class JsonFormatHandler`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/json_handler.py`
 
 #### `KitOptions`
 
@@ -4611,6 +4657,30 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class NoWorkerOnTaskQueueError(*, ...)`
 - **Summary:** No worker started any DAG node while the AE run was live.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `OutputFormat`
+
+- **Import:** `from application_sdk.testing.scale_data_generator.config_loader import OutputFormat`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.data_generator`
+- **Signature:** `class OutputFormat`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/_scale_data_generator/config_loader.py`
+
+#### `OutputFormatHandler`
+
+- **Import:** `from application_sdk.testing.scale_data_generator.output_handler.base import OutputFormatHandler`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.output_handler.csv_handler`, `application_sdk.testing.scale_data_generator.output_handler.json_handler`, `application_sdk.testing.scale_data_generator.output_handler.parquet_handler`
+- **Signature:** `class OutputFormatHandler(output_dir: str)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/base.py`
+
+#### `ParquetFormatHandler`
+
+- **Import:** `from application_sdk.testing.scale_data_generator.data_generator import ParquetFormatHandler`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.output_handler.parquet_handler`
+- **Signature:** `class ParquetFormatHandler`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/parquet_handler.py`
 
 #### `PodPhase`
 
@@ -4763,14 +4833,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.setup_routes import RouteCheckSkipped`
 - **Signature:** `class RouteCheckSkipped`
 - **Summary:** There is no setup route to check, and that is not a failure.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `RouteReader`
 
 - **Import:** `from application_sdk.testing.setup_routes import RouteReader`
 - **Signature:** `class RouteReader`
 - **Summary:** The two reads :func:`verify` needs from a tenant.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `RunLookup`
 
@@ -4787,6 +4857,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class RunMode`
 - **Summary:** Whether the connector runs in tenant or in caller-controlled CI.
 - **Defined in:** `application_sdk/testing/e2e/payload.py`
+
+#### `ScaleDataConfigError`
+
+- **Import:** `from application_sdk.testing.scale_data_generator.config_loader import ScaleDataConfigError`
+- **Signature:** `class ScaleDataConfigError(*, ...)`
+- **Summary:** Scale-data generator YAML config is missing or malformed.
+- **Defined in:** `application_sdk/testing/_scale_data_generator/config_loader.py`
 
 #### `Scenario`
 
@@ -4896,9 +4973,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `ServedForm`
 
 - **Import:** `from application_sdk.testing.setup_routes import ServedForm`
-- **Signature:** `class ServedForm(properties: frozenset[str] = frozenset(), steps: tuple[FormStep, ...] = ()) -> None`
+- **Signature:** `class ServedForm(properties: frozenset[str] = frozenset(), steps: tuple[FormStep, ...] = ())`
 - **Summary:** The setup form a tenant serves, in the two parts the UI renders from.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `ServiceTarget`
 
@@ -4920,7 +4997,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.setup_routes import SetupRouteError`
 - **Signature:** `class SetupRouteError`
 - **Summary:** A setup route is broken, or the tenant could not be asked.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `SQLAppE2EFullTest`
 
@@ -5089,16 +5166,16 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `TenantRoutes`
 
 - **Import:** `from application_sdk.testing.setup_routes import TenantRoutes`
-- **Signature:** `class TenantRoutes(base_url: str, bearer: str) -> None`
+- **Signature:** `class TenantRoutes(base_url: str, bearer: str)`
 - **Summary:** Reads the two routes the setup page walks, with one bearer credential.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `TenantUnreachable`
 
 - **Import:** `from application_sdk.testing.setup_routes import TenantUnreachable`
 - **Signature:** `class TenantUnreachable`
 - **Summary:** One GET got no answer at all — no status line, no body (FND-2057).
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `TypenameDiff`
 
@@ -5555,9 +5632,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `declared_inputs`
 
 - **Import:** `from application_sdk.testing.setup_routes import declared_inputs`
-- **Signature:** `declared_inputs(workflow_config: dict[str, Any]) -> frozenset[str]`
+- **Signature:** `declared_inputs(workflow_config: dict[str, Any])`
 - **Summary:** Return the input names a generated workflow config declares.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `delete_connection`
 
@@ -5580,6 +5657,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `discover_categories(baseline_dir: Path, candidate_dir: Path)`
 - **Summary:** Find all category subdirectories across both dirs.
 - **Defined in:** `application_sdk/testing/parity/comparator.py`
+
+#### `driver`
+
+- **Import:** `from application_sdk.testing.scale_data_generator.driver import driver`
+- **Signature:** `driver(args: DriverArgs)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/_scale_data_generator/driver.py`
 
 #### `embedded_temporal`
 
@@ -5668,16 +5752,16 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `foreign_form`
 
 - **Import:** `from application_sdk.testing.setup_routes import foreign_form`
-- **Signature:** `foreign_form(entrypoint: Entrypoint, siblings: Sequence[Entrypoint], served_name: object) -> str | None`
+- **Signature:** `foreign_form(entrypoint: Entrypoint, siblings: Sequence[Entrypoint], served_name: object)`
 - **Summary:** Whether the tenant served a DIFFERENT entry point's form, or ``None``.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `form_shortfall`
 
 - **Import:** `from application_sdk.testing.setup_routes import form_shortfall`
-- **Signature:** `form_shortfall(entrypoint: Entrypoint, served: ServedForm) -> str | None`
+- **Signature:** `form_shortfall(entrypoint: Entrypoint, served: ServedForm)`
 - **Summary:** Why this entry point's setup form will not render, or ``None``.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `format_validation_report`
 
@@ -5714,6 +5798,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `generate_test_methods(test_class: type[BaseIntegrationTest])`
 - **Summary:** Generate individual test methods for each scenario.
 - **Defined in:** `application_sdk/testing/integration/runner.py`
+
+#### `get_logger`
+
+- **Import:** `from application_sdk.testing.scale_data_generator.driver import get_logger`
+- **Signature:** `get_logger(name: str | None = None)`
+- **Summary:** Get or create an instance of AtlanLoggerAdapter.
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
 
 #### `get_normalised_dataframe`
 
@@ -6086,9 +6177,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `locate_cards`
 
 - **Import:** `from application_sdk.testing.setup_routes import locate_cards`
-- **Signature:** `locate_cards(identity: AppIdentity, ...)`
+- **Signature:** `locate_cards(identity: AppIdentity, entrypoints: Sequence[Entrypoint], payloads: list[dict[str, Any]])`
 - **Summary:** Pick this app's cards out of the whole catalog, keyed by entry point.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `matches`
 
@@ -6264,9 +6355,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `read_app_identity`
 
 - **Import:** `from application_sdk.testing.setup_routes import read_app_identity`
-- **Signature:** `read_app_identity(repo_root: Path) -> AppIdentity`
+- **Signature:** `read_app_identity(repo_root: Path)`
 - **Summary:** Return the names ``atlan.yaml`` commits, as cards may report them.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `read_asset_attributes`
 
@@ -6278,16 +6369,16 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `read_entrypoint_names`
 
 - **Import:** `from application_sdk.testing.setup_routes import read_entrypoint_names`
-- **Signature:** `read_entrypoint_names(repo_root: Path) -> list[str]`
+- **Signature:** `read_entrypoint_names(repo_root: Path)`
 - **Summary:** Return the ``entrypoints[].name`` values that should have a setup page.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `read_entrypoints`
 
 - **Import:** `from application_sdk.testing.setup_routes import read_entrypoints`
-- **Signature:** `read_entrypoints(repo_root: Path, generated_dir: str = 'app/generated') -> list[Entrypoint]`
+- **Signature:** `read_entrypoints(repo_root: Path, generated_dir: str = 'app/generated')`
 - **Summary:** Read every entry point's committed workflow config.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `read_records`
 
@@ -6343,9 +6434,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `route_mismatch`
 
 - **Import:** `from application_sdk.testing.setup_routes import route_mismatch`
-- **Signature:** `route_mismatch(entrypoint: Entrypoint, card: Card) -> str | None`
+- **Signature:** `route_mismatch(entrypoint: Entrypoint, card: Card)`
 - **Summary:** Why this entry point's setup page will 404, or ``None`` if it resolves.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `run_comparison`
 
@@ -6422,9 +6513,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `served_form`
 
 - **Import:** `from application_sdk.testing.setup_routes import served_form`
-- **Signature:** `served_form(body: dict[str, Any]) -> ServedForm`
+- **Signature:** `served_form(body: dict[str, Any])`
 - **Summary:** Unwrap a ConfigMap response into the form the tenant serves.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `single_outcome`
 
@@ -6529,7 +6620,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.setup_routes import verify`
 - **Signature:** `verify(repo_root: Path, *, ...)`
 - **Summary:** Check every entry point's setup route. Returns the lines to report.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `wait_for_workflow`
 
@@ -6619,6 +6710,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Env var gating ``App.on_complete()``'s file and object-store cleanup.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
+#### `CONFIGMAP_PATH`
+
+- **Import:** `from application_sdk.testing.setup_routes import CONFIGMAP_PATH`
+- **Signature:** `CONFIGMAP_PATH`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `CONFIGMAP_SOURCE_APP_QUERY`
+
+- **Import:** `from application_sdk.testing.setup_routes import CONFIGMAP_SOURCE_APP_QUERY`
+- **Signature:** `CONFIGMAP_SOURCE_APP_QUERY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
 #### `CONNECTION_DELETE_APP_NAME`
 
 - **Import:** `from application_sdk.testing.harness.teardown import CONNECTION_DELETE_APP_NAME`
@@ -6660,14 +6765,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.setup_routes import DEFAULT_CATALOG_WAIT_SECONDS`
 - **Signature:** `DEFAULT_CATALOG_WAIT_SECONDS`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `DEFAULT_POD_RECONCILE_WAIT_SECONDS`
 
 - **Import:** `from application_sdk.testing.setup_routes import DEFAULT_POD_RECONCILE_WAIT_SECONDS`
 - **Signature:** `DEFAULT_POD_RECONCILE_WAIT_SECONDS`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/setup_routes.py`
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `DEFAULT_TYPE_NAMES`
 
@@ -6729,6 +6834,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `LineageEdgeRead: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `logger`
+
+- **Import:** `from application_sdk.testing.scale_data_generator.driver import logger`
+- **Signature:** `logger`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/_scale_data_generator/driver.py`
+
+#### `MARKETPLACE_APPS_PATH`
+
+- **Import:** `from application_sdk.testing.setup_routes import MARKETPLACE_APPS_PATH`
+- **Signature:** `MARKETPLACE_APPS_PATH`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `NO_TYPENAME`
 

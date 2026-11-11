@@ -3855,13 +3855,13 @@ def test_pod_wait_defaults_agree_across_the_two_files() -> None:
     """One physical event, one number — or the next reader asks which is right.
 
     The leg waits for the same reconcile twice: here, on the build-identity
-    route, and a step later in `application_sdk.testing.setup_routes` on the
+    route, and a step later in `application_sdk.testing._setup_routes` on the
     pod-served configmap routes. Two different ceilings for one event would be
     a question with no answer, and the SDK constant is the one carrying the
     derivation.
     """
     root = Path(__file__).resolve().parents[3]
-    sdk = (root / "application_sdk" / "testing" / "setup_routes.py").read_text()
+    sdk = (root / "application_sdk" / "testing" / "_setup_routes.py").read_text()
     assert f"DEFAULT_POD_RECONCILE_WAIT_SECONDS = {app.DEFAULT_POD_WAIT_SECONDS}" in sdk
 
 

@@ -461,7 +461,7 @@ BUILD_IDENTITY_CONFIGMAP_ID = "atlan-build-identity"
 
 #: Statuses on the build-identity route that mean "ask again", not "no".
 #:
-#: Same reasoning as ``setup_routes._RETRYABLE_STATUSES``, and deliberately the
+#: Same reasoning as ``_setup_routes._RETRYABLE_STATUSES``, and deliberately the
 #: same set: a 5xx or a 429 is the edge not having a pod to route to yet, while
 #: every 4xx is the route answering. Kept as a literal here rather than imported
 #: for the reason ``BUILD_IDENTITY_CONFIGMAP_ID`` is — this module must import on
@@ -480,7 +480,7 @@ _POD_TRANSIENT_STATUSES = (429, 500, 502, 503, 504)
 #: where the race bites, since ``verify`` runs in the leg immediately before the
 #: pod-served routes that FND-2057 watched time out.
 #:
-#: 300 matches ``setup_routes.DEFAULT_POD_RECONCILE_WAIT_SECONDS``, which bounds
+#: 300 matches ``_setup_routes.DEFAULT_POD_RECONCILE_WAIT_SECONDS``, which bounds
 #: the same wait one step later in the same leg; that constant carries the
 #: derivation. Two different numbers for one physical event would only invite
 #: the question of which is right.

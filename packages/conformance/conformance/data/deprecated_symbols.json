@@ -1081,6 +1081,240 @@
       "symbol": "workflow_event_strategy"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "get_logger is deprecated; use application_sdk.observability.logger_adaptor.get_logger \u2014 the parity CLI entry point is retired; the library API stays (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.parity.__main__",
+      "removal_version": "4.0.0",
+      "symbol": "get_logger"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "logger is deprecated; use a logger of your own from application_sdk.observability.logger_adaptor.get_logger \u2014 the parity CLI entry point is retired; the library API stays (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.parity.__main__",
+      "removal_version": "4.0.0",
+      "symbol": "logger"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "main is deprecated; use application_sdk.testing.parity.run_comparison with generate_markdown or generate_json_report \u2014 the parity CLI entry point is retired; the library API stays (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.parity.__main__",
+      "removal_version": "4.0.0",
+      "symbol": "main"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ConfigLoader is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.config_loader",
+      "removal_version": "4.0.0",
+      "symbol": "ConfigLoader"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "InvalidInputError is deprecated; use application_sdk.errors.leaves.InvalidInputError \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.config_loader",
+      "removal_version": "4.0.0",
+      "symbol": "InvalidInputError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "OutputFormat is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.config_loader",
+      "removal_version": "4.0.0",
+      "symbol": "OutputFormat"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ScaleDataConfigError is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.config_loader",
+      "removal_version": "4.0.0",
+      "symbol": "ScaleDataConfigError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ConfigLoader is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.data_generator",
+      "removal_version": "4.0.0",
+      "symbol": "ConfigLoader"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CsvFormatHandler is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.data_generator",
+      "removal_version": "4.0.0",
+      "symbol": "CsvFormatHandler"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DataGenerator is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.data_generator",
+      "removal_version": "4.0.0",
+      "symbol": "DataGenerator"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "JsonFormatHandler is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.data_generator",
+      "removal_version": "4.0.0",
+      "symbol": "JsonFormatHandler"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "OutputFormat is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.data_generator",
+      "removal_version": "4.0.0",
+      "symbol": "OutputFormat"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ParquetFormatHandler is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.data_generator",
+      "removal_version": "4.0.0",
+      "symbol": "ParquetFormatHandler"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ConfigLoader is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.driver",
+      "removal_version": "4.0.0",
+      "symbol": "ConfigLoader"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DataGenerator is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.driver",
+      "removal_version": "4.0.0",
+      "symbol": "DataGenerator"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DriverArgs is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.driver",
+      "removal_version": "4.0.0",
+      "symbol": "DriverArgs"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "driver is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.driver",
+      "removal_version": "4.0.0",
+      "symbol": "driver"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "get_logger is deprecated; use application_sdk.observability.logger_adaptor.get_logger \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.driver",
+      "removal_version": "4.0.0",
+      "symbol": "get_logger"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "logger is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.driver",
+      "removal_version": "4.0.0",
+      "symbol": "logger"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "OutputFormatHandler is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.output_handler.base",
+      "removal_version": "4.0.0",
+      "symbol": "OutputFormatHandler"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CsvFormatHandler is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.output_handler.csv_handler",
+      "removal_version": "4.0.0",
+      "symbol": "CsvFormatHandler"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "OutputFormatHandler is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.output_handler.csv_handler",
+      "removal_version": "4.0.0",
+      "symbol": "OutputFormatHandler"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "JsonFormatHandler is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.output_handler.json_handler",
+      "removal_version": "4.0.0",
+      "symbol": "JsonFormatHandler"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "OutputFormatHandler is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.output_handler.json_handler",
+      "removal_version": "4.0.0",
+      "symbol": "OutputFormatHandler"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "OutputFormatHandler is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.output_handler.parquet_handler",
+      "removal_version": "4.0.0",
+      "symbol": "OutputFormatHandler"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ParquetFormatHandler is deprecated; use faker directly in your own fixture script \u2014 the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.scale_data_generator.output_handler.parquet_handler",
+      "removal_version": "4.0.0",
+      "symbol": "ParquetFormatHandler"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "application_sdk.testing.sdr.BaseSDRIntegrationTest is deprecated; SDR is a deployment mode, not a test tier, so there is no single replacement class \u2014 migrate each concern to where it belongs (auth/preflight: call the handler directly; credential resolution: already covered in application-sdk's tests/unit/credentials; a full DAG: tests/e2e with mode=RunMode.AGENT). See docs/standards/connector-ci-e2e.md \u2014 will be removed in v4.0",
@@ -1088,6 +1322,231 @@
       "module": "application_sdk.testing.sdr.base",
       "removal_version": "4.0",
       "symbol": "BaseSDRIntegrationTest"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "AppIdentity is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "AppIdentity"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CONFIGMAP_PATH is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "CONFIGMAP_PATH"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CONFIGMAP_SOURCE_APP_QUERY is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "CONFIGMAP_SOURCE_APP_QUERY"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "Card is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "Card"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DEFAULT_CATALOG_WAIT_SECONDS is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "DEFAULT_CATALOG_WAIT_SECONDS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DEFAULT_POD_RECONCILE_WAIT_SECONDS is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "DEFAULT_POD_RECONCILE_WAIT_SECONDS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "Entrypoint is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "Entrypoint"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "FormStep is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "FormStep"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "MARKETPLACE_APPS_PATH is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "MARKETPLACE_APPS_PATH"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "RouteCheckSkipped is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "RouteCheckSkipped"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "RouteReader is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "RouteReader"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ServedForm is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "ServedForm"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SetupRouteError is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "SetupRouteError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "TenantRoutes is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "TenantRoutes"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "TenantUnreachable is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "TenantUnreachable"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "declared_inputs is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "declared_inputs"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "foreign_form is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "foreign_form"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "form_shortfall is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "form_shortfall"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "locate_cards is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "locate_cards"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "read_app_identity is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "read_app_identity"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "read_entrypoint_names is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "read_entrypoint_names"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "read_entrypoints is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "read_entrypoints"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "route_mismatch is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "route_mismatch"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "served_form is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "served_form"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "verify is deprecated; use the sdr-e2e composite's workflow-setup route check \u2014 the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.setup_routes",
+      "removal_version": "4.0.0",
+      "symbol": "verify"
     },
     {
       "kind": "class",

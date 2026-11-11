@@ -325,7 +325,7 @@ live in `application_sdk/common/_generated_tree.py` and nowhere else:
 Everything that needs one of those reads it from there: the configmap
 endpoint's default-entrypoint fallback (`application_sdk.handler.service`), the
 artifact-schema registration guard (`_artifact_schema_guard`), and the
-tenant-side setup-route check (`application_sdk.testing.setup_routes`).
+tenant-side setup-route check (`application_sdk.testing._setup_routes`).
 
 The exclusion in `is_form_configmap` is load-bearing rather than cosmetic. For
 a flat app, `atlan-connectors-<source>.json` sorts alphabetically **before**
@@ -382,8 +382,8 @@ Those two names come from different places, and a contract change can move one
 without the other — setting `Entrypoint.packageId` moves the card's identity
 onto the marketplace package while the form stays under the workflow config's
 `id`, which 404s the setup page with every generated artifact still
-self-consistent and every static gate still green. `application_sdk.testing.setup_routes`
-asserts that join against a live tenant; see
+self-consistent and every static gate still green. The SDK's CI check in
+`application_sdk.testing._setup_routes` asserts that join against a live tenant; see
 `docs/standards/connector-ci-e2e.md` for where it runs in CI.
 
 ### Per-entry-point handler & core modules
