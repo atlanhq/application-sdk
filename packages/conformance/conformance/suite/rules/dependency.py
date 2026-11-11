@@ -28,6 +28,9 @@ SDK upgrades.  These rules enforce two invariants:
   from GitHub over the network; the installed SDK wheel bundles them.
 * ``D017`` — an ``atlan-application-sdk[extra]`` reference does not name a
   deprecated shim extra (one removed in SDK v4.0.0).
+* ``D018`` — ``[project.dependencies]`` does not request a test-only SDK
+  extra (``[tests]``, ``[harness]``), which would ship test tooling in the
+  production image.
 * ``D010`` — an app whose code path uses the SDK query transformer
   (``application_sdk.transformers.query`` / ``transform_metadata``) must
   resolve ``duckdb`` — via the SDK's ``[sql]``/``[incremental]`` extra or a
@@ -1321,6 +1324,82 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d017"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="D018",
+        canonical_reference=(
+            "atlan-openapi-app pyproject.toml — `atlan-application-sdk` in "
+            "[project.dependencies] carries no test extra, and [dependency-groups].dev "
+            "pulls the SDK's test tooling in through `atlan-application-sdk[tests]`. "
+            "A production sync installs only the first, so pytest and pandera never "
+            "reach the runtime image."
+        ),
+        fix_locus=FixLocus.PACKAGING,
+        scope=RuleScope.APP,
+        name="SdkTestExtraInRuntimeDependencies",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="dependency-pinning",
+        autofixable=True,
+        since="0.57.0",
+        rationale=(
+            "The SDK's [tests] extra installs pytest, pytest-asyncio, pandera and "
+            "httpx2 for application_sdk.testing, and [harness] installs the kubernetes "
+            "client for the e2e harness. A production sync installs "
+            "[project.dependencies] and skips dependency groups, so naming either "
+            "extra on the runtime SDK requirement ships test tooling in every "
+            "production image: a larger image, a larger vulnerability surface, and "
+            "packages the app never imports at runtime. D004 already says the extra "
+            "belongs in a dev group, but nothing graded the runtime array, and most "
+            "of the fleet carried the pattern."
+        ),
+        short_description=(
+            "Test-only atlan-application-sdk extra in [project.dependencies]"
+        ),
+        full_description=(
+            "An ``atlan-application-sdk[...]`` requirement in\n"
+            "``[project.dependencies]`` names a test-only SDK extra:\n"
+            "\n"
+            "* ``tests``: pytest, pytest-asyncio, pandera and httpx2.\n"
+            "* ``harness``: the kubernetes client the e2e harness imports.\n"
+            "\n"
+            "A production sync (``uv sync --no-dev``, the runtime image build)\n"
+            "installs ``[project.dependencies]`` and skips ``[dependency-groups]``,\n"
+            "so the extra lands in the production image. Move it to a dev group:\n"
+            "\n"
+            "::\n"
+            "\n"
+            "    [project]\n"
+            '    dependencies = ["atlan-application-sdk[sql,tests]>=3.33,<4"]  # flagged\n'
+            "\n"
+            "    [project]\n"
+            '    dependencies = ["atlan-application-sdk[sql]>=3.33,<4"]        # passes\n'
+            "    [dependency-groups]\n"
+            '    dev = ["atlan-application-sdk[tests]>=3.33,<4"]\n'
+            "\n"
+            "Only ``[project.dependencies]`` is graded. A test extra in\n"
+            "``[dependency-groups]`` or ``[project.optional-dependencies]`` is not\n"
+            "installed by a production sync and passes.\n"
+            "\n"
+            "Autofixable: remove the extra from the runtime requirement, keeping\n"
+            "its version range, marker and other extras (drop the brackets when\n"
+            "the list ends up empty). If no ``[dependency-groups]`` entry already\n"
+            "requests the extra, add ``atlan-application-sdk[<extra>]`` with the\n"
+            "same version range to ``[dependency-groups].dev``. Re-run ``uv lock``\n"
+            "and review the diff: the moved packages change from runtime to dev in\n"
+            "the lock. If app source outside the tests imports one of them\n"
+            "directly (``pandera``, say), declare that package in\n"
+            "``[project.dependencies]`` on its own rather than keeping the extra.\n"
+            "Cite: FND-4657."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/dependency.md#d018"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
