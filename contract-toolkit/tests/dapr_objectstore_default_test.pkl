@@ -5,8 +5,8 @@
 /// `atlan.yaml` says `deploy.dapr.objectstore: false`, so enabling any other
 /// Dapr component must not switch the object store off.
 ///
-/// The chart enables no Dapr component unless `atlan.yaml` asks for it, so an
-/// app with a `deploy` block and every component at its default must still emit
+/// The deployer honours every component `atlan.yaml` states, so an app with a
+/// `deploy` block and every component at its default must still emit
 /// `objectstore: true`.
 amends "pkl:test"
 

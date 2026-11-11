@@ -957,7 +957,7 @@ There is deliberately no `taskQueue` field — see [What `deploy.pools` generate
 ```pkl
 class DaprComponents {
   objectstore: Boolean = true   // required by the SDK — keep it on
-  secretstore: Boolean = false
+  secretstore: Boolean? = null  // unset: true when the app resolves credentials
   statestore: Boolean = false
   eventstore: Boolean = false
   subscription: Boolean = false
@@ -976,10 +976,11 @@ rule K029 flags a contract or `atlan.yaml` that sets it to `false`.
 What changes in the generated `atlan.yaml`:
 
 - Every contract with a `deploy` block now emits a `dapr:` block with
-  `objectstore: true`, even when it sets no Dapr toggle. The atlan-app chart
-  enables no Dapr component unless `atlan.yaml` asks for it, so a contract that
-  emitted no block got no object store. The other components render as `false`,
-  which is also the chart's default for them.
+  `objectstore: true`, even when it sets no Dapr toggle. The Local Marketplace
+  deployer fills each component `atlan.yaml` leaves out with its own default —
+  `true` for `objectstore` and `secretstore`, `false` for the rest — but honours
+  every value the block states. So a rendered `false` switches a component off
+  even where the deployer's default would have turned it on.
 - `dapr { secretstore = true }` (any other component enabled) emits
   `objectstore: true`. Earlier toolkit releases emitted `objectstore: false`
   here, which left the app unable to start.
@@ -989,6 +990,23 @@ What changes in the generated `atlan.yaml`:
   defaults, no `dapr:` block is emitted, so `objectstore = false` does not
   appear in `atlan.yaml`; K029 still flags the explicit value in the source
   contract.
+
+`secretstore` is the Dapr secret store the SDK resolves every credential through
+(preflight, `resolve_credential_raw`, `context.get_secret`). Leave it unset and
+the toolkit renders `true` when the app resolves credentials and `false`
+otherwise. "Resolves credentials" means `hasCredentialConfig` (on by default,
+off for `type = "system"`) or a non-empty `additionalCredentialConfigs`, on the
+app or on any entrypoint's contract, so a bundle root with
+`hasCredentialConfig = false` whose entrypoints carry credentials still gets the
+store. An explicit value is rendered as written. Conformance rule K030 flags an
+explicit `false`, or a `secretstore: false` in `atlan.yaml`, on an app that
+resolves credentials: without the store every credential lookup fails with HTTP
+500.
+
+Toolkit releases between the `objectstore` default change and this default
+rendered `secretstore: false` for every contract with a `deploy` block, so a
+credential app regenerated on one of them lost its secret store. Bump the
+toolkit and regenerate, or pin `dapr { objectstore = true; secretstore = true }`.
 
 **KedaConfig:**
 
