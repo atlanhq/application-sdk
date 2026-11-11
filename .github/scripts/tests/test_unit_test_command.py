@@ -517,6 +517,17 @@ def test_a_floor_that_is_not_a_percentage_is_refused(
         utc.package_floors(path)
 
 
+def test_a_floor_table_that_is_not_a_table_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        '[project]\nname = "x"\n[tool.application-sdk.coverage]\n'
+        'package-floors = "83"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(utc.CoverageFloorError, match="is not a table"):
+        utc.package_floors(path)
+
+
 def test_coverage_is_grouped_by_top_level_subpackage(tmp_path: Path) -> None:
     report = _coverage_xml(
         tmp_path / "coverage.xml",
@@ -575,6 +586,13 @@ def test_a_listed_floor_replaces_the_global_one() -> None:
     ok, emitted = _check([utc.PackageCoverage("errors", 100, 96)], {"errors": 97.0})
     assert not ok
     assert "application_sdk/errors is at 96.00% against its 97% floor" in emitted[0]
+
+
+def test_a_package_a_hair_under_its_floor_fails_and_shows_under_it() -> None:
+    """6,803/8,004 is 84.995%: rounding would show and pass it as 85.00."""
+    ok, emitted = _check([utc.PackageCoverage("app", 8004, 6803)], {})
+    assert not ok
+    assert "is at 84.99% against its 85% floor" in emitted[0]
 
 
 def test_a_package_exactly_on_its_floor_passes() -> None:

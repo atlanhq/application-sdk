@@ -25,6 +25,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import re
 import subprocess
@@ -356,6 +357,11 @@ def coverage_by_package(coverage_xml: Path) -> list[PackageCoverage]:
     ]
 
 
+def _shown(percent: float) -> str:
+    """*percent* to two places, truncated so a miss never displays as its floor."""
+    return f"{math.floor(percent * 100) / 100:.2f}"
+
+
 def check_package_floors(
     *,
     measured: Sequence[PackageCoverage],
@@ -382,16 +388,18 @@ def check_package_floors(
     rows: list[str] = []
     for m in measured:
         floor = floors.get(m.package, default_floor)
-        passed = round(m.percent, 2) >= floor
+        # Unrounded: 6,803/8,004 is 84.995%, which rounds to 85.00 but is
+        # below an 85% floor.
+        passed = m.percent >= floor
         if not passed:
             ok = False
             emit(
                 f"::error title=Coverage floor::application_sdk/{m.package} is at "
-                f"{m.percent:.2f}% against its {floor:g}% floor "
+                f"{_shown(m.percent)}% against its {floor:g}% floor "
                 f"({m.covered}/{m.statements} lines)"
             )
         rows.append(
-            f"| `{m.package}` | {m.percent:.2f} | {floor:g} | {m.statements} "
+            f"| `{m.package}` | {_shown(m.percent)} | {floor:g} | {m.statements} "
             f"| {'' if passed else 'below floor'} |"
         )
 
