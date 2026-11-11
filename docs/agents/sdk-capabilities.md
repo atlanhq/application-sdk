@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.55.3
-source-sha:    7bca1747e6cbdea33c12ce67215e93fcf65e1e0f
-source-date:   2026-11-11T01:15:58Z
+source-sha:    4ad5bad81308d872a919a9775d35c403620cd048
+source-date:   2026-11-11T11:52:22Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -3295,18 +3295,11 @@ Output collectors and record models for Automation Engine
 #### `SkipReason`
 
 - **Import:** `from application_sdk.outputs import SkipReason`
-- **Signature:** `class SkipReason(StrEnum)`
+- **Signature:** `class SkipReason`
 - **Summary:** Why a record was skipped. A closed set, so skips aggregate across the fleet.
 - **Defined in:** `application_sdk/outputs/skipped.py`
 
 ### Functions
-
-#### `skip_record`
-
-- **Import:** `from application_sdk.outputs import skip_record`
-- **Signature:** `async skip_record(record: Mapping[str, object] | BaseModel, reason: SkipReason, *, record_id: str, entity_type: str, detail: str | None = None) -> None`
-- **Summary:** Skip a record on purpose, keeping it for review after the run.
-- **Defined in:** `application_sdk/outputs/skipped.py`
 
 #### `get_outputs`
 
@@ -3315,14 +3308,14 @@ Output collectors and record models for Automation Engine
 - **Summary:** Get the output collector for the current execution context.
 - **Defined in:** `application_sdk/outputs/__init__.py`
 
-### Constants and Enums
+#### `skip_record`
 
-#### `MAX_SKIPPED_RECORDS`
-
-- **Import:** `from application_sdk.outputs import MAX_SKIPPED_RECORDS`
-- **Signature:** `MAX_SKIPPED_RECORDS: Final = 10_000`
-- **Summary:** Caps both output surfaces of the skipped-record path: the lines kept in the run's merged file, and the per-record warnings each activity logs.
+- **Import:** `from application_sdk.outputs import skip_record`
+- **Signature:** `skip_record(record: SkippableRecord, reason: SkipReason, *, record_id: str, entity_type: str, detail: str | None = None)`
+- **Summary:** Skip a record on purpose, keeping it for review after the run.
 - **Defined in:** `application_sdk/outputs/skipped.py`
+
+### Constants and Enums
 
 #### `current_outputs`
 
@@ -3330,6 +3323,13 @@ Output collectors and record models for Automation Engine
 - **Signature:** `current_outputs: contextvars.ContextVar[OutputCollector | None]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/outputs/__init__.py`
+
+#### `MAX_SKIPPED_RECORDS`
+
+- **Import:** `from application_sdk.outputs import MAX_SKIPPED_RECORDS`
+- **Signature:** `MAX_SKIPPED_RECORDS: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/skipped.py`
 
 ## `application_sdk.pkl_version`
 
