@@ -2,7 +2,7 @@
 name: audit-consumers
 description: >
   Audit every github.com/atlanhq/ consumer of application_sdk against a user-supplied check
-  specification. Discovers consumer repos via `gh search code`, applies one or more named
+  specification. Scopes consumer repos to connector-pulse's curated repos.json, applies one or more named
   checks per repo (grep patterns anchored to SDK symbol usage), and produces a markdown
   report — including a coverage table listing every analyzed repo with its outcome
   (no-usage / no-findings / has-findings). Optionally raises migration PRs against consumer
@@ -305,56 +305,59 @@ Gate decisions after calling `compatible_majors(pin, target_major)`:
 
 ## Phase A — Discover candidate repos
 
-Run four discovery signals in parallel, union the results:
+The candidate list is connector-pulse's curated `repos.json`: every active
+(non-archived) atlanhq repo that consumes `application_sdk`, about 120 of them. It is
+the population. Do not search the org for more.
 
 ```bash
-gh search code "from application_sdk"   --owner atlanhq --limit 100 \
-  --json repository --jq '.[].repository.nameWithOwner' | sort -u >  /tmp/audit-repos.txt
-
-gh search code "import application_sdk" --owner atlanhq --limit 100 \
-  --json repository --jq '.[].repository.nameWithOwner' | sort -u >> /tmp/audit-repos.txt
-
-gh search code "application-sdk" --filename pyproject.toml --owner atlanhq --limit 100 \
-  --json repository --jq '.[].repository.nameWithOwner'             >> /tmp/audit-repos.txt
-
-gh search code "application-sdk" --filename requirements.txt --owner atlanhq --limit 100 \
-  --json repository --jq '.[].repository.nameWithOwner'             >> /tmp/audit-repos.txt
-
-sort -u /tmp/audit-repos.txt -o /tmp/audit-repos.txt
+gh api repos/atlanhq/connector-pulse/contents/src/services/repos.json \
+  --jq '.content' | base64 -d \
+  | jq -r '.[].repo' | sort -u > /tmp/audit-repos.txt
+wc -l < /tmp/audit-repos.txt
 ```
 
-For each anchor pattern in the spec, also run:
+Each entry is `{"repo": "atlanhq/<name>", "board": ..., "fullName": ...}`; only `repo` is
+used. If the fetch fails or yields zero repos, **stop** and report the error. Never fall
+back to an empty or partial list, which would read as "no consumers".
 
-```bash
-gh search code "<anchor>" --owner atlanhq --limit 100 \
-  --json repository --jq '.[].repository.nameWithOwner' >> /tmp/audit-repos.txt
-sort -u /tmp/audit-repos.txt -o /tmp/audit-repos.txt
-```
+**Why not `gh search code`:** it does not reliably index the private `atlan-*-app` repos,
+and it misses them silently. It returns a small, plausible result set that reads as a
+clean audit. Measured misses include 9 of 9 known repos for one symbol, and 4 of 18 for
+another. An org-wide clone of all 600+ repos is reliable, but it is ~5× the work for the
+same answer. In the FND-4660 audit (2026-11-11), the full 604-repo sweep found no
+consumer outside `repos.json`.
 
-This catches repos whose code directly uses the anchored symbol even if their dependency
-declarations are non-standard.
-
-### Connector-map cross-check
-
-Read the curated list of all connector/app repos:
-
-```bash
-gh api repos/atlanhq/integration-studio-aisdlc/contents/context/connector-map.md \
-  --jq '.content' | base64 -d > /tmp/connector-map.md
-```
-
-Extract every `atlanhq/<repo-name>` that appears in that file and diff against
-`/tmp/audit-repos.txt`. For each repo in the connector map that is **not** in the candidate
-list, add it and log a warning:
-
-```
-⚠ Gap: atlanhq/<repo> appears in connector-map.md but was not found by gh search code.
-  Added to candidate list. Cause: repo may not have searchable code indexed, or the SDK
-  dependency uses a non-standard declaration format.
-```
+**If the change also affects non-connector consumers** (e.g. `atlan-python`, internal
+tooling), say so in the spec's Context and add those repos to `/tmp/audit-repos.txt` by
+name. A repo that should be in `repos.json` but isn't is a gap to fix in connector-pulse.
+Name it in the report rather than working around it.
 
 **Record every repo in the final candidate list verbatim.** The Phase C coverage table must
 account for every entry, even ones that turn out to have no SDK usage at all.
+
+### Shallow-clone the candidates
+
+Clone every candidate once, up front. Phases B and E read from these clones.
+
+```bash
+mkdir -p /tmp/audit-clones && : > /tmp/audit-clone-fail.txt
+xargs -P 12 -n 1 sh -c '
+  r="$1"; d="/tmp/audit-clones/${r#atlanhq/}"
+  [ -d "$d" ] || GIT_TERMINAL_PROMPT=0 git clone -q --depth 1 --filter=blob:limit=200k \
+      --no-checkout "https://github.com/$r.git" "$d" 2>/dev/null \
+    || echo "$r" >> /tmp/audit-clone-fail.txt
+' _ < /tmp/audit-repos.txt
+wc -l < /tmp/audit-clone-fail.txt
+```
+
+- Clone over **HTTPS** with `GIT_TERMINAL_PROMPT=0`. `git@github.com:` clones have
+  failed on every repo in this environment: the agent's SSH key signs commits but is not
+  accepted for clone.
+- `--no-checkout` plus `--filter=blob:limit=200k` keeps all 120 clones to a few hundred MB.
+  Read files with `git grep … HEAD` and `git show HEAD:<path>`.
+- **Check `/tmp/audit-clone-fail.txt` before trusting any result.** A repo that failed to
+  clone gets status `analyzed-error`. It is never `analyzed-no-usage`: a 100% clone-failure
+  rate looks exactly like "no consumers".
 
 ---
 
@@ -438,33 +441,30 @@ majors, pin_display = compatible_majors(pin, target_major)
 
 Apply the gate decisions from Phase 0b after calling `compatible_majors`.
 
-### Step 2 — Anchor check (cheap, via GitHub API)
+### Step 2 — Anchor check (local `git grep` on the Phase A clone)
 
 ```bash
-gh search code "<anchor>" --repo atlanhq/<repo> --json path,textMatches --limit 20
+git -C /tmp/audit-clones/<repo> grep -I -l -P '<anchor>' HEAD
 ```
 
-Run this for each anchor pattern in the spec. If all return empty → status `analyzed-no-usage`.
-If `gh api` fails → status `analyzed-error`. Never silently drop.
+Run this for each anchor pattern in the spec. Use the clone, not `gh search code --repo`,
+which misses connector repos (see Phase A). If all anchors return no files → status
+`analyzed-no-usage`. If the repo is in `/tmp/audit-clone-fail.txt` → status
+`analyzed-error`. Never silently drop.
 
-### Step 3 — Fetch anchored files
+### Step 3 — Read anchored files
 
-For each unique file path surfaced by the anchor search:
-
-```bash
-gh api repos/atlanhq/<repo>/contents/<path> --jq '.content' | base64 -d > /tmp/audit-file.py
-```
-
-**Clone fallback:** if more than 5 files need individual fetching, OR if the spec requires
-cross-file analysis (e.g., subclass tracing), do a shallow clone instead:
+Each anchor hit is printed as `HEAD:<path>`. Read the file from the clone, so no API call is
+needed. The clone holds the whole tree at `HEAD`, so cross-file analysis (e.g. subclass
+tracing) works too:
 
 ```bash
-git clone --depth 1 git@github.com:atlanhq/<repo>.git /tmp/sql-audit/<repo>
+git -C /tmp/audit-clones/<repo> show HEAD:<path> > /tmp/audit-file.py
 ```
 
 ### Step 4 — Run checks
 
-For each check in the spec, against each fetched file:
+For each check in the spec, against each anchored file:
 
 ```bash
 rg -nP '<pattern>' /tmp/audit-file.py
@@ -481,7 +481,8 @@ Record every hit as an extended record:
                       # `except` (best-effort); empty string otherwise
 ```
 
-For hits where `require_anchor: false`, run the patterns against all Python files in the repo.
+For checks with `require_anchor: false`, run the patterns against every Python file in the
+clone: `git -C /tmp/audit-clones/<repo> grep -n -P '<pattern>' HEAD -- '*.py'`.
 
 ### Step 4b — Triage each finding
 
@@ -549,7 +550,7 @@ Write the report to the path specified by `--report` (or the default slug-based 
 
 **Audit date:** <ISO date>
 **Target SDK release:** <spec.target_release>
-**Audited by:** automated gh search + per-file content inspection
+**Audited by:** connector-pulse `repos.json` (N repos) + shallow clone and `git grep` per repo
 
 ---
 
@@ -616,10 +617,11 @@ Write the report to the path specified by `--report` (or the default slug-based 
 
 ---
 
-## Repos added from connector-map cross-check
+## Scope notes
 
-<List any repos added from the connector-map but absent from gh search results.
-Omit this section if there were no gaps.>
+<Repos added by name beyond repos.json, and why. Repos that failed to clone (from
+/tmp/audit-clone-fail.txt), each also in the Coverage table as analyzed-error.
+Omit this section if there are none.>
 ```
 
 ### Post-Phase-C interactive prompt (when `--raise-prs` was not set)
@@ -702,7 +704,7 @@ gh pr list --repo atlanhq/<repo> --head sdk-audit/<spec-slug> --state open --jso
 
 ```bash
 mkdir -p /tmp/audit-fix/<spec-slug>/<repo>
-git clone --depth 50 git@github.com:atlanhq/<repo>.git /tmp/audit-fix/<spec-slug>/<repo>
+GIT_TERMINAL_PROMPT=0 git clone --depth 50 https://github.com/atlanhq/<repo>.git /tmp/audit-fix/<spec-slug>/<repo>
 cd /tmp/audit-fix/<spec-slug>/<repo>
 git checkout -b sdk-audit/<spec-slug> origin/<default_branch>
 ```
