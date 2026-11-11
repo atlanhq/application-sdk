@@ -246,6 +246,101 @@ class TestPersistActivitySkips:
         assert collector.to_dict()["metrics"][SKIPPED_RECORDS_UNPERSISTED_METRIC] == 2
 
 
+class _PartialWriter:
+    """A file whose write lands half the bytes, then fails like a full disk."""
+
+    def __init__(self, fh, *, truncate_fails: bool = False):
+        self._fh = fh
+        self._truncate_fails = truncate_fails
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._fh.close()
+
+    def tell(self):
+        return self._fh.tell()
+
+    def write(self, data):
+        self._fh.write(data[: len(data) // 2])
+        self._fh.flush()
+        raise OSError(28, "No space left on device")
+
+    def flush(self):
+        self._fh.flush()
+
+    def truncate(self, size):
+        if self._truncate_fails:
+            raise OSError(5, "I/O error")
+        return self._fh.truncate(size)
+
+
+class TestPartialAppend:
+    """A failed append never leaves a partial NDJSON line (lens F-41d425)."""
+
+    @staticmethod
+    def _open_partial(path: Path, *, truncate_fails: bool = False):
+        real_open = Path.open
+
+        def fake_open(self, mode="r", *args, **kwargs):
+            fh = real_open(self, mode, *args, **kwargs)
+            if self == path and "a" in mode:
+                return _PartialWriter(fh, truncate_fails=truncate_fails)
+            return fh
+
+        return mock.patch.object(Path, "open", fake_open)
+
+    def test_failed_append_is_rolled_back(self, tmp_path):
+        path = tmp_path / "part.ndjson"
+        path.write_bytes(b'{"record_id":"a"}\n')
+        with self._open_partial(path), pytest.raises(OSError):
+            skipped._append_lines(path, b'{"record_id":"b"}\n')
+
+        assert path.read_bytes() == b'{"record_id":"a"}\n'
+
+    def test_unrollbackable_append_is_flagged(self, tmp_path):
+        path = tmp_path / "part.ndjson"
+        path.write_bytes(b'{"record_id":"a"}\n')
+        with (
+            self._open_partial(path, truncate_fails=True),
+            pytest.raises(skipped._RollbackFailedError),
+        ):
+            skipped._append_lines(path, b'{"record_id":"b"}\n')
+
+    async def test_partial_write_keeps_earlier_lines_valid(self, collector, sink):
+        await skip_record({}, SkipReason.BLANK_IDENTITY, record_id="a", entity_type="T")
+        await sink.flush()
+        await skip_record({}, SkipReason.BLANK_IDENTITY, record_id="b", entity_type="T")
+        with self._open_partial(sink.path), mock.patch.object(skipped, "_logger"):
+            await sink.flush()
+
+        assert [line["record_id"] for line in _lines(sink.path)] == ["a"]
+        assert sink.kept == 1
+        assert collector.numeric_metric(SKIPPED_RECORDS_UNPERSISTED_METRIC) == 1
+
+    async def test_failed_rollback_drops_the_whole_file(self, collector, sink):
+        await skip_record({}, SkipReason.BLANK_IDENTITY, record_id="a", entity_type="T")
+        await sink.flush()
+        await skip_record({}, SkipReason.BLANK_IDENTITY, record_id="b", entity_type="T")
+        with (
+            self._open_partial(sink.path, truncate_fails=True),
+            mock.patch.object(skipped, "_logger"),
+        ):
+            await sink.flush()
+        # Later skips are counted, never written to the untrusted file.
+        await skip_record({}, SkipReason.BLANK_IDENTITY, record_id="c", entity_type="T")
+        with mock.patch.object(
+            storage, "upload_file", new_callable=mock.AsyncMock
+        ) as up:
+            await persist_activity_skips(sink)
+
+        up.assert_not_awaited()
+        assert sink.kept == 0
+        assert collector.numeric_metric(SKIPPED_RECORDS_METRIC) == 3
+        assert collector.numeric_metric(SKIPPED_RECORDS_UNPERSISTED_METRIC) == 3
+
+
 class TestRetriedActivity:
     """A retry never inherits a failed attempt's lines (lens F-53be14)."""
 

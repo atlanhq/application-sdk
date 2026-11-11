@@ -116,10 +116,30 @@ SkippableRecord = Mapping[str, object] | BaseModel
 """A record :func:`skip_record` accepts: a mapping (a source row) or a pydantic model."""
 
 
+class _RollbackFailedError(Exception):
+    """A failed append could not be rolled back; the file may end mid-line."""
+
+
 def _append_lines(path: Path, chunk: bytes) -> None:
+    """Append ``chunk`` whole, or leave the file exactly as it was.
+
+    A write can fail part-way (``ENOSPC`` after some bytes landed). The file is
+    then truncated back to its size before the append, so it never ends in a
+    partial NDJSON line. If that truncate fails too, :class:`_RollbackFailedError`
+    tells the caller the file can no longer be trusted.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("ab") as fh:
-        fh.write(chunk)
+        start = fh.tell()
+        try:
+            fh.write(chunk)
+            fh.flush()
+        except BaseException:
+            try:
+                fh.truncate(start)
+            except OSError as exc:
+                raise _RollbackFailedError(str(path)) from exc
+            raise
 
 
 @dataclass
@@ -148,11 +168,17 @@ class SkippedRecordSink:
     kept: int = 0
     _buffer: list[bytes] = field(default_factory=list)
     _buffered_bytes: int = 0
+    # Set when a failed append could not be rolled back: the file may end
+    # mid-line, so nothing more is written and nothing is uploaded.
+    _poisoned: bool = False
 
     async def add(self, line: bytes | None) -> None:
         """Count a skip and keep ``line`` when under the cap (``None`` = over the cap)."""
         self.seen += 1
         if line is None:
+            return
+        if self._poisoned:
+            _count_unpersisted(1)
             return
         self.kept += 1
         self._buffer.append(line)
@@ -187,12 +213,24 @@ class SkippedRecordSink:
         self._buffered_bytes = 0
         try:
             await run_in_thread(_append_lines, self.path, chunk)
+        except _RollbackFailedError:
+            # The file may end mid-line: drop all of it rather than ship
+            # invalid NDJSON. Every line it held, and every later one, is
+            # unpersisted.
+            lost = self.kept
+            self.kept = 0
+            self._poisoned = True
+            _logger.error(
+                "Failed to write skipped records and could not roll the local "
+                "file back; %d record(s) are counted but missing from the "
+                "run's skipped-records file",
+                lost,
+                exc_info=True,
+            )
+            _count_unpersisted(lost)
         # conformance: ignore[E004] fail-open by design (FND-4881): logged at ERROR and counted in skipped-records-unpersisted
         except Exception:
-            from application_sdk.outputs import (  # noqa: PLC0415 — circular: the package re-exports this module
-                get_outputs,
-            )
-
+            # _append_lines rolled the file back, so earlier lines stay valid.
             self.kept -= lines
             _logger.error(
                 "Failed to write %d skipped record(s) to the local file; they "
@@ -200,9 +238,15 @@ class SkippedRecordSink:
                 lines,
                 exc_info=True,
             )
-            get_outputs().add_metric(
-                Metric(name=SKIPPED_RECORDS_UNPERSISTED_METRIC, value=lines)
-            )
+            _count_unpersisted(lines)
+
+
+def _count_unpersisted(n: int) -> None:
+    from application_sdk.outputs import (  # noqa: PLC0415 — circular: the package re-exports this module
+        get_outputs,
+    )
+
+    get_outputs().add_metric(Metric(name=SKIPPED_RECORDS_UNPERSISTED_METRIC, value=n))
 
 
 current_skipped_records: contextvars.ContextVar[SkippedRecordSink | None] = (
