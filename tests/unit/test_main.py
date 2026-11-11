@@ -3738,6 +3738,8 @@ class TestLoopStallBound:
             module="application_sdk.app.base",
         )
         self._register("publish", heartbeat=None, timeout=86400)
+        # Finishes within the bound even if it holds the loop, so not named.
+        self._register("tidy", heartbeat=None, timeout=60)
 
         bound = _loop_stall_bound()
 

@@ -79,7 +79,8 @@ Three clarifications, because each is a real misread:
   threads. Once the worker has received SIGTERM, its event-loop stall watchdog ends
   that process with a stack dump when the loop has been silent for longer than the
   longest registered `heartbeat_timeout_seconds`, within the shutdown budget. A task
-  without a heartbeat timeout is not waited for, and startup names it in a warning.
+  without a heartbeat timeout is not waited for; startup names, in a warning, each app
+  task without one whose start-to-close timeout is longer than the bound.
   Before shutdown a frozen loop is left to the liveness probe. See `ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS`
   in [configuration](../configuration.md).
 
