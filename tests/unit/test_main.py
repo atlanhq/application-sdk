@@ -15,6 +15,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk._loop_stall_watchdog import LoopStallWatchdog
 from application_sdk.main import (
     AppConfig,
     _create_infrastructure,
@@ -27,7 +28,6 @@ from application_sdk.main import (
     _log_process_memory_baseline,
     _log_shutdown_budget,
     _loop_exception_handler,
-    _LoopStallWatchdog,
     _observe_worker_poll_state,
     _parse_all_component_yamls,
     _parse_workflow_max_timeout_hours,
@@ -1883,14 +1883,15 @@ class TestRunWorkerMode:
     ) -> None:
         """Armed before the worker polls, handed over to the post-drain deadline."""
         order: list[str] = []
-        watchdog = MagicMock(spec=_LoopStallWatchdog)
+        watchdog = MagicMock(spec=LoopStallWatchdog)
+        watchdog.timeout_seconds = 300
         watchdog.start.side_effect = lambda: order.append("watchdog on")
         watchdog.stop.side_effect = lambda: order.append("watchdog off")
         health_cm = worker_patches["health"].return_value
         health_cm.__aexit__.side_effect = lambda *_: order.append("drained")
 
         with (
-            patch.object(_LoopStallWatchdog, "from_settings", return_value=watchdog),
+            patch.object(LoopStallWatchdog, "from_settings", return_value=watchdog),
             patch(
                 "application_sdk.main._start_post_drain_exit_deadline",
                 side_effect=lambda: order.append("deadline"),
@@ -1907,7 +1908,7 @@ class TestRunWorkerMode:
         self, worker_patches, wait_patch
     ) -> None:
         """It ends the process, so a caller that keeps the process gets none."""
-        with patch.object(_LoopStallWatchdog, "from_settings") as from_settings:
+        with patch.object(LoopStallWatchdog, "from_settings") as from_settings:
             await run_worker_mode(AppConfig(mode="worker", app_module="pkg:FakeApp"))
 
         from_settings.assert_not_called()
@@ -2368,14 +2369,15 @@ class TestRunCombinedMode:
     async def test_stall_watchdog_runs_until_the_drain(self, combined_patches) -> None:
         """Armed before the worker polls, handed over to the post-drain deadline."""
         order: list[str] = []
-        watchdog = MagicMock(spec=_LoopStallWatchdog)
+        watchdog = MagicMock(spec=LoopStallWatchdog)
+        watchdog.timeout_seconds = 300
         watchdog.start.side_effect = lambda: order.append("watchdog on")
         watchdog.stop.side_effect = lambda: order.append("watchdog off")
         health_cm = combined_patches["health"].return_value
         health_cm.__aexit__.side_effect = lambda *_: order.append("drained")
 
         with (
-            patch.object(_LoopStallWatchdog, "from_settings", return_value=watchdog),
+            patch.object(LoopStallWatchdog, "from_settings", return_value=watchdog),
             patch(
                 "application_sdk.main._start_post_drain_exit_deadline",
                 side_effect=lambda: order.append("deadline"),
@@ -2392,7 +2394,7 @@ class TestRunCombinedMode:
         self, combined_patches
     ) -> None:
         """It ends the process, so a caller that keeps the process gets none."""
-        with patch.object(_LoopStallWatchdog, "from_settings") as from_settings:
+        with patch.object(LoopStallWatchdog, "from_settings") as from_settings:
             await run_combined_mode(
                 AppConfig(mode="combined", app_module="pkg:FakeApp")
             )

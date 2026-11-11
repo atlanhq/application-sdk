@@ -2,7 +2,7 @@
 
 The scenarios that end a process run ``run_worker_mode`` in a child
 (``tests/unit/loop_stall_probe.py``) and read its exit code and stderr; the
-rest drive ``_LoopStallWatchdog`` in-process against a private faulthandler.
+rest drive ``LoopStallWatchdog`` in-process against a private faulthandler.
 """
 
 from __future__ import annotations
@@ -14,12 +14,13 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-import application_sdk.main as main_mod
-from application_sdk.main import _LoopStallWatchdog, _PostDrainExitArm
+import application_sdk._loop_stall_watchdog as watchdog_mod
+from application_sdk._loop_stall_watchdog import LoopStallWatchdog
+from application_sdk.main import _PostDrainExitArm
 from tests.unit.private_stdlib import private_stdlib
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -95,13 +96,29 @@ class TestHealthyLoopSurvives:
 def fake_faulthandler():
     """faulthandler holds one timer per process; keep tests off the real one."""
     with (
-        private_stdlib(main_mod, "faulthandler") as local_fh,
-        private_stdlib(main_mod, "os") as local_os,
+        private_stdlib(watchdog_mod, "faulthandler") as local_fh,
+        private_stdlib(watchdog_mod, "os") as local_os,
         patch.object(local_fh, "dump_traceback_later") as arm,
         patch.object(local_fh, "cancel_dump_traceback_later") as cancel,
-        patch.object(local_os, "register_at_fork"),
+        # Windows has no register_at_fork; start() then skips the fork hooks.
+        patch.object(local_os, "register_at_fork", create=True),
     ):
         yield arm, cancel
+
+
+@pytest.fixture
+def clock():
+    """The watchdog's monotonic clock, frozen and advanced by hand."""
+    now = [1000.0]
+    with (
+        private_stdlib(watchdog_mod, "time") as local_time,
+        patch.object(local_time, "monotonic", side_effect=lambda: now[0]),
+    ):
+        yield now
+
+
+def _timer_call(seconds: float):
+    return call(seconds, repeat=False, file=2, exit=True)
 
 
 class TestWatchdogInProcess:
@@ -110,7 +127,7 @@ class TestWatchdogInProcess:
     ) -> None:
         arm, _ = fake_faulthandler
         monkeypatch.setenv("ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS", "0")
-        watchdog = _LoopStallWatchdog.from_settings()
+        watchdog = LoopStallWatchdog.from_settings()
 
         watchdog.start()
         await asyncio.sleep(0)
@@ -121,11 +138,11 @@ class TestWatchdogInProcess:
         self, fake_faulthandler
     ) -> None:
         arm, cancel = fake_faulthandler
-        watchdog = _LoopStallWatchdog(300)
+        watchdog = LoopStallWatchdog(300)
 
         watchdog.start()
         await asyncio.sleep(0)
-        arm.assert_called_once_with(300, repeat=False, file=2, exit=True)
+        assert arm.call_args_list == [_timer_call(300)]
 
         watchdog.stop()
         cancel.assert_called_once_with()
@@ -136,7 +153,7 @@ class TestWatchdogInProcess:
         """A loop torn down without a drain (an exception, asyncio.run's
         cleanup) still leaves no timer behind."""
         _, cancel = fake_faulthandler
-        watchdog = _LoopStallWatchdog(300)
+        watchdog = LoopStallWatchdog(300)
         watchdog.start()
         await asyncio.sleep(0)
 
@@ -151,7 +168,7 @@ class TestWatchdogInProcess:
     def test_rearms_several_times_per_timeout(
         self, timeout: float, rearm: float
     ) -> None:
-        assert _LoopStallWatchdog(timeout)._rearm_seconds == rearm
+        assert LoopStallWatchdog(timeout)._rearm_seconds == rearm
 
     @pytest.mark.parametrize(
         ("raw", "expected"),
@@ -166,15 +183,71 @@ class TestWatchdogInProcess:
             monkeypatch.setenv("ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS", raw)
         warns = raw in ("abc", "inf")
         with pytest.warns(UserWarning) if warns else contextlib.nullcontext():
-            watchdog = _LoopStallWatchdog.from_settings()
-        assert watchdog._timeout_seconds == expected
+            watchdog = LoopStallWatchdog.from_settings()
+        assert watchdog.timeout_seconds == expected
+
+
+class TestForkHooks:
+    """The hooks os.register_at_fork runs around every fork in the process."""
+
+    def test_parent_rearms_for_what_is_left_of_the_loop_deadline(
+        self, fake_faulthandler, clock
+    ) -> None:
+        """A thread that keeps forking cannot postpone a stopped loop's exit."""
+        arm, cancel = fake_faulthandler
+        watchdog = LoopStallWatchdog(300)
+        watchdog._arm()
+
+        clock[0] += 200
+        watchdog._pause_for_fork()
+        watchdog._resume_after_fork()
+
+        cancel.assert_called_once_with()
+        assert arm.call_args_list == [_timer_call(300), _timer_call(100)]
+
+    def test_deadline_passed_during_the_fork_fires_at_once(
+        self, fake_faulthandler, clock
+    ) -> None:
+        arm, _ = fake_faulthandler
+        watchdog = LoopStallWatchdog(300)
+        watchdog._arm()
+
+        clock[0] += 301
+        watchdog._pause_for_fork()
+        watchdog._resume_after_fork()
+
+        assert arm.call_args_list[-1] == _timer_call(0.001)
+
+    def test_child_side_leaves_the_timer_off(self, fake_faulthandler) -> None:
+        arm, cancel = fake_faulthandler
+        watchdog = LoopStallWatchdog(300)
+        watchdog._arm()
+
+        watchdog._pause_for_fork()
+        watchdog._release_after_fork()
+
+        cancel.assert_called_once_with()
+        assert arm.call_count == 1
+        assert watchdog._armed is False
+        # The child can still take the lock, so stop() there does not hang.
+        watchdog.stop()
+
+    def test_fork_while_unarmed_arms_nothing(self, fake_faulthandler) -> None:
+        arm, cancel = fake_faulthandler
+        watchdog = LoopStallWatchdog(300)
+
+        watchdog._pause_for_fork()
+        watchdog._resume_after_fork()
+
+        arm.assert_not_called()
+        cancel.assert_not_called()
 
 
 class TestHandoffToPostDrainDeadline:
     def test_drain_on_shutdown_stops_the_watchdog(self) -> None:
         event = asyncio.Event()
         event.set()
-        watchdog = MagicMock(spec=_LoopStallWatchdog)
+        watchdog = MagicMock(spec=LoopStallWatchdog)
         arm = _PostDrainExitArm(
             enabled=True, shutdown_event=event, stall_watchdog=watchdog
         )
@@ -187,7 +260,7 @@ class TestHandoffToPostDrainDeadline:
 
     def test_drain_for_a_supervised_restart_keeps_it_running(self) -> None:
         """A worker rebuilt after a fatal error can poll again, so stay armed."""
-        watchdog = MagicMock(spec=_LoopStallWatchdog)
+        watchdog = MagicMock(spec=LoopStallWatchdog)
         arm = _PostDrainExitArm(
             enabled=True, shutdown_event=asyncio.Event(), stall_watchdog=watchdog
         )
@@ -198,33 +271,44 @@ class TestHandoffToPostDrainDeadline:
         watchdog.stop.assert_not_called()
 
 
+# Imports only the watchdog module, so the process has no thread but the main
+# one when it forks: a thread holding a lock at fork time (stderr's, a logging
+# handler's) would leave the child stuck for reasons unrelated to the timer.
+# No event loop either: a child cannot tear down a loop it inherited.
+_FORK_SCRIPT = """
+import os, sys, threading, time
+from application_sdk._loop_stall_watchdog import LoopStallWatchdog
+
+threads = [t.name for t in threading.enumerate()]
+assert threads == ["MainThread"], threads
+watchdog = LoopStallWatchdog(60)
+watchdog._register_fork_hooks()
+watchdog._arm()
+pid = os.fork()
+if pid == 0:
+    sys.exit(0)
+# A stuck child is reported and reaped, never left holding this test's pipes.
+for _ in range(300):
+    done, status = os.waitpid(pid, os.WNOHANG)
+    if done:
+        print("child exit", os.waitstatus_to_exitcode(status), "rearmed", watchdog._armed)
+        break
+    time.sleep(0.1)
+else:
+    os.kill(pid, 9)
+    os.waitpid(pid, 0)
+    print("child stuck at exit")
+watchdog.stop()
+"""
+
+
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="os.fork is POSIX-only")
 def test_forked_child_exits_normally_while_armed() -> None:
-    """A child forked while the timer is armed can still finish its interpreter
-    exit, and the parent is re-armed afterwards. Without the fork hooks the
-    child waits forever on a timer thread it never inherited."""
-    script = textwrap.dedent(
-        """
-        import asyncio, os, sys, warnings
-        warnings.simplefilter("ignore", DeprecationWarning)
-        from application_sdk.main import _LoopStallWatchdog
-
-        async def main():
-            watchdog = _LoopStallWatchdog(60)
-            watchdog.start()
-            await asyncio.sleep(0)
-            pid = os.fork()
-            if pid == 0:
-                sys.exit(0)
-            _, status = os.waitpid(pid, 0)
-            print("child finished, rearmed", watchdog._armed)
-            watchdog.stop()
-
-        asyncio.run(main())
-        """
-    )
+    """A child forked while the timer is armed finishes its interpreter exit,
+    and the parent is re-armed. Without the fork hooks the child waits forever
+    on a timer thread it never inherited."""
     result = subprocess.run(  # noqa: S603 — fixed argv: this interpreter + a literal script
-        [sys.executable, "-c", script],
+        [sys.executable, "-c", textwrap.dedent(_FORK_SCRIPT)],
         cwd=_REPO_ROOT,
         capture_output=True,
         text=True,
@@ -233,6 +317,4 @@ def test_forked_child_exits_normally_while_armed() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    # The child's own exit code reflects SDK at-exit hooks that do not survive
-    # a fork; the property here is that its exit finishes at all.
-    assert "child finished, rearmed True" in result.stdout
+    assert "child exit 0 rearmed True" in result.stdout, result.stdout

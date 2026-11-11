@@ -52,6 +52,10 @@ if _importlib_util.find_spec("application_sdk.handler.base") is None:
         "pip install --force-reinstall --no-deps atlan-application-sdk-api"
     )
 
+from application_sdk._loop_stall_watchdog import (
+    LOOP_STALL_TIMEOUT_ENV,
+    LoopStallWatchdog,
+)
 from application_sdk.app.base import _pascal_to_kebab
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.common import restart_marker
@@ -1304,7 +1308,7 @@ class _PostDrainExitArm:
         *,
         enabled: bool,
         shutdown_event: asyncio.Event,
-        stall_watchdog: _LoopStallWatchdog | None = None,
+        stall_watchdog: LoopStallWatchdog | None = None,
     ) -> None:
         self._enabled = enabled
         self._shutdown_event = shutdown_event
@@ -1422,104 +1426,18 @@ def _start_post_drain_exit_deadline(
     return timer
 
 
-_LOOP_STALL_TIMEOUT_ENV = "ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS"
-# Several re-arms fit inside one timeout, so a single late tick never trips it.
-_LOOP_STALL_REARM_CAP_SECONDS = 15.0
-
-
-class _LoopStallWatchdog:
-    """Exits the process when its event loop stops running for too long.
-
-    Shutdown signals are handled on the loop (``loop.add_signal_handler``), so
-    a loop stuck in a lock wait or an untimed call never sees SIGTERM. The
-    Temporal core keeps polling on its own threads: the process goes on taking
-    workflow and activity tasks it cannot run, each one times out, and this
-    lasts until SIGKILL at the end of the pod's grace period. The kubelet stops
-    running liveness probes once a pod is terminating, so only the process
-    itself can end that.
-
-    A task on the loop re-arms ``faulthandler.dump_traceback_later`` well
-    inside the timeout. Its timer runs on a C thread that needs neither the
-    loop nor the GIL, so when the loop stops re-arming it, the timer writes
-    every thread's stack to stderr (the evidence of what blocked) and exits
-    with code 1. faulthandler keeps one such timer per process, so nothing else
-    in the SDK may use ``dump_traceback_later``.
-
-    It runs while a Temporal worker can poll, including through the drain,
-    where the loop keeps ticking. Once the worker has drained on a shutdown
-    signal, ``_PostDrainExitArm`` stops it and the post-drain exit deadline
-    bounds the rest of the shutdown, so a normal exit never trips it.
-    """
-
-    def __init__(self, timeout_seconds: float) -> None:
-        self._timeout_seconds = timeout_seconds
-        self._rearm_seconds = min(timeout_seconds / 4, _LOOP_STALL_REARM_CAP_SECONDS)
-        self._lock = threading.Lock()
-        self._armed = False
-        self._stopped = False
-        # The loop holds tasks weakly; this reference keeps the re-arm alive.
-        self._task: asyncio.Future[None] | None = None
-
-    @classmethod
-    def from_settings(cls) -> _LoopStallWatchdog:
-        from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker startup only
-            load_worker_loop_stall_timeout_seconds,
-        )
-
-        return cls(load_worker_loop_stall_timeout_seconds())
-
-    def start(self) -> None:
-        """Start re-arming from the running loop. A timeout of 0 disables it."""
-        if self._timeout_seconds <= 0:
-            logger.info(
-                "Event-loop stall watchdog disabled (%s=0)", _LOOP_STALL_TIMEOUT_ENV
-            )
-            return
-        logger.info(
-            "Event-loop stall watchdog on: if the event loop does not run for %gs "
-            "the process dumps every thread's stack to stderr and exits with code 1 (%s)",
-            self._timeout_seconds,
-            _LOOP_STALL_TIMEOUT_ENV,
-        )
-        if hasattr(os, "register_at_fork"):
-            # A forked child inherits the armed timer but not its thread, and
-            # an interpreter exit in that child then waits on the thread
-            # forever. Disarm across the fork; the parent re-arms after it.
-            os.register_at_fork(before=self._disarm_for_fork, after_in_parent=self._arm)
-        self._task = asyncio.ensure_future(self._rearm_until_stopped())
-
-    def stop(self) -> None:
-        """Cancel the timer for good. Idempotent and safe from any thread."""
-        with self._lock:
-            self._stopped = True
-            if self._armed:
-                faulthandler.cancel_dump_traceback_later()
-                self._armed = False
-
-    def _arm(self) -> bool:
-        with self._lock:
-            if self._stopped:
-                return False
-            # A file descriptor, not sys.stderr: the timer writes from C after
-            # the Python-level stream may have been replaced or wrapped.
-            faulthandler.dump_traceback_later(
-                self._timeout_seconds, repeat=False, file=2, exit=True
-            )
-            self._armed = True
-            return True
-
-    def _disarm_for_fork(self) -> None:
-        with self._lock:
-            if self._armed:
-                faulthandler.cancel_dump_traceback_later()
-                self._armed = False
-
-    async def _rearm_until_stopped(self) -> None:
-        try:
-            while self._arm():
-                await asyncio.sleep(self._rearm_seconds)
-        finally:
-            self.stop()
+def _start_loop_stall_watchdog(watchdog: LoopStallWatchdog) -> None:
+    """Log the configured timeout once, then start the watchdog on this loop."""
+    if watchdog.timeout_seconds <= 0:
+        logger.info("Event-loop stall watchdog disabled (%s=0)", LOOP_STALL_TIMEOUT_ENV)
+        return
+    logger.info(
+        "Event-loop stall watchdog on: if the event loop does not run for %gs "
+        "the process dumps every thread's stack to stderr and exits with code 1 (%s)",
+        watchdog.timeout_seconds,
+        LOOP_STALL_TIMEOUT_ENV,
+    )
+    watchdog.start()
 
 
 async def _observe_worker_poll_state(
@@ -2011,7 +1929,7 @@ async def run_worker_mode(
     # Like the post-drain deadline it hands over to, the watchdog ends the
     # whole process, so only the process-owning entry point runs it.
     stall_watchdog = (
-        _LoopStallWatchdog.from_settings() if bound_post_drain_exit else None
+        LoopStallWatchdog.from_settings() if bound_post_drain_exit else None
     )
     # Read by _build_worker's on_drained hook, which only runs after this point.
     post_drain_arm = _PostDrainExitArm(
@@ -2028,7 +1946,7 @@ async def run_worker_mode(
     logger.info("Worker started: app=%s queue=%s", app_name, config.task_queue)
     _log_process_memory_baseline()
     if stall_watchdog is not None:
-        stall_watchdog.start()
+        _start_loop_stall_watchdog(stall_watchdog)
     # health_server stays up across worker restarts so the runtime keeps
     # answering health checks while the supervisor rebuilds a crashed worker.
     async with health_server:
@@ -2398,7 +2316,7 @@ async def run_combined_mode(
     # Like the post-drain deadline it hands over to, the watchdog ends the
     # whole process, so only the process-owning entry point runs it.
     stall_watchdog = (
-        _LoopStallWatchdog.from_settings() if bound_post_drain_exit else None
+        LoopStallWatchdog.from_settings() if bound_post_drain_exit else None
     )
     # Read by _build_worker's on_drained hook, which only runs after this point.
     post_drain_arm = _PostDrainExitArm(
@@ -2420,7 +2338,7 @@ async def run_combined_mode(
     )
     _log_process_memory_baseline()
     if stall_watchdog is not None:
-        stall_watchdog.start()
+        _start_loop_stall_watchdog(stall_watchdog)
     # uvicorn keeps serving while the worker is supervised and restarted
     # independently; a shutdown signal (which also sets should_exit) stops both.
     async with health_server:
