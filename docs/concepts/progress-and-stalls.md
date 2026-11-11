@@ -76,9 +76,12 @@ Three clarifications, because each is a real misread:
   a starved loop never runs the watchdog either. The two cover each other's blind spot.
   Failing the attempt does not stop the worker process, though: a blocked loop also
   never runs the shutdown handler, while Temporal's core keeps taking tasks on its own
-  threads. The worker's event-loop stall watchdog
-  (`ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS`, default 300s; see
-  [configuration](../configuration.md)) ends that process with a stack dump.
+  threads. The worker's event-loop stall watchdog ends that process with a stack
+  dump once the loop has been silent for `ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS`
+  (default 300s) or, while activities run, for the longest of their
+  `heartbeat_timeout_seconds` if that is longer. By then Temporal has already given
+  up on those activities, so raising a task's heartbeat timeout also lets the worker
+  ride out a loop stall that long. See [configuration](../configuration.md).
 
 There is a fourth setting, `progress_watchdog`, which is a mode rather than a
 duration: `off`, `warn` or `enforce`. See [Modes](#modes-off-warn-enforce).

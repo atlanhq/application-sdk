@@ -803,7 +803,8 @@ WORKER_LIVENESS_MAX_IDLE_SECONDS = _load_worker_liveness_max_idle_seconds()
 
 
 #: Seconds the worker's event loop may go without running before the process
-#: dumps every thread's stack to stderr and exits with code 1. Shutdown signals
+#: dumps every thread's stack to stderr and exits with code 1 (while activities
+#: run, the longest of their heartbeat timeouts if longer). Shutdown signals
 #: are handled on the loop, so a blocked loop would otherwise never stop: the
 #: Temporal core keeps polling on its own threads and takes tasks it can never
 #: run until the pod's grace period ends. Far above any legitimate loop block;

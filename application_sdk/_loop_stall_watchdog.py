@@ -7,16 +7,61 @@ importing it.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import faulthandler
 import os
 import threading
 import time
+from collections import Counter
+from collections.abc import Callable, Iterator
 
 LOOP_STALL_TIMEOUT_ENV = "ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS"
-# Several re-arms fit inside one timeout, so a single late tick never trips it.
 _REARM_CAP_SECONDS = 15.0
 # faulthandler rejects a timeout of 0; a deadline already passed fires at once.
 _MIN_TIMER_SECONDS = 0.001
+
+
+class RunningHeartbeatTimeouts:
+    """Heartbeat timeouts of the activities running in this process.
+
+    Updated and read on the event loop thread only (activity interceptors and
+    the watchdog both run there), so it takes no lock.
+    """
+
+    def __init__(self) -> None:
+        self._counts: Counter[float] = Counter()
+        self.on_change: Callable[[], None] | None = None
+
+    def longest(self) -> float:
+        """The longest heartbeat timeout among running activities, else 0."""
+        return max(self._counts, default=0.0)
+
+    @contextlib.contextmanager
+    def track(self, heartbeat_timeout_seconds: float | None) -> Iterator[None]:
+        """Count an activity as running for the duration of the block.
+
+        An activity without a heartbeat timeout is not counted: Temporal never
+        gives up on it for missed heartbeats, so it has nothing to lose.
+        """
+        if not heartbeat_timeout_seconds or heartbeat_timeout_seconds <= 0:
+            yield
+            return
+        self._counts[heartbeat_timeout_seconds] += 1
+        self._notify()
+        try:
+            yield
+        finally:
+            self._counts[heartbeat_timeout_seconds] -= 1
+            if self._counts[heartbeat_timeout_seconds] <= 0:
+                del self._counts[heartbeat_timeout_seconds]
+            self._notify()
+
+    def _notify(self) -> None:
+        if self.on_change is not None:
+            self.on_change()
+
+
+running_heartbeat_timeouts = RunningHeartbeatTimeouts()
 
 
 class LoopStallWatchdog:
@@ -37,15 +82,30 @@ class LoopStallWatchdog:
     with code 1. faulthandler keeps one such timer per process, so nothing else
     in the SDK may use ``dump_traceback_later``.
 
+    The timeout is ``max(timeout_seconds, longest heartbeat timeout among the
+    running activities)``. A loop silent for longer than a running activity's
+    heartbeat timeout has already lost that activity to Temporal, so waiting
+    that long costs nothing, while a shorter fixed bound could end work that
+    would have finished. An idle worker uses ``timeout_seconds``.
+
     The caller decides how long it runs. In the worker that is from worker
     start through the drain, where the loop keeps ticking; once the worker has
     drained on a shutdown signal, ``_PostDrainExitArm`` stops it and the
     post-drain exit deadline bounds the rest, so a normal exit never trips it.
     """
 
-    def __init__(self, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        timeout_seconds: float,
+        *,
+        running: RunningHeartbeatTimeouts | None = None,
+        on_timeout_change: Callable[[float], None] | None = None,
+    ) -> None:
         self.timeout_seconds = timeout_seconds
-        self._rearm_seconds = min(timeout_seconds / 4, _REARM_CAP_SECONDS)
+        self._running = running if running is not None else running_heartbeat_timeouts
+        self._on_timeout_change = on_timeout_change
+        self._effective_seconds = timeout_seconds
+        self._wake = asyncio.Event()
         self._lock = threading.Lock()
         self._armed = False
         self._paused_for_fork = False
@@ -55,19 +115,35 @@ class LoopStallWatchdog:
         self._task: asyncio.Future[None] | None = None
 
     @classmethod
-    def from_settings(cls) -> LoopStallWatchdog:
+    def from_settings(
+        cls, *, on_timeout_change: Callable[[float], None] | None = None
+    ) -> LoopStallWatchdog:
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker startup only
             load_worker_loop_stall_timeout_seconds,
         )
 
-        return cls(load_worker_loop_stall_timeout_seconds())
+        return cls(
+            load_worker_loop_stall_timeout_seconds(),
+            on_timeout_change=on_timeout_change,
+        )
+
+    def effective_timeout_seconds(self) -> float:
+        return max(self.timeout_seconds, self._running.longest())
 
     def start(self) -> None:
         """Start re-arming from the running loop. A timeout of 0 disables it."""
         if self.timeout_seconds <= 0:
             return
         self._register_fork_hooks()
+        self._running.on_change = self._on_running_change
         self._task = asyncio.ensure_future(self._rearm_until_stopped())
+
+    def _on_running_change(self) -> None:
+        # Re-arm now: the activity that just started may block the loop before
+        # the re-arm task runs again. Then wake that task, so a timeout that
+        # just shrank is not followed by a sleep sized for the longer one.
+        self._arm()
+        self._wake.set()
 
     def _register_fork_hooks(self) -> None:
         if not hasattr(os, "register_at_fork"):
@@ -83,19 +159,27 @@ class LoopStallWatchdog:
 
     def stop(self) -> None:
         """Cancel the timer for good. Idempotent and safe from any thread."""
+        if self._running.on_change == self._on_running_change:
+            self._running.on_change = None
         with self._lock:
             self._stopped = True
             if self._armed:
                 faulthandler.cancel_dump_traceback_later()
                 self._armed = False
 
-    def _arm(self) -> bool:
+    def _arm(self) -> float | None:
+        """Re-arm for the effective timeout; ``None`` once stopped."""
+        timeout = self.effective_timeout_seconds()
         with self._lock:
             if self._stopped:
-                return False
-            self._deadline = time.monotonic() + self.timeout_seconds
-            self._set_timer(self.timeout_seconds)
-            return True
+                return None
+            self._deadline = time.monotonic() + timeout
+            self._set_timer(timeout)
+        if timeout != self._effective_seconds:
+            self._effective_seconds = timeout
+            if self._on_timeout_change is not None:
+                self._on_timeout_change(timeout)
+        return timeout
 
     def _set_timer(self, seconds: float) -> None:
         # A file descriptor, not sys.stderr: the timer writes from C after the
@@ -129,7 +213,16 @@ class LoopStallWatchdog:
 
     async def _rearm_until_stopped(self) -> None:
         try:
-            while self._arm():
-                await asyncio.sleep(self._rearm_seconds)
+            while (timeout := self._arm()) is not None:
+                self._wake.clear()
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(
+                        self._wake.wait(), rearm_interval_seconds(timeout)
+                    )
         finally:
             self.stop()
+
+
+def rearm_interval_seconds(timeout_seconds: float) -> float:
+    """Several re-arms per timeout, so one late tick never trips it."""
+    return min(timeout_seconds / 4, _REARM_CAP_SECONDS)

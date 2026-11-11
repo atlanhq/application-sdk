@@ -963,10 +963,17 @@ def create_worker(
             field="interceptors",
         )
 
+    from application_sdk.execution._temporal.interceptors.loop_stall import (  # noqa: PLC0415 — circular: same reason as the imports above
+        LoopStallInterceptor,
+    )
+
     all_interceptors: list[TemporalInterceptor] = [
         LogInterceptor(),
         MetricsInterceptor(),
         TraceInterceptor(),
+        # Feeds the event-loop stall watchdog the running activities'
+        # heartbeat timeouts; inert when no watchdog is running.
+        LoopStallInterceptor(),
     ]
 
     # Liveness recording is appended after the SDK's own Log/Metrics/Trace

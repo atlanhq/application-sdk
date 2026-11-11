@@ -1426,14 +1426,21 @@ def _start_post_drain_exit_deadline(
     return timer
 
 
+def _log_stall_timeout_change(seconds: float) -> None:
+    # The dump's "Timeout (h:mm:ss)!" header records the bound that fired;
+    # this records when a running activity moved it.
+    logger.debug("Event-loop stall watchdog timeout is now %gs", seconds)
+
+
 def _start_loop_stall_watchdog(watchdog: LoopStallWatchdog) -> None:
     """Log the configured timeout once, then start the watchdog on this loop."""
     if watchdog.timeout_seconds <= 0:
         logger.info("Event-loop stall watchdog disabled (%s=0)", LOOP_STALL_TIMEOUT_ENV)
         return
     logger.info(
-        "Event-loop stall watchdog on: if the event loop does not run for %gs "
-        "the process dumps every thread's stack to stderr and exits with code 1 (%s)",
+        "Event-loop stall watchdog on: if the event loop does not run for %gs, or "
+        "for the longest heartbeat timeout among running activities if longer, the "
+        "process dumps every thread's stack to stderr and exits with code 1 (%s)",
         watchdog.timeout_seconds,
         LOOP_STALL_TIMEOUT_ENV,
     )
@@ -1929,7 +1936,9 @@ async def run_worker_mode(
     # Like the post-drain deadline it hands over to, the watchdog ends the
     # whole process, so only the process-owning entry point runs it.
     stall_watchdog = (
-        LoopStallWatchdog.from_settings() if bound_post_drain_exit else None
+        LoopStallWatchdog.from_settings(on_timeout_change=_log_stall_timeout_change)
+        if bound_post_drain_exit
+        else None
     )
     # Read by _build_worker's on_drained hook, which only runs after this point.
     post_drain_arm = _PostDrainExitArm(
@@ -2316,7 +2325,9 @@ async def run_combined_mode(
     # Like the post-drain deadline it hands over to, the watchdog ends the
     # whole process, so only the process-owning entry point runs it.
     stall_watchdog = (
-        LoopStallWatchdog.from_settings() if bound_post_drain_exit else None
+        LoopStallWatchdog.from_settings(on_timeout_change=_log_stall_timeout_change)
+        if bound_post_drain_exit
+        else None
     )
     # Read by _build_worker's on_drained hook, which only runs after this point.
     post_drain_arm = _PostDrainExitArm(
@@ -2727,8 +2738,9 @@ Environment Variables:
                            polling again before /live fails (default: 600; 0 = disabled).
   ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS
                            Seconds the event loop may go without running before the
-                           process dumps every thread's stack and exits with code 1
-                           (default: 300; 0 = disabled).
+                           process dumps every thread's stack and exits with code 1,
+                           or the longest heartbeat timeout among running activities
+                           if longer (default: 300; 0 = disabled).
   ATLAN_LOG_LEVEL          Log level (default: INFO)
                            Falls back to LOG_LEVEL (v2)
 
