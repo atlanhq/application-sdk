@@ -382,9 +382,6 @@ application_sdk/
 │   ├── fixtures.py         # pytest fixtures (clean_app_registry, etc.)
 │   └── mocks.py            # MockStateStore, MockSecretStore, MockPubSub, MockBinding, etc.
 │
-├── test_utils/             # Integration test helpers
-│   └── integration/        # Integration test runner and fixtures
-│
 ├── discovery.py            # Auto-discovery helpers for apps and handlers
 ├── errors/                 # Categorical error hierarchy: AppError, FailureCategory, Audience, 15 leaf classes
 │   │                       # Legacy errors.py shim kept for back-compat (AAF-{COMPONENT}-{ID} constants)
