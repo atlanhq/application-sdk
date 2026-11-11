@@ -99,3 +99,20 @@ def test_importing_the_sdr_base_does_not_warn() -> None:
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_star_import_still_binds_the_served_full_dag_names() -> None:
+    """``import *`` reads ``__all__``, then resolves each name through ``__getattr__``.
+
+    ``full_dag.base`` had no ``__all__`` before FND-4659, so a star import bound
+    its ``logger`` and ``get_logger`` globals. Declaring ``__all__`` without them
+    would drop both silently instead of warning.
+    """
+    module = _import_quietly("application_sdk.testing.full_dag.base")
+    namespace: dict[str, object] = {}
+
+    with pytest.warns(DeprecationWarning, match=r"logger is deprecated.*v4\.0\.0"):
+        exec("from application_sdk.testing.full_dag.base import *", namespace)  # noqa: S102
+
+    assert namespace["logger"] is module._logger  # type: ignore[attr-defined]
+    assert namespace["get_logger"] is module._get_logger  # type: ignore[attr-defined]

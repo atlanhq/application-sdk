@@ -87,10 +87,16 @@ if TYPE_CHECKING:
     # Type checkers only: binds nothing at runtime, so access still goes through
     # ``__getattr__`` and warns. It is what lets the symbol gate follow the
     # served class to its definition, methods included.
+    from application_sdk.observability.logger_adaptor import (  # noqa: F401
+        AtlanLoggerAdapter,
+        get_logger,
+    )
     from application_sdk.testing.e2e.client import (  # noqa: F401
         DAGRunResult,
         cold_start_submit_kwargs,
     )
+
+    logger: AtlanLoggerAdapter
 
 #: Every name the last release exposed here, so the symbol gate counts each
 #: re-export and served alias as surface (FND-4659).
@@ -111,6 +117,10 @@ __all__ = [
     "build_ae_payload",
     "build_seed_dag",
     "cold_start_submit_kwargs",
+    # Served by ``__getattr__`` with a warning; listed so ``import *`` still binds
+    # them, as it did before this module declared ``__all__``.
+    "get_logger",
+    "logger",
 ]
 
 _logger = _get_logger(__name__)

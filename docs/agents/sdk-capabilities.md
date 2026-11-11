@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.55.3
-source-sha:    d83978cbc3ef5e13e9367ea32c2d8b1cf1fa37de
-source-date:   2026-11-11T10:13:26Z
+source-sha:    9f75b2d970875ad942a5fe5a546a0de1f387e83c
+source-date:   2026-11-11T11:06:29Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -5871,7 +5871,8 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 #### `get_logger`
 
-- **Import:** `from application_sdk.testing.scale_data_generator.driver import get_logger`
+- **Import:** `from application_sdk.testing.full_dag.base import get_logger`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.driver`
 - **Signature:** `get_logger(name: str | None = None)`
 - **Summary:** Get or create an instance of AtlanLoggerAdapter.
 - **Defined in:** `application_sdk/observability/logger_adaptor.py`
@@ -6907,10 +6908,11 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 #### `logger`
 
-- **Import:** `from application_sdk.testing.scale_data_generator.driver import logger`
-- **Signature:** `logger`
+- **Import:** `from application_sdk.testing.full_dag.base import logger`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.driver`
+- **Signature:** `logger: AtlanLoggerAdapter`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/driver.py`
+- **Defined in:** `application_sdk/testing/full_dag/base.py`
 
 #### `MARKETPLACE_APPS_PATH`
 
