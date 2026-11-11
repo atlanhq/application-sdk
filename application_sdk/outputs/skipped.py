@@ -45,6 +45,7 @@ file, ``skipped-records-truncated`` (dropped by the cap), or
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import re
 import tempfile
@@ -171,6 +172,9 @@ class SkippedRecordSink:
     # Set when a failed append could not be rolled back: the file may end
     # mid-line, so nothing more is written and nothing is uploaded.
     _poisoned: bool = False
+    # Child tasks of one activity share the sink. Appends and their rollbacks
+    # run one at a time, or a rollback could truncate another task's rows.
+    _write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def add(self, line: bytes | None) -> None:
         """Count a skip and keep ``line`` when under the cap (``None`` = over the cap)."""
@@ -201,7 +205,11 @@ class SkippedRecordSink:
         it is logged, and the chunk's lines are counted as
         ``skipped-records-unpersisted`` instead of kept.
         """
-        if not self._buffer:
+        async with self._write_lock:
+            await self._flush_locked()
+
+    async def _flush_locked(self) -> None:
+        if not self._buffer or self._poisoned:
             return
         from application_sdk._runtime.offload import (  # noqa: PLC0415 — keep the workflow sandbox import set small
             run_in_thread,

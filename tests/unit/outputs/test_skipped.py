@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
 from decimal import Decimal
 from pathlib import Path
 from unittest import mock
@@ -339,6 +342,53 @@ class TestPartialAppend:
         assert sink.kept == 0
         assert collector.numeric_metric(SKIPPED_RECORDS_METRIC) == 3
         assert collector.numeric_metric(SKIPPED_RECORDS_UNPERSISTED_METRIC) == 3
+
+
+class TestConcurrentFlush:
+    """Child tasks sharing a sink never interleave appends (lens F-0f8482)."""
+
+    async def test_rollback_cannot_erase_another_tasks_rows(self, collector, sink):
+        real_append = skipped._append_lines
+        active = 0
+        overlap = []
+        lock = threading.Lock()
+
+        def slow_append(path: Path, chunk: bytes) -> None:
+            nonlocal active
+            with lock:
+                active += 1
+                overlap.append(active)
+            try:
+                time.sleep(0.05)  # widen the window an unserialised flush would hit
+                if b'"fail"' in chunk:
+                    # Half the chunk lands, then the disk fills: roll back.
+                    with path.open("ab") as fh:
+                        start = fh.tell()
+                        fh.write(chunk[: len(chunk) // 2])
+                        fh.flush()
+                        fh.truncate(start)
+                    raise OSError(28, "No space left on device")
+                real_append(path, chunk)
+            finally:
+                with lock:
+                    active -= 1
+
+        async def child(record_id: str) -> None:
+            await skip_record(
+                {}, SkipReason.BLANK_IDENTITY, record_id=record_id, entity_type="T"
+            )
+
+        with (
+            mock.patch.object(skipped, "_FLUSH_BYTES", 1),
+            mock.patch.object(skipped, "_append_lines", slow_append),
+            mock.patch.object(skipped, "_logger"),
+        ):
+            await asyncio.gather(child("fail"), child("ok"))
+
+        assert max(overlap) == 1
+        assert [line["record_id"] for line in _lines(sink.path)] == ["ok"]
+        assert sink.kept == 1
+        assert collector.numeric_metric(SKIPPED_RECORDS_UNPERSISTED_METRIC) == 1
 
 
 class TestRetriedActivity:
