@@ -544,7 +544,6 @@ class TestActivityFnExecution:
         activity_fn = create_activity_from_task(greet_task)
         return _AfnApp, activity_fn
 
-    @pytest.mark.asyncio
     async def test_happy_path_executes_task_method(self) -> None:
         _, activity_fn = self._make_app_and_get_activity()
         ctx = TaskContext(
@@ -568,7 +567,6 @@ class TestActivityFnExecution:
         assert isinstance(result, _AfnOut)
         assert result.greeting == "hi vee"
 
-    @pytest.mark.asyncio
     async def test_non_retryable_error_wrapped_as_application_error(self) -> None:
         """A NonRetryableError raised inside a task is converted to ApplicationError."""
 
@@ -611,7 +609,6 @@ class TestActivityFnExecution:
         # ApplicationError should be flagged non-retryable.
         assert exc_info.value.non_retryable is True
 
-    @pytest.mark.asyncio
     async def test_retryable_exception_propagates_unchanged(self) -> None:
         class _PlainErrApp(App):
             @task(timeout_seconds=60)
@@ -648,7 +645,6 @@ class TestActivityFnExecution:
         ):
             await activity_fn(ctx, _AfnIn(name="x"))
 
-    @pytest.mark.asyncio
     async def test_starts_and_stops_auto_heartbeat_loop(self) -> None:
         """Heartbeat path runs when heartbeat_timeout_seconds and auto_heartbeat_seconds are set."""
         _, activity_fn = self._make_app_and_get_activity()
@@ -684,7 +680,6 @@ class TestActivityFnExecution:
             result = await activity_fn(ctx, _AfnIn(name="hb"))
         assert result.greeting == "hi hb"
 
-    @pytest.mark.asyncio
     async def test_uses_infrastructure_when_available(self) -> None:
         """Validates the get_infrastructure() inline import path.
 
@@ -720,7 +715,6 @@ class TestActivityFnExecution:
             result = await activity_fn(ctx, _AfnIn(name="i"))
         assert result.greeting == "hi i"
 
-    @pytest.mark.asyncio
     async def test_workflow_id_plumbed_through_task_context(self) -> None:
         """workflow_id must flow from TaskContext into app_context.workflow_id.
 
@@ -828,7 +822,6 @@ class TestSqlWrapRetryabilityReachesTheWire:
             await activity_fn(ctx, _AfnIn(name="x"))
         return exc_info.value
 
-    @pytest.mark.asyncio
     async def test_unclassified_sql_wrap_is_not_flagged_non_retryable(self) -> None:
         from application_sdk.clients.sql_errors import SqlPandasResultError
 
@@ -840,7 +833,6 @@ class TestSqlWrapRetryabilityReachesTheWire:
         app_err = await self._run_task_raising(err)
         assert app_err.non_retryable is False
 
-    @pytest.mark.asyncio
     async def test_sql_invariant_violation_is_flagged_non_retryable(self) -> None:
         from application_sdk.clients.sql_errors import SqlPandasResultError
 

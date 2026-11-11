@@ -52,7 +52,6 @@ async def _http_request(
 
 @pytest.mark.integration
 class TestWorkerHealthServer:
-    @pytest.mark.asyncio
     async def test_health_endpoint_returns_200(self):
         port = _find_free_port()
         async with WorkerHealthServer(host="127.0.0.1", port=port):
@@ -60,7 +59,6 @@ class TestWorkerHealthServer:
         assert status_code == 200
         assert body["healthy"] is True
 
-    @pytest.mark.asyncio
     async def test_ready_returns_503_without_client(self):
         port = _find_free_port()
         async with WorkerHealthServer(host="127.0.0.1", port=port):
@@ -68,7 +66,6 @@ class TestWorkerHealthServer:
         assert status_code == 503
         assert body["healthy"] is False
 
-    @pytest.mark.asyncio
     async def test_ready_returns_200_with_client(self):
         port = _find_free_port()
         server = WorkerHealthServer(host="127.0.0.1", port=port)
@@ -85,7 +82,6 @@ class TestWorkerHealthServer:
         assert body["healthy"] is True
         assert body["details"]["identity"] == "test-worker"
 
-    @pytest.mark.asyncio
     async def test_live_endpoint_returns_200(self):
         port = _find_free_port()
         async with WorkerHealthServer(host="127.0.0.1", port=port):
@@ -93,7 +89,6 @@ class TestWorkerHealthServer:
         assert status_code == 200
         assert body["healthy"] is True
 
-    @pytest.mark.asyncio
     async def test_404_for_unknown_path(self):
         port = _find_free_port()
         async with WorkerHealthServer(host="127.0.0.1", port=port):
@@ -102,7 +97,6 @@ class TestWorkerHealthServer:
             )
         assert status_code == 404
 
-    @pytest.mark.asyncio
     async def test_405_for_post_method(self):
         port = _find_free_port()
         async with WorkerHealthServer(host="127.0.0.1", port=port):
@@ -111,7 +105,6 @@ class TestWorkerHealthServer:
             )
         assert status_code == 405
 
-    @pytest.mark.asyncio
     async def test_manual_start_stop(self):
         port = _find_free_port()
         server = WorkerHealthServer(host="127.0.0.1", port=port)
@@ -122,7 +115,6 @@ class TestWorkerHealthServer:
         finally:
             await server.stop()
 
-    @pytest.mark.asyncio
     async def test_request_count_increments(self):
         port = _find_free_port()
         async with WorkerHealthServer(host="127.0.0.1", port=port) as server:
@@ -134,7 +126,6 @@ class TestWorkerHealthServer:
 
 @pytest.mark.integration
 class TestRunHealthServer:
-    @pytest.mark.asyncio
     async def test_run_health_server(self):
         port = _find_free_port()
         with pytest.warns(DeprecationWarning, match="run_health_server"):
@@ -145,7 +136,6 @@ class TestRunHealthServer:
         finally:
             await server.stop()
 
-    @pytest.mark.asyncio
     async def test_run_health_server_with_client(self):
         port = _find_free_port()
 

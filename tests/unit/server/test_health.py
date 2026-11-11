@@ -45,7 +45,6 @@ class TestHealthStatus:
 
 
 class TestWorkerHealthServerState:
-    @pytest.mark.asyncio
     async def test_record_activity_updates_last_activity(self):
         server = WorkerHealthServer(host="127.0.0.1", port=0)
         assert server._last_activity is None
@@ -56,7 +55,6 @@ class TestWorkerHealthServerState:
 class TestCheckLive:
     """check_live: optional activity-staleness window (default disabled)."""
 
-    @pytest.mark.asyncio
     async def test_healthy_when_no_window(self):
         """Default posture: no window — always healthy (never false-fails an
         idle queue)."""
@@ -64,7 +62,6 @@ class TestCheckLive:
         status = await server.check_live()
         assert status.healthy is True
 
-    @pytest.mark.asyncio
     async def test_idle_window_disabled_by_default(self):
         """Even with a stale last_activity, no configured window means healthy."""
         server = WorkerHealthServer(host="127.0.0.1", port=0)
@@ -72,7 +69,6 @@ class TestCheckLive:
         status = await server.check_live()
         assert status.healthy is True
 
-    @pytest.mark.asyncio
     async def test_idle_window_unhealthy_when_stale(self):
         server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=30)
         stale = _utc_now() - timedelta(seconds=120)
@@ -95,7 +91,6 @@ class TestCheckLive:
         ):
             assert key in status.details
 
-    @pytest.mark.asyncio
     async def test_idle_window_healthy_at_exact_boundary(self):
         """Equality is healthy: production compares with a strict ``>``, so
         idle_seconds == max_idle_seconds must not fail the probe."""
@@ -107,14 +102,12 @@ class TestCheckLive:
             status = await server.check_live()
         assert status.healthy is True
 
-    @pytest.mark.asyncio
     async def test_idle_window_healthy_when_recent(self):
         server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=300)
         server.record_activity()
         status = await server.check_live()
         assert status.healthy is True
 
-    @pytest.mark.asyncio
     async def test_idle_window_healthy_when_never_active(self):
         """A configured window must not fail before any activity is recorded —
         avoids killing a worker during its startup grace period."""
@@ -122,14 +115,12 @@ class TestCheckLive:
         status = await server.check_live()
         assert status.healthy is True
 
-    @pytest.mark.asyncio
     async def test_zero_max_idle_seconds_disables_window(self):
         server = WorkerHealthServer(host="127.0.0.1", port=0, max_idle_seconds=0)
         # Disabled window: /live stays healthy even with no activity recorded.
         assert (await server.check_live()).healthy is True
 
     @pytest.mark.parametrize("bad_window", [-10, math.inf, math.nan])
-    @pytest.mark.asyncio
     async def test_non_positive_or_non_finite_window_disables_check(
         self, bad_window: float
     ):
@@ -159,7 +150,6 @@ class TestPollDiagnostics:
     ``TestLivePollLoopChecks``.
     """
 
-    @pytest.mark.asyncio
     async def test_fatal_and_poller_counts_surface_in_live_details(self):
         server = WorkerHealthServer(host="127.0.0.1", port=0)
         server.record_worker_fatal(RuntimeError("Activity worker failed"))
@@ -172,7 +162,6 @@ class TestPollDiagnostics:
         assert status.details["poller_counts"] == {"workflow_task": 0.0}
         assert status.details["poller_counts_read_at"] is not None
 
-    @pytest.mark.asyncio
     async def test_fatal_message_is_not_exposed_over_http(self):
         """Only the exception type is retained; the chain goes to the logs.
 
@@ -186,7 +175,6 @@ class TestPollDiagnostics:
 
         assert "abcdef123" not in str(details)
 
-    @pytest.mark.asyncio
     async def test_zero_pollers_do_not_flip_live_when_checks_disabled(self):
         server = WorkerHealthServer(host="127.0.0.1", port=0)
         server.record_poller_counts({"workflow_task": 0.0, "activity_task": 0.0})
@@ -194,7 +182,6 @@ class TestPollDiagnostics:
 
         assert (await server.check_live()).healthy is True
 
-    @pytest.mark.asyncio
     async def test_unknown_reading_stays_none_not_zero(self):
         """An unreadable gauge is recorded as unknown, never as a zero count."""
         server = WorkerHealthServer(host="127.0.0.1", port=0)
@@ -202,7 +189,6 @@ class TestPollDiagnostics:
 
         assert (await server.check_live()).details["poller_counts"] is None
 
-    @pytest.mark.asyncio
     async def test_ready_details_carry_the_same_diagnostics(self):
         server = WorkerHealthServer(host="127.0.0.1", port=0)
         server.set_temporal_client(_StubTemporalClient(identity="1@host"))
@@ -220,7 +206,6 @@ class TestLivePollLoopChecks:
     _ZERO = {"workflow_task": 0.0, "activity_task": 0.0}
     _POLLING = {"workflow_task": 2.0, "activity_task": 0.0}
 
-    @pytest.mark.asyncio
     async def test_zero_readings_trip_live_at_threshold(self):
         server = WorkerHealthServer(
             host="127.0.0.1", port=0, max_zero_poller_readings=3
@@ -237,7 +222,6 @@ class TestLivePollLoopChecks:
         assert status.details["consecutive_zero_poller_readings"] == 3
         assert status.details["poller_counts"] == self._ZERO
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("interrupting", [None, {"activity_task": 1.0}])
     async def test_non_zero_reading_resets_the_streak(
         self, interrupting: dict[str, float] | None
@@ -252,7 +236,6 @@ class TestLivePollLoopChecks:
 
         assert (await server.check_live()).healthy is True
 
-    @pytest.mark.asyncio
     async def test_recovery_after_tripping_returns_live_to_healthy(self):
         server = WorkerHealthServer(
             host="127.0.0.1", port=0, max_zero_poller_readings=1
@@ -263,7 +246,6 @@ class TestLivePollLoopChecks:
         server.record_poller_counts(self._POLLING)
         assert (await server.check_live()).healthy is True
 
-    @pytest.mark.asyncio
     async def test_empty_gauge_counts_as_zero(self):
         """A readable gauge with no poller series is a definitive zero."""
         server = WorkerHealthServer(
@@ -273,7 +255,6 @@ class TestLivePollLoopChecks:
 
         assert (await server.check_live()).healthy is False
 
-    @pytest.mark.asyncio
     async def test_unrecovered_fatal_trips_live_after_bound(self):
         server = WorkerHealthServer(
             host="127.0.0.1", port=0, fatal_recovery_seconds=600
@@ -290,7 +271,6 @@ class TestLivePollLoopChecks:
         assert status.details["fatal_unrecovered_since"] is not None
         assert status.details["fatal_recovery_seconds"] == 600
 
-    @pytest.mark.asyncio
     async def test_polling_reading_after_fatal_counts_as_recovery(self):
         server = WorkerHealthServer(
             host="127.0.0.1", port=0, fatal_recovery_seconds=600
@@ -305,7 +285,6 @@ class TestLivePollLoopChecks:
         assert status.healthy is True
         assert status.details["fatal_unrecovered_since"] is None
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("reading", [None, {"activity_task": 0.0}])
     async def test_unknown_or_zero_reading_is_not_recovery(
         self, reading: dict[str, float] | None
@@ -320,7 +299,6 @@ class TestLivePollLoopChecks:
         with patch("application_sdk.server.health._utc_now", return_value=later):
             assert (await server.check_live()).healthy is False
 
-    @pytest.mark.asyncio
     async def test_activity_heartbeat_is_not_recovery(self):
         """In-flight activities keep heartbeating while a failed worker drains."""
         server = WorkerHealthServer(
@@ -333,7 +311,6 @@ class TestLivePollLoopChecks:
         with patch("application_sdk.server.health._utc_now", return_value=later):
             assert (await server.check_live()).healthy is False
 
-    @pytest.mark.asyncio
     async def test_repeat_fatal_keeps_the_first_deadline(self):
         """A crash loop that never recovers must not keep pushing the bound out."""
         start = _utc_now()
@@ -353,7 +330,6 @@ class TestLivePollLoopChecks:
         ):
             assert (await server.check_live()).healthy is False
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("bad", [0, -1, math.inf, math.nan])
     async def test_non_positive_or_non_finite_fatal_bound_disables_check(
         self, bad: float

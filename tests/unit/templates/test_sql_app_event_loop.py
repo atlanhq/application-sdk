@@ -34,8 +34,6 @@ from application_sdk.templates.contracts.sql_metadata import (
 from application_sdk.templates.sql_app import SqlApp
 from tests.unit.loop_probe import LoopProbe
 
-pytestmark = pytest.mark.asyncio
-
 
 class _FakeSqlClient(BaseSQLClient):
     """In-process SQL client yielding one fixed batch — no network, no driver."""

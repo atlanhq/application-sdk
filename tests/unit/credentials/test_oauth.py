@@ -59,7 +59,6 @@ def _mock_httpx_response(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.anyio
 async def test_get_token_exchanges_when_no_token() -> None:
     svc = OAuthTokenService(_cred())
     mock_resp = _mock_httpx_response(access_token="fresh_tok")
@@ -76,7 +75,6 @@ async def test_get_token_exchanges_when_no_token() -> None:
     assert token == "fresh_tok"
 
 
-@pytest.mark.anyio
 async def test_get_token_uses_cache_when_valid() -> None:
     """No HTTP call when the cached token is still valid."""
     cred = _cred(access_token="cached_tok", expires_at=_future_iso(3600))
@@ -89,7 +87,6 @@ async def test_get_token_uses_cache_when_valid() -> None:
     assert token == "cached_tok"
 
 
-@pytest.mark.anyio
 async def test_get_token_refreshes_when_near_expiry() -> None:
     """Token within the 60-second buffer triggers a refresh."""
     cred = _cred(access_token="old_tok", expires_at=_future_iso(30))  # 30s left
@@ -108,7 +105,6 @@ async def test_get_token_refreshes_when_near_expiry() -> None:
     assert token == "new_tok"
 
 
-@pytest.mark.anyio
 async def test_get_token_refreshes_when_expired() -> None:
     cred = _cred(access_token="old_tok", expires_at=_past_iso(10))
     svc = OAuthTokenService(cred)
@@ -126,7 +122,6 @@ async def test_get_token_refreshes_when_expired() -> None:
     assert token == "renewed_tok"
 
 
-@pytest.mark.anyio
 async def test_force_refresh_ignores_valid_cache() -> None:
     cred = _cred(access_token="cached_tok", expires_at=_future_iso(3600))
     svc = OAuthTokenService(cred)
@@ -149,7 +144,6 @@ async def test_force_refresh_ignores_valid_cache() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.anyio
 async def test_get_headers_returns_bearer() -> None:
     cred = _cred(access_token="mytoken", expires_at=_future_iso(3600))
     svc = OAuthTokenService(cred)
@@ -158,7 +152,6 @@ async def test_get_headers_returns_bearer() -> None:
     assert headers == {"Authorization": "Bearer mytoken"}
 
 
-@pytest.mark.anyio
 async def test_get_headers_empty_when_no_credentials() -> None:
     """No client_id → returns empty dict (auth not configured)."""
     svc = OAuthTokenService(_cred(client_id="", client_secret=""))
@@ -171,7 +164,6 @@ async def test_get_headers_empty_when_no_credentials() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.anyio
 async def test_scopes_sent_in_request() -> None:
     cred = _cred(scopes=("read", "write"))
     svc = OAuthTokenService(cred)
@@ -195,7 +187,6 @@ async def test_scopes_sent_in_request() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.anyio
 async def test_raises_oauth_token_error_on_missing_access_token() -> None:
     svc = OAuthTokenService(_cred())
 
@@ -214,7 +205,6 @@ async def test_raises_oauth_token_error_on_missing_access_token() -> None:
             await svc.get_token()
 
 
-@pytest.mark.anyio
 async def test_raises_oauth_token_error_on_http_status_error() -> None:
     import httpx
 
@@ -353,7 +343,6 @@ def test_calibrate_clock_offset_skips_when_no_iat() -> None:
     assert svc.clock_offset_seconds == 3.0
 
 
-@pytest.mark.anyio
 async def test_exchange_calibrates_clock_offset_from_jwt_iat() -> None:
     """After _exchange, clock_offset_seconds reflects the JWT iat vs local time."""
     server_iat = 1_700_000_030.0
@@ -411,7 +400,6 @@ def test_needs_refresh_applies_clock_offset() -> None:
         assert svc._needs_refresh() is True
 
 
-@pytest.mark.anyio
 async def test_exchange_uses_jwt_exp_for_expires_at() -> None:
     """When the token is a JWT, expires_at is taken from the server-issued exp
     claim rather than datetime.now(UTC)+expires_in, making it immune to local
@@ -438,7 +426,6 @@ async def test_exchange_uses_jwt_exp_for_expires_at() -> None:
     assert result == datetime.fromtimestamp(server_exp, UTC)
 
 
-@pytest.mark.anyio
 async def test_exchange_falls_back_to_expires_in_for_opaque_token() -> None:
     """Opaque tokens (no JWT exp) fall back to the expires_in-based calculation."""
     resp = MagicMock()

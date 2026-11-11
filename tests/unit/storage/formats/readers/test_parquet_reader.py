@@ -83,7 +83,6 @@ def test_init_single_file_with_file_names_raises_error() -> None:
     assert exc_info.value.code == "INVALID_INPUT_FORMAT_SINGLE_PATH_WITH_FILE_NAMES"
 
 
-@pytest.mark.asyncio
 async def test_not_download_file_that_exists() -> None:
     """Test that no download occurs when a parquet file exists locally."""
     path = "/data/test.parquet"
@@ -108,7 +107,6 @@ async def test_not_download_file_that_exists() -> None:
         assert result == [path]
 
 
-@pytest.mark.asyncio
 async def test_download_file_invoked_for_missing_files() -> None:
     """Ensure that a download is triggered when no parquet files exist locally."""
     path = "/local/test.parquet"
@@ -152,7 +150,6 @@ async def test_download_file_invoked_for_missing_files() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test__download_files_uses_base_class() -> None:
     """Test that ParquetFileReader uses the base class _download_files method."""
     path = "/data/test.parquet"
@@ -198,7 +195,6 @@ def _make_parquet_file(tmp_path: Path, name: str, rows: int = 10) -> str:
     return str(path)
 
 
-@pytest.mark.asyncio
 async def test_read_returns_pandas_dataframe(tmp_path: Path) -> None:
     """read() returns a pandas DataFrame built from pyarrow read_table."""
     import pandas as pd
@@ -222,7 +218,6 @@ async def test_read_returns_pandas_dataframe(tmp_path: Path) -> None:
     assert list(result.columns) == ["id", "value"]
 
 
-@pytest.mark.asyncio
 async def test_read_batches_streams_pyarrow_row_groups(tmp_path: Path) -> None:
     """read_batches() yields pandas DataFrames via pyarrow ParquetFile.iter_batches."""
     import pandas as pd
@@ -250,7 +245,6 @@ async def test_read_batches_streams_pyarrow_row_groups(tmp_path: Path) -> None:
     assert total_rows == 10
 
 
-@pytest.mark.asyncio
 async def test_read_batches_multiple_files(tmp_path: Path) -> None:
     """read_batches iterates over each file in the returned file list."""
     import pandas as pd
@@ -279,7 +273,6 @@ async def test_read_batches_multiple_files(tmp_path: Path) -> None:
         assert isinstance(chunk, pd.DataFrame)
 
 
-@pytest.mark.asyncio
 async def test_read_with_mocked_pandas(monkeypatch) -> None:
     """Verify that read delegates to pyarrow and returns a DataFrame."""
     path = "/data/test.parquet"
@@ -320,7 +313,6 @@ async def test_read_with_mocked_pandas(monkeypatch) -> None:
     assert result is not None
 
 
-@pytest.mark.asyncio
 async def test_read_with_input_prefix(tmp_path: Path) -> None:
     """Verify that read downloads multiple files and concatenates them."""
     import pandas as pd
@@ -349,7 +341,6 @@ async def test_read_with_input_prefix(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_context_manager_calls_close(tmp_path: Path) -> None:
     """Verify that using async with calls close() on exit."""
     parquet_file = _make_parquet_file(tmp_path, "test.parquet", rows=2)
@@ -371,7 +362,6 @@ async def test_context_manager_calls_close(tmp_path: Path) -> None:
     assert reader._is_closed
 
 
-@pytest.mark.asyncio
 async def test_close_is_idempotent() -> None:
     """Verify that calling close() multiple times is safe."""
     path = "/data/test.parquet"
@@ -388,7 +378,6 @@ async def test_close_is_idempotent() -> None:
     assert reader._is_closed
 
 
-@pytest.mark.asyncio
 async def test_read_after_close_raises_error(tmp_path: Path) -> None:
     """Verify that reading after close raises ReaderClosedError."""
     parquet_file = _make_parquet_file(tmp_path, "test.parquet", rows=2)
@@ -417,7 +406,6 @@ async def test_read_after_close_raises_error(tmp_path: Path) -> None:
     assert exc_info.value.code == "PRECONDITION_FORMAT_READER_CLOSED"
 
 
-@pytest.mark.asyncio
 async def test_read_batches_after_close_raises_error() -> None:
     """Verify that read_batches after close raises ReaderClosedError."""
     from application_sdk.storage.formats.format_errors import ReaderClosedError
@@ -434,7 +422,6 @@ async def test_read_batches_after_close_raises_error() -> None:
     assert exc_info.value.code == "PRECONDITION_FORMAT_READER_CLOSED"
 
 
-@pytest.mark.asyncio
 async def test_cleanup_on_close_default_true() -> None:
     """Verify that cleanup_on_close defaults to True."""
     path = "/data/test.parquet"
@@ -443,7 +430,6 @@ async def test_cleanup_on_close_default_true() -> None:
     assert reader.cleanup_on_close is True
 
 
-@pytest.mark.asyncio
 async def test_cleanup_on_close_false_retains_files(tmp_path: Path) -> None:
     """Verify that setting cleanup_on_close=False retains downloaded files."""
     parquet_file = _make_parquet_file(tmp_path, "test.parquet", rows=2)
@@ -486,7 +472,6 @@ async def test_cleanup_on_close_false_retains_files(tmp_path: Path) -> None:
     assert reader._is_closed
 
 
-@pytest.mark.asyncio
 async def test_cleanup_on_close_true_cleans_files(tmp_path: Path) -> None:
     """Verify that setting cleanup_on_close=True cleans up downloaded files."""
     parquet_file = _make_parquet_file(tmp_path, "test.parquet", rows=2)
@@ -530,7 +515,6 @@ async def test_cleanup_on_close_true_cleans_files(tmp_path: Path) -> None:
     assert reader._is_closed
 
 
-@pytest.mark.asyncio
 async def test_downloaded_files_tracked_on_read(tmp_path: Path) -> None:
     """Verify that downloaded files are tracked when read() is called."""
     parquet_file = _make_parquet_file(tmp_path, "test.parquet", rows=2)
@@ -617,7 +601,6 @@ def _make_multi_row_group_parquet(
     return str(path)
 
 
-@pytest.mark.asyncio
 async def test_read_batches_multi_row_group_data_fidelity(tmp_path: Path) -> None:
     """All rows are recovered from a file with multiple row groups — no gaps, no duplication."""
     # 3 row groups × 4 rows = 12 rows
@@ -647,7 +630,6 @@ async def test_read_batches_multi_row_group_data_fidelity(tmp_path: Path) -> Non
     assert all_values == sorted(f"v{i}" for i in range(12))
 
 
-@pytest.mark.asyncio
 async def test_read_batches_bounded_by_chunk_size(tmp_path: Path) -> None:
     """Each yielded batch contains at most chunk_size rows (bounded memory per batch)."""
     # 4 row groups × 100 rows = 400 rows; chunk_size=50 forces splits within each group
@@ -671,7 +653,6 @@ async def test_read_batches_bounded_by_chunk_size(tmp_path: Path) -> None:
     assert sum(len(c) for c in chunks) == 400
 
 
-@pytest.mark.asyncio
 async def test_read_batches_streams_in_multiple_batches(tmp_path: Path) -> None:
     """When chunk_size < total rows, multiple batches are yielded — not one large load.
 
@@ -707,7 +688,6 @@ class TestReadNonBatchedSchemaUnification:
     fix (null-typed column in one file + string-typed in another).
     """
 
-    @pytest.mark.asyncio
     async def test_read_preserves_rows_mixed_null_and_string(self, tmp_path) -> None:
         """ParquetFileReader.read() must preserve all rows from files with mixed schemas."""
         f1 = _write_parquet(
@@ -739,7 +719,6 @@ class TestReadNonBatchedSchemaUnification:
         assert [pd.isna(t) for t in tags] == [True, True, False, False]
         assert tags[2:] == ["a", "b"]
 
-    @pytest.mark.asyncio
     async def test_read_merges_legacy_all_null_large_string_with_numeric(
         self, tmp_path
     ) -> None:
@@ -779,7 +758,6 @@ class TestReadNonBatchedSchemaUnification:
         assert df["extra"].isna().tolist() == [True, True, False, False]
         assert df["extra"].dropna().tolist() == [10.0, 18.0]
 
-    @pytest.mark.asyncio
     async def test_read_merges_zero_row_legacy_all_null_large_string_with_numeric(
         self, tmp_path
     ) -> None:
@@ -816,7 +794,6 @@ class TestReadNonBatchedSchemaUnification:
         assert df["extra"].tolist() == [10.0, 18.0]
 
 
-@pytest.mark.asyncio
 async def test_read_with_file_names(tmp_path: Path) -> None:
     """read() returns combined data from all explicitly named files.
 
@@ -851,7 +828,6 @@ async def test_read_with_file_names(tmp_path: Path) -> None:
     assert set(df["id"].tolist()) == set(range(3)) | set(range(4))
 
 
-@pytest.mark.asyncio
 async def test_read_batches_with_file_names(tmp_path: Path) -> None:
     """read_batches() yields all rows from explicitly named files.
 
@@ -884,7 +860,6 @@ async def test_read_batches_with_file_names(tmp_path: Path) -> None:
     assert total == 11  # 5 + 6
 
 
-@pytest.mark.asyncio
 async def test_read_batches_empty_parquet_file(tmp_path: Path) -> None:
     """read_batches() on a 0-row parquet file yields no rows.
 
@@ -910,7 +885,6 @@ async def test_read_batches_empty_parquet_file(tmp_path: Path) -> None:
     assert total_rows == 0, "empty parquet file must yield no rows"
 
 
-@pytest.mark.asyncio
 async def test_read_batches_corrupt_file_raises_format_read_error(
     tmp_path: Path,
 ) -> None:
@@ -942,7 +916,6 @@ async def test_read_batches_corrupt_file_raises_format_read_error(
         assert isinstance(exc_info.value.cause, pa.lib.ArrowInvalid)
 
 
-@pytest.mark.asyncio
 async def test_reader_preserves_object_store_read_error_classification() -> None:
     """A typed ObjectStoreReadError must survive the parquet reader unchanged.
 
@@ -981,7 +954,6 @@ async def test_reader_preserves_object_store_read_error_classification() -> None
     assert exc_info.value.effective_retryable is True
 
 
-@pytest.mark.asyncio
 async def test_read_batches_preserves_object_store_read_error_classification() -> None:
     """Same guard on the parquet batched read path."""
     from application_sdk.storage.formats.format_errors import (

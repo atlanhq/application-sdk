@@ -15,33 +15,28 @@ from application_sdk.testing.mocks import (
 
 
 class TestMockStateStore:
-    @pytest.mark.asyncio
     async def test_save_tracked(self) -> None:
         store = MockStateStore()
         await store.save("k", {"x": 1})
         assert store.get_save_calls() == [("k", {"x": 1})]
 
-    @pytest.mark.asyncio
     async def test_load_tracked(self) -> None:
         store = MockStateStore()
         await store.save("k", {"x": 1})
         await store.load("k")
         assert store.get_load_calls() == ["k"]
 
-    @pytest.mark.asyncio
     async def test_delete_tracked(self) -> None:
         store = MockStateStore()
         await store.save("k", {"x": 1})
         await store.delete("k")
         assert store.get_delete_calls() == ["k"]
 
-    @pytest.mark.asyncio
     async def test_list_keys_tracked(self) -> None:
         store = MockStateStore()
         await store.list_keys("pref")
         assert store.get_list_keys_calls() == ["pref"]
 
-    @pytest.mark.asyncio
     async def test_reset_calls_preserves_data(self) -> None:
         store = MockStateStore()
         await store.save("k", {"x": 1})
@@ -50,7 +45,6 @@ class TestMockStateStore:
         result = await store.load("k")
         assert result == {"x": 1}
 
-    @pytest.mark.asyncio
     async def test_reset_clears_data(self) -> None:
         store = MockStateStore()
         await store.save("k", {"x": 1})
@@ -61,19 +55,16 @@ class TestMockStateStore:
 
 
 class TestMockSecretStore:
-    @pytest.mark.asyncio
     async def test_get_tracked(self) -> None:
         store = MockSecretStore({"pw": "secret"})
         await store.get("pw")
         assert store.get_get_calls() == ["pw"]
 
-    @pytest.mark.asyncio
     async def test_get_optional_tracked(self) -> None:
         store = MockSecretStore()
         await store.get_optional("missing")
         assert store.get_get_optional_calls() == ["missing"]
 
-    @pytest.mark.asyncio
     async def test_reset_calls_preserves_secrets(self) -> None:
         store = MockSecretStore({"pw": "secret"})
         await store.get("pw")
@@ -81,7 +72,6 @@ class TestMockSecretStore:
         assert store.get_get_calls() == []
         assert await store.get("pw") == "secret"
 
-    @pytest.mark.asyncio
     async def test_reset_clears_secrets(self) -> None:
         from application_sdk.infrastructure.secrets import SecretNotFoundError
 
@@ -92,7 +82,6 @@ class TestMockSecretStore:
 
 
 class TestMockPubSub:
-    @pytest.mark.asyncio
     async def test_publish_tracked(self) -> None:
         pubsub = MockPubSub()
         await pubsub.publish("events", {"key": "val"})
@@ -101,7 +90,6 @@ class TestMockPubSub:
         assert calls[0][0] == "events"
         assert calls[0][1] == {"key": "val"}
 
-    @pytest.mark.asyncio
     async def test_publish_filtered_by_topic(self) -> None:
         pubsub = MockPubSub()
         await pubsub.publish("topic-a", {"a": 1})
@@ -109,7 +97,6 @@ class TestMockPubSub:
         assert len(pubsub.get_publish_calls("topic-a")) == 1
         assert len(pubsub.get_publish_calls("topic-b")) == 1
 
-    @pytest.mark.asyncio
     async def test_reset_calls_preserves_published(self) -> None:
         pubsub = MockPubSub()
         await pubsub.publish("t", {"x": 1})
@@ -117,7 +104,6 @@ class TestMockPubSub:
         assert pubsub.get_publish_calls() == []
         assert len(pubsub.get_published()) == 1
 
-    @pytest.mark.asyncio
     async def test_reset_clears_all(self) -> None:
         pubsub = MockPubSub()
         await pubsub.publish("t", {"x": 1})
@@ -127,7 +113,6 @@ class TestMockPubSub:
 
 
 class TestMockBinding:
-    @pytest.mark.asyncio
     async def test_invoke_tracked(self) -> None:
         binding = MockBinding()
         await binding.invoke("get", b"data", {"k": "v"})
@@ -135,7 +120,6 @@ class TestMockBinding:
         assert len(calls) == 1
         assert calls[0] == ("get", b"data", {"k": "v"})
 
-    @pytest.mark.asyncio
     async def test_invoke_filtered_by_operation(self) -> None:
         binding = MockBinding()
         await binding.invoke("get")
@@ -143,14 +127,12 @@ class TestMockBinding:
         assert len(binding.get_invoke_calls("get")) == 1
         assert len(binding.get_invoke_calls("put")) == 1
 
-    @pytest.mark.asyncio
     async def test_configured_response_returned(self) -> None:
         binding = MockBinding()
         binding.set_response("get", BindingResponse(data=b"result"))
         resp = await binding.invoke("get")
         assert resp.data == b"result"
 
-    @pytest.mark.asyncio
     async def test_reset_calls_preserves_responses(self) -> None:
         binding = MockBinding()
         binding.set_response("get", BindingResponse(data=b"x"))
@@ -160,7 +142,6 @@ class TestMockBinding:
         resp = await binding.invoke("get")
         assert resp.data == b"x"
 
-    @pytest.mark.asyncio
     async def test_reset_clears_responses(self) -> None:
         binding = MockBinding()
         binding.set_response("get", BindingResponse(data=b"x"))

@@ -167,7 +167,6 @@ class TestFlushRecordsWorkflowGuard:
 
         return uploads
 
-    @pytest.mark.asyncio
     async def test_skips_store_sink_in_workflow(self, obs_instance, tmp_path):
         """No gzip partition file is written and no upload is attempted."""
         uploads = await self._flush_collecting_uploads(obs_instance, in_workflow=True)
@@ -177,7 +176,6 @@ class TestFlushRecordsWorkflowGuard:
             "workflow-illegal file I/O ran despite the guard"
         )
 
-    @pytest.mark.asyncio
     async def test_writes_store_sink_outside_workflow(self, obs_instance, tmp_path):
         """Positive control: the same call flushes when not in a workflow.
 
@@ -188,7 +186,6 @@ class TestFlushRecordsWorkflowGuard:
 
         assert len(uploads) == 1, uploads
 
-    @pytest.mark.asyncio
     async def test_returns_records_to_the_buffer_in_workflow(self, obs_instance):
         """Skipping the write must not drop the batch the caller swapped out.
 
@@ -233,7 +230,6 @@ class TestAddRecordWorkflowGuard:
         create_task.assert_not_called()
         assert len(obs_instance._buffer) == 1
 
-    @pytest.mark.asyncio
     async def test_starts_flush_outside_workflow(self, obs_instance):
         """Positive control: the same full batch flushes on a running worker loop."""
         create_task = self._add_with_flush_due(obs_instance, in_workflow=False)
@@ -262,7 +258,6 @@ class TestAddRecordWorkflowGuard:
 class TestSyncFlushWorkflowGuard:
     """Neither ``_sync_flush`` branch runs in workflow context."""
 
-    @pytest.mark.asyncio
     async def test_schedules_no_task_in_workflow(self, logger_adapter):
         """Async branch: nothing is scheduled on the (workflow) running loop."""
         flushed: list[bool] = []
@@ -282,7 +277,6 @@ class TestSyncFlushWorkflowGuard:
         assert flushed == []
         assert after == before, "a task was scheduled on the workflow loop"
 
-    @pytest.mark.asyncio
     async def test_schedules_task_outside_workflow(self, logger_adapter):
         """Positive control for the async branch."""
         flushed: list[bool] = []

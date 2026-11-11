@@ -48,7 +48,6 @@ def _local_file(tmp_path: Path, name: str, parts: int = 4) -> Path:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_upload_marks_once_per_part(
     tmp_path: Path, store, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -60,7 +59,6 @@ async def test_upload_marks_once_per_part(
     assert progress_marks.count("storage.upload_part") == 4
 
 
-@pytest.mark.asyncio
 async def test_a_zero_byte_upload_marks_nothing(
     tmp_path: Path, store, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -73,7 +71,6 @@ async def test_a_zero_byte_upload_marks_nothing(
     assert progress_marks.count("storage.upload_part") == 0
 
 
-@pytest.mark.asyncio
 async def test_download_marks_per_streamed_chunk(
     tmp_path: Path, store, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -92,7 +89,6 @@ async def test_download_marks_per_streamed_chunk(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_chunked_download_marks_once_per_range_get(
     tmp_path: Path, store, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -118,7 +114,6 @@ async def test_chunked_download_marks_once_per_range_get(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_directory_upload_marks_once_per_file(
     tmp_path: Path, store, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -131,7 +126,6 @@ async def test_directory_upload_marks_once_per_file(
     assert progress_marks.count("storage.upload_file") == 3
 
 
-@pytest.mark.asyncio
 async def test_a_hash_match_skip_still_counts_as_progress(
     tmp_path: Path, store, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -156,7 +150,6 @@ async def test_a_hash_match_skip_still_counts_as_progress(
     assert progress_marks.count("storage.upload_part") == 0
 
 
-@pytest.mark.asyncio
 async def test_prefix_download_marks_once_per_file(
     tmp_path: Path, store, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -171,7 +164,6 @@ async def test_prefix_download_marks_once_per_file(
     assert progress_marks.count("storage.download_file") == 3
 
 
-@pytest.mark.asyncio
 async def test_cross_store_copy_marks_per_file(
     tmp_path: Path, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -201,7 +193,6 @@ async def test_cross_store_copy_marks_per_file(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_persist_marks_once_per_reference(
     tmp_path: Path, store, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -215,7 +206,6 @@ async def test_persist_marks_once_per_reference(
     assert progress_marks.count("file_ref.persist") == 3
 
 
-@pytest.mark.asyncio
 async def test_materialize_marks_once_per_reference(
     tmp_path: Path, store, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -241,7 +231,6 @@ async def test_materialize_marks_once_per_reference(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_cloudstore_upload_marks_once_per_part(
     tmp_path: Path, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -268,7 +257,6 @@ async def test_cloudstore_upload_marks_once_per_part(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_transfers_behave_identically_with_no_tracker_bound(
     tmp_path: Path, store
 ) -> None:

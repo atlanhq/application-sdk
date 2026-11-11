@@ -106,7 +106,6 @@ class TestCreateAsyncAtlanClient:
 
 
 class TestAtlanClientMixinCacheMiss:
-    @pytest.mark.asyncio
     async def test_creates_client_on_first_call(self) -> None:
         cred_ref = CredentialRef(name="my-atlan", credential_type="atlan_api_token")
         resolved = AtlanApiToken(token="tok", base_url="https://t.atlan.com")
@@ -124,7 +123,6 @@ class TestAtlanClientMixinCacheMiss:
         assert result is mock_client
         mixin.context.resolve_credential.assert_awaited_once_with(cred_ref)
 
-    @pytest.mark.asyncio
     async def test_caches_client_after_first_call(self) -> None:
         cred_ref = CredentialRef(name="my-atlan", credential_type="atlan_api_token")
         resolved = AtlanApiToken(token="tok", base_url="https://t.atlan.com")
@@ -151,7 +149,6 @@ class TestAtlanClientMixinCacheMiss:
 
 
 class TestAtlanClientMixinCacheHit:
-    @pytest.mark.asyncio
     async def test_returns_cached_client_without_resolving(self) -> None:
         cred_ref = CredentialRef(name="my-atlan", credential_type="atlan_api_token")
         mock_client = MagicMock()
@@ -175,7 +172,6 @@ class TestAtlanClientMixinCacheHit:
 
 
 class TestAtlanClientMixinValidatedClientReuse:
-    @pytest.mark.asyncio
     async def test_reuses_validated_client_key(self) -> None:
         """A client stored under _VALIDATED_ASYNC_CLIENT_KEY is reused directly."""
         cred_ref = CredentialRef(name="my-atlan", credential_type="atlan_api_token")
@@ -313,7 +309,6 @@ class TestCreateAsyncAtlanClientHeaders:
 
 
 class TestAtlanClientMixinHeaders:
-    @pytest.mark.asyncio
     async def test_mixin_passes_context_derived_headers(self) -> None:
         # Verify the mixin sources app_name / app_version from the AppContext
         # and forwards them through to the factory on cache-miss creation.

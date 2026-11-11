@@ -154,7 +154,6 @@ class TestSyncWrapper:
 
 
 class TestAsyncWrapper:
-    @pytest.mark.asyncio
     async def test_async_success_records_observability(self) -> None:
         logger, metrics, traces = _mock_components()
 
@@ -168,7 +167,6 @@ class TestAsyncWrapper:
         metrics.record_metric.assert_called_once()
         assert metrics.record_metric.call_args.kwargs["name"] == FUNCTION_CALLS_METRIC
 
-    @pytest.mark.asyncio
     async def test_async_failure_records_error_and_reraises(self) -> None:
         logger, metrics, traces = _mock_components()
 
@@ -188,7 +186,6 @@ class TestAsyncWrapper:
         assert labels["error_type"] == "RuntimeError"
         assert labels["outcome"] == "failure"
 
-    @pytest.mark.asyncio
     async def test_async_swallows_trace_failure_in_error_path(self) -> None:
         logger, metrics, traces = _mock_components()
         traces.record_trace.side_effect = RuntimeError("trace down")
@@ -206,7 +203,6 @@ class TestAsyncWrapper:
             for call in logger.error.call_args_list
         )
 
-    @pytest.mark.asyncio
     async def test_async_swallows_metric_failure_in_error_path(self) -> None:
         logger, metrics, traces = _mock_components()
         metrics.record_metric.side_effect = RuntimeError("metric down")

@@ -104,14 +104,12 @@ class TestAtlanApiToken:
         with pytest.raises((ValidationError, AttributeError, TypeError)):
             cred.base_url = "other"  # type: ignore[misc]
 
-    @pytest.mark.asyncio
     async def test_validate_empty_token_raises(self):
         """Empty token → CredentialValidationError, no pyatlan import needed."""
         cred = AtlanApiToken(token="", base_url="https://x.atlan.com")
         with pytest.raises(CredentialValidationError, match="token must not be empty"):
             await cred.validate()
 
-    @pytest.mark.asyncio
     async def test_validate_empty_base_url_raises(self):
         cred = AtlanApiToken(token="tok", base_url="")
         with pytest.raises(
@@ -119,7 +117,6 @@ class TestAtlanApiToken:
         ):
             await cred.validate()
 
-    @pytest.mark.asyncio
     async def test_validate_success_invokes_pyatlan(self, restore_pyatlan_modules):
         """Success path imports pyatlan_v9 (BLDX-1129 anchor) and calls
         user.get_current."""
@@ -129,7 +126,6 @@ class TestAtlanApiToken:
         fake_cls.assert_called_once_with(base_url="https://x.atlan.com", api_key="tok")
         fake_instance.user.get_current.assert_awaited_once()
 
-    @pytest.mark.asyncio
     async def test_validate_pyatlan_failure_wrapped(self, restore_pyatlan_modules):
         """If pyatlan raises, error is wrapped with original cause."""
         _install_fake_pyatlan(get_current_side_effect=RuntimeError("network down"))
@@ -290,25 +286,21 @@ class TestAtlanOAuthClientValidate:
         defaults.update(kwargs)
         return AtlanOAuthClient(**defaults)
 
-    @pytest.mark.asyncio
     async def test_validate_missing_client_id(self):
         cred = self._make(client_id="")
         with pytest.raises(CredentialValidationError, match="client_id"):
             await cred.validate()
 
-    @pytest.mark.asyncio
     async def test_validate_missing_client_secret(self):
         cred = self._make(client_secret="")
         with pytest.raises(CredentialValidationError, match="client_secret"):
             await cred.validate()
 
-    @pytest.mark.asyncio
     async def test_validate_missing_base_url(self):
         cred = self._make(base_url="")
         with pytest.raises(CredentialValidationError, match="base_url"):
             await cred.validate()
 
-    @pytest.mark.asyncio
     async def test_validate_missing_access_token(self):
         cred = self._make(access_token="")
         with pytest.raises(
@@ -316,7 +308,6 @@ class TestAtlanOAuthClientValidate:
         ):
             await cred.validate()
 
-    @pytest.mark.asyncio
     async def test_validate_success_invokes_pyatlan(self, restore_pyatlan_modules):
         """Success path uses inline pyatlan_v9 import (BLDX-1129 anchor).
 
@@ -328,7 +319,6 @@ class TestAtlanOAuthClientValidate:
         fake_cls.assert_called_once_with(base_url="https://t.atlan.com", api_key="atok")
         fake_instance.user.get_current.assert_awaited_once()
 
-    @pytest.mark.asyncio
     async def test_validate_pyatlan_failure_wrapped(self, restore_pyatlan_modules):
         _install_fake_pyatlan(get_current_side_effect=RuntimeError("401"))
         cred = self._make()
@@ -402,7 +392,6 @@ class TestParseAtlanOAuthClient:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_validate_does_not_leak_token_in_error_message(
     restore_pyatlan_modules,
 ):

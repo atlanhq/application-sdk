@@ -47,8 +47,6 @@ from application_sdk.storage.reference import (
 from tests.unit.loop_probe import LoopProbe
 from tests.unit.private_stdlib import private_stdlib
 
-pytestmark = pytest.mark.asyncio
-
 _PAYLOAD = b"0123456789abcdef" * 64  # 1 KiB
 
 

@@ -1,0 +1,28 @@
+/// Source of `../generated_bigquery_credentials/` (FND-4680).
+///
+/// The BigQuery app's credential form and its `crawler` entry point's workflow
+/// form, reduced to what `test_validate_route_credentials.py` exercises, written
+/// as a contract so the fixture is toolkit output rather than a hand-trimmed
+/// copy. It amends the in-repo toolkit, so a toolkit change that alters these
+/// forms fails `test_bigquery_fixture_freshness.py` instead of going unnoticed.
+///
+/// Regenerate after editing this contract or the toolkit:
+///   uv run poe regen-test-fixtures
+amends "../../../../../contract-toolkit/src/App.pkl"
+
+import "crawler.pkl" as Crawler
+
+name = "bigquery"
+displayName = "BigQuery"
+icon = "https://assets.atlan.com/assets/bigquery.svg"
+// The bundle root owns no credential config; the crawler entry point does,
+// and the toolkit hoists it to the generated root.
+hasCredentialConfig = false
+
+entrypoints {
+  new Entrypoint {
+    name = "crawler"
+    displayName = "Crawler"
+    contract = Crawler
+  }
+}

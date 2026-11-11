@@ -58,7 +58,6 @@ def _client(statuses: dict[str, WorkflowExecutionStatus | Exception]) -> mock.Mo
 
 
 class TestSweepClosedRuns:
-    @pytest.mark.asyncio
     async def test_closed_runs_are_removed_and_running_ones_kept(self) -> None:
         done = _dir_of(("wf-a", "run-done"))
         failed = _dir_of(("wf-b", "run-failed"))
@@ -80,7 +79,6 @@ class TestSweepClosedRuns:
         assert done not in credential_utils._issued_dirs
         assert live in credential_utils._issued_dirs
 
-    @pytest.mark.asyncio
     async def test_a_run_temporal_no_longer_knows_is_removed(self) -> None:
         gone = _dir_of(("wf-a", "run-gone"))
         await credential_sweep.sweep_closed_runs(
@@ -88,7 +86,6 @@ class TestSweepClosedRuns:
         )
         assert not os.path.lexists(gone)
 
-    @pytest.mark.asyncio
     async def test_an_unanswered_status_keeps_the_dir_for_the_next_sweep(self) -> None:
         kept = _dir_of(("wf-a", "run-x"))
         await credential_sweep.sweep_closed_runs(
@@ -97,7 +94,6 @@ class TestSweepClosedRuns:
         assert os.path.isdir(kept)
         assert app_base._runs_with_credential_dirs() == [("wf-a", "run-x")]
 
-    @pytest.mark.asyncio
     async def test_nothing_tracked_means_no_temporal_calls(self) -> None:
         client = _client({})
         await credential_sweep.sweep_closed_runs(client)
@@ -105,7 +101,6 @@ class TestSweepClosedRuns:
 
 
 class TestWorkerLifecycle:
-    @pytest.mark.asyncio
     async def test_the_worker_runs_the_sweeper_and_removes_everything_at_shutdown(
         self,
     ) -> None:
@@ -128,7 +123,6 @@ class TestWorkerLifecycle:
         assert not os.path.lexists(live)
         assert app_base._runs_with_credential_dirs() == []
 
-    @pytest.mark.asyncio
     async def test_run_removes_everything_when_the_worker_stops(self) -> None:
         live = _dir_of(("wf-a", "run-live"))
         inner = mock.AsyncMock()

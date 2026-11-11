@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from unittest import mock
 
-import pytest
-
 from application_sdk.app.base import _app_state, _app_state_lock
 from application_sdk.constants import TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.types import FileReference
@@ -108,7 +106,6 @@ class TestActivityTrackingWiring:
         with _app_state_lock:
             _app_state.clear()
 
-    @pytest.mark.asyncio
     async def test_refs_from_input_and_output_are_tracked(self) -> None:
         """_track_file_refs is called with refs from both input_data and result."""
         import application_sdk.execution._temporal.activities as act_mod

@@ -85,7 +85,6 @@ class TestAzureClient:
         assert azure_client._connection_health is False
         assert azure_client._services == {}
 
-    @pytest.mark.asyncio
     async def test_health_check_no_connection(self, azure_client):
         """Test health check when connection is not healthy."""
         azure_client._connection_health = False
@@ -97,7 +96,6 @@ class TestAzureClient:
         assert result.services == {}
         assert result.overall_health is False
 
-    @pytest.mark.asyncio
     async def test_health_check_with_services_dict_return(self, azure_client):
         """Test health check with services that return dictionary health status."""
         azure_client._connection_health = True
@@ -129,7 +127,6 @@ class TestAzureClient:
 
         assert result.overall_health is True
 
-    @pytest.mark.asyncio
     async def test_health_check_with_services_object_return(self, azure_client):
         """Test health check with services that return object with status attribute."""
         azure_client._connection_health = True
@@ -154,7 +151,6 @@ class TestAzureClient:
         assert service_health.status == "healthy"
         assert service_health.error is None
 
-    @pytest.mark.asyncio
     async def test_health_check_with_services_unexpected_return(self, azure_client):
         """Test health check with services that return unexpected types."""
         azure_client._connection_health = True
@@ -176,7 +172,6 @@ class TestAzureClient:
         assert service_health.status == "unknown"
         assert "Unexpected health check return type" in service_health.error
 
-    @pytest.mark.asyncio
     async def test_health_check_with_services_no_health_check_method(
         self, azure_client
     ):
@@ -200,7 +195,6 @@ class TestAzureClient:
         assert service_health.status == "unknown"
         assert service_health.error is None
 
-    @pytest.mark.asyncio
     async def test_health_check_with_service_exception(self, azure_client):
         """Test health check when a service raises an exception."""
         azure_client._connection_health = True
@@ -224,7 +218,6 @@ class TestAzureClient:
         assert service_health.status == "error"
         assert service_health.error == "Service unavailable"
 
-    @pytest.mark.asyncio
     async def test_health_check_overall_health_calculation(self, azure_client):
         """Test that overall health is calculated correctly."""
         azure_client._connection_health = True

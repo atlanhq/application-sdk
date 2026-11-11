@@ -5176,7 +5176,6 @@ class TestGetTemporalClientInlineImports:
     in application_sdk.execution surfaces here, not in production.
     """
 
-    @pytest.mark.asyncio
     async def test_no_auth_uses_create_temporal_client(
         self, reset_temporal_client_singleton
     ) -> None:
@@ -5207,7 +5206,6 @@ class TestGetTemporalClientInlineImports:
         assert kwargs["enable_prometheus"] is True
         assert kwargs["prometheus_bind_address"] == ""
 
-    @pytest.mark.asyncio
     async def test_temporal_client_uses_metrics_runtime_config(
         self, reset_temporal_client_singleton
     ) -> None:
@@ -5234,7 +5232,6 @@ class TestGetTemporalClientInlineImports:
         assert kwargs["enable_prometheus"] is False
         assert kwargs["prometheus_bind_address"] == "127.0.0.1:9999"
 
-    @pytest.mark.asyncio
     async def test_returns_cached_client_on_second_call(
         self, reset_temporal_client_singleton
     ) -> None:
@@ -5257,7 +5254,6 @@ class TestGetTemporalClientInlineImports:
         # Cached: only one underlying create
         assert mock_create.call_count == 1
 
-    @pytest.mark.asyncio
     async def test_auth_enabled_uses_temporal_auth_manager(
         self, reset_temporal_client_singleton
     ) -> None:
@@ -5311,7 +5307,6 @@ class TestGetTemporalClientInlineImports:
 class TestGetWorkflowResultHelper:
     """Tests for _get_workflow_result coverage (lines 198-215)."""
 
-    @pytest.mark.asyncio
     async def test_typed_dict_result_returned_as_dict(self) -> None:
         from unittest.mock import AsyncMock, MagicMock
 
@@ -5327,7 +5322,6 @@ class TestGetWorkflowResultHelper:
         )
         assert result == {"foo": "bar"}
 
-    @pytest.mark.asyncio
     async def test_pydantic_result_is_model_dumped(self) -> None:
         from unittest.mock import AsyncMock, MagicMock
 
@@ -5349,7 +5343,6 @@ class TestGetWorkflowResultHelper:
         )
         assert result == {"x": 42, "y": "hello"}
 
-    @pytest.mark.asyncio
     async def test_unknown_result_type_returns_empty_dict(self) -> None:
         from unittest.mock import AsyncMock, MagicMock
 
@@ -5365,7 +5358,6 @@ class TestGetWorkflowResultHelper:
         )
         assert result == {}
 
-    @pytest.mark.asyncio
     async def test_typed_failure_falls_back_to_untyped(self) -> None:
         """If typed deserialization fails, fall back to untyped result.
         Verifies the swallowed-but-logged exception path still returns data.

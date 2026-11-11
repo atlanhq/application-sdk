@@ -51,33 +51,28 @@ def _pid() -> int:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_returns_result_across_process_boundary():
     assert await run_fault_isolated(_echo, "hi") == "echo:hi"
 
 
-@pytest.mark.asyncio
 async def test_native_crash_surfaces_as_broken_pool_and_parent_survives():
     """A segfault in the child must become a catchable Python exception here."""
     with pytest.raises(BrokenProcessPool):
         await run_fault_isolated(_segfault)
 
 
-@pytest.mark.asyncio
 async def test_pool_recycles_after_native_crash():
     with pytest.raises(BrokenProcessPool):
         await run_fault_isolated(_segfault)
     assert await run_fault_isolated(_echo, "recovered") == "echo:recovered"
 
 
-@pytest.mark.asyncio
 async def test_timeout_kills_hung_child_and_pool_recycles():
     with pytest.raises(TimeoutError):
         await run_fault_isolated(_sleep_forever, timeout=0.5)
     assert await run_fault_isolated(_echo, "recovered") == "echo:recovered"
 
 
-@pytest.mark.asyncio
 async def test_foreign_discard_never_cancels_a_concurrent_caller():
     """A caller whose child is discarded by *another* caller's timeout must see
     a catchable exception, never CancelledError.
@@ -106,7 +101,6 @@ async def test_foreign_discard_never_cancels_a_concurrent_caller():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_max_workers_1_serialises_into_a_single_child():
     # Opt-in sequentialisation: a width-1 pool has exactly one child, so
     # concurrent max_workers=1 callers all run in that same child (serialised),
@@ -117,7 +111,6 @@ async def test_max_workers_1_serialises_into_a_single_child():
     assert len(set(pids)) == 1
 
 
-@pytest.mark.asyncio
 async def test_max_workers_below_one_is_rejected():
     with pytest.raises(ValueError):
         await run_fault_isolated(_pid, max_workers=0)
@@ -128,14 +121,12 @@ async def test_max_workers_below_one_is_rejected():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_best_effort_returns_result_and_does_not_warn():
     logger = MagicMock()
     assert await run_best_effort(_echo, "hi", label="Echo", logger=logger) == "echo:hi"
     logger.warning.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_best_effort_swallows_native_crash():
     logger = MagicMock()
     assert await run_best_effort(_segfault, label="Decode", logger=logger) is None
@@ -144,7 +135,6 @@ async def test_best_effort_swallows_native_crash():
     assert "Decode" in logger.warning.call_args.args  # label interpolated
 
 
-@pytest.mark.asyncio
 async def test_best_effort_swallows_timeout():
     logger = MagicMock()
     result = await run_best_effort(
@@ -155,7 +145,6 @@ async def test_best_effort_swallows_timeout():
     assert "timed out" in logger.warning.call_args.args[0]
 
 
-@pytest.mark.asyncio
 async def test_best_effort_swallows_ordinary_exception_with_traceback():
     logger = MagicMock()
     assert (

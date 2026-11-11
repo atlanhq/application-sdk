@@ -244,7 +244,6 @@ class TestActivityExceptionHandlerDeepChain:
             current = nxt
         return _ConfigError(message="no accessible assets", cause=current)
 
-    @pytest.mark.asyncio
     async def test_handler_raises_application_error_not_recursion_error(
         self,
     ) -> None:
@@ -309,7 +308,6 @@ class TestActivityExceptionHandlerDeepChain:
         assert depth <= _MAX_CHAIN_DEPTH + 2
         assert raised.type == "_ConfigError"
 
-    @pytest.mark.asyncio
     async def test_details_carry_original_type_and_message(self) -> None:
         from application_sdk.app.base import App
         from application_sdk.app.registry import TaskRegistry

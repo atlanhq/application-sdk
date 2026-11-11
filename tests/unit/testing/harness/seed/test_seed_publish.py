@@ -351,7 +351,6 @@ def _wire(
 class TestSeedAssetsSequence:
     """Validate, upload, publish, verify — in that order, or not at all."""
 
-    @pytest.mark.asyncio
     async def test_a_successful_seed_reports_what_it_published(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -370,7 +369,6 @@ class TestSeedAssetsSequence:
         assert seeded.ae_workflow_slug == "slug-1"
         assert seeded.ae_run_id == "ae-run-1"
 
-    @pytest.mark.asyncio
     async def test_the_ndjson_lands_under_the_transformed_prefix(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -384,7 +382,6 @@ class TestSeedAssetsSequence:
         )
         assert uploaded == [(f"{_PREFIX_ROOT}/transformed/assets.json", "assets.json")]
 
-    @pytest.mark.asyncio
     async def test_an_invalid_batch_is_neither_uploaded_nor_submitted(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -416,7 +413,6 @@ class TestSeedAssetsSequence:
         assert ae.submitted == []
         assert "PUBLIC" in str(caught.value)
 
-    @pytest.mark.asyncio
     async def test_a_publish_that_did_not_succeed_is_a_failure_not_a_seed(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -434,7 +430,6 @@ class TestSeedAssetsSequence:
         assert "slug-1" in str(caught.value)
         assert "ae-run-1" in str(caught.value)
 
-    @pytest.mark.asyncio
     async def test_a_succeeded_publish_that_landed_nothing_is_a_failure(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -454,7 +449,6 @@ class TestSeedAssetsSequence:
         assert f"{_PREFIX_ROOT}/transformed" in str(caught.value)
         assert "ae-run-1" in str(caught.value)
 
-    @pytest.mark.asyncio
     async def test_a_short_count_is_reported_but_not_fatal(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -473,7 +467,6 @@ class TestSeedAssetsSequence:
         )
         assert seeded.qualified_name == _CONNECTION_QN
 
-    @pytest.mark.asyncio
     async def test_an_unreadable_count_is_unverified_not_empty(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -490,7 +483,6 @@ class TestSeedAssetsSequence:
         )
         assert seeded.qualified_name == _CONNECTION_QN
 
-    @pytest.mark.asyncio
     async def test_the_read_back_runs_only_after_the_node_verdict(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -513,7 +505,6 @@ class TestSeedAssetsSequence:
 class TestTheGraphThatRuns:
     """The seed's own node, or nothing — never some app's crawl."""
 
-    @pytest.mark.asyncio
     async def test_the_submit_names_only_the_slug(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -528,7 +519,6 @@ class TestTheGraphThatRuns:
         )
         assert ae.submitted == ["slug-1"]
 
-    @pytest.mark.asyncio
     async def test_the_guard_asks_for_the_seeds_own_node(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -540,7 +530,6 @@ class TestTheGraphThatRuns:
         )
         assert ae.guarded == [("slug-1", (SEED_PUBLISH_NODE_ID,))]
 
-    @pytest.mark.asyncio
     async def test_a_substituted_version_is_refused_before_the_poll(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -557,7 +546,6 @@ class TestTheGraphThatRuns:
         assert "extract, publish" in str(caught.value)
         assert SEED_PUBLISH_NODE_ID in str(caught.value)
 
-    @pytest.mark.asyncio
     async def test_a_foreign_run_is_refused_even_when_it_went_green(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -574,7 +562,6 @@ class TestTheGraphThatRuns:
         assert "extract, publish" in str(caught.value)
         assert "ae-run-1" in str(caught.value)
 
-    @pytest.mark.asyncio
     async def test_a_run_reporting_no_nodes_is_not_treated_as_foreign(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -104,7 +104,6 @@ def _reset_instances():
 
 
 class TestCleanupOldRecordsOffload:
-    @pytest.mark.asyncio
     async def test_partition_removal_offloaded_to_thread(self, tmp_path) -> None:
         obs = _make_observability(tmp_path, retention_days=7)
         stale_day = _partition_dir(obs, _FROZEN_NOW - timedelta(days=30))
@@ -131,7 +130,6 @@ class TestCleanupOldRecordsOffload:
         )
         assert not os.path.exists(stale_day)
 
-    @pytest.mark.asyncio
     async def test_day_partition_pruned_without_year_deletion(self, tmp_path) -> None:
         """A stale *day* inside the current year must still be pruned.
 
