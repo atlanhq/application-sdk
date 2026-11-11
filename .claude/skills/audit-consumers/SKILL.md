@@ -340,15 +340,20 @@ account for every entry, even ones that turn out to have no SDK usage at all.
 Clone every candidate once, up front. Phases B and E read from these clones.
 
 ```bash
-mkdir -p /tmp/audit-clones && : > /tmp/audit-clone-fail.txt
+rm -rf /tmp/audit-clones && mkdir -p /tmp/audit-clones && : > /tmp/audit-clone-fail.txt
 xargs -P 12 -n 1 sh -c '
   r="$1"; d="/tmp/audit-clones/${r#atlanhq/}"
-  [ -d "$d" ] || GIT_TERMINAL_PROMPT=0 git clone -q --depth 1 --filter=blob:limit=200k \
+  GIT_TERMINAL_PROMPT=0 git clone -q --depth 1 --filter=blob:limit=200k \
       --no-checkout "https://github.com/$r.git" "$d" 2>/dev/null \
     || echo "$r" >> /tmp/audit-clone-fail.txt
 ' _ < /tmp/audit-repos.txt
 wc -l < /tmp/audit-clone-fail.txt
 ```
+
+- **Every run starts from fresh clones.** `rm -rf` the directory first; never reuse a clone
+  from an earlier run. A leftover clone is frozen at its old `HEAD`, so usage added since then
+  would be reported as `analyzed-no-usage`. Re-cloning 120 shallow, blob-filtered repos takes
+  about a minute.
 
 - Clone over **HTTPS** with `GIT_TERMINAL_PROMPT=0`. `git@github.com:` clones have
   failed on every repo in this environment: the agent's SSH key signs commits but is not
