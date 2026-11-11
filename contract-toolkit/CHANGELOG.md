@@ -6,6 +6,13 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.37.2] - 2026-11-11
+
+### Bug fixes
+
+- default deploy.dapr.secretstore to the app's credentials and flag credential apps without it (K030) [FND-4871] (#4848) ([8d4d4e5](https://github.com/atlanhq/application-sdk/commit/8d4d4e5))
+- delete orphaned AgentConfig.pkl and CI-check App.pkl's SDK names [FND-4694] (#4839) ([67f6797](https://github.com/atlanhq/application-sdk/commit/67f6797))
+
 ## [0.37.1] - 2026-11-09
 
 ### Bug fixes
