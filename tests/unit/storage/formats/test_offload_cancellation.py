@@ -50,7 +50,6 @@ from tests.unit.private_stdlib import private_stdlib
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-pytestmark = pytest.mark.asyncio
 
 # Generous enough that a loaded CI box never trips it, short enough that a real
 # hang fails the test rather than the job.

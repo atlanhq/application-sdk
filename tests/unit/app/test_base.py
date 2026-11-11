@@ -567,7 +567,6 @@ class TestTaskOnlyMethods:
         with pytest.raises(AppContextError):
             call(self._app(), heartbeat_details_type)
 
-    @pytest.mark.asyncio
     async def test_run_in_thread_outside_task_raises(self) -> None:
         with pytest.raises(AppContextError):
             await self._app().run_in_thread(lambda: None)
@@ -586,7 +585,6 @@ class TestTaskOnlyMethods:
         app._task_context = tc
         assert app.get_last_heartbeat_details() == ("x",)
 
-    @pytest.mark.asyncio
     async def test_run_in_thread_delegates(self) -> None:
         app = self._app()
         tc = mock.MagicMock()
@@ -600,7 +598,6 @@ class TestTaskOnlyMethods:
         assert result == "done"
         tc.run_in_thread.assert_awaited_once()
 
-    @pytest.mark.asyncio
     async def test_run_in_thread_forwards_a_func_cancel_kwarg(self) -> None:
         """Every keyword is func's: ``cancel=`` and ``cancel_handle=`` both
         pass through unchanged (lens F-b8aa2a)."""
@@ -696,7 +693,6 @@ class TestAppState:
         with pytest.raises(AppContextError, match="outside of task context"):
             accessor.set("k", 1)
 
-    @pytest.mark.asyncio
     async def test_persistent_state_accessor_delegates_to_context(self) -> None:
         app = self._app()
         ctx = mock.MagicMock()
@@ -768,7 +764,6 @@ class TestAppConvenience:
 
 
 class TestRunStub:
-    @pytest.mark.asyncio
     async def test_default_run_raises_not_implemented(self) -> None:
         # NoRunApp inherits the App.run stub silently; call it directly to
         # exercise the NotImplementedError branch.
@@ -902,7 +897,6 @@ class TestScanAndWrap:
 class TestCreateTaskActivityWrapper:
     """Tests for _create_task_activity_wrapper."""
 
-    @pytest.mark.asyncio
     async def test_wrapper_invokes_workflow_execute_activity(self) -> None:
         wrapper = _create_task_activity_wrapper(
             app_name="my-app",
@@ -933,7 +927,6 @@ class TestCreateTaskActivityWrapper:
         # Result type is forwarded for proper deserialization
         assert call_args.kwargs["result_type"] is _BLDXOutput
 
-    @pytest.mark.asyncio
     async def test_wrapper_disables_heartbeat_when_none(self) -> None:
         wrapper = _create_task_activity_wrapper(
             app_name="a",
@@ -955,7 +948,6 @@ class TestCreateTaskActivityWrapper:
         # When heartbeat is disabled the kwarg is None.
         assert exec_act.call_args.kwargs["heartbeat_timeout"] is None
 
-    @pytest.mark.asyncio
     async def test_wrapper_passes_explicit_retry_policy_through(self) -> None:
         from application_sdk.execution.retry import RetryPolicy
 
@@ -998,7 +990,6 @@ class TestGenerateWorkflowClass:
             implicit=True,
         )
 
-    @pytest.mark.asyncio
     async def test_generate_workflow_returns_cached_class(self) -> None:
         # Build a real App via __init_subclass__ to keep types valid.
         class _CachedApp(App):
@@ -1019,7 +1010,6 @@ class TestGenerateWorkflowClass:
             wf_cls_b = generate_workflow_class(_CachedApp, ep)
         assert wf_cls_a is wf_cls_b
 
-    @pytest.mark.asyncio
     async def test_warns_at_boot_when_input_not_gate_eligible(self) -> None:
         # _BLDXInput is a bare Input — not credential-resolvable — so the gate
         # would silently skip at runtime. Boot must surface that once, loudly.
@@ -1043,7 +1033,6 @@ class TestGenerateWorkflowClass:
         assert log.warning.called
         assert "Preflight gate will not run" in log.warning.call_args.args[0]
 
-    @pytest.mark.asyncio
     async def test_no_boot_warn_when_input_gate_eligible(self) -> None:
         class _ResolvableApp(App):
             async def run(self, input: _GateEligibleInput) -> _BLDXOutput:
@@ -1064,7 +1053,6 @@ class TestGenerateWorkflowClass:
 
         assert not log.warning.called
 
-    @pytest.mark.asyncio
     async def test_run_happy_path_executes_entry_method(self) -> None:
         results: list[str] = []
 
@@ -1105,7 +1093,6 @@ class TestGenerateWorkflowClass:
         assert results == ["ran:hi"]
         on_complete.assert_awaited_once()
 
-    @pytest.mark.asyncio
     async def test_run_raw_dict_payload_is_validated_into_typed_model(self) -> None:
         """A raw wire payload (dict) is validated into the typed contract before the
         entry method runs — the entry point still receives a typed model, so the
@@ -1147,7 +1134,6 @@ class TestGenerateWorkflowClass:
         assert isinstance(seen[0], _BLDXInput)
         assert seen[0].value == "hi"
 
-    @pytest.mark.asyncio
     async def test_run_invalid_payload_fails_fast_non_retryable(self) -> None:
         """An invalid payload fails as a non-retryable workflow *execution* error
         (fast) rather than an unvalidated decode failure that Temporal would retry
@@ -1232,7 +1218,6 @@ class TestGenerateWorkflowClass:
         stack.enter_context(mock.patch("application_sdk.app.base._wrap_instance_tasks"))
         return stack
 
-    @pytest.mark.asyncio
     async def test_run_wraps_raw_exceptions_in_application_error(self) -> None:
         class BoomApp(App):
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
@@ -1268,7 +1253,6 @@ class TestGenerateWorkflowClass:
         assert isinstance(exc.value.__cause__, ValueError)
         assert getattr(exc.value, "non_retryable", None) is True
 
-    @pytest.mark.asyncio
     async def test_run_lets_failure_error_propagate_unchanged(self) -> None:
         from temporalio.exceptions import FailureError
 
@@ -1303,7 +1287,6 @@ class TestGenerateWorkflowClass:
         ):
             await wf_cls.run(mock.MagicMock(), _BLDXInput())
 
-    @pytest.mark.asyncio
     async def test_run_retryable_error_marked_retryable(self) -> None:
         class _Retry(RetryableError):
             pass
@@ -1340,7 +1323,6 @@ class TestGenerateWorkflowClass:
 
         assert getattr(exc.value, "non_retryable", None) is False
 
-    @pytest.mark.asyncio
     async def test_run_swallows_on_complete_failure(self) -> None:
         class OCFail(App):
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
@@ -1374,7 +1356,6 @@ class TestGenerateWorkflowClass:
 
         assert isinstance(out, _BLDXOutput)
 
-    @pytest.mark.asyncio
     async def test_run_continues_when_correlation_import_fails(self) -> None:
         """Failure inside the inline get_correlation_context import path falls back to run_id."""
 
@@ -1407,7 +1388,6 @@ class TestGenerateWorkflowClass:
 
         assert isinstance(out, _BLDXOutput)
 
-    @pytest.mark.asyncio
     async def test_preflight_block_logs_warning_not_error(self) -> None:
         """A PreflightFailed gate block must log at warning (no stack), not error."""
 
@@ -1508,7 +1488,6 @@ class TestGenerateWorkflowClass:
             wf_cls = generate_workflow_class(GatedApp, ep)
         return GatedApp, wf_cls
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("wrapped", [False, True], ids=["bare", "activity_error"])
     async def test_preflight_block_never_reaches_the_entry_method(
         self, wrapped: bool
@@ -1602,7 +1581,6 @@ class TestGenerateWorkflowClass:
             await wf_cls.run(mock.MagicMock(), _BLDXInput())
         return excinfo.value
 
-    @pytest.mark.asyncio
     async def test_non_retryable_task_failure_is_lifted_to_a_non_retryable_workflow_failure(
         self,
     ) -> None:
@@ -1629,7 +1607,6 @@ class TestGenerateWorkflowClass:
         assert list(raised.details) == [details]
         assert raised.__cause__ is wrapper
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("error_type", "non_retryable"),
         [("ValueError", False), ("WorkerEvicted", True)],
@@ -1650,7 +1627,6 @@ class TestGenerateWorkflowClass:
 
         assert raised is wrapper
 
-    @pytest.mark.asyncio
     async def test_a_proceeding_gate_runs_the_entry_method_exactly_once(
         self,
     ) -> None:
@@ -1772,7 +1748,6 @@ class TestWorkflowInteractionRelay:
         assert defn is not None
         assert "get_counter" in defn.queries
 
-    @pytest.mark.asyncio
     async def test_relay_delegates_to_shared_app_instance(self) -> None:
         """Interaction relay must mutate the same App instance _run sees, not a fresh one."""
 

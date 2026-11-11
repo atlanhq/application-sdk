@@ -56,7 +56,6 @@ class TestWriterDataIntegrity:
                     pass
         return ids
 
-    @pytest.mark.asyncio
     async def test_pandas_writer_no_data_loss(self, temp_dir: str):
         """Verify pandas writer preserves all records across multiple write() calls."""
         object_store: dict[str, list[str]] = {}
@@ -102,7 +101,6 @@ class TestWriterDataIntegrity:
             )
             assert len(ids_in_store) == total_records
 
-    @pytest.mark.asyncio
     async def test_daft_shim_writer_no_data_loss(self, temp_dir: str):
         """Verify DataframeType.daft shim preserves all records across multiple write() calls.
 
@@ -155,7 +153,6 @@ class TestWriterDataIntegrity:
             )
             assert len(ids_in_store) == total_records
 
-    @pytest.mark.asyncio
     async def test_pandas_daft_shim_chunk_count_consistency(self, temp_dir: str):
         """Verify pandas and DataframeType.daft-shim writers have identical chunk_count.
 
@@ -213,7 +210,6 @@ class TestWriterDataIntegrity:
             assert pandas_writer.chunk_count == daft_shim_writer.chunk_count
             assert len(pandas_writer.partitions) == len(daft_shim_writer.partitions)
 
-    @pytest.mark.asyncio
     async def test_no_duplicate_file_uploads(self, temp_dir: str):
         """Verify no duplicate file names are uploaded (original file-name-collision bug).
 

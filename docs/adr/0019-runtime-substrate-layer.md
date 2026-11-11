@@ -152,7 +152,7 @@ file it splits:
   `import application_sdk.execution as ex; ex.progress.…` worked; `heartbeat` now
   reaches `_runtime.progress` instead.
 
-Both are pinned per-name in `tests/unit/runtime/test_layering.py`. What is *not*
+Both are pinned per-name in `tests/unit/_runtime/test_layering.py`. What is *not*
 preserved is incidental import leakage — stdlib module aliases (`threading`,
 `functools`), typing helpers (`Iterator`, `TypeVar`), and module privates
 (`_BLOCKING_EXECUTOR`, `_auto_hold`, `_progress_tracker`) that were reachable only
@@ -179,7 +179,7 @@ it would have broken a real consumer for no benefit to the goal. A test asserts
 `activities.py` does not bind the name at module scope.
 
 **The rule is enforced, not remembered.**
-`tests/unit/runtime/test_layering.py` imports each `_runtime` module in a
+`tests/unit/_runtime/test_layering.py` imports each `_runtime` module in a
 subprocess and fails if any layer above it was pulled in, asserts
 `storage.ops` still loads standalone without `execution`, and asserts the façades
 re-export the same objects. A subprocess is required: in-process, pytest has
@@ -228,4 +228,4 @@ the same rediscover-by-`ImportError` trap, one layer down.
 * [ADR-0017](0017-native-execution-isolation.md) — `run_fault_isolated` / `run_best_effort`.
 * [ADR-0018](0018-progress-aware-heartbeat.md) — the progress tracker, holds, and the stall watchdog.
 * `application_sdk/_runtime/__init__.py` — the rule, next to the code it governs.
-* `tests/unit/runtime/test_layering.py` — the enforcement.
+* `tests/unit/_runtime/test_layering.py` — the enforcement.

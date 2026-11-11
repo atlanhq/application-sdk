@@ -354,7 +354,6 @@ def clear_log_buffer(logger_adapter):
     logger_adapter._buffer.clear()
 
 
-@pytest.mark.asyncio
 async def test_objectstore_sink_buffering():
     """Test that objectstore_sink properly buffers logs."""
     with create_logger_adapter() as logger_adapter:
@@ -384,7 +383,6 @@ async def test_objectstore_sink_buffering():
         assert buffered_log["logger_name"] == "test_logger"
 
 
-@pytest.mark.asyncio
 async def test_objectstore_sink_error_handling():
     """Test that objectstore_sink handles errors gracefully."""
     with create_logger_adapter() as logger_adapter:
@@ -429,7 +427,6 @@ class TestFlushRecordsSinglePass:
             "extra": {},
         }
 
-    @pytest.mark.asyncio
     async def test_single_partition_writes_one_file(self, tmp_path):
         """Records within the same hour produce exactly one upload call.
 
@@ -475,7 +472,6 @@ class TestFlushRecordsSinglePass:
         messages = [_orjson.loads(ln)["message"] for ln in lines]
         assert messages == ["msg-0", "msg-1", "msg-2"]
 
-    @pytest.mark.asyncio
     async def test_multi_partition_writes_separate_files(self, tmp_path):
         """Records spanning two different hours produce two separate upload calls.
 
@@ -514,7 +510,6 @@ class TestFlushRecordsSinglePass:
         local_paths = [u[0] for u in uploaded]
         assert local_paths[0] != local_paths[1]
 
-    @pytest.mark.asyncio
     async def test_empty_records_is_noop(self):
         """An empty record list never reaches the gzip/upload path."""
         with create_logger_adapter() as adapter:
@@ -526,7 +521,6 @@ class TestFlushRecordsSinglePass:
                     await adapter._flush_records([])
         mock_upload.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_partition_switch_after_upload_failure_continues(self, tmp_path):
         """Upload failure on partition switch does not drop the triggering record.
 
@@ -575,7 +569,6 @@ class TestFlushRecordsSinglePass:
             "trailing hour10 record must be in a new file, not the failed-upload file"
         )
 
-    @pytest.mark.asyncio
     async def test_out_of_order_records_writes_second_file_for_same_hour(
         self, tmp_path
     ):
@@ -626,7 +619,6 @@ class TestFlushRecordsSinglePass:
 class TestLogSinkFanOut:
     """Tests for _log_sink fan-out to both object-store and OTLP targets."""
 
-    @pytest.mark.asyncio
     async def test_log_sink_calls_both_targets_when_both_active(self):
         """_log_sink builds the record dict once and fans to add_record + _send_to_otel.
 
@@ -668,7 +660,6 @@ class TestLogSinkFanOut:
         otel_arg = mock_send_otel.call_args[0][0]
         assert store_arg is otel_arg
 
-    @pytest.mark.asyncio
     async def test_log_sink_store_only_when_otlp_not_configured(self):
         """_log_sink skips _send_to_otel when logger_provider is None."""
         test_message = mock.MagicMock()
@@ -774,7 +765,6 @@ class TestOffloadedLogsReachSinkOwner:
     on any adapter flushes it.
     """
 
-    @pytest.mark.asyncio
     async def test_run_in_thread_log_lands_in_sink_owner_buffer(self):
         """A line logged inside ``run_in_thread`` is buffered for upload.
 

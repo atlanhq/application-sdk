@@ -341,7 +341,6 @@ class TestSlaFromEnv:
 
 
 class TestHeartbeatLoopWiring:
-    @pytest.mark.asyncio
     async def test_the_loop_observes_the_run_on_every_tick(self) -> None:
         stop = asyncio.Event()
         watch = MagicMock()
@@ -362,7 +361,6 @@ class TestHeartbeatLoopWiring:
 
         assert watch.observe.call_count >= 1
 
-    @pytest.mark.asyncio
     async def test_no_watch_leaves_the_loop_as_it_was(self) -> None:
         """The default is byte-identical to before the observation existed."""
         stop = asyncio.Event()
@@ -458,7 +456,6 @@ class TestActivityPlumbing:
 
         return captured.get("run_length")
 
-    @pytest.mark.asyncio
     async def test_the_activity_hands_the_loop_a_watch_for_its_run(self) -> None:
         watch = await self._run_activity(run_started_at_epoch=_RUN_STARTED)
 
@@ -467,7 +464,6 @@ class TestActivityPlumbing:
         assert watch.task_name == "extract"
         assert watch.workflow_type == "MyConnectorWorkflow"
 
-    @pytest.mark.asyncio
     async def test_no_watch_when_the_dispatching_workflow_sent_no_run_start(
         self,
     ) -> None:
@@ -492,7 +488,6 @@ class TestWireCompatibility:
     against the real converter rather than assumed: if the premise ever changes,
     every activity dispatched during a deploy would fail on decode."""
 
-    @pytest.mark.asyncio
     async def test_the_run_start_survives_the_wire(self) -> None:
         converter = create_data_converter()
         context = TaskContext(
@@ -504,7 +499,6 @@ class TestWireCompatibility:
 
         assert decoded[0].run_started_at_epoch == _RUN_STARTED
 
-    @pytest.mark.asyncio
     async def test_an_older_worker_ignores_the_field_rather_than_failing(self) -> None:
         converter = create_data_converter()
         context = TaskContext(

@@ -91,7 +91,6 @@ def https_server(
 class TestSslContextWithPrivateServer:
     """Tests with a real local HTTPS server using private certificates."""
 
-    @pytest.mark.asyncio
     async def test_httpx_connects_to_private_https_server(
         self, trustme_ca, https_server
     ):  # type: ignore[no-untyped-def]
@@ -112,7 +111,6 @@ class TestSslContextWithPrivateServer:
                         assert response.status_code == 200
                         assert response.text == "Hello from private HTTPS server!"
 
-    @pytest.mark.asyncio
     async def test_base_client_connects_to_private_https_server(
         self, trustme_ca, https_server
     ):  # type: ignore[no-untyped-def]
@@ -137,7 +135,6 @@ class TestSslContextWithPrivateServer:
                 assert response.status_code == 200
                 assert response.text == "Hello from private HTTPS server!"
 
-    @pytest.mark.asyncio
     async def test_connection_fails_without_custom_ca(self, https_server):  # type: ignore[no-untyped-def]
         """Test that connection fails when custom CA is not loaded."""
 
@@ -149,7 +146,6 @@ class TestSslContextWithPrivateServer:
             error_message = str(exc_info.value).lower()
             assert "certificate" in error_message or "ssl" in error_message
 
-    @pytest.mark.asyncio
     async def test_private_and_public_certs_work_simultaneously(
         self, trustme_ca, https_server
     ):  # type: ignore[no-untyped-def]
@@ -179,7 +175,6 @@ class TestSslContextPublicCertificates:
     the assertion — no has_internet_connection() guard that silently skips.
     """
 
-    @pytest.mark.asyncio
     async def test_httpx_ssl_context_works_with_public_url(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
@@ -189,7 +184,6 @@ class TestSslContextPublicCertificates:
                     response = await client.get("https://www.google.com", timeout=10)
                     assert response.status_code == 200
 
-    @pytest.mark.asyncio
     async def test_default_ssl_works_with_public_url(self):
         with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", ""):
             ssl_context = get_ssl_context()

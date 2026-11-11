@@ -60,7 +60,6 @@ class TestEventInterceptor:
 class TestEventActivityInboundInterceptor:
     """Tests for EventActivityInboundInterceptor."""
 
-    @pytest.mark.asyncio
     async def test_execute_activity_calls_next(self) -> None:
         mock_next = mock.AsyncMock()
         mock_next.execute_activity = mock.AsyncMock(return_value="activity_result")
@@ -76,7 +75,6 @@ class TestEventActivityInboundInterceptor:
         assert result == "activity_result"
         mock_next.execute_activity.assert_called_once_with(mock_input)
 
-    @pytest.mark.asyncio
     async def test_execute_activity_publishes_start_event(self) -> None:
         mock_next = mock.AsyncMock()
         mock_next.execute_activity = mock.AsyncMock(return_value="ok")
@@ -92,7 +90,6 @@ class TestEventActivityInboundInterceptor:
         # Should be called at least twice (start + end)
         assert mock_publish.call_count >= 2
 
-    @pytest.mark.asyncio
     async def test_execute_activity_publishes_end_event_on_success(self) -> None:
         mock_next = mock.AsyncMock()
         mock_next.execute_activity = mock.AsyncMock(return_value="result")
@@ -116,7 +113,6 @@ class TestEventActivityInboundInterceptor:
         end_event = published_events[1]
         assert "duration_ms" in end_event.data
 
-    @pytest.mark.asyncio
     async def test_execute_activity_reraises_exception(self) -> None:
         mock_next = mock.AsyncMock()
         mock_next.execute_activity = mock.AsyncMock(
@@ -132,7 +128,6 @@ class TestEventActivityInboundInterceptor:
             with pytest.raises(ValueError, match="activity failed"):
                 await interceptor.execute_activity(mock_input)
 
-    @pytest.mark.asyncio
     async def test_execute_activity_publishes_end_event_on_failure(self) -> None:
         mock_next = mock.AsyncMock()
         mock_next.execute_activity = mock.AsyncMock(side_effect=RuntimeError("failure"))
@@ -153,7 +148,6 @@ class TestEventActivityInboundInterceptor:
 class TestPublishEventActivity:
     """Tests for the publish_event activity function."""
 
-    @pytest.mark.asyncio
     async def test_publishes_event_to_event_store(self) -> None:
         event_data = {
             "event_type": "APPLICATION_EVENT",
@@ -169,7 +163,6 @@ class TestPublishEventActivity:
 
         mock_publish.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_reraises_on_eventstore_failure(self) -> None:
         event_data = {
             "event_type": "APPLICATION_EVENT",
@@ -219,7 +212,6 @@ def _frozen_events_clock(now: float):
 class TestGetEventTokenService:
     """Tests for the _get_event_token_service singleton."""
 
-    @pytest.mark.asyncio
     async def test_returns_none_when_auth_disabled(
         self, _reset_event_token_service
     ) -> None:
@@ -233,7 +225,6 @@ class TestGetEventTokenService:
         # Cache must remain empty when auth is disabled.
         assert events_module._event_token_service is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_when_credentials_missing(
         self, _reset_event_token_service
     ) -> None:
@@ -249,7 +240,6 @@ class TestGetEventTokenService:
             result = await _get_event_token_service()
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_constructs_and_caches_when_configured(
         self, _reset_event_token_service
     ) -> None:
@@ -327,7 +317,6 @@ class TestEventTokenServiceCaching:
         ):
             yield
 
-    @pytest.mark.asyncio
     async def test_missing_credentials_are_fetched_once_per_window(self) -> None:
         from application_sdk.infrastructure.secrets import SecretNotFoundError
 
@@ -348,7 +337,6 @@ class TestEventTokenServiceCaching:
             assert secrets.await_count == 4
         service_cls.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_concurrent_callers_share_one_lookup(self) -> None:
         release = asyncio.Event()
 
@@ -371,7 +359,6 @@ class TestEventTokenServiceCaching:
         assert secrets.await_count == 2
         assert service_cls.call_count == 1
 
-    @pytest.mark.asyncio
     async def test_store_failure_is_cached_for_the_short_window(self) -> None:
         """A store that did not answer (not ready at boot, throttled) is
         retried after the short outage window, not the 60 s miss window."""
@@ -393,7 +380,6 @@ class TestEventTokenServiceCaching:
             )
         assert secrets.await_count == 1
 
-    @pytest.mark.asyncio
     async def test_rejected_exchange_rereads_credentials_after_the_window(
         self,
     ) -> None:
@@ -675,7 +661,6 @@ class TestSendLifecycleEventToSegment:
 class TestPublishEventViaBinding:
     """Tests for _publish_event_via_binding."""
 
-    @pytest.mark.asyncio
     async def test_skips_when_no_infrastructure(self) -> None:
         with mock.patch(
             "application_sdk.infrastructure.context.get_infrastructure",
@@ -688,7 +673,6 @@ class TestPublishEventViaBinding:
             )
             await _publish_event_via_binding(event)  # no exception, no-op
 
-    @pytest.mark.asyncio
     async def test_skips_when_no_event_binding(self) -> None:
         infra = mock.MagicMock(event_binding=None)
         with mock.patch(
@@ -702,7 +686,6 @@ class TestPublishEventViaBinding:
             )
             await _publish_event_via_binding(event)
 
-    @pytest.mark.asyncio
     async def test_publishes_with_auth_headers(
         self, _reset_event_token_service
     ) -> None:
@@ -744,7 +727,6 @@ class TestPublishEventViaBinding:
         assert kwargs["metadata"]["content-type"] == "application/json"
         assert kwargs["metadata"]["authorization"] == "Bearer token-xyz"
 
-    @pytest.mark.asyncio
     async def test_publishes_when_token_service_returns_none(
         self, _reset_event_token_service
     ) -> None:
@@ -778,7 +760,6 @@ class TestPublishEventViaBinding:
         kwargs = infra.event_binding.invoke.await_args.kwargs
         assert "authorization" not in kwargs["metadata"]
 
-    @pytest.mark.asyncio
     async def test_swallows_token_service_failure(
         self, _reset_event_token_service
     ) -> None:
@@ -816,7 +797,6 @@ class TestPublishEventViaBinding:
 class TestEventWorkflowInboundInterceptor:
     """Tests for EventWorkflowInboundInterceptor.execute_workflow."""
 
-    @pytest.mark.asyncio
     async def test_success_emits_start_and_end_events(self) -> None:
         next_iface = mock.AsyncMock()
         next_iface.execute_workflow = mock.AsyncMock(return_value="ok")
@@ -847,7 +827,6 @@ class TestEventWorkflowInboundInterceptor:
             end_payload["metadata"]["workflow_state"] == WorkflowStates.COMPLETED.value
         )
 
-    @pytest.mark.asyncio
     async def test_failure_emits_failed_end_event_and_reraises(self) -> None:
         next_iface = mock.AsyncMock()
         next_iface.execute_workflow = mock.AsyncMock(side_effect=ValueError("boom"))
@@ -868,7 +847,6 @@ class TestEventWorkflowInboundInterceptor:
         end_payload = execute_activity.await_args_list[1].args[1]
         assert end_payload["metadata"]["workflow_state"] == WorkflowStates.FAILED.value
 
-    @pytest.mark.asyncio
     async def test_swallows_publish_failure_on_start(self) -> None:
         """A failure in workflow start-event publication must not abort the workflow."""
         next_iface = mock.AsyncMock()
@@ -890,7 +868,6 @@ class TestEventWorkflowInboundInterceptor:
         assert result == "result"
         assert execute_activity.await_count == 2
 
-    @pytest.mark.asyncio
     async def test_swallows_publish_failure_on_end(self) -> None:
         next_iface = mock.AsyncMock()
         next_iface.execute_workflow = mock.AsyncMock(return_value="result")
@@ -997,7 +974,6 @@ class TestDirectHttpFallback:
             mock.patch.object(events_module, "logger"),
         )
 
-    @pytest.mark.asyncio
     async def test_binding_success_never_touches_http(self, tmp_path):
         _component(tmp_path)
         infra, client = self._infra(None), _http_client()
@@ -1014,7 +990,6 @@ class TestDirectHttpFallback:
         log.info.assert_called_once()
         log.warning.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_non_delivery_error_posts_same_payload_headers_url_and_timeout(
         self, tmp_path
     ):
@@ -1063,7 +1038,6 @@ class TestDirectHttpFallback:
         assert "exc_info" not in success.kwargs
         log.info.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_worker_start_budget_is_passed_through(self, tmp_path):
         _component(tmp_path)
         infra = self._infra(
@@ -1086,7 +1060,6 @@ class TestDirectHttpFallback:
         # the default must fit inside the 30 s publish_event activity budget
         assert events_module._DIRECT_PUBLISH_TIMEOUT_SECONDS < 30
 
-    @pytest.mark.asyncio
     async def test_ambiguous_error_is_not_resent(self, tmp_path):
         """An upstream HTTP status means the far side answered; re-sending could
         double-deliver, so the fallback must not fire."""
@@ -1111,7 +1084,6 @@ class TestDirectHttpFallback:
             for c in log.warning.call_args_list
         )
 
-    @pytest.mark.asyncio
     async def test_fallback_disabled_reraises(self, tmp_path):
         _component(tmp_path)
         infra = self._infra(
@@ -1130,7 +1102,6 @@ class TestDirectHttpFallback:
                 await _publish_event_via_binding(self._event())
         http_client.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_fallback_failure_keeps_dapr_cause_and_suspends(self, tmp_path):
         _component(tmp_path)
         dapr_cause = RuntimeError("EOF from daprd")
@@ -1166,7 +1137,6 @@ class TestDirectHttpFallback:
             for c in log.info.call_args_list
         )
 
-    @pytest.mark.asyncio
     async def test_non_http_component_means_no_fallback(self, tmp_path):
         """The SDK's local-dev eventstore is bindings.localstorage with no url:
         never guess a URL for it."""
@@ -1267,7 +1237,6 @@ class TestPublishEventIsAtLeastOnce:
     retry policy, because a missing ``workflow_end`` costs consumers more than
     a duplicate they can dedupe on ``metadata.event_id``."""
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "text", [_AMBIGUOUS, _NON_DELIVERY], ids=["ambiguous", "non-delivery"]
     )
@@ -1373,7 +1342,6 @@ class TestEventId:
         ):
             assert _enrich_event_metadata(event).metadata.event_id == "given"
 
-    @pytest.mark.asyncio
     async def test_pre_event_id_payload_gets_one_id_across_retries(self) -> None:
         """A ``publish_event`` input recorded before ``event_id`` existed.
 

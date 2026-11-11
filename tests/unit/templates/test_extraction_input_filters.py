@@ -619,7 +619,6 @@ class TestTreeSelectionExtractionInput:
         with pytest.raises(ValidationError):
             Sub.model_validate({"include_filter": '{"cat": {}}'})
 
-    @pytest.mark.asyncio
     async def test_sql_metadata_extractor_run_raises_the_input_error_unwrapped(self):
         from application_sdk.templates._template_errors import (
             SqlTreeFilterInputUnsupportedError,

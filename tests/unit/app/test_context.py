@@ -240,7 +240,6 @@ class TestAppContextIdentity:
 
 
 class TestAppContextStateStore:
-    @pytest.mark.asyncio
     async def test_save_state_namespaces_key(self) -> None:
         store = MockStateStore()
         ctx = AppContext(
@@ -249,7 +248,6 @@ class TestAppContextStateStore:
         await ctx.save_state("foo", {"x": 1})
         assert store.get_save_calls() == [("myapp:r1:foo", {"x": 1})]
 
-    @pytest.mark.asyncio
     async def test_load_state_namespaces_key(self) -> None:
         store = MockStateStore()
         await store.save("myapp:r1:foo", {"x": 1})
@@ -259,19 +257,16 @@ class TestAppContextStateStore:
         assert await ctx.load_state("foo") == {"x": 1}
         assert store.get_load_calls() == ["myapp:r1:foo"]
 
-    @pytest.mark.asyncio
     async def test_load_state_returns_none_when_missing(self) -> None:
         ctx = AppContext(app_name="a", app_version="1", _state_store=MockStateStore())
         assert await ctx.load_state("nope") is None
 
-    @pytest.mark.asyncio
     async def test_save_state_without_store_raises(self) -> None:
         ctx = AppContext(app_name="a", app_version="1")
         with pytest.raises(StateStoreNotConfiguredError) as exc_info:
             await ctx.save_state("k", {})
         assert exc_info.value.message == "No state store configured"
 
-    @pytest.mark.asyncio
     async def test_load_state_without_store_raises(self) -> None:
         ctx = AppContext(app_name="a", app_version="1")
         with pytest.raises(StateStoreNotConfiguredError) as exc_info:
@@ -285,26 +280,22 @@ class TestAppContextStateStore:
 
 
 class TestAppContextSecretStore:
-    @pytest.mark.asyncio
     async def test_get_secret_delegates_to_store(self) -> None:
         ss = MockSecretStore({"db_password": "hunter2"})
         ctx = AppContext(app_name="a", app_version="1", _secret_store=ss)
         assert await ctx.get_secret("db_password") == "hunter2"
         assert ss.get_get_calls() == ["db_password"]
 
-    @pytest.mark.asyncio
     async def test_get_secret_without_store_raises(self) -> None:
         ctx = AppContext(app_name="a", app_version="1")
         with pytest.raises(SecretStoreNotConfiguredError) as exc_info:
             await ctx.get_secret("anything")
         assert exc_info.value.message == "No secret store configured"
 
-    @pytest.mark.asyncio
     async def test_get_secret_optional_returns_none_when_no_store(self) -> None:
         ctx = AppContext(app_name="a", app_version="1")
         assert await ctx.get_secret_optional("anything") is None
 
-    @pytest.mark.asyncio
     async def test_get_secret_optional_delegates_when_store_present(self) -> None:
         ss = MockSecretStore({"k": "v"})
         ctx = AppContext(app_name="a", app_version="1", _secret_store=ss)
@@ -319,7 +310,6 @@ class TestAppContextSecretStore:
 
 
 class TestAppContextCredentialResolution:
-    @pytest.mark.asyncio
     async def test_resolve_credential_returns_typed_credential(self) -> None:
         cred_store = MockCredentialStore()
         ref = cred_store.add_basic("svc", username="u", password="p")
@@ -331,7 +321,6 @@ class TestAppContextCredentialResolution:
         assert getattr(result, "username", None) == "u"
         assert getattr(result, "password", None) == "p"
 
-    @pytest.mark.asyncio
     async def test_resolve_credential_raw_returns_dict(self) -> None:
         cred_store = MockCredentialStore()
         ref = cred_store.add_api_key("svc", api_key="abc")
@@ -343,7 +332,6 @@ class TestAppContextCredentialResolution:
         assert raw.get("api_key") == "abc"
         assert raw.get("type") == "api_key"
 
-    @pytest.mark.asyncio
     async def test_resolve_credential_without_store_raises(self) -> None:
         cred_store = MockCredentialStore()
         ref = cred_store.add_basic("svc", username="u", password="p")
@@ -352,7 +340,6 @@ class TestAppContextCredentialResolution:
             await ctx.resolve_credential(ref)
         assert exc_info.value.message == "No secret store configured"
 
-    @pytest.mark.asyncio
     async def test_resolve_credential_raw_without_store_raises(self) -> None:
         cred_store = MockCredentialStore()
         ref = cred_store.add_basic("svc", username="u", password="p")
@@ -870,7 +857,6 @@ class TestTaskExecutionContextRunInThread:
     delegation itself.
     """
 
-    @pytest.mark.asyncio
     async def test_run_in_thread_executes_sync_function(self) -> None:
         ctx = AppContext(app_name="a", app_version="1")
         tec = TaskExecutionContext(
@@ -881,7 +867,6 @@ class TestTaskExecutionContextRunInThread:
         result = await tec.run_in_thread(lambda x: x * 2, 21)
         assert result == 42
 
-    @pytest.mark.asyncio
     async def test_run_in_thread_propagates_exceptions(self) -> None:
         ctx = AppContext(app_name="a", app_version="1")
         tec = TaskExecutionContext(
@@ -896,7 +881,6 @@ class TestTaskExecutionContextRunInThread:
         with pytest.raises(ValueError, match="expected"):
             await tec.run_in_thread(boom)
 
-    @pytest.mark.asyncio
     async def test_run_in_thread_passes_args_and_kwargs(self) -> None:
         ctx = AppContext(app_name="a", app_version="1")
         tec = TaskExecutionContext(
@@ -911,7 +895,6 @@ class TestTaskExecutionContextRunInThread:
         result = await tec.run_in_thread(add, 2, 3, mult=10)
         assert result == 50
 
-    @pytest.mark.asyncio
     async def test_run_in_thread_forwards_a_func_cancel_kwarg(self) -> None:
         """No keyword is the SDK's: ``cancel=`` reaches func."""
         ctx = AppContext(app_name="a", app_version="1")

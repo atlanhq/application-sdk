@@ -106,14 +106,12 @@ async def _run_probe(
         return await _probe_store(store, "deployment", "objectstore")
 
 
-@pytest.mark.asyncio
 async def test_probe_store_success() -> None:
     """Write and read both succeed → None returned."""
     result = await _run_probe(_fake_store())
     assert result is None
 
 
-@pytest.mark.asyncio
 async def test_probe_store_write_fails_permission_denied() -> None:
     """Write raises 403 → failure message mentioning 'permission denied'."""
     result = await _run_probe(
@@ -126,7 +124,6 @@ async def test_probe_store_write_fails_permission_denied() -> None:
     assert "objectstore" in result
 
 
-@pytest.mark.asyncio
 async def test_probe_store_write_fails_invalid_credentials() -> None:
     """Write raises 401 → failure message mentioning 'invalid credentials'."""
     result = await _run_probe(
@@ -137,7 +134,6 @@ async def test_probe_store_write_fails_invalid_credentials() -> None:
     assert "invalid credentials" in result
 
 
-@pytest.mark.asyncio
 async def test_probe_store_head_fails_after_write_succeeds() -> None:
     """Write succeeds, HEAD fails → read failure returned."""
     result = await _run_probe(
@@ -167,7 +163,6 @@ def _make_infra(*, storage=None, upstream_storage=None):
     return InfrastructureContext(storage=storage, upstream_storage=upstream_storage)
 
 
-@pytest.mark.asyncio
 async def test_verify_noop_when_sdr_disabled(monkeypatch) -> None:
     """ENABLE_ATLAN_UPLOAD=False → function returns immediately without probing."""
     import application_sdk.constants as constants_mod
@@ -179,7 +174,6 @@ async def test_verify_noop_when_sdr_disabled(monkeypatch) -> None:
     await verify_object_store_access(infra)  # must not raise
 
 
-@pytest.mark.asyncio
 async def test_verify_fails_when_upstream_absent_in_sdr(monkeypatch) -> None:
     """SDR mode + upstream_storage=None → ObjectStorePreflightError mentioning upstream.
 
@@ -211,7 +205,6 @@ async def test_verify_fails_when_upstream_absent_in_sdr(monkeypatch) -> None:
     assert "ENABLE_ATLAN_UPLOAD" in msg
 
 
-@pytest.mark.asyncio
 async def test_verify_probes_an_aliased_upstream_store_once(monkeypatch) -> None:
     """SDR mode + both store names on one component → one handle, one probe.
 
@@ -236,7 +229,6 @@ async def test_verify_probes_an_aliased_upstream_store_once(monkeypatch) -> None
     assert fake_obstore.put_async.await_count == 1
 
 
-@pytest.mark.asyncio
 async def test_verify_fails_when_store_is_none_in_sdr(monkeypatch) -> None:
     """SDR mode + deployment store is None → ObjectStorePreflightError."""
     import application_sdk.constants as constants_mod
@@ -261,7 +253,6 @@ async def test_verify_fails_when_store_is_none_in_sdr(monkeypatch) -> None:
     assert "store is None" in str(err)
 
 
-@pytest.mark.asyncio
 async def test_verify_passes_both_stores_healthy(monkeypatch) -> None:
     """SDR mode + both stores respond → no error raised."""
     import application_sdk.constants as constants_mod
@@ -279,7 +270,6 @@ async def test_verify_passes_both_stores_healthy(monkeypatch) -> None:
         await verify_object_store_access(infra)  # must not raise
 
 
-@pytest.mark.asyncio
 async def test_verify_timeout_classified_as_connectivity(monkeypatch) -> None:
     """A probe that times out is reported as 'connectivity / unknown'."""
     import application_sdk.constants as constants_mod
@@ -309,7 +299,6 @@ async def test_verify_timeout_classified_as_connectivity(monkeypatch) -> None:
     assert "timed out" in msg or "connectivity" in msg
 
 
-@pytest.mark.asyncio
 async def test_verify_probe_failure_propagates_to_preflight_error(monkeypatch) -> None:
     """A non-None failure string from _probe_store propagates into ObjectStorePreflightError."""
     import application_sdk.constants as constants_mod
@@ -341,7 +330,6 @@ async def test_verify_probe_failure_propagates_to_preflight_error(monkeypatch) -
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_check_returns_empty_when_sdr_disabled(monkeypatch) -> None:
     """ENABLE_ATLAN_UPLOAD=False → [] with no probing."""
     import application_sdk.constants as constants_mod
@@ -352,7 +340,6 @@ async def test_check_returns_empty_when_sdr_disabled(monkeypatch) -> None:
     assert await check_object_store_access(infra) == []
 
 
-@pytest.mark.asyncio
 async def test_check_returns_empty_when_infra_none(monkeypatch) -> None:
     """infra=None → [] even in SDR mode."""
     import application_sdk.constants as constants_mod
@@ -361,7 +348,6 @@ async def test_check_returns_empty_when_infra_none(monkeypatch) -> None:
     assert await check_object_store_access(None) == []
 
 
-@pytest.mark.asyncio
 async def test_check_success_both_stores(monkeypatch) -> None:
     """Both stores healthy → one passed result each, no error fields."""
     import application_sdk.constants as constants_mod
@@ -383,7 +369,6 @@ async def test_check_success_both_stores(monkeypatch) -> None:
     assert all(r.error_class is None and r.cause is None for r in results)
 
 
-@pytest.mark.asyncio
 async def test_check_deployment_only_when_no_upstream(monkeypatch) -> None:
     """Upstream absent → only the deployment store is probed (no hard-fail here)."""
     import application_sdk.constants as constants_mod
@@ -403,7 +388,6 @@ async def test_check_deployment_only_when_no_upstream(monkeypatch) -> None:
     assert results[0].passed is True
 
 
-@pytest.mark.asyncio
 async def test_check_write_failure_returns_failed_result(monkeypatch) -> None:
     """A write failure → failed result carrying class/cause/hint and a message."""
     import application_sdk.constants as constants_mod
@@ -427,7 +411,6 @@ async def test_check_write_failure_returns_failed_result(monkeypatch) -> None:
     assert "access check failed" in result.message
 
 
-@pytest.mark.asyncio
 async def test_check_head_failure_returns_failed_result(monkeypatch) -> None:
     """Write succeeds, HEAD fails → failed result flagged read/head."""
     import application_sdk.constants as constants_mod
@@ -447,7 +430,6 @@ async def test_check_head_failure_returns_failed_result(monkeypatch) -> None:
     assert results[0].error_class == "invalid credentials"
 
 
-@pytest.mark.asyncio
 async def test_check_store_none_returns_not_configured(monkeypatch) -> None:
     """A None deployment store → a failed 'not configured' result, no raise."""
     import application_sdk.constants as constants_mod
@@ -462,7 +444,6 @@ async def test_check_store_none_returns_not_configured(monkeypatch) -> None:
     assert results[0].error_class == "not configured"
 
 
-@pytest.mark.asyncio
 async def test_check_timeout_returns_connectivity_failure(monkeypatch) -> None:
     """A probe that times out → a connectivity failure result, no raise."""
     import application_sdk.constants as constants_mod
@@ -578,7 +559,6 @@ async def _run_probe_structured(
     return result, fake_obstore
 
 
-@pytest.mark.asyncio
 async def test_probe_multipart_disabled_by_default_single_put() -> None:
     """Without the flag, exactly one plain put runs — boot path unchanged."""
     result, fake_obstore = await _run_probe_structured(
@@ -591,7 +571,6 @@ async def test_probe_multipart_disabled_by_default_single_put() -> None:
     )
 
 
-@pytest.mark.asyncio
 async def test_probe_multipart_forced_second_write() -> None:
     """With the flag, a second put runs with use_multipart=True."""
     result, fake_obstore = await _run_probe_structured(
@@ -604,7 +583,6 @@ async def test_probe_multipart_forced_second_write() -> None:
     assert multipart_call.kwargs.get("chunk_size") == 5 * 1024 * 1024
 
 
-@pytest.mark.asyncio
 async def test_probe_multipart_relocation_failure_classified() -> None:
     """Plain put passes, multipart initiate rejected → relocation bucket, write-multipart phase."""
     result, _ = await _run_probe_structured(
@@ -618,7 +596,6 @@ async def test_probe_multipart_relocation_failure_classified() -> None:
     assert "relocation" in (result.hint or "")
 
 
-@pytest.mark.asyncio
 async def test_interactive_check_includes_multipart_probe(monkeypatch) -> None:
     """check_object_store_access catches a store that only rejects multipart."""
     import application_sdk.constants as constants_mod
@@ -644,7 +621,6 @@ async def test_interactive_check_includes_multipart_probe(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_run_check_probes_without_sdr_mode(monkeypatch) -> None:
     """Unlike the SDR checker, the run-path checker probes in-cluster too."""
     import application_sdk.constants as constants_mod
@@ -669,7 +645,6 @@ async def test_run_check_probes_without_sdr_mode(monkeypatch) -> None:
     )
 
 
-@pytest.mark.asyncio
 async def test_run_check_empty_only_without_infra_context() -> None:
     """No infrastructure context at all → [] (unit tests, direct calls)."""
     from application_sdk.storage.preflight import check_run_storage_access
@@ -677,7 +652,6 @@ async def test_run_check_empty_only_without_infra_context() -> None:
     assert await check_run_storage_access(None) == []
 
 
-@pytest.mark.asyncio
 async def test_run_check_relocation_failure(monkeypatch) -> None:
     """A relocating bucket fails the run-path check with the relocation bucket."""
     fake_obstore = MagicMock()
@@ -697,7 +671,6 @@ async def test_run_check_relocation_failure(monkeypatch) -> None:
     assert results[0].failed_operation == "write-multipart"
 
 
-@pytest.mark.asyncio
 async def test_run_check_timeout_bounded_by_budget() -> None:
     """A stalled probe is cut at the caller's budget and reported as connectivity."""
     from application_sdk.storage.preflight import check_run_storage_access
@@ -720,7 +693,6 @@ async def test_run_check_timeout_bounded_by_budget() -> None:
     assert "timed out" in (results[0].cause or "")
 
 
-@pytest.mark.asyncio
 async def test_run_check_missing_deployment_store_is_a_failed_check() -> None:
     """A binding that failed to parse must fail the check, not vanish.
 
@@ -739,7 +711,6 @@ async def test_run_check_missing_deployment_store_is_a_failed_check() -> None:
     assert results[0].error_class == "not configured"
 
 
-@pytest.mark.asyncio
 async def test_probe_writes_with_binding_put_attributes() -> None:
     """The probe must exercise the same put-attribute path real uploads use.
 
@@ -796,7 +767,6 @@ _SIGNED_URL_ERROR = (
 
 
 @pytest.mark.parametrize("failing_phase", ["write", "read/head", "write-multipart"])
-@pytest.mark.asyncio
 async def test_probe_cause_is_sanitised(failing_phase: str) -> None:
     """No probe may put a raw object-store error into user-facing text.
 
@@ -837,7 +807,6 @@ async def test_probe_cause_is_sanitised(failing_phase: str) -> None:
 
 
 @pytest.mark.parametrize("failing_phase", ["write", "read/head", "write-multipart"])
-@pytest.mark.asyncio
 async def test_probe_log_does_not_emit_an_unredacted_traceback(
     failing_phase: str,
 ) -> None:
@@ -892,7 +861,6 @@ async def test_probe_log_does_not_emit_an_unredacted_traceback(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_run_check_below_floor_budget_skips_instead_of_overrunning() -> None:
     """A budget under the per-store floor must not be silently overridden.
 
@@ -919,7 +887,6 @@ async def test_run_check_below_floor_budget_skips_instead_of_overrunning() -> No
     mock_probe.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_run_check_never_raises_per_store_above_its_share() -> None:
     """Each store's timeout stays within its share of the declared budget."""
     from application_sdk.storage.preflight import check_run_storage_access

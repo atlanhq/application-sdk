@@ -21,7 +21,6 @@ class TestAzureAuthProvider:
         """Create an AzureAuthProvider instance for testing."""
         return AzureAuthProvider()
 
-    @pytest.mark.asyncio
     async def test_unsupported_auth_type(self, auth_provider):
         """Test that unsupported authentication types raise appropriate errors."""
         with pytest.raises(AzureCredentialParseError) as exc_info:
@@ -33,7 +32,6 @@ class TestAzureAuthProvider:
         )
         assert exc_info.value.received_auth_type == "unsupported_type"
 
-    @pytest.mark.asyncio
     async def test_missing_tenant_id(self, auth_provider):
         """Test error message when tenant_id is missing."""
         credentials = {
@@ -53,7 +51,6 @@ class TestAzureAuthProvider:
             or "required" in validation_errors.lower()
         )
 
-    @pytest.mark.asyncio
     async def test_missing_client_id(self, auth_provider):
         """Test error message when client_id is missing."""
         credentials = {
@@ -72,7 +69,6 @@ class TestAzureAuthProvider:
             or "required" in validation_errors.lower()
         )
 
-    @pytest.mark.asyncio
     async def test_missing_client_secret(self, auth_provider):
         """Test error message when client_secret is missing."""
         credentials = {"tenant_id": "test_tenant_id", "client_id": "test_client_id"}
@@ -91,7 +87,6 @@ class TestAzureAuthProvider:
             or "required" in validation_errors.lower()
         )
 
-    @pytest.mark.asyncio
     async def test_missing_multiple_keys(self, auth_provider):
         """Test error message when multiple keys are missing."""
         credentials = {
@@ -111,7 +106,6 @@ class TestAzureAuthProvider:
             or "required" in validation_errors.lower()
         )
 
-    @pytest.mark.asyncio
     async def test_missing_all_keys(self, auth_provider):
         """Test error message when all keys are missing."""
         credentials = {}
@@ -125,7 +119,6 @@ class TestAzureAuthProvider:
             exc_info.value
         )
 
-    @pytest.mark.asyncio
     async def test_none_credentials(self, auth_provider):
         """Test error message when credentials is None."""
         with pytest.raises(AzureCredentialParseError) as exc_info:
@@ -136,7 +129,6 @@ class TestAzureAuthProvider:
             exc_info.value
         )
 
-    @pytest.mark.asyncio
     async def test_empty_credentials(self, auth_provider):
         """Test error message when credentials is empty dict."""
         with pytest.raises(AzureCredentialParseError) as exc_info:
@@ -148,7 +140,6 @@ class TestAzureAuthProvider:
             exc_info.value
         )
 
-    @pytest.mark.asyncio
     async def test_alternative_key_names(self, auth_provider):
         """Test that alternative key names (tenantId, clientId, clientSecret) are supported."""
         credentials = {
@@ -164,7 +155,6 @@ class TestAzureAuthProvider:
             # If it fails, it should be due to actual credential validation, not missing keys
             assert "Missing required credential keys" not in str(e)
 
-    @pytest.mark.asyncio
     async def test_mixed_key_names(self, auth_provider):
         """Test that mixing standard and alternative key names works."""
         credentials = {
@@ -180,7 +170,6 @@ class TestAzureAuthProvider:
             # If it fails, it should be due to actual credential validation, not missing keys
             assert "Missing required credential keys" not in str(e)
 
-    @pytest.mark.asyncio
     async def test_extra_fields_ignored(self, auth_provider):
         """Test that extra fields (like storage_account_name, network_config) are ignored by Pydantic validation."""
         credentials = {
@@ -204,7 +193,6 @@ class TestAzureAuthProvider:
     # Tests for create_credential() — error paths and dispatch
     # ------------------------------------------------------------------
 
-    @pytest.mark.asyncio
     async def test_create_credential_none_credentials_raises(self, auth_provider):
         """create_credential with no credentials must raise AzureCredentialParseError."""
         with pytest.raises(AzureCredentialParseError) as exc_info:
@@ -216,7 +204,6 @@ class TestAzureAuthProvider:
             exc_info.value
         )
 
-    @pytest.mark.asyncio
     async def test_create_credential_empty_credentials_raises(self, auth_provider):
         """create_credential with empty dict credentials must raise AzureCredentialParseError."""
         with pytest.raises(AzureCredentialParseError) as exc_info:
@@ -229,7 +216,6 @@ class TestAzureAuthProvider:
             exc_info.value
         )
 
-    @pytest.mark.asyncio
     async def test_create_credential_unsupported_auth_type_default_dict(
         self, auth_provider
     ):
@@ -248,7 +234,6 @@ class TestAzureAuthProvider:
             exc_info.value
         )
 
-    @pytest.mark.asyncio
     async def test_create_credential_success_dispatches(self, auth_provider):
         """Happy path: dispatches to _create_service_principal_credential."""
         creds = {"tenant_id": "t", "client_id": "c", "client_secret": "s"}
@@ -264,7 +249,6 @@ class TestAzureAuthProvider:
         assert result is sentinel
         mock_inner.assert_called_once_with(creds)
 
-    @pytest.mark.asyncio
     async def test_create_credential_wraps_value_error(self, auth_provider):
         """ValueError from inner method becomes AzureCredentialParseError."""
         with (
@@ -286,7 +270,6 @@ class TestAzureAuthProvider:
         assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
         assert "Invalid credential parameters" in str(exc_info.value)
 
-    @pytest.mark.asyncio
     async def test_create_credential_wraps_type_error(self, auth_provider):
         """TypeError from inner method becomes AzureCredentialTypeError."""
         with (
@@ -308,7 +291,6 @@ class TestAzureAuthProvider:
         assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIAL_TYPE"
         assert "Invalid credential parameter types" in str(exc_info.value)
 
-    @pytest.mark.asyncio
     async def test_create_credential_wraps_client_auth_error(self, auth_provider):
         """ClientAuthenticationError gets mapped to AzureCredentialError."""
         with (
@@ -330,7 +312,6 @@ class TestAzureAuthProvider:
         assert exc_info.value.code == "AUTH_AZURE_CREDENTIAL"
         assert isinstance(exc_info.value.cause, ClientAuthenticationError)
 
-    @pytest.mark.asyncio
     async def test_create_credential_wraps_unexpected_error(self, auth_provider):
         """Generic Exception is wrapped as 'Unexpected error'."""
         with (
@@ -356,7 +337,6 @@ class TestAzureAuthProvider:
     # Tests for _create_service_principal_credential — successful path
     # ------------------------------------------------------------------
 
-    @pytest.mark.asyncio
     async def test_create_service_principal_success(self, auth_provider):
         """run_in_thread is called with snake_case args and result is returned."""
         sentinel = Mock(name="ClientSecretCredential")
@@ -372,7 +352,6 @@ class TestAzureAuthProvider:
         args = mock_rit.call_args.args
         assert args[1:] == ("t-id", "c-id", "s-id")
 
-    @pytest.mark.asyncio
     async def test_create_service_principal_run_in_thread_value_error(
         self, auth_provider
     ):
@@ -390,7 +369,6 @@ class TestAzureAuthProvider:
         assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
         assert "Invalid credential parameters" in str(exc_info.value)
 
-    @pytest.mark.asyncio
     async def test_create_service_principal_run_in_thread_type_error(
         self, auth_provider
     ):
@@ -407,7 +385,6 @@ class TestAzureAuthProvider:
             )
         assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIAL_TYPE"
 
-    @pytest.mark.asyncio
     async def test_create_service_principal_run_in_thread_client_auth_error(
         self, auth_provider
     ):
@@ -425,7 +402,6 @@ class TestAzureAuthProvider:
         assert exc_info.value.code == "AUTH_AZURE_CREDENTIAL"
         assert isinstance(exc_info.value.cause, ClientAuthenticationError)
 
-    @pytest.mark.asyncio
     async def test_create_service_principal_run_in_thread_unexpected_error(
         self, auth_provider
     ):
@@ -447,7 +423,6 @@ class TestAzureAuthProvider:
     # Tests for validate_credential
     # ------------------------------------------------------------------
 
-    @pytest.mark.asyncio
     async def test_validate_credential_success(self, auth_provider):
         """Token returned with .token attribute → True."""
         token = Mock()
@@ -459,7 +434,6 @@ class TestAzureAuthProvider:
         ):
             assert await auth_provider.validate_credential(credential) is True
 
-    @pytest.mark.asyncio
     async def test_validate_credential_no_token_returned(self, auth_provider):
         """run_in_thread returns None or token without .token → False."""
         credential = Mock()
@@ -469,7 +443,6 @@ class TestAzureAuthProvider:
         ):
             assert await auth_provider.validate_credential(credential) is False
 
-    @pytest.mark.asyncio
     async def test_validate_credential_token_missing_attr(self, auth_provider):
         """Token object without .token attribute → False."""
         credential = Mock()
@@ -481,7 +454,6 @@ class TestAzureAuthProvider:
         ):
             assert await auth_provider.validate_credential(credential) is False
 
-    @pytest.mark.asyncio
     async def test_validate_credential_client_auth_error(self, auth_provider):
         """ClientAuthenticationError → False."""
         credential = Mock()
@@ -491,7 +463,6 @@ class TestAzureAuthProvider:
         ):
             assert await auth_provider.validate_credential(credential) is False
 
-    @pytest.mark.asyncio
     async def test_validate_credential_value_error(self, auth_provider):
         """ValueError in run_in_thread → False (param error path)."""
         credential = Mock()
@@ -501,7 +472,6 @@ class TestAzureAuthProvider:
         ):
             assert await auth_provider.validate_credential(credential) is False
 
-    @pytest.mark.asyncio
     async def test_validate_credential_unexpected_error(self, auth_provider):
         """Generic exception → False (defensive last-resort branch)."""
         credential = Mock()

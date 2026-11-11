@@ -32,8 +32,6 @@ from application_sdk.storage.formats.parquet import ParquetFileReader
 from application_sdk.storage.rolling import RollingFileWriter
 from tests.unit.loop_probe import LoopProbe
 
-pytestmark = pytest.mark.asyncio
-
 
 def write_jsonl(path: Path, rows: int) -> Path:
     with path.open("wb") as f:

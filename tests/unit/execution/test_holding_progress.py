@@ -84,7 +84,6 @@ def tracker(clock: _Clock, closed: list[ClosedHold]) -> Iterator[ProgressTracker
 class TestTheVouch:
     """Inside the block there is no gap; outside it the call counts as progress."""
 
-    @pytest.mark.asyncio
     async def test_a_bounded_hold_suppresses_a_gap_past_the_budget(
         self, tracker: ProgressTracker, clock: _Clock
     ) -> None:
@@ -94,7 +93,6 @@ class TestTheVouch:
             assert tracker.held() is True
             assert tracker.stalled_for() == 0.0
 
-    @pytest.mark.asyncio
     async def test_exiting_records_the_call_as_progress(
         self, tracker: ProgressTracker, clock: _Clock
     ) -> None:
@@ -110,7 +108,6 @@ class TestTheVouch:
         assert tracker.stalled_for() == 0.0
         assert tracker.last_label == "snapshot metadata query"
 
-    @pytest.mark.asyncio
     async def test_the_gap_resumes_from_the_exit(
         self, tracker: ProgressTracker, clock: _Clock
     ) -> None:
@@ -120,7 +117,6 @@ class TestTheVouch:
 
         assert tracker.stalled_for() == pytest.approx(60.0)
 
-    @pytest.mark.asyncio
     async def test_an_unbounded_hold_vouches_indefinitely(
         self, tracker: ProgressTracker, clock: _Clock
     ) -> None:
@@ -131,7 +127,6 @@ class TestTheVouch:
             assert tracker.held() is True
             assert tracker.stalled_for() == 0.0
 
-    @pytest.mark.asyncio
     async def test_the_observed_hold_is_reported_once(
         self, tracker: ProgressTracker, clock: _Clock, closed: list[ClosedHold]
     ) -> None:
@@ -153,7 +148,6 @@ class TestTheVouch:
 class TestTheLapse:
     """Past the allowance the hold stops vouching and the watchdog resumes."""
 
-    @pytest.mark.asyncio
     async def test_the_hold_stops_vouching_at_its_deadline(
         self, tracker: ProgressTracker, clock: _Clock
     ) -> None:
@@ -164,7 +158,6 @@ class TestTheLapse:
             clock.advance(2.0)
             assert tracker.held() is False
 
-    @pytest.mark.asyncio
     async def test_the_gap_resumes_from_the_deadline_not_the_entry(
         self, tracker: ProgressTracker, clock: _Clock
     ) -> None:
@@ -182,7 +175,6 @@ class TestTheLapse:
             clock.advance(2.0)
             assert tracker.stalled_for() >= BUDGET
 
-    @pytest.mark.asyncio
     async def test_a_lapsed_hold_is_reported_as_lapsed(
         self, tracker: ProgressTracker, clock: _Clock, closed: list[ClosedHold]
     ) -> None:
@@ -193,7 +185,6 @@ class TestTheLapse:
         assert closed[0].lapsed is True
         assert closed[0].duration_seconds == pytest.approx(2000.0)
 
-    @pytest.mark.asyncio
     async def test_a_negative_allowance_vouches_for_nothing(
         self, tracker: ProgressTracker, clock: _Clock
     ) -> None:
@@ -213,7 +204,6 @@ class TestTheLapse:
 class TestEveryExitPathReleases:
     """A leaked hold pauses the watchdog for the rest of the attempt, silently."""
 
-    @pytest.mark.asyncio
     async def test_an_exception_releases_the_hold_and_propagates(
         self, tracker: ProgressTracker
     ) -> None:
@@ -223,7 +213,6 @@ class TestEveryExitPathReleases:
 
         assert tracker.held() is False
 
-    @pytest.mark.asyncio
     async def test_a_cancellation_releases_the_hold(
         self, tracker: ProgressTracker
     ) -> None:
@@ -245,7 +234,6 @@ class TestEveryExitPathReleases:
 
         assert tracker.held() is False
 
-    @pytest.mark.asyncio
     async def test_a_hold_still_reports_when_the_body_raises(
         self, tracker: ProgressTracker, clock: _Clock, closed: list[ClosedHold]
     ) -> None:
@@ -259,7 +247,6 @@ class TestEveryExitPathReleases:
             ("snapshot metadata query", 120.0)
         ]
 
-    @pytest.mark.asyncio
     async def test_an_unentered_context_manager_opens_no_hold(
         self, tracker: ProgressTracker
     ) -> None:
@@ -277,7 +264,6 @@ class TestEveryExitPathReleases:
 class TestConcurrentAndNested:
     """Holds are keyed by token, so no block can release another's deadline."""
 
-    @pytest.mark.asyncio
     async def test_gathered_holds_release_only_their_own(
         self, tracker: ProgressTracker, clock: _Clock
     ) -> None:
@@ -303,7 +289,6 @@ class TestConcurrentAndNested:
 
         assert tracker.held() is False
 
-    @pytest.mark.asyncio
     async def test_nesting_leaves_the_outer_hold_vouching(
         self, tracker: ProgressTracker, clock: _Clock
     ) -> None:
@@ -315,7 +300,6 @@ class TestConcurrentAndNested:
             assert tracker.held() is True
             assert tracker.stalled_for() == 0.0
 
-    @pytest.mark.asyncio
     async def test_each_gathered_hold_is_reported_separately(
         self, tracker: ProgressTracker, closed: list[ClosedHold]
     ) -> None:
@@ -356,7 +340,6 @@ class TestTheAllowanceIsNeverDefaulted:
 class TestOutsideAnActivity:
     """Local runs, unit tests and scripts behave as they did before ADR-0018."""
 
-    @pytest.mark.asyncio
     async def test_the_block_is_inert_with_no_tracker_bound(self) -> None:
         async with holding_progress("snapshot metadata query", timeout=1800):
             assert current_progress_tracker().held() is False
@@ -364,7 +347,6 @@ class TestOutsideAnActivity:
         assert current_progress_tracker().stalled_for() == 0.0
         assert current_progress_tracker().last_label == ""
 
-    @pytest.mark.asyncio
     async def test_an_inert_block_swallows_nothing(self) -> None:
         with pytest.raises(ValueError, match="source refused"):
             async with holding_progress("snapshot metadata query", timeout=1800):
@@ -398,7 +380,6 @@ class _HoldApp(App):
 class TestTheDelegates:
     """The two receivers app authors actually type."""
 
-    @pytest.mark.asyncio
     async def test_the_task_context_holds_on_the_attempts_tracker(
         self, tracker: ProgressTracker, clock: _Clock
     ) -> None:
@@ -412,7 +393,6 @@ class TestTheDelegates:
 
         assert tracker.last_label == "full table scan"
 
-    @pytest.mark.asyncio
     async def test_the_app_delegate_reaches_the_same_hold(
         self, tracker: ProgressTracker, clock: _Clock
     ) -> None:
@@ -437,7 +417,6 @@ class TestTheDelegates:
 class TestTheAdrsBlockingExample:
     """``holding_progress`` around ``run_in_thread`` — the ADR's second example."""
 
-    @pytest.mark.asyncio
     async def test_the_hold_spans_the_offload(
         self, tracker: ProgressTracker, clock: _Clock
     ) -> None:

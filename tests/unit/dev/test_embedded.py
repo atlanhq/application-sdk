@@ -13,7 +13,6 @@ import pytest
 from application_sdk.dev._embedded import EmbeddedRuntime, embedded_runtime
 
 
-@pytest.mark.asyncio
 class TestEmbeddedRuntimeLifecycle:
     async def test_yields_embedded_runtime_dataclass_and_shuts_down(self) -> None:
         """Yielded value carries the loopback target; shutdown is awaited on exit."""

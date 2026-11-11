@@ -216,7 +216,6 @@ class TestWorkerBuildResolution:
 
 
 class TestEveryArtifactEmits:
-    @pytest.mark.asyncio
     async def test_a_declared_clean_artifact_reports_clean(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -235,7 +234,6 @@ class TestEveryArtifactEmits:
         assert events[0]["artifact_total"] == 1
         assert events[0]["artifact_side"] == ARTIFACT_SIDE_HANDOFF
 
-    @pytest.mark.asyncio
     async def test_a_declared_broken_artifact_reports_flagged(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -260,7 +258,6 @@ class TestEveryArtifactEmits:
         assert matrix[0]["field"] == "START_TIME"
         assert matrix[0]["expected"] == "timestamp"
 
-    @pytest.mark.asyncio
     async def test_an_undeclared_ref_reports_not_declared(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -268,7 +265,6 @@ class TestEveryArtifactEmits:
         events = await _run(_InternalOut(scratch=FileReference(local_path=local)))
         assert [e["outcome"] for e in events] == ["not_declared"]
 
-    @pytest.mark.asyncio
     async def test_an_unsupported_cell_says_so_rather_than_going_quiet(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -293,7 +289,6 @@ class TestEveryArtifactEmits:
         assert events[0]["outcome"] == "unsupported"
         assert events[0]["artifact_format"] == "avro"
 
-    @pytest.mark.asyncio
     async def test_a_missing_artifact_reports_absent(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -305,7 +300,6 @@ class TestEveryArtifactEmits:
         )
         assert events[0]["outcome"] == "absent"
 
-    @pytest.mark.asyncio
     async def test_a_ref_with_no_local_artifact_still_emits(
         self, generated_dir: Path
     ) -> None:
@@ -319,7 +313,6 @@ class TestEveryArtifactEmits:
         assert events[0]["outcome"] == "absent"
         assert events[0]["artifact_schema_source"] == "contract"
 
-    @pytest.mark.asyncio
     async def test_no_local_artifact_and_no_declaration_is_not_declared(
         self, generated_dir: Path
     ) -> None:
@@ -327,7 +320,6 @@ class TestEveryArtifactEmits:
         events = await _run(_BoundaryOut(queries=FileReference()))
         assert events[0]["outcome"] == "not_declared"
 
-    @pytest.mark.asyncio
     async def test_nothing_is_emitted_for_a_payload_holding_no_refs(self) -> None:
         assert await _run(_BoundaryOut()) == []
 
@@ -338,7 +330,6 @@ class TestEveryArtifactEmits:
 
 
 class TestBoundaryAttribution:
-    @pytest.mark.asyncio
     async def test_entrypoint_contract_reports_boundary_true(
         self, generated_dir: Path
     ) -> None:
@@ -349,7 +340,6 @@ class TestBoundaryAttribution:
         assert events[0]["outcome"] == "not_declared"
         assert events[0]["boundary"] is True
 
-    @pytest.mark.asyncio
     async def test_internal_task_contract_reports_boundary_false(
         self, generated_dir: Path
     ) -> None:
@@ -360,7 +350,6 @@ class TestBoundaryAttribution:
         assert events[0]["outcome"] == "not_declared"
         assert events[0]["boundary"] is False
 
-    @pytest.mark.asyncio
     async def test_a_ref_on_a_nested_model_is_not_a_boundary_handoff(
         self, generated_dir: Path
     ) -> None:
@@ -381,7 +370,6 @@ def _boom(*args: Any, **kwargs: Any) -> Any:
 
 
 class TestNeverBreaksTheHandoff:
-    @pytest.mark.asyncio
     async def test_a_raising_validator_becomes_an_absent_row(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -397,12 +385,10 @@ class TestNeverBreaksTheHandoff:
         # validator's, so a broken validator cannot erase a finding's audience.
         assert events[0]["boundary"] is True
 
-    @pytest.mark.asyncio
     async def test_a_broken_walk_is_swallowed(self, generated_dir: Path) -> None:
         with patch.object(interceptor_module, "_walk", _boom):
             assert await _run(_BoundaryOut(queries=FileReference())) == []
 
-    @pytest.mark.asyncio
     async def test_a_broken_emit_is_swallowed(self, generated_dir: Path) -> None:
         with patch.object(
             interceptor_module, "artifact_validation_event_fields", _boom
@@ -423,7 +409,6 @@ class TestNeverBreaksTheHandoff:
 
 
 class TestBookkeeping:
-    @pytest.mark.asyncio
     async def test_identical_refs_are_scanned_once(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -431,7 +416,6 @@ class TestBookkeeping:
         events = await _run(_ParentOut(parts=[ref, ref]))
         assert len(events) == 1
 
-    @pytest.mark.asyncio
     async def test_distinct_artifacts_under_one_field_each_emit(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -445,7 +429,6 @@ class TestBookkeeping:
         )
         assert len(events) == 2
 
-    @pytest.mark.asyncio
     async def test_distinct_durable_refs_under_one_field_each_emit(
         self, generated_dir: Path
     ) -> None:
@@ -465,7 +448,6 @@ class TestBookkeeping:
         )
         assert len(events) == 2
 
-    @pytest.mark.asyncio
     async def test_the_same_durable_artifact_twice_is_scanned_once(
         self, generated_dir: Path
     ) -> None:
@@ -480,7 +462,6 @@ class TestBookkeeping:
         )
         assert len(events) == 1
 
-    @pytest.mark.asyncio
     async def test_refs_naming_no_artifact_at_all_each_emit(
         self, generated_dir: Path
     ) -> None:
@@ -492,7 +473,6 @@ class TestBookkeeping:
         events = await _run(_ParentOut(parts=[FileReference(), FileReference()]))
         assert len(events) == 2
 
-    @pytest.mark.asyncio
     async def test_the_kill_switch_stops_the_hook_entirely(
         self, generated_dir: Path
     ) -> None:
@@ -556,7 +536,6 @@ class TestModelDeclaredFields:
         item = next(iter_named_file_refs(FileReference()))
         assert isinstance(_source_for(item, entrypoint=""), ContractSource)
 
-    @pytest.mark.asyncio
     async def test_a_marked_field_is_validated_against_the_real_model(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -579,7 +558,6 @@ class TestModelDeclaredFields:
         assert events[0]["artifact_format"] == "ndjson"
         assert events[0]["artifact_total"] == 1
 
-    @pytest.mark.asyncio
     async def test_a_broken_asset_is_flagged_rather_than_undeclared(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -591,7 +569,6 @@ class TestModelDeclaredFields:
         assert events[0]["outcome"] == "flagged"
         assert events[0]["artifact_schema_source"] == "model"
 
-    @pytest.mark.asyncio
     async def test_a_hand_written_envelope_does_not_win_over_the_model(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -618,7 +595,6 @@ class TestModelDeclaredFields:
         events = await _run(_AssetOut(transformed=FileReference(local_path=local)))
         assert events[0]["artifact_schema_source"] == "model"
 
-    @pytest.mark.asyncio
     async def test_the_model_scan_runs_isolated_not_on_a_thread(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -651,7 +627,6 @@ class TestModelDeclaredFields:
         assert isinstance(best_effort.await_args.args[2], ModelSource)
         assert best_effort.await_args.kwargs["timeout"] is not None
 
-    @pytest.mark.asyncio
     async def test_a_field_map_still_rides_a_thread(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -673,7 +648,6 @@ class TestModelDeclaredFields:
         assert in_thread.await_count == 1
         assert best_effort.await_count == 0
 
-    @pytest.mark.asyncio
     async def test_a_swallowed_child_failure_is_absent_and_never_blocks(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -709,7 +683,6 @@ class TestModelDeclaredFields:
         assert events[0]["artifact_classification"] == "validator_broken"
         assert events[0]["artifact_enforcement"] != "blocked"
 
-    @pytest.mark.asyncio
     async def test_a_marked_field_with_nothing_local_is_absent_not_undeclared(
         self, generated_dir: Path
     ) -> None:

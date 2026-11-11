@@ -96,7 +96,6 @@ def test_load_respects_pool_pre_ping_override(
     assert sql_client.connection is None
 
 
-@pytest.mark.asyncio
 @patch("application_sdk.clients.sql.run_in_thread", new_callable=AsyncMock)
 @patch("sqlalchemy.create_engine")
 async def test_load_uses_run_in_thread_for_ping(
@@ -162,7 +161,6 @@ def test_load_property_based(
         assert sql_client.connection is None
 
 
-@pytest.mark.asyncio
 @patch("sqlalchemy.text")
 @patch(
     "application_sdk.clients.sql.run_in_thread",
@@ -245,7 +243,6 @@ async def test_run_query(
     assert results == expected_results
 
 
-@pytest.mark.asyncio
 @patch("sqlalchemy.text")
 @patch(
     "application_sdk.clients.sql.run_in_thread",
@@ -336,7 +333,6 @@ def test_connection_string_property_based(
 
 @given(query_result=mock_sql_query_result_strategy)
 @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
-@pytest.mark.asyncio
 @pytest.mark.skip(reason="Failing due to KeyError: 'col1'")
 async def test_run_query_property_based(
     sql_client: BaseSQLClient,
@@ -384,7 +380,6 @@ async def test_run_query_property_based(
 
 @given(error_type=sql_error_strategy)
 @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
-@pytest.mark.asyncio
 async def test_run_query_error_property_based(
     sql_client: BaseSQLClient,
     error_type: str,
@@ -701,7 +696,6 @@ def test_get_sqlalchemy_connection_string_omits_none_parameters(
 # ---------- BaseSQLClient.load — error / edge paths ----------
 
 
-@pytest.mark.asyncio
 async def test_load_raises_when_db_config_missing():
     """load() must validate DB_CONFIG before attempting any sqlalchemy import."""
     client = BaseSQLClient()
@@ -710,7 +704,6 @@ async def test_load_raises_when_db_config_missing():
         await client.load({"username": "u", "password": "p"})
 
 
-@pytest.mark.asyncio
 @patch("sqlalchemy.create_engine")
 async def test_load_wraps_engine_failure_as_client_error(
     mock_create_engine: Any, sql_client: BaseSQLClient
@@ -740,7 +733,6 @@ async def test_load_wraps_engine_failure_as_client_error(
 # ---------- BaseSQLClient.close ----------
 
 
-@pytest.mark.asyncio
 async def test_close_disposes_engine_and_clears_state(sql_client: BaseSQLClient):
     """close() must dispose the underlying engine and null out engine/connection."""
     mock_engine = MagicMock()
@@ -754,7 +746,6 @@ async def test_close_disposes_engine_and_clears_state(sql_client: BaseSQLClient)
     assert sql_client.connection is None
 
 
-@pytest.mark.asyncio
 async def test_close_is_idempotent_when_engine_none(sql_client: BaseSQLClient):
     """close() must be safe to call when engine was never initialized."""
     sql_client.engine = None
@@ -837,7 +828,6 @@ def test_get_iam_role_token_missing_database(sql_client: BaseSQLClient):
 # ---------- run_query guards ----------
 
 
-@pytest.mark.asyncio
 async def test_run_query_raises_when_engine_not_initialized(sql_client: BaseSQLClient):
     sql_client.engine = None
     with pytest.raises(EngineNotInitializedError):
@@ -845,7 +835,6 @@ async def test_run_query_raises_when_engine_not_initialized(sql_client: BaseSQLC
             pass
 
 
-@pytest.mark.asyncio
 @patch("sqlalchemy.text")
 @patch(
     "application_sdk.clients.sql.run_in_thread",
@@ -1080,7 +1069,6 @@ def test_execute_pandas_query_escapes_colons_before_text(sql_client: BaseSQLClie
     mock_text.assert_called_once_with("RLIKE '^(?\\:cdl)'")
 
 
-@pytest.mark.asyncio
 @patch("sqlalchemy.text", side_effect=lambda q: q)  # type: ignore
 @patch(
     "application_sdk.clients.sql.run_in_thread",
@@ -1114,7 +1102,6 @@ async def test_run_query_escapes_colons(
 # ---------- _execute_async_read_operation / get_results / get_batched_results ----------
 
 
-@pytest.mark.asyncio
 async def test_execute_async_read_operation_rejects_string_engine(
     sql_client: BaseSQLClient,
 ):
@@ -1123,7 +1110,6 @@ async def test_execute_async_read_operation_rejects_string_engine(
         await sql_client._execute_async_read_operation("SELECT 1", chunksize=None)
 
 
-@pytest.mark.asyncio
 async def test_get_results_returns_dataframe(sql_client: BaseSQLClient):
     """get_results returns the pandas DataFrame produced by the read path."""
     import pandas as pd
@@ -1141,7 +1127,6 @@ async def test_get_results_returns_dataframe(sql_client: BaseSQLClient):
     assert out is fake_df
 
 
-@pytest.mark.asyncio
 async def test_get_results_rejects_non_dataframe(sql_client: BaseSQLClient):
     """If the read path returns something that isn't a DataFrame, get_results
     must surface the error as SqlPandasResultError."""
@@ -1155,7 +1140,6 @@ async def test_get_results_rejects_non_dataframe(sql_client: BaseSQLClient):
             await sql_client.get_results("SELECT 1")
 
 
-@pytest.mark.asyncio
 async def test_get_batched_results_raises_sql_pandas_result_error(
     sql_client: BaseSQLClient,
 ):
@@ -1172,7 +1156,6 @@ async def test_get_batched_results_raises_sql_pandas_result_error(
         await sql_client.get_batched_results("SELECT 1")
 
 
-@pytest.mark.asyncio
 async def test_get_batched_results_returns_iterator(sql_client: BaseSQLClient):
     sql_client.engine = MagicMock()
     frames = [MagicMock(name="frame-1"), MagicMock(name="frame-2")]
@@ -1188,7 +1171,6 @@ async def test_get_batched_results_returns_iterator(sql_client: BaseSQLClient):
     assert list(out) == frames
 
 
-@pytest.mark.asyncio
 async def test_execute_async_read_operation_thread_pool_branch(
     sql_client: BaseSQLClient,
 ):
@@ -1204,7 +1186,6 @@ async def test_execute_async_read_operation_thread_pool_branch(
     mock_eq.assert_called_once_with("SELECT 1", 42)
 
 
-@pytest.mark.asyncio
 async def test_execute_async_read_operation_async_session_branch(
     sql_client: BaseSQLClient,
 ):
@@ -1253,7 +1234,6 @@ def async_sql_client_local():
     return client
 
 
-@pytest.mark.asyncio
 async def test_async_load_raises_when_db_config_missing():
     client = AsyncBaseSQLClient()
     client.DB_CONFIG = None
@@ -1261,7 +1241,6 @@ async def test_async_load_raises_when_db_config_missing():
         await client.load({"username": "u", "password": "p"})
 
 
-@pytest.mark.asyncio
 @patch("sqlalchemy.ext.asyncio.create_async_engine")
 async def test_async_load_disposes_engine_on_failure(
     mock_create: MagicMock, async_sql_client_local: AsyncBaseSQLClient
@@ -1289,7 +1268,6 @@ async def test_async_load_disposes_engine_on_failure(
     assert async_sql_client_local.engine is None
 
 
-@pytest.mark.asyncio
 async def test_async_close_disposes_engine(
     async_sql_client_local: AsyncBaseSQLClient,
 ):
@@ -1302,7 +1280,6 @@ async def test_async_close_disposes_engine(
     assert async_sql_client_local.connection is None
 
 
-@pytest.mark.asyncio
 async def test_async_close_idempotent_when_engine_none(
     async_sql_client_local: AsyncBaseSQLClient,
 ):
@@ -1310,7 +1287,6 @@ async def test_async_close_idempotent_when_engine_none(
     await async_sql_client_local.close()  # must not raise
 
 
-@pytest.mark.asyncio
 async def test_async_run_query_requires_engine(
     async_sql_client_local: AsyncBaseSQLClient,
 ):
@@ -1341,7 +1317,6 @@ def test_add_connection_params_empty_dict_is_noop(sql_client_with_db_config):
 # ---------- retryability split on SqlPandasResultError (CONAT-747) ----------
 
 
-@pytest.mark.asyncio
 async def test_get_batched_results_wrap_is_retryable(sql_client: BaseSQLClient):
     """An unclassified read-path failure must not override the retry policy."""
     sql_client.engine = MagicMock()
@@ -1359,7 +1334,6 @@ async def test_get_batched_results_wrap_is_retryable(sql_client: BaseSQLClient):
     assert exc_info.value.effective_retryable is True
 
 
-@pytest.mark.asyncio
 async def test_get_results_wrap_is_retryable(sql_client: BaseSQLClient):
     """Same for the single-DataFrame read path."""
     sql_client.engine = MagicMock()
@@ -1375,7 +1349,6 @@ async def test_get_results_wrap_is_retryable(sql_client: BaseSQLClient):
     assert exc_info.value.effective_retryable is True
 
 
-@pytest.mark.asyncio
 async def test_get_results_invariant_violation_stays_non_retryable(
     sql_client: BaseSQLClient,
 ):

@@ -27,18 +27,15 @@ class TestBasicCredential:
         decoded = base64.b64decode(header[6:]).decode()
         assert decoded == "user:pass"
 
-    @pytest.mark.asyncio
     async def test_validate_ok(self):
         cred = BasicCredential(username="user", password="pass")
         await cred.validate()  # should not raise
 
-    @pytest.mark.asyncio
     async def test_validate_empty_username(self):
         cred = BasicCredential(username="", password="pass")
         with pytest.raises(CredentialValidationError):
             await cred.validate()
 
-    @pytest.mark.asyncio
     async def test_validate_empty_password(self):
         cred = BasicCredential(username="user", password="")
         with pytest.raises(CredentialValidationError):
@@ -71,12 +68,10 @@ class TestApiKeyCredential:
         )
         assert cred.to_headers() == {"Authorization": "Bearer key"}
 
-    @pytest.mark.asyncio
     async def test_validate_ok(self):
         cred = ApiKeyCredential(api_key="secret")
         await cred.validate()
 
-    @pytest.mark.asyncio
     async def test_validate_empty(self):
         cred = ApiKeyCredential(api_key="")
         with pytest.raises(CredentialValidationError):
@@ -104,12 +99,10 @@ class TestBearerTokenCredential:
         cred = BearerTokenCredential(token="tok", expires_at="2000-01-01T00:00:00Z")
         assert cred.is_expired() is True
 
-    @pytest.mark.asyncio
     async def test_validate_ok(self):
         cred = BearerTokenCredential(token="tok")
         await cred.validate()
 
-    @pytest.mark.asyncio
     async def test_validate_empty(self):
         cred = BearerTokenCredential(token="")
         with pytest.raises(CredentialValidationError):
@@ -152,11 +145,9 @@ class TestOAuthClientCredential:
         cred = self._make(access_token="mytoken")
         assert cred.to_headers() == {"Authorization": "Bearer mytoken"}
 
-    @pytest.mark.asyncio
     async def test_validate_ok(self):
         await self._make().validate()
 
-    @pytest.mark.asyncio
     async def test_validate_missing_client_id(self):
         cred = self._make(client_id="")
         with pytest.raises(CredentialValidationError):
@@ -168,17 +159,14 @@ class TestCertificateCredential:
         cred = CertificateCredential(cert_data="cert", key_data="key")
         assert cred.credential_type == "certificate"
 
-    @pytest.mark.asyncio
     async def test_validate_ok_with_key(self):
         cred = CertificateCredential(key_data="key")
         await cred.validate()
 
-    @pytest.mark.asyncio
     async def test_validate_ok_with_cert(self):
         cred = CertificateCredential(cert_data="cert")
         await cred.validate()
 
-    @pytest.mark.asyncio
     async def test_validate_empty(self):
         cred = CertificateCredential()
         with pytest.raises(CredentialValidationError):
@@ -196,7 +184,6 @@ class TestRawCredential:
         assert cred.get("missing") is None
         assert cred.get("missing", "default") == "default"
 
-    @pytest.mark.asyncio
     async def test_validate_noop(self):
         cred = RawCredential(data={})
         await cred.validate()  # should not raise

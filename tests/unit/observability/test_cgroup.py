@@ -363,7 +363,6 @@ class TestContainerTrace:
 
 
 class TestTrackContainerUsage:
-    @pytest.mark.asyncio
     async def test_watermark_mode_catches_a_spike_that_ended(
         self, tmp_path, monkeypatch
     ):
@@ -393,7 +392,6 @@ class TestTrackContainerUsage:
         assert trace.start_memory_bytes == 1000
         assert trace.peak_delta_bytes == 8000
 
-    @pytest.mark.asyncio
     async def test_watermark_mode_on_a_pod_with_no_earlier_peak(
         self, tmp_path, monkeypatch
     ):
@@ -418,7 +416,6 @@ class TestTrackContainerUsage:
         assert trace.start_memory_bytes == 1000
         assert trace.peak_delta_bytes == 6000
 
-    @pytest.mark.asyncio
     async def test_poll_mode_still_records_the_baseline(self, tmp_path, monkeypatch):
         """The delta has to survive the fallback, or it is absent when most needed."""
         current = tmp_path / "memory.current"
@@ -439,7 +436,6 @@ class TestTrackContainerUsage:
         assert trace.peak_memory_bytes == 4200
         assert trace.peak_delta_bytes == 3000
 
-    @pytest.mark.asyncio
     async def test_poll_mode_when_the_watermark_is_unavailable(
         self, tmp_path, monkeypatch
     ):
@@ -464,7 +460,6 @@ class TestTrackContainerUsage:
         assert trace.peak_memory_bytes == 7000
         assert trace.peak_memory_fraction == pytest.approx(0.7)
 
-    @pytest.mark.asyncio
     async def test_zero_interval_disables_polling(self, tmp_path, monkeypatch):
         """The fleet-wide default has to be able to cost nothing."""
         monkeypatch.setattr(cgroup, "_MEMORY_PEAK_PATHS", _missing(tmp_path))
@@ -478,7 +473,6 @@ class TestTrackContainerUsage:
         assert trace.peak_source == "unavailable"
         assert trace.peak_memory_bytes is None
 
-    @pytest.mark.asyncio
     async def test_unavailable_when_there_is_no_cgroup(self, tmp_path, monkeypatch):
         """macOS and local dev. Must be None, never 0."""
         monkeypatch.setattr(cgroup, "_MEMORY_CURRENT_PATHS", _missing(tmp_path))
@@ -493,7 +487,6 @@ class TestTrackContainerUsage:
         assert trace.peak_memory_bytes is None
         assert trace.cpu_seconds is None
 
-    @pytest.mark.asyncio
     async def test_cpu_counters_are_differenced(self, tmp_path, monkeypatch):
         stat = tmp_path / "cpu.stat"
         stat.write_text(
@@ -516,7 +509,6 @@ class TestTrackContainerUsage:
         assert trace.cpu_periods == 300
         assert trace.throttled_fraction == pytest.approx(0.3)
 
-    @pytest.mark.asyncio
     async def test_never_fails_a_successful_block(self, tmp_path, monkeypatch):
         """An instrument must not fail the thing it measures."""
         monkeypatch.setattr(cgroup, "_MEMORY_CURRENT_PATHS", _missing(tmp_path))
@@ -531,7 +523,6 @@ class TestTrackContainerUsage:
         assert result == "done"
         assert trace.cpu_seconds is None
 
-    @pytest.mark.asyncio
     async def test_a_poller_that_raises_does_not_fail_the_block(
         self, tmp_path, monkeypatch
     ):
@@ -564,7 +555,6 @@ class TestTrackContainerUsage:
         assert result == "done"
         assert trace.peak_source == "poll"
 
-    @pytest.mark.asyncio
     async def test_propagates_the_blocks_own_error(self, tmp_path, monkeypatch):
         """Telemetry must not swallow the activity's failure either."""
         monkeypatch.setattr(cgroup, "_MEMORY_CURRENT_PATHS", _missing(tmp_path))
@@ -574,7 +564,6 @@ class TestTrackContainerUsage:
             async with cgroup.track_container_usage():
                 raise ValueError("activity failed")
 
-    @pytest.mark.asyncio
     async def test_poll_task_is_cancelled_on_exit(self, tmp_path, monkeypatch):
         """A leaked poller per activity accumulates for the pod's lifetime."""
         monkeypatch.setattr(cgroup, "_MEMORY_PEAK_PATHS", _missing(tmp_path))

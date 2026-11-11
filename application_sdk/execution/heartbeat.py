@@ -67,7 +67,7 @@ logger = get_logger(__name__)
 # as a refactor. Kept so `from application_sdk.execution.heartbeat import <name>`
 # never regresses; their real homes are `_runtime.progress`,
 # `observability.logger_adaptor` and `concurrent.futures.process`. Pinned by
-# `tests/unit/runtime/test_layering.py`.
+# `tests/unit/_runtime/test_layering.py`.
 __all__ = [
     "AtlanLoggerAdapter",
     "BrokenProcessPool",

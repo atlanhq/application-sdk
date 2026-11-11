@@ -1,11 +1,15 @@
 # Testing
 
 - Test command and conventions: `docs/standards/testing.md`.
-- New code should target 85% coverage per `docs/standards/review-checklist.md` (the tooling threshold in `pyproject.toml` is 85% — CI fails below it).
-- Current tests live in `tests/unit/`; follow existing structure when adding new tests.
+- New code should target 85% coverage per `docs/standards/review-checklist.md` (the tooling threshold in `pyproject.toml` is 85% — CI fails below it). The same floor applies to each top-level `application_sdk` subpackage on its own, except those listed with a different floor in `[tool.application-sdk.coverage.package-floors]`; the coverage leg uploads `coverage.xml` and `htmlcov/` as the `sdk-unit-test-coverage` artifact (14 days).
+- Current tests live in `tests/unit/`, which mirrors `application_sdk/`: `application_sdk/a/b/c.py` → `tests/unit/a/b/test_c.py` (so `_runtime/` → `tests/unit/_runtime/`, `execution/_temporal/interceptors/` → `tests/unit/execution/_temporal/interceptors/`). `tests/unit/test_unit_tree_mirrors_package.py` fails a test directory with no package counterpart; a deliberate exception goes in its `_NOT_MIRRORED` with what it tests instead.
+- Keep a test module under 1,500 lines. When one grows past that, split it by the area it covers and move shared handlers and factories into a support module beside it — `tests/unit/handler/test_service_*.py` share `_service_support.py`.
 - A unit test that takes ≥10s on its own (a throughput comparison, a 100k-key scale probe) gets `@pytest.mark.perf`. `addopts` excludes it from the 12-leg matrix; the `Unit Perf Tests` job runs it once, in one process, with `uv run pytest tests/unit -m perf`. Every other unit test runs under a 120s per-test `--timeout` in CI, and only the ubuntu 3.12 leg measures coverage.
 - For how a *consumer app's* tests should be laid out, read `docs/agents/canonical-apps.md` and then the app itself — not an arbitrary `atlan-*-app`, which may be mid-migration or carry deprecated patterns.
 - When a fixture stands in for a **generated artifact** (`app/generated/**`, `atlan.yaml`, a served API envelope), build it from a real one and say in a comment which repo it was read from. A fixture with the shape inverted still passes — for a reason unrelated to its claim — and it flatters the code under test, which is APP-TESTS-001's self-certifying PR arriving through the fixture rather than the assertion. FND-1667 shipped one: a credential template written as `{"id": ...}` with no `config`, where the toolkit emits `config` and no `id`. Nothing caught it until someone ran the selector against a real tree.
+- When the generated artifact can be rendered here, render it instead of copying it. Each fixture listed in `tests/regen_fixtures.py` (today `tests/unit/handler/fixtures/generated_bigquery_credentials/`, rendered from `fixtures/bigquery_contract/app.pkl`) is toolkit output; `tests/unit/test_rendered_fixtures.py` renders each one again with the pinned pkl and fails when a copy is stale. To add one, write its contract and add an entry to `FIXTURES`. After changing a contract or `contract-toolkit/src`, run `uv run poe regen-test-fixtures` and review the diff. The Linux unit legs install pkl and set `SDK_TESTS_REQUIRE_PKL`, so the check cannot pass there by skipping. `tests/unit/validation/resources/artifact_schemas.json` is held to its toolkit example the same way, by `test_fixture_is_the_generated_example`.
+- `addopts` has `--strict-markers`: a mark not listed in `[tool.pytest.ini_options].markers` (or registered by a plugin) fails collection. Register a new mark there before using it.
+- No reruns and no flaky marker: CI runs each test once. Fix a flaky test in place.
 - For consumer apps built on this SDK, the conformance suite's T-series (`packages/conformance/conformance/docs/rules/tests.md`) enforces the agreed per-connector testing-tier architecture (unit + integration required, e2e recommended, UI optional except for top connectors) plus test-quality checks — assertion-free tests, uncollectable test files, disabled coverage gates, and more. Run it with `/remediate` or `uv run atlan-application-sdk-conformance detect --series T`.
 
 ## Shared State Under xdist
@@ -118,7 +122,7 @@ The reviewer enforces these test rules (G4 guardrail):
 
 ### Test Patterns the Reviewer Flags
 
-- `@pytest.mark.asyncio` (redundant with `asyncio_mode="auto"` — remove it)
+- `@pytest.mark.asyncio` or `@pytest.mark.anyio` (redundant with `asyncio_mode="auto"` — remove it; only a non-default argument such as `loop_scope="session"` needs the mark)
 - `assert result` or `assert result is not None` (too vague — assert specific values)
 - Missing `clean_app_registry` fixture when defining App subclasses in tests
 - Real external calls in unit tests (use `MockStateStore`, `MockSecretStore`, `MockPubSub`)

@@ -86,7 +86,6 @@ def _stub_token_service(
 class TestEmitTokenRefreshEvent:
     """Tests for TemporalAuthManager._emit_token_refresh_event."""
 
-    @pytest.mark.asyncio
     async def test_publishes_event_successfully(self) -> None:
         """_emit_token_refresh_event calls _publish_event_via_binding with correct event."""
         manager = _make_manager()
@@ -103,7 +102,6 @@ class TestEmitTokenRefreshEvent:
             assert event.event_type == EventTypes.APPLICATION_EVENT.value
             assert event.event_name == ApplicationEventNames.TOKEN_REFRESH.value
 
-    @pytest.mark.asyncio
     async def test_does_not_raise_on_publish_failure(self) -> None:
         """_emit_token_refresh_event swallows exceptions from publishing."""
         manager = _make_manager()
@@ -116,7 +114,6 @@ class TestEmitTokenRefreshEvent:
             # Should not raise
             await manager._emit_token_refresh_event(expires_at)
 
-    @pytest.mark.asyncio
     async def test_does_not_raise_on_import_failure(self) -> None:
         """_emit_token_refresh_event handles import errors gracefully."""
         manager = _make_manager()
@@ -129,7 +126,6 @@ class TestEmitTokenRefreshEvent:
             # Should not raise
             await manager._emit_token_refresh_event(None)
 
-    @pytest.mark.asyncio
     async def test_event_metadata_contains_expected_fields(self) -> None:
         """Event data includes deployment_name, application_name, and timing fields."""
         manager = _make_manager()
@@ -159,7 +155,6 @@ class TestEmitTokenRefreshEvent:
             assert "time_until_expiry" in data
             assert "refresh_timestamp" in data
 
-    @pytest.mark.asyncio
     async def test_deployment_name_falls_back_to_app_name(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -182,7 +177,6 @@ class TestEmitTokenRefreshEvent:
             event = mock_publish.call_args[0][0]
             assert event.data["deployment_name"] == "fallback-app"
 
-    @pytest.mark.asyncio
     async def test_handles_none_expires_at(self) -> None:
         """When expires_at is None, event still publishes with zero timestamps."""
         manager = _make_manager()
@@ -196,7 +190,6 @@ class TestEmitTokenRefreshEvent:
             event = mock_publish.call_args[0][0]
             assert event.data["token_expiry_time"] == "0.0"
 
-    @pytest.mark.asyncio
     async def test_uses_correct_event_type_and_name(self) -> None:
         """Verify the exact event_type and event_name string values."""
         manager = _make_manager()
@@ -369,7 +362,6 @@ class TestGetTokenService:
 
 
 class TestAcquireInitialToken:
-    @pytest.mark.asyncio
     async def test_returns_token_on_success(self) -> None:
         manager = _make_manager()
         expires = datetime(2026, 1, 1, tzinfo=UTC)
@@ -380,7 +372,6 @@ class TestAcquireInitialToken:
         assert token == "initial-token"
         svc.get_token.assert_awaited_once_with(force_refresh=True)
 
-    @pytest.mark.asyncio
     async def test_wraps_failure_in_runtime_error(self) -> None:
         manager = _make_manager()
         svc = _stub_token_service(manager)
@@ -389,7 +380,6 @@ class TestAcquireInitialToken:
         with pytest.raises(TemporalAuthTokenAcquireError):
             await manager.acquire_initial_token()
 
-    @pytest.mark.asyncio
     async def test_handles_unknown_expires_at(self) -> None:
         """When current_expires_at is None the call still succeeds."""
         manager = _make_manager()
@@ -399,7 +389,6 @@ class TestAcquireInitialToken:
 
         assert token == "t"
 
-    @pytest.mark.asyncio
     async def test_runtime_error_chains_original_exception(self) -> None:
         manager = _make_manager()
         original = ValueError("network blip")
@@ -418,7 +407,6 @@ class TestAcquireInitialToken:
 
 
 class TestStartAndShutdown:
-    @pytest.mark.asyncio
     async def test_start_creates_named_task(self) -> None:
         manager = _make_manager()
         client = mock.MagicMock(name="Client")
@@ -434,7 +422,6 @@ class TestStartAndShutdown:
             assert manager._refresh_task.get_name() == "temporal-auth-refresh"
             await manager._refresh_task  # let it finish
 
-    @pytest.mark.asyncio
     async def test_double_start_is_idempotent(self) -> None:
         manager = _make_manager()
         client = mock.MagicMock(name="Client")
@@ -457,7 +444,6 @@ class TestStartAndShutdown:
             except asyncio.CancelledError:
                 pass
 
-    @pytest.mark.asyncio
     async def test_shutdown_with_no_task_is_safe(self) -> None:
         """Shutdown before start should not raise."""
         manager = _make_manager()
@@ -465,7 +451,6 @@ class TestStartAndShutdown:
         assert manager._refresh_task is None
         assert manager._shutdown_event.is_set()
 
-    @pytest.mark.asyncio
     async def test_shutdown_awaits_clean_task(self) -> None:
         manager = _make_manager()
 
@@ -481,7 +466,6 @@ class TestStartAndShutdown:
         assert manager._refresh_task is None
         assert manager._shutdown_event.is_set()
 
-    @pytest.mark.asyncio
     async def test_shutdown_cancels_hung_task(self) -> None:
         """If the refresh task does not stop within timeout, it is cancelled."""
         manager = _make_manager()
@@ -511,7 +495,6 @@ class TestStartAndShutdown:
 
         assert manager._refresh_task is None
 
-    @pytest.mark.asyncio
     async def test_start_after_shutdown_starts_a_new_generation(self) -> None:
         """shutdown() must not permanently disable start_background_refresh.
 
@@ -540,7 +523,6 @@ class TestStartAndShutdown:
             assert seen == [client_one, client_two]
             await manager.shutdown()
 
-    @pytest.mark.asyncio
     async def test_restart_background_refresh_points_loop_at_new_client(self) -> None:
         manager = _make_manager()
         seen: list[object] = []
@@ -565,7 +547,6 @@ class TestStartAndShutdown:
 
 
 class TestReconnectTemporalClient:
-    @pytest.mark.asyncio
     async def test_connects_then_restarts_refresh_and_rebinds_health(self) -> None:
         """Success path: connect first, then switch auth + health onto the new client."""
         auth = mock.MagicMock()
@@ -594,7 +575,6 @@ class TestReconnectTemporalClient:
         # Must not stop the old loop before the replacement is up.
         auth.shutdown.assert_not_awaited()
 
-    @pytest.mark.asyncio
     async def test_failed_connect_leaves_refresh_running(self) -> None:
         auth = mock.MagicMock()
         auth.acquire_initial_token = mock.AsyncMock(return_value="new-token")
@@ -617,7 +597,6 @@ class TestReconnectTemporalClient:
         auth.shutdown.assert_not_awaited()
         health.set_temporal_client.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_without_auth_still_rebinds_health(self) -> None:
         health = mock.MagicMock()
         new_client = object()
@@ -714,7 +693,6 @@ class TestCalculateSleepSeconds:
 
 
 class TestDoRefresh:
-    @pytest.mark.asyncio
     async def test_updates_client_api_key_and_emits_event(self) -> None:
         manager = _make_manager()
         expires = datetime(2026, 6, 1, tzinfo=UTC)
@@ -731,7 +709,6 @@ class TestDoRefresh:
         svc.get_token.assert_awaited_once_with(force_refresh=True)
         mock_emit.assert_awaited_once_with(expires)
 
-    @pytest.mark.asyncio
     async def test_propagates_get_token_failure(self) -> None:
         """_do_refresh does not swallow exceptions — the loop wraps it."""
         manager = _make_manager()
@@ -749,7 +726,6 @@ class TestDoRefresh:
 
 
 class TestRefreshLoop:
-    @pytest.mark.asyncio
     async def test_exits_immediately_when_shutdown_already_set(self) -> None:
         manager = _make_manager()
         _stub_token_service(manager, expires_at=None)
@@ -763,7 +739,6 @@ class TestRefreshLoop:
 
         mock_refresh.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_performs_refresh_when_sleep_times_out(self) -> None:
         """Normal path: sleep → timeout → _do_refresh → next iteration sees shutdown."""
         manager = _make_manager()
@@ -784,7 +759,6 @@ class TestRefreshLoop:
 
         mock_refresh.assert_awaited()
 
-    @pytest.mark.asyncio
     async def test_refresh_failure_triggers_retry_sleep_then_exit(self) -> None:
         """When _do_refresh raises, the loop logs and waits for retry interval.
 
@@ -809,7 +783,6 @@ class TestRefreshLoop:
         # Loop must have exited — task is bounded and event is set.
         assert manager._shutdown_event.is_set()
 
-    @pytest.mark.asyncio
     async def test_refresh_failure_continues_loop_when_not_shutdown(self) -> None:
         """If retry sleep times out (no shutdown), loop continues to retry refresh."""
         manager = _make_manager()
@@ -842,7 +815,6 @@ class TestRefreshLoop:
 class TestForceRefresh:
     """Tests for TemporalAuthManager.force_refresh."""
 
-    @pytest.mark.asyncio
     async def test_delegates_to_do_refresh_with_same_client(self) -> None:
         """force_refresh awaits _do_refresh exactly once with the passed client.
 
@@ -878,7 +850,6 @@ class TestTokenRefreshEventPollStateGate:
         yield
         worker_poll_state.reset()
 
-    @pytest.mark.asyncio
     async def test_publishes_when_poll_state_is_healthy(self) -> None:
         """Default posture is unchanged: the event goes out as before."""
         manager = _make_manager()
@@ -889,7 +860,6 @@ class TestTokenRefreshEventPollStateGate:
 
         mock_publish.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_suppressed_when_poll_loop_confirmed_dead(self) -> None:
         """A confirmed-parked worker stops advertising itself as healthy."""
         from application_sdk.execution._temporal.poll_state import worker_poll_state
@@ -905,7 +875,6 @@ class TestTokenRefreshEventPollStateGate:
 
         mock_publish.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_publishing_resumes_when_polling_returns(self) -> None:
         """Recovery needs no restart and no human."""
         from application_sdk.execution._temporal.poll_state import worker_poll_state
@@ -922,7 +891,6 @@ class TestTokenRefreshEventPollStateGate:
 
         mock_publish.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_gate_failure_fails_open(self) -> None:
         """If the gate cannot be read at all, publish — never mute on doubt."""
         manager = _make_manager()

@@ -37,7 +37,6 @@ class TestOnComplete:
         AppRegistry.reset()
         TaskRegistry.reset()
 
-    @pytest.mark.asyncio
     async def test_default_calls_cleanup_files(self) -> None:
         class _App(App):
             async def run(self, input: _OCInput) -> _OCOutput:
@@ -56,7 +55,6 @@ class TestOnComplete:
 
         m_files.assert_called_once_with(CleanupInput())
 
-    @pytest.mark.asyncio
     async def test_default_calls_both_cleanups_concurrently(self) -> None:
         """on_complete() runs cleanup_files and cleanup_storage concurrently."""
         import asyncio
@@ -96,7 +94,6 @@ class TestOnComplete:
         assert "files_start" in call_order
         assert "storage_start" in call_order
 
-    @pytest.mark.asyncio
     async def test_cleanup_disabled_via_env_false(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -112,7 +109,6 @@ class TestOnComplete:
 
         m.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_cleanup_disabled_via_env_zero(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -128,7 +124,6 @@ class TestOnComplete:
 
         m.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_cleanup_failure_does_not_propagate(self) -> None:
         class _App(App):
             async def run(self, input: _OCInput) -> _OCOutput:
@@ -144,7 +139,6 @@ class TestOnComplete:
                 # Should not raise — on_complete() swallows cleanup errors
                 await app.on_complete()
 
-    @pytest.mark.asyncio
     async def test_subclass_override_adds_custom_logic(self) -> None:
         custom_called: list[bool] = []
 
@@ -164,7 +158,6 @@ class TestOnComplete:
         assert custom_called == [True]
         m.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_subclass_can_skip_super(self) -> None:
         class _App(App):
             async def run(self, input: _OCInput) -> _OCOutput:
@@ -179,7 +172,6 @@ class TestOnComplete:
 
         m.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_context_not_yet_nulled_during_on_complete(self) -> None:
         """on_complete() is called before self._context is nulled."""
         from application_sdk.app.context import AppContext

@@ -113,7 +113,6 @@ class _Callable:
 
 
 class TestTheOffloadIsVouchedFor:
-    @pytest.mark.asyncio
     async def test_the_hold_is_active_for_the_whole_call(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -132,7 +131,6 @@ class TestTheOffloadIsVouchedFor:
         assert stalled_during == 0.0
         assert tracker.held() is False, "the hold must not outlive the offload"
 
-    @pytest.mark.asyncio
     async def test_the_context_wrapper_reaches_the_same_hold(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -150,7 +148,6 @@ class TestTheOffloadIsVouchedFor:
         assert len(tracker.holds) == 1
         assert tracker.holds[0].label.startswith(THREAD_PREFIX)
 
-    @pytest.mark.asyncio
     async def test_one_hold_per_offload_not_per_entry_point(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -173,7 +170,6 @@ class TestTheOffloadIsVouchedFor:
 
         assert len(tracker.holds) == 2
 
-    @pytest.mark.asyncio
     async def test_a_completed_offload_counts_as_progress(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -196,7 +192,6 @@ class TestTheOffloadIsVouchedFor:
 
 
 class TestTheHoldIsUnbounded:
-    @pytest.mark.asyncio
     async def test_no_allowance_is_invented(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -212,7 +207,6 @@ class TestTheHoldIsUnbounded:
         assert [hold.allowance_seconds for hold in tracker.holds] == [None, None]
         assert [hold.bounded for hold in tracker.holds] == [False, False]
 
-    @pytest.mark.asyncio
     async def test_a_six_hour_blocking_call_is_not_a_stall(self) -> None:
         """The whole point of the issue, asserted through the watchdog itself.
 
@@ -244,7 +238,6 @@ class TestTheHoldIsUnbounded:
         assert fired is False
         on_stall.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_the_watchdog_is_inactive_mid_call_by_design(self) -> None:
         """The accepted residual, pinned so it is a decision and not a surprise.
 
@@ -273,7 +266,6 @@ class TestTheHoldIsUnbounded:
         assert fired is False
         on_stall.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_the_hold_reports_the_duration_it_observed(self) -> None:
         """What makes an auto-held call visible to the warn-mode work-list.
 
@@ -300,7 +292,6 @@ class TestTheHoldIsUnbounded:
 
 
 class TestTheHoldIsAlwaysReleased:
-    @pytest.mark.asyncio
     async def test_released_when_the_blocking_call_raises(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -311,7 +302,6 @@ class TestTheHoldIsAlwaysReleased:
         assert tracker.held() is False
         assert len(tracker.holds) == 1
 
-    @pytest.mark.asyncio
     async def test_released_when_the_caller_is_cancelled_mid_offload(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -341,7 +331,6 @@ class TestTheHoldIsAlwaysReleased:
         assert tracker.held() is False
         assert len(tracker.holds) == 1
 
-    @pytest.mark.asyncio
     async def test_concurrent_offloads_release_only_their_own_hold(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -395,7 +384,6 @@ class TestADeclaredAllowanceGoverns:
     inside a declared block.
     """
 
-    @pytest.mark.asyncio
     async def test_a_wedged_offload_is_still_caught_at_timeout_plus_budget(
         self,
     ) -> None:
@@ -441,7 +429,6 @@ class TestADeclaredAllowanceGoverns:
             wedged.set()
             await offload
 
-    @pytest.mark.asyncio
     async def test_only_the_declared_hold_is_recorded(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -462,7 +449,6 @@ class TestADeclaredAllowanceGoverns:
 
     # Spawns pool children; see addopts in pyproject.toml.
     @pytest.mark.xdist_group("procpool")
-    @pytest.mark.asyncio
     async def test_an_isolated_call_stands_down_too(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -477,7 +463,6 @@ class TestADeclaredAllowanceGoverns:
 
         assert [hold.label for hold in tracker.holds] == ["validation scan"]
 
-    @pytest.mark.asyncio
     async def test_a_concurrent_offload_outside_the_block_is_still_held(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -511,7 +496,6 @@ class TestADeclaredAllowanceGoverns:
         )
         assert "declared" in labels
 
-    @pytest.mark.asyncio
     async def test_the_auto_hold_returns_once_the_block_exits(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -526,7 +510,6 @@ class TestADeclaredAllowanceGoverns:
             f"{THREAD_PREFIX}_echo",
         ]
 
-    @pytest.mark.asyncio
     async def test_a_task_that_outlives_the_block_is_vouched_for_again(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -565,7 +548,6 @@ class TestADeclaredAllowanceGoverns:
             f"{THREAD_PREFIX}<lambda>",
         ]
 
-    @pytest.mark.asyncio
     async def test_a_hold_on_another_tracker_suppresses_nothing(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -584,7 +566,6 @@ class TestADeclaredAllowanceGoverns:
         assert [hold.label for hold in other.holds] == [f"{THREAD_PREFIX}_echo"]
         assert [hold.label for hold in tracker.holds] == ["full table scan"]
 
-    @pytest.mark.asyncio
     async def test_a_lapsed_declared_hold_still_suppresses(self) -> None:
         """Suppression tracks the token being *open*, not the hold still vouching.
 
@@ -609,7 +590,6 @@ class TestADeclaredAllowanceGoverns:
 
         assert [hold.label for hold in recording.holds] == ["full table scan"]
 
-    @pytest.mark.asyncio
     async def test_nested_declared_blocks_restore_one_level_at_a_time(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -635,7 +615,6 @@ class TestADeclaredAllowanceGoverns:
 
 
 class TestTheHoldLabel:
-    @pytest.mark.asyncio
     async def test_it_names_the_offloaded_callable(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -644,7 +623,6 @@ class TestTheHoldLabel:
 
         assert tracker.holds[0].label == f"{THREAD_PREFIX}_Cursor.execute"
 
-    @pytest.mark.asyncio
     async def test_no_argument_reaches_the_label(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -665,7 +643,6 @@ class TestTheHoldLabel:
         for leak in ("example_tenant", "SELECT", "artifacts", "secret", "apac"):
             assert leak not in labels
 
-    @pytest.mark.asyncio
     async def test_a_partial_is_named_by_the_callable_it_wraps(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -676,7 +653,6 @@ class TestTheHoldLabel:
 
         assert tracker.holds[0].label == f"{THREAD_PREFIX}_echo"
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("func", "expected"),
         [
@@ -707,7 +683,6 @@ class TestTheHoldLabel:
         assert label.endswith(expected)
         assert "id=" not in label, "a repr, not an identifier, reached the label"
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "hostile_qualname",
         [
@@ -746,7 +721,6 @@ class TestTheHoldLabel:
         assert hostile_qualname not in label
         assert label == f"{THREAD_PREFIX}function"
 
-    @pytest.mark.asyncio
     async def test_an_unnameable_callable_collapses_to_one_constant(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -770,7 +744,6 @@ class TestTheHoldLabel:
 
         assert tracker.holds[0].label == f"{THREAD_PREFIX}{UNNAMEABLE}"
 
-    @pytest.mark.asyncio
     async def test_a_hostile_qualname_falls_back_to_the_plain_name(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -791,7 +764,6 @@ class TestTheHoldLabel:
 
         assert tracker.holds[0].label == f"{THREAD_PREFIX}_named"
 
-    @pytest.mark.asyncio
     async def test_a_deeply_nested_qualname_is_still_kept(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -821,7 +793,6 @@ class TestTheHoldLabel:
 
 
 class TestWithNoTrackerBound:
-    @pytest.mark.asyncio
     async def test_the_offload_is_unchanged_and_silent(self, loguru_capture) -> None:
         """Local runs, unit tests, scripts: inert, and no warning about it.
 
@@ -848,7 +819,6 @@ class TestWithNoTrackerBound:
 # Spawns pool children; see addopts in pyproject.toml.
 @pytest.mark.xdist_group("procpool")
 class TestTheIsolatedOffloadHold:
-    @pytest.mark.asyncio
     async def test_a_declared_timeout_becomes_the_allowance(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -867,7 +837,6 @@ class TestTheIsolatedOffloadHold:
         assert closed.allowance_seconds == 30
         assert closed.lapsed is False
 
-    @pytest.mark.asyncio
     async def test_no_timeout_means_an_unbounded_hold(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -876,7 +845,6 @@ class TestTheIsolatedOffloadHold:
 
         assert tracker.holds[0].allowance_seconds is None
 
-    @pytest.mark.asyncio
     async def test_released_when_the_timeout_kills_the_child(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -886,7 +854,6 @@ class TestTheIsolatedOffloadHold:
         assert tracker.held() is False
         assert len(tracker.holds) == 1
 
-    @pytest.mark.asyncio
     async def test_released_when_the_child_raises(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -896,7 +863,6 @@ class TestTheIsolatedOffloadHold:
         assert tracker.held() is False
         assert len(tracker.holds) == 1
 
-    @pytest.mark.asyncio
     async def test_a_rejected_pool_width_records_no_hold(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -911,7 +877,6 @@ class TestTheIsolatedOffloadHold:
         assert tracker.holds == []
         assert tracker.held() is False
 
-    @pytest.mark.asyncio
     async def test_best_effort_delegates_one_hold(
         self, tracker: RecordingProgressTracker
     ) -> None:
@@ -925,7 +890,6 @@ class TestTheIsolatedOffloadHold:
         assert len(tracker.holds) == 1
         assert tracker.holds[0].label == f"{ISOLATED_PREFIX}_echo"
 
-    @pytest.mark.asyncio
     async def test_a_foreign_pool_discard_still_releases(
         self, tracker: RecordingProgressTracker
     ) -> None:

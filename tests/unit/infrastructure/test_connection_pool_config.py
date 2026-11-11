@@ -103,7 +103,6 @@ class TestBaseClientPoolConfig:
 class TestPoolTimeoutPropagation:
     """Verify PoolTimeout exceptions propagate instead of hanging."""
 
-    @pytest.mark.asyncio
     async def test_dapr_client_pool_timeout_propagates(self):
         """httpx.PoolTimeout must propagate up, not be swallowed.
 

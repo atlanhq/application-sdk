@@ -18,7 +18,6 @@ import asyncio
 from unittest import mock
 
 import orjson
-import pytest
 
 from application_sdk.execution._temporal.preflight_gate import (
     GATE_TIMEOUT_DEFAULT_SECONDS,
@@ -75,7 +74,6 @@ def _matrix(mock_logger) -> list[dict]:
 
 
 class TestSelfReportedDurationsAreUnvalidated:
-    @pytest.mark.asyncio
     async def test_duration_far_above_the_budget_is_published_verbatim(self):
         """The mechanism: a claim ~60x the budget reaches ClickHouse intact."""
         gate = build_preflight_gate_activity(
@@ -97,7 +95,6 @@ class TestSelfReportedDurationsAreUnvalidated:
         # The row asserts 292.8s of work inside an activity that lived
         # milliseconds. Nothing in the gate objects.
 
-    @pytest.mark.asyncio
     async def test_no_warning_is_emitted_for_an_impossible_duration(self):
         """Nothing flags it, so the fleet had no signal the data was wrong."""
         gate = build_preflight_gate_activity(
@@ -111,7 +108,6 @@ class TestSelfReportedDurationsAreUnvalidated:
 
         assert m.warning.call_args_list == []
 
-    @pytest.mark.asyncio
     async def test_a_completed_run_cannot_exceed_the_default_budget(self):
         """Why the production rows are provably wrong, stated as an invariant.
 

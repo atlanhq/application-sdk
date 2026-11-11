@@ -1319,7 +1319,7 @@ class TestServedFormRoundTrip:
     @staticmethod
     def _serve(tmp_path: Path, config_id: str) -> dict[str, Any]:
         from application_sdk.handler import service as svc_module
-        from tests.unit.handler.test_service import _make_client
+        from tests.unit.handler._service_support import _make_client
 
         original = svc_module.CONTRACT_GENERATED_DIR
         svc_module.CONTRACT_GENERATED_DIR = tmp_path / "app" / "generated"
@@ -1400,7 +1400,7 @@ class TestServedFormRoundTrip:
         asserts the SDK server it proxies to behaves that way at all.
         """
         from application_sdk.handler import service as svc_module
-        from tests.unit.handler.test_service import _make_client
+        from tests.unit.handler._service_support import _make_client
 
         _write_bundle(tmp_path)
         original = svc_module.CONTRACT_GENERATED_DIR

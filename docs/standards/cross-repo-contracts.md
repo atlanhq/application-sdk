@@ -89,7 +89,7 @@ What this means in practice:
 | **Served at** | `GET`/`POST /workflows/v1/manifest` (and the deprecated unversioned `/manifest` alias) |
 | **Key** | `task_queue`, at `dag.<node>.task_queue`, `dag.<node>.inputs.task_queue`, and top level on single-node manifests |
 | **Read by** | The Automation Engine, which writes it into the DAG and submits work to it; from FND-224, the runtime scenario suite's contract tier, which diffs it against the TWD trigger, the KEDA metadata and the rerouter's formula |
-| **Pinned by** | `TestServedManifestTaskQueueContract` in `tests/unit/handler/test_service.py` |
+| **Pinned by** | `TestServedManifestTaskQueueContract` in `tests/unit/handler/test_service_manifest.py` |
 
 The value is **stamped, not derived**: the route hands `resolve_manifest_tokens`
 the queue this process was configured with — the same value `create_worker`
@@ -243,7 +243,7 @@ it is read instead of listing the prefix.
 | **Line shape** | `{"record_id", "entity_type", "reason", "detail", "record"}`; `reason` is a `SkipReason` value (`blank_identity`, `missing_required_field`, `malformed_record`, `unsupported_type`) |
 | **Run outputs** | artifact `skipped-records`; metrics `skipped-records`, `skipped-records-<reason>` (kebab-case), `skipped-records-truncated`, `skipped-records-unpersisted`; status `partial_success` |
 | **Read by** | Run-output consumers (the Automation Engine UI) and anyone aggregating skips across the fleet |
-| **Pinned by** | `tests/unit/outputs/test_skipped.py`, `TestSkippedRecordsThroughInterceptors` in `tests/unit/interceptors/test_output_interceptor.py`, `tests/unit/app/test_merge_skipped_records.py` |
+| **Pinned by** | `tests/unit/outputs/test_skipped.py`, `TestSkippedRecordsThroughInterceptors` in `tests/unit/execution/_temporal/interceptors/test_output_interceptor.py`, `tests/unit/app/test_merge_skipped_records.py` |
 
 **Absence means zero.** A run that skipped nothing has none of these: no artifact,
 no metric, no file. Consumers must treat a missing `skipped-records` metric as 0
@@ -380,7 +380,7 @@ marker now appears on ordinary runs, not only with storage verification opted in
 | **Served at** | `POST /workflows/v1/validate?entrypoint=<name>` on the consolidated API host and on the worker (200 or 422, never dispatches), and the same 422 shape from the worker's `POST /workflows/v1/start` |
 | **Key** | 422: `success: false`, `message`, `detail[]` of `{field, message, type}`. `field` is the dotted pydantic location (a missing required field has `type: "missing"`); pydantic's `input` is never included, and the SDK's own validators never embed the value in `message` (an app's custom validator is passed through as written). Missing credential fields (FND-502) use three prefixes: `credentials.<path>` (inline credential), `agent_json.<auth-type>.<path>` (agent mapping) and `credential_guid` (no reference) |
 | **Read by** | Workflow creation callers (Heracles), which call `/validate` on the API host with the body they will later send to `/start`, and surface `detail[]` to the user |
-| **Pinned by** | `tests/unit/handler/test_validate_route_host.py` and `tests/unit/handler/test_validate_route_credentials.py` (host), `TestValidateWorkflowConfig` and `test_start_contract_misfit_answers_422_naming_the_field` in `tests/unit/handler/test_service.py` (worker) |
+| **Pinned by** | `tests/unit/handler/test_validate_route_host.py` and `tests/unit/handler/test_validate_route_credentials.py` (host), `TestValidateWorkflowConfig` in `tests/unit/handler/test_service_entrypoints.py` and `test_start_contract_misfit_answers_422_naming_the_field` in `tests/unit/handler/test_service_start.py` (worker) |
 
 `/validate` judges the body against the **published** contract, the model
 `/input-contract` serves. The schema a caller reads and the verdict it gets

@@ -92,7 +92,6 @@ async def _rows(client: BaseSQLClient, query: str, **kwargs: Any) -> list[dict]:
     return out
 
 
-@pytest.mark.asyncio
 async def test_a_bound_value_reaches_the_driver_as_a_value(
     sqlite_client: BaseSQLClient,
 ):
@@ -103,7 +102,6 @@ async def test_a_bound_value_reaches_the_driver_as_a_value(
     assert rows == [{"v": hostile}]
 
 
-@pytest.mark.asyncio
 async def test_the_querys_own_colons_stay_literal_beside_a_bind(
     sqlite_client: BaseSQLClient,
 ):
@@ -111,13 +109,11 @@ async def test_the_querys_own_colons_stay_literal_beside_a_bind(
     assert rows == [{"v": "a", "t": "12:30"}]
 
 
-@pytest.mark.asyncio
 async def test_without_params_the_query_runs_as_before(sqlite_client: BaseSQLClient):
     rows = await _rows(sqlite_client, "SELECT '12:30' AS t")
     assert rows == [{"t": "12:30"}]
 
 
-@pytest.mark.asyncio
 async def test_a_param_the_query_never_references_stops_the_run(
     sqlite_client: BaseSQLClient,
 ):
@@ -126,7 +122,6 @@ async def test_a_param_the_query_never_references_stops_the_run(
         await _rows(sqlite_client, "SELECT 1 AS v", params={"pattern": "a"})
 
 
-@pytest.mark.asyncio
 async def test_a_param_name_must_be_an_identifier(sqlite_client: BaseSQLClient):
     with pytest.raises(SqlBindParameterError):
         await _rows(sqlite_client, "SELECT :v AS v", params={"v; DROP": "a"})
@@ -139,7 +134,6 @@ def test_a_cast_is_not_mistaken_for_a_bind_of_the_same_name():
     assert escaped == "x\\:\\:v = :v AND t = '12\\:30'"
 
 
-@pytest.mark.asyncio
 async def test_a_bind_followed_by_a_cast_binds_and_keeps_the_cast(
     sqlite_client: BaseSQLClient,
 ):
@@ -154,7 +148,6 @@ async def test_a_bind_followed_by_a_cast_binds_and_keeps_the_cast(
     )
 
 
-@pytest.mark.asyncio
 async def test_a_placeholder_inside_quotes_or_comments_stays_literal(
     sqlite_client: BaseSQLClient,
 ):
@@ -212,7 +205,6 @@ def test_without_bind_names_every_colon_is_escaped():
     assert _escape_colons_for_text("a :v '1:2'") == "a \\:v '1\\:2'"
 
 
-@pytest.mark.asyncio
 async def test_the_async_client_passes_params_to_the_driver():
     client = AsyncBaseSQLClient()
     connection = MagicMock()
