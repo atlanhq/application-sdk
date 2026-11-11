@@ -97,6 +97,33 @@ def test_formerly_eager_submodules_still_resolve_as_attributes(package: str) -> 
         assert getattr(pkg, sub) is importlib.import_module(f"{package}.{sub}"), sub
 
 
+@pytest.mark.parametrize(
+    "package", ["application_sdk.testing", "application_sdk.testing.e2e"]
+)
+def test_dir_lists_every_lazy_name_and_formerly_eager_submodule(package: str) -> None:
+    """``dir(pkg)`` still shows what the eager init used to bind, before any
+    access, so introspection and tab completion see the same surface.
+
+    Fresh interpreter: in-process, other tests have already imported the
+    submodules, which binds them as package attributes and hides the gap.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            f"import importlib; print('\\n'.join(dir(importlib.import_module({package!r}))))",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=120,
+    )
+    listed = set(result.stdout.splitlines())
+    pkg = importlib.import_module(package)
+    assert set(pkg._LAZY) <= listed
+    assert set(pkg._EAGER_SUBMODULES) <= listed
+
+
 def test_unknown_names_raise_attribute_error() -> None:
     import application_sdk.testing as testing
 
