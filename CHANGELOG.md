@@ -1,5 +1,44 @@
 # Changelog
 
+## v3.56.0 (November 11, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.55.3...v3.56.0
+
+### Features
+
+- deprecate the transformers helper modules and re-home the YAML-template helpers [FND-4690] (#4838) (by @cmgrote in [c8e5cd9](https://github.com/atlanhq/application-sdk/commit/c8e5cd9))
+- capture skipped records as one run artifact and mark the run PARTIAL_SUCCESS [FND-4881] (#4852) (by @cmgrote in [e66422d](https://github.com/atlanhq/application-sdk/commit/e66422d))
+
+### Bug Fixes
+
+- size activity slots and the blocking pool from the container's limits [FND-4646] (#4822) (by @cmgrote in [4f3c8c7](https://github.com/atlanhq/application-sdk/commit/4f3c8c7))
+- attribute per-activity CPU and memory by fair share, not whole-process window [FND-4640] (#4827) (by @cmgrote in [e54ed0e](https://github.com/atlanhq/application-sdk/commit/e54ed0e))
+- install the tracer provider at startup so enabled traces export worker spans [FND-4642] (#4828) (by @cmgrote in [e7c5a09](https://github.com/atlanhq/application-sdk/commit/e7c5a09))
+- fail /live when the poll loop is confirmed dead [FND-4641] (#4833) (by @cmgrote in [625782b](https://github.com/atlanhq/application-sdk/commit/625782b))
+- combined-mode handler /ready mirrors the co-hosted worker's readiness [FND-4644] (#4835) (by @cmgrote in [fc575c9](https://github.com/atlanhq/application-sdk/commit/fc575c9))
+- treat the credential_guid route as supported; stop the SDK tripping legacy_credential_ref's warning [FND-4691] (#4837) (by @cmgrote in [7c11461](https://github.com/atlanhq/application-sdk/commit/7c11461))
+- accept the handler's FileUploadResponse in download_file_from_upload_response; deprecate the v2 server/fastapi surface [FND-4692] (#4841) (by @cmgrote in [4d9d1f9](https://github.com/atlanhq/application-sdk/commit/4d9d1f9))
+
+### Performance
+
+- serve the asset barrel lazily to keep pyatlan off the import path (#4795) (by @OnkarVO7 in [dfcd602](https://github.com/atlanhq/application-sdk/commit/dfcd602))
+- import testing and testing.e2e lazily so CredentialBody stops loading pytest and Temporal [FND-4658] (#4853) (by @cmgrote in [a6b5f8a](https://github.com/atlanhq/application-sdk/commit/a6b5f8a))
+
+### Refactoring
+
+- deprecate app/ re-export shims, drop transfer no-ops, move arrow helper to common [FND-4693] (#4836) (by @cmgrote in [8ccf131](https://github.com/atlanhq/application-sdk/commit/8ccf131))
+- move setup_routes, scale_data_generator and the parity CLI behind private modules with deprecated aliases [FND-4660] (#4842) (by @cmgrote in [66b4948](https://github.com/atlanhq/application-sdk/commit/66b4948))
+- delete test_utils, make the full_dag deprecation gate-visible, deprecate BaseIntegrationTest and LogCollector [FND-4659] (#4851) (by @cmgrote in [18709d8](https://github.com/atlanhq/application-sdk/commit/18709d8))
+
+### Chores
+
+- clear 1 vulnerability (authlib) (#4845) (by @connectivity-ai[bot] in [44895a0](https://github.com/atlanhq/application-sdk/commit/44895a0))
+- scope /audit-consumers to connector-pulse repos.json and clone instead of code search (#4843) (by @cmgrote in [9f871e7](https://github.com/atlanhq/application-sdk/commit/9f871e7))
+- add --strict-markers, drop 1,025 redundant async marks and pytest-rerunfailures, render the BigQuery fixture from a contract [FND-4680] (#4854) (by @cmgrote in [588f57f](https://github.com/atlanhq/application-sdk/commit/588f57f))
+- mirror tests/unit to the package and split the 9,241-line handler test_service.py by route area [FND-4679] (#4856) (by @cmgrote in [1cebefb](https://github.com/atlanhq/application-sdk/commit/1cebefb))
+- anchor coverage exclude_lines so "pass" stops hiding create_worker from the gate [FND-4677] (#4859) (by @cmgrote in [c83396b](https://github.com/atlanhq/application-sdk/commit/c83396b))
+
+
 ## v3.55.3 (November 10, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.55.2...v3.55.3
