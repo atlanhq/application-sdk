@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.55.3
-source-sha:    da17157895692a3f70dddc7199454c9783ebda8a
-source-date:   2026-11-10T23:57:03Z
+source-sha:    7bca1747e6cbdea33c12ce67215e93fcf65e1e0f
+source-date:   2026-11-11T01:15:58Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,12 +30,12 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 40 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 30 |
-| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
+| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 5 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 441 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 442 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 85 |
 
 ## Subpackage Details
@@ -3301,6 +3301,15 @@ Output collectors and record models for Automation Engine
 - **Summary:** Get the output collector for the current execution context.
 - **Defined in:** `application_sdk/outputs/__init__.py`
 
+### Constants and Enums
+
+#### `current_outputs`
+
+- **Import:** `from application_sdk.outputs import current_outputs`
+- **Signature:** `current_outputs: contextvars.ContextVar[OutputCollector | None]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/__init__.py`
+
 ## `application_sdk.pkl_version`
 
 The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate
@@ -5353,6 +5362,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `app_context(mock_state_store: MockStateStore, mock_secret_store: MockSecretStore)`
 - **Summary:** AppContext wired with MockStateStore and MockSecretStore.
 - **Defined in:** `application_sdk/testing/fixtures.py`
+
+#### `apply_mustache_subs`
+
+- **Import:** `from application_sdk.testing import apply_mustache_subs`
+- **Signature:** `apply_mustache_subs(obj: Any, subs: dict[str, Any])`
+- **Summary:** Recursively replace exact-match ``{{...}}`` strings with ``subs`` values.
+- **Defined in:** `application_sdk/testing/_mustache.py`
 
 #### `as_attribute_samples`
 
