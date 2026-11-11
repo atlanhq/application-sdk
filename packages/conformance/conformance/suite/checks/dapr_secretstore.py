@@ -38,6 +38,7 @@ from conformance.suite.checks.dapr_objectstore import (
     contract_files,
     deploy_dapr_false_line,
     discover,
+    pkl_code_lines,
 )
 from conformance.suite.checks.legacy_contract._directives_pkl import (
     _make_pkl_finding_suppressed,
@@ -58,18 +59,31 @@ __all__ = [
 ]
 
 # ``secretstore = false`` anywhere on a pkl line, including the one-line form
-# ``dapr { objectstore = true; secretstore = false }``. Matched against the line
-# with its ``//`` comment stripped.
+# ``dapr { objectstore = true; secretstore = false }``. Matched against
+# :func:`pkl_code_lines`, so a commented-out assignment or one quoted inside a
+# string (a ``longDescription``, say) is not a setting.
 _PKL_FALSE_RE = re.compile(r"\bsecretstore\s*=\s*false\b")
 
 # A file is an App contract when it amends or extends contract-toolkit's App.pkl
 # (``@app-contract-toolkit/App.pkl`` or a relative path to it). Helper modules
 # such as a shared ``CredentialConfig`` are not contracts and carry no defaults.
-_APP_CONTRACT_RE = re.compile(r'^\s*(?:amends|extends)\s+"[^"]*\bApp\.pkl"', re.M)
+# Both carry a string value, which pkl_code_lines blanks: the keyword is matched
+# on the masked line (so it is code, not text inside a string) and the value on
+# the raw one.
+_APP_CONTRACT_KW_RE = re.compile(r"^\s*(?:amends|extends)\s")
+_APP_CONTRACT_RE = re.compile(r'^\s*(?:amends|extends)\s+"[^"]*\bApp\.pkl"')
+_SYSTEM_TYPE_KW_RE = re.compile(r"^\s*type\s*=")
+_SYSTEM_TYPE_RE = re.compile(r'^\s*type\s*=\s*"system"')
+# Matched against masked code.
 _HAS_CREDS_TRUE_RE = re.compile(r"^\s*hasCredentialConfig\s*=\s*true\b", re.M)
 _HAS_CREDS_FALSE_RE = re.compile(r"^\s*hasCredentialConfig\s*=\s*false\b", re.M)
-_SYSTEM_TYPE_RE = re.compile(r'^\s*type\s*=\s*"system"', re.M)
-_ADDITIONAL_CREDS_RE = re.compile(r"^\s*additionalCredentialConfigs\b", re.M)
+# ``additionalCredentialConfigs { ... }`` or ``= new Listing<...> { ... }``,
+# capturing up to the opening brace; any other right-hand side is a reference.
+_ADDITIONAL_CREDS_RE = re.compile(
+    r"^\s*additionalCredentialConfigs\b\s*"
+    r"(?:(?P<brace>(?:=\s*new\s+Listing\s*(?:<[^>{]*>)?\s*)?\{)|=)",
+    re.M,
+)
 
 _FIX = (
     "Remove the explicit secretstore = false from the contract's deploy.dapr "
@@ -79,18 +93,54 @@ _FIX = (
 )
 
 
-def _strip_comments(text: str) -> str:
-    return "\n".join(line.split("//", 1)[0] for line in text.splitlines())
+def _line_matches(
+    raw_lines: list[str],
+    code_lines: list[str],
+    kw: re.Pattern[str],
+    full: re.Pattern[str],
+) -> bool:
+    """A line whose keyword is code (``kw`` on the masked line) and whose value matches ``full``."""
+    return any(
+        kw.match(code) and full.match(raw) for raw, code in zip(raw_lines, code_lines)
+    )
 
 
-def _contract_uses_credentials(code: str) -> bool:
-    """Mirror contract-toolkit's ``hasCredentialConfig || additionalCredentialConfigs``."""
-    if _ADDITIONAL_CREDS_RE.search(code) or _HAS_CREDS_TRUE_RE.search(code):
+def _declares_additional_credentials(code: str) -> bool:
+    """``additionalCredentialConfigs`` is set to a non-empty listing.
+
+    contract-toolkit counts the listing only when it is non-empty, so an
+    explicit ``additionalCredentialConfigs {}`` is not a credential. A
+    right-hand side other than a literal listing (a reference to a shared
+    listing) cannot be evaluated statically and is taken as non-empty.
+    """
+    for m in _ADDITIONAL_CREDS_RE.finditer(code):
+        if m.group("brace") is None:
+            return True
+        depth, i = 1, m.end()
+        while i < len(code) and depth:
+            depth += {"{": 1, "}": -1}.get(code[i], 0)
+            i += 1
+        if code[m.end() : i - 1].strip():
+            return True
+    return False
+
+
+def _contract_uses_credentials(text: str) -> bool:
+    """Mirror contract-toolkit's ``hasCredentialConfig || additionalCredentialConfigs``.
+
+    ``False`` when ``text`` does not amend or extend ``App.pkl``.
+    """
+    raw_lines = text.splitlines()
+    code_lines = pkl_code_lines(text)
+    if not _line_matches(raw_lines, code_lines, _APP_CONTRACT_KW_RE, _APP_CONTRACT_RE):
+        return False
+    code = "\n".join(code_lines)
+    if _declares_additional_credentials(code) or _HAS_CREDS_TRUE_RE.search(code):
         return True
     if _HAS_CREDS_FALSE_RE.search(code):
         return False
     # ``hasCredentialConfig = !isSystemApp``.
-    return not _SYSTEM_TYPE_RE.search(code)
+    return not _line_matches(raw_lines, code_lines, _SYSTEM_TYPE_KW_RE, _SYSTEM_TYPE_RE)
 
 
 def app_uses_credentials(root: Path) -> bool:
@@ -103,8 +153,7 @@ def app_uses_credentials(root: Path) -> bool:
         text = safe_read_text(path)
         if text is None:
             continue
-        code = _strip_comments(text)
-        if _APP_CONTRACT_RE.search(code) and _contract_uses_credentials(code):
+        if _contract_uses_credentials(text):
             return True
     return False
 
@@ -117,8 +166,8 @@ def _contract_findings(root: Path) -> list[Finding]:
             continue
         directives = _parse_pkl_directives(text)
         rel = path.relative_to(root).as_posix()
-        for lineno, raw in enumerate(text.splitlines(), start=1):
-            if not _PKL_FALSE_RE.search(raw.split("//", 1)[0]):
+        for lineno, code in enumerate(pkl_code_lines(text), start=1):
+            if not _PKL_FALSE_RE.search(code):
                 continue
             suppressed, justification = _make_pkl_finding_suppressed(
                 rule_id=_RULE_ID, line=lineno, directives=directives

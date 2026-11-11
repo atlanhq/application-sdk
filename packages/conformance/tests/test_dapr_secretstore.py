@@ -245,3 +245,79 @@ def test_atlan_yaml_finding_can_be_suppressed(tmp_path: Path) -> None:
 
 def test_repo_without_contract_dir_is_skipped(tmp_path: Path) -> None:
     assert _scan(tmp_path, atlan=_atlan("false")) == []
+
+
+def test_empty_additional_credential_configs_is_not_a_credential(
+    tmp_path: Path,
+) -> None:
+    """The toolkit counts the listing only when it is non-empty."""
+    for form in (
+        "additionalCredentialConfigs {}\n",
+        "additionalCredentialConfigs = new Listing {}\n",
+        "additionalCredentialConfigs = new Listing<CredentialConfig> {\n}\n",
+    ):
+        contract = _SYSTEM_APP + form
+        assert (
+            _active(
+                _scan(
+                    tmp_path / str(len(form)),
+                    contracts={"app.pkl": contract},
+                    atlan=_atlan("false"),
+                )
+            )
+            == []
+        ), form
+
+
+def test_additional_credential_configs_by_reference_count_as_credentials(
+    tmp_path: Path,
+) -> None:
+    """A reference cannot be evaluated statically and is taken as non-empty."""
+    contract = _NO_CRED_APP + "additionalCredentialConfigs = Shared.configs\n"
+    findings = _active(
+        _scan(tmp_path, contracts={"app.pkl": contract}, atlan=_atlan("false"))
+    )
+
+    assert [f.file for f in findings] == ["atlan.yaml"]
+
+
+def test_secretstore_false_inside_a_string_is_not_a_setting(tmp_path: Path) -> None:
+    """A multiline ``longDescription`` may quote the setting; the real value is true."""
+    contract = _HEADER + (
+        'longDescription = """\n'
+        "Never set secretstore = false on this app.\n"
+        '"""\n'
+        'shortDescription = #"no "secretstore = false" here"#\n'
+        "deploy = new DeployConfig {\n"
+        "  dapr { objectstore = true; secretstore = true }\n"
+        "}\n"
+    )
+    assert (
+        _active(_scan(tmp_path, contracts={"app.pkl": contract}, atlan=_atlan("true")))
+        == []
+    )
+
+
+def test_system_type_inside_a_string_is_ignored(tmp_path: Path) -> None:
+    """A quoted ``type = "system"`` does not switch the credential default off."""
+    contract = _HEADER + 'longDescription = """\ntype = "system"\n"""\n'
+    findings = _active(
+        _scan(tmp_path, contracts={"app.pkl": contract}, atlan=_atlan("false"))
+    )
+
+    assert [f.file for f in findings] == ["atlan.yaml"]
+
+
+def test_amends_inside_a_string_is_not_a_contract(tmp_path: Path) -> None:
+    """A helper module quoting ``amends ".../App.pkl"`` carries no credential default."""
+    helper = 'module helper\n\ndoc = """\namends "@app-contract-toolkit/App.pkl"\n"""\n'
+    assert (
+        _active(
+            _scan(
+                tmp_path,
+                contracts={"app.pkl": _NO_CRED_APP, "helper.pkl": helper},
+                atlan=_atlan("false"),
+            )
+        )
+        == []
+    )

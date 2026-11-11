@@ -224,8 +224,11 @@ for `objectstore` and `secretstore`, `false` for the rest. A value the block sta
 always wins, including `false`. The chart's own values have every component off, so
 these deployer defaults are what an app without a `dapr` block runs with.
 
-contract-toolkit renders every component once a contract has a `deploy` block, so the
-contract decides each one. `secretstore` defaults to `true` for an app that resolves
+Once a contract has a `deploy` block, contract-toolkit renders every component whenever
+at least one resolves to `true` (or `customComponents` is non-empty), so the contract
+decides each one. When every component resolves to `false` (for example
+`objectstore = false` on an app without credentials), the toolkit emits no `dapr` block
+at all, and the deployer's defaults above apply instead. `secretstore` defaults to `true` for an app that resolves
 credentials (`hasCredentialConfig` or `additionalCredentialConfigs`, on the app or any
 entrypoint): the SDK resolves every credential through it, and without it each lookup
 fails with HTTP 500 from `/v1.0/secrets/<store>/<guid>`. Conformance rule

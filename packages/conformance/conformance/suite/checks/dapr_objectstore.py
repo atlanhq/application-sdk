@@ -45,14 +45,15 @@ __all__ = [
     "deploy_dapr_false_line",
     "discover",
     "main",
+    "pkl_code_lines",
     "scan_all",
     "scan_path",
 ]
 
 # ``objectstore = false`` anywhere on a pkl line, including the one-line form
-# ``dapr { objectstore = false; secretstore = true }``. Matched against the
-# line with its ``//`` comment stripped, so a commented-out assignment is not a
-# setting.
+# ``dapr { objectstore = false; secretstore = true }``. Matched against
+# :func:`pkl_code_lines`, so a commented-out assignment or one quoted inside a
+# string (a ``longDescription``, say) is not a setting.
 _PKL_FALSE_RE = re.compile(r"\bobjectstore\s*=\s*false\b")
 
 # YAML key/value on one line: indentation, key, value (comment not yet removed).
@@ -75,6 +76,62 @@ def discover(root: Path) -> list[Path]:
     return [root] if (root / "contract").is_dir() else []
 
 
+def pkl_code_lines(text: str) -> list[str]:
+    r'''``text``'s lines with Pkl comments and string literals blanked out.
+
+    Covers ``//`` and ``/* */`` comments and every Pkl string form: ``"..."``,
+    ``"""..."""`` and their custom-delimiter variants ``#"..."#`` and
+    ``#"""..."""#``. Blanked characters become spaces (newlines are kept), so
+    line and column numbers still match the source. A ``\(...)`` interpolation
+    is blanked with the string it sits in.
+    '''
+    out: list[str] = []
+    i, n = 0, len(text)
+
+    def blank(chunk: str) -> str:
+        return "".join("\n" if c == "\n" else " " for c in chunk)
+
+    while i < n:
+        if text.startswith("//", i):
+            end = text.find("\n", i)
+            end = n if end == -1 else end
+            out.append(blank(text[i:end]))
+            i = end
+            continue
+        if text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            end = n if end == -1 else end + 2
+            out.append(blank(text[i:end]))
+            i = end
+            continue
+        pounds = 0
+        while i + pounds < n and text[i + pounds] == "#":
+            pounds += 1
+        if i + pounds < n and text[i + pounds] == '"':
+            start = i
+            j = i + pounds
+            quote = '"""' if text.startswith('"""', j) else '"'
+            close = quote + "#" * pounds
+            j += len(quote)
+            while j < n:
+                # Only a string without pound delimiters treats ``\`` as an escape.
+                if pounds == 0 and text[j] == "\\":
+                    j += 2
+                    continue
+                if text.startswith(close, j):
+                    j += len(close)
+                    break
+                if quote == '"' and text[j] == "\n":
+                    break  # unterminated single-line string: stop at the line end
+                j += 1
+            out.append(blank(text[start:j]))
+            i = j
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out).splitlines()
+
+
 def contract_files(root: Path) -> list[Path]:
     """Hand-written ``contract/**/*.pkl``, skipping hidden dirs (pkl caches)."""
     contract_dir = root / "contract"
@@ -93,8 +150,7 @@ def _contract_findings(root: Path) -> list[Finding]:
             continue
         directives = _parse_pkl_directives(text)
         rel = path.relative_to(root).as_posix()
-        for lineno, raw in enumerate(text.splitlines(), start=1):
-            code = raw.split("//", 1)[0]
+        for lineno, code in enumerate(pkl_code_lines(text), start=1):
             if not _PKL_FALSE_RE.search(code):
                 continue
             suppressed, justification = _make_pkl_finding_suppressed(
