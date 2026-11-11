@@ -43,6 +43,12 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
         os: [ubuntu-22.04, macOS-latest, windows-latest]
+    env:
+      # One leg measures coverage; it posts the PR comment, enforces fail-under
+      # and the per-package floors, and uploads the report. Tracing under xdist
+      # cost every other leg ~20-30% of its wall time for a report nobody read
+      # (FND-4238).
+      UNIT_COVERAGE_LEG: ${{ matrix.os == 'ubuntu-22.04' && matrix.python-version == '3.12' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Fails the job when it cannot mint: no continue-on-error and no
@@ -78,10 +84,23 @@ jobs:
           github-token: ${{ (github.event.pull_request.head.repo.fork == true || github.event.pull_request.user.login == 'dependabot[bot]') && github.token || steps.app-token.outputs.token }}
           fail-under: "85"
           python-version: ${{ matrix.python-version }}
-          # One leg measures coverage; it posts the PR comment and enforces
-          # fail-under. Tracing under xdist cost every other leg ~20-30% of its
-          # wall time for a report nobody read (FND-4238).
-          coverage: ${{ matrix.os == 'ubuntu-22.04' && matrix.python-version == '3.12' }}
+          coverage: ${{ env.UNIT_COVERAGE_LEG }}
+      # The coverage report, so per-package and per-file coverage can be read
+      # without rerunning the suite locally (FND-4678). Uploaded after a failing
+      # run too: that is when it is wanted. Diagnostic only, so an
+      # artifact-service blip never fails the leg (EXEMPT in
+      # test_artifact_upload_retry.py).
+      - name: Upload coverage report
+        if: ${{ !cancelled() && env.UNIT_COVERAGE_LEG == 'true' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: sdk-unit-test-coverage
+          path: |
+            coverage.xml
+            htmlcov/
+          if-no-files-found: warn
+          retention-days: 14
 
   unit-dependency-floors:
     name: Unit Tests (dependency floors)
