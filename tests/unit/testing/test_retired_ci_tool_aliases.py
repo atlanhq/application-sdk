@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib
 import runpy
 import sys
+import types
 import warnings
 
 import pytest
@@ -121,3 +122,54 @@ def test_the_parity_cli_still_runs_and_warns(
         and "python -m application_sdk.testing.parity is deprecated" in str(w.message)
         for w in caught
     )
+
+
+def _committed_manifest_entries() -> list[dict[str, str]]:
+    from pathlib import Path
+
+    import orjson
+
+    root = Path(__file__).resolve().parents[3]
+    path = root / "packages/conformance/conformance/data/deprecated_symbols.json"
+    return orjson.loads(path.read_bytes())["symbols"]
+
+
+def test_no_retired_entry_shadows_a_supported_parent_name() -> None:
+    """B001 matches an entry against imports from any parent package.
+
+    So an entry for ``parity.__main__.run_comparison`` flags
+    ``from application_sdk.testing.parity import run_comparison`` — the very
+    replacement its notice recommends. No entry these aliases contribute may
+    share a name with something a parent package serves undeprecated.
+    """
+    retired = (
+        "application_sdk.testing.setup_routes",
+        "application_sdk.testing.parity.__main__",
+        "application_sdk.testing.scale_data_generator",
+    )
+    collisions = []
+    for entry in _committed_manifest_entries():
+        module = entry["module"]
+        if not module.startswith(retired):
+            continue
+        parts = module.split(".")
+        for depth in range(1, len(parts)):
+            parent = importlib.import_module(".".join(parts[:depth]))
+            served = getattr(parent, "__dict__", {}).get(entry["symbol"])
+            # A submodule bound on its package (``scale_data_generator.driver``)
+            # is the retired module itself, not a supported name.
+            if served is not None and not isinstance(served, types.ModuleType):
+                collisions.append(f"{entry['symbol']}: {module} vs {parent.__name__}")
+
+    assert collisions == []
+
+
+def test_the_parity_library_names_are_plain_reexports() -> None:
+    """The supported comparator API stays importable from ``__main__`` silently."""
+    import application_sdk.testing.parity as library
+    import application_sdk.testing.parity.__main__ as entry
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        for name in ("run_comparison", "generate_markdown", "generate_json_report"):
+            assert getattr(entry, name) is getattr(library, name)

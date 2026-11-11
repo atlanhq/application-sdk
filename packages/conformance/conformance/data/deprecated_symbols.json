@@ -1083,24 +1083,6 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "generate_json_report is deprecated; use application_sdk.testing.parity.generate_json_report \u2014 the parity CLI entry point is retired; the library API stays (FND-4660). Will be removed in v4.0.0.",
-      "migration_target": true,
-      "module": "application_sdk.testing.parity.__main__",
-      "removal_version": "4.0.0",
-      "symbol": "generate_json_report"
-    },
-    {
-      "kind": "constant",
-      "marker_via": "module-getattr",
-      "message": "generate_markdown is deprecated; use application_sdk.testing.parity.generate_markdown \u2014 the parity CLI entry point is retired; the library API stays (FND-4660). Will be removed in v4.0.0.",
-      "migration_target": true,
-      "module": "application_sdk.testing.parity.__main__",
-      "removal_version": "4.0.0",
-      "symbol": "generate_markdown"
-    },
-    {
-      "kind": "constant",
-      "marker_via": "module-getattr",
       "message": "get_logger is deprecated; use application_sdk.observability.logger_adaptor.get_logger \u2014 the parity CLI entry point is retired; the library API stays (FND-4660). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.parity.__main__",
@@ -1124,15 +1106,6 @@
       "module": "application_sdk.testing.parity.__main__",
       "removal_version": "4.0.0",
       "symbol": "main"
-    },
-    {
-      "kind": "constant",
-      "marker_via": "module-getattr",
-      "message": "run_comparison is deprecated; use application_sdk.testing.parity.run_comparison \u2014 the parity CLI entry point is retired; the library API stays (FND-4660). Will be removed in v4.0.0.",
-      "migration_target": true,
-      "module": "application_sdk.testing.parity.__main__",
-      "removal_version": "4.0.0",
-      "symbol": "run_comparison"
     },
     {
       "kind": "constant",
