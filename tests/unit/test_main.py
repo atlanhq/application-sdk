@@ -3683,7 +3683,7 @@ class TestLogShutdownBudget:
 
 
 class TestLoopStallBound:
-    """The stall bound: past the longest task hold, within the shutdown budget."""
+    """The stall bound: past the longest heartbeat timeout, within the budget."""
 
     @pytest.fixture(autouse=True)
     def _no_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3691,12 +3691,22 @@ class TestLoopStallBound:
         monkeypatch.delenv("ATLAN_SHUTDOWN_GRACE_SECONDS", raising=False)
 
     @staticmethod
-    def _register(name: str, *, heartbeat: int | None, timeout: int) -> None:
+    def _register(
+        name: str,
+        *,
+        heartbeat: int | None,
+        timeout: int,
+        module: str = "app.activities",
+    ) -> None:
+        def func(*_: Any) -> None:
+            return None
+
+        func.__module__ = module
         TaskRegistry.get_instance().register(
             "stall-app",
             TaskMetadata(
                 name=name,
-                func=lambda *_: None,
+                func=func,
                 input_type=Input,
                 output_type=Output,
                 heartbeat_timeout_seconds=heartbeat,
@@ -3709,17 +3719,48 @@ class TestLoopStallBound:
 
         bound = _loop_stall_bound()
 
-        assert (bound.seconds, bound.longest_task_hold_seconds) == (75, 60)
+        assert (bound.seconds, bound.longest_heartbeat_seconds) == (75, 60)
         assert bound.limit_seconds is None
+        assert bound.unwatched_tasks == ()
         assert bound.in_order()
 
-    def test_task_without_heartbeat_counts_its_start_to_close(self) -> None:
-        """Temporal gives up on a silent task only through heartbeats, so one
-        without a heartbeat timeout may hold the loop for its whole run."""
-        self._register("beating", heartbeat=600, timeout=7200)
-        self._register("silent", heartbeat=None, timeout=3600)
+    def test_tasks_without_heartbeat_do_not_count_and_are_named(self) -> None:
+        """A worker shaped like a connector's: 120 s heartbeats plus the SDK's
+        own 300 s cleanup task and an app task with no heartbeat timeout and
+        the 86 400 s start-to-close default. Counting those would push the
+        bound past a day and switch the watchdog off in practice."""
+        self._register("extract", heartbeat=120, timeout=7200)
+        self._register("transform", heartbeat=120, timeout=7200)
+        self._register(
+            "cleanup_storage",
+            heartbeat=None,
+            timeout=300,
+            module="application_sdk.app.base",
+        )
+        self._register("publish", heartbeat=None, timeout=86400)
 
-        assert _loop_stall_bound().seconds == 3615
+        bound = _loop_stall_bound()
+
+        assert bound.seconds == 135
+        assert timer_seconds(bound.seconds) == 150
+        assert bound.unwatched_tasks == ("stall-app.publish (86400s)",)
+        assert bound.in_order()
+
+    def test_unwatched_tasks_are_named_in_a_warning(self) -> None:
+        bound = _LoopStallBound(
+            135,
+            120,
+            None,
+            overridden=False,
+            unwatched_tasks=("stall-app.publish (86400s)",),
+        )
+        with patch("application_sdk.main.logger") as log:
+            _log_shutdown_budget(bound)
+
+        log.warning.assert_called_once()
+        message = log.warning.call_args.args[0] % log.warning.call_args.args[1:]
+        assert "stall-app.publish (86400s)" in message
+        assert "heartbeat timeout" in message
 
     def test_long_grace_keeps_the_task_derived_bound(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3766,11 +3807,11 @@ class TestLoopStallBound:
     @pytest.mark.parametrize(
         ("bound", "advice"),
         [
-            # An override at or below the longest task hold.
+            # An override at or below the longest heartbeat timeout.
             (_LoopStallBound(30, 60, None, overridden=True), "Unset"),
             # An override past what still fires before SIGKILL.
             (_LoopStallBound(500, 60, 400, overridden=True), "Unset"),
-            # A derived bound the grace cut below the longest task hold.
+            # A derived bound the grace cut below the longest heartbeat timeout.
             (_LoopStallBound(22.4, 60, 22.4, overridden=False), "Raise"),
         ],
     )

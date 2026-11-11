@@ -56,11 +56,15 @@ class LoopStallWatchdog:
     armed only by a shutdown signal and never limits a running worker.
 
     The first SIGTERM or SIGINT arms ``faulthandler.dump_traceback_later``
-    from a process-level ``signal.signal`` handler, which the interpreter runs
-    on the main thread even while it waits on a lock or in a blocking system
-    call, so a loop already frozen when the signal arrives is covered too. It
-    does not run while a C call holds the GIL, so such a freeze is left to
-    SIGKILL. The timer runs on a C thread that needs neither the loop nor the
+    from a process-level ``signal.signal`` handler. The interpreter runs that
+    handler only when the main thread is back in Python bytecode. A lock wait
+    and a blocking system call that PEP 475 retries both return there, so a
+    loop already frozen in one of them when the signal arrives is covered. A
+    native call that keeps waiting inside C delays the arming until it
+    returns, whether or not it released the GIL, and one that never returns
+    never arms it: such a freeze is left to SIGKILL. A freeze that starts
+    after the signal is always covered, because the timer is then armed
+    already. The timer runs on a C thread that needs neither the loop nor the
     GIL: when it runs out it writes every thread's stack to stderr (the
     evidence of what blocked) and exits with code 1. faulthandler keeps one
     such timer per process, so nothing else in the SDK may use

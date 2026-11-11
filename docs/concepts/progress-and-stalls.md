@@ -77,10 +77,10 @@ Three clarifications, because each is a real misread:
   Failing the attempt does not stop the worker process, though: a blocked loop also
   never runs the shutdown handler, while Temporal's core keeps taking tasks on its own
   threads. Once the worker has received SIGTERM, its event-loop stall watchdog ends
-  that process with a stack dump when the loop has been silent for longer than any
-  registered task may hold it (its `heartbeat_timeout_seconds`, or its start-to-close
-  timeout when it has none), within the shutdown budget. Before shutdown a frozen
-  loop is left to the liveness probe. See `ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS`
+  that process with a stack dump when the loop has been silent for longer than the
+  longest registered `heartbeat_timeout_seconds`, within the shutdown budget. A task
+  without a heartbeat timeout is not waited for, and startup names it in a warning.
+  Before shutdown a frozen loop is left to the liveness probe. See `ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS`
   in [configuration](../configuration.md).
 
 There is a fourth setting, `progress_watchdog`, which is a mode rather than a

@@ -1340,8 +1340,8 @@ def _log_shutdown_budget(loop_stall: _LoopStallBound | None = None) -> None:
     with the declared grace. A sum past the grace means SIGKILL lands before
     shutdown finishes; logging it at startup makes that visible before it
     happens instead of after. The event-loop stall bound is checked against
-    its own ordering: above the longest a task may hold the loop, and within
-    the budget.
+    its own ordering: above the longest heartbeat timeout, and within the
+    budget.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker startup only
         PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS,
@@ -1372,19 +1372,29 @@ def _log_shutdown_budget(loop_stall: _LoopStallBound | None = None) -> None:
     )
     if loop_stall is not None and not loop_stall.in_order():
         logger.warning(
-            "Event-loop stall bound out of order: the longest a registered task "
-            "may hold the loop (%gs: its heartbeat timeout, or its start-to-close "
-            "timeout when it has none) < loop_stall %gs <= what still fires before "
-            "SIGKILL (%s) must hold. %s",
-            loop_stall.longest_task_hold_seconds,
+            "Event-loop stall bound out of order: the longest registered heartbeat "
+            "timeout (%gs) < loop_stall %gs <= what still fires before SIGKILL (%s) "
+            "must hold. %s",
+            loop_stall.longest_heartbeat_seconds,
             loop_stall.seconds,
             f"{loop_stall.limit_seconds:g}s"
             if loop_stall.limit_seconds is not None
             else "unbounded",
             f"Unset {LOOP_STALL_TIMEOUT_ENV} to derive it"
             if loop_stall.overridden
-            else f"Raise {SHUTDOWN_GRACE_SECONDS_ENV} or lower that task's timeout; "
-            "until then a stall during the drain can end work Temporal still waits for",
+            else f"Raise {SHUTDOWN_GRACE_SECONDS_ENV} or lower that task's heartbeat "
+            "timeout; until then a stall during the drain can end work Temporal "
+            "still counts as alive",
+        )
+    if loop_stall is not None and loop_stall.unwatched_tasks:
+        logger.warning(
+            "Tasks without a heartbeat timeout may run past the event-loop stall "
+            "bound (loop_stall %gs): %s. If one holds the event loop during "
+            "shutdown, the watchdog ends the process after %gs instead of waiting "
+            "for it. Give them a heartbeat timeout to make the wait explicit",
+            loop_stall.seconds,
+            ", ".join(loop_stall.unwatched_tasks),
+            loop_stall.seconds,
         )
     if budget is None:
         return
@@ -1448,8 +1458,8 @@ def _start_post_drain_exit_deadline(
     return timer
 
 
-# Kept between the longest a registered task may hold the loop and the stall
-# bound, so a task that holds it for exactly its own limit is never cut short.
+# Kept between the longest heartbeat timeout and the stall bound, so a task
+# that holds the loop for exactly its heartbeat timeout is never cut short.
 _LOOP_STALL_MARGIN_SECONDS = 15
 
 
@@ -1459,49 +1469,77 @@ class _LoopStallBound:
 
     seconds: float
     """The bound; ``0`` turns the watchdog off."""
-    longest_task_hold_seconds: float
-    """The longest a registered task may hold the loop without Temporal giving up on it."""
+    longest_heartbeat_seconds: float
+    """The longest heartbeat timeout among the registered tasks."""
     limit_seconds: float | None
     """The largest bound that still ends the process before SIGKILL; ``None``
     when the grace is not declared."""
     overridden: bool
+    unwatched_tasks: tuple[str, ...] = ()
+    """App tasks without a heartbeat timeout that may run longer than the bound,
+    as ``app.task (start-to-close s)``."""
 
     def in_order(self) -> bool:
-        """``longest task hold < bound <= limit``, or the watchdog is off."""
+        """``longest heartbeat timeout < bound <= limit``, or the watchdog is off."""
         if self.seconds <= 0:
             return True
-        above_tasks = self.seconds > self.longest_task_hold_seconds
-        return above_tasks and (
+        above_heartbeats = self.seconds > self.longest_heartbeat_seconds
+        return above_heartbeats and (
             self.limit_seconds is None or self.seconds <= self.limit_seconds
         )
 
 
-def _longest_task_loop_hold_seconds() -> float:
-    """The longest any registered task may hold the event loop while Temporal
-    still waits for it.
+def _registered_tasks() -> list[Any]:
+    return [
+        task
+        for tasks in TaskRegistry.get_instance().get_all_tasks().values()
+        for task in tasks
+    ]
 
-    That is its heartbeat timeout or, for a task without one, its start-to-close
-    timeout: Temporal gives up on a silent task only through heartbeats. The
-    SDK's default heartbeat timeout is the floor, which covers the SDK's own
-    activities.
+
+def _longest_heartbeat_timeout_seconds() -> float:
+    """The longest heartbeat timeout among the registered tasks.
+
+    A task that holds the event loop for less than its heartbeat timeout is
+    still alive to Temporal, so a stall during the drain must outlast it. The
+    SDK's default heartbeat timeout is the floor. A task without a heartbeat
+    timeout does not count: once the loop stops, it is indistinguishable from
+    a freeze, and Temporal reclaims it only at its start-to-close timeout,
+    which would leave the bound no use (see ``_unwatched_tasks``).
     """
     from application_sdk.app.task import (  # noqa: PLC0415 — cold path: worker startup only
         _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS,
     )
 
-    longest = float(_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS)
-    for tasks in TaskRegistry.get_instance().get_all_tasks().values():
-        for task in tasks:
-            hold = task.heartbeat_timeout_seconds or task.timeout_seconds
-            longest = max(longest, float(hold))
-    return longest
+    heartbeats = [
+        float(task.heartbeat_timeout_seconds)
+        for task in _registered_tasks()
+        if task.heartbeat_timeout_seconds
+    ]
+    return max([float(_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS), *heartbeats])
+
+
+def _unwatched_tasks(bound_seconds: float) -> tuple[str, ...]:
+    """App tasks without a heartbeat timeout that may run past the bound.
+
+    The watchdog will not wait for them at shutdown if they hold the loop, so
+    their owners are told at startup. The SDK's own tasks are left out: they
+    await their I/O rather than hold the loop.
+    """
+    return tuple(
+        f"{task.app_name}.{task.name} ({task.timeout_seconds}s)"
+        for task in _registered_tasks()
+        if not task.heartbeat_timeout_seconds
+        and task.timeout_seconds > bound_seconds
+        and not getattr(task.func, "__module__", "").startswith("application_sdk.")
+    )
 
 
 def _loop_stall_bound() -> _LoopStallBound:
     """Derive the stall bound from the registered tasks and the shutdown budget.
 
-    The bound sits just past the longest a registered task may hold the loop,
-    so a stall during the drain never ends work Temporal still waits for, and
+    The bound sits just past the longest registered heartbeat timeout, so a
+    stall during the drain never ends work Temporal still counts as alive, and
     within the budget, so the exit lands before SIGKILL with daprd's headroom
     left; the budget wins when the two cannot both hold. An explicit
     ``ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS`` replaces it, and ``0`` turns
@@ -1513,7 +1551,7 @@ def _loop_stall_bound() -> _LoopStallBound:
     )
 
     budget = load_shutdown_budget()
-    hold = _longest_task_loop_hold_seconds()
+    heartbeat = _longest_heartbeat_timeout_seconds()
     limit = (
         largest_bound_within(budget.loop_stall_limit_seconds)
         if budget is not None
@@ -1521,11 +1559,18 @@ def _loop_stall_bound() -> _LoopStallBound:
     )
     override = load_worker_loop_stall_timeout_override()
     if override is not None:
-        return _LoopStallBound(override, hold, limit, overridden=True)
-    seconds = hold + _LOOP_STALL_MARGIN_SECONDS
-    if limit is not None:
-        seconds = min(seconds, limit)
-    return _LoopStallBound(seconds, hold, limit, overridden=False)
+        seconds, overridden = override, True
+    else:
+        seconds, overridden = heartbeat + _LOOP_STALL_MARGIN_SECONDS, False
+        if limit is not None:
+            seconds = min(seconds, limit)
+    return _LoopStallBound(
+        seconds,
+        heartbeat,
+        limit,
+        overridden=overridden,
+        unwatched_tasks=_unwatched_tasks(seconds) if seconds > 0 else (),
+    )
 
 
 def _install_loop_stall_watchdog(watchdog: LoopStallWatchdog) -> None:
@@ -2851,7 +2896,8 @@ Environment Variables:
                            After SIGTERM/SIGINT, seconds the event loop may go without
                            running before the process dumps every thread's stack and
                            exits with code 1 (default: derived from the registered
-                           tasks' timeouts and the shutdown budget; 0 = disabled).
+                           tasks' heartbeat timeouts and the shutdown budget;
+                           0 = disabled).
   ATLAN_LOG_LEVEL          Log level (default: INFO)
                            Falls back to LOG_LEVEL (v2)
 
