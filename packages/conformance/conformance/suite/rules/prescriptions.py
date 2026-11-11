@@ -921,11 +921,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "entity is assembled as a `typeName` / `attributes` dict."
         ),
         terminal_state=(
-            "A justified inline `# conformance: ignore[P058] <reason>` is "
-            "correct only for a type `pyatlan_v9` does not model, and only when "
-            'the dict carries top-level `"status": "ACTIVE"` on a non-delete '
-            "upsert. The reason must name the unmodelled type. A directive on "
-            "a type `pyatlan_v9` models is unremediated."
+            "The entity is a `pyatlan_v9.model.assets` object written through "
+            "`entity_bytes`. No `# conformance: ignore[P058]` is correct. A type "
+            "`pyatlan_v9` does not model is a pyatlan gap: the finding stays "
+            "open until pyatlan models the type and its creator, a pyatlan "
+            "release ships it, the app's pyatlan is raised to that release, "
+            "and the entity is rebuilt with the creator. Until then the dict "
+            'carries top-level `"status": "ACTIVE"` on a non-delete upsert.'
         ),
         scope=RuleScope.APP,
         name="RawDictEntity",
@@ -982,9 +984,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "Fix: build the entity with the ``pyatlan_v9.model.assets`` creator\n"
             "for its type and serialize it with ``entity_bytes``.  WARN tier —\n"
-            "where ``pyatlan_v9`` does not model the type, keep the dict, give it\n"
-            'top-level ``"status": "ACTIVE"`` on every non-delete upsert, and\n'
-            "suppress with ``# conformance: ignore[P058] <reason>`` naming the type.\n"
+            "where ``pyatlan_v9`` does not model the type, that is a pyatlan gap,\n"
+            'not a suppression: keep the dict with top-level ``"status": "ACTIVE"``\n'
+            "on every non-delete upsert and leave the finding open until a pyatlan\n"
+            "release models the type, the app's pyatlan is raised to it, and the\n"
+            "entity is built with that type's creator.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p058",
         remediation_reference=RemediationReference(

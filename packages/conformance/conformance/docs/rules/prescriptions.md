@@ -3168,10 +3168,12 @@ assets puts every entity on that seam.
   `pyatlan_v9.model.assets` creator and app/connector.py writes each one through
   `entity_bytes(...)`; no entity is assembled as a `typeName` / `attributes` dict.
 - **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
-- **Already correct when:** A justified inline `# conformance: ignore[P058] <reason>` is correct only for a type
-  `pyatlan_v9` does not model, and only when the dict carries top-level `"status":
-  "ACTIVE"` on a non-delete upsert. The reason must name the unmodelled type. A
-  directive on a type `pyatlan_v9` models is unremediated.
+- **Already correct when:** The entity is a `pyatlan_v9.model.assets` object written through `entity_bytes`. No `#
+  conformance: ignore[P058]` is correct. A type `pyatlan_v9` does not model is a pyatlan
+  gap: the finding stays open until pyatlan models the type and its creator, a pyatlan
+  release ships it, the app's pyatlan is raised to that release, and the entity is
+  rebuilt with the creator. Until then the dict carries top-level `"status": "ACTIVE"`
+  on a non-delete upsert.
 
 App code under `app/` (`app/generated/` excluded) emits an Atlas entity it built as a
 raw dict — a dict display with literal `"typeName"` and `"attributes"` keys, or
@@ -3200,8 +3202,10 @@ when the payload carries `status: ACTIVE`.
 
 Fix: build the entity with the `pyatlan_v9.model.assets` creator for its type and
 serialize it with `entity_bytes`.  WARN tier — where `pyatlan_v9` does not model the
-type, keep the dict, give it top-level `"status": "ACTIVE"` on every non-delete upsert,
-and suppress with `# conformance: ignore[P058] <reason>` naming the type.
+type, that is a pyatlan gap, not a suppression: keep the dict with top-level `"status":
+"ACTIVE"` on every non-delete upsert and leave the finding open until a pyatlan release
+models the type, the app's pyatlan is raised to it, and the entity is built with that
+type's creator.
 
 ---
 

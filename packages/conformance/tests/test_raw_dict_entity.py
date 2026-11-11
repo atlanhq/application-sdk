@@ -64,7 +64,8 @@ def test_fires_on_dataplex_aspect_type_append() -> None:
     assert "`GCPDataplexAspectType` entity built as a raw dict" in finding.message
     assert "pyatlan_v9.model.assets" in finding.message
     assert '"status": "ACTIVE"' in finding.message
-    assert "ignore[P058]" in finding.message
+    assert "pyatlan gap, not a suppression" in finding.message
+    assert "ignore[P058]" not in finding.message
 
 
 @pytest.mark.parametrize(

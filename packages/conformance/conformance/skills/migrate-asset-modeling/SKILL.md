@@ -143,7 +143,7 @@ without breaking 1 and 2, and how to prove it.
 | P028 | an f-string that interpolates a name matching `qualified_name`, `*_qn` or `qn` **and** has a `/` literal (an object-store key, with a `/` literal before the name, is exempt) | the qualifiedName comes from `X.creator(...).qualified_name` or `Process.generate_qualified_name(...)`; an ignore is correct only where the string is not a qualifiedName (the rule's terminal state) |
 | P052 | `.to_nested_bytes()`, `.to_nested_dict()`, pyatlan_v9 `to_atlas_format`, or `to_atlas_format_dict`, in `app/` (not `app/generated/`) | the entity goes through `entity_bytes` |
 | P055 | a pyatlan_v9 mapper populating the list end of a 1-to-N relationship — `Table(columns=...)`, `process.fabric_activities = [...]`, `schema.tables.append(...)` | each child sets its single reference to the parent (`column.table = RelatedTable(...)`) and the parent's list is left unset |
-| P058 | a dict with literal `"typeName"` and `"attributes"` keys (or `dict(typeName=..., attributes=...)`) that is appended / extended / inserted, yielded, passed to `entity_bytes`, or returned from a `map_<entity>` mapper, in `app/` (not `app/generated/`) — directly or through a local name | the entity is a `pyatlan_v9.model.assets` object, or the site carries a justified ignore for a type pyatlan_v9 does not model |
+| P058 | a dict with literal `"typeName"` and `"attributes"` keys (or `dict(typeName=..., attributes=...)`) that is appended / extended / inserted, yielded, passed to `entity_bytes`, or returned from a `map_<entity>` mapper, in `app/` (not `app/generated/`) — directly or through a local name | the entity is a `pyatlan_v9.model.assets` object; a type pyatlan_v9 does not model stays open as a pyatlan gap, never ignored |
 | O002 | any `.dict()` call in a module that imports pyatlan asset models | `.dict()` is gone, or the module no longer imports asset models |
 | O003 | a function with no return annotation that returns a directly constructed asset `X(...)` | the function has a return annotation |
 | O004 | an import of `pyatlan.model.assets` | the import is `pyatlan_v9.model.assets` |
@@ -206,11 +206,13 @@ that comes back stays deleted. End state: each publish entity is a pyatlan_v9
 asset (creator where the type has one, P028 applies to it) written with
 `entity_bytes`, with the output unchanged. A publish entity whose literal
 type name pyatlan_v9 does not model (checked with
-`hasattr(pyatlan_v9.model.assets, "<Type>")`) keeps the dict with top-level
-`"status": "ACTIVE"` and
-`# conformance: ignore[P058] <type> is not modeled in pyatlan_v9`. That
-claim must be checkable: a type held in a variable, or a payload that is not
-publish output (principle 3), never gets this ignore.
+`hasattr(pyatlan_v9.model.assets, "<Type>")` on the installed pyatlan) is a
+pyatlan gap, never an ignore: the fix is the type and its creator in
+pyatlan, a release, the app's pyatlan raised to it, then the creator. Until
+then the dict stays, unsuppressed, with top-level `"status": "ACTIVE"`.
+Plan it as type `SDK` and name the type and the creator inputs the source
+record carries. A type held in a variable, or a payload that is not publish
+output (principle 3), is held instead.
 
 ### O004 — pyatlan_v9 models
 
@@ -380,7 +382,8 @@ sites planned with that `fix_shape` for a person.
 {"rule": "P052", "fix_shape": "released-envelope", "decision": "Write the entity with entity_bytes and the envelope that matches what the app publishes today; delete only the code that rebuilds that envelope by hand; keep every other change the app makes, applied to the decoded entity_bytes output.", "why": "entity_bytes is the seam for central fixes; the envelope choice keeps the published output unchanged except the documented stamps.", "pr_note": true}
 {"rule": "P052", "fix_shape": "^hold$", "block": "Held: this site's identity or published output cannot be proven unchanged, or its payload is not publish output. The planner's reason for this site says what is missing.", "brief": "Add what the planner's reason names as missing, or answer its question, then re-run the unit."}
 {"rule": "P058", "fix_shape": "pyatlan-asset", "decision": "Build each publish entity as a pyatlan_v9 asset (the type's creator where it has one) and write it with entity_bytes so the published output is unchanged except the documented stamps.", "why": "A model checks the keys and a creator owns the identity; outside entity_bytes the entity misses status ACTIVE.", "pr_note": true}
-{"rule": "P058", "fix_shape": "unmodeled-ignore", "decision": "Only for a publish entity whose literal type name pyatlan_v9 does not model (hasattr(pyatlan_v9.model.assets, \"<Type>\") is False): keep the dict with top-level \"status\": \"ACTIVE\" on every non-delete upsert and add # conformance: ignore[P058] <type> is not modeled in pyatlan_v9. Never for a type held in a variable or a payload that is not publish output.", "why": "The rule's terminal state allows an ignore only for a type pyatlan_v9 does not model.", "suppress": true, "reason": "is not modeled in pyatlan_v9"}
+{"rule": "P058", "fix_shape": "pyatlan-gap", "decision": "Only for a publish entity whose literal type name pyatlan_v9 does not model (hasattr(pyatlan_v9.model.assets, \"<Type>\") is False on the installed pyatlan): keep the dict, unsuppressed, with top-level \"status\": \"ACTIVE\" on every non-delete upsert; never add an ignore. Name the type and the creator inputs the source record carries. Never for a type held in a variable or a payload that is not publish output: hold those.", "why": "The rule's terminal state allows no P058 ignore: an unmodeled type is fixed in pyatlan (type and creator), released, and adopted by raising the app's pyatlan; an ignore would hide the gap from the fleet."}
+{"rule": "P058", "fix_shape": "^pyatlan-gap$", "block": "pyatlan_v9 does not model this entity type, so no creator can build it.", "brief": "Add the type and its creator to pyatlan, release it, raise the app's pyatlan to that release, then rebuild this entity with the creator."}
 {"rule": "P058", "fix_shape": "^hold$", "block": "Held: this site's identity or published output cannot be proven unchanged, or its payload is not publish output. The planner's reason for this site says what is missing.", "brief": "Add what the planner's reason names as missing, or answer its question, then re-run the unit."}
 {"rule": "O004", "fix_shape": "v9-import", "decision": "Import from pyatlan_v9.model.assets, moving the models together with the mapper's P052 and P058 sites when they feed a mapper. The site is fixed only when every use of the moved models runs on v9 (no attributes=, to_atlas_dict() or v1-client call left) and, where they feed published output, the identity and output proof (Prove it, steps 3 and 4) holds; without that proof, plan it as hold.", "why": "The v9 classes reject attributes= and have no to_atlas_dict(), so the import alone breaks a mapper. In lane runs an import-only swap was accepted as fixed, and one O004 change altered published output."}
 {"rule": "O004", "fix_shape": "^hold$", "block": "Held: this site's identity or published output cannot be proven unchanged, or its payload is not publish output. The planner's reason for this site says what is missing.", "brief": "Add what the planner's reason names as missing, or answer its question, then re-run the unit."}
