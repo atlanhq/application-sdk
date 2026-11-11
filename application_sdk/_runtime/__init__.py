@@ -14,7 +14,7 @@ auto-holds work). Nothing else in ``application_sdk``: never
 ``application_sdk.storage``, ``application_sdk.execution`` or
 ``application_sdk.app`` — each of those pulls in ``storage.ops`` transitively,
 which is exactly the cycle this package exists to remove.
-``tests/unit/runtime/test_layering.py`` enforces this in a subprocess, so
+``tests/unit/_runtime/test_layering.py`` enforces this in a subprocess, so
 breaking the rule fails CI rather than surfacing as an ``ImportError`` at some
 unrelated call site months later.
 
