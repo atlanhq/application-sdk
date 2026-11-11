@@ -1,8 +1,7 @@
-"""The zero-caller test surfaces keep serving their names, with a warning, until v4.0.0 (FND-4659).
+"""The deprecated test surfaces keep serving their names, with a warning, until v4.0.0 (FND-4659).
 
-``testing.full_dag`` and ``testing.harness.fixtures`` have no consumer, and the
-``BaseIntegrationTest`` HTTP scenario framework is superseded by the in-process
-fixture kit. None of them can be deleted in the release that deprecates them:
+``testing.full_dag`` has no consumer, and the ``BaseIntegrationTest`` HTTP
+scenario framework is superseded by the in-process fixture kit. None of them can be deleted in the release that deprecates them:
 the symbol-removal gate only lets a name go once the previous release marked it,
 and it reads only ``@deprecated`` and PEP 562 aliases. So every old name here
 must still import, resolve to the *same* object as its implementation, and warn
@@ -22,7 +21,6 @@ import pytest
 
 #: public alias module -> the module whose object each name must resolve to.
 _ALIAS_MODULES = {
-    "application_sdk.testing.harness.fixtures": "application_sdk.testing.harness._fixtures",
     "application_sdk.testing.full_dag.client": "application_sdk.testing.e2e.client",
     "application_sdk.testing.full_dag._errors": "application_sdk.testing.e2e._errors",
     "application_sdk.testing.full_dag.base": "application_sdk.testing.e2e.client",
@@ -61,28 +59,6 @@ def test_each_old_name_warns_and_is_the_same_object(
         assert served is getattr(module, f"_{name}")
     else:
         assert served is getattr(implementation, name)
-
-
-def test_every_fixture_export_is_still_served() -> None:
-    """The public ``__all__`` of the last release, name for name."""
-    private = importlib.import_module("application_sdk.testing.harness._fixtures")
-    public = importlib.import_module("application_sdk.testing.harness.fixtures")
-
-    assert set(private.__all__) <= set(public._DEPRECATED_CONSTANTS)
-
-
-def test_the_fixture_alias_lists_every_name_for_pytest_discovery() -> None:
-    """pytest and pluggy find fixtures and hooks through ``dir(module)``."""
-    public = importlib.import_module("application_sdk.testing.harness.fixtures")
-
-    assert set(public._DEPRECATED_CONSTANTS) <= set(dir(public))
-
-
-def test_an_unknown_name_is_still_an_attribute_error() -> None:
-    module = importlib.import_module("application_sdk.testing.harness.fixtures")
-
-    with pytest.raises(AttributeError):
-        module.no_such_fixture  # noqa: B018
 
 
 @pytest.mark.parametrize(

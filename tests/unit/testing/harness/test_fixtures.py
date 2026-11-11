@@ -31,10 +31,12 @@ from typing import Any
 
 import pytest
 
-from application_sdk.testing.harness import _fixtures as fixtures_api
 from application_sdk.testing.harness import evidence as evidence_api
+from application_sdk.testing.harness import fixtures as fixtures_api
 from application_sdk.testing.harness import teardown as teardown_api
-from application_sdk.testing.harness._fixtures import (
+from application_sdk.testing.harness.evidence import EvidenceBundle
+from application_sdk.testing.harness.expectations import Finding
+from application_sdk.testing.harness.fixtures import (
     DEFAULT_EVIDENCE_DIR,
     EvidenceLog,
     _failed_in_any_phase,
@@ -43,8 +45,6 @@ from application_sdk.testing.harness._fixtures import (
     _slug,
     _write_if_failed,
 )
-from application_sdk.testing.harness.evidence import EvidenceBundle
-from application_sdk.testing.harness.expectations import Finding
 from application_sdk.testing.harness.teardown import PurgeReport
 
 pytest_plugins = ["pytester"]
@@ -60,7 +60,7 @@ pytestmark = pytest.mark.enable_socket
 #: Written into every generated project: the fixtures reach pytest's hooks only
 #: when the module is registered as a plugin, and ``asyncio_mode`` is what lets
 #: an ``async def`` fixture work with no decorator.
-CONFTEST = 'pytest_plugins = ["application_sdk.testing.harness._fixtures"]\n'
+CONFTEST = 'pytest_plugins = ["application_sdk.testing.harness.fixtures"]\n'
 INI = "[pytest]\nasyncio_mode = auto\nasyncio_default_fixture_loop_scope = function\n"
 
 
