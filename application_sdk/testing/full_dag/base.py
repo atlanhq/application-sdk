@@ -55,9 +55,17 @@ import os
 import time
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
-from application_sdk.observability.logger_adaptor import get_logger
+from typing_extensions import deprecated
+
+from application_sdk.observability.logger_adaptor import get_logger as _get_logger
+from application_sdk.testing.e2e.client import (
+    DAGRunResult as _DAGRunResult,
+)
+from application_sdk.testing.e2e.client import (
+    cold_start_submit_kwargs as _cold_start_submit_kwargs,
+)
 from application_sdk.testing.full_dag._errors import (
     HarnessMethodNotImplementedError,
     ManifestDagMissingError,
@@ -65,11 +73,7 @@ from application_sdk.testing.full_dag._errors import (
     MissingHarnessClassAttrError,
     MissingHarnessEnvError,
 )
-from application_sdk.testing.full_dag.client import (
-    AEWorkflowClient,
-    DAGRunResult,
-    cold_start_submit_kwargs,
-)
+from application_sdk.testing.full_dag.client import AEWorkflowClient
 from application_sdk.testing.full_dag.payload import (
     AgentSpec,
     ConnectionSpec,
@@ -79,9 +83,53 @@ from application_sdk.testing.full_dag.payload import (
     build_seed_dag,
 )
 
-logger = get_logger(__name__)
+if TYPE_CHECKING:
+    # Type checkers only: binds nothing at runtime, so access still goes through
+    # ``__getattr__`` and warns. It is what lets the symbol gate follow the
+    # served class to its definition, methods included.
+    from application_sdk.observability.logger_adaptor import (  # noqa: F401
+        AtlanLoggerAdapter,
+        get_logger,
+    )
+    from application_sdk.testing.e2e.client import (  # noqa: F401
+        DAGRunResult,
+        cold_start_submit_kwargs,
+    )
+
+    logger: AtlanLoggerAdapter
+
+#: Every name the last release exposed here, so the symbol gate counts each
+#: re-export and served alias as surface (FND-4659).
+__all__ = [
+    "AEWorkflowClient",
+    "AgentSpec",
+    "BaseFullDAGE2ETest",
+    "ConnectionSpec",
+    "DAGRunResult",
+    "DatabaseSpec",
+    "FullDAGOutcome",
+    "HarnessMethodNotImplementedError",
+    "ManifestDagMissingError",
+    "ManifestFileNotFoundError",
+    "MissingHarnessClassAttrError",
+    "MissingHarnessEnvError",
+    "RunMode",
+    "build_ae_payload",
+    "build_seed_dag",
+    "cold_start_submit_kwargs",
+    # Served by ``__getattr__`` with a warning; listed so ``import *`` still binds
+    # them, as it did before this module declared ``__all__``.
+    "get_logger",
+    "logger",
+]
+
+_logger = _get_logger(__name__)
 
 
+@deprecated(
+    "application_sdk.testing.full_dag.FullDAGOutcome is deprecated; use "
+    "application_sdk.testing.e2e.FullDAGOutcome — will be removed in v4.0.0."
+)
 @dataclass(frozen=True)
 class FullDAGOutcome:
     """Combined result of a single full-DAG run.
@@ -106,7 +154,7 @@ class FullDAGOutcome:
             the Connection probe didn't succeed.
     """
 
-    ae_result: DAGRunResult
+    ae_result: _DAGRunResult
     connection_qualified_name: str
     connection_in_atlas: bool
     asset_counts: dict[str, int] = field(default_factory=dict)
@@ -118,6 +166,13 @@ class FullDAGOutcome:
         return self.ae_result.all_nodes_succeeded and self.connection_in_atlas
 
 
+@deprecated(
+    "application_sdk.testing.full_dag.BaseFullDAGE2ETest is deprecated; use "
+    "application_sdk.testing.e2e.BaseE2ETest — will be removed in v4.0.0.",
+    # Static marker only: the guarded __init_subclass__ below already warns a
+    # consumer subclass exactly once and keeps SDK-internal subclasses quiet.
+    category=None,
+)
 class BaseFullDAGE2ETest:
     """Deprecated: pytest base — use ``application_sdk.testing.e2e.BaseE2ETest``.
 
@@ -549,7 +604,7 @@ class BaseFullDAGE2ETest:
             if isinstance(args, dict):
                 inputs["args"] = self._apply_mustache_subs(args, mustache_subs)
 
-        logger.info(
+        _logger.info(
             "Loaded seed DAG from %s (%d nodes: %s)",
             path,
             len(dag),
@@ -672,7 +727,7 @@ class BaseFullDAGE2ETest:
         'X' not found. Create the workflow first.").
         """
         if self.ae_workflow_slug:
-            logger.info(
+            _logger.info(
                 "Using pre-existing AE workflow slug: %s",
                 self.ae_workflow_slug,
             )
@@ -686,7 +741,7 @@ class BaseFullDAGE2ETest:
             name=name,
             description=f"Full-DAG e2e harness — {self.connector_short_name}",
         )
-        logger.info("Created (or reused) AE workflow: name=%s slug=%s", name, slug)
+        _logger.info("Created (or reused) AE workflow: name=%s slug=%s", name, slug)
         # AE has a brief indexing window before the slug is queryable by
         # /versions. Was an unconditional ``time.sleep(3)``; now a real readiness
         # read (FND-240), advisory rather than a gate — create_version retries on
@@ -715,7 +770,7 @@ class BaseFullDAGE2ETest:
             # `manifest_path`.
             seed_dag = self._seed_dag_from_manifest(extract_queue)
         else:
-            logger.info(
+            _logger.info(
                 "manifest_path empty — falling back to hand-crafted build_seed_dag"
             )
             seed_dag = build_seed_dag(
@@ -738,7 +793,7 @@ class BaseFullDAGE2ETest:
             slug,
             {"version": int(time.time()), "dag": seed_dag},
         )
-        logger.info("Created seed version %d under slug %s", version, slug)
+        _logger.info("Created seed version %d under slug %s", version, slug)
 
         self.client.publish_version(slug, version)
         return slug
@@ -772,7 +827,7 @@ class BaseFullDAGE2ETest:
             ae_workflow_slug=slug,
         )
 
-        logger.info(
+        _logger.info(
             "Submitting AE workflow: connector=%s mode=%s qn=%s",
             self.connector_short_name,
             self.mode.value,
@@ -783,12 +838,12 @@ class BaseFullDAGE2ETest:
             # Lets an ambiguous submit timeout be resolved by reading AE's own
             # run list under this slug instead of failing the leg outright.
             slug=slug,
-            **cold_start_submit_kwargs(
+            **_cold_start_submit_kwargs(
                 self.app_ready_timeout_seconds,
                 self.app_ready_poll_interval_seconds,
             ),
         )
-        logger.info("AE submit returned run_id=%s", run_id)
+        _logger.info("AE submit returned run_id=%s", run_id)
 
         ae_result = self.client.poll_native_status(
             run_id,
@@ -832,12 +887,12 @@ class BaseFullDAGE2ETest:
                 # Two separate log lines so the CI PR-comment parser can
                 # surface them as distinct sections ("Assets in Atlas" /
                 # "Lineage") matching the Atlan workflow-center UI.
-                logger.info(
+                _logger.info(
                     "Atlas inventory under %s: %s",
                     self.connection_qualified_name,
                     asset_counts,
                 )
-                logger.info(
+                _logger.info(
                     "Lineage inventory under %s: %s lineage_present=%s",
                     self.connection_qualified_name,
                     lineage_counts,
@@ -845,7 +900,7 @@ class BaseFullDAGE2ETest:
                 )
         else:
             failed_names = ", ".join(n.name for n in ae_result.failed_nodes) or "(none)"
-            logger.warning(
+            _logger.warning(
                 "Skipping Atlas probe — %d/%d DAG nodes did not succeed (failed: %s)",
                 len(ae_result.failed_nodes),
                 len(ae_result.nodes),
@@ -928,3 +983,58 @@ class BaseFullDAGE2ETest:
                 "no lineage rows reached Atlas — likely an issue with "
                 "view parsing or the lineage-publish output prefix."
             )
+
+
+#: name -> (replacement, why). Names this module bound without defining them —
+#: re-exports and its logger — served once more by ``__getattr__`` below
+#: (PEP 562), so the symbol-removal gate sees them as deprecated (FND-4659).
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "logger": (
+        "application_sdk.observability.logger_adaptor.get_logger(__name__) in your own module",
+        "application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659)",
+    ),
+    "get_logger": (
+        "application_sdk.observability.logger_adaptor.get_logger",
+        "application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659)",
+    ),
+    "DAGRunResult": (
+        "application_sdk.testing.e2e.client.DAGRunResult",
+        "application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659)",
+    ),
+    "cold_start_submit_kwargs": (
+        "application_sdk.testing.e2e.client.cold_start_submit_kwargs",
+        "application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659)",
+    ),
+}
+
+#: Where each served name is defined. Read by the symbol gate to follow it to
+#: its definition, so a served class's methods are surface too.
+_LAZY: dict[str, tuple[str, str]] = {
+    "DAGRunResult": ("application_sdk.testing.e2e.client", "DAGRunResult"),
+    "cold_start_submit_kwargs": (
+        "application_sdk.testing.e2e.client",
+        "cold_start_submit_kwargs",
+    ),
+}
+
+_SERVED: dict[str, object] = {
+    "logger": _logger,
+    "get_logger": _get_logger,
+    "DAGRunResult": _DAGRunResult,
+    "cold_start_submit_kwargs": _cold_start_submit_kwargs,
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the deprecated names once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _SERVED[name]

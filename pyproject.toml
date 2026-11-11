@@ -448,7 +448,6 @@ venv = ".venv"
 typeCheckingMode = "standard"
 extraPaths = []
 exclude = [
-    "application_sdk/test_utils/**",
     "application_sdk/testing/_scale_data_generator/**",
     ".github/**",
     "tests",
@@ -499,7 +498,6 @@ markers = [
 # proximity would exempt the one part of this surface that is unit-testable.
 omit = [
     "tests/**",
-    "application_sdk/test_utils/**",
     "application_sdk/testing/scale_data_generator/**",
     "application_sdk/testing/_scale_data_generator/**",
     "application_sdk/testing/integration/**",
