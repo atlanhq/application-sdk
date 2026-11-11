@@ -1,72 +1,37 @@
 {
+  "icon": "https://assets.atlan.com/assets/bigquery.svg",
+  "helpdeskLink": "",
+  "logo": "https://assets.atlan.com/assets/bigquery.svg",
+  "connector": "bigquery",
+  "defaultConnectorType": "rest",
   "config": {
     "properties": {
       "name": {
         "type": "string",
-        "required": false
+        "required": false,
+        "ui": {
+          "label": "Name",
+          "hidden": true,
+          "placeholder": "Host Name"
+        }
       },
       "connector": {
         "type": "string",
-        "required": false
+        "required": false,
+        "ui": {
+          "label": "Connector",
+          "hidden": true,
+          "placeholder": "Connector"
+        }
       },
       "connectorType": {
         "type": "string",
-        "required": false
-      },
-      "extra": {
-        "type": "object",
-        "ui": {
-          "widget": "nested"
-        },
-        "properties": {
-          "connect_type": {
-            "type": "string",
-            "required": true,
-            "enum": [
-              "public",
-              "private"
-            ],
-            "default": "public",
-            "ui": {
-              "widget": "radio"
-            }
-          }
-        }
-      },
-      "host": {
-        "type": "conditional",
         "required": false,
-        "default": "https://bigquery.googleapis.com",
-        "conditions": [
-          {
-            "property": "extra.connect_type",
-            "value": "private",
-            "required": true,
-            "ui": {
-              "widget": ""
-            }
-          }
-        ],
         "ui": {
-          "widget": "input"
-        }
-      },
-      "port": {
-        "type": "conditional",
-        "required": false,
-        "default": 443,
-        "conditions": [
-          {
-            "property": "extra.connect_type",
-            "value": "private",
-            "required": false,
-            "ui": {
-              "widget": ""
-            }
-          }
-        ],
-        "ui": {
-          "widget": "inputNumber"
+          "key": "_host",
+          "label": "connectorType",
+          "placeholder": "connectorType",
+          "hidden": true
         }
       },
       "auth-type": {
@@ -77,14 +42,22 @@
         ],
         "default": "basic",
         "required": true,
+        "enumNames": [
+          "Service account",
+          "Workload identity federation"
+        ],
         "ui": {
-          "widget": "radio"
+          "widget": "radio",
+          "hidden": false,
+          "label": "Authentication"
         }
       },
       "basic": {
         "type": "object",
         "ui": {
           "widget": "nested",
+          "label": "",
+          "hidden": true,
           "nestedValue": false
         },
         "properties": {
@@ -92,27 +65,39 @@
             "type": "string",
             "required": true,
             "ui": {
-              "widget": "input"
+              "widget": "input",
+              "label": "Service account email",
+              "hidden": false,
+              "grid": 8
             }
           },
           "password": {
             "type": "string",
             "required": true,
             "ui": {
-              "widget": "password"
+              "widget": "password",
+              "label": "Service account JSON",
+              "hidden": false,
+              "grid": 8
             }
           },
           "extra": {
             "type": "object",
             "ui": {
-              "widget": "nested"
+              "widget": "nested",
+              "label": "",
+              "header": "Advanced",
+              "hidden": false
             },
             "properties": {
               "project_id": {
                 "type": "string",
                 "required": true,
                 "ui": {
-                  "widget": "input"
+                  "widget": "input",
+                  "label": "Project ID",
+                  "hidden": false,
+                  "grid": 8
                 }
               }
             }
@@ -123,48 +108,68 @@
         "type": "object",
         "ui": {
           "widget": "nested",
+          "label": "",
+          "hidden": true,
           "nestedValue": false
         },
         "properties": {
           "extra": {
             "type": "object",
             "ui": {
-              "widget": "nested"
+              "widget": "nested",
+              "label": "",
+              "header": "Advanced",
+              "hidden": false
             },
             "properties": {
               "project_id": {
                 "type": "string",
                 "required": true,
                 "ui": {
-                  "widget": "input"
+                  "widget": "input",
+                  "label": "Project ID",
+                  "hidden": false,
+                  "grid": 8
                 }
               },
               "service_account_email": {
                 "type": "string",
                 "required": true,
                 "ui": {
-                  "widget": "input"
+                  "widget": "input",
+                  "label": "Service account email",
+                  "hidden": false,
+                  "grid": 8
                 }
               },
               "wif_pool_provider_id": {
                 "type": "string",
                 "required": true,
                 "ui": {
-                  "widget": "input"
+                  "widget": "input",
+                  "label": "WIF pool provider ID",
+                  "hidden": false,
+                  "grid": 8
                 }
               },
               "atlan_oauth_id": {
                 "type": "string",
                 "required": true,
                 "ui": {
-                  "widget": "input"
+                  "widget": "input",
+                  "label": "Atlan OAuth client ID",
+                  "hidden": false,
+                  "grid": 8
                 }
               },
               "atlan_oauth_secret": {
                 "type": "string",
                 "required": true,
                 "ui": {
-                  "widget": "password"
+                  "widget": "password",
+                  "label": "Atlan OAuth client secret",
+                  "hidden": false,
+                  "grid": 8
                 }
               }
             }
@@ -191,16 +196,6 @@
         },
         "required": [
           "gcp-wif"
-        ]
-      },
-      {
-        "properties": {
-          "extra.connect_type": {
-            "const": "private"
-          }
-        },
-        "required": [
-          "host"
         ]
       }
     ]

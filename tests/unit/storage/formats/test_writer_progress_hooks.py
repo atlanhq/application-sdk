@@ -32,7 +32,6 @@ def _frame(rows: int = _ROWS) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_flush_buffer_marks_once_per_chunk_never_per_record(
     tmp_path: Path, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -47,7 +46,6 @@ async def test_flush_buffer_marks_once_per_chunk_never_per_record(
     assert len(progress_marks.labels) < _ROWS
 
 
-@pytest.mark.asyncio
 async def test_json_writer_inherits_the_same_flush_hook(
     tmp_path: Path, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -59,7 +57,6 @@ async def test_json_writer_inherits_the_same_flush_hook(
     assert progress_marks.count("writer.flush_buffer") == _ROWS // _BUFFER
 
 
-@pytest.mark.asyncio
 async def test_an_empty_write_marks_nothing(
     tmp_path: Path, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -75,7 +72,6 @@ async def test_an_empty_write_marks_nothing(
     assert progress_marks.labels == []
 
 
-@pytest.mark.asyncio
 async def test_batched_write_marks_every_batch(
     tmp_path: Path, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -98,7 +94,6 @@ async def test_batched_write_marks_every_batch(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_close_marks_the_statistics_emission_once(
     tmp_path: Path, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -114,7 +109,6 @@ async def test_close_marks_the_statistics_emission_once(
     assert progress_marks.labels[-1] == "writer.statistics"
 
 
-@pytest.mark.asyncio
 async def test_a_second_close_marks_nothing_more(
     tmp_path: Path, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -134,7 +128,6 @@ async def test_a_second_close_marks_nothing_more(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_consolidation_path_marks_accumulation_and_consolidation(
     tmp_path: Path, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -165,7 +158,6 @@ async def test_consolidation_path_marks_accumulation_and_consolidation(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_rolling_writer_marks_once_per_rolled_chunk(
     tmp_path: Path, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -188,7 +180,6 @@ async def test_rolling_writer_marks_once_per_rolled_chunk(
     assert progress_marks.count("writer.rolling_flush") == 3
 
 
-@pytest.mark.asyncio
 async def test_rolling_writer_marks_before_the_completion_callback(
     tmp_path: Path, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -218,7 +209,6 @@ async def test_rolling_writer_marks_before_the_completion_callback(
     assert seen_at_callback == [1]
 
 
-@pytest.mark.asyncio
 async def test_a_failed_flush_marks_nothing(
     tmp_path: Path, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -242,7 +232,6 @@ async def test_a_failed_flush_marks_nothing(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_writers_behave_identically_with_no_tracker_bound(
     tmp_path: Path,
 ) -> None:

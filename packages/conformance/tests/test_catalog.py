@@ -521,6 +521,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "D011",
         "D016",
         "D017",
+        "D018",
         "E020",
         "K001",
         "K002",
@@ -738,6 +739,7 @@ def test_catalog_d_series_present() -> None:
         "D009",
         "D010",
         "D017",
+        "D018",
     }
     missing = expected - d_ids
     assert not missing, f"Missing D-series rules: {missing}"

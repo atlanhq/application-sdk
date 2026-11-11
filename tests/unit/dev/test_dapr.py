@@ -227,7 +227,6 @@ class TestEmbeddedDaprLifecycle:
             )
             yield fake_proc
 
-    @pytest.mark.asyncio
     async def test_yields_embedded_dapr_dataclass(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -238,7 +237,6 @@ class TestEmbeddedDaprLifecycle:
             assert dapr.grpc_port > 0
             assert Path(dapr.components_dir).is_dir()
 
-    @pytest.mark.asyncio
     async def test_sets_env_vars_inside_context(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -251,7 +249,6 @@ class TestEmbeddedDaprLifecycle:
             assert os.environ["DAPR_GRPC_PORT"] == str(dapr.grpc_port)
             assert os.environ["DAPR_COMPONENTS_PATH"] == dapr.components_dir
 
-    @pytest.mark.asyncio
     async def test_restores_prior_env_vars_on_exit(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -269,7 +266,6 @@ class TestEmbeddedDaprLifecycle:
         assert "DAPR_GRPC_PORT" not in os.environ
         assert "DAPR_COMPONENTS_PATH" not in os.environ
 
-    @pytest.mark.asyncio
     async def test_cleans_up_components_dir_on_exit(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -280,7 +276,6 @@ class TestEmbeddedDaprLifecycle:
 
         assert not components_dir.exists()
 
-    @pytest.mark.asyncio
     async def test_custom_components_dir_is_used_and_preserved(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -304,7 +299,6 @@ class TestEmbeddedDaprLifecycle:
         # Previously-unset env var is unset again on exit.
         assert "DAPR_COMPONENTS_PATH" not in os.environ
 
-    @pytest.mark.asyncio
     async def test_custom_components_dir_conflicts_with_secrets_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -320,7 +314,6 @@ class TestEmbeddedDaprLifecycle:
         for k in ("DAPR_HTTP_PORT", "DAPR_GRPC_PORT", "DAPR_COMPONENTS_PATH"):
             assert k not in os.environ
 
-    @pytest.mark.asyncio
     async def test_missing_components_dir_fails_fast(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -336,7 +329,6 @@ class TestEmbeddedDaprLifecycle:
         for k in ("DAPR_HTTP_PORT", "DAPR_GRPC_PORT", "DAPR_COMPONENTS_PATH"):
             assert k not in os.environ
 
-    @pytest.mark.asyncio
     async def test_config_file_is_passed_to_daprd(
         self,
         tmp_path: Path,
@@ -366,7 +358,6 @@ class TestEmbeddedDaprLifecycle:
         assert with_config[flag + 1] == str(config)
         assert "--config" not in without_config
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("bad", ["", "   ", "missing.yaml"])
     async def test_missing_config_file_fails_fast(
         self, bad: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -380,7 +371,6 @@ class TestEmbeddedDaprLifecycle:
         for k in ("DAPR_HTTP_PORT", "DAPR_GRPC_PORT", "DAPR_COMPONENTS_PATH"):
             assert k not in os.environ
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("blank", ["", "   "])
     async def test_blank_components_dir_fails_fast(
         self, blank: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -397,7 +387,6 @@ class TestEmbeddedDaprLifecycle:
         for k in ("DAPR_HTTP_PORT", "DAPR_GRPC_PORT", "DAPR_COMPONENTS_PATH"):
             assert k not in os.environ
 
-    @pytest.mark.asyncio
     async def test_terminates_subprocess_on_exit(
         self,
         tmp_path: Path,
@@ -532,7 +521,6 @@ class TestDownloadDaprd:
 
 
 class TestWaitForDaprReady:
-    @pytest.mark.asyncio
     async def test_exited_daprd_fails_fast_with_log_tail(self, tmp_path: Path) -> None:
         """A daprd that already died raises at once with its exit code and
         output, instead of being polled for the whole readiness window."""
@@ -597,7 +585,6 @@ class TestEmbeddedDaprLog:
         with _private_spawn_and_log_dir(monkeypatch, _spawn, self.log_dir):
             yield
 
-    @pytest.mark.asyncio
     async def test_log_removed_after_clean_run(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -609,7 +596,6 @@ class TestEmbeddedDaprLog:
         assert self.spawn_kwargs["stdout"] is not asyncio.subprocess.DEVNULL
         assert not [p for p in self.log_dir.iterdir() if p.suffix == ".log"]
 
-    @pytest.mark.asyncio
     async def test_log_kept_when_daprd_died(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -688,7 +674,6 @@ class TestEnsureDaprdBinary:
 
 
 class TestSpawnFailureCleanup:
-    @pytest.mark.asyncio
     async def test_log_removed_when_spawn_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

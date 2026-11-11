@@ -1,0 +1,114 @@
+/// The `crawler` entry point of `app.pkl`: BigQuery's credential (basic and
+/// gcp-wif auth) and a workflow form with direct and agent extraction.
+amends "../../../../../contract-toolkit/src/App.pkl"
+
+import "../../../../../contract-toolkit/src/Connectors.pkl"
+
+name = "crawler"
+displayName = "Crawler"
+icon = "https://assets.atlan.com/assets/bigquery.svg"
+connector = Connectors.BIGQUERY
+connectorConfigName = "atlan-connectors-bigquery"
+workflowConfigName = "bigquery-crawler"
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Service account"
+    fields {
+      new FieldSpec { name = "username"; displayName = "Service account email" }
+      new FieldSpec { name = "password"; displayName = "Service account JSON"; sensitive = true }
+    }
+    extraFields {
+      new FieldSpec { name = "project_id"; displayName = "Project ID" }
+    }
+  }
+  ["gcp-wif"] = new AuthOption {
+    label = "Workload identity federation"
+    fields {}
+    extraFields {
+      new FieldSpec { name = "project_id"; displayName = "Project ID" }
+      new FieldSpec { name = "service_account_email"; displayName = "Service account email" }
+      new FieldSpec { name = "wif_pool_provider_id"; displayName = "WIF pool provider ID" }
+      new FieldSpec { name = "atlan_oauth_id"; displayName = "Atlan OAuth client ID" }
+      new FieldSpec { name = "atlan_oauth_secret"; displayName = "Atlan OAuth client secret"; sensitive = true }
+    }
+  }
+}
+credentialAuthDefault = "basic"
+
+pipeline {
+  publish = null
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["extraction-method"] = new ConditionalInput {
+          title = "Extraction method"
+          baseWidgetType = "radio"
+          baseEnum { "direct" }
+          baseEnumNames { "Direct" }
+          default = "direct"
+          conditions {
+            new Condition {
+              property = "labFlag"
+              value = "SECURE_AGENT_EXTRACTION"
+              overrideEnum { "direct"; "agent" }
+              overrideEnumNames { "Direct"; "Self-Deployed Runtime" }
+            }
+          }
+        }
+        ["credential-guid"] = new CredentialInput {
+          title = ""
+          credType = "atlan-connectors-bigquery"
+          required = true
+        }
+        ["agent-json"] = new AgentSelector {
+          title = ""
+          placeholderText = "Agent JSON"
+          // Which credential fields the agent must map to its secret store,
+          // per auth type. The toolkit derives this only for JDBC-URL forms,
+          // so a REST app such as BigQuery declares it.
+          agentConfigEntries {
+            new Listing {
+              "atlan-connectors-bigquery"
+              new Mapping {
+                ["properties"] = new Mapping {
+                  ["basic"] = new Mapping {
+                    ["properties"] = new Mapping {
+                      ["username"] = new Mapping { ["type"] = "string"; ["required"] = true }
+                      ["password"] = new Mapping { ["type"] = "string"; ["required"] = true }
+                    }
+                  }
+                  ["gcp-wif"] = new Mapping {
+                    ["properties"] = new Mapping {
+                      ["extra"] = new Mapping {
+                        ["properties"] = new Mapping {
+                          for (field in List("project_id", "service_account_email", "wif_pool_provider_id", "atlan_oauth_id", "atlan_oauth_secret")) {
+                            [field] = new Mapping { ["type"] = "string"; ["required"] = true }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            new Listing { "atlan-connectors-agent" }
+          }
+        }
+      }
+    }
+  }
+  rules {
+    new UIRule {
+      whenInputs { ["extraction-method"] = "direct" }
+      required { "credential-guid" }
+    }
+    new UIRule {
+      whenInputs { ["extraction-method"] = "agent" }
+      required { "agent-json" }
+    }
+  }
+}

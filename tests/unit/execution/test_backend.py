@@ -101,7 +101,6 @@ def _make_input_data(*, with_config_hash: bool = False) -> Any:
 
 
 class TestTemporalExecutorBackendExecute:
-    @pytest.mark.asyncio
     async def test_execute_calls_client_execute_workflow(self) -> None:
         client = mock.MagicMock()
         client.execute_workflow = mock.AsyncMock(return_value="OK")
@@ -120,7 +119,6 @@ class TestTemporalExecutorBackendExecute:
         assert kwargs["task_queue"] == "q"
         assert kwargs["id"].startswith("my-app-")
 
-    @pytest.mark.asyncio
     async def test_execute_uses_config_hash_in_workflow_id_when_available(self) -> None:
         client = mock.MagicMock()
         client.execute_workflow = mock.AsyncMock(return_value=None)
@@ -136,7 +134,6 @@ class TestTemporalExecutorBackendExecute:
         wf_id = client.execute_workflow.await_args.kwargs["id"]
         assert wf_id.startswith("hashy-cfghash-")
 
-    @pytest.mark.asyncio
     async def test_execute_with_entry_point_uses_qualified_workflow_name(self) -> None:
         ep_meta = _make_ep_meta("extract")
         client = mock.MagicMock()
@@ -155,7 +152,6 @@ class TestTemporalExecutorBackendExecute:
         wf_name = client.execute_workflow.await_args.args[0]
         assert wf_name == "mep:extract"
 
-    @pytest.mark.asyncio
     async def test_execute_never_dispatches_on_a_legacy_alias(self) -> None:
         """C1: aliases are inbound-only — SDK dispatch always emits canonical."""
         ep_meta = _make_ep_meta("extract")
@@ -176,7 +172,6 @@ class TestTemporalExecutorBackendExecute:
 
         assert client.execute_workflow.await_args.args[0] == "mep:extract"
 
-    @pytest.mark.asyncio
     async def test_execute_with_unknown_entry_point_raises_value_error(self) -> None:
         client = mock.MagicMock()
         client.execute_workflow = mock.AsyncMock()
@@ -192,7 +187,6 @@ class TestTemporalExecutorBackendExecute:
                 entry_point="missing",
             )
 
-    @pytest.mark.asyncio
     async def test_execute_passes_execution_timeout(self) -> None:
         client = mock.MagicMock()
         client.execute_workflow = mock.AsyncMock(return_value=None)
@@ -210,7 +204,6 @@ class TestTemporalExecutorBackendExecute:
             "execution_timeout"
         ] == timedelta(minutes=5)
 
-    @pytest.mark.asyncio
     async def test_execute_passes_correlation_memo_from_context(self) -> None:
         # CNCT-104: execute() must put the correlation id in the Temporal
         # start memo — the memo is what the LogInterceptor reads (priority 1).
@@ -231,7 +224,6 @@ class TestTemporalExecutorBackendExecute:
         assert inp.correlation_id == "ctx-corr"
         assert inp._correlation_id == "ctx-corr"
 
-    @pytest.mark.asyncio
     async def test_execute_frozen_input_still_gets_memo(self) -> None:
         # An input that rejects attribute assignment (dict/frozen shapes)
         # must still be correlated via the memo — the reliable channel. The
@@ -251,7 +243,6 @@ class TestTemporalExecutorBackendExecute:
         kwargs = client.execute_workflow.await_args.kwargs
         assert kwargs["memo"] == {"correlation_id": "ctx-corr"}
 
-    @pytest.mark.asyncio
     async def test_execute_respects_caller_supplied_correlation(self) -> None:
         # A caller-supplied input.correlation_id wins over the context's.
         client = mock.MagicMock()
@@ -265,7 +256,6 @@ class TestTemporalExecutorBackendExecute:
         kwargs = client.execute_workflow.await_args.kwargs
         assert kwargs["memo"] == {"correlation_id": "caller-corr"}
 
-    @pytest.mark.asyncio
     async def test_execute_stamps_workflow_id_on_input(self) -> None:
         # Production (/workflows/v1/start) populates Input.workflow_id before
         # Temporal dispatch; the backend must match, or an input left at the
@@ -287,7 +277,6 @@ class TestTemporalExecutorBackendExecute:
         await backend.execute(app_cls, inp2, context=ctx, retry_policy=SdkRetryPolicy())
         assert inp2.workflow_id != inp.workflow_id
 
-    @pytest.mark.asyncio
     async def test_execute_dispatches_under_caller_supplied_workflow_id(self) -> None:
         # Production dispatches under an explicitly supplied workflow_id; the
         # backend must too, or the input claims one identity while Temporal
@@ -308,7 +297,6 @@ class TestTemporalExecutorBackendExecute:
 
 
 class TestTemporalExecutorBackendStart:
-    @pytest.mark.asyncio
     async def test_start_returns_workflow_id(self) -> None:
         handle = mock.MagicMock()
         handle.id = "wf-id-xyz"
@@ -325,7 +313,6 @@ class TestTemporalExecutorBackendStart:
         )
         assert wf_id == "wf-id-xyz"
 
-    @pytest.mark.asyncio
     async def test_start_stamps_workflow_id_on_input(self) -> None:
         class _WfInput:
             workflow_id: str = ""
@@ -342,7 +329,6 @@ class TestTemporalExecutorBackendStart:
         dispatched_id = client.start_workflow.await_args.kwargs["id"]
         assert inp.workflow_id == dispatched_id
 
-    @pytest.mark.asyncio
     async def test_start_uses_entry_point_when_provided(self) -> None:
         handle = mock.MagicMock(id="abc")
         client = mock.MagicMock()
@@ -359,7 +345,6 @@ class TestTemporalExecutorBackendStart:
         )
         assert client.start_workflow.await_args.args[0] == "ep:do"
 
-    @pytest.mark.asyncio
     async def test_start_never_dispatches_on_a_legacy_alias(self) -> None:
         """C1: aliases are inbound-only — SDK dispatch always emits canonical."""
         handle = mock.MagicMock(id="abc")
@@ -381,7 +366,6 @@ class TestTemporalExecutorBackendStart:
 
         assert client.start_workflow.await_args.args[0] == "ep:do"
 
-    @pytest.mark.asyncio
     async def test_start_with_unknown_entry_point_raises(self) -> None:
         """start() must reject an unknown entry point like execute() does.
 
@@ -404,7 +388,6 @@ class TestTemporalExecutorBackendStart:
             )
         client.start_workflow.assert_not_awaited()
 
-    @pytest.mark.asyncio
     async def test_start_passes_correlation_memo_from_context(self) -> None:
         # CNCT-104: start() mirrors execute() — correlation memo always set.
         handle = mock.MagicMock(id="abc")
@@ -423,7 +406,6 @@ class TestTemporalExecutorBackendStart:
 
 
 class TestTemporalExecutorBackendHandleOps:
-    @pytest.mark.asyncio
     async def test_get_result_awaits_handle_result(self) -> None:
         handle = mock.MagicMock()
         handle.result = mock.AsyncMock(return_value=42)
@@ -434,7 +416,6 @@ class TestTemporalExecutorBackendHandleOps:
         assert result == 42
         client.get_workflow_handle.assert_called_once_with("wf-1")
 
-    @pytest.mark.asyncio
     async def test_cancel_awaits_handle_cancel(self) -> None:
         handle = mock.MagicMock()
         handle.cancel = mock.AsyncMock(return_value=None)
@@ -555,7 +536,6 @@ class TestGetOrCreateRuntime:
 
 
 class TestCreateTemporalClient:
-    @pytest.mark.asyncio
     async def test_plaintext_connect_happy_path(self) -> None:
         fake_client = mock.MagicMock(name="client")
         with (
@@ -577,7 +557,6 @@ class TestCreateTemporalClient:
         assert kwargs["tls"] is False
         assert "api_key" not in kwargs
 
-    @pytest.mark.asyncio
     async def test_api_key_passed_through(self) -> None:
         with (
             mock.patch.object(backend_module, "_get_or_create_runtime"),
@@ -590,7 +569,6 @@ class TestCreateTemporalClient:
             await create_temporal_client(api_key="secret-token", connect_max_attempts=1)
         assert connect.await_args.kwargs["api_key"] == "secret-token"
 
-    @pytest.mark.asyncio
     async def test_tls_with_no_paths_uses_custom_ca_when_available(self) -> None:
         """Exercises inline imports of clients.ssl_utils and temporalio.service."""
         with (
@@ -611,7 +589,6 @@ class TestCreateTemporalClient:
         assert tls_arg is not True
         assert tls_arg is not False
 
-    @pytest.mark.asyncio
     async def test_tls_with_no_paths_and_no_custom_ca_enables_tls(self) -> None:
         """tls=True is the historical no-config TLS shape; the v4-preferring
         pre-resolver may upgrade it to TLSConfig(domain=<original>) to
@@ -642,7 +619,6 @@ class TestCreateTemporalClient:
         tls_arg = connect.await_args.kwargs["tls"]
         assert tls_arg is True or isinstance(tls_arg, TLSConfig)
 
-    @pytest.mark.asyncio
     async def test_tls_with_explicit_cert_path_calls_build_tls_config(
         self, tmp_path: Any
     ) -> None:
@@ -666,7 +642,6 @@ class TestCreateTemporalClient:
         assert tls_arg is not True
         assert tls_arg is not False
 
-    @pytest.mark.asyncio
     async def test_retries_on_connect_failure(self) -> None:
         """create_temporal_client retries up to connect_max_attempts."""
         fake_client = mock.MagicMock(name="client")
@@ -694,7 +669,6 @@ class TestCreateTemporalClient:
         # Two retries → two sleeps.
         assert sleep_mock.await_count == 2
 
-    @pytest.mark.asyncio
     async def test_raises_after_max_attempts(self) -> None:
         connect_mock = mock.AsyncMock(side_effect=ConnectionError("nope"))
         with (
@@ -751,7 +725,6 @@ class TestTemporalProxyConfig:
             mock.patch.object(request, "proxy_bypass_environment", return_value=bypass),
         )
 
-    @pytest.mark.asyncio
     async def test_no_proxy_config_when_env_unset(self) -> None:
         """No proxy in the environment -> connect directly (no proxy kwarg)."""
         getproxies, bypass = self._proxy_env({})
@@ -766,7 +739,6 @@ class TestTemporalProxyConfig:
             await create_temporal_client(tls_enabled=True, connect_max_attempts=1)
         assert "http_connect_proxy_config" not in connect.await_args.kwargs
 
-    @pytest.mark.asyncio
     async def test_https_proxy_used_when_tls_enabled(self) -> None:
         """The 'https' proxy is used (scheme stripped) when TLS is enabled."""
         getproxies, bypass = self._proxy_env({"https": "http://proxy.corp:8080"})
@@ -783,7 +755,6 @@ class TestTemporalProxyConfig:
         assert proxy.target_host == "proxy.corp:8080"
         assert proxy.basic_auth is None
 
-    @pytest.mark.asyncio
     async def test_http_proxy_used_when_plaintext(self) -> None:
         getproxies, bypass = self._proxy_env({"http": "http://plainproxy:3128"})
         with (
@@ -798,7 +769,6 @@ class TestTemporalProxyConfig:
         proxy = connect.await_args.kwargs["http_connect_proxy_config"]
         assert proxy.target_host == "plainproxy:3128"
 
-    @pytest.mark.asyncio
     async def test_proxy_selected_by_tls_state(self) -> None:
         """Only an 'http' proxy set -> a TLS connection picks nothing (direct)."""
         getproxies, bypass = self._proxy_env({"http": "http://proxy.corp:3128"})
@@ -813,7 +783,6 @@ class TestTemporalProxyConfig:
             await create_temporal_client(tls_enabled=True, connect_max_attempts=1)
         assert "http_connect_proxy_config" not in connect.await_args.kwargs
 
-    @pytest.mark.asyncio
     async def test_no_proxy_bypass(self) -> None:
         """NO_PROXY match -> connect directly even with a proxy configured."""
         getproxies, bypass = self._proxy_env(
@@ -908,7 +877,6 @@ class TestTemporalProxyConfig:
         assert cfg.target_host == "proxy.corp:443"
         warn.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_proxy_skips_sdr_ipv4_substitution(self) -> None:
         """With a proxy set, _prefer_v4_target is skipped so the proxy sees the
         hostname (not a bare IP) and does DNS itself."""
@@ -977,7 +945,6 @@ class TestPreferV4Target:
     # ``socket`` module attribute at call time — the patch is on that same
     # module attribute so the thread executor picks it up.
 
-    @pytest.mark.asyncio
     async def test_returns_v4_ip_when_both_families_present(self) -> None:
         with mock.patch.object(
             backend_module.socket,
@@ -990,7 +957,6 @@ class TestPreferV4Target:
         assert target == "203.0.113.10:443"
         assert sni == "temporal.example.com"
 
-    @pytest.mark.asyncio
     async def test_returns_v6_bracketed_when_no_v4_available(self) -> None:
         # Hosts genuinely v6-only (some k8s clusters) — pass v6 through
         # so the connect can still succeed via the only family available.
@@ -1008,7 +974,6 @@ class TestPreferV4Target:
         assert target == "[2001:db8::abcd]:443"
         assert sni == "temporal.example.com"
 
-    @pytest.mark.asyncio
     async def test_swaps_when_only_v4_returned(self) -> None:
         # Even when Python's AI_ADDRCONFIG-filtered result has no AAAA
         # (e.g. inside a Docker bridge netns with no v6 stack), the
@@ -1028,19 +993,16 @@ class TestPreferV4Target:
         assert target == "203.0.113.10:443"
         assert sni == "temporal.example.com"
 
-    @pytest.mark.asyncio
     async def test_noop_on_literal_ipv4(self) -> None:
         target, sni = await backend_module._prefer_v4_target("203.0.113.10:443")
         assert target == "203.0.113.10:443"
         assert sni is None
 
-    @pytest.mark.asyncio
     async def test_noop_on_literal_ipv6_bracketed(self) -> None:
         target, sni = await backend_module._prefer_v4_target("[::1]:7233")
         assert target == "[::1]:7233"
         assert sni is None
 
-    @pytest.mark.asyncio
     async def test_noop_on_gaierror(self) -> None:
         with mock.patch.object(
             backend_module.socket,
@@ -1051,7 +1013,6 @@ class TestPreferV4Target:
         assert target == "nx.example.com:443"
         assert sni is None
 
-    @pytest.mark.asyncio
     async def test_noop_on_malformed_target(self) -> None:
         # No port, port is non-numeric, or empty host — caller's input
         # contract violation, let the real connect raise rather than
@@ -1103,7 +1064,6 @@ class TestCreateTemporalClientPrefersV4:
     # hostname intact for re-resolution on reconnect — covered by the
     # ``TestCreateTemporalClientNonSdrMode`` class below.
 
-    @pytest.mark.asyncio
     async def test_substitutes_v4_ip_and_preserves_sni_for_tls(self) -> None:
         """End-to-end: when the resolver returns both v4 and v6 and TLS
         is enabled, Client.connect receives the v4 IP as target_host and
@@ -1138,7 +1098,6 @@ class TestCreateTemporalClientPrefersV4:
         assert isinstance(kwargs["tls"], TLSConfig)
         assert kwargs["tls"].domain == "temporal.example.com"
 
-    @pytest.mark.asyncio
     async def test_swaps_even_when_resolver_returns_only_v4(self) -> None:
         # Plaintext path: Python's AI_ADDRCONFIG-filtered result has
         # only A, but the substitution still happens — the Rust
@@ -1169,7 +1128,6 @@ class TestCreateTemporalClientPrefersV4:
         # Plaintext — no TLS to upgrade for SNI; tls stays False.
         assert kwargs["tls"] is False
 
-    @pytest.mark.asyncio
     async def test_plaintext_target_swap_does_not_touch_tls(self) -> None:
         # Plaintext connect with both v4 and v6 — target swaps, but tls
         # stays False because there's no handshake to preserve SNI for.
@@ -1207,7 +1165,6 @@ class TestCreateTemporalClientNonSdrMode:
     # ``ENABLE_ATLAN_UPLOAD`` to False and confirm the SDK keeps the
     # hostname intact so the bridge re-resolves DNS on each reconnect.
 
-    @pytest.mark.asyncio
     async def test_hostname_preserved_when_not_sdr_dual_stack(self) -> None:
         with (
             mock.patch.object(backend_module, "_get_or_create_runtime"),
@@ -1237,7 +1194,6 @@ class TestCreateTemporalClientNonSdrMode:
         )
         assert kwargs["tls"] is False
 
-    @pytest.mark.asyncio
     async def test_tls_unchanged_when_not_sdr(self) -> None:
         """When not in SDR mode, ``tls=True`` is NOT upgraded to a
         TLSConfig with a SNI domain — because we never substituted an
@@ -1274,7 +1230,6 @@ class TestCreateTemporalClientNonSdrMode:
         # didn't substitute an IP, so SNI naturally tracks the hostname.
         assert kwargs["tls"] is True
 
-    @pytest.mark.asyncio
     async def test_resolver_helper_is_not_called_when_not_sdr(self) -> None:
         # Direct evidence the resolver short-circuits before
         # ``getaddrinfo`` runs at all when we're not in SDR mode. Catches

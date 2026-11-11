@@ -101,7 +101,6 @@ def output_dir(tmp_path: Path) -> Path:
     return tmp_path / "test-logs"
 
 
-@pytest.mark.asyncio
 async def test_collect_creates_output_dir(output_dir: Path):
     with patch.object(
         _local_asyncio(), "create_subprocess_exec", return_value=_make_proc()
@@ -112,7 +111,6 @@ async def test_collect_creates_output_dir(output_dir: Path):
     assert output_dir.is_dir()
 
 
-@pytest.mark.asyncio
 async def test_collect_writes_pods_wide(output_dir: Path):
     with patch.object(
         _local_asyncio(),
@@ -127,7 +125,6 @@ async def test_collect_writes_pods_wide(output_dir: Path):
     assert b"pod-1" in pods_wide.read_bytes()
 
 
-@pytest.mark.asyncio
 async def test_collect_writes_container_logs(output_dir: Path):
     reader = _FakeReader([_pod("my-pod", handler=0)], log_text="handler log line")
 
@@ -150,7 +147,6 @@ async def test_collect_writes_container_logs(output_dir: Path):
     ]
 
 
-@pytest.mark.asyncio
 async def test_collect_writes_previous_logs_on_restart(output_dir: Path):
     """A crash loop's actual cause is in the *previous* container's output."""
     reader = _FakeReader([_pod("crash-pod", worker=2)], log_text="crash logs")
@@ -165,7 +161,6 @@ async def test_collect_writes_previous_logs_on_restart(output_dir: Path):
     assert [call["previous"] for call in reader.log_calls] == [False, True]
 
 
-@pytest.mark.asyncio
 async def test_collect_describes_every_pod(output_dir: Path):
     """``describe`` stays ``kubectl``: it is a formatter, not an endpoint."""
     commands: list[tuple[str, ...]] = []
@@ -184,7 +179,6 @@ async def test_collect_describes_every_pod(output_dir: Path):
     assert ("kubectl", "describe", "pod", "my-pod", "-n", "test-ns") in commands
 
 
-@pytest.mark.asyncio
 async def test_collect_events_writes_events_file(output_dir: Path):
     with patch.object(
         _local_asyncio(),
@@ -199,7 +193,6 @@ async def test_collect_events_writes_events_file(output_dir: Path):
     assert b"BackOff" in events_file.read_bytes()
 
 
-@pytest.mark.asyncio
 async def test_collect_never_raises_on_subprocess_error(output_dir: Path):
     """LogCollector is best-effort — subprocess failures must not propagate."""
     with patch.object(
@@ -213,7 +206,6 @@ async def test_collect_never_raises_on_subprocess_error(output_dir: Path):
         await collector.collect_events()
 
 
-@pytest.mark.asyncio
 async def test_an_unreadable_pod_listing_still_collects_the_namespace_artefacts(
     output_dir: Path,
 ):
@@ -237,7 +229,6 @@ async def test_an_unreadable_pod_listing_still_collects_the_namespace_artefacts(
     assert reader.log_calls == []
 
 
-@pytest.mark.asyncio
 async def test_an_unreadable_container_log_does_not_stop_the_rest(output_dir: Path):
     reader = _FakeReader([_pod("my-pod", handler=0)])
     reader.container_log = AsyncMock(  # type: ignore[method-assign]
@@ -254,7 +245,6 @@ async def test_an_unreadable_container_log_does_not_stop_the_rest(output_dir: Pa
     assert (output_dir / "pods-wide.txt").exists()
 
 
-@pytest.mark.asyncio
 async def test_an_uncreatable_output_dir_stops_before_reading_anything(
     tmp_path: Path,
 ):
@@ -270,7 +260,6 @@ async def test_an_uncreatable_output_dir_stops_before_reading_anything(
     assert reader.log_calls == []
 
 
-@pytest.mark.asyncio
 async def test_container_logs_are_written_as_utf8_not_as_the_locale_encoding(
     output_dir: Path,
 ):
@@ -311,7 +300,6 @@ async def test_container_logs_are_written_as_utf8_not_as_the_locale_encoding(
     assert (output_dir / "handler-my-pod.log").read_text(encoding="utf-8") == log_text
 
 
-@pytest.mark.asyncio
 async def test_the_kubectl_artefacts_pin_the_readers_context(output_dir: Path):
     """Evidence about a different cluster is worse than no evidence.
 
@@ -341,7 +329,6 @@ async def test_the_kubectl_artefacts_pin_the_readers_context(output_dir: Path):
         assert argv[argv.index("--context") + 1] == "e2e-gcp"
 
 
-@pytest.mark.asyncio
 async def test_no_context_named_leaves_the_kubectl_argv_alone(output_dir: Path):
     commands: list[tuple[str, ...]] = []
 
@@ -359,7 +346,6 @@ async def test_no_context_named_leaves_the_kubectl_argv_alone(output_dir: Path):
     assert all("--context" not in argv for argv in commands)
 
 
-@pytest.mark.asyncio
 async def test_the_default_reader_is_the_typed_one():
     """No injected reader means the typed backend, not a ``kubectl`` shell-out."""
     from application_sdk.testing.harness.cluster import KubernetesReader

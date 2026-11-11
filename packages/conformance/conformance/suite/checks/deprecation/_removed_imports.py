@@ -132,6 +132,9 @@ REMOVED_SDK_MODULES: dict[str, RemovedModule] = {
     "application_sdk.test_utils.hypothesis.strategies.outputs": RemovedModule("3.0.0"),
     "application_sdk.test_utils.hypothesis.strategies.server": RemovedModule("3.0.0"),
     "application_sdk.test_utils.hypothesis.strategies.temporal": RemovedModule("3.0.0"),
+    "application_sdk.test_utils.integration": RemovedModule(
+        "3.56.0", "application_sdk.testing.integration"
+    ),
     "application_sdk.test_utils.scale_data_generator": RemovedModule("3.0.0"),
     "application_sdk.test_utils.workflow_monitoring": RemovedModule("3.0.0"),
     "application_sdk.testing.e2e.deployer": RemovedModule("3.1.0"),

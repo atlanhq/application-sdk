@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from application_sdk.execution._temporal.interceptors.liveness import (
     LivenessInterceptor,
 )
@@ -18,7 +16,6 @@ class _MockExecuteActivityInput:
     args: list = field(default_factory=list)
 
 
-@pytest.mark.asyncio
 async def test_records_on_activity_execution() -> None:
     calls: list[int] = []
     next_inbound = MagicMock()
@@ -52,7 +49,6 @@ def test_records_on_heartbeat() -> None:
     passed_outbound.next.heartbeat.assert_called_once_with("progress", 42)
 
 
-@pytest.mark.asyncio
 async def test_record_callback_failure_never_blocks_activity() -> None:
     """A raising record callback must not fail the activity (best-effort guard)."""
     next_inbound = MagicMock()

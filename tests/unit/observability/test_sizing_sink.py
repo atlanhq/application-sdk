@@ -117,7 +117,6 @@ class TestStoreSinkGate:
         ):
             assert other._store_sink_enabled() is False
 
-    @pytest.mark.asyncio
     async def test_a_flush_uploads_with_the_shared_flag_off(self, sink, tmp_path):
         """End to end: the flush must reach the object store, flag or no flag."""
         uploads: list[tuple[str, str]] = []
@@ -300,7 +299,6 @@ class TestTheFlushActuallyHappens:
     ``add_record`` only evaluates its flush condition when a record ARRIVES.
     """
 
-    @pytest.mark.asyncio
     async def test_a_periodic_flush_task_is_started(self, tmp_path):
         sizing_sink._reset_for_testing()
         started = []
@@ -326,7 +324,6 @@ class TestTheFlushActuallyHappens:
         sizing_sink._reset_for_testing()
         SizingObservabilitySink._periodic_flush = real
 
-    @pytest.mark.asyncio
     async def test_one_record_then_shutdown_is_not_lost(self, sink):
         """The exact shape that lost a day of data."""
         flushed: list[list] = []
@@ -344,12 +341,10 @@ class TestTheFlushActuallyHappens:
         assert flushed, "the single buffered row was dropped on shutdown"
         assert flushed[0][0]["activity_type"] == "automation-engine:merge"
 
-    @pytest.mark.asyncio
     async def test_drain_is_safe_with_no_sink(self):
         sizing_sink._reset_for_testing()
         await sizing_sink.drain()  # must not raise
 
-    @pytest.mark.asyncio
     async def test_drain_never_raises(self, sink):
         """Runs on the shutdown path; a failure must not block termination."""
         sizing_sink._sink = sink
@@ -359,7 +354,6 @@ class TestTheFlushActuallyHappens:
             await sizing_sink.drain()  # must not raise
         sizing_sink._reset_for_testing()
 
-    @pytest.mark.asyncio
     async def test_flush_logs_at_info(self, sink, tmp_path):
         """'Is it writing?' must be answerable from logs, not by exec-ing into a pod.
         The base class logs its success at DEBUG, which every deployment filters.
@@ -444,7 +438,6 @@ class TestResetLeavesNothingToFlushLater:
         assert sink in AtlanObservability._instances, "_sink is a stopped sink"
         assert SizingObservabilitySink._flush_task_started
 
-    @pytest.mark.asyncio
     async def test_a_flush_after_the_session_restores_env_writes_nothing(
         self, tmp_path, monkeypatch
     ):

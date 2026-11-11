@@ -1,11 +1,18 @@
 {
+  "id": "bigquery-crawler",
+  "name": "Crawler",
+  "logo": "https://assets.atlan.com/assets/bigquery.svg",
   "config": {
     "properties": {
       "extraction-method": {
         "type": "conditional",
         "required": false,
         "ui": {
-          "widget": "radio"
+          "widget": "radio",
+          "label": "Extraction method",
+          "hidden": false,
+          "help": "",
+          "grid": 8
         },
         "default": "direct",
         "conditions": [
@@ -15,11 +22,18 @@
             "enum": [
               "direct",
               "agent"
+            ],
+            "enumNames": [
+              "Direct",
+              "Self-Deployed Runtime"
             ]
           }
         ],
         "enum": [
           "direct"
+        ],
+        "enumNames": [
+          "Direct"
         ]
       },
       "credential-guid": {
@@ -27,7 +41,12 @@
         "required": true,
         "ui": {
           "widget": "credential",
-          "credentialType": "atlan-connectors-bigquery"
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "credentialType": "atlan-connectors-bigquery",
+          "isTestAuthenticationDisabled": false
         }
       },
       "agent-json": {
@@ -35,6 +54,11 @@
         "required": false,
         "ui": {
           "widget": "agent",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Agent JSON",
+          "grid": 8,
           "agentConfigs": [
             [
               "atlan-connectors-bigquery",
@@ -44,16 +68,11 @@
                     "properties": {
                       "username": {
                         "type": "string",
-                        "required": true,
-                        "default": ""
+                        "required": true
                       },
                       "password": {
                         "type": "string",
-                        "default": "",
-                        "required": true,
-                        "ui": {
-                          "widget": ""
-                        }
+                        "required": true
                       }
                     }
                   },
@@ -79,10 +98,7 @@
                           },
                           "atlan_oauth_secret": {
                             "type": "string",
-                            "required": true,
-                            "ui": {
-                              "widget": ""
-                            }
+                            "required": true
                           }
                         }
                       }
@@ -96,28 +112,41 @@
             ]
           ]
         }
-      },
-      "include-filter": {
-        "type": "conditional",
-        "required": false,
-        "ui": {
-          "widget": "sqltree"
-        },
-        "conditions": [
-          {
-            "property": "extraction-method",
-            "value": "agent",
-            "required": false,
-            "default": "",
-            "ui": {
-              "widget": ""
-            }
-          }
-        ],
-        "additionalProperties": {
-          "type": "array"
-        }
       }
-    }
+    },
+    "anyOf": [
+      {
+        "properties": {
+          "extraction-method": {
+            "const": "direct"
+          }
+        },
+        "required": [
+          "credential-guid"
+        ]
+      },
+      {
+        "properties": {
+          "extraction-method": {
+            "const": "agent"
+          }
+        },
+        "required": [
+          "agent-json"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "title": "Credential",
+        "description": "",
+        "id": "credential",
+        "properties": [
+          "extraction-method",
+          "credential-guid",
+          "agent-json"
+        ]
+      }
+    ]
   }
 }

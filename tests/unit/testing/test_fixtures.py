@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from application_sdk.app.context import AppContext
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.testing.fixtures import (
@@ -76,14 +74,12 @@ def test_app_context_fixture_wired(
     assert app_context._secret_store is mock_secret_store
 
 
-@pytest.mark.asyncio
 async def test_app_context_state_store_works(app_context: AppContext) -> None:
     await app_context.save_state("key", {"value": 42})
     result = await app_context.load_state("key")
     assert result == {"value": 42}
 
 
-@pytest.mark.asyncio
 async def test_app_context_secret_store_works(app_context: AppContext) -> None:
     assert app_context._secret_store is not None
     app_context._secret_store.set("pw", "secret")  # type: ignore[union-attr]

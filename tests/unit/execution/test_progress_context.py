@@ -222,7 +222,6 @@ class TestBinding:
 class TestReachableFromRunInThread:
     """Both entry points must reach the tracker, not only the wrapper."""
 
-    @pytest.mark.asyncio
     async def test_module_level_run_in_thread(self) -> None:
         # A recording tracker, because the label history is what proves the mark
         # landed: the offload's own auto-hold (FND-290) releases *after* the
@@ -239,7 +238,6 @@ class TestReachableFromRunInThread:
         # tracker rather than on a private copy that dies with the thread.
         assert "from_thread" in tracker.labels
 
-    @pytest.mark.asyncio
     async def test_task_execution_context_run_in_thread(self) -> None:
         tracker = RecordingProgressTracker()
 
@@ -249,7 +247,6 @@ class TestReachableFromRunInThread:
         assert seen is tracker
         assert "from_thread" in tracker.labels
 
-    @pytest.mark.asyncio
     async def test_reachable_from_a_nested_async_frame(self) -> None:
         """The seam FND-291's ``holding_progress()`` will read.
 
@@ -265,7 +262,6 @@ class TestReachableFromRunInThread:
         with bind_progress_tracker(tracker):
             assert await _opaque_call() is tracker
 
-    @pytest.mark.asyncio
     async def test_binding_inside_the_thread_is_confined_to_it(self) -> None:
         """A nested bind off the event loop restores, and never reaches back."""
         outer = ProgressTracker()
@@ -305,7 +301,6 @@ class TestActivityBinding:
         ):
             yield
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "heartbeating", [False, True], ids=["heartbeating-off", "heartbeating-on"]
     )
@@ -353,7 +348,6 @@ class TestActivityBinding:
         # A real tracker, not the inert one: it recorded what the task reported.
         assert [t.last_label for t in seen] == ["greeting"]
 
-    @pytest.mark.asyncio
     async def test_run_in_thread_inside_the_activity_reaches_the_tracker(self) -> None:
         """The composed shape the fleet actually runs: offload inside a task."""
         seen: list[ProgressTracker] = []
@@ -386,7 +380,6 @@ class TestActivityBinding:
         # both entry points, and vouched for on the way back out.
         assert from_body.last_label == "run_in_thread._read_tracker_deep"
 
-    @pytest.mark.asyncio
     async def test_tracker_is_unbound_after_the_activity_returns(self) -> None:
         activity_fn = _register_trivial_app()
         before = current_progress_tracker()
@@ -397,7 +390,6 @@ class TestActivityBinding:
 
         assert current_progress_tracker() is before
 
-    @pytest.mark.asyncio
     async def test_tracker_is_unbound_when_the_task_raises(self) -> None:
         class _BoomApp(App):
             @task(timeout_seconds=60)
@@ -418,7 +410,6 @@ class TestActivityBinding:
 
         assert current_progress_tracker() is before
 
-    @pytest.mark.asyncio
     async def test_tracker_is_unbound_when_heartbeat_setup_raises(self) -> None:
         """A raise before the body starts must not leak the binding.
 
@@ -445,7 +436,6 @@ class TestActivityBinding:
 
         assert current_progress_tracker() is before
 
-    @pytest.mark.asyncio
     async def test_tracker_is_unbound_when_cancelled_during_cleanup(self) -> None:
         """`CancelledError` in the cleanup path must not skip the unbind.
 
@@ -480,7 +470,6 @@ class TestActivityBinding:
         assert result == _ProgOut(greeting="ok")
         assert current_progress_tracker() is before
 
-    @pytest.mark.asyncio
     async def test_concurrent_activities_do_not_share_a_tracker(self) -> None:
         """Two attempts in one worker, both inside the body at the same time."""
         both_inside = asyncio.Barrier(2)

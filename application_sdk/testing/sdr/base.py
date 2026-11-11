@@ -81,11 +81,11 @@ from application_sdk.testing._mustache import PLACEHOLDER_RE as _PLACEHOLDER_RE
 from application_sdk.testing._mustache import (
     apply_mustache_subs as _apply_mustache_subs,
 )
-from application_sdk.testing.integration import (
-    BaseIntegrationTest,
-    Scenario,
-    ScenarioResult,
-)
+from application_sdk.testing.integration.models import Scenario, ScenarioResult
+
+# From the defining module, not the package: the package serves the name through
+# a deprecation alias (FND-4659), and this class is deprecated on its own terms.
+from application_sdk.testing.integration.runner import BaseIntegrationTest
 
 logger = get_logger(__name__)
 

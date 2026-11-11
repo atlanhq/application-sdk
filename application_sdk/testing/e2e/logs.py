@@ -36,6 +36,8 @@ import asyncio
 from collections.abc import Sequence
 from pathlib import Path
 
+from typing_extensions import deprecated
+
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.harness.cluster import PodState
 from application_sdk.testing.harness.cluster._portforward import kubectl_argv
@@ -67,6 +69,10 @@ async def _run_to_file(args: Sequence[str], output_path: Path) -> None:
         )
 
 
+@deprecated(
+    "LogCollector is deprecated; use application_sdk.testing.harness.evidence, "
+    "which BaseE2ETest already writes on a failed run — will be removed in v4.0.0."
+)
 class LogCollector:
     """Collect container logs, pod descriptions, and events from a namespace.
 

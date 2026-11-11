@@ -56,7 +56,6 @@ async def _run_ticks(ticks: int, limit: int | None, rss: int) -> list:
     return _pressure_warnings(mock_logger)
 
 
-@pytest.mark.asyncio
 async def test_warning_uses_cgroup_limit_without_env(monkeypatch) -> None:
     """A cgroup limit alone enables the warning; the env var is not needed."""
     monkeypatch.delenv("K8S_POD_MEMORY_LIMIT", raising=False)
@@ -81,20 +80,17 @@ async def test_warning_uses_cgroup_limit_without_env(monkeypatch) -> None:
     assert limit_gib == pytest.approx(2.0)
 
 
-@pytest.mark.asyncio
 async def test_silent_without_any_limit() -> None:
     """No limit from either source: no warning, however high RSS is."""
     assert await _run_ticks(ticks=2, limit=None, rss=10 * _GIB) == []
 
 
-@pytest.mark.asyncio
 async def test_warns_once_within_repeat_interval() -> None:
     """Several ticks above 80% inside one 5-minute interval: one warning."""
     limit = 4 * _GIB
     assert len(await _run_ticks(ticks=4, limit=limit, rss=int(limit * 0.85))) == 1
 
 
-@pytest.mark.asyncio
 async def test_repeats_each_interval_while_above_threshold() -> None:
     """With the interval forced to 0 every tick qualifies, so every tick warns."""
     limit = 4 * _GIB
@@ -275,14 +271,12 @@ async def _run_with_limits(monkeypatch, limits: list[int | None], ticks: int) ->
     return _pressure_warnings(mock_logger)
 
 
-@pytest.mark.asyncio
 async def test_loop_uses_a_limit_that_changes_mid_activity(monkeypatch) -> None:
     warnings = await _run_with_limits(monkeypatch, [4 * _GIB, 2 * _GIB], ticks=3)
     assert len(warnings) == 1
     assert warnings[0].args[4] == pytest.approx(2.0)  # the new, smaller limit
 
 
-@pytest.mark.asyncio
 async def test_limit_appearing_after_an_unlimited_start_enables_warning(
     monkeypatch,
 ) -> None:

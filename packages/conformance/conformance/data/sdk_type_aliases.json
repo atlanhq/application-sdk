@@ -28,6 +28,7 @@
     "application_sdk.infrastructure.pubsub.MessageHandler": "Callable[[Message], Awaitable[None]]",
     "application_sdk.observability.metrics.ObservableCallback": "Callable[[CallbackOptions], Iterable[Observation]]",
     "application_sdk.observability.temporal_core_metrics.CoreMetricsRead": "CoreMetricsBody | CoreMetricsUnavailable",
+    "application_sdk.outputs.skipped.SkippableRecord": "Mapping[str, object] | BaseModel",
     "application_sdk.storage.SecretMap": "Mapping[str, Mapping[str, str]]",
     "application_sdk.storage.binding.SecretMap": "Mapping[str, Mapping[str, str]]",
     "application_sdk.storage.rolling.ChunkCompleteFn": "Callable[[int, str], Awaitable[None] | None]",

@@ -5,7 +5,7 @@
 
 # Dependency Rules (D-series)
 
-**17 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
+**18 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -32,6 +32,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [D015](#d015) | `PyrightExcludeClobbersDefaults` | `warn` | `both` | `tooling-baseline` | yes | 0.32.0 |
 | [D016](#d016) | `RequiresPythonExcludesRuntimePython` | `warn` | `app` | `python-version` | yes | 0.54.0 |
 | [D017](#d017) | `DeprecatedSdkExtra` | `warn` | `app` | `dependency-pinning` | yes | 0.55.0 |
+| [D018](#d018) | `SdkTestExtraInRuntimeDependencies` | `warn` | `app` | `dependency-pinning` | yes | 0.57.0 |
 
 ---
 
@@ -918,5 +919,62 @@ the shim installed but can add others (`[pandas]` alone gains `sqlalchemy` and `
 
 The rule carries `superseded_by: sdk>=4.0.0`: once v4 deletes the extras, a leftover
 reference is an unknown extra, which D005 blocks. Cite: FND-4255.
+
+---
+
+## D018 — `SdkTestExtraInRuntimeDependencies` {#d018}
+
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.57.0
+
+> Test-only atlan-application-sdk extra in [project.dependencies]
+
+**Rationale:** The SDK's [tests] extra installs pytest, pytest-asyncio, pandera and httpx2 for
+application_sdk.testing, and [harness] installs the kubernetes client for the e2e
+harness. A production sync installs [project.dependencies] and skips dependency groups,
+so naming either extra on the runtime SDK requirement ships test tooling in every
+production image: a larger image, a larger vulnerability surface, and packages the app
+never imports at runtime. D004 already says the extra belongs in a dev group, but
+nothing graded the runtime array, and most of the fleet carried the pattern.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app pyproject.toml — `atlan-application-sdk` in [project.dependencies]
+  carries no test extra, and [dependency-groups].dev pulls the SDK's test tooling in
+  through `atlan-application-sdk[tests]`. A production sync installs only the first, so
+  pytest and pandera never reach the runtime image.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
+
+An `atlan-application-sdk[...]` requirement in `[project.dependencies]` names a
+test-only SDK extra:
+
+* `tests`: pytest, pytest-asyncio, pandera and httpx2.
+* `harness`: the kubernetes client the e2e harness imports.
+
+A production sync (`uv sync --no-dev`, the runtime image build) installs
+`[project.dependencies]` and skips `[dependency-groups]`, so the extra lands in the
+production image. Move it to a dev group:
+
+```toml
+[project]
+dependencies = ["atlan-application-sdk[sql,tests]>=3.33,<4"]  # flagged
+
+[project]
+dependencies = ["atlan-application-sdk[sql]>=3.33,<4"]        # passes
+[dependency-groups]
+dev = ["atlan-application-sdk[tests]>=3.33,<4"]
+```
+
+Only `[project.dependencies]` is graded. A test extra in `[dependency-groups]` or
+`[project.optional-dependencies]` is not installed by a production sync and passes.
+
+Autofixable: remove the extra from the runtime requirement, keeping its version range,
+marker and other extras (drop the brackets when the list ends up empty). If
+`[dependency-groups].dev` does not already request the extra, add
+`atlan-application-sdk[<extra>]` with the same version range there: `dev` is the group
+`uv sync` installs by default, so another group may not reach the test job. Re-run `uv
+lock` and review the diff: the moved packages change from runtime to dev in the lock. If
+app source outside the tests imports one of them directly (`pandera`, say), declare that
+package in `[project.dependencies]` on its own rather than keeping the extra. Cite:
+FND-4657.
 
 ---

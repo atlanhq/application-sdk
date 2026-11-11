@@ -473,7 +473,6 @@ class TestEnforcementIsOneDecision:
 
 
 class TestSoftNeverBlocks:
-    @pytest.mark.asyncio
     async def test_a_flagged_handoff_proceeds_and_reports_would_block(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -487,7 +486,6 @@ class TestSoftNeverBlocks:
         assert rows[0][ARTIFACT_MODE_KEY] == MODE_SOFT
         assert rows[0][ARTIFACT_CLASSIFICATION_KEY] == CLASSIFICATION_VERDICT
 
-    @pytest.mark.asyncio
     async def test_soft_is_the_default(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -499,7 +497,6 @@ class TestSoftNeverBlocks:
         rows = await _run(out)
         assert rows[0][ARTIFACT_ENFORCEMENT_KEY] == ENFORCEMENT_WOULD_BLOCK
 
-    @pytest.mark.asyncio
     async def test_a_clean_handoff_reports_no_enforcement(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -510,7 +507,6 @@ class TestSoftNeverBlocks:
 
 
 class TestHardBlocks:
-    @pytest.mark.asyncio
     async def test_a_flagged_handoff_fails_the_activity(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -521,7 +517,6 @@ class TestHardBlocks:
             await _run(out, enforce=True)
         assert "queries" in str(excinfo.value)
 
-    @pytest.mark.asyncio
     async def test_the_row_says_blocked_before_the_raise(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -543,7 +538,6 @@ class TestHardBlocks:
         assert rows[0][ARTIFACT_ENFORCEMENT_KEY] == ENFORCEMENT_BLOCKED
         assert rows[0][ARTIFACT_MODE_KEY] == MODE_HARD
 
-    @pytest.mark.asyncio
     async def test_a_clean_handoff_still_proceeds(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -551,7 +545,6 @@ class TestHardBlocks:
         rows = await _run(out, enforce=True)
         assert rows[0]["outcome"] == "clean"
 
-    @pytest.mark.asyncio
     async def test_the_error_is_attributable(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -573,7 +566,6 @@ class TestHardBlocks:
         assert "START_TIME" in (err.observed or "")
         assert "ATLAN_ARTIFACT_VALIDATION_MODE" in (err.suggested_action or "")
 
-    @pytest.mark.asyncio
     async def test_the_ingest_side_blocks_too_and_names_itself(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -587,7 +579,6 @@ class TestHardBlocks:
             await _run(out, side=ARTIFACT_SIDE_INGEST, enforce=True)
         assert ARTIFACT_SIDE_INGEST in (excinfo.value.location or "")
 
-    @pytest.mark.asyncio
     async def test_an_undeclared_internal_artifact_never_blocks(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -598,7 +589,6 @@ class TestHardBlocks:
         assert rows[0]["outcome"] == "not_declared"
         assert rows[0][ARTIFACT_ENFORCEMENT_KEY] == ENFORCEMENT_NONE
 
-    @pytest.mark.asyncio
     async def test_an_undeclared_boundary_artifact_does_block(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -620,7 +610,6 @@ class TestBrokenValidatorAlwaysFailsOpen:
     """The axis that is never subject to mode."""
 
     @pytest.mark.parametrize("enforce", [True, False])
-    @pytest.mark.asyncio
     async def test_a_validator_crash_proceeds_in_either_posture(
         self, enforce: bool, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -635,7 +624,6 @@ class TestBrokenValidatorAlwaysFailsOpen:
         assert rows[0][ARTIFACT_CLASSIFICATION_KEY] == CLASSIFICATION_VALIDATOR_BROKEN
         assert rows[0][ARTIFACT_ENFORCEMENT_KEY] == ENFORCEMENT_NONE
 
-    @pytest.mark.asyncio
     async def test_a_crash_emits_its_classification_rather_than_going_quiet(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -648,7 +636,6 @@ class TestBrokenValidatorAlwaysFailsOpen:
         assert rows[0][ARTIFACT_CLASSIFICATION_KEY] == CLASSIFICATION_VALIDATOR_BROKEN
 
     @pytest.mark.parametrize("enforce", [True, False])
-    @pytest.mark.asyncio
     async def test_an_unreadable_declaration_never_fails_the_handoff(
         self, enforce: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -712,7 +699,6 @@ class TestBrokenValidatorAlwaysFailsOpen:
         assert via_interceptor.enforceable is via_wrapper.enforceable is False
 
     @pytest.mark.parametrize("enforce", [True, False])
-    @pytest.mark.asyncio
     async def test_a_broken_walk_never_fails_the_handoff(
         self, enforce: bool, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -732,7 +718,6 @@ class TestDeclaredButUnreadableStillBlocks:
     could not be given. Only the *declaration* being unreadable fails open.
     """
 
-    @pytest.mark.asyncio
     async def test_a_durable_reference_with_a_readable_declaration_blocks(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -744,7 +729,6 @@ class TestDeclaredButUnreadableStillBlocks:
         with pytest.raises(ArtifactValidationBlockedError):
             await _run(out, enforce=True)
 
-    @pytest.mark.asyncio
     async def test_and_reports_would_block_under_soft(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -762,7 +746,6 @@ class TestDeclaredButUnreadableStillBlocks:
 
 
 class TestEveryReferenceEmitsBeforeAnyBlock:
-    @pytest.mark.asyncio
     async def test_a_flagged_first_reference_does_not_silence_the_second(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -791,7 +774,6 @@ class TestEveryReferenceEmitsBeforeAnyBlock:
         # One block, so no "and N more" tail.
         assert "more blocked reference" not in str(excinfo.value)
 
-    @pytest.mark.asyncio
     async def test_several_blocked_references_are_counted_in_the_message(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -811,7 +793,6 @@ class TestEveryReferenceEmitsBeforeAnyBlock:
 
 
 class TestKillSwitchOutranksThePosture:
-    @pytest.mark.asyncio
     async def test_nothing_runs_and_nothing_blocks_when_disabled(
         self, tmp_path: Path, generated_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

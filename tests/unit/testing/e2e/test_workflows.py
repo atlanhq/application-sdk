@@ -64,7 +64,6 @@ async def _one_session(session: _RecordingSession, opens: list[int]):
     yield session
 
 
-@pytest.mark.asyncio
 async def test_run_workflow_posts_the_named_workflow_and_returns_its_id():
     response = _response({"workflow_id": "wf-42"})
 
@@ -84,7 +83,6 @@ async def test_run_workflow_posts_the_named_workflow_and_returns_its_id():
     response.raise_for_status.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_run_workflow_raises_on_a_non_2xx():
     response = _response({}, status=500)
     response.raise_for_status.side_effect = httpx.HTTPStatusError(
@@ -101,7 +99,6 @@ async def test_run_workflow_raises_on_a_non_2xx():
         await run_workflow("conn", "handler", 8000, "extract", {})
 
 
-@pytest.mark.asyncio
 async def test_one_tunnel_serves_the_whole_wait():
     """Not one ``kubectl`` process per probe — the rough edge FND-241 named."""
     session = _RecordingSession(
@@ -124,7 +121,6 @@ async def test_one_tunnel_serves_the_whole_wait():
     assert session.calls == [("GET", "/api/v1/workflows/wf-42")] * 3
 
 
-@pytest.mark.asyncio
 async def test_a_workflow_that_never_settles_times_out_with_the_last_status():
     session = _RecordingSession(_response({"status": "RUNNING"}))
     opens: list[int] = []
@@ -141,7 +137,6 @@ async def test_a_workflow_that_never_settles_times_out_with_the_last_status():
         )
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["completed", "FAILED", "Cancelled", "terminated"])
 async def test_every_terminal_state_ends_the_wait(status: str):
     """Case-insensitively: the handler's casing has changed before now."""
@@ -177,7 +172,6 @@ def _failing(status: int) -> MagicMock:
     return response
 
 
-@pytest.mark.asyncio
 async def test_a_handler_blip_is_polled_through():
     """The gap FND-240 closes: a 502 from a pod mid-restart used to end the wait
     on its first poll, because ``raise_for_status()`` sat bare in the loop."""
@@ -200,7 +194,6 @@ async def test_a_handler_blip_is_polled_through():
     assert len(session.calls) == 3
 
 
-@pytest.mark.asyncio
 async def test_an_unreadable_handler_is_indeterminate_not_a_timeout():
     """A pod that never answers is not evidence about the workflow.
 
@@ -227,7 +220,6 @@ async def test_an_unreadable_handler_is_indeterminate_not_a_timeout():
     assert len(session.calls) == 5
 
 
-@pytest.mark.asyncio
 async def test_a_4xx_ends_the_wait_rather_than_being_polled_through():
     """A 404 on a workflow id is a wrong id, and no amount of waiting turns it
     into the right one. Absorbing it would spend the whole budget on a typo and
@@ -249,7 +241,6 @@ async def test_a_4xx_ends_the_wait_rather_than_being_polled_through():
     assert len(session.calls) == 1, "a 4xx must not be retried"
 
 
-@pytest.mark.asyncio
 async def test_a_transport_error_from_the_request_is_absorbed():
     """The shape a dropped tunnel actually takes: ``session.request`` raises.
 
@@ -282,7 +273,6 @@ async def test_a_transport_error_from_the_request_is_absorbed():
     assert len(session.calls) == 2, "the failed request must have been retried"
 
 
-@pytest.mark.asyncio
 async def test_a_body_that_fails_to_decode_is_absorbed():
     """A truncated read surfacing from ``response.json()`` rather than from the
     request — a real second shape, and now named for what it is."""
@@ -306,7 +296,6 @@ async def test_a_body_that_fails_to_decode_is_absorbed():
     assert len(session.calls) == 2
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("payload", [{}, {"status": None}, {"status": 7}])
 async def test_a_status_field_that_is_not_a_string_keeps_the_wait_alive(
     payload: dict[str, Any],

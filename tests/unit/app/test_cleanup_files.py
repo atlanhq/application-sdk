@@ -67,7 +67,6 @@ class TestCleanupFiles:
         with _app_state_lock:
             _app_state.clear()
 
-    @pytest.mark.asyncio
     async def test_removes_tracked_file_ref_local_paths(self, tmp_path: Any) -> None:
         f = tmp_path / "output.parquet"
         f.write_text("data")
@@ -91,7 +90,6 @@ class TestCleanupFiles:
         assert result.path_results[str(f)] is True
         assert result.path_results[str(f) + ".sha256"] is True
 
-    @pytest.mark.asyncio
     async def test_ref_without_local_path_is_skipped(self, tmp_path: Any) -> None:
         # A durable ref may have no local_path yet
         ref = FileReference(storage_path="artifacts/remote-only")
@@ -108,7 +106,6 @@ class TestCleanupFiles:
         # No local_path → nothing deleted, no path_results entry for a ref
         assert "nonexistent-dir" in result.path_results
 
-    @pytest.mark.asyncio
     async def test_removes_convention_based_temp_dir(self, tmp_path: Any) -> None:
         test_dir = tmp_path / "workflow-artifacts"
         test_dir.mkdir()
@@ -126,7 +123,6 @@ class TestCleanupFiles:
         assert not test_dir.exists()
         assert result.path_results[str(test_dir)] is True
 
-    @pytest.mark.asyncio
     async def test_nonexistent_path_treated_as_success(self, tmp_path: Any) -> None:
         missing = str(tmp_path / "nonexistent")
 
@@ -139,7 +135,6 @@ class TestCleanupFiles:
 
         assert result.path_results[missing] is True
 
-    @pytest.mark.asyncio
     async def test_default_sweep_removes_path_less_materialised_refs(
         self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -192,7 +187,6 @@ class TestCleanupFiles:
         assert not os.path.exists(dir_ref.local_path)
         assert all(result.path_results.values())
 
-    @pytest.mark.asyncio
     async def test_a_climbing_workflow_id_deletes_nothing_outside_temporary_path(
         self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -231,7 +225,6 @@ class TestCleanupFiles:
         assert (victim / "keep.txt").exists()
         assert result.path_results == {}
 
-    @pytest.mark.asyncio
     async def test_extra_paths_override_defaults(self, tmp_path: Any) -> None:
         extra_dir = tmp_path / "extra"
         extra_dir.mkdir()
@@ -246,7 +239,6 @@ class TestCleanupFiles:
         assert not extra_dir.exists()
         assert result.path_results[str(extra_dir)] is True
 
-    @pytest.mark.asyncio
     async def test_returns_cleanup_output(self, tmp_path: Any) -> None:
         app = _CleanupApp()
 
@@ -260,7 +252,6 @@ class TestCleanupFiles:
         assert isinstance(result, CleanupOutput)
         assert isinstance(result.path_results, dict)
 
-    @pytest.mark.asyncio
     async def test_error_during_file_removal_recorded_as_false(
         self, tmp_path: Any
     ) -> None:
@@ -296,7 +287,6 @@ class TestCleanupFiles:
         assert metadata.heartbeat_timeout_seconds == 60
         assert metadata.timeout_seconds == 300
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("section", ["tracked_ref", "extra_paths"])
     @pytest.mark.parametrize("kind", ["file", "dir"])
     async def test_removal_runs_off_the_event_loop(
@@ -398,7 +388,6 @@ class TestCleanupCredentialFiles:
         with app_base._credential_dirs_lock:
             app_base._credential_dirs_by_run.clear()
 
-    @pytest.mark.asyncio
     async def test_same_named_files_for_two_connections_are_private_and_cleaned_up(
         self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -445,7 +434,6 @@ class TestCleanupCredentialFiles:
             assert result.path_results[call_dir] is True
         assert _RUN not in app_base._credential_dirs_by_run
 
-    @pytest.mark.asyncio
     async def test_failed_removal_stays_tracked(self, tmp_path: Any) -> None:
         cred_dir = tmp_path / "cred-x"
         cred_dir.mkdir()
@@ -469,7 +457,6 @@ class TestCleanupCredentialFiles:
         with pytest.raises(AppContextError):
             _track_credential_dir("/somewhere")
 
-    @pytest.mark.asyncio
     async def test_a_credential_dir_made_in_a_task_is_cleaned_up(
         self, tmp_path: Any
     ) -> None:
@@ -489,7 +476,6 @@ class TestCleanupCredentialFiles:
 
         assert str(d) not in credential_utils._issued_dirs
 
-    @pytest.mark.asyncio
     async def test_cleanup_on_another_worker_leaves_this_workers_dirs_for_the_sweeper(
         self, tmp_path: Any
     ) -> None:

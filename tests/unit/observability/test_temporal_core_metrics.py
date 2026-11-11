@@ -79,7 +79,6 @@ MODES = pytest.mark.parametrize("mode", ["async", "blocking"])
 
 
 @MODES
-@pytest.mark.asyncio
 async def test_returns_body_on_200(mode: str) -> None:
     read = await _read(mode, lambda _r: httpx.Response(200, content=_EXPOSITION))
 
@@ -87,7 +86,6 @@ async def test_returns_body_on_200(mode: str) -> None:
 
 
 @MODES
-@pytest.mark.asyncio
 async def test_body_exactly_at_cap_is_kept(mode: str) -> None:
     body = b"x" * _CAP
     read = await _read(mode, lambda _r: httpx.Response(200, content=body))
@@ -96,7 +94,6 @@ async def test_body_exactly_at_cap_is_kept(mode: str) -> None:
 
 
 @MODES
-@pytest.mark.asyncio
 async def test_non_200_reports_status_reason(mode: str) -> None:
     read = await _read(mode, lambda _r: httpx.Response(503, content=b"down"))
 
@@ -104,7 +101,6 @@ async def test_non_200_reports_status_reason(mode: str) -> None:
 
 
 @MODES
-@pytest.mark.asyncio
 async def test_declared_oversize_is_rejected(mode: str) -> None:
     read = await _read(mode, lambda _r: httpx.Response(200, content=b"x" * (_CAP + 1)))
 
@@ -112,7 +108,6 @@ async def test_declared_oversize_is_rejected(mode: str) -> None:
 
 
 @MODES
-@pytest.mark.asyncio
 async def test_streamed_oversize_stops_near_the_cap(mode: str) -> None:
     """No Content-Length: the running total trips the cap mid-stream."""
     stream = _ChunkStream(total=_CAP * 100)
@@ -125,7 +120,6 @@ async def test_streamed_oversize_stops_near_the_cap(mode: str) -> None:
 
 
 @MODES
-@pytest.mark.asyncio
 async def test_malformed_content_length_still_bounded(mode: str) -> None:
     stream = _ChunkStream(total=_CAP * 10)
     read = await _read(
@@ -139,7 +133,6 @@ async def test_malformed_content_length_still_bounded(mode: str) -> None:
 
 
 @MODES
-@pytest.mark.asyncio
 async def test_transport_error_propagates(mode: str) -> None:
     def _refuse(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused", request=request)
@@ -150,7 +143,6 @@ async def test_transport_error_propagates(mode: str) -> None:
 
 @pytest.mark.parametrize("cap", [0, -1])
 @MODES
-@pytest.mark.asyncio
 async def test_non_positive_cap_is_oversize_without_a_request(
     mode: str, cap: int
 ) -> None:

@@ -2,7 +2,7 @@
 
 Covers the heartbeat controllers, the auto-heartbeat loop and the stall
 watchdog that rides on its tick. The offload primitives this module re-exports
-are tested at their own home, ``tests/unit/runtime/test_offload.py``.
+are tested at their own home, ``tests/unit/_runtime/test_offload.py``.
 
 Strict no-real-loop policy: the auto-heartbeat loop tests use intervals well
 under 1 second with pre-set events to avoid hangs.
@@ -185,7 +185,6 @@ class TestTemporalHeartbeatController:
 
 
 class TestAutoHeartbeatLoop:
-    @pytest.mark.asyncio
     async def test_stop_event_pre_set_breaks_immediately(self) -> None:
         """If stop_event is set before entry, loop breaks via wait_for resolution."""
         stop = asyncio.Event()
@@ -195,7 +194,6 @@ class TestAutoHeartbeatLoop:
         # stop_event was set → no heartbeat sent before break
         hb.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_emits_heartbeat_after_one_interval(self) -> None:
         """When stop never fires before timeout, fn is called and loop continues."""
         stop = asyncio.Event()
@@ -212,7 +210,6 @@ class TestAutoHeartbeatLoop:
         # Should have made at least 2 heartbeat calls (then we set stop).
         assert len(hb_calls) >= 1
 
-    @pytest.mark.asyncio
     async def test_heartbeat_exception_logged_and_loop_continues(self) -> None:
         """If hb_fn raises Exception, it's logged but the loop keeps going."""
         stop = asyncio.Event()
@@ -230,7 +227,6 @@ class TestAutoHeartbeatLoop:
         # Exception happened on first call; loop continued until stop
         assert len(calls) >= 1
 
-    @pytest.mark.asyncio
     async def test_base_exception_propagates(self) -> None:
         """asyncio.CancelledError (BaseException) must propagate out of the loop."""
         stop = asyncio.Event()
@@ -246,7 +242,6 @@ class TestAutoHeartbeatLoop:
                 task_name="cancelled-task",
             )
 
-    @pytest.mark.asyncio
     async def test_stop_event_set_during_wait_breaks(self) -> None:
         """If stop_event becomes set during wait_for, loop must break (line 144).
 
@@ -274,7 +269,6 @@ class TestAutoHeartbeatLoop:
         # The break path: heartbeat should NOT have been called.
         hb.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_blocked_loop_warning_logged(self, caplog) -> None:
         """Simulate a blocked loop by patching asyncio.wait_for to time out
         immediately and time.monotonic to report a huge elapsed.
@@ -321,7 +315,6 @@ class TestAutoHeartbeatLoop:
 
         assert hb_calls  # heartbeat was sent
 
-    @pytest.mark.asyncio
     async def test_memory_pressure_silent_when_env_unset(self, monkeypatch) -> None:
         """No memory-pressure WARNING when K8S_POD_MEMORY_LIMIT is not set."""
         from application_sdk.execution import heartbeat as hb_mod
@@ -340,7 +333,6 @@ class TestAutoHeartbeatLoop:
         ]
         assert not memory_warnings
 
-    @pytest.mark.asyncio
     async def test_memory_pressure_warning_emitted_above_threshold(
         self, monkeypatch
     ) -> None:
@@ -375,7 +367,6 @@ class TestAutoHeartbeatLoop:
         assert task == "mem-task"
         assert abs(pct - 85.0) < 0.5
 
-    @pytest.mark.asyncio
     async def test_memory_pressure_warning_latches_above_threshold(
         self, monkeypatch
     ) -> None:
@@ -412,7 +403,6 @@ class TestAutoHeartbeatLoop:
             f"Expected exactly 1 warning, got {len(mem_warnings)}"
         )
 
-    @pytest.mark.asyncio
     async def test_memory_pressure_rearms_after_drop_below_hysteresis(
         self, monkeypatch
     ) -> None:
@@ -577,14 +567,12 @@ async def _drive(
 class TestStallWatchdogInert:
     """Purely additive: with nothing injected, the loop behaves exactly as before."""
 
-    @pytest.mark.asyncio
     async def test_no_tracker_means_no_watchdog(self) -> None:
         run = await _drive(tracker=None, clock=WatchdogClock(), budget=1.0, ticks=3)
 
         assert run.beats == 3
         assert not run.stall_infos and not run.stall_warnings and not run.recorded
 
-    @pytest.mark.asyncio
     async def test_off_mode_observes_nothing(self) -> None:
         clock = WatchdogClock()
         run = await _drive(
@@ -599,7 +587,6 @@ class TestStallWatchdogInert:
         assert run.beats == 3
         assert not run.stall_infos and not run.stall_warnings and not run.recorded
 
-    @pytest.mark.asyncio
     async def test_no_budget_means_no_watchdog(self) -> None:
         clock = WatchdogClock()
         run = await _drive(
@@ -616,7 +603,6 @@ class TestStallWatchdogInert:
 
 
 class TestStallWatchdogEnforce:
-    @pytest.mark.asyncio
     async def test_gap_at_the_budget_fails_the_activity_and_stops_the_loop(
         self,
     ) -> None:
@@ -640,7 +626,6 @@ class TestStallWatchdogEnforce:
         assert stalls.calls == [(6.0, "write_batch")]
         assert run.beats == 3
 
-    @pytest.mark.asyncio
     async def test_stall_is_reported_at_warning_and_names_the_last_signal(self) -> None:
         clock = WatchdogClock()
         tracker = ProgressTracker(clock=clock)
@@ -661,7 +646,6 @@ class TestStallWatchdogEnforce:
         assert "failing the activity" in run.stall_warnings[0].args[0]
         assert run.stall_warnings[0].args[1:] == ("extract", 5.0, 5.0, "fetch_page")
 
-    @pytest.mark.asyncio
     async def test_detection_latency_is_budget_plus_at_most_one_tick(self) -> None:
         """The tick that first sees ``stalled >= budget`` is the tick that fires."""
         clock = WatchdogClock()
@@ -683,7 +667,6 @@ class TestStallWatchdogEnforce:
         assert run.beats == 4
         assert stalls.calls == [(12.0, "")]
 
-    @pytest.mark.asyncio
     async def test_progress_each_tick_never_stalls(self) -> None:
         clock = WatchdogClock()
         tracker = ProgressTracker(clock=clock)
@@ -703,7 +686,6 @@ class TestStallWatchdogEnforce:
         assert not stalls.calls
         assert run.beats == 10
 
-    @pytest.mark.asyncio
     async def test_unbounded_hold_suppresses_the_stall(self) -> None:
         """A vouched-for opaque call is never accused of stalling."""
         clock = WatchdogClock()
@@ -724,7 +706,6 @@ class TestStallWatchdogEnforce:
         assert not stalls.calls
         assert run.beats == 6
 
-    @pytest.mark.asyncio
     async def test_lapsed_bounded_hold_fires_at_allowance_plus_budget(self) -> None:
         """Kill time for a wedged held call is ``allowance + budget``."""
         clock = WatchdogClock()
@@ -747,7 +728,6 @@ class TestStallWatchdogEnforce:
         assert run.beats == 15
         assert stalls.calls == [(5.0, "")]
 
-    @pytest.mark.asyncio
     async def test_beat_stays_unconditional_while_stalled(self) -> None:
         """The keepalive is the crash detector; a stall must not gate it."""
         clock = WatchdogClock()
@@ -764,7 +744,6 @@ class TestStallWatchdogEnforce:
 
         assert run.beats == 5
 
-    @pytest.mark.asyncio
     async def test_on_stall_failure_stops_the_loop_anyway(self) -> None:
         """If the handler can't fail the attempt, stop beating and let
         Temporal's heartbeat_timeout reclaim it — never keep beating for an
@@ -789,7 +768,6 @@ class TestStallWatchdogEnforce:
 
 
 class TestStallWatchdogWarn:
-    @pytest.mark.asyncio
     async def test_warn_reports_each_gap_once_and_never_fails(self) -> None:
         clock = WatchdogClock()
         tracker = ProgressTracker(clock=clock)
@@ -812,7 +790,6 @@ class TestStallWatchdogWarn:
         assert not stalls.calls
         assert run.beats == 12
 
-    @pytest.mark.asyncio
     async def test_warn_never_logs_at_warning(self) -> None:
         """A fleet-wide default that logged at WARNING would manufacture exactly
         the alert noise ADR-0018 exists to reduce."""
@@ -831,7 +808,6 @@ class TestStallWatchdogWarn:
         assert run.stall_infos
         assert not run.stall_warnings
 
-    @pytest.mark.asyncio
     async def test_re_arm_keeps_the_label_it_just_reported(self) -> None:
         clock = WatchdogClock()
         tracker = ProgressTracker(clock=clock)
@@ -851,7 +827,6 @@ class TestStallWatchdogWarn:
             assert call.args[-1] == "fetch_page"
         assert tracker.last_label == "fetch_page"
 
-    @pytest.mark.asyncio
     async def test_unlabelled_gap_reads_as_none(self) -> None:
         clock = WatchdogClock()
         tracker = ProgressTracker(clock=clock)
@@ -869,7 +844,6 @@ class TestStallWatchdogWarn:
 
 
 class TestStallWatchdogMetric:
-    @pytest.mark.asyncio
     async def test_gap_is_recorded_with_task_label_and_mode(self) -> None:
         clock = WatchdogClock()
         tracker = ProgressTracker(clock=clock)
@@ -893,7 +867,6 @@ class TestStallWatchdogMetric:
             "watchdog.mode": "warn",
         }
 
-    @pytest.mark.asyncio
     async def test_enforced_gap_is_recorded_too(self) -> None:
         clock = WatchdogClock()
         tracker = ProgressTracker(clock=clock)
@@ -911,7 +884,6 @@ class TestStallWatchdogMetric:
         assert len(run.recorded) == 1
         assert run.recorded[0].args[1]["watchdog.mode"] == "enforce"
 
-    @pytest.mark.asyncio
     async def test_metric_failure_never_breaks_the_watchdog(self) -> None:
         clock = WatchdogClock()
         tracker = ProgressTracker(clock=clock)
@@ -933,7 +905,6 @@ class TestStallWatchdogMetric:
 
 
 class TestStallWatchdogWiring:
-    @pytest.mark.asyncio
     async def test_enforce_without_a_handler_downgrades_to_warn(self) -> None:
         """A wiring bug must not silence the watchdog, and must not let it
         pretend it enforced."""
@@ -955,7 +926,6 @@ class TestStallWatchdogWiring:
         assert run.beats == 3
         assert all(c.args[1]["watchdog.mode"] == "warn" for c in run.recorded)
 
-    @pytest.mark.asyncio
     async def test_non_positive_budget_disables_the_watchdog(self) -> None:
         """One bad config value must not become a fleet-wide kill switch."""
         clock = WatchdogClock()
@@ -977,7 +947,6 @@ class TestStallWatchdogWiring:
         assert not run.stall_infos and not run.recorded
         assert run.beats == 3
 
-    @pytest.mark.asyncio
     async def test_negative_budget_disables_the_watchdog(self) -> None:
         """A negative allowance vouches for nothing: the guard must refuse it
         the same way it refuses zero."""
@@ -1000,7 +969,6 @@ class TestStallWatchdogWiring:
         assert not run.stall_infos and not run.recorded
         assert run.beats == 3
 
-    @pytest.mark.asyncio
     async def test_non_finite_budget_disables_the_watchdog(self) -> None:
         """NaN slips past a `<= 0` check (every comparison against NaN is
         False) and +inf would silently never enforce — both must disable the

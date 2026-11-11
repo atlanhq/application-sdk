@@ -74,7 +74,6 @@ def test_init_single_file_with_file_names_raises_error() -> None:
     assert exc_info.value.code == "INVALID_INPUT_FORMAT_SINGLE_PATH_WITH_FILE_NAMES"
 
 
-@pytest.mark.asyncio
 async def test_not_download_file_that_exists() -> None:
     """Test that no download occurs when a JSON file exists locally."""
     path = "/data/test.json"
@@ -94,7 +93,6 @@ async def test_not_download_file_that_exists() -> None:
         assert result == [path]
 
 
-@pytest.mark.asyncio
 async def test_download_file_invoked_for_missing_files() -> None:
     """Ensure that a download is triggered when the file does not exist locally."""
     path = "/local"
@@ -145,7 +143,6 @@ async def test_download_file_invoked_for_missing_files() -> None:
         ]
 
 
-@pytest.mark.asyncio
 async def test_download_file_not_invoked_when_file_present() -> None:
     """Ensure no download occurs when the file already exists locally."""
     path = "/local"
@@ -170,7 +167,6 @@ async def test_download_file_not_invoked_when_file_present() -> None:
         assert result == ["/local/exists.json"]
 
 
-@pytest.mark.asyncio
 async def test_download_file_error_propagation() -> None:
     """Ensure errors during download are surfaced as ObjectStoreDownloadError."""
     from application_sdk.storage.formats.format_errors import ObjectStoreDownloadError
@@ -201,7 +197,6 @@ async def test_download_file_error_propagation() -> None:
         assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_DOWNLOAD"
 
 
-@pytest.mark.asyncio
 async def test_no_matching_files_surfaces_read_error_not_download_error() -> None:
     """Empty prefix listing must raise ObjectStoreReadError, not ObjectStoreDownloadError.
 
@@ -274,7 +269,6 @@ def _write_json_file(tmp_path: Path, name: str, records: list[dict]) -> str:
     return str(path)
 
 
-@pytest.mark.asyncio
 async def test_read_batches_yields_dataframes(tmp_path: Path) -> None:
     """_get_batched_dataframe yields pd.DataFrame batches via orjson line reading."""
     import pandas as pd
@@ -301,7 +295,6 @@ async def test_read_batches_yields_dataframes(tmp_path: Path) -> None:
     assert list(chunks[0]["name"]) == [r["name"] for r in records]
 
 
-@pytest.mark.asyncio
 async def test_read_batches_respects_chunk_size(tmp_path: Path) -> None:
     """read_batches splits records into batches of chunk_size."""
     records = [{"id": i} for i in range(10)]
@@ -328,7 +321,6 @@ async def test_read_batches_respects_chunk_size(tmp_path: Path) -> None:
     assert total == 10
 
 
-@pytest.mark.asyncio
 async def test_read_batches_empty_file_list(tmp_path: Path) -> None:
     """An empty file list should result in no yielded batches."""
 
@@ -349,7 +341,6 @@ async def test_read_batches_empty_file_list(tmp_path: Path) -> None:
     assert batches == []
 
 
-@pytest.mark.asyncio
 async def test_read_batches_multiple_files(tmp_path: Path) -> None:
     """read_batches concatenates records across multiple files."""
     f1 = _write_json_file(tmp_path, "f1.json", [{"id": 1}, {"id": 2}])
@@ -379,7 +370,6 @@ async def test_read_batches_multiple_files(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_read_returns_pandas_dataframe(tmp_path: Path) -> None:
     """read() returns a pandas DataFrame built from orjson-decoded records."""
     import pandas as pd
@@ -402,7 +392,6 @@ async def test_read_returns_pandas_dataframe(tmp_path: Path) -> None:
     assert list(result.columns) == ["id", "val"]
 
 
-@pytest.mark.asyncio
 async def test_read_returns_pandas_values_for_missing_keys(tmp_path: Path) -> None:
     """A key missing from one row turns the column's ints to float and fills NaN."""
     import pandas as pd
@@ -447,7 +436,6 @@ def test_deprecation_notice_says_to_fix_callers_of_pandas_coercion() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_context_manager_calls_close(tmp_path: Path) -> None:
     """Verify that using async with calls close() on exit."""
     json_file = _write_json_file(tmp_path, "test.json", [{"id": 1}])
@@ -469,7 +457,6 @@ async def test_context_manager_calls_close(tmp_path: Path) -> None:
     assert reader._is_closed
 
 
-@pytest.mark.asyncio
 async def test_close_is_idempotent() -> None:
     """Verify that calling close() multiple times is safe."""
     path = "/data"
@@ -486,7 +473,6 @@ async def test_close_is_idempotent() -> None:
     assert reader._is_closed
 
 
-@pytest.mark.asyncio
 async def test_read_after_close_raises_error(tmp_path: Path) -> None:
     """Verify that reading after close raises ReaderClosedError."""
     json_file = _write_json_file(tmp_path, "test.json", [{"id": 1}])
@@ -515,7 +501,6 @@ async def test_read_after_close_raises_error(tmp_path: Path) -> None:
     assert exc_info.value.code == "PRECONDITION_FORMAT_READER_CLOSED"
 
 
-@pytest.mark.asyncio
 async def test_read_batches_after_close_raises_error() -> None:
     """Verify that read_batches after close raises ReaderClosedError."""
     from application_sdk.storage.formats.format_errors import ReaderClosedError
@@ -532,7 +517,6 @@ async def test_read_batches_after_close_raises_error() -> None:
     assert exc_info.value.code == "PRECONDITION_FORMAT_READER_CLOSED"
 
 
-@pytest.mark.asyncio
 async def test_cleanup_on_close_default_true() -> None:
     """Verify that cleanup_on_close defaults to True."""
     path = "/data"
@@ -541,7 +525,6 @@ async def test_cleanup_on_close_default_true() -> None:
     assert reader.cleanup_on_close is True
 
 
-@pytest.mark.asyncio
 async def test_cleanup_on_close_false_retains_files(tmp_path: Path) -> None:
     """Verify that setting cleanup_on_close=False retains downloaded files."""
     json_file = _write_json_file(tmp_path, "test.json", [{"id": 1}])
@@ -584,7 +567,6 @@ async def test_cleanup_on_close_false_retains_files(tmp_path: Path) -> None:
     assert reader._is_closed
 
 
-@pytest.mark.asyncio
 async def test_cleanup_on_close_true_cleans_files(tmp_path: Path) -> None:
     """Verify that setting cleanup_on_close=True cleans up downloaded files."""
     json_file = _write_json_file(tmp_path, "test.json", [{"id": 1}])
@@ -628,7 +610,6 @@ async def test_cleanup_on_close_true_cleans_files(tmp_path: Path) -> None:
     assert reader._is_closed
 
 
-@pytest.mark.asyncio
 async def test_downloaded_files_tracked_on_read(tmp_path: Path) -> None:
     """Verify that downloaded files are tracked when read() is called."""
     json_file = _write_json_file(tmp_path, "test.json", [{"id": 1}])
@@ -655,7 +636,6 @@ async def test_downloaded_files_tracked_on_read(tmp_path: Path) -> None:
         assert reader._downloaded_files == downloaded_files
 
 
-@pytest.mark.asyncio
 async def test_read_no_files(tmp_path: Path) -> None:
     """read() with no files available returns an empty pandas DataFrame."""
     import pandas as pd
@@ -674,7 +654,6 @@ async def test_read_no_files(tmp_path: Path) -> None:
     assert len(result) == 0
 
 
-@pytest.mark.asyncio
 async def test_read_batches_empty_json_file(tmp_path: Path) -> None:
     """read_batches() on a file with zero records yields no batches.
 
@@ -698,7 +677,6 @@ async def test_read_batches_empty_json_file(tmp_path: Path) -> None:
     assert chunks == [], "file with zero records must yield no batches"
 
 
-@pytest.mark.asyncio
 async def test_read_batches_malformed_jsonl_raises_format_read_error(
     tmp_path: Path,
 ) -> None:
@@ -730,7 +708,6 @@ async def test_read_batches_malformed_jsonl_raises_format_read_error(
         assert isinstance(exc_info.value.cause, orjson.JSONDecodeError)
 
 
-@pytest.mark.asyncio
 async def test_read_batches_skips_blank_lines(tmp_path: Path) -> None:
     """read_batches() silently skips blank and whitespace-only lines.
 
@@ -765,7 +742,6 @@ async def test_read_batches_skips_blank_lines(tmp_path: Path) -> None:
     assert list(chunks[0]["id"]) == [1, 2, 3]
 
 
-@pytest.mark.asyncio
 async def test_reader_preserves_object_store_read_error_classification() -> None:
     """A typed ObjectStoreReadError must survive the reader, not become FormatReadError.
 
@@ -813,7 +789,6 @@ async def test_reader_preserves_object_store_read_error_classification() -> None
     assert exc_info.value.effective_retryable is True
 
 
-@pytest.mark.asyncio
 async def test_read_batches_preserves_object_store_read_error_classification() -> None:
     """Same guard on the batched read path (read_batches / _get_batched_dataframe)."""
     from application_sdk.storage.formats.format_errors import (
@@ -841,7 +816,6 @@ async def test_read_batches_preserves_object_store_read_error_classification() -
     assert exc_info.value.effective_retryable is True
 
 
-@pytest.mark.asyncio
 async def test_reader_still_wraps_untyped_errors_as_format_read_error() -> None:
     """An untyped exception must still become FormatReadError — the AppError
     pass-through must not widen into a blanket re-raise."""

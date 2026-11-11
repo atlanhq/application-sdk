@@ -32,10 +32,19 @@ import os
 import warnings
 from typing import Any, ClassVar
 
+from typing_extensions import deprecated
+
 from application_sdk.testing.full_dag.base import BaseFullDAGE2ETest
 from application_sdk.testing.full_dag.payload import AgentSpec, ConnectionSpec, RunMode
 
 
+@deprecated(
+    "application_sdk.testing.full_dag.SQLAppE2EFullTest is deprecated; use "
+    "application_sdk.testing.e2e.SQLAppE2ETest — will be removed in v4.0.0.",
+    # Static marker only: the guarded __init_subclass__ below already warns a
+    # consumer subclass exactly once and keeps SDK-internal subclasses quiet.
+    category=None,
+)
 class SQLAppE2EFullTest(BaseFullDAGE2ETest):
     """Deprecated: SQL full-DAG base — use ``application_sdk.testing.e2e.SQLAppE2ETest``.
 

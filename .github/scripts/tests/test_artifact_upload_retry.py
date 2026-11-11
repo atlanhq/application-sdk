@@ -93,6 +93,12 @@ EXEMPT = {
         "${{ inputs.dependency-floors != '' && '-floors' || '' }}",
     ): "diagnostic per-test timings; continue-on-error, so a failed upload never "
     "fails the leg, and nothing reads the artifact to gate (FND-4304)",
+    (
+        "workflows/sdk-tests-reusable.yaml",
+        "sdk-unit-test-coverage",
+    ): "diagnostic coverage report; continue-on-error, so a failed upload never "
+    "fails the leg, and the gate reads coverage.xml in the job, not the artifact "
+    "(FND-4678)",
 }
 
 # Files that are not valid YAML, so their steps cannot be inspected. Empty, and

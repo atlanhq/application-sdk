@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.55.3
-source-sha:    7bca1747e6cbdea33c12ce67215e93fcf65e1e0f
-source-date:   2026-11-11T01:15:58Z
+source-sha:    4ad5bad81308d872a919a9775d35c403620cd048
+source-date:   2026-11-11T11:52:22Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,12 +30,12 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 40 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 30 |
-| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 5 |
+| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 8 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 442 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 449 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 85 |
 
 ## Subpackage Details
@@ -3292,6 +3292,13 @@ Output collectors and record models for Automation Engine
 - **Summary:** Collects metrics and artifacts during workflow or activity execution.
 - **Defined in:** `application_sdk/outputs/collector.py`
 
+#### `SkipReason`
+
+- **Import:** `from application_sdk.outputs import SkipReason`
+- **Signature:** `class SkipReason`
+- **Summary:** Why a record was skipped. A closed set, so skips aggregate across the fleet.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
 ### Functions
 
 #### `get_outputs`
@@ -3301,6 +3308,13 @@ Output collectors and record models for Automation Engine
 - **Summary:** Get the output collector for the current execution context.
 - **Defined in:** `application_sdk/outputs/__init__.py`
 
+#### `skip_record`
+
+- **Import:** `from application_sdk.outputs import skip_record`
+- **Signature:** `skip_record(record: SkippableRecord, reason: SkipReason, *, record_id: str, entity_type: str, detail: str | None = None)`
+- **Summary:** Skip a record on purpose, keeping it for review after the run.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
 ### Constants and Enums
 
 #### `current_outputs`
@@ -3309,6 +3323,13 @@ Output collectors and record models for Automation Engine
 - **Signature:** `current_outputs: contextvars.ContextVar[OutputCollector | None]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/outputs/__init__.py`
+
+#### `MAX_SKIPPED_RECORDS`
+
+- **Import:** `from application_sdk.outputs import MAX_SKIPPED_RECORDS`
+- **Signature:** `MAX_SKIPPED_RECORDS: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/skipped.py`
 
 ## `application_sdk.pkl_version`
 
@@ -3824,7 +3845,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `AEWorkflowClient`
 
 - **Import:** `from application_sdk.testing.full_dag import AEWorkflowClient`
-- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.client`
+- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.base`, `application_sdk.testing.full_dag.client`
 - **Signature:** `class AEWorkflowClient(tenant_url: str, ...)`
 - **Summary:** Thin sync wrapper over the harness's AE and Atlas readers.
 - **Defined in:** `application_sdk/testing/e2e/client.py`
@@ -3835,6 +3856,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class AEWorkflowSpec(*, ...)`
 - **Summary:** A workflow to start through the Automation Engine.
 - **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
+
+#### `AgentSpec`
+
+- **Import:** `from application_sdk.testing.full_dag.base import AgentSpec`
+- **Signature:** `class AgentSpec(agent_name: str, ...)`
+- **Summary:** Optional agent routing (tier 4 only).
+- **Defined in:** `application_sdk/testing/full_dag/payload.py`
 
 #### `APIType`
 
@@ -4006,6 +4034,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `BaseFullDAGE2ETest`
 
 - **Import:** `from application_sdk.testing.full_dag import BaseFullDAGE2ETest`
+- **Also importable from:** `application_sdk.testing.full_dag.base`
 - **Signature:** `class BaseFullDAGE2ETest`
 - **Summary:** Deprecated: pytest base — use ``application_sdk.testing.e2e.BaseE2ETest``.
 - **Defined in:** `application_sdk/testing/full_dag/base.py`
@@ -4105,6 +4134,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The ephemeral connection one harness run creates and then purges.
 - **Defined in:** `application_sdk/testing/harness/identity.py`
 
+#### `ConnectionSpec`
+
+- **Import:** `from application_sdk.testing.full_dag.base import ConnectionSpec`
+- **Signature:** `class ConnectionSpec(name: str, ...)`
+- **Summary:** Identity of the Connection the AE workflow will create.
+- **Defined in:** `application_sdk/testing/full_dag/payload.py`
+
 #### `CoreReads`
 
 - **Import:** `from application_sdk.testing.harness.cluster.kube import CoreReads`
@@ -4182,7 +4218,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `DAGRunResult`
 
 - **Import:** `from application_sdk.testing.e2e.client import DAGRunResult`
-- **Also importable from:** `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
+- **Also importable from:** `application_sdk.testing.full_dag.base`, `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGRunResult(run_id: str, ...)`
 - **Summary:** Full result of one ``native-status`` read.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
@@ -4204,10 +4240,11 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 #### `DatabaseSpec`
 
-- **Import:** `from application_sdk.testing.harness.seed import DatabaseSpec`
-- **Signature:** `class DatabaseSpec(*, name: str, schemas: tuple[SchemaSpec, ...] = ())`
-- **Summary:** One database and the schemas under it.
-- **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
+- **Import:** `from application_sdk.testing.full_dag.base import DatabaseSpec`
+- **Also importable from:** `application_sdk.testing.harness.seed`
+- **Signature:** `class DatabaseSpec(host: str, ...)`
+- **Summary:** DB connection details for the credential payload.
+- **Defined in:** `application_sdk/testing/full_dag/payload.py`
 
 #### `DataForgeSource`
 
@@ -4375,6 +4412,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `FullDAGOutcome`
 
 - **Import:** `from application_sdk.testing.e2e import FullDAGOutcome`
+- **Also importable from:** `application_sdk.testing.full_dag.base`
 - **Signature:** `class FullDAGOutcome(ae_result: DAGRunResult, ...)`
 - **Summary:** Combined result of a single full-DAG run.
 - **Defined in:** `application_sdk/testing/e2e/base.py`
@@ -4433,6 +4471,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class GoldenRuleError(*, ...)`
 - **Summary:** A TypenameRule combines settings that contradict each other.
 - **Defined in:** `application_sdk/testing/integration/_errors.py`
+
+#### `HarnessMethodNotImplementedError`
+
+- **Import:** `from application_sdk.testing.full_dag.base import HarnessMethodNotImplementedError`
+- **Signature:** `class HarnessMethodNotImplementedError(*, ...)`
+- **Summary:** Abstract test harness method was not overridden by a connector subclass.
+- **Defined in:** `application_sdk/testing/e2e/_errors.py`
 
 #### `HarnessNotBuiltError`
 
@@ -4596,12 +4641,40 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** One line of container output.
 - **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
 
+#### `ManifestDagMissingError`
+
+- **Import:** `from application_sdk.testing.full_dag.base import ManifestDagMissingError`
+- **Signature:** `class ManifestDagMissingError(*, ...)`
+- **Summary:** The manifest file exists but contains no top-level ``dag`` object.
+- **Defined in:** `application_sdk/testing/e2e/_errors.py`
+
+#### `ManifestFileNotFoundError`
+
+- **Import:** `from application_sdk.testing.full_dag.base import ManifestFileNotFoundError`
+- **Signature:** `class ManifestFileNotFoundError(*, ...)`
+- **Summary:** The workflow manifest JSON file does not exist at the expected path.
+- **Defined in:** `application_sdk/testing/e2e/_errors.py`
+
 #### `Minter`
 
 - **Import:** `from application_sdk.testing.harness.identity import Minter`
 - **Signature:** `class Minter(*, clock: Callable[[], int], randbelow: Callable[[int], int], run_id_env: str | None = None) -> None`
 - **Summary:** Mints the per-run identifiers a harness run needs.
 - **Defined in:** `application_sdk/testing/harness/identity.py`
+
+#### `MissingHarnessClassAttrError`
+
+- **Import:** `from application_sdk.testing.full_dag.base import MissingHarnessClassAttrError`
+- **Signature:** `class MissingHarnessClassAttrError(*, ...)`
+- **Summary:** A required class-level attribute was not set on the test harness.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `MissingHarnessEnvError`
+
+- **Import:** `from application_sdk.testing.full_dag.base import MissingHarnessEnvError`
+- **Signature:** `class MissingHarnessEnvError(*, ...)`
+- **Summary:** Required environment variables for the full-DAG harness are absent.
+- **Defined in:** `application_sdk/testing/e2e/_errors.py`
 
 #### `MissingTenantEnvError`
 
@@ -4862,7 +4935,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `RunMode`
 
 - **Import:** `from application_sdk.testing.e2e import RunMode`
-- **Also importable from:** `application_sdk.testing.full_dag`
+- **Also importable from:** `application_sdk.testing.full_dag`, `application_sdk.testing.full_dag.base`
 - **Signature:** `class RunMode`
 - **Summary:** Whether the connector runs in tenant or in caller-controlled CI.
 - **Defined in:** `application_sdk/testing/e2e/payload.py`
@@ -5453,6 +5526,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `build_ae_payload`
 
 - **Import:** `from application_sdk.testing.full_dag import build_ae_payload`
+- **Also importable from:** `application_sdk.testing.full_dag.base`
 - **Signature:** `build_ae_payload(*, *, ...)`
 - **Summary:** Deprecated (v4.0) — AE submit body; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
@@ -5467,6 +5541,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `build_seed_dag`
 
 - **Import:** `from application_sdk.testing.full_dag import build_seed_dag`
+- **Also importable from:** `application_sdk.testing.full_dag.base`
 - **Signature:** `build_seed_dag(*, *, ...)`
 - **Summary:** Deprecated (v4.0) — seed-version DAG; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
@@ -5541,7 +5616,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `cold_start_submit_kwargs`
 
 - **Import:** `from application_sdk.testing.e2e.client import cold_start_submit_kwargs`
-- **Also importable from:** `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.retry`
+- **Also importable from:** `application_sdk.testing.full_dag.base`, `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.retry`
 - **Signature:** `cold_start_submit_kwargs(timeout_seconds: int, poll_interval_seconds: int)`
 - **Summary:** Re-size the AE submit's retry to a cold start.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/retry.py`
@@ -5817,7 +5892,8 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 #### `get_logger`
 
-- **Import:** `from application_sdk.testing.scale_data_generator.driver import get_logger`
+- **Import:** `from application_sdk.testing.full_dag.base import get_logger`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.driver`
 - **Signature:** `get_logger(name: str | None = None)`
 - **Summary:** Get or create an instance of AtlanLoggerAdapter.
 - **Defined in:** `application_sdk/observability/logger_adaptor.py`
@@ -6853,10 +6929,11 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 #### `logger`
 
-- **Import:** `from application_sdk.testing.scale_data_generator.driver import logger`
-- **Signature:** `logger`
+- **Import:** `from application_sdk.testing.full_dag.base import logger`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.driver`
+- **Signature:** `logger: AtlanLoggerAdapter`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/driver.py`
+- **Defined in:** `application_sdk/testing/full_dag/base.py`
 
 #### `MARKETPLACE_APPS_PATH`
 

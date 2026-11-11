@@ -74,7 +74,6 @@ _SANDBOX_RUNNER = SandboxedWorkflowRunner(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "tier, storage_path",
     [
@@ -124,7 +123,6 @@ async def test_storage_tier_survives_temporal_round_trip(
     assert result.ref.file_count == 3
 
 
-@pytest.mark.asyncio
 async def test_default_tier_is_transient_after_round_trip(
     temporal_client, task_queue
 ) -> None:

@@ -49,46 +49,38 @@ class TestLocalCapacityPool:
     def setup_method(self) -> None:
         self.pool = LocalCapacityPool()
 
-    @pytest.mark.asyncio
     async def test_acquire_returns_requested_amount(self) -> None:
         granted = await self.pool.acquire("test-pool", requested=10)
         assert granted == 10
 
-    @pytest.mark.asyncio
     async def test_acquire_any_amount(self) -> None:
         for amount in [1, 5, 100, 1000]:
             granted = await self.pool.acquire("test-pool", requested=amount)
             assert granted == amount
 
-    @pytest.mark.asyncio
     async def test_acquire_with_min_useful_still_returns_full(self) -> None:
         # LocalCapacityPool ignores min_useful — always returns requested
         granted = await self.pool.acquire("test-pool", requested=10, min_useful=8)
         assert granted == 10
 
-    @pytest.mark.asyncio
     async def test_acquire_with_holder_id(self) -> None:
         granted = await self.pool.acquire(
             "test-pool", requested=5, holder_id="worker-1"
         )
         assert granted == 5
 
-    @pytest.mark.asyncio
     async def test_acquire_with_ttl(self) -> None:
         granted = await self.pool.acquire("test-pool", requested=5, ttl_seconds=60)
         assert granted == 5
 
-    @pytest.mark.asyncio
     async def test_release_is_noop(self) -> None:
         # Should not raise
         await self.pool.release("test-pool", holder_id="worker-1")
 
-    @pytest.mark.asyncio
     async def test_renew_always_returns_true(self) -> None:
         result = await self.pool.renew("test-pool", holder_id="worker-1")
         assert result is True
 
-    @pytest.mark.asyncio
     async def test_renew_with_ttl(self) -> None:
         result = await self.pool.renew(
             "test-pool", holder_id="worker-1", ttl_seconds=60

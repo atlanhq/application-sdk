@@ -76,7 +76,6 @@ class TestCleanupStorage:
     # No store configured → immediate zero-count return
     # ------------------------------------------------------------------
 
-    @pytest.mark.asyncio
     async def test_no_store_returns_zero_counts(self) -> None:
         app = _make_app()
         # _context is None → storage is None
@@ -85,7 +84,6 @@ class TestCleanupStorage:
             deleted_count=0, skipped_count=0, error_count=0
         )
 
-    @pytest.mark.asyncio
     async def test_no_store_with_context_but_no_storage(self) -> None:
         from application_sdk.app.context import AppContext
 
@@ -101,7 +99,6 @@ class TestCleanupStorage:
     # Tracked file_refs/ paths are deleted (+ .sha256 sidecars)
     # ------------------------------------------------------------------
 
-    @pytest.mark.asyncio
     async def test_deletes_tracked_file_refs_and_sidecars(self) -> None:
         from unittest.mock import MagicMock
 
@@ -146,7 +143,6 @@ class TestCleanupStorage:
     # Protected prefixes are skipped
     # ------------------------------------------------------------------
 
-    @pytest.mark.asyncio
     async def test_skips_protected_persistent_artifacts(self) -> None:
         from unittest.mock import MagicMock
 
@@ -185,7 +181,6 @@ class TestCleanupStorage:
     # RETAINED and PERSISTENT tier refs are skipped by cleanup_storage
     # ------------------------------------------------------------------
 
-    @pytest.mark.asyncio
     async def test_skips_retained_tier_ref(self) -> None:
         from unittest.mock import MagicMock
 
@@ -221,7 +216,6 @@ class TestCleanupStorage:
         assert result.skipped_count == 1
         assert result.deleted_count == 0
 
-    @pytest.mark.asyncio
     async def test_skips_persistent_tier_ref(self) -> None:
         from unittest.mock import MagicMock
 
@@ -261,7 +255,6 @@ class TestCleanupStorage:
     # include_prefix_cleanup=True triggers run-scoped prefix deletion
     # ------------------------------------------------------------------
 
-    @pytest.mark.asyncio
     async def test_prefix_cleanup_when_opted_in(self) -> None:
         from unittest.mock import MagicMock
 
@@ -311,7 +304,6 @@ class TestCleanupStorage:
     # include_prefix_cleanup=False (default) does NOT call prefix deletion
     # ------------------------------------------------------------------
 
-    @pytest.mark.asyncio
     async def test_no_prefix_cleanup_by_default(self) -> None:
         from unittest.mock import MagicMock
 
@@ -349,7 +341,6 @@ class TestCleanupStorage:
     # Individual delete errors increment error_count, others continue
     # ------------------------------------------------------------------
 
-    @pytest.mark.asyncio
     async def test_delete_error_increments_error_count(self) -> None:
         from unittest.mock import MagicMock
 
@@ -400,7 +391,6 @@ class TestCleanupStorage:
     # Directory FileReference (storage_path ending with "/") streams sub-keys
     # ------------------------------------------------------------------
 
-    @pytest.mark.asyncio
     async def test_directory_ref_streams_subkeys(self) -> None:
         from unittest.mock import MagicMock
 
@@ -506,7 +496,6 @@ class TestCleanupStorageNeverDeletesDurableAlias:
         TaskRegistry.reset()
         _clear_app_state()
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("tier", [StorageTier.RETAINED, StorageTier.PERSISTENT])
     async def test_transient_twin_of_durable_file_is_not_deleted(
         self, tier: StorageTier
@@ -523,7 +512,6 @@ class TestCleanupStorageNeverDeletesDurableAlias:
         # One skip for the durable ref, two for the twin's key and its sidecar.
         assert result.skipped_count == 3
 
-    @pytest.mark.asyncio
     async def test_unrelated_transient_ref_is_still_deleted(self) -> None:
         other = "file_refs/abc123.parquet"
         refs = [
@@ -535,7 +523,6 @@ class TestCleanupStorageNeverDeletesDurableAlias:
 
         assert sorted(deleted) == [other, other + ".sha256"]
 
-    @pytest.mark.asyncio
     async def test_transient_file_under_durable_directory_is_not_deleted(
         self,
     ) -> None:
@@ -548,7 +535,6 @@ class TestCleanupStorageNeverDeletesDurableAlias:
 
         assert deleted == []
 
-    @pytest.mark.asyncio
     async def test_transient_directory_skips_only_durable_subkeys(self) -> None:
         transient_dir = "artifacts/apps/test/workflows/wf-test/r1/transformed/"
         other = transient_dir + "column/entities.json"
@@ -564,7 +550,6 @@ class TestCleanupStorageNeverDeletesDurableAlias:
         assert deleted == [other]
         assert result.deleted_count == 1
 
-    @pytest.mark.asyncio
     async def test_prefix_cleanup_still_removes_retained_keys(self) -> None:
         # Opt-in prefix cleanup is the documented way to drop RETAINED refs;
         # the alias guard must not turn it into a no-op.
@@ -594,7 +579,6 @@ class TestCleanupStorageDirectoryManifest:
         TaskRegistry.reset()
         _clear_app_state()
 
-    @pytest.mark.asyncio
     async def test_transient_directory_ref_deletes_its_manifest(self) -> None:
         ref = FileReference(storage_path=self._DIR, manifest_path=self._MANIFEST)
         listing = [[{"path": self._DIR + "a.json"}]]
@@ -604,7 +588,6 @@ class TestCleanupStorageDirectoryManifest:
         assert sorted(deleted) == sorted([self._DIR + "a.json", self._MANIFEST])
         assert result.deleted_count == 2
 
-    @pytest.mark.asyncio
     async def test_manifest_under_a_protected_prefix_is_never_deleted(self) -> None:
         protected = "persistent-artifacts/apps/test/file_refs/m2.sdk-manifest"
         ref = FileReference(storage_path=self._DIR, manifest_path=protected)
@@ -614,7 +597,6 @@ class TestCleanupStorageDirectoryManifest:
         assert protected not in deleted
         assert result.skipped_count == 1
 
-    @pytest.mark.asyncio
     async def test_transient_twin_does_not_delete_a_retained_manifest(self) -> None:
         refs = [
             FileReference(
@@ -685,7 +667,6 @@ class TestCleanupStorageSparesDownloadedKeys:
 
         return await exists(key, store, normalize=False)
 
-    @pytest.mark.asyncio
     async def test_single_store_download_survives_cleanup(self) -> None:
         store = create_memory_store()
         await _put(self._KEY, self._DATA, store)
@@ -697,7 +678,6 @@ class TestCleanupStorageSparesDownloadedKeys:
         assert await self._exists(store, self._KEY)
         assert result.deleted_count == 0
 
-    @pytest.mark.asyncio
     async def test_single_store_explicit_transient_download_is_cleaned(
         self,
     ) -> None:
@@ -712,7 +692,6 @@ class TestCleanupStorageSparesDownloadedKeys:
 
         assert not await self._exists(store, self._KEY)
 
-    @pytest.mark.asyncio
     async def test_redownload_of_a_runs_transient_ref_is_still_cleaned(
         self,
     ) -> None:
@@ -735,7 +714,6 @@ class TestCleanupStorageSparesDownloadedKeys:
 
         assert not await self._exists(store, key)
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("input_tier", "ref_tier", "expected"),
         [
@@ -767,7 +745,6 @@ class TestCleanupStorageSparesDownloadedKeys:
 
         assert dl.ref.tier is expected
 
-    @pytest.mark.asyncio
     async def test_explicit_path_other_than_the_ref_is_retained(self) -> None:
         store = create_memory_store()
         await _put(self._KEY, self._DATA, store)
@@ -779,7 +756,6 @@ class TestCleanupStorageSparesDownloadedKeys:
 
         assert dl.ref.tier is StorageTier.RETAINED
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("tier", [StorageTier.RETAINED, StorageTier.TRANSIENT])
     async def test_two_store_download_never_deletes_from_deployment(
         self, tier: StorageTier
@@ -798,7 +774,6 @@ class TestCleanupStorageSparesDownloadedKeys:
         assert await self._exists(upstream, self._KEY)
         assert result.deleted_count == 0
 
-    @pytest.mark.asyncio
     async def test_prefix_sweep_still_removes_runs_deployment_copy(self) -> None:
         """Opt-in sweep owns the run prefix, whatever store the ref names.
 
@@ -839,7 +814,6 @@ class TestCleanupStorageSparesDownloadedKeys:
         assert not await self._exists(deployment, key)
         assert await self._exists(upstream, key)
 
-    @pytest.mark.asyncio
     async def test_transient_ref_under_connection_cache_is_not_deleted(
         self,
     ) -> None:

@@ -97,7 +97,6 @@ def _stub_writer_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestReaderClose:
-    @pytest.mark.asyncio
     async def test_close_is_idempotent(self) -> None:
         reader = _StubReader()
         reader._is_closed = True
@@ -107,7 +106,6 @@ class TestReaderClose:
         # Files list is untouched because close exits early.
         assert reader._downloaded_files == ["/tmp/junk"]
 
-    @pytest.mark.asyncio
     async def test_close_skips_cleanup_when_disabled(self) -> None:
         reader = _StubReader()
         reader.cleanup_on_close = False
@@ -119,7 +117,6 @@ class TestReaderClose:
         cleanup_mock.assert_not_called()
         assert reader._is_closed is True
 
-    @pytest.mark.asyncio
     async def test_cleanup_swallows_exceptions(self, tmp_path) -> None:
         """Each per-file cleanup error must be logged; loop must not abort."""
         f1 = tmp_path / "a.txt"
@@ -149,7 +146,6 @@ class TestReaderClose:
         assert len(calls) == 2
         assert reader._downloaded_files == []  # cleared regardless of failures
 
-    @pytest.mark.asyncio
     async def test_cleanup_handles_directories(self, tmp_path) -> None:
         """Directory entries are removed via ``shutil.rmtree``."""
         d = tmp_path / "downloaded_dir"
@@ -163,7 +159,6 @@ class TestReaderClose:
         assert not d.exists()
         assert reader._downloaded_files == []
 
-    @pytest.mark.asyncio
     async def test_directory_cleanup_offloaded_to_thread(self, tmp_path) -> None:
         """The directory rmtree must not run inline on the event loop.
 
@@ -191,7 +186,6 @@ class TestReaderClose:
         assert mock_offload.await_args.args[1] == str(d)
         assert not d.exists()
 
-    @pytest.mark.asyncio
     async def test_close_marks_closed_and_clears_files(self, tmp_path) -> None:
         f = tmp_path / "tmp.txt"
         f.write_text("x")
@@ -250,7 +244,6 @@ class TestConvertToDataframe:
 
 
 class TestWriterWrite:
-    @pytest.mark.asyncio
     async def test_write_to_closed_writer_raises(self) -> None:
         from application_sdk.storage.formats.format_errors import WriterClosedError
 
@@ -260,7 +253,6 @@ class TestWriterWrite:
             await writer.write({"a": 1})
         assert exc_info.value.code == "PRECONDITION_FORMAT_WRITER_CLOSED"
 
-    @pytest.mark.asyncio
     async def test_write_unsupported_dtype_raises(self) -> None:
         from application_sdk.storage.formats.format_errors import (
             UnsupportedDataframeTypeError,
@@ -273,7 +265,6 @@ class TestWriterWrite:
             await writer.write({"a": 1})
         assert exc_info.value.code == "UNIMPLEMENTED_FORMAT_DATAFRAME_TYPE"
 
-    @pytest.mark.asyncio
     async def test_write_pandas_calls_internal_method(self) -> None:
         writer = _StubWriter()
         with patch.object(
@@ -282,7 +273,6 @@ class TestWriterWrite:
             await writer.write({"a": 1})
         mock_write.assert_awaited_once()
 
-    @pytest.mark.asyncio
     async def test_write_daft_type_routes_to_pandas_with_deprecation_warning(
         self,
     ) -> None:
@@ -351,7 +341,6 @@ class TestWriterWrite:
 
 
 class TestWriteBatches:
-    @pytest.mark.asyncio
     async def test_write_batches_to_closed_writer_raises(self) -> None:
         from application_sdk.storage.formats.format_errors import WriterClosedError
 
@@ -365,7 +354,6 @@ class TestWriteBatches:
             await writer.write_batches(_gen())
         assert exc_info.value.code == "PRECONDITION_FORMAT_WRITER_CLOSED"
 
-    @pytest.mark.asyncio
     async def test_write_batches_unsupported_dtype_raises(self) -> None:
         from application_sdk.storage.formats.format_errors import (
             UnsupportedDataframeTypeError,
@@ -381,7 +369,6 @@ class TestWriteBatches:
             await writer.write_batches(_gen())
         assert exc_info.value.code == "UNIMPLEMENTED_FORMAT_DATAFRAME_TYPE"
 
-    @pytest.mark.asyncio
     async def test_batched_dataframe_raises_format_write_error(self) -> None:
         from application_sdk.storage.formats.format_errors import FormatWriteError
 
@@ -403,7 +390,6 @@ class TestWriteBatches:
                 await writer.write_batches(_gen())
         assert excinfo.value.code == "INTERNAL_FORMAT_WRITE"
 
-    @pytest.mark.asyncio
     async def test_write_batches_daft_type_routes_to_pandas_with_deprecation_warning(
         self,
     ) -> None:
@@ -439,7 +425,6 @@ class TestWriteBatches:
 
 
 class TestWriterUploadFile:
-    @pytest.mark.asyncio
     async def test_upload_file_propagates_retain_local_copy(self) -> None:
         writer = _StubWriter()
         # Under writer.path: the upload key is its path relative to that root,
@@ -460,7 +445,6 @@ class TestWriterUploadFile:
         )
         assert writer.current_buffer_size_bytes == 0
 
-    @pytest.mark.asyncio
     async def test_upload_file_default_retain_is_false_when_attr_missing(self) -> None:
         """Default for ``retain_local_copy`` is False if the attribute is unset."""
         writer = _StubWriter()
@@ -484,7 +468,6 @@ class TestWriterUploadFile:
 
 
 class TestFlushBuffer:
-    @pytest.mark.asyncio
     async def test_flush_buffer_records_error_metric_and_reraises(self) -> None:
         import pandas as pd
 
@@ -506,7 +489,6 @@ class TestFlushBuffer:
         ]
         assert "write_errors" in names
 
-    @pytest.mark.asyncio
     async def test_flush_buffer_records_chunks_metric_on_success(self) -> None:
         import pandas as pd
 
@@ -521,7 +503,6 @@ class TestFlushBuffer:
         assert "chunks_written" in names
         assert writer.total_record_count == 2
 
-    @pytest.mark.asyncio
     async def test_flush_buffer_skips_empty_chunk(self) -> None:
         import pandas as pd
 
@@ -537,7 +518,6 @@ class TestFlushBuffer:
 
 
 class TestWriterClose:
-    @pytest.mark.asyncio
     async def test_close_idempotent_returns_cached_result(self) -> None:
         from application_sdk.storage.formats import WriterResult
 
@@ -553,7 +533,6 @@ class TestWriterClose:
         result = await writer.close()
         assert result is cached
 
-    @pytest.mark.asyncio
     async def test_close_idempotent_rederives_when_no_cached_result(self) -> None:
         writer = _StubWriter()
         writer._is_closed = True
@@ -568,7 +547,6 @@ class TestWriterClose:
         # Base Writer doesn't opt into deferred uploads → no FileReference.
         assert result.files is None
 
-    @pytest.mark.asyncio
     async def test_close_raises_format_close_error_on_finalize_failure(self) -> None:
         from application_sdk.storage.formats.format_errors import FormatCloseError
 
@@ -585,7 +563,6 @@ class TestWriterClose:
             await writer.close()
         assert excinfo.value.code == "INTERNAL_FORMAT_CLOSE"
 
-    @pytest.mark.asyncio
     async def test_close_writes_statistics_and_marks_closed(self, tmp_path) -> None:
         writer = _StubWriter(path=str(tmp_path / "out"))
         writer.partitions = [0]
@@ -638,14 +615,12 @@ class TestWriteMode:
 
 
 class TestContextManagers:
-    @pytest.mark.asyncio
     async def test_reader_async_context_manager_closes(self) -> None:
         reader = _StubReader()
         async with reader as r:
             assert r is reader
         assert reader._is_closed is True
 
-    @pytest.mark.asyncio
     async def test_writer_async_context_manager_closes(self, tmp_path) -> None:
         writer = _StubWriter(path=str(tmp_path / "out"))
         with patch(

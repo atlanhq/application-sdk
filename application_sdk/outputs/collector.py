@@ -65,6 +65,13 @@ class OutputCollector:
                 return
         self._metrics[metric.name] = metric
 
+    def numeric_metric(self, name: str) -> int | float:
+        """The summed value of a numeric metric, or ``0`` when absent or non-numeric."""
+        metric = self._metrics.get(name)
+        if metric is None or not isinstance(metric.value, (int, float)):
+            return 0
+        return metric.value
+
     def add_artifact(self, artifact: Artifact) -> None:
         """Add an artifact reference.
 

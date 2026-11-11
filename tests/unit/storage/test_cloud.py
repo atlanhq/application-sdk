@@ -682,7 +682,6 @@ class TestCloudStoreLogMessageFormat:
 class TestCloudStorePutAttributes:
     """storageClass in extra is forwarded as a put attribute on every write."""
 
-    @pytest.mark.asyncio
     async def test_from_credentials_s3_storage_class_passed_to_upload(
         self, tmp_path
     ) -> None:
@@ -730,7 +729,6 @@ class TestCloudStorePutAttributes:
             len(_call_kwargs.args) > 2 and _call_kwargs.args[2] == put_attrs
         ), f"attributes not forwarded; call was {_call_kwargs}"
 
-    @pytest.mark.asyncio
     async def test_from_credentials_s3_storage_class_passed_to_upload_bytes(
         self,
     ) -> None:

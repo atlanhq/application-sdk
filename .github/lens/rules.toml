@@ -59,10 +59,6 @@ glob = "application_sdk/testing/**"
 cards = ["tests", "public-api-and-deprecation", "python-correctness", "v3-architecture"]
 
 [[path]]
-glob = "application_sdk/test_utils/**"
-cards = ["tests", "public-api-and-deprecation", "python-correctness"]
-
-[[path]]
 glob = "application_sdk/transformers/**"
 cards = ["performance", "python-correctness", "v3-architecture", "error-handling-and-logging"]
 

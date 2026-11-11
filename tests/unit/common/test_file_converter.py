@@ -47,13 +47,11 @@ from application_sdk.common.file_converter import (
 class TestConvertDataFiles:
     """Test suite for the main convert_data_files function."""
 
-    @pytest.mark.asyncio
     async def test_empty_input_list_returns_empty_list(self):
         """Test that empty input list returns empty list."""
         result = await convert_data_files([], FileType.PARQUET)
         assert result == []
 
-    @pytest.mark.asyncio
     @patch("application_sdk.common.file_converter.file_converter_registry")
     async def test_successful_conversion_single_file(self, mock_registry):
         """Test successful conversion of a single file."""
@@ -71,7 +69,6 @@ class TestConvertDataFiles:
         mock_registry.registry.get.assert_called_once_with(ConvertFile.JSON_TO_PARQUET)
         mock_converter.assert_called_once_with("/path/input.json")
 
-    @pytest.mark.asyncio
     @patch("application_sdk.common.file_converter.file_converter_registry")
     async def test_successful_conversion_multiple_files(self, mock_registry):
         """Test successful conversion of multiple files."""
@@ -98,7 +95,6 @@ class TestConvertDataFiles:
         ]
         assert mock_converter.call_count == 3
 
-    @pytest.mark.asyncio
     @patch("application_sdk.common.file_converter.file_converter_registry")
     async def test_conversion_with_failed_files_skipped(self, mock_registry):
         """Test that files returning None are skipped from results."""
@@ -121,7 +117,6 @@ class TestConvertDataFiles:
         assert result == ["/path/output1.parquet", "/path/output3.parquet"]
         assert mock_converter.call_count == 3
 
-    @pytest.mark.asyncio
     async def test_unsupported_conversion_raises_value_error(self):
         """Test that unsupported conversion raises ValueError when ConvertFile enum construction fails."""
         input_files = ["/path/input.xyz"]
@@ -130,7 +125,6 @@ class TestConvertDataFiles:
         with pytest.raises(ValueError):
             await convert_data_files(input_files, FileType.PARQUET)
 
-    @pytest.mark.asyncio
     @patch("application_sdk.common.file_converter.file_converter_registry")
     async def test_converter_not_found_error(self, mock_registry):
         """Test that when converter function is None, ValueError is raised."""
@@ -143,7 +137,6 @@ class TestConvertDataFiles:
         with pytest.raises(FileConverterNotFoundError):
             await convert_data_files(input_files, FileType.PARQUET)
 
-    @pytest.mark.asyncio
     @patch("application_sdk.common.file_converter.file_converter_registry")
     async def test_file_extension_detection_from_first_file(self, mock_registry):
         """Test that file extension is detected from the first file in the list."""
@@ -359,7 +352,6 @@ class TestEdgeCasesAndErrorHandling:
 class TestFileConverterIntegration:
     """Integration tests using actual files created during test setup."""
 
-    @pytest.mark.asyncio
     async def test_convert_real_json_to_parquet(self, tmp_path):
         """Test converting an actual JSON file to Parquet format.
 
@@ -389,7 +381,6 @@ class TestFileConverterIntegration:
         assert "name" in df.columns
         assert set(df["name"].values) == {"Alice", "Bob", "Charlie"}
 
-    @pytest.mark.asyncio
     async def test_convert_real_parquet_to_json(self, tmp_path):
         """Test converting an actual Parquet file to JSON format.
 

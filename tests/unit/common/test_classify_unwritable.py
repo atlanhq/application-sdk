@@ -172,7 +172,6 @@ class TestActivityBoundaryTranslatesIt:
     a broken lazy import in `activities.py` would not fail one of them.
     """
 
-    @pytest.mark.asyncio
     async def test_an_erofs_from_a_task_becomes_the_typed_leaf(self) -> None:
         from application_sdk.app.base import App
         from application_sdk.app.registry import TaskRegistry
@@ -224,7 +223,6 @@ class TestActivityBoundaryTranslatesIt:
 
         assert exc_info.value.type == "LocalVolumeUnwritableError"
 
-    @pytest.mark.asyncio
     async def test_an_unrelated_eacces_stays_untranslated(self) -> None:
         # The other half of the wiring: a non-provenanced OSError must reach the
         # caller as itself. Note it is not even wrapped in ApplicationError —
