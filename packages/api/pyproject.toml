@@ -61,7 +61,7 @@ pyatlan = [
     # pyatlan 11.5.0 already requires authlib~=1.9.1 on Python >=3.10. Published
     # here too so a resolver that ignores requires-python cannot pick pyatlan's
     # py3.9 authlib branch for this wheel.
-    "authlib>=1.9.4,<2",  # CVE-2026-96760
+    "authlib>=1.9.5,<2",  # CVE-2026-96760
 ]
 
 [project.urls]
