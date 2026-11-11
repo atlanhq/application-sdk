@@ -132,13 +132,18 @@ class SkippedRecordSink:
     with ``current_skipped_records.set(SkippedRecordSink(path))``.
 
     Attributes:
-        path: Local file the kept lines are appended to.
+        path: Local file the kept lines are appended to. Unique per activity
+            *attempt*, so a retry never appends to a failed attempt's lines.
+        part_name: Object name of the uploaded part; one per activity, so a
+            retry's upload replaces any earlier one. Defaults to ``path.name``.
         seen: Every skip recorded through this sink.
         kept: Lines written (or buffered) to :attr:`path`; at most
-            :data:`MAX_SKIPPED_RECORDS`.
+            :data:`MAX_SKIPPED_RECORDS`. Lines lost to a failed local write
+            are moved from here to ``skipped-records-unpersisted``.
     """
 
     path: Path
+    part_name: str = ""
     seen: int = 0
     kept: int = 0
     _buffer: list[bytes] = field(default_factory=list)
@@ -156,21 +161,48 @@ class SkippedRecordSink:
             await self.flush()
 
     @property
+    def object_name(self) -> str:
+        return self.part_name or self.path.name
+
+    @property
     def has_room(self) -> bool:
         return self.kept < MAX_SKIPPED_RECORDS
 
     async def flush(self) -> None:
-        """Write buffered lines to :attr:`path` off the event loop."""
+        """Write buffered lines to :attr:`path` off the event loop. Fails open.
+
+        A write failure (e.g. a full scratch disk) never fails the activity:
+        it is logged, and the chunk's lines are counted as
+        ``skipped-records-unpersisted`` instead of kept.
+        """
         if not self._buffer:
             return
         from application_sdk._runtime.offload import (  # noqa: PLC0415 — keep the workflow sandbox import set small
             run_in_thread,
         )
 
+        lines = len(self._buffer)
         chunk = b"".join(self._buffer)
         self._buffer.clear()
         self._buffered_bytes = 0
-        await run_in_thread(_append_lines, self.path, chunk)
+        try:
+            await run_in_thread(_append_lines, self.path, chunk)
+        # conformance: ignore[E004] fail-open by design (FND-4881): logged at ERROR and counted in skipped-records-unpersisted
+        except Exception:
+            from application_sdk.outputs import (  # noqa: PLC0415 — circular: the package re-exports this module
+                get_outputs,
+            )
+
+            self.kept -= lines
+            _logger.error(
+                "Failed to write %d skipped record(s) to the local file; they "
+                "are counted but missing from the run's skipped-records file",
+                lines,
+                exc_info=True,
+            )
+            get_outputs().add_metric(
+                Metric(name=SKIPPED_RECORDS_UNPERSISTED_METRIC, value=lines)
+            )
 
 
 current_skipped_records: contextvars.ContextVar[SkippedRecordSink | None] = (
@@ -205,9 +237,17 @@ def _new_sink() -> SkippedRecordSink:
             run_temp_dir,
         )
 
-        name = _UNSAFE_KEY_CHARS.sub("_", activity.info().activity_id)
+        info = activity.info()
+        name = _UNSAFE_KEY_CHARS.sub("_", info.activity_id)
+        # The local file is per attempt: run_temp_dir() and the activity ID
+        # are both stable across retries, and a failed attempt's file stays
+        # behind. The part keeps the activity's name, so a retry's upload
+        # replaces rather than adds to an earlier one.
         return SkippedRecordSink(
-            Path(run_temp_dir()) / "skipped-records" / f"{name}.ndjson"
+            Path(run_temp_dir())
+            / "skipped-records"
+            / f"{name}-attempt-{info.attempt}.ndjson",
+            part_name=f"{name}.ndjson",
         )
     # No directory is created until the first flush writes to it.
     return SkippedRecordSink(
@@ -316,6 +356,8 @@ async def persist_activity_skips(sink: SkippedRecordSink) -> None:
     """
     from application_sdk.outputs import get_outputs  # noqa: PLC0415 — circular
 
+    # Fails open itself; a failed write moves its lines out of ``kept``.
+    await sink.flush()
     if sink.kept == 0:
         return
     try:
@@ -326,8 +368,7 @@ async def persist_activity_skips(sink: SkippedRecordSink) -> None:
             upload_file,
         )
 
-        key = f"{build_output_path()}/{SKIPPED_RECORDS_PARTS_DIR}/{sink.path.name}"
-        await sink.flush()
+        key = f"{build_output_path()}/{SKIPPED_RECORDS_PARTS_DIR}/{sink.object_name}"
         await upload_file(key, sink.path)
     # conformance: ignore[E004] fail-open by design (FND-4881): logged at ERROR and counted in skipped-records-unpersisted
     except Exception:

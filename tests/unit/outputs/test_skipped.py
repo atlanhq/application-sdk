@@ -173,6 +173,27 @@ class TestSkipRecord:
         run_in_thread.assert_awaited_once()
         assert run_in_thread.await_args.args[0] is skipped._append_lines
 
+    async def test_local_write_failure_fails_open(self, collector, sink):
+        """A full scratch disk never fails the activity (lens F-7f3f33)."""
+        with (
+            mock.patch.object(skipped, "_FLUSH_BYTES", 1),
+            mock.patch(
+                "application_sdk._runtime.offload.run_in_thread",
+                new_callable=mock.AsyncMock,
+                side_effect=OSError("No space left on device"),
+            ),
+            mock.patch.object(skipped, "_logger") as logger,
+        ):
+            await skip_record(
+                {}, SkipReason.BLANK_IDENTITY, record_id="x", entity_type="T"
+            )
+
+        logger.error.assert_called_once()
+        metrics = collector.to_dict()["metrics"]
+        assert metrics[SKIPPED_RECORDS_METRIC] == 1
+        assert metrics[SKIPPED_RECORDS_UNPERSISTED_METRIC] == 1
+        assert (sink.seen, sink.kept) == (1, 0)
+
     async def test_no_skips_writes_nothing(self, collector, sink):
         await sink.flush()
         assert not sink.path.exists()
@@ -223,6 +244,61 @@ class TestPersistActivitySkips:
 
         logger.error.assert_called_once()
         assert collector.to_dict()["metrics"][SKIPPED_RECORDS_UNPERSISTED_METRIC] == 2
+
+
+class TestRetriedActivity:
+    """A retry never inherits a failed attempt's lines (lens F-53be14)."""
+
+    @staticmethod
+    def _sink_for_attempt(attempt: int, scratch: Path) -> SkippedRecordSink:
+        info = mock.MagicMock(activity_id="7", attempt=attempt)
+        with (
+            mock.patch("temporalio.activity.in_activity", return_value=True),
+            mock.patch("temporalio.activity.info", return_value=info),
+            mock.patch(
+                "application_sdk.execution._temporal.activity_utils.run_temp_dir",
+                return_value=str(scratch),
+            ),
+        ):
+            return skipped._new_sink()
+
+    async def test_each_attempt_writes_its_own_file_to_one_part(
+        self, collector, tmp_path
+    ):
+        first = self._sink_for_attempt(1, tmp_path)
+        token = current_skipped_records.set(first)
+        try:
+            await skip_record(
+                {}, SkipReason.BLANK_IDENTITY, record_id="a", entity_type="T"
+            )
+            await first.flush()  # attempt 1 then fails before upload
+        finally:
+            current_skipped_records.reset(token)
+
+        second = self._sink_for_attempt(2, tmp_path)
+        token = current_skipped_records.set(second)
+        try:
+            await skip_record(
+                {}, SkipReason.BLANK_IDENTITY, record_id="b", entity_type="T"
+            )
+            with (
+                mock.patch(
+                    "application_sdk.execution._temporal.activity_utils.build_output_path",
+                    return_value="artifacts/run",
+                ),
+                mock.patch.object(
+                    storage, "upload_file", new_callable=mock.AsyncMock
+                ) as up,
+            ):
+                await persist_activity_skips(second)
+        finally:
+            current_skipped_records.reset(token)
+
+        assert first.path != second.path
+        up.assert_awaited_once_with(
+            "artifacts/run/skipped-records/parts/7.ndjson", second.path
+        )
+        assert [line["record_id"] for line in _lines(second.path)] == ["b"]
 
 
 class TestMergeRunSkips:
