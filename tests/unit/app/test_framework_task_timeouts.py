@@ -32,7 +32,7 @@ from application_sdk.app.task import _DEFAULT_TIMEOUT_SECONDS, get_task_metadata
 BACKSTOP_TASKS = ("upload", "download", "verify_refs", "upload_refs")
 
 #: No progress signal → the declared duration is the only bound. Keep it.
-DECLARED_DURATION_TASKS = ("cleanup_files", "cleanup_storage")
+DECLARED_DURATION_TASKS = ("cleanup_files", "cleanup_storage", "merge_skipped_records")
 
 
 @pytest.mark.parametrize("name", BACKSTOP_TASKS)

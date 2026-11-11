@@ -888,6 +888,49 @@ an INFO line per hard app at boot. Start soft, then flip to `hard` once connecto
 `would_block` rows show the checks track real workflow failures. See the `adopt-preflight-gate`
 skill for the full adoption flow.
 
+### Skipping a Record on Purpose (`skip_record`)
+
+When an app decides not to emit a record — for example, a qualifiedName input is blank and would
+publish a broken identity — call `skip_record` from inside the `@task` loop instead of only
+logging:
+
+```python
+from application_sdk.outputs import SkipReason, skip_record
+
+@task
+async def transform(self, input: TransformInput) -> TransformOutput:
+    for row in rows:
+        if not row.get("schema_name"):
+            await skip_record(
+                row,
+                SkipReason.BLANK_IDENTITY,
+                record_id=row["table_id"],
+                entity_type="Table",
+                detail="schema_name is blank",
+            )
+            continue
+        ...
+```
+
+The SDK then does the rest:
+
+- The record is kept as one NDJSON line, written off the event loop. Logs get only `record_id`,
+  `entity_type` and `reason`, never the record.
+- `skipped-records` and `skipped-records-<reason>` are added to the run metrics.
+- After `run()` returns, the framework task `merge_skipped_records` merges every activity's records
+  into `{run prefix}/skipped-records.ndjson` and adds the run artifact `skipped-records`.
+- A `SUCCESS` result is marked `PARTIAL_SUCCESS`. `FAILURE` is never changed.
+
+A run that skips nothing has no artifact, no skip metrics and keeps its status, so the artifact's
+presence alone says there is something to review. `reason` must be a `SkipReason`; put specifics in
+`detail`, which reaches the file only. The file and the per-record warnings are capped at
+`MAX_SKIPPED_RECORDS` (10,000); the counts never are, and `skipped-records-truncated` /
+`skipped-records-unpersisted` account for every skip not in the file. Storage failures fail open.
+
+This is not asset validation: [Asset-Validation Outcome](#asset-validation-outcome) reports assets
+the app *did* emit that look wrong; `skip_record` records what the app *chose not to* emit. See
+[ADR-0022](../adr/0022-skipped-record-capture.md).
+
 ### Asset-Validation Outcome
 
 `App.upload()` runs a **warn-only** validation of transformed asset NDJSON against the pyatlan_v9

@@ -204,9 +204,9 @@ class TestGetAllTaskActivities:
                 return _ActOutput()
 
         activities = get_all_task_activities()
-        # 2 user tasks + 6 framework tasks (upload, download, verify_refs,
-        # upload_refs, cleanup_files, cleanup_storage) = 8
-        assert len(activities) == 8
+        # 2 user tasks + 7 framework tasks (upload, download, verify_refs,
+        # upload_refs, cleanup_files, cleanup_storage, merge_skipped_records) = 9
+        assert len(activities) == 9
 
     def test_returns_activities_for_all_apps(self) -> None:
         class _AppA(App):
@@ -252,9 +252,9 @@ class TestGetAllTaskActivities:
                 return _Out2()
 
         activities = get_all_task_activities()
-        # 1 user task per app (2) + 6 framework tasks per app (12) = 14
+        # 1 user task per app (2) + 7 framework tasks per app (14) = 16
         # (no dedup — each app has its own qualified activity names)
-        assert len(activities) == 14
+        assert len(activities) == 16
         activity_names = [
             a._task_metadata.name  # type: ignore[attr-defined]
             for a in activities
