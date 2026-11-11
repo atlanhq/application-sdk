@@ -544,7 +544,7 @@ provides-extras = ["sql", "pandas", "aws", "pyatlan"]
 
 [[package]]
 name = "atlan-application-sdk-conformance"
-version = "0.56.1"
+version = "0.57.0"
 source = { directory = "packages/conformance" }
 dependencies = [
     { name = "jinja2" },

@@ -2,6 +2,32 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.57.0] - 2026-11-11
+
+### Features
+
+- capture skipped records as one run artifact and mark the run PARTIAL_SUCCESS [FND-4881] (#4852) ([e66422d](https://github.com/atlanhq/application-sdk/commit/e66422d))
+- flag test-only SDK extras in [project.dependencies] with D018 [FND-4657] (#4850) ([301b4a4](https://github.com/atlanhq/application-sdk/commit/301b4a4))
+- flag imports of removed SDK modules (B009) and give connector-imported private names public homes [FND-4661] (#4844) ([dfa7cfb](https://github.com/atlanhq/application-sdk/commit/dfa7cfb))
+- deprecate the transformers helper modules and re-home the YAML-template helpers [FND-4690] (#4838) ([c8e5cd9](https://github.com/atlanhq/application-sdk/commit/c8e5cd9))
+
+### Bug fixes
+
+- default deploy.dapr.secretstore to the app's credentials and flag credential apps without it (K030) [FND-4871] (#4848) ([8d4d4e5](https://github.com/atlanhq/application-sdk/commit/8d4d4e5))
+- accept the handler's FileUploadResponse in download_file_from_upload_response; deprecate the v2 server/fastapi surface [FND-4692] (#4841) ([4d9d1f9](https://github.com/atlanhq/application-sdk/commit/4d9d1f9))
+- treat the credential_guid route as supported; stop the SDK tripping legacy_credential_ref's warning [FND-4691] (#4837) ([7c11461](https://github.com/atlanhq/application-sdk/commit/7c11461))
+- combined-mode handler /ready mirrors the co-hosted worker's readiness [FND-4644] (#4835) ([fc575c9](https://github.com/atlanhq/application-sdk/commit/fc575c9))
+- deprecate the unwired Heracles helpers and CapacityPool, record one @observability metric, and stop installing debug handlers at import [FND-4650] (#4820) ([fbcb5c0](https://github.com/atlanhq/application-sdk/commit/fbcb5c0))
+- bound every read of the Temporal core /metrics endpoint with one shared helper [FND-4643] (#4817) ([17899fc](https://github.com/atlanhq/application-sdk/commit/17899fc))
+- keep a retired shim's reusable until C002 reports zero copies, enforced by a test [FND-4654] (#4815) ([30ce771](https://github.com/atlanhq/application-sdk/commit/30ce771))
+- hold GitHub Actions updates 7 days, stop auto-merging action majors, and record the 3-day Renovate exception [FND-4651] (#4809) ([44cb7c1](https://github.com/atlanhq/application-sdk/commit/44cb7c1))
+
+### Other changes
+
+- refactor(testing): delete test_utils, make the full_dag deprecation gate-visible, deprecate BaseIntegrationTest and LogCollector [FND-4659] (#4851) ([18709d8](https://github.com/atlanhq/application-sdk/commit/18709d8))
+- refactor(testing): move setup_routes, scale_data_generator and the parity CLI behind private modules with deprecated aliases [FND-4660] (#4842) ([66b4948](https://github.com/atlanhq/application-sdk/commit/66b4948))
+- refactor: deprecate app/ re-export shims, drop transfer no-ops, move arrow helper to common [FND-4693] (#4836) ([8ccf131](https://github.com/atlanhq/application-sdk/commit/8ccf131))
+
 ## [0.56.1] - 2026-11-09
 
 ### Bug fixes
