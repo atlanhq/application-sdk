@@ -19,6 +19,7 @@ from conformance.suite.checks.dependency_conformance import (
     DEPRECATED_SDK_EXTRAS,
     RUNTIME_IMAGE_PYTHON,
     SDK_PYTHON_FLOOR,
+    TEST_ONLY_SDK_EXTRAS,
     _collect_dialect_drivers,
     _collect_dialect_names,
     _dist_dialect_entry_points,
@@ -756,6 +757,142 @@ def test_d017_shim_table_matches_sdk_pyproject() -> None:
     assert set(DEPRECATED_SDK_EXTRAS) <= set(extras), (
         "D017 lists an extra the SDK no longer publishes; D005 owns it now"
     )
+
+
+# ── D018: test-only SDK extra in [project.dependencies] ─────────────────────
+
+
+def _d018(text: str) -> list:
+    findings = scan_text(text, "pyproject.toml", sdk_managed_packages=set())
+    return [f for f in findings if f.rule_id == "D018"]
+
+
+@pytest.mark.parametrize("extra", ["tests", "harness", "Tests"])
+def test_d018_fires_on_test_extra_in_runtime_array(extra: str) -> None:
+    text = _write_pyproject(deps=f'    "atlan-application-sdk[{extra}]>=3.33,<4",\n')
+    findings = _d018(text)
+    assert len(findings) == 1
+    f = findings[0]
+    assert (f.line, f.discriminator) == (5, extra.lower())
+    assert f"[{extra}]" in f.message
+    assert "[project.dependencies]" in f.message
+    assert "[dependency-groups].dev" in f.message
+    assert "uv lock" in f.message
+
+
+def test_d018_one_finding_per_test_extra_alongside_runtime_extras() -> None:
+    text = _write_pyproject(
+        deps='    "atlan-application-sdk[sql,tests,harness]>=3.33,<4",\n'
+    )
+    findings = _d018(text)
+    assert sorted(f.discriminator for f in findings) == ["harness", "tests"]
+    assert {f.line for f in findings} == {5}
+
+
+def test_d018_fires_on_inline_single_quoted_runtime_array() -> None:
+    text = (
+        '[project]\nname = "demo-app"\nversion = "0.1.0"\n'
+        "dependencies = ['atlan-application-sdk[tests]>=3.33,<4']\n"
+    )
+    assert [(f.line, f.discriminator) for f in _d018(text)] == [(4, "tests")]
+
+
+def test_d018_says_dev_group_entry_already_exists() -> None:
+    """With [tests] already in a dev group, the fix is only the runtime removal."""
+    text = (
+        _write_pyproject(deps='    "atlan-application-sdk[tests]>=3.33,<4",\n')
+        + "[dependency-groups]\n"
+        + 'dev = ["atlan-application-sdk[tests]>=3.33,<4"]\n'
+    )
+    findings = _d018(text)
+    assert len(findings) == 1
+    assert "already pulls in" in findings[0].message
+    assert "add '" not in findings[0].message
+
+
+@pytest.mark.parametrize("group", ["lint", "test"])
+def test_d018_non_dev_group_entry_still_asks_for_dev(group: str) -> None:
+    """Only ``dev`` is synced by default; another group may never reach tests."""
+    text = (
+        _write_pyproject(deps='    "atlan-application-sdk[tests]>=3.33,<4",\n')
+        + "[dependency-groups]\n"
+        + f'{group} = ["atlan-application-sdk[tests]>=3.33,<4"]\n'
+    )
+    findings = _d018(text)
+    assert len(findings) == 1
+    assert "already pulls in" not in findings[0].message
+    assert "[dependency-groups].dev so tests still get it" in findings[0].message
+
+
+@pytest.mark.parametrize("extras", ["", "[sql]", "[mcp,sql]", "[incremental]"])
+def test_d018_silent_on_runtime_extras(extras: str) -> None:
+    text = _write_pyproject(deps=f'    "atlan-application-sdk{extras}>=3.33,<4",\n')
+    assert _d018(text) == []
+
+
+def test_d018_silent_outside_the_runtime_array() -> None:
+    """Dev groups and optional-dependencies are not installed by a prod sync."""
+    text = (
+        _write_pyproject(deps='    "atlan-application-sdk>=3.33,<4",\n')
+        + "[project.optional-dependencies]\n"
+        + 'test = ["atlan-application-sdk[tests]>=3.33,<4"]\n'
+        + "[dependency-groups]\n"
+        + 'dev = ["atlan-application-sdk[tests,harness]>=3.33,<4"]\n'
+    )
+    assert _d018(text) == []
+
+
+def test_d018_silent_on_tests_extra_of_another_package() -> None:
+    text = _write_pyproject(
+        deps=('    "atlan-application-sdk>=3.33,<4",\n    "some-lib[tests]>=1,<2",\n')
+    )
+    assert _d018(text) == []
+
+
+def test_d018_suppressed_inline_directive() -> None:
+    text = _write_pyproject(
+        deps=(
+            '    "atlan-application-sdk[tests]>=3.33,<4",'
+            "  # conformance: ignore[D018] runtime image runs the self-test\n"
+        )
+    )
+    findings = _d018(text)
+    assert len(findings) == 1
+    assert findings[0].suppressed is True
+
+
+def test_d018_sdk_pyproject_is_exempt() -> None:
+    text = _write_pyproject(
+        name="atlan-application-sdk",
+        deps='    "atlan-application-sdk[tests]",\n',
+    )
+    assert scan_text(text, "pyproject.toml", sdk_managed_packages=set()) == []
+
+
+def test_d018_test_extras_match_sdk_pyproject() -> None:
+    """Drift guard: every extra D018 lists is published by the SDK, and the
+    packages its message names are exactly what the extra adds beyond core."""
+    sdk_pyproject = Path(__file__).parents[3] / "pyproject.toml"
+    if not sdk_pyproject.is_file():
+        pytest.skip("SDK pyproject.toml not locatable from the test tree")
+    project = tomllib.loads(sdk_pyproject.read_text(encoding="utf-8"))["project"]
+    if project.get("name") != "atlan-application-sdk":
+        pytest.skip("repo-root pyproject is not the SDK")
+
+    core = {
+        _normalise_name(re.split(r"[<>=!~;\[ ]", r, maxsplit=1)[0])
+        for r in project["dependencies"]
+    }
+    extras = {
+        _normalise_name(k): v for k, v in project["optional-dependencies"].items()
+    }
+    for name, installs in TEST_ONLY_SDK_EXTRAS.items():
+        assert name in extras, f"D018 lists [{name}], which the SDK no longer publishes"
+        adds = _sdk_extras_closure(extras, name) - core
+        assert adds, f"[{name}] adds nothing beyond core; D018 should not list it"
+        named = set(re.split(r",\s*|\s+and\s+", installs.removeprefix("the ")))
+        named = {n.removesuffix(" client") for n in named}
+        assert named == adds, f"D018 names {named} for [{name}]; it adds {adds}"
 
 
 # ── D016: requires-python must admit the runtime image's Python ──────────────
