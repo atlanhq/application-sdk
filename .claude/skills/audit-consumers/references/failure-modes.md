@@ -67,7 +67,7 @@ the repo reaches a terminal state.
 | `gh auth status` fails (Phase E0) | `[Phase E] gh not authenticated. Run: gh auth login --scopes repo\nSkipping Phase E — report has already been written.` | Phase E exits cleanly | User re-authenticates, re-runs with `--raise-prs` |
 | `gh api` returns no push permission | `[Phase E] atlanhq/<repo>: SKIP — no push permission for <gh-user>. Open this PR manually from the per-repo section of the audit report.` | repo → skipped | Manual PR from the audit report |
 | Repo is archived | `[Phase E] atlanhq/<repo>: SKIP — repo archived.` | repo → skipped | None; archived repos are not migration targets |
-| `git clone` fails | `[Phase E] atlanhq/<repo>: clone failed:\n<stderr>` | repo → failed | Check SSH key / network, re-run |
+| `git clone` fails | `[Phase E] atlanhq/<repo>: clone failed:\n<stderr>` | repo → failed | Check `gh auth status` (HTTPS clones use the gh credential helper) / network, re-run |
 | `git push` rejected | `[Phase E] atlanhq/<repo>: push rejected:\n<stderr>\nLocal branch preserved at /tmp/audit-fix/<slug>/<repo> for manual inspection.` | repo → failed (branch exists locally) | `cd /tmp/audit-fix/<slug>/<repo> && git push` after resolving |
 | `gh pr create` fails | `[Phase E] atlanhq/<repo>: PR creation FAILED:\n<stderr>\nBranch was pushed — open PR at: https://github.com/atlanhq/<repo>/compare/sdk-audit/<slug>` | repo → failed (branch is up at remote) | User opens PR via the compare URL |
 | User answers `skip` at E6 prompt | `[Phase E] atlanhq/<repo>: skipped by user. Local clone discarded.` | repo → skipped | — |
