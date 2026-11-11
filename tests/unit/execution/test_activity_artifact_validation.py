@@ -169,7 +169,6 @@ def generated_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_both_hooks_fire_on_a_declared_contract(
     tmp_path: Path, generated_dir: Path
 ) -> None:
@@ -197,7 +196,6 @@ async def test_both_hooks_fire_on_a_declared_contract(
     assert by_side["handoff"]["outcome"] == "clean"
 
 
-@pytest.mark.asyncio
 async def test_boundary_is_true_for_an_entrypoint_contract(
     tmp_path: Path, generated_dir: Path
 ) -> None:
@@ -216,7 +214,6 @@ async def test_boundary_is_true_for_an_entrypoint_contract(
     assert all(e["boundary"] is True for e in events)
 
 
-@pytest.mark.asyncio
 async def test_boundary_is_false_for_an_internal_task_contract(
     tmp_path: Path, generated_dir: Path
 ) -> None:
@@ -235,7 +232,6 @@ async def test_boundary_is_false_for_an_internal_task_contract(
     assert all(e["boundary"] is False for e in events)
 
 
-@pytest.mark.asyncio
 async def test_a_raising_validator_never_reaches_the_task(
     tmp_path: Path, generated_dir: Path
 ) -> None:
@@ -329,7 +325,6 @@ def bundle_generated_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
         pytest.param("legacy-extract", id="legacy-alias"),
     ],
 )
-@pytest.mark.asyncio
 async def test_the_runs_entry_point_selects_the_declaration_file(
     tmp_path: Path, bundle_generated_dir: Path, workflow_type: str
 ) -> None:
@@ -360,7 +355,6 @@ async def test_the_runs_entry_point_selects_the_declaration_file(
     )
 
 
-@pytest.mark.asyncio
 async def test_an_unregistered_workflow_type_falls_back_to_the_flat_file(
     tmp_path: Path, bundle_generated_dir: Path
 ) -> None:

@@ -127,7 +127,6 @@ class TestGuardsOnTheCallPath:
     """Each guard through the path an adopter actually runs — so removing a
     guard's call site (not just the guard) turns a test red."""
 
-    @pytest.mark.asyncio
     async def test_execute_app_refuses_a_replaced_context(self) -> None:
         installed = InfrastructureContext()
         set_infrastructure(installed)

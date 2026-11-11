@@ -42,7 +42,6 @@ class TestBaseClient:
         client = BaseClient(http_headers=headers)
         assert client.http_headers == headers
 
-    @pytest.mark.asyncio
     async def test_load_not_implemented(self, base_client):
         """Test that load method raises AbstractClientLoadError."""
         credentials = {"username": "test", "password": "secret"}
@@ -51,7 +50,6 @@ class TestBaseClient:
             await base_client.load(credentials=credentials)
         assert exc_info.value.message == "load method is not implemented"
 
-    @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_get_request_success(
         self, mock_async_client, base_client
@@ -83,7 +81,6 @@ class TestBaseClient:
             url, headers=expected_headers, params=params, auth=httpx.USE_CLIENT_DEFAULT
         )
 
-    @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_get_request_with_client_headers(
         self, mock_async_client, base_client
@@ -119,7 +116,6 @@ class TestBaseClient:
             url, headers=expected_headers, params=None, auth=httpx.USE_CLIENT_DEFAULT
         )
 
-    @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_get_request_http_status_error(
         self, mock_async_client, base_client
@@ -138,7 +134,6 @@ class TestBaseClient:
 
         assert result is None
 
-    @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_get_request_general_exception(
         self, mock_async_client, base_client
@@ -155,7 +150,6 @@ class TestBaseClient:
 
         assert result is None
 
-    @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_get_request_with_auth(
         self, mock_async_client, base_client
@@ -180,7 +174,6 @@ class TestBaseClient:
             url, headers=Headers(base_client.http_headers), params=None, auth=auth
         )
 
-    @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_post_request_success(
         self, mock_async_client, base_client
@@ -220,7 +213,6 @@ class TestBaseClient:
             follow_redirects=True,
         )
 
-    @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_post_request_with_files(
         self, mock_async_client, base_client
@@ -257,7 +249,6 @@ class TestBaseClient:
             follow_redirects=True,
         )
 
-    @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_post_request_http_status_error(
         self, mock_async_client, base_client
@@ -279,7 +270,6 @@ class TestBaseClient:
 
         assert result is None
 
-    @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_post_request_general_exception(
         self, mock_async_client, base_client
@@ -299,7 +289,6 @@ class TestBaseClient:
 
         assert result is None
 
-    @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_post_request_with_custom_timeout(
         self, mock_async_client, base_client
@@ -342,7 +331,6 @@ class TestBaseClient:
         assert isinstance(transport, httpx.AsyncHTTPTransport)
         assert transport._pool._ssl_context is sdk_context
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("method", ["get", "post"])
     @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_http_helpers_do_not_pass_ignored_verify(
@@ -388,7 +376,6 @@ class TestBaseClient:
         base_client.http_headers = {"Authorization": "Bearer token"}
         assert base_client.http_headers == {"Authorization": "Bearer token"}
 
-    @pytest.mark.asyncio
     async def test_load_method_signature(self, base_client):
         """Test that load method accepts the correct parameters."""
         credentials = {"username": "test", "password": "secret"}

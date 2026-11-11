@@ -69,7 +69,6 @@ def _client_with_pool() -> tuple[_LoadedClient, _PoolTransport]:
 _PATHS = [f"/slow/{i}" if i % 2 else f"/fast/{i}" for i in range(20)]
 
 
-@pytest.mark.asyncio
 async def test_fast_request_finishing_does_not_kill_concurrent_slow_requests() -> None:
     client, _ = _client_with_pool()
 
@@ -88,7 +87,6 @@ async def test_fast_request_finishing_does_not_kill_concurrent_slow_requests() -
     assert [resp.text for resp in responses] == _PATHS
 
 
-@pytest.mark.asyncio
 async def test_concurrent_posts_share_transport_without_failing() -> None:
     client, _ = _client_with_pool()
 
@@ -107,7 +105,6 @@ async def test_concurrent_posts_share_transport_without_failing() -> None:
     assert [resp.text if resp is not None else None for resp in responses] == _PATHS
 
 
-@pytest.mark.asyncio
 async def test_custom_transport_set_in_load_stays_open_between_calls() -> None:
     client, pool = _client_with_pool()
 
@@ -121,7 +118,6 @@ async def test_custom_transport_set_in_load_stays_open_between_calls() -> None:
     assert pool.close_calls == 1, "close() must release the shared transport once"
 
 
-@pytest.mark.asyncio
 async def test_async_with_closes_the_shared_transport_on_exit() -> None:
     client, pool = _client_with_pool()
 
@@ -133,7 +129,6 @@ async def test_async_with_closes_the_shared_transport_on_exit() -> None:
     assert pool.close_calls == 1
 
 
-@pytest.mark.asyncio
 async def test_async_with_closes_the_shared_transport_when_the_block_raises() -> None:
     client, pool = _client_with_pool()
 
@@ -159,7 +154,6 @@ async def _resource_warnings(scenario: Callable[[], Awaitable[None]]) -> list[st
     return [str(w.message) for w in caught if w.category is ResourceWarning]
 
 
-@pytest.mark.asyncio
 async def test_unclosed_client_warns_when_collected() -> None:
     async def unclosed() -> None:
         client, _ = _client_with_pool()
@@ -170,7 +164,6 @@ async def test_unclosed_client_warns_when_collected() -> None:
     assert len(messages) == 1 and "_LoadedClient was not closed" in messages[0]
 
 
-@pytest.mark.asyncio
 async def test_close_override_without_super_warns_when_collected() -> None:
     async def override_skips_super() -> None:
         client = _CloseWithoutSuper()
@@ -181,7 +174,6 @@ async def test_close_override_without_super_warns_when_collected() -> None:
     assert len(await _resource_warnings(override_skips_super)) == 1
 
 
-@pytest.mark.asyncio
 async def test_closed_or_unused_client_does_not_warn() -> None:
     async def closed() -> None:
         client, _ = _client_with_pool()
@@ -195,7 +187,6 @@ async def test_closed_or_unused_client_does_not_warn() -> None:
     assert await _resource_warnings(unused) == []
 
 
-@pytest.mark.asyncio
 async def test_shared_transport_is_entered_once_and_exited_by_close() -> None:
     client, pool = _client_with_pool()
 
@@ -215,7 +206,6 @@ async def test_shared_transport_is_entered_once_and_exited_by_close() -> None:
     await client.close()
 
 
-@pytest.mark.asyncio
 async def test_finalizer_tolerates_cleared_module_globals(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

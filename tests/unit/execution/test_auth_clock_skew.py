@@ -47,7 +47,6 @@ def _jwt_response() -> dict:
     }
 
 
-@pytest.mark.asyncio
 async def test_iat_clock_offset_corrects_skewed_refresh_timing() -> None:
     """With a 60s-slow local clock and a 60s token, the next refresh is
     scheduled at TTL/2 = 30s, not (TTL + skew)/2 = 60s."""

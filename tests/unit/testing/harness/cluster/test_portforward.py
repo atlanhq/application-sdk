@@ -57,7 +57,6 @@ def _kubectl_proc() -> MagicMock:
     return proc
 
 
-@pytest.mark.asyncio
 async def test_wait_for_port_success():
     """_wait_for_port resolves immediately when port is open."""
     reader = AsyncMock()
@@ -72,7 +71,6 @@ async def test_wait_for_port_success():
         await _wait_for_port(9999, timeout=1.0)
 
 
-@pytest.mark.asyncio
 async def test_wait_for_port_timeout():
     """_wait_for_port raises TimeoutError when port never opens."""
     with patch.object(
@@ -82,7 +80,6 @@ async def test_wait_for_port_timeout():
             await _wait_for_port(9999, timeout=0.2)
 
 
-@pytest.mark.asyncio
 async def test_kube_http_call_starts_port_forward():
     """kube_http_call starts kubectl port-forward and makes the HTTP request."""
     pf_proc = _kubectl_proc()
@@ -119,7 +116,6 @@ async def test_kube_http_call_starts_port_forward():
     assert exec_args[ns_idx + 1] == "test-ns"
 
 
-@pytest.mark.asyncio
 async def test_kube_http_call_terminates_port_forward_on_success():
     """Port-forward process is terminated even after a successful request."""
     pf_proc = _kubectl_proc()
@@ -136,7 +132,6 @@ async def test_kube_http_call_terminates_port_forward_on_success():
     pf_proc.terminate.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_kube_http_call_terminates_port_forward_on_error():
     """Port-forward process is terminated even when the HTTP request raises."""
     pf_proc = _kubectl_proc()
@@ -162,7 +157,6 @@ async def test_kube_http_call_terminates_port_forward_on_error():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_one_tunnel_serves_a_whole_session():
     """The property the poll loop needed: not one ``kubectl`` process per probe.
 
@@ -188,7 +182,6 @@ async def test_one_tunnel_serves_a_whole_session():
     pf_proc.terminate.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_a_session_that_makes_no_call_opens_no_tunnel():
     """The tunnel opens on first use, so an unused session costs nothing."""
     with (
@@ -202,7 +195,6 @@ async def test_a_session_that_makes_no_call_opens_no_tunnel():
     mock_exec.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_a_transport_error_rebuilds_the_tunnel_and_re_attempts():
     """A half-dead tunnel is exactly what a transport retry exists to escape.
 
@@ -235,7 +227,6 @@ async def test_a_transport_error_rebuilds_the_tunnel_and_re_attempts():
     procs[1].terminate.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_two_consecutive_transport_errors_propagate():
     """Rebuilt and still failing is a Service that is genuinely unreachable."""
     with (
@@ -256,7 +247,6 @@ async def test_two_consecutive_transport_errors_propagate():
             await session.request("GET", "/status")
 
 
-@pytest.mark.asyncio
 async def test_a_non_transport_failure_is_not_retried():
     """A 500 comes back as a response; a bug in the call is not a dead tunnel."""
     pf_proc = _kubectl_proc()
@@ -279,7 +269,6 @@ async def test_a_non_transport_failure_is_not_retried():
     assert mock_exec.call_count == 1
 
 
-@pytest.mark.asyncio
 async def test_a_tunnel_that_never_opens_does_not_leak_the_process():
     """The readiness wait failing still leaves a running ``kubectl`` behind."""
     pf_proc = _kubectl_proc()
@@ -296,7 +285,6 @@ async def test_a_tunnel_that_never_opens_does_not_leak_the_process():
     pf_proc.terminate.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_a_kubectl_that_ignores_terminate_is_killed():
     pf_proc = _kubectl_proc()
     pf_proc.wait = AsyncMock(side_effect=TimeoutError)
@@ -314,7 +302,6 @@ async def test_a_kubectl_that_ignores_terminate_is_killed():
     pf_proc.kill.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_closing_a_session_twice_is_harmless():
     """``aclose`` is idempotent, so the context manager's exit cannot double-free."""
     async with port_forward("ns", "svc", 8080) as session:
@@ -322,7 +309,6 @@ async def test_closing_a_session_twice_is_harmless():
         await session.aclose()
 
 
-@pytest.mark.asyncio
 async def test_the_tunnel_pins_the_kube_context_it_was_given():
     """Reads from one cluster and a tunnel into another is a silent wrong answer.
 
@@ -348,7 +334,6 @@ async def test_the_tunnel_pins_the_kube_context_it_was_given():
     assert argv[argv.index("--context") + 1] == "e2e-gcp"
 
 
-@pytest.mark.asyncio
 async def test_no_context_named_means_no_context_flag():
     """`None` is "whatever is current", which is right when nothing named one."""
     pf_proc = _kubectl_proc()
@@ -367,7 +352,6 @@ async def test_no_context_named_means_no_context_flag():
     assert "--context" not in list(mock_exec.call_args[0])
 
 
-@pytest.mark.asyncio
 async def test_concurrent_requests_open_exactly_one_tunnel():
     """The lazy open is check-then-act, so two callers could each spawn a kubectl.
 
@@ -399,7 +383,6 @@ async def test_concurrent_requests_open_exactly_one_tunnel():
     )
 
 
-@pytest.mark.asyncio
 async def test_the_e2e_module_re_exports_the_same_objects():
     """The compatibility guarantee of the move: same function, same class."""
     from application_sdk.testing import e2e
@@ -412,7 +395,6 @@ async def test_the_e2e_module_re_exports_the_same_objects():
     assert e2e.kube_http_call is moved.kube_http_call
 
 
-@pytest.mark.asyncio
 async def test_a_request_timeout_override_reaches_the_client():
     pf_proc = _kubectl_proc()
     request = AsyncMock(return_value=MagicMock(spec=httpx.Response))
@@ -431,7 +413,6 @@ async def test_a_request_timeout_override_reaches_the_client():
     assert kwargs["timeout"] == 2.5
 
 
-@pytest.mark.asyncio
 async def test_no_override_leaves_the_sessions_own_timeout_in_place():
     """``httpx`` reads an explicit ``timeout=None`` as "no timeout at all".
 
@@ -460,7 +441,6 @@ async def test_no_override_leaves_the_sessions_own_timeout_in_place():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_the_address_opens_the_tunnel_and_names_its_near_end():
     """``temporalio`` speaks gRPC and takes a bare ``host:port``, so the Temporal
     reader needs the tunnel's near end rather than an HTTP session over it."""
@@ -480,7 +460,6 @@ async def test_the_address_opens_the_tunnel_and_names_its_near_end():
     pf_proc.terminate.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_the_address_and_a_request_share_one_tunnel():
     """The reason ``address`` is on this class rather than a second
     implementation elsewhere: a session that is asked for both opens one
@@ -504,7 +483,6 @@ async def test_the_address_and_a_request_share_one_tunnel():
     assert mock_exec.call_count == 1
 
 
-@pytest.mark.asyncio
 async def test_a_closed_session_reopens_on_the_next_address_call():
     """``aclose`` clears the port as well as the client, so a reused session does
     not hand out the address of a tunnel it has already terminated."""
@@ -521,7 +499,6 @@ async def test_a_closed_session_reopens_on_the_next_address_call():
             assert await session.address() == "127.0.0.1:54322"
 
 
-@pytest.mark.asyncio
 async def test_an_address_on_a_tunnel_that_never_opens_does_not_leak_the_process():
     """Same leak the HTTP path guards: the ``kubectl`` child is already running by
     the time the readiness wait gives up."""
@@ -539,7 +516,6 @@ async def test_an_address_on_a_tunnel_that_never_opens_does_not_leak_the_process
     pf_proc.terminate.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_concurrent_first_calls_spawn_exactly_one_tunnel():
     """Both lazy-open entry points serialise on the same lock.
 
@@ -583,7 +559,6 @@ async def test_concurrent_first_calls_spawn_exactly_one_tunnel():
     )
 
 
-@pytest.mark.asyncio
 async def test_aclose_clears_both_fields_so_the_next_open_rebuilds():
     """`aclose` has to clear the port as well as the client.
 

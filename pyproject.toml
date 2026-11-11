@@ -231,7 +231,6 @@ test = [
     "coverage>=7.6.1,<8.0.0",
     "pytest-asyncio>=1.4.0,<2.0.0",
     "pytest-timeout>=2.3.0,<3.0.0",
-    "pytest-rerunfailures>=16.7,<17.0",
     "pytest-socket>=0.7.0,<1.0.0",
     "pytest-xdist>=3.8.0,<4.0.0",
     # starlette's TestClient (fastapi.testclient) is built on httpx2 and only
@@ -292,6 +291,9 @@ test-integration = "pytest tests/integration/ -m integration -v --timeout=120"
 # Size via ATLAN_LOAD_TEST_SIZE_MIB (default 1024; 51200 = 50 GiB). See tests/load/README.md.
 load-test-storage = "pytest tests/load -m load -v -s --timeout=0"
 test-scripts = "bats .github/scripts/tests"  # requires: bats-core (apt-get install -y bats)
+# Re-render the golden fixtures built from a toolkit contract; the freshness
+# test fails with this command when the checked-in copy is stale (FND-4680).
+regen-test-fixtures = "python -m tests.regen_fixtures"
 
 # API docs — must be before any sub-table header ([tool.poe.tasks.*])
 # or TOML nests it inside the sub-table rather than the parent tasks namespace
@@ -462,6 +464,9 @@ reportMissingImports = "warning"
 reportInvalidTypeForm = "warning"
 
 [tool.pytest.ini_options]
+# auto: every `async def` test and fixture runs on pytest-asyncio without a
+# mark. Do not add `@pytest.mark.asyncio`; only a non-default argument such as
+# `@pytest.mark.asyncio(loop_scope="session")` needs one.
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
@@ -470,7 +475,10 @@ pythonpath = ["."]
 # that spawn run_fault_isolated's process-pool children, so one worker owns them
 # instead of every worker spawning its own and starving timing-sensitive tests
 # of CPU (FND-4237). Inert without -n.
-addopts = "-m 'not integration and not e2e and not s3_integration and not azure_integration and not gcs_integration and not storage_emulator and not load and not perf' --dist loadgroup"
+# --strict-markers: an unregistered mark is a collection error, so a typo such
+# as `@pytest.mark.integraton` cannot slip past the -m filter and run a
+# Temporal-bound test in the unit legs. Register new marks in `markers` below.
+addopts = "-m 'not integration and not e2e and not s3_integration and not azure_integration and not gcs_integration and not storage_emulator and not load and not perf' --dist loadgroup --strict-markers"
 markers = [
     "perf: throughput comparisons and large-scale probes (≥10s each); excluded from the unit matrix, run once in the `Unit Perf Tests` job via `pytest tests/unit -m perf`",
     "load: opt-in large-file storage load tests — real bytes at ATLAN_LOAD_TEST_SIZE_MIB (50 GiB-class); run via `poe load-test-storage`, never in CI",

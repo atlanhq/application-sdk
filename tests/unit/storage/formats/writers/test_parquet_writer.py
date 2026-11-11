@@ -308,7 +308,6 @@ class TestParquetFileWriterPathGen:
 class TestParquetFileWriterWriteDataframe:
     """Test ParquetFileWriter pandas DataFrame writing."""
 
-    @pytest.mark.asyncio
     async def test_write_empty_dataframe(self, base_output_path: str):
         """Test writing an empty DataFrame."""
         parquet_output = ParquetFileWriter(path=base_output_path)
@@ -319,7 +318,6 @@ class TestParquetFileWriterWriteDataframe:
         assert parquet_output.chunk_count == 0
         assert parquet_output.total_record_count == 0
 
-    @pytest.mark.asyncio
     async def test_write_success(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
@@ -337,7 +335,6 @@ class TestParquetFileWriterWriteDataframe:
             assert parquet_output.chunk_count == 1
             mock_write_table.assert_called()
 
-    @pytest.mark.asyncio
     async def test_write_with_custom_path_gen(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
@@ -364,7 +361,6 @@ class TestParquetFileWriterWriteDataframe:
             assert "chunk-" in _published_name(file_path)
             assert _published_name(file_path).endswith(".parquet")
 
-    @pytest.mark.asyncio
     async def test_write_error_handling(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
@@ -381,7 +377,6 @@ class TestParquetFileWriterWriteDataframe:
 class TestParquetFileWriterReplacePrefix:
     """Regression coverage for replacing object-store parquet prefixes."""
 
-    @pytest.mark.asyncio
     async def test_replace_prefix_removes_stale_object_store_chunks_at_scale(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -493,7 +488,6 @@ class TestParquetFileWriterCloseContract:
     ``result.files`` of ``None``.
     """
 
-    @pytest.mark.asyncio
     async def test_close_returns_writer_result_with_filereference(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
@@ -513,7 +507,6 @@ class TestParquetFileWriterCloseContract:
         # And it's surfaced via last_result for async-with callers.
         assert writer.last_result is result
 
-    @pytest.mark.asyncio
     async def test_default_mode_returns_no_filereference(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
@@ -533,7 +526,6 @@ class TestParquetFileWriterCloseContract:
         assert result.total_record_count == len(sample_dataframe)
         assert result.files is None
 
-    @pytest.mark.asyncio
     async def test_close_then_persist_file_reference_uploads_full_output(
         self, tmp_path: Path
     ):
@@ -568,7 +560,6 @@ class TestParquetFileWriterCloseContract:
         all_keys = await list_keys(durable.storage_path, store)
         assert any("statistics" in k for k in all_keys)
 
-    @pytest.mark.asyncio
     async def test_no_inline_uploads_during_write_when_deferred(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
@@ -601,7 +592,6 @@ class TestParquetFileWriterCloseContract:
         parquet_upload.assert_not_called()
         delete_prefix.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_flush_buffer_swallows_only_object_store_not_provided_error(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
@@ -623,7 +613,6 @@ class TestParquetFileWriterCloseContract:
         # nothing was thrown, so the writer accepted the flush.
         assert writer.total_record_count == len(sample_dataframe)
 
-    @pytest.mark.asyncio
     async def test_flush_buffer_propagates_non_object_store_not_provided_error(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
@@ -649,7 +638,6 @@ class TestParquetFileWriterCloseContract:
 class TestParquetFileWriterMetrics:
     """Test ParquetFileWriter metrics recording."""
 
-    @pytest.mark.asyncio
     async def test_pandas_write_metrics(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
@@ -771,7 +759,6 @@ class TestParquetFileWriterConsolidation:
             0 in parquet_output.temp_folders_created
         )  # Previous folder should be tracked
 
-    @pytest.mark.asyncio
     async def test_write_chunk_to_temp_folder(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
@@ -798,7 +785,6 @@ class TestParquetFileWriterConsolidation:
         assert len(files) == 2
         assert "chunk-1.parquet" in files
 
-    @pytest.mark.asyncio
     async def test_write_chunk_to_temp_folder_no_path(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
@@ -814,7 +800,6 @@ class TestParquetFileWriterConsolidation:
             await parquet_output._write_chunk_to_temp_folder(sample_dataframe)
         assert exc_info.value.code == "INTERNAL_FORMAT_TEMP_FOLDER_PATH_MISSING"
 
-    @pytest.mark.asyncio
     async def test_consolidate_empty_folder(self, base_output_path: str):
         """Test consolidating when folder is empty."""
         parquet_output = ParquetFileWriter(path=base_output_path)
@@ -827,7 +812,6 @@ class TestParquetFileWriterConsolidation:
         assert parquet_output.chunk_count == 0
         assert parquet_output.total_record_count == 0
 
-    @pytest.mark.asyncio
     async def test_cleanup_temp_folders(self, base_output_path: str):
         """Test cleanup of temp folders."""
         parquet_output = ParquetFileWriter(path=base_output_path)
@@ -857,7 +841,6 @@ class TestParquetFileWriterConsolidation:
         assert parquet_output.temp_folder_index == 0
         assert parquet_output.current_folder_records == 0
 
-    @pytest.mark.asyncio
     async def test_temp_folder_removal_offloaded_to_thread(self, base_output_path: str):
         """Temp-folder rmtree must not run inline on the event loop.
 
@@ -881,7 +864,6 @@ class TestParquetFileWriterConsolidation:
         assert mock_offload.await_args_list[0].args[0] is SafeFileOps.rmtree
         assert not os.path.exists(folder)
 
-    @pytest.mark.asyncio
     async def test_write_batches_without_consolidation(self, base_output_path: str):
         """Test write_batches with consolidation disabled."""
         parquet_output = ParquetFileWriter(path=base_output_path)
@@ -902,7 +884,6 @@ class TestParquetFileWriterConsolidation:
             # Should have called base class method
             mock_base_method.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_accumulate_dataframe(self, base_output_path: str):
         """Test accumulating DataFrame into temp folders."""
         parquet_output = ParquetFileWriter(
@@ -939,7 +920,6 @@ class TestParquetFileWriterConsolidation:
             mock_consolidate.assert_called()
             mock_start_folder.assert_called()
 
-    @pytest.mark.asyncio
     async def test_consolidation_error_handling(self, base_output_path: str):
         """Test error handling in consolidation with cleanup."""
         parquet_output = ParquetFileWriter(
@@ -964,7 +944,6 @@ class TestParquetFileWriterConsolidation:
 
             mock_cleanup.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_async_generator_support(self, base_output_path: str):
         """Test that consolidation works with async generators."""
         parquet_output = ParquetFileWriter(
@@ -994,7 +973,6 @@ class TestParquetFileWriterConsolidation:
             assert mock_accumulate.call_count == 2
             mock_cleanup.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_consolidate_current_folder_pyarrow(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
@@ -1020,7 +998,6 @@ class TestParquetFileWriterConsolidation:
         assert parquet_output.total_record_count == len(sample_dataframe)
         assert len(parquet_output.partitions) == 1
 
-    @pytest.mark.asyncio
     async def test_consolidation_end_to_end_persist(self, tmp_path: Path):
         """`use_consolidation=True` + `defer_uploads=True` reach the store via close().
 
@@ -1067,7 +1044,6 @@ class TestParquetFileWriterConsolidation:
             f"{len(local_parquet)} — consolidation upload boundary broken"
         )
 
-    @pytest.mark.asyncio
     async def test_write_batches_with_consolidation(self, base_output_path: str):
         """write_batches() with consolidation accumulates, consolidates, and cleans up.
 
@@ -1101,7 +1077,6 @@ class TestParquetFileWriterConsolidation:
         temp_base = parquet_output._get_temp_base_path()
         assert not os.path.exists(temp_base) or not os.listdir(temp_base)
 
-    @pytest.mark.asyncio
     async def test_multiple_write_batched_calls_with_consolidation(
         self, base_output_path: str
     ):
@@ -1132,7 +1107,6 @@ class TestParquetFileWriterConsolidation:
         assert parquet_output.chunk_count >= 4
         assert len(parquet_output.partitions) >= 4
 
-    @pytest.mark.asyncio
     async def test_consolidation_with_very_small_buffer_multiple_chunks(
         self, base_output_path: str
     ):

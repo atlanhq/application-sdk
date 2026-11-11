@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from application_sdk.infrastructure.bindings import (
     BindingError,
     BindingRequest,
@@ -56,7 +54,6 @@ class TestBindingError:
 class TestMockBinding:
     """Tests for MockBinding."""
 
-    @pytest.mark.asyncio
     async def test_invoke_records_invocation(self) -> None:
         binding = MockBinding("test")
         await binding.invoke("get", b"data", {"k": "v"})
@@ -64,14 +61,12 @@ class TestMockBinding:
         assert len(invocations) == 1
         assert invocations[0] == ("get", b"data", {"k": "v"})
 
-    @pytest.mark.asyncio
     async def test_invoke_default_response(self) -> None:
         binding = MockBinding()
         resp = await binding.invoke("get")
         assert resp.data is None
         assert resp.metadata == {}
 
-    @pytest.mark.asyncio
     async def test_invoke_configured_response(self) -> None:
         binding = MockBinding()
         binding.set_response(
@@ -81,7 +76,6 @@ class TestMockBinding:
         assert resp.data == b"result"
         assert resp.metadata == {"x": "1"}
 
-    @pytest.mark.asyncio
     async def test_get_invocations_filtered_by_operation(self) -> None:
         binding = MockBinding()
         await binding.invoke("get")
@@ -92,7 +86,6 @@ class TestMockBinding:
         put_calls = binding.get_invocations("put")
         assert len(put_calls) == 1
 
-    @pytest.mark.asyncio
     async def test_clear_resets_invocations_and_responses(self) -> None:
         binding = MockBinding()
         binding.set_response("get", BindingResponse(data=b"x"))
@@ -110,7 +103,6 @@ class TestMockBinding:
         binding = MockBinding()
         assert binding.name == "mock"
 
-    @pytest.mark.asyncio
     async def test_metadata_defaults_to_empty_dict(self) -> None:
         binding = MockBinding()
         await binding.invoke("op", b"data")

@@ -28,7 +28,6 @@ def base_output_path(tmp_path_factory: pytest.TempPathFactory) -> str:
 )
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(config=json_output_config_strategy)
-@pytest.mark.asyncio
 async def test_init(base_output_path: str, config: dict[str, Any]) -> None:
     # Create a safe output path by joining base_output_path with config's output_path
     safe_path = str(Path(base_output_path) / config["output_path"])
@@ -42,7 +41,6 @@ async def test_init(base_output_path: str, config: dict[str, Any]) -> None:
     assert os.path.exists(json_output.path)
 
 
-@pytest.mark.asyncio
 async def test_write_empty(base_output_path: str) -> None:
     json_output = JsonFileWriter(  # type: ignore
         path=os.path.join(base_output_path, "tests", "raw"),
@@ -63,7 +61,6 @@ async def test_write_empty(base_output_path: str) -> None:
 )
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(df=dataframe_strategy())  # type: ignore
-@pytest.mark.asyncio
 async def test_write_single_chunk(base_output_path: str, df: pd.DataFrame) -> None:
     with patch("application_sdk.storage.formats._upload_file") as mock_push:
         json_output = JsonFileWriter(  # type: ignore
@@ -91,7 +88,6 @@ async def test_write_single_chunk(base_output_path: str, df: pd.DataFrame) -> No
 )
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(df=dataframe_strategy(), chunk_size=chunk_size_strategy)  # type: ignore
-@pytest.mark.asyncio
 async def test_write_multiple_chunks(
     base_output_path: str, df: pd.DataFrame, chunk_size: int
 ) -> None:
@@ -119,7 +115,6 @@ async def test_write_multiple_chunks(
         assert mock_push.call_count == expected_chunks
 
 
-@pytest.mark.asyncio
 async def test_write_error(base_output_path: str) -> None:
     json_output = JsonFileWriter(  # type: ignore
         path=os.path.join(base_output_path, "tests", "raw"),
@@ -173,7 +168,6 @@ def test_init_daft_dataframe_type_emits_deprecation_and_routes_to_pandas(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_write_chunk_handles_pandas_timestamp(tmp_path: Path) -> None:
     """_write_chunk must not raise TypeError when a column contains pandas.Timestamp."""
     import pandas as pd
@@ -197,7 +191,6 @@ async def test_write_chunk_handles_pandas_timestamp(tmp_path: Path) -> None:
     assert "2024-01-01" in record["ts"]
 
 
-@pytest.mark.asyncio
 async def test_write_chunk_surfaces_a_delayed_allocation_enospc_typed(
     tmp_path: Path,
 ) -> None:

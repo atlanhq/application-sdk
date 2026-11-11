@@ -103,7 +103,6 @@ class TestRollingFileWriterInit:
 
 
 class TestRollingFileWriterFlush:
-    @pytest.mark.asyncio
     async def test_aexit_flushes_buffer(self, base: str) -> None:
         """Pending appends must reach disk on context-manager exit."""
         flush_fn, calls = _make_flush_fn()
@@ -119,7 +118,6 @@ class TestRollingFileWriterFlush:
         assert path == os.path.join(base, "run", "chunk-0.json")
         assert os.path.exists(path)
 
-    @pytest.mark.asyncio
     async def test_close_is_idempotent(self, base: str) -> None:
         flush_fn, calls = _make_flush_fn()
         writer = RollingFileWriter(base, ".json", flush_fn)
@@ -128,7 +126,6 @@ class TestRollingFileWriterFlush:
         await writer.close()  # must not re-flush or raise
         assert len(calls) == 1
 
-    @pytest.mark.asyncio
     async def test_append_after_close_raises(self, base: str) -> None:
         flush_fn, _ = _make_flush_fn()
         writer = RollingFileWriter(base, ".json", flush_fn)
@@ -138,7 +135,6 @@ class TestRollingFileWriterFlush:
         with pytest.raises(RollingWriterClosedError):
             await writer.append({"id": 1})
 
-    @pytest.mark.asyncio
     async def test_explicit_flush_starts_new_chunk(self, base: str) -> None:
         flush_fn, calls = _make_flush_fn()
         async with RollingFileWriter(
@@ -155,7 +151,6 @@ class TestRollingFileWriterFlush:
         assert calls[1][0] == [{"id": 2}]
         assert calls[1][1].endswith("chunk-1.json")
 
-    @pytest.mark.asyncio
     async def test_empty_buffer_flush_is_noop(self, base: str) -> None:
         flush_fn, calls = _make_flush_fn()
         async with RollingFileWriter(base, ".json", flush_fn) as writer:
@@ -163,7 +158,6 @@ class TestRollingFileWriterFlush:
         assert calls == []
         assert writer.chunk_count == 0
 
-    @pytest.mark.asyncio
     async def test_async_flush_fn(self, base: str) -> None:
         """flush_fn may be an async callable; the writer awaits it."""
         calls: list[tuple[list[Any], str]] = []
@@ -181,7 +175,6 @@ class TestRollingFileWriterFlush:
 
 
 class TestRollingFileWriterRollover:
-    @pytest.mark.asyncio
     async def test_time_rollover_after_interval_elapsed(self, base: str) -> None:
         """append after interval elapses must flush the in-flight chunk."""
         flush_fn, calls = _make_flush_fn()
@@ -214,7 +207,6 @@ class TestRollingFileWriterRollover:
         assert flushed_paths == [os.path.join(base, "run", "chunk-0.json")]
         assert calls[0][0] == [{"id": 1}, {"id": 2}]
 
-    @pytest.mark.asyncio
     async def test_short_interval_rolls_between_sleeps(self, base: str) -> None:
         """Wall-clock interval drives rollover for real (non-mocked) sleeps.
 
@@ -253,7 +245,6 @@ class TestRollingFileWriterRollover:
 
 
 class TestRollingFileWriterOnChunkComplete:
-    @pytest.mark.asyncio
     async def test_callback_fires_per_chunk_with_index_and_path(
         self, base: str
     ) -> None:
@@ -277,7 +268,6 @@ class TestRollingFileWriterOnChunkComplete:
         assert first_path.endswith("chunk-0.json")
         assert second_path.endswith("chunk-1.json")
 
-    @pytest.mark.asyncio
     async def test_async_callback_supported(self, base: str) -> None:
         flush_fn, _ = _make_flush_fn()
         cb = AsyncMock()
@@ -287,7 +277,6 @@ class TestRollingFileWriterOnChunkComplete:
             await writer.append({"id": 1})
         assert cb.await_count == 1
 
-    @pytest.mark.asyncio
     async def test_callback_exception_does_not_abort_writer(self, base: str) -> None:
         """on_chunk_complete is best-effort; raises in it must not bubble."""
         flush_fn, calls = _make_flush_fn()
@@ -312,7 +301,6 @@ class TestRollingFileWriterFileReference:
         assert ref.local_path == os.path.join(base, "run")
         assert ref.is_durable is False  # ephemeral until persisted
 
-    @pytest.mark.asyncio
     async def test_file_reference_after_writes_covers_only_writer_dir(
         self, tmp_path: Path
     ) -> None:
@@ -550,7 +538,6 @@ class TestRollingFileWriterDefaults:
 
 
 class TestRollingFileWriterSizeRollover:
-    @pytest.mark.asyncio
     async def test_byte_ceiling_flushes_before_time(self, base: str) -> None:
         """max_buffer_bytes triggers a flush ahead of the time interval."""
         flush_fn, calls = _make_flush_fn()
@@ -573,7 +560,6 @@ class TestRollingFileWriterSizeRollover:
         # The size-triggered flush + __aexit__'s final flush = ≥ 1 chunk.
         assert len(calls) >= 1
 
-    @pytest.mark.asyncio
     async def test_record_ceiling_flushes_before_time(self, base: str) -> None:
         """max_buffer_records triggers a flush ahead of the time interval."""
         flush_fn, calls = _make_flush_fn()
@@ -598,7 +584,6 @@ class TestRollingFileWriterSizeRollover:
         ]
         assert len(flushed_records) == 100
 
-    @pytest.mark.asyncio
     async def test_size_estimator_failure_does_not_abort_writer(
         self, base: str
     ) -> None:

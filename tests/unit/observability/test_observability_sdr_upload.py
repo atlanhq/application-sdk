@@ -186,7 +186,6 @@ class TestObsModeDerivation:
 class TestUpstreamUploadFanOut:
     """(b) ``_upload_and_delete`` fans out to the upstream store in SDR mode."""
 
-    @pytest.mark.asyncio
     async def test_targets_both_deployment_and_upstream_store(
         self, obs_instance, tmp_path
     ):
@@ -227,7 +226,6 @@ class TestUpstreamUploadFanOut:
         # Local file is always deleted afterwards (no disk leak).
         assert not local.exists()
 
-    @pytest.mark.asyncio
     async def test_no_upstream_upload_when_flag_disabled(self, obs_instance, tmp_path):
         """Sanity: with the flag off, only the deployment store is targeted."""
         local = tmp_path / "part.json.gz"
@@ -256,7 +254,6 @@ class TestUpstreamUploadFanOut:
         assert calls == [deployment_store]
         get_upstream.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_flush_records_reaches_upstream_store(self, obs_instance, tmp_path):
         """End-to-end via ``_flush_records``: a real batch reaches the upstream
         store when SDR mode is on."""
@@ -299,7 +296,6 @@ class TestUpstreamUploadFanOut:
 class TestUpstreamUploadFailureSwallowed:
     """(c) An upstream-upload failure must not crash the flush."""
 
-    @pytest.mark.asyncio
     async def test_flush_records_swallows_upstream_failure(
         self, obs_instance, tmp_path
     ):
@@ -345,7 +341,6 @@ class TestUpstreamUploadFailureSwallowed:
         leftovers = list(tmp_path.rglob("*.json.gz"))
         assert leftovers == [], leftovers
 
-    @pytest.mark.asyncio
     async def test_upload_and_delete_deletes_local_file_even_on_upstream_failure(
         self, obs_instance, tmp_path
     ):

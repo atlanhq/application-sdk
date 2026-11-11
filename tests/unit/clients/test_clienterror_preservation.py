@@ -32,7 +32,6 @@ class TestAsyncSqlLoadErrorContract:
     unrecognised failure is typed as pending classification, not as auth.
     """
 
-    @pytest.mark.asyncio
     async def test_async_load_failure_raises_client_error_not_value_error(self):
         from application_sdk.clients.models import DatabaseConfig
         from application_sdk.clients.sql import AsyncBaseSQLClient
@@ -74,7 +73,6 @@ class TestAzureClientErrorContract:
     after ``close()``.
     """
 
-    @pytest.mark.asyncio
     async def test_load_preserves_internal_client_error_code(self):
         from application_sdk.clients.azure.client import AzureClient
 
@@ -98,7 +96,6 @@ class TestAzureClientErrorContract:
         # Sanity: it is the same AzureClientAuthError instance, not a re-wrap.
         assert exc_info.value is sentinel
 
-    @pytest.mark.asyncio
     async def test_load_after_close_raises_client_error_not_silent_dead_executor(
         self,
     ):
@@ -167,7 +164,6 @@ class TestRedisAsyncClientErrorContract:
     flagged as missed in the original PR.
     """
 
-    @pytest.mark.asyncio
     async def test_async_connect_preserves_internal_connection_error(self):
         from application_sdk.clients.redis import RedisClientAsync
 
@@ -187,7 +183,6 @@ class TestRedisAsyncClientErrorContract:
 
         assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_REDIS"
 
-    @pytest.mark.asyncio
     async def test_async_release_lock_preserves_process_result_error(self):
         from application_sdk.clients.redis import RedisClientAsync
 

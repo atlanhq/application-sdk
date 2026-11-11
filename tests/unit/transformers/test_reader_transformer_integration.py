@@ -18,7 +18,6 @@ from unittest.mock import mock_open, patch
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pytest
 
 from application_sdk.common.types import DataframeType
 from application_sdk.storage.formats.parquet import ParquetFileReader
@@ -56,7 +55,6 @@ async def _read_via_reader(tmp_path: Path):
         return await reader.read()
 
 
-@pytest.mark.asyncio
 async def test_reader_output_feeds_atlas_transformer(tmp_path: Path) -> None:
     """AtlasTransformer.transform_metadata must accept a real reader's output."""
     dataframe = await _read_via_reader(tmp_path)
@@ -79,7 +77,6 @@ async def test_reader_output_feeds_atlas_transformer(tmp_path: Path) -> None:
     assert len(result) == 2
 
 
-@pytest.mark.asyncio
 async def test_reader_output_feeds_query_based_transformer(tmp_path: Path) -> None:
     """QueryBasedTransformer.transform_metadata must accept a real reader's output."""
     dataframe = await _read_via_reader(tmp_path)

@@ -539,7 +539,6 @@ class TestCreateWorker:
 
     # ── sizing drain on shutdown ──────────────────────────────────────────
 
-    @pytest.mark.asyncio
     async def test_shutdown_drains_buffered_sizing_rows(self, monkeypatch) -> None:
         """The last batch of a pod's life must not die with the process: these pools
         scale to zero, so the tail of every pod would be lost.
@@ -560,7 +559,6 @@ class TestCreateWorker:
         await wrapper.__aexit__(None)
         assert drained == [True], "shutdown did not drain the sizing sink"
 
-    @pytest.mark.asyncio
     async def test_shutdown_skips_drain_when_collection_is_off(
         self, monkeypatch
     ) -> None:
@@ -580,7 +578,6 @@ class TestCreateWorker:
         await wrapper.__aexit__(None)
         assert drained == []
 
-    @pytest.mark.asyncio
     async def test_a_failing_drain_does_not_break_shutdown(self, monkeypatch) -> None:
         """Telemetry must never hold up or fail a shutdown."""
         monkeypatch.setenv("APPLICATION_SDK_ENABLE_SIZING_TELEMETRY", "true")
@@ -971,7 +968,6 @@ class TestAppWorker:
         ):
             yield
 
-    @pytest.mark.asyncio
     async def test_run_emits_worker_start_event_before_delegating(self) -> None:
         mock_inner = mock.AsyncMock()
         mock_inner.run = mock.AsyncMock(return_value=None)
@@ -998,7 +994,6 @@ class TestAppWorker:
         mock_emit.assert_called_once()
         mock_inner.run.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_emit_worker_start_event_suppresses_binding_error(
         self,
     ) -> None:
@@ -1030,7 +1025,6 @@ class TestAppWorker:
 
         mock_inner.run.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_emit_worker_start_event_passes_direct_publish_timeout(
         self,
     ) -> None:
@@ -1068,7 +1062,6 @@ class TestAppWorker:
         )
         mock_inner.run.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_emit_worker_start_event_suppresses_unexpected_errors(
         self,
     ) -> None:
@@ -1098,7 +1091,6 @@ class TestAppWorker:
 
         mock_inner.run.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_aenter_emits_event_and_returns_inner_worker(self) -> None:
         mock_inner = mock.AsyncMock()
         mock_inner.__aenter__ = mock.AsyncMock(return_value=mock_inner)
@@ -1197,7 +1189,6 @@ class TestShutdownDrainDelay:
             shutdown_drain_delay_seconds=drain_delay,
         )
 
-    @pytest.mark.asyncio
     async def test_without_drain_delay_activity_completion_preempted(self) -> None:
         """WITHOUT the drain delay, shutdown preempts the activity completion
         — reproducing the production deadlock.
@@ -1225,7 +1216,6 @@ class TestShutdownDrainDelay:
         assert activity_completed is False
         inner.__aexit__.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_with_drain_delay_activity_completes_before_shutdown(self) -> None:
         """WITH the drain delay, the activity completion runs before
         shutdown — the fix works.
@@ -1253,7 +1243,6 @@ class TestShutdownDrainDelay:
         assert activity_completed is True
         inner.__aexit__.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_drain_delay_flushes_multiple_pending_completions(self) -> None:
         """The drain delay flushes multiple pending activity completions,
         not just one."""
@@ -1275,7 +1264,6 @@ class TestShutdownDrainDelay:
 
         assert set(completions) == {"activity_1", "activity_2", "activity_3"}
 
-    @pytest.mark.asyncio
     async def test_aexit_completes_even_with_zero_delay(self) -> None:
         """Shutdown doesn't hang even when drain delay is 0 and there are
         no pending completions."""
@@ -1306,7 +1294,6 @@ class TestOnDrained:
     final push, pre-DELETE hold and DELETE (FND-4645).
     """
 
-    @pytest.mark.asyncio
     async def test_fires_after_drain_and_before_pushgateway_stop(self) -> None:
         order: list[str] = []
         inner = mock.AsyncMock()
@@ -1333,7 +1320,6 @@ class TestOnDrained:
 
         assert order == ["drain", "drained", "pushgateway_stop"]
 
-    @pytest.mark.asyncio
     async def test_fires_when_drain_raises(self) -> None:
         inner = mock.AsyncMock()
         inner.__aexit__ = mock.AsyncMock(side_effect=RuntimeError("teardown"))
@@ -1350,7 +1336,6 @@ class TestOnDrained:
 
         drained.assert_called_once_with()
 
-    @pytest.mark.asyncio
     async def test_failing_callback_does_not_skip_cleanup(self) -> None:
         inner = mock.AsyncMock()
         inner.__aexit__ = mock.AsyncMock(return_value=None)
@@ -1608,7 +1593,6 @@ class TestDescribeExceptionChain:
 class TestLogWorkerFatalError:
     """Tests for the ``on_fatal_error`` diagnostic log."""
 
-    @pytest.mark.asyncio
     async def test_passes_the_exception_object_as_exc_info(self) -> None:
         """``exc_info=True`` renders "NoneType: None" on this path.
 
@@ -1680,14 +1664,12 @@ class TestReadCorePollerCounts:
         client.__aexit__ = mock.AsyncMock(return_value=False)
         return mock.patch("httpx.AsyncClient", return_value=client)
 
-    @pytest.mark.asyncio
     async def test_sums_the_gauge_by_poller_type(self) -> None:
         with self._patch_client(self._response()):
             counts = await read_core_poller_counts()
 
         assert counts == {"workflow_task": 2.0, "activity_task": 3.0}
 
-    @pytest.mark.asyncio
     async def test_zero_pollers_reads_as_zero_not_unknown(self) -> None:
         """A dead poll loop must be distinguishable from an unreadable endpoint."""
         exposition = (
@@ -1699,20 +1681,17 @@ class TestReadCorePollerCounts:
 
         assert counts == {"workflow_task": 0.0}
 
-    @pytest.mark.asyncio
     async def test_oversize_content_length_is_unknown_not_zero(self) -> None:
         """A declared-oversize exposition is unknown, never a zero count."""
         with self._patch_client(self._response(content_length=str(100 * 1024 * 1024))):
             assert await read_core_poller_counts() is None
 
-    @pytest.mark.asyncio
     async def test_oversize_body_is_unknown_not_zero(self) -> None:
         """An actually-oversize body (no/!accurate Content-Length) is unknown."""
         body = "x" * (1024 * 1024 + 1)
         with self._patch_client(self._response(text=body)):
             assert await read_core_poller_counts() is None
 
-    @pytest.mark.asyncio
     async def test_oversize_chunked_stream_is_bounded(self) -> None:
         """A chunked response with no Content-Length must bail on the running
         byte total, not after an unbounded bulk read of the full body."""
@@ -1722,7 +1701,6 @@ class TestReadCorePollerCounts:
         with self._patch_client(self._response(text=body, force_chunk_size=4096)):
             assert await read_core_poller_counts() is None
 
-    @pytest.mark.asyncio
     async def test_unreachable_endpoint_is_unknown_not_zero(self) -> None:
         client = mock.AsyncMock()
         client.stream = mock.Mock(side_effect=OSError("connection refused"))
@@ -1732,12 +1710,10 @@ class TestReadCorePollerCounts:
         with mock.patch("httpx.AsyncClient", return_value=client):
             assert await read_core_poller_counts() is None
 
-    @pytest.mark.asyncio
     async def test_non_200_is_unknown(self) -> None:
         with self._patch_client(self._response(status_code=503)):
             assert await read_core_poller_counts() is None
 
-    @pytest.mark.asyncio
     async def test_absent_gauge_family_is_unknown(self) -> None:
         """Core registers the gauge only once polling starts; absent != zero."""
         exposition = (

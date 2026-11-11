@@ -80,7 +80,6 @@ class _App(SqlApp):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_extract_marks_once_per_page_never_per_record(
     tmp_path: Path, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -97,7 +96,6 @@ async def test_extract_marks_once_per_page_never_per_record(
     assert len(progress_marks.labels) == 4
 
 
-@pytest.mark.asyncio
 async def test_an_extract_that_yields_no_pages_marks_nothing(
     tmp_path: Path, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -110,7 +108,6 @@ async def test_an_extract_that_yields_no_pages_marks_nothing(
     assert progress_marks.labels == []
 
 
-@pytest.mark.asyncio
 async def test_transform_deliberately_records_no_progress(
     tmp_path: Path, progress_marks: RecordingProgressTracker
 ) -> None:
@@ -198,7 +195,6 @@ def _extractor(client: _PagedSQLClient, **attrs: str) -> SqlMetadataExtractor:
         ),
     ],
 )
-@pytest.mark.asyncio
 async def test_each_fetch_task_marks_once_per_page(
     attr: str,
     sql: str,
@@ -218,7 +214,6 @@ async def test_each_fetch_task_marks_once_per_page(
     assert len(progress_marks.labels) == 3
 
 
-@pytest.mark.asyncio
 async def test_fetch_tasks_are_inert_without_a_bound_tracker() -> None:
     """No ``progress_marks`` fixture here: no tracker is bound, on purpose.
 

@@ -26,7 +26,6 @@ from application_sdk._runtime.offload import run_in_thread
 
 
 class TestRunInThread:
-    @pytest.mark.asyncio
     async def test_dispatches_to_the_sdk_pool(self) -> None:
         """run_in_thread submits to the SDK-owned pool, never the loop's default executor.
 
@@ -42,7 +41,6 @@ class TestRunInThread:
         assert result == "passed through"
         assert len(executor.submissions) == 1
 
-    @pytest.mark.asyncio
     async def test_propagates_function_kwargs(self) -> None:
         """The wrapped callable must close over the original args and kwargs."""
         from application_sdk._runtime import offload as hb_mod
@@ -55,7 +53,6 @@ class TestRunInThread:
 
         assert result == 13
 
-    @pytest.mark.asyncio
     async def test_exception_inside_func_propagates(self) -> None:
         """If the wrapped function raises, the exception bubbles to the caller."""
         from application_sdk._runtime import offload as hb_mod

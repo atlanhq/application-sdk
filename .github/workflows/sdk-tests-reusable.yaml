@@ -63,7 +63,17 @@ jobs:
           # security-gate mint rather than a context expression that could
           # silently widen scope for a future empty-context caller.
           repositories: application-sdk
+      # The pinned pkl, for tests/unit/test_rendered_fixtures.py, which renders
+      # toolkit contracts and compares them with the checked-in fixtures. The
+      # install action is Linux-only, so macOS and Windows skip that one test;
+      # SDK_TESTS_REQUIRE_PKL below turns a skip on Linux into a failure
+      # (FND-4680).
+      - name: Install pkl
+        if: runner.os == 'Linux'
+        uses: "./.github/actions/install-pkl"
       - uses: "./.github/actions/unit-tests"
+        env:
+          SDK_TESTS_REQUIRE_PKL: ${{ runner.os == 'Linux' && '1' || '' }}
         with:
           github-token: ${{ (github.event.pull_request.head.repo.fork == true || github.event.pull_request.user.login == 'dependabot[bot]') && github.token || steps.app-token.outputs.token }}
           fail-under: "85"

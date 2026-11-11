@@ -180,7 +180,6 @@ async def test_preflight_fails_with_bad_credentials(tmp_path, monkeypatch):
     assert "upstream" not in msg or "not configured" not in msg
 
 
-@pytest.mark.asyncio
 async def test_multipart_forced_probe_round_trips_against_real_store(
     tmp_path,
 ) -> None:
@@ -199,7 +198,6 @@ async def test_multipart_forced_probe_round_trips_against_real_store(
     assert result.passed is True, result.message
 
 
-@pytest.mark.asyncio
 async def test_run_storage_access_check_against_real_store(tmp_path) -> None:
     """check_run_storage_access passes against a healthy real store and fails
     against one with rejected credentials."""

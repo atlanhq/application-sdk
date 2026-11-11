@@ -55,7 +55,6 @@ def mock_async_engine_with_connection():
 
 
 @patch("sqlalchemy.ext.asyncio.create_async_engine")
-@pytest.mark.asyncio
 async def test_load(
     create_async_engine: Any,
     async_sql_client: AsyncBaseSQLClient,
@@ -85,7 +84,6 @@ async def test_load(
 
 
 @patch("sqlalchemy.ext.asyncio.create_async_engine")
-@pytest.mark.asyncio
 async def test_load_respects_pool_pre_ping_override(
     create_async_engine: Any,
     async_sql_client: AsyncBaseSQLClient,
@@ -112,7 +110,6 @@ async def test_load_respects_pool_pre_ping_override(
     assert async_sql_client.connection is None
 
 
-@pytest.mark.asyncio
 @patch(
     "sqlalchemy.text",
     side_effect=lambda q: q,  # type: ignore
@@ -167,7 +164,6 @@ async def test_run_query_client_side_cursor(
     mock_result.keys.assert_called_once()
 
 
-@pytest.mark.asyncio
 @patch(
     "sqlalchemy.text",
     side_effect=lambda q: q,  # type: ignore
@@ -222,7 +218,6 @@ async def test_run_query_server_side_cursor(
     mock_result.keys.assert_called_once()
 
 
-@pytest.mark.asyncio
 @patch(
     "sqlalchemy.text",
     side_effect=lambda q: q,  # type: ignore
@@ -264,7 +259,6 @@ async def test_run_query_with_error(
 # ---------- colon-safe query execution (CONNECT-260) ----------
 
 
-@pytest.mark.asyncio
 @patch("sqlalchemy.text", side_effect=lambda q: q)  # type: ignore
 async def test_run_query_escapes_colons_client_side(
     mock_text: MagicMock,
@@ -289,7 +283,6 @@ async def test_run_query_escapes_colons_client_side(
     mock_connection.execute.assert_called_once_with("RLIKE '^(?\\:cdl)'", None)
 
 
-@pytest.mark.asyncio
 @patch("sqlalchemy.text", side_effect=lambda q: q)  # type: ignore
 async def test_run_query_escapes_colons_server_side(
     mock_text: MagicMock,
@@ -320,7 +313,6 @@ async def test_run_query_escapes_colons_server_side(
 # ---------- retryability of the unclassified-exception wrap (CONAT-747) ----------
 
 
-@pytest.mark.asyncio
 @patch("sqlalchemy.text", side_effect=lambda q: q)  # type: ignore
 async def test_run_query_wrap_is_retryable_server_side(
     mock_text: MagicMock,
@@ -356,7 +348,6 @@ async def test_run_query_wrap_is_retryable_server_side(
     assert exc_info.value.to_failure_details().retryable is True
 
 
-@pytest.mark.asyncio
 @patch("sqlalchemy.text", side_effect=lambda q: q)  # type: ignore
 async def test_run_query_wrap_is_retryable_client_side(
     mock_text: MagicMock,
@@ -403,7 +394,6 @@ def _record_connect_params(sync_engine: Any) -> list[dict[str, Any]]:
     return seen
 
 
-@pytest.mark.asyncio
 async def test_an_async_refresh_builds_the_token_off_the_event_loop() -> None:
     """An async engine connects on the loop; the STS-bound build must not run there."""
     pytest.importorskip("psycopg")
@@ -447,7 +437,6 @@ async def test_an_async_refresh_builds_the_token_off_the_event_loop() -> None:
     await engine.dispose()
 
 
-@pytest.mark.asyncio
 async def test_load_installs_the_on_loop_refresh_on_the_sync_engine() -> None:
     pytest.importorskip("psycopg")
     from sqlalchemy.ext.asyncio import create_async_engine
@@ -488,7 +477,6 @@ async def test_load_installs_the_on_loop_refresh_on_the_sync_engine() -> None:
     await real.dispose()
 
 
-@pytest.mark.asyncio
 async def test_a_cancelled_waiter_does_not_break_the_shared_refresh() -> None:
     """Cancelling a connect that waits on another's refresh must not cancel that refresh."""
     pytest.importorskip("psycopg")
