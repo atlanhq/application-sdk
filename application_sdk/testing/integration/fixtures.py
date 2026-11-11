@@ -150,7 +150,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -158,6 +158,7 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from typing_extensions import deprecated
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.fake_source import HttpFakeSourceFactory
@@ -323,7 +324,7 @@ def _app_name_of(app_cls: type[App]) -> str | None:
     ``_app_name`` is stamped onto the class by registration
     (:func:`application_sdk.app._ep_registration`), not by ``App`` itself — so
     its absence is not a missing attribute to route around, it *is* the
-    unregistered case :func:`_verify_registration` reports. One reader here
+    unregistered case :func:`verify_registration` reports. One reader here
     keeps the three call sites from each inventing a different fallback.
     """
     name = getattr(app_cls, "_app_name", None)
@@ -364,7 +365,7 @@ def _verify_env_ordering() -> None:
             )
 
 
-def _verify_registration(app_cls: type[App]) -> str:
+def verify_registration(app_cls: type[App]) -> str:
     """Fail when *app_cls* never reached the App registry; else its name."""
     from application_sdk.app.registry import (  # noqa: PLC0415 — deferred: keeps app.registry off the conftest's import path
         AppRegistry,
@@ -390,6 +391,20 @@ def _verify_registration(app_cls: type[App]) -> str:
         )
     _verify_app_name(app_cls, app_name)
     return app_name
+
+
+@deprecated(
+    "_verify_registration is deprecated; use verify_registration from "
+    "application_sdk.testing.integration.fixtures, the same function under a "
+    "public name (FND-4661) — will be removed in v4.0.0."
+)
+def _verify_registration(app_cls: type[App]) -> str:
+    """Deprecated private alias of :func:`verify_registration`.
+
+    .. deprecated:: 3.56
+        Use :func:`verify_registration`. Will be removed in v4.0.0.
+    """
+    return verify_registration(app_cls)
 
 
 def _verify_app_name(app_cls: type[App], app_name: str) -> None:
@@ -481,7 +496,7 @@ def _verify_infrastructure(expected: InfrastructureContext | None) -> None:
 
 
 @contextmanager
-def _artifact_preservation(options: KitOptions) -> Iterator[None]:
+def artifact_preservation(options: KitOptions) -> Iterator[None]:
     """Apply :attr:`KitOptions.preserve_artifacts` for the block, then restore it.
 
     With ``preserve_artifacts=False`` (the default) the variable is left
@@ -548,6 +563,20 @@ def _artifact_preservation(options: KitOptions) -> Iterator[None]:
             os.environ[CLEANUP_INTERCEPTOR_ENV] = current
 
 
+@deprecated(
+    "_artifact_preservation is deprecated; use artifact_preservation from "
+    "application_sdk.testing.integration.fixtures, the same context manager "
+    "under a public name (FND-4661) — will be removed in v4.0.0."
+)
+def _artifact_preservation(options: KitOptions) -> AbstractContextManager[None]:
+    """Deprecated private alias of :func:`artifact_preservation`.
+
+    .. deprecated:: 3.56
+        Use :func:`artifact_preservation`. Will be removed in v4.0.0.
+    """
+    return artifact_preservation(options)
+
+
 _verify_env_ordering()
 
 
@@ -596,7 +625,7 @@ def integration_task_queue(integration_app_cls: type[App]) -> str:
         task_queue_from_env,
     )
 
-    return task_queue_from_env() or f"{_verify_registration(integration_app_cls)}-queue"
+    return task_queue_from_env() or f"{verify_registration(integration_app_cls)}-queue"
 
 
 @pytest.fixture(scope="session")
@@ -880,8 +909,8 @@ async def worker(
     )
 
     del infrastructure
-    _verify_registration(integration_app_cls)
-    with _artifact_preservation(integration_options):
+    verify_registration(integration_app_cls)
+    with artifact_preservation(integration_options):
         async with create_worker(temporal_client, task_queue=integration_task_queue):
             yield
 
@@ -911,6 +940,12 @@ def executor(
     )
 
 
+# Connectors star-import this module, so ``__all__`` is the set of names that
+# lands in every adopting conftest. ``verify_registration`` and
+# ``artifact_preservation`` are public for a conftest that composes its own
+# ``worker`` fixture and imports them by name, but are deliberately left out of
+# ``__all__``: adding them would inject two new names into every star-importer's
+# namespace (FND-4661).
 __all__ = [
     "APPLICATION_NAME_ENV",
     "CLEANUP_INTERCEPTOR_ENV",

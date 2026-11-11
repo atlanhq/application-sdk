@@ -667,6 +667,15 @@
       "symbol": "StateStoreError"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "_current_outputs is deprecated; use application_sdk.outputs.current_outputs \u2014 the same ContextVar under a public name (FND-4661). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.outputs",
+      "removal_version": "4.0.0",
+      "symbol": "_current_outputs"
+    },
+    {
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.server.fastapi.models.ConfigMapResponse is deprecated; use the handler's GET /workflows/v1/configmap/{config_map_id} route instead \u2014 will be removed in v4.0.",
@@ -1018,6 +1027,15 @@
       "symbol": "AppConfig"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "_agent_credential_ref_keys is deprecated; use agent_credential_ref_keys from application_sdk.testing.e2e.payload, the same function under a public name (FND-4661) \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.e2e.payload",
+      "removal_version": "4.0.0",
+      "symbol": "_agent_credential_ref_keys"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "application_sdk.testing.full_dag.BaseFullDAGE2ETest is deprecated; use application_sdk.testing.e2e.BaseE2ETest \u2014 will be removed in v4.0",
@@ -1079,6 +1097,33 @@
       "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
       "removal_version": "4.0",
       "symbol": "workflow_event_strategy"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "_artifact_preservation is deprecated; use artifact_preservation from application_sdk.testing.integration.fixtures, the same context manager under a public name (FND-4661) \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "_artifact_preservation"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "_verify_registration is deprecated; use verify_registration from application_sdk.testing.integration.fixtures, the same function under a public name (FND-4661) \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "_verify_registration"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "_auto_discover_credentials is deprecated; use auto_discover_credentials from application_sdk.testing.integration.runner, the same function under a public name (FND-4661) \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration.runner",
+      "removal_version": "4.0.0",
+      "symbol": "_auto_discover_credentials"
     },
     {
       "kind": "constant",

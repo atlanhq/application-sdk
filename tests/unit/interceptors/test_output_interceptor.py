@@ -22,7 +22,7 @@ from application_sdk.outputs import (
     Artifact,
     Metric,
     OutputCollector,
-    _current_outputs,
+    current_outputs,
     get_outputs,
 )
 
@@ -78,23 +78,23 @@ class TestOutputActivityInboundInterceptor:
     @pytest.fixture(autouse=True)
     def cleanup_state(self):
         """Clean up ContextVar state before and after each test."""
-        _current_outputs.set(None)
+        current_outputs.set(None)
         yield
-        _current_outputs.set(None)
+        current_outputs.set(None)
 
     async def test_creates_fresh_collector_for_activity(
         self, interceptor, mock_next_inbound
     ):
         """Test that a fresh collector is created for each activity.
 
-        The collector is set on _current_outputs during execution and reset
+        The collector is set on current_outputs during execution and reset
         to None afterwards (try/finally cleanup). Verify it exists during
         the activity via a side effect on the mock.
         """
         collector_during_activity: list = []
 
         async def capture_collector(input):
-            collector_during_activity.append(_current_outputs.get())
+            collector_during_activity.append(current_outputs.get())
             return {"status": "success"}
 
         mock_next_inbound.execute_activity.side_effect = capture_collector
@@ -111,7 +111,7 @@ class TestOutputActivityInboundInterceptor:
         assert collector_during_activity[0] is not None
         assert isinstance(collector_during_activity[0], OutputCollector)
         # Collector is reset to None after execution (try/finally cleanup)
-        assert _current_outputs.get() is None
+        assert current_outputs.get() is None
 
     async def test_returns_original_activity_result(
         self, interceptor, mock_next_inbound
@@ -262,9 +262,9 @@ class TestOutputWorkflowInboundInterceptor:
     @pytest.fixture(autouse=True)
     def cleanup_state(self):
         """Clean up ContextVar state before and after each test."""
-        _current_outputs.set(None)
+        current_outputs.set(None)
         yield
-        _current_outputs.set(None)
+        current_outputs.set(None)
 
     @staticmethod
     def _completed(result: Any) -> "asyncio.Future[Any]":
@@ -533,9 +533,9 @@ class TestGetOutputsFunction:
     @pytest.fixture(autouse=True)
     def cleanup_state(self):
         """Clean up ContextVar state before and after each test."""
-        _current_outputs.set(None)
+        current_outputs.set(None)
         yield
-        _current_outputs.set(None)
+        current_outputs.set(None)
 
     def test_creates_collector_when_none_exists(self):
         """Test that get_outputs creates a new collector when none exists."""
@@ -553,7 +553,7 @@ class TestGetOutputsFunction:
         """Test that get_outputs returns an existing collector."""
         existing = OutputCollector()
         existing.add_metric(Metric(name="test", value=123))
-        _current_outputs.set(existing)
+        current_outputs.set(existing)
 
         collector = get_outputs()
         assert collector is existing

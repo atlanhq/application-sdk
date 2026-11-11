@@ -5,6 +5,10 @@ and the SDR harness (``application_sdk.testing.sdr.base``) substitute exact-matc
 ``{{...}}`` placeholders inside a manifest's nested ``extract`` args. The walker
 lives here so the two harnesses share one implementation (no drift) and the SDR
 harness need not depend on the AE-publish base class.
+
+The module is private; :func:`apply_mustache_subs` is public through
+:mod:`application_sdk.testing` (``from application_sdk.testing import
+apply_mustache_subs``), which is where an app test should import it from.
 """
 
 from __future__ import annotations

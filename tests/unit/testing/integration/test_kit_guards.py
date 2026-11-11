@@ -32,7 +32,7 @@ from application_sdk.testing.integration.fixtures import (
     AppExecutor,
     _verify_app_name,
     _verify_infrastructure,
-    _verify_registration,
+    verify_registration,
 )
 
 
@@ -177,7 +177,7 @@ class TestGuardsOnTheCallPath:
         monkeypatch.setattr(constants, "APPLICATION_NAME", "powerbi")
 
         with pytest.raises(AppNameMismatchError):
-            _verify_registration(_RegisteredApp)
+            verify_registration(_RegisteredApp)
 
 
 @pytest.fixture

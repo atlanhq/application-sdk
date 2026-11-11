@@ -38,6 +38,7 @@ from urllib.parse import quote
 import httpx
 import orjson
 import pytest
+from typing_extensions import deprecated
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.harness._poll import until_deadline
@@ -52,7 +53,7 @@ from .validation import format_validation_report, validate_with_pandera
 logger = get_logger(__name__)
 
 
-def _auto_discover_credentials(scenario_name: str = "") -> dict[str, Any]:
+def auto_discover_credentials(scenario_name: str = "") -> dict[str, Any]:
     """Auto-discover credentials from E2E_* environment variables.
 
     Checks for scenario-specific env vars first, then falls back to
@@ -123,6 +124,20 @@ def _auto_discover_credentials(scenario_name: str = "") -> dict[str, Any]:
             return {**app_credentials, **scenario_credentials}
 
     return app_credentials
+
+
+@deprecated(
+    "_auto_discover_credentials is deprecated; use auto_discover_credentials "
+    "from application_sdk.testing.integration.runner, the same function under "
+    "a public name (FND-4661) — will be removed in v4.0.0."
+)
+def _auto_discover_credentials(scenario_name: str = "") -> dict[str, Any]:
+    """Deprecated private alias of :func:`auto_discover_credentials`.
+
+    .. deprecated:: 3.56
+        Use :func:`auto_discover_credentials`. Will be removed in v4.0.0.
+    """
+    return auto_discover_credentials(scenario_name)
 
 
 def _collect_env_credentials(prefix: str) -> dict[str, Any]:
@@ -337,7 +352,7 @@ class BaseIntegrationTest:
                 )
 
         # Validate that app-level credentials are discoverable (early warning)
-        _auto_discover_credentials()
+        auto_discover_credentials()
 
         # Initialize the client
         cls.client = IntegrationTestClient(
@@ -491,7 +506,7 @@ class BaseIntegrationTest:
             credentials = scenario.credentials
         else:
             # Discover credentials with scenario-specific overrides
-            env_credentials = _auto_discover_credentials(scenario.name)
+            env_credentials = auto_discover_credentials(scenario.name)
             # Merge env vars + class defaults
             credentials = {**env_credentials, **self.default_credentials}
             # Apply build_credentials hook if defined

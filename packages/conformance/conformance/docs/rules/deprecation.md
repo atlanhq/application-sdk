@@ -5,7 +5,7 @@
 
 # Backwards-Compatibility / Deprecation Rules (B-series)
 
-**8 rules** · Checker: `suite.checks.deprecation` (AST-based)
+**9 rules** · Checker: `suite.checks.deprecation` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -31,6 +31,7 @@ reassigned.
 | [B006](#b006) | `StaleContractLedger` | `block` | `both` | `contract-backwards-compatibility` | yes | 0.7.0 |
 | [B007](#b007) | `DaftOnlyDataframeApiUsage` | `warn` | `app` | `daft-removal` | — | 0.18.0 |
 | [B008](#b008) | `PrivateModuleImport` | `warn` | `app` | `sdk-private-surface` | — | 0.34.0 |
+| [B009](#b009) | `RemovedSdkImport` | `warn` | `app` | `sdk-removed-surface` | — | 0.57.0 |
 
 ---
 
@@ -496,5 +497,59 @@ gap in the package worth raising rather than routing around; say so in the suppr
 Coverage limit (intentional): a reach-through whose base is not a module alias bound in
 the same file — e.g. a private attribute on an object returned by a factory — is not
 matched, biased toward zero false positives.
+
+---
+
+## B009 — `RemovedSdkImport` {#b009}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdk-removed-surface` · **Autofixable:** — · **Since:** 0.57.0
+
+> Imports an application_sdk module the SDK has removed — the file fails at import, so its tests never collect
+
+**Rationale:** A file that imports a module the SDK has removed fails at import. In tests/ that means
+the file never collects, so every test in it stops running, and the only signal is a
+collection error in a tier CI may not run on every PR — it reads as missing coverage
+rather than as a defect. Six connector e2e test files still import
+application_sdk.test_utils.e2e, which the v3.0.0 cut deleted, and none of their tests
+has run since (FND-4661). B001 cannot report this: it reads the deprecated-symbol
+manifest, and a symbol leaves that manifest when it is deleted at its horizon, which is
+exactly when an app still importing it breaks. B008 cannot either, because the module
+path is public. The rule reads a static registry of removed SDK modules, because detect
+runs without the app's own SDK installed and so cannot ask it whether a module still
+resolves. WARN rather than BLOCK because the fleet has these imports today and the fix
+is app-side; revisit once the count nears zero.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app tests/integration/conftest.py — every SDK import names a module the
+  current SDK ships (application_sdk.testing.integration.fixtures); nothing under the
+  three reference apps' tests/ imports application_sdk.test_utils or another removed
+  module.
+- **Migrate with:** [`programs/areas/deprecation.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/deprecation.prose.md)
+
+Flags an absolute import of a removed SDK module, or of any module beneath one.  Four
+shapes are matched:
+
+* `from application_sdk.test_utils.e2e.base import BaseTest`;
+* `import application_sdk.workflows.metadata_extraction.sql`;
+* `from application_sdk.test_utils import e2e` — the removed module named as the
+  imported member;
+* `from application_sdk import workflows`.
+
+The registry lists each removed public module by its topmost removed package, with the
+first SDK release that no longer shipped it.  It is derived from the SDK's git history,
+and the conformance suite checks every entry against the SDK tree, so a module that
+comes back stops being flagged.
+
+**Not matched.**  An import inside a `try` whose handler catches `ImportError` or
+`ModuleNotFoundError` is a deliberate probe that survives the module's absence.
+`importlib.import_module` with a string is not an import statement.  A removed *name*
+inside a module that still exists is deprecated before removal, and B001 reports it
+while the deprecation lasts.
+
+**Remediation.**  The finding names the removal version and, where one exists, the
+replacement module.  Port the file to the replacement (`application_sdk.testing.e2e` for
+the old e2e base), or delete it: it has not run since the module was removed, so check
+whether a newer file already covers it before porting.
 
 ---

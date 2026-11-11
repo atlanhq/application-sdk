@@ -29,6 +29,11 @@ with :class:`WarmingSource` (and, for gate tests, :class:`WarmingSourceHandler`)
 
     from application_sdk.testing import WarmingSource
 
+To assert what a manifest's ``{{...}}`` placeholders resolve to, run the same
+walker the e2e and SDR harnesses use rather than re-implementing it::
+
+    from application_sdk.testing import apply_mustache_subs
+
 Fixtures (import into conftest.py or test files)::
 
     from application_sdk.testing import (
@@ -64,6 +69,7 @@ if TYPE_CHECKING:
         diff_golden,
     )
 
+from application_sdk.testing._mustache import apply_mustache_subs
 from application_sdk.testing.fake_source import (
     Authorizer,
     CursorPage,
@@ -185,6 +191,7 @@ __all__ = [
     "WarmingSourceHandler",
     "WarmingStep",
     "app_context",
+    "apply_mustache_subs",
     "assert_matches_golden",
     "capture_preflight_outcomes",
     "clean_app_registry",

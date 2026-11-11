@@ -17,8 +17,10 @@ Usage:
     - Enriches the workflow's return value with collected data
 
 Architecture:
-    - _current_outputs: ContextVar holding the collector for the current
-      activity or workflow execution.
+    - current_outputs: ContextVar holding the collector for the current
+      activity or workflow execution. A test that drives an activity body
+      directly can install its own collector with ``current_outputs.set(...)``
+      and restore it with ``current_outputs.reset(token)``.
     - OutputInterceptor: Temporal interceptor managing the lifecycle. There is
       no process-level store: the activity and its workflow may run in
       different worker processes, so outputs travel through Temporal history
@@ -26,11 +28,12 @@ Architecture:
 """
 
 import contextvars
+import warnings
 
 from application_sdk.outputs.collector import OutputCollector
 from application_sdk.outputs.models import Artifact, Metric
 
-_current_outputs: contextvars.ContextVar[OutputCollector | None] = (
+current_outputs: contextvars.ContextVar[OutputCollector | None] = (
     contextvars.ContextVar("workflow_outputs", default=None)
 )
 
@@ -51,11 +54,35 @@ def get_outputs() -> OutputCollector:
         >>> outputs.add_metric(Metric(name="tables-extracted", value=150))
         >>> outputs.add_artifact(Artifact(name="debug-logs", path="artifacts/debug.tgz"))
     """
-    collector = _current_outputs.get()
+    collector = current_outputs.get()
     if collector is None:
         collector = OutputCollector()
-        _current_outputs.set(collector)
+        current_outputs.set(collector)
     return collector
 
 
-__all__ = ["get_outputs", "Metric", "Artifact", "OutputCollector"]
+#: name -> (replacement, why), served by ``__getattr__`` below (PEP 562).
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "_current_outputs": (
+        "application_sdk.outputs.current_outputs",
+        "the same ContextVar under a public name (FND-4661)",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the renamed ContextVar once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return current_outputs
+
+
+__all__ = ["get_outputs", "current_outputs", "Metric", "Artifact", "OutputCollector"]

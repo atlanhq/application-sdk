@@ -2,7 +2,7 @@
 
 One checker, two halves plus a contract-compat pass, dispatched by scope:
 
-* **consumer half (B001/B007/B008, scope ``app``)** — B001 flags app usage of any
+* **consumer half (B001/B007/B008/B009, scope ``app``)** — B001 flags app usage of any
   SDK symbol the committed manifest marks deprecated; B007 flags daft-only
   DataFrame APIs (``count_rows``/``to_pylist``/``.names``,
   ``DataframeType.daft``) that are dead on the daft-less SDK >= 3.22 runtime —
@@ -10,7 +10,8 @@ One checker, two halves plus a contract-compat pass, dispatched by scope:
   or attribute use that reaches an ``_``-prefixed module or name the app does
   not own — the SDK's, or any other package's — which no manifest can carry
   either, because a private symbol is never deprecated before it changes
-  (FND-2388);
+  (FND-2388); B009 flags an import of an SDK module the SDK has already
+  removed, which no manifest carries once the module is gone (FND-4661);
 * **authoring half (B002/B003/B004, scope ``sdk``)** — flags the SDK declaring
   its own deprecations incorrectly (malformed notice, overdue removal, or an
   unmarked docstring claim);
@@ -25,7 +26,7 @@ never depends on this dispatch alone.
 
 Inline suppression
 ------------------
-Add ``# conformance: ignore[B001] <reason>`` (or B002–B008) on the offending
+Add ``# conformance: ignore[B001] <reason>`` (or B002–B009) on the offending
 line or the comment-only line directly above it.
 """
 
@@ -53,6 +54,7 @@ from ._daft_runtime import scan_daft_runtime
 from ._ledger_schema import load_ledger
 from ._manifest import load_manifest
 from ._private_imports import own_import_roots, scan_private_imports
+from ._removed_imports import scan_removed_imports
 
 SERIES = "B"
 
@@ -68,6 +70,7 @@ __all__ = [
     "scan_daft_runtime",
     "scan_path",
     "scan_private_imports",
+    "scan_removed_imports",
 ]
 
 
@@ -127,6 +130,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                     tree, rel, directives, own_roots, lines=source_lines(text)
                 )
             )
+            findings.extend(scan_removed_imports(tree, rel, directives, own_roots))
         if run_authoring:
             findings.extend(scan_authoring(tree, rel, version, directives))
 

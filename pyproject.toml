@@ -169,6 +169,13 @@ tests = [
     # through fastapi[standard]; without it TestClient falls back to httpx with
     # a deprecation warning, which fails a suite run with `-W error`.
     "httpx2>=2.16.0,<3.0.0",
+    # application_sdk.testing imports these at module top (testing/fixtures.py,
+    # preflight.py, e2e/base.py, sdr/base.py; integration/fixtures.py for
+    # pytest-asyncio), so the extra that ships those modules declares them
+    # rather than leaving them to each app's own test deps (FND-4661). Same
+    # ranges as the dev group below, so the lock resolves the same versions.
+    "pytest>=8.3.3,<10.0.0",
+    "pytest-asyncio>=1.4.0,<2.0.0",
 ]
 # Typed Kubernetes backend for application_sdk.testing.harness.cluster — the
 # in-process client that replaces the `kubectl`-shelling reads in
