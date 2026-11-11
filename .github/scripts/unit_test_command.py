@@ -6,6 +6,10 @@ test is interrupted, whether this leg measures coverage — live here rather
 than in the action's ``run:`` block so each branch has a test
 (``tests/test_unit_test_command.py``; see ``docs/standards/ci.md``).
 
+On the coverage leg it also holds every top-level ``application_sdk``
+subpackage to a floor of its own, read from ``coverage.xml``, so one package
+cannot sink far below the global gate under a passing total (FND-4678).
+
 Usage::
 
     python .github/scripts/unit_test_command.py \\
@@ -69,6 +73,17 @@ _PY314_IGNORES = (
 FLOOR_EXTRA = "sql"
 
 _PYPROJECT = Path(__file__).resolve().parents[2] / "pyproject.toml"
+
+#: Where ``--cov-report=xml`` writes, relative to the checkout. The PR coverage
+#: comment and the coverage artifact read the same file.
+COVERAGE_XML = Path("coverage.xml")
+
+#: The pyproject table holding per-package floors that differ from the global
+#: one: ``{"<subpackage>" = <percent>}``.
+PACKAGE_FLOORS_TABLE = ("tool", "application-sdk", "coverage", "package-floors")
+
+#: The group for modules directly under ``application_sdk/``.
+ROOT_PACKAGE = "(top level)"
 
 _NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 _FLOOR_RE = re.compile(r">=\s*([^,;\s]+)")
@@ -273,6 +288,129 @@ def report_timing(
         f.write("\n".join(lines) + "\n")
 
 
+class CoverageFloorError(ValueError):
+    """The per-package floor table, or the report it is checked against, is unusable."""
+
+
+@dataclass(frozen=True)
+class PackageCoverage:
+    package: str
+    statements: int
+    covered: int
+
+    @property
+    def percent(self) -> float:
+        return 100.0 * self.covered / self.statements if self.statements else 100.0
+
+
+def package_floors(pyproject: Path = _PYPROJECT) -> dict[str, float]:
+    """The per-package floors that differ from the global one."""
+    table: object = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    for key in PACKAGE_FLOORS_TABLE:
+        if not isinstance(table, dict) or key not in table:
+            return {}
+        table = table[key]
+    if not isinstance(table, dict):
+        raise CoverageFloorError(f"[{'.'.join(PACKAGE_FLOORS_TABLE)}] is not a table")
+    floors: dict[str, float] = {}
+    for package, floor in table.items():
+        if isinstance(floor, bool) or not isinstance(floor, (int, float)):
+            raise CoverageFloorError(
+                f"floor for {package!r} must be a number, got {floor!r}"
+            )
+        if not 0 <= floor <= 100:
+            raise CoverageFloorError(f"floor for {package!r} is not a percentage")
+        floors[package] = float(floor)
+    return floors
+
+
+def _package_of(filename: str) -> str:
+    """Top-level ``application_sdk`` subpackage of a ``coverage.xml`` filename.
+
+    coverage.py writes filenames relative to the ``source`` directory
+    (``clients/sql.py``); the ``application_sdk/`` prefix is stripped in case a
+    report was written from the checkout root instead.
+    """
+    parts = Path(filename.replace("\\", "/")).parts
+    if parts and parts[0] == "application_sdk":
+        parts = parts[1:]
+    return parts[0] if len(parts) > 1 else ROOT_PACKAGE
+
+
+def coverage_by_package(coverage_xml: Path) -> list[PackageCoverage]:
+    """Line coverage per top-level subpackage, from a Cobertura ``coverage.xml``.
+
+    Counted from each file's ``<line>`` elements rather than coverage.py's
+    ``<package>`` rates, which are per directory: ``execution`` and
+    ``execution/_temporal`` are separate packages there.
+    """
+    totals: dict[str, list[int]] = {}
+    for cls in ET.parse(coverage_xml).getroot().iter("class"):
+        counts = totals.setdefault(_package_of(cls.get("filename", "")), [0, 0])
+        for line in cls.iter("line"):
+            counts[0] += 1
+            counts[1] += int(line.get("hits", "0")) > 0
+    return [
+        PackageCoverage(package, statements, covered)
+        for package, (statements, covered) in sorted(totals.items())
+    ]
+
+
+def check_package_floors(
+    *,
+    measured: Sequence[PackageCoverage],
+    floors: dict[str, float],
+    default_floor: float,
+    emit: Callable[[str], None],
+    summary: Path | None,
+) -> bool:
+    """Hold each package to its floor (or *default_floor*); False when any misses.
+
+    A floor naming a package the report does not have is a failure too: a
+    renamed package would otherwise drop its floor without anyone noticing.
+    """
+    ok = True
+    seen = {m.package for m in measured}
+    for package in sorted(set(floors) - seen):
+        ok = False
+        emit(
+            f"::error title=Coverage floor::'{package}' has a floor in "
+            f"[{'.'.join(PACKAGE_FLOORS_TABLE)}] but no coverage was measured "
+            f"for it; remove or rename the entry"
+        )
+
+    rows: list[str] = []
+    for m in measured:
+        floor = floors.get(m.package, default_floor)
+        passed = round(m.percent, 2) >= floor
+        if not passed:
+            ok = False
+            emit(
+                f"::error title=Coverage floor::application_sdk/{m.package} is at "
+                f"{m.percent:.2f}% against its {floor:g}% floor "
+                f"({m.covered}/{m.statements} lines)"
+            )
+        rows.append(
+            f"| `{m.package}` | {m.percent:.2f} | {floor:g} | {m.statements} "
+            f"| {'' if passed else 'below floor'} |"
+        )
+
+    if summary is not None:
+        lines = [
+            "### Coverage by package",
+            "",
+            f"Floor is {default_floor:g}% unless listed in "
+            f"`[{'.'.join(PACKAGE_FLOORS_TABLE)}]` in pyproject.toml.",
+            "",
+            "| package | % | floor | lines | |",
+            "| -- | --: | --: | --: | -- |",
+            *rows,
+        ]
+        with summary.open("a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    return ok
+
+
 def _parse_bool(value: str) -> bool:
     if value not in ("true", "false"):
         raise argparse.ArgumentTypeError(f"expected 'true' or 'false', got {value!r}")
@@ -303,6 +441,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     except FloorError as exc:
         print(f"::error title=Dependency floor::{exc}", flush=True)
         return 2
+    # Read before the run, so a malformed table fails in seconds, not after it.
+    try:
+        coverage_floors = package_floors() if args.coverage else {}
+    except CoverageFloorError as exc:
+        print(f"::error title=Coverage floor::{exc}", flush=True)
+        return 2
 
     junit_xml = Path(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()) / (
         "unit-tests-junit.xml"
@@ -317,18 +461,38 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     # A report left by an earlier run on a reused runner would be read as this one's.
     junit_xml.unlink(missing_ok=True)
+    if args.coverage:
+        COVERAGE_XML.unlink(missing_ok=True)
     print("+ " + " ".join(command), flush=True)
     started = time.monotonic()
     code = _run(command)
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    summary_env = os.environ.get("GITHUB_STEP_SUMMARY")
+    summary = Path(summary_env) if summary_env else None
+
+    def emit(line: str) -> None:
+        print(line, flush=True)
+
     report_timing(
         runner_os=args.runner_os,
         step_seconds=time.monotonic() - started,
         junit_xml=junit_xml,
-        emit=lambda line: print(line, flush=True),
-        summary=Path(summary) if summary else None,
+        emit=emit,
+        summary=summary,
     )
-    return code
+    # A failed run has already failed the leg, and its report may be partial.
+    if code != 0 or not args.coverage:
+        return code
+    if not COVERAGE_XML.is_file():
+        emit(f"::error title=Coverage floor::pytest wrote no {COVERAGE_XML}")
+        return 1
+    passed = check_package_floors(
+        measured=coverage_by_package(COVERAGE_XML),
+        floors=coverage_floors,
+        default_floor=float(args.fail_under),
+        emit=emit,
+        summary=summary,
+    )
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

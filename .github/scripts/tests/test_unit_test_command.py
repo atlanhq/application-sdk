@@ -95,6 +95,7 @@ def test_main_runs_the_built_command_and_returns_its_exit_code(
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     monkeypatch.setattr(utc, "_run", _fake_run)
+    monkeypatch.setattr(utc, "COVERAGE_XML", tmp_path / "coverage.xml")
     code = utc.main(
         [
             "--python-version",
@@ -448,3 +449,266 @@ def test_the_floor_job_runs_on_the_sdk_python_floor() -> None:
         s for s in job["steps"] if s.get("uses") == "./.github/actions/unit-tests"
     ]
     assert step["with"]["python-version"] == floor
+
+
+# ── per-package coverage floors (FND-4678) ──────────────────────────────────
+
+_REPO = Path(__file__).parents[3]
+
+_COVERAGE_ARGS = [
+    "--python-version",
+    "3.12",
+    "--runner-os",
+    "Linux",
+    "--coverage",
+    "true",
+    "--fail-under",
+    "85",
+]
+
+
+def _coverage_xml(path: Path, files: dict[str, tuple[int, int]]) -> Path:
+    """A Cobertura report: ``{filename: (statements, covered)}``."""
+    classes: list[str] = []
+    for filename, (statements, covered) in files.items():
+        lines = "".join(
+            f'<line number="{n}" hits="{1 if n <= covered else 0}"/>'
+            for n in range(1, statements + 1)
+        )
+        classes.append(
+            f'<class name="{filename}" filename="{filename}"><lines>{lines}</lines></class>'
+        )
+    path.write_text(
+        '<?xml version="1.0" ?><coverage><packages><package name="x"><classes>'
+        + "".join(classes)
+        + "</classes></package></packages></coverage>",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _floors_pyproject(tmp_path: Path, body: str) -> Path:
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        '[project]\nname = "x"\n[tool.application-sdk.coverage.package-floors]\n'
+        + body,
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_package_floors_are_read_from_pyproject(tmp_path: Path) -> None:
+    path = _floors_pyproject(tmp_path, "server = 83\ncontracts = 80.5\n")
+    assert utc.package_floors(path) == {"server": 83.0, "contracts": 80.5}
+
+
+def test_no_floor_table_means_no_overrides(tmp_path: Path) -> None:
+    path = tmp_path / "pyproject.toml"
+    path.write_text('[project]\nname = "x"\n', encoding="utf-8")
+    assert utc.package_floors(path) == {}
+
+
+@pytest.mark.parametrize("value", ['"83"', "true", "-1", "101"])
+def test_a_floor_that_is_not_a_percentage_is_refused(
+    tmp_path: Path, value: str
+) -> None:
+    path = _floors_pyproject(tmp_path, f"server = {value}\n")
+    with pytest.raises(utc.CoverageFloorError, match="server"):
+        utc.package_floors(path)
+
+
+def test_coverage_is_grouped_by_top_level_subpackage(tmp_path: Path) -> None:
+    report = _coverage_xml(
+        tmp_path / "coverage.xml",
+        {
+            "__init__.py": (2, 2),
+            "constants.py": (8, 6),
+            "execution/worker.py": (10, 9),
+            # Nested directories count toward their top-level subpackage.
+            "execution/_temporal/sdr.py": (10, 1),
+            # A report written from the checkout root, or on Windows.
+            "application_sdk/clients/sql.py": (4, 4),
+            "clients\\redis.py": (4, 0),
+        },
+    )
+    assert utc.coverage_by_package(report) == [
+        utc.PackageCoverage(utc.ROOT_PACKAGE, 10, 8),
+        utc.PackageCoverage("clients", 8, 4),
+        utc.PackageCoverage("execution", 20, 10),
+    ]
+
+
+def test_a_package_with_no_statements_is_fully_covered() -> None:
+    assert utc.PackageCoverage("empty", 0, 0).percent == 100.0
+
+
+def _check(
+    measured: list[utc.PackageCoverage],
+    floors: dict[str, float],
+    summary: Path | None = None,
+) -> tuple[bool, list[str]]:
+    emitted: list[str] = []
+    ok = utc.check_package_floors(
+        measured=measured,
+        floors=floors,
+        default_floor=85.0,
+        emit=emitted.append,
+        summary=summary,
+    )
+    return ok, emitted
+
+
+def test_an_unlisted_package_is_held_to_the_global_floor() -> None:
+    ok, emitted = _check([utc.PackageCoverage("server", 100, 84)], {})
+    assert not ok
+    assert emitted == [
+        "::error title=Coverage floor::application_sdk/server is at 84.00% "
+        "against its 85% floor (84/100 lines)"
+    ]
+
+
+def test_a_listed_floor_replaces_the_global_one() -> None:
+    assert _check([utc.PackageCoverage("server", 100, 84)], {"server": 83.0}) == (
+        True,
+        [],
+    )
+    ok, emitted = _check([utc.PackageCoverage("errors", 100, 96)], {"errors": 97.0})
+    assert not ok
+    assert "application_sdk/errors is at 96.00% against its 97% floor" in emitted[0]
+
+
+def test_a_package_exactly_on_its_floor_passes() -> None:
+    assert _check([utc.PackageCoverage("app", 200, 170)], {}) == (True, [])
+
+
+def test_a_floor_for_a_package_that_was_not_measured_fails() -> None:
+    """A renamed package would otherwise drop its floor silently."""
+    ok, emitted = _check([utc.PackageCoverage("app", 1, 1)], {"servers": 80.0})
+    assert not ok
+    assert "'servers' has a floor" in emitted[0]
+
+
+def test_the_summary_lists_every_package(tmp_path: Path) -> None:
+    summary = tmp_path / "summary.md"
+    _check(
+        [utc.PackageCoverage("app", 100, 90), utc.PackageCoverage("server", 100, 80)],
+        {"server": 83.0},
+        summary=summary,
+    )
+    text = summary.read_text(encoding="utf-8")
+    assert "| `app` | 90.00 | 85 | 100 |  |" in text
+    assert "| `server` | 80.00 | 83 | 100 | below floor |" in text
+
+
+def _run_main_with_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    files: dict[str, tuple[int, int]] | None,
+    exit_code: int = 0,
+) -> int:
+    xml = tmp_path / "coverage.xml"
+
+    def _fake_run(argv: Sequence[str]) -> int:
+        if files is not None:
+            _coverage_xml(xml, files)
+        return exit_code
+
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(utc, "_run", _fake_run)
+    monkeypatch.setattr(utc, "COVERAGE_XML", xml)
+    monkeypatch.setattr(utc, "package_floors", lambda: {"server": 83.0})
+    return utc.main(_COVERAGE_ARGS)
+
+
+def test_main_passes_when_every_package_meets_its_floor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    code = _run_main_with_coverage(
+        monkeypatch,
+        tmp_path,
+        files={"app/base.py": (100, 90), "server/api.py": (100, 84)},
+    )
+    assert code == 0
+
+
+def test_main_fails_a_passing_run_with_a_package_below_its_floor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The case the global gate misses: 95% overall, one package at 50%."""
+    code = _run_main_with_coverage(
+        monkeypatch,
+        tmp_path,
+        files={
+            "app/base.py": (1000, 1000),
+            "server/api.py": (100, 84),
+            "outputs/x.py": (100, 50),
+        },
+    )
+    assert code == 1
+    assert "application_sdk/outputs is at 50.00%" in capsys.readouterr().out
+
+
+def test_main_keeps_a_failing_run_s_exit_code_and_skips_the_floors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = _run_main_with_coverage(
+        monkeypatch, tmp_path, files={"outputs/x.py": (100, 0)}, exit_code=2
+    )
+    assert code == 2
+    assert "Coverage floor" not in capsys.readouterr().out
+
+
+def test_main_fails_when_the_run_wrote_no_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert _run_main_with_coverage(monkeypatch, tmp_path, files=None) == 1
+    assert "pytest wrote no" in capsys.readouterr().out
+
+
+def test_main_never_checks_a_coverage_report_left_by_an_earlier_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _coverage_xml(tmp_path / "coverage.xml", {"app/base.py": (1, 1)})
+    assert _run_main_with_coverage(monkeypatch, tmp_path, files=None) == 1
+
+
+def test_main_refuses_a_malformed_floor_table_without_running_pytest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def _bad_floors() -> dict[str, float]:
+        raise utc.CoverageFloorError("floor for 'server' is not a percentage")
+
+    monkeypatch.setattr(utc, "package_floors", _bad_floors)
+    monkeypatch.setattr(utc, "_run", lambda argv: pytest.fail("pytest ran"))
+    assert utc.main(_COVERAGE_ARGS) == 2
+
+
+def test_every_listed_floor_names_a_real_subpackage() -> None:
+    floors = utc.package_floors()
+    assert floors, "the table is empty: is it still read from the right key?"
+    missing = [p for p in floors if not (_REPO / "application_sdk" / p).is_dir()]
+    assert not missing, f"floors for packages that do not exist: {missing}"
+
+
+def test_the_coverage_leg_uploads_its_report() -> None:
+    job = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["unit"]
+    flag = "env.UNIT_COVERAGE_LEG"
+    (action,) = [
+        s for s in job["steps"] if s.get("uses") == "./.github/actions/unit-tests"
+    ]
+    assert action["with"]["coverage"] == "${{ " + flag + " }}"
+    (upload,) = [
+        s for s in job["steps"] if s.get("uses", "").startswith("actions/upload-")
+    ]
+    assert flag + " == 'true'" in upload["if"]
+    assert "!cancelled()" in upload["if"]
+    assert "coverage.xml" in upload["with"]["path"]
+    assert upload["with"]["retention-days"] == 14

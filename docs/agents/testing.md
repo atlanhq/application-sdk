@@ -1,7 +1,7 @@
 # Testing
 
 - Test command and conventions: `docs/standards/testing.md`.
-- New code should target 85% coverage per `docs/standards/review-checklist.md` (the tooling threshold in `pyproject.toml` is 85% — CI fails below it).
+- New code should target 85% coverage per `docs/standards/review-checklist.md` (the tooling threshold in `pyproject.toml` is 85% — CI fails below it). The same floor applies to each top-level `application_sdk` subpackage on its own, except those listed with a different floor in `[tool.application-sdk.coverage.package-floors]`; the coverage leg uploads `coverage.xml` and `htmlcov/` as the `sdk-unit-test-coverage` artifact (14 days).
 - Current tests live in `tests/unit/`, which mirrors `application_sdk/`: `application_sdk/a/b/c.py` → `tests/unit/a/b/test_c.py` (so `_runtime/` → `tests/unit/_runtime/`, `execution/_temporal/interceptors/` → `tests/unit/execution/_temporal/interceptors/`). `tests/unit/test_unit_tree_mirrors_package.py` fails a test directory with no package counterpart; a deliberate exception goes in its `_NOT_MIRRORED` with what it tests instead.
 - Keep a test module under 1,500 lines. When one grows past that, split it by the area it covers and move shared handlers and factories into a support module beside it — `tests/unit/handler/test_service_*.py` share `_service_support.py`.
 - A unit test that takes ≥10s on its own (a throughput comparison, a 100k-key scale probe) gets `@pytest.mark.perf`. `addopts` excludes it from the 12-leg matrix; the `Unit Perf Tests` job runs it once, in one process, with `uv run pytest tests/unit -m perf`. Every other unit test runs under a 120s per-test `--timeout` in CI, and only the ubuntu 3.12 leg measures coverage.

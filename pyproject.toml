@@ -533,6 +533,16 @@ fail_under = 85
 show_missing = true
 precision = 2
 
+# Per-package coverage floors, checked on the coverage leg by
+# .github/scripts/unit_test_command.py against coverage.xml (FND-4678). Every
+# top-level application_sdk subpackage must meet the global fail_under above
+# unless it is listed here. List a package only to hold it to a different
+# floor, and raise its entry when its coverage rises: a floor is a ratchet,
+# not a target. An entry for a package that no longer exists fails the leg.
+[tool.application-sdk.coverage.package-floors]
+# 84.07% when the per-package check was introduced.
+server = 83
+
 [tool.ruff.format]
 # ruff 0.17 also formats Python code blocks inside Markdown. The hook did not
 # before (it was 0.6.4), and doc snippets are often deliberately partial or
