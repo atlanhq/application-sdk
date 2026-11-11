@@ -518,16 +518,23 @@ source = ["application_sdk"]
 [tool.coverage.report]
 exclude_lines = [
     "pragma: no cover",
-    "def __repr__",
-    "if self.debug:",
-    "raise NotImplementedError",
-    "if __name__ == .__main__.:",
-    "pass",
-    "raise ImportError",
-    # An ellipsis-only body is a Protocol method or a typing stub: a signature
-    # declaration, never a statement that runs. Anchored to a line that is
-    # nothing but `...` so it cannot swallow a real statement.
-    "^\\s*\\.\\.\\.$",
+    # Every other pattern is anchored to the start of a line. coverage.py
+    # matches these with re.search over the whole file, so an unanchored
+    # `pass` hid every statement in `create_worker` (its `passthrough_modules`
+    # parameter) and in each `imports_passed_through()` block (FND-4677).
+    # `[ \t]` rather than `\s`: the file is searched with re.MULTILINE, and
+    # `\s` also matches a newline. tests/unit/test_coverage_config.py holds
+    # this list to that shape.
+    "^[ \\t]*def __repr__\\(",
+    "^[ \\t]*if self\\.debug:",
+    "^[ \\t]*raise NotImplementedError\\b",
+    "^[ \\t]*if __name__ == .__main__.:",
+    "^[ \\t]*raise ImportError\\b",
+    # A bare `pass` or ellipsis-only body is a placeholder: an empty block, a
+    # Protocol method or a typing stub, never a statement that does work.
+    # Anchored at both ends so neither can swallow a line with other tokens.
+    "^[ \\t]*pass[ \\t]*$",
+    "^[ \\t]*\\.\\.\\.[ \\t]*$",
 ]
 fail_under = 85
 show_missing = true
