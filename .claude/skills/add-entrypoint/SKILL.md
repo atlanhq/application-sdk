@@ -170,7 +170,7 @@ no workflow change:
 
 ```python
 # tests/e2e/test_{app_name}_{entrypoint_snake_name}_e2e.py
-from app.generated.{entrypoint_snake_name}._e2e_base import (
+from tests.e2e.generated.{entrypoint_snake_name}._e2e_base import (
     {EntrypointPascalName}GeneratedE2EBase,
 )
 from application_sdk.testing.e2e import RunMode

@@ -107,7 +107,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`packageId` on the card entrypoint; route-only entrypoint has none).
 - [`examples/behind-the-scenes/`](examples/behind-the-scenes/) — single-entrypoint app with `marketplaceCard = false`; routable but no marketplace card or `package_id` emitted.
 - [`examples/system-app/`](examples/system-app/) — `type = "system"`: an in-tenant app started by other apps' DAG nodes. No `entrypoints` block, no card, no credential config, no manifest. Typed `inputs` (string, number, enum, bounded list/map, nested object) render `_input.py` without a `uiConfig`. They also render `contract/generated/input.pkl`, the typed DAG node that is synced into the toolkit as `src/system/<name>.pkl` for callers to import.
-- [`examples/system-bundle/`](examples/system-bundle/) — `type = "system"` with two entrypoints, each a UI-less system sub-contract with its own `inputs`. Each renders `app/generated/<entrypoint_snake>/` (importable), `contract/generated/<entrypoint>/input.pkl`, and an `_e2e_base.py` extending `SystemAppE2ETest`.
+- [`examples/system-bundle/`](examples/system-bundle/) — `type = "system"` with two entrypoints, each a UI-less system sub-contract with its own `inputs`. Each renders `app/generated/<entrypoint_snake>/` (importable), `contract/generated/<entrypoint>/input.pkl`, and a `tests/e2e/generated/<entrypoint_snake>/_e2e_base.py` extending `SystemAppE2ETest`.
 - [`examples/deploy/`](examples/deploy/) — single-pool deployment: KEDA, resources, env, and per-pool `overrides` under `deploy.pools["default"]`.
 - [`examples/pools/`](examples/pools/) — `pools` map (preferred): named hot/cold worker pools with per-pool KEDA `cooldownPeriod` and resources.
 - [`examples/connection-ref/`](examples/connection-ref/) — `ConnectionRefInput` widget, `pipeline.publish = null`.
@@ -198,6 +198,12 @@ Typed Python `AppInputContract` dataclass. SDK-owned fields inherited from `Extr
 Framework-populated fields (`workflow_id`, `correlation_id`, `app_name`) are declared by
 the SDK's base `Input` and are never regenerated from a `uiConfig` property — redeclaring
 one would shadow the base field with the author's type and fail only at workflow dispatch.
+
+### E2E test harness (`tests/e2e/generated/`)
+
+`_e2e_base.py` (`<Name>GeneratedE2EBase`), plus `_e2e_credential.py` and `_e2e_substitutions.py` when the contract has a credential form or setup fields. A bundle writes them per entrypoint under `tests/e2e/generated/<entrypoint_snake>/`. Every directory gets an empty `__init__.py`, so tests import `tests.e2e.generated._e2e_base`.
+
+They are emitted under `tests/`, not `app/generated/`: they import `application_sdk.testing` and pytest, and `app/` is what the connector image ships. Upgrading from a toolkit that emitted them under `app/generated/`: regenerate, delete the old `app/generated/**/_e2e_*.py`, and change test imports from `app.generated._e2e_*` to `tests.e2e.generated._e2e_*`.
 
 ### Artifact Schemas (`app/generated/artifact_schemas.json`)
 
@@ -714,6 +720,13 @@ your-app/
 │   │   ├── manifest.json
 │   │   └── frontend/static/             # App playground dist; ignored, not committed
 │   └── ...
+├── tests/
+│   └── e2e/
+│       └── generated/                   # Generated e2e harness — DO NOT EDIT MANUALLY
+│           ├── __init__.py
+│           ├── _e2e_base.py
+│           ├── _e2e_credential.py
+│           └── _e2e_substitutions.py
 └── main.py
 ```
 

@@ -425,7 +425,7 @@ against the wrong workflow rather than an error:
   [Integration testing — Naming the entrypoint](../guides/integration-testing.md#naming-the-entrypoint-on-a-multi-entrypoint-app).
 - **e2e** — one `tests/e2e/test_*.py` file per entry point (the CI matrix fans out
   one leg per file), each subclassing that entry point's generated
-  `app/generated/<ep>/_e2e_base.py`. Conformance rule `T025` reports any bundle
+  `tests/e2e/generated/<ep_snake>/_e2e_base.py`. Conformance rule `T025` reports any bundle
   entry point without one. See
   [Connector CI e2e — Multi-entrypoint apps](../standards/connector-ci-e2e.md#multi-entrypoint-bundle-apps-one-suite-per-entrypoint).
 

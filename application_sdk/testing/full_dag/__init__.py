@@ -3,7 +3,7 @@
 
     ``application_sdk.testing.e2e`` is the harness every scaffolded app gets:
     :class:`~application_sdk.testing.e2e.BaseE2ETest` is what the codegen'd
-    ``app/generated/_e2e_base.py`` subclasses, SQL connectors get
+    ``tests/e2e/generated/_e2e_base.py`` subclasses, SQL connectors get
     :class:`~application_sdk.testing.e2e.SQLAppE2ETest` on top of it, and
     :mod:`application_sdk.testing.e2e.client` / ``._errors`` are already the
     canonical implementations this package re-exports.

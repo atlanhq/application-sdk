@@ -536,33 +536,33 @@ local e2eOverridesApp = (App) {
 }
 
 local bundleCrawlerBase: String =
-  bundleApp.output.files["app/generated/crawler/_e2e_base.py"].text
+  bundleApp.output.files["tests/e2e/generated/crawler/_e2e_base.py"].text
 local bundleMinerBase: String =
-  bundleApp.output.files["app/generated/miner/_e2e_base.py"].text
+  bundleApp.output.files["tests/e2e/generated/miner/_e2e_base.py"].text
 local suffixCrawlerBase: String =
-  suffixBundleApp.output.files["app/generated/crawler/_e2e_base.py"].text
+  suffixBundleApp.output.files["tests/e2e/generated/crawler/_e2e_base.py"].text
 local suffixMinerBase: String =
-  suffixBundleApp.output.files["app/generated/miner/_e2e_base.py"].text
+  suffixBundleApp.output.files["tests/e2e/generated/miner/_e2e_base.py"].text
 local apiBundleBase: String =
-  apiBundleApp.output.files["app/generated/fetch/_e2e_base.py"].text
+  apiBundleApp.output.files["tests/e2e/generated/fetch/_e2e_base.py"].text
 local explicitCrawlerBase: String =
-  explicitPackageBundleApp.output.files["app/generated/crawler/_e2e_base.py"].text
+  explicitPackageBundleApp.output.files["tests/e2e/generated/crawler/_e2e_base.py"].text
 local explicitMinerBase: String =
-  explicitPackageBundleApp.output.files["app/generated/miner/_e2e_base.py"].text
+  explicitPackageBundleApp.output.files["tests/e2e/generated/miner/_e2e_base.py"].text
 
 local ovrCloudBase: String =
-  e2eOverridesApp.output.files["app/generated/cloud/_e2e_base.py"].text
+  e2eOverridesApp.output.files["tests/e2e/generated/cloud/_e2e_base.py"].text
 local ovrSelfhostedBase: String =
-  e2eOverridesApp.output.files["app/generated/selfhosted/_e2e_base.py"].text
+  e2eOverridesApp.output.files["tests/e2e/generated/selfhosted/_e2e_base.py"].text
 local plainSelfhostedBase: String =
-  e2eOverridesPlainApp.output.files["app/generated/selfhosted/_e2e_base.py"].text
+  e2eOverridesPlainApp.output.files["tests/e2e/generated/selfhosted/_e2e_base.py"].text
 
-local apiBase: String = apiApp.output.files["app/generated/_e2e_base.py"].text
-local postgresBase: String = postgresApp.output.files["app/generated/_e2e_base.py"].text
-local warehouseBase: String = warehouseApp.output.files["app/generated/_e2e_base.py"].text
-local selfNamedBase: String = selfNamedApp.output.files["app/generated/_e2e_base.py"].text
-local overrideBase: String = overrideApp.output.files["app/generated/_e2e_base.py"].text
-local widgetSubs: String = widgetApp.output.files["app/generated/_e2e_substitutions.py"].text
+local apiBase: String = apiApp.output.files["tests/e2e/generated/_e2e_base.py"].text
+local postgresBase: String = postgresApp.output.files["tests/e2e/generated/_e2e_base.py"].text
+local warehouseBase: String = warehouseApp.output.files["tests/e2e/generated/_e2e_base.py"].text
+local selfNamedBase: String = selfNamedApp.output.files["tests/e2e/generated/_e2e_base.py"].text
+local overrideBase: String = overrideApp.output.files["tests/e2e/generated/_e2e_base.py"].text
+local widgetSubs: String = widgetApp.output.files["tests/e2e/generated/_e2e_substitutions.py"].text
 
 // Substitution fields too long for one line, in each layout ruff gives them.
 // Every expected string below is what ruff 0.17.3 (default settings) leaves
@@ -591,15 +591,15 @@ local longSubsApp = (App) {
     }
   }
 }
-local longSubs: String = longSubsApp.output.files["app/generated/_e2e_substitutions.py"].text
-local singleAuthCred: String = singleAuthApp.output.files["app/generated/_e2e_credential.py"].text
-local multiAuthCred: String = multiAuthApp.output.files["app/generated/_e2e_credential.py"].text
-local authDefaultCred: String = authDefaultApp.output.files["app/generated/_e2e_credential.py"].text
-local fullCredPy: String = fullExampleApp.output.files["app/generated/_e2e_credential.py"].text
-local fullSubsPy: String = fullExampleApp.output.files["app/generated/_e2e_substitutions.py"].text
-local extraFieldsCred: String = extraFieldsApp.output.files["app/generated/_e2e_credential.py"].text
-local agentCred: String = agentCredApp.output.files["app/generated/_e2e_credential.py"].text
-local condEnumSubs: String = conditionalEnumApp.output.files["app/generated/_e2e_substitutions.py"].text
+local longSubs: String = longSubsApp.output.files["tests/e2e/generated/_e2e_substitutions.py"].text
+local singleAuthCred: String = singleAuthApp.output.files["tests/e2e/generated/_e2e_credential.py"].text
+local multiAuthCred: String = multiAuthApp.output.files["tests/e2e/generated/_e2e_credential.py"].text
+local authDefaultCred: String = authDefaultApp.output.files["tests/e2e/generated/_e2e_credential.py"].text
+local fullCredPy: String = fullExampleApp.output.files["tests/e2e/generated/_e2e_credential.py"].text
+local fullSubsPy: String = fullExampleApp.output.files["tests/e2e/generated/_e2e_substitutions.py"].text
+local extraFieldsCred: String = extraFieldsApp.output.files["tests/e2e/generated/_e2e_credential.py"].text
+local agentCred: String = agentCredApp.output.files["tests/e2e/generated/_e2e_credential.py"].text
+local condEnumSubs: String = conditionalEnumApp.output.files["tests/e2e/generated/_e2e_substitutions.py"].text
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
@@ -613,7 +613,7 @@ facts {
   }
 
   ["_e2e_base.py always emitted even without connector"] {
-    noCredApp.output.files.containsKey("app/generated/_e2e_base.py")
+    noCredApp.output.files.containsKey("tests/e2e/generated/_e2e_base.py")
   }
 
   // ── _e2e_base.py: base class routing ────────────────────────────────────────
@@ -693,11 +693,11 @@ facts {
   // ── _e2e_substitutions.py: not emitted when no custom fields ─────────────────
 
   ["_e2e_substitutions.py omitted when all uiConfig fields are in parent skip-set"] {
-    !allSkippedApp.output.files.containsKey("app/generated/_e2e_substitutions.py")
+    !allSkippedApp.output.files.containsKey("tests/e2e/generated/_e2e_substitutions.py")
   }
 
   ["_e2e_substitutions.py omitted when uiConfig is null"] {
-    !noCredApp.output.files.containsKey("app/generated/_e2e_substitutions.py")
+    !noCredApp.output.files.containsKey("tests/e2e/generated/_e2e_substitutions.py")
   }
 
   // ── _e2e_substitutions.py: parent class routing ──────────────────────────────
@@ -725,7 +725,7 @@ facts {
         }
       }
     }
-    local subs = apiWidgetApp.output.files["app/generated/_e2e_substitutions.py"].text
+    local subs = apiWidgetApp.output.files["tests/e2e/generated/_e2e_substitutions.py"].text
     subs.contains("from application_sdk.testing.e2e.substitutions import MustacheSubstitutions")
     subs.contains("class ApiWidgetMustacheSubstitutions(MustacheSubstitutions):")
   }
@@ -806,7 +806,7 @@ facts {
 
   ["SQL parent-class fields (include_filter etc.) are skipped for SQL connector"] {
     // allSkippedApp has include_filter but is SQL → should be skipped entirely
-    !allSkippedApp.output.files.containsKey("app/generated/_e2e_substitutions.py")
+    !allSkippedApp.output.files.containsKey("tests/e2e/generated/_e2e_substitutions.py")
   }
 
   ["Substitutions imports Literal and Any only when used"] {
@@ -831,7 +831,7 @@ facts {
         }
       }
     }
-    local subs = strOnlyApp.output.files["app/generated/_e2e_substitutions.py"].text
+    local subs = strOnlyApp.output.files["tests/e2e/generated/_e2e_substitutions.py"].text
     !subs.contains("from typing import")
   }
 
@@ -845,7 +845,7 @@ facts {
   // ── _e2e_credential.py: not emitted without credential config ─────────────────
 
   ["_e2e_credential.py not emitted when hasCredentialConfig=false"] {
-    !noCredApp.output.files.containsKey("app/generated/_e2e_credential.py")
+    !noCredApp.output.files.containsKey("tests/e2e/generated/_e2e_credential.py")
   }
 
   // ── _e2e_credential.py: banner, imports, class structure ─────────────────────
@@ -1076,7 +1076,7 @@ facts {
     // byte-identical to the same app without overrides.
     e2eOverridesApp.output.files.keys == e2eOverridesPlainApp.output.files.keys
     e2eOverridesApp.output.files.keys
-      .filter((k) -> k != "app/generated/cloud/_e2e_base.py")
+      .filter((k) -> k != "tests/e2e/generated/cloud/_e2e_base.py")
       .every((k) -> e2eOverridesApp.output.files[k].text == e2eOverridesPlainApp.output.files[k].text)
   }
 

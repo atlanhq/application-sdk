@@ -10,7 +10,7 @@ Hierarchy:
   connector needs: credential, credential-guid, connection.
 * :class:`SQLMustacheSubstitutions` — SQL additions: extraction-method,
   agent-json, filters, preflight-check.
-* Per-connector subclasses live in ``app/generated/_e2e_substitutions.py``
+* Per-connector subclasses live in ``tests/e2e/generated/_e2e_substitutions.py``
   (codegen'd from ``contract/app.pkl`` via ``generateE2ESubstitutionsPy()``
   in ``contract-toolkit/src/App.pkl``).
 """

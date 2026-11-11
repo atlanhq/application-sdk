@@ -20,6 +20,7 @@ Contracts generate — from one `pkl eval --project-dir contract -m . contract/a
 - `app/generated/manifest.json` — Automation Engine DAG
 - `app/generated/_input.py` — typed SDK input model
 - `app/generated/artifact_schemas.json` — data hand-off declarations (only when `artifactSchemas` is non-empty)
+- `tests/e2e/generated/_e2e_*.py` — e2e test harness; under `tests/` so test source never ships in the image
 
 ## Main Files
 

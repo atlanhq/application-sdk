@@ -80,6 +80,14 @@ ROOT_FILES = ("atlan.yaml", "app.yaml")
 # the fleet; apps that differ are refused rather than mis-written.
 GENERATED_DIR = "app/generated"
 
+# Where ``App.pkl`` emits the generated e2e test harness (``_e2e_base.py``,
+# ``_e2e_credential.py``, ``_e2e_substitutions.py`` and ``__init__.py``; a bundle
+# one subdirectory per entrypoint). Prefixed family only. ``App.pkl`` owns every
+# file here, so it is replaced wholesale like :data:`GENERATED_DIR`. Under
+# ``tests/`` rather than ``app/generated/`` because the harness imports pytest
+# and ``app/`` is what the image ships (FND-4656).
+TESTS_GENERATED_DIR = "tests/e2e/generated"
+
 # Where an ``App.pkl`` system app's caller node lands: ``contract/generated/
 # input.pkl``, or ``contract/generated/<entrypoint>/input.pkl`` per entrypoint of
 # a system bundle (FND-3563). Prefixed family only, keyed repo-root-relative like
@@ -298,12 +306,27 @@ def _unemitted_generated_files(target: Path) -> list[str]:
     )
 
 
+def tests_generated_dir_for(generated_dir: str) -> str:
+    """The e2e harness dir that pairs with *generated_dir*.
+
+    :data:`GENERATED_DIR` pairs with :data:`TESTS_GENERATED_DIR`. An app with one
+    eval root per entrypoint places each root under ``app/generated/<root>``
+    (``renovate_pkl_sync.regenerate_tree``), so its harness goes under
+    ``tests/e2e/generated/<root_snake>``: snake_case, because nothing but
+    Python lives there and it has to import."""
+    if generated_dir == GENERATED_DIR:
+        return TESTS_GENERATED_DIR
+    sub = Path(generated_dir).relative_to(GENERATED_DIR).as_posix()
+    return f"{TESTS_GENERATED_DIR}/{sub.replace('-', '_')}"
+
+
 def detect_layout(out_dir: Path) -> str:
     """Classify what ``pkl eval -m <out_dir>`` produced.
 
     Returns one of:
 
-      * ``"prefixed"`` — ``<out_dir>/app/generated`` exists (``App.pkl`` family).
+      * ``"prefixed"`` — ``<out_dir>/app/generated`` or
+        ``<out_dir>/tests/e2e/generated`` exists (``App.pkl`` family).
       * ``"native"``   — no such dir, but there is at least one emitted entry
         that is not a repo-root file (``NativeApp``/``NativeAppBundle`` family).
       * ``"root-only"`` — only ``atlan.yaml``/``app.yaml`` were emitted. A real
@@ -314,7 +337,7 @@ def detect_layout(out_dir: Path) -> str:
     ``root-only`` and ``empty`` are both "no generated artifacts to place"; they
     are distinguished so callers can report the more specific one.
     """
-    if (out_dir / "app" / "generated").is_dir():
+    if (out_dir / GENERATED_DIR).is_dir() or (out_dir / TESTS_GENERATED_DIR).is_dir():
         return "prefixed"
     entries = [p for p in out_dir.iterdir() if p.name not in ROOT_FILES]
     if entries:
@@ -360,7 +383,9 @@ def plan_swap(
     Root files map to the repo root; generated artifacts map under
     ``generated_dir`` with the family's prefix stripped. In the prefixed family
     a caller node under :data:`CONTRACT_GENERATED_DIR` maps to the same
-    repo-relative path. An empty mapping means there was nothing to place.
+    repo-relative path, and the e2e harness under :data:`TESTS_GENERATED_DIR`
+    maps under ``tests_generated_dir_for(generated_dir)``. An empty mapping
+    means there was nothing to place.
     """
     layout = detect_layout(out_dir)
     plan: dict[Path, Path] = {}
@@ -371,8 +396,8 @@ def plan_swap(
             plan[Path(name)] = src
 
     target = Path(generated_dir)
-    base = out_dir / "app" / "generated" if layout == "prefixed" else out_dir
-    if layout in ("prefixed", "native"):
+    base = out_dir / GENERATED_DIR if layout == "prefixed" else out_dir
+    if layout in ("prefixed", "native") and base.is_dir():
         for src in sorted(base.rglob("*")):
             if src.is_dir():
                 continue
@@ -382,6 +407,13 @@ def plan_swap(
             if layout == "native" and len(rel.parts) == 1 and rel.name in ROOT_FILES:
                 continue
             plan[target / rel] = src
+
+    tests_base = out_dir / TESTS_GENERATED_DIR
+    if layout == "prefixed" and tests_base.is_dir():
+        tests_target = Path(tests_generated_dir_for(generated_dir))
+        for src in sorted(tests_base.rglob("*")):
+            if src.is_file():
+                plan[tests_target / src.relative_to(tests_base)] = src
 
     # Without this the caller node was evaluated and then dropped, so a toolkit
     # bump never refreshed it in the app's repo.
@@ -541,15 +573,27 @@ def swap_outputs(
             return False
 
     if layout == "prefixed":
-        # App.pkl owns every file under the generated dir, so replacing it
-        # wholesale is safe and clears orphans.
+        # App.pkl owns every file under the generated dir and the e2e harness
+        # dir, so replacing both wholesale is safe and clears orphans — including
+        # an e2e module a pre-FND-4656 toolkit left under the generated dir.
+        tests_target = Path(tests_generated_dir_for(generated_dir))
         reserved = _withhold_reserved_subdirs(target)
         try:
-            shutil.rmtree(target, ignore_errors=True)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(out_dir / "app" / "generated", target)
+            for owned, emitted in (
+                (target, out_dir / GENERATED_DIR),
+                (tests_target, out_dir / TESTS_GENERATED_DIR),
+            ):
+                shutil.rmtree(owned, ignore_errors=True)
+                if emitted.is_dir():
+                    owned.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copytree(emitted, owned)
             _copy_planned(
-                {d: s for d, s in plan.items() if not d.is_relative_to(target)}
+                {
+                    d: s
+                    for d, s in plan.items()
+                    if not d.is_relative_to(target)
+                    and not d.is_relative_to(tests_target)
+                }
             )
             _prune_stale_caller_nodes(plan)
         finally:
@@ -650,7 +694,8 @@ def run_post_generate(contract_dir: str = "contract") -> bool:
 def format_generated_python(
     run: Callable[[list[str]], object], root: Path = Path(".")
 ) -> bool:
-    """ruff-fix + format every generated ``*.py`` under ``<root>/app/generated``.
+    """ruff-fix + format every generated ``*.py`` under ``<root>/app/generated``
+    and ``<root>/tests/e2e/generated``.
 
     The ONE definition of "formatted" for generated Python, shared by every
     regeneration entry point. ``renovate_pkl_sync`` (and through it the
@@ -682,10 +727,12 @@ def format_generated_python(
     notice — unformatted generated Python still imports. Returns True iff the
     generated Python is formatted, with "nothing to format" counting as True;
     ``regenerate_contract.warn_on_drift`` narrows its comparison on False."""
-    gen = root / GENERATED_DIR
-    if not gen.is_dir():
-        return True
-    paths = sorted(str(p) for p in gen.rglob("*.py"))
+    paths = sorted(
+        str(p)
+        for gen in (root / GENERATED_DIR, root / TESTS_GENERATED_DIR)
+        if gen.is_dir()
+        for p in gen.rglob("*.py")
+    )
     if not paths:
         return True
     if shutil.which("uvx"):

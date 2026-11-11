@@ -193,7 +193,7 @@ credential routing and upload behaviour are the parts that genuinely differ by m
 
 ```python
 from application_sdk.testing.e2e import RunMode
-from app.generated._e2e_base import MyAppGeneratedE2EBase
+from tests.e2e.generated._e2e_base import MyAppGeneratedE2EBase
 
 @pytest.mark.e2e
 class TestMyAppE2E(MyAppGeneratedE2EBase):
@@ -336,7 +336,7 @@ an SDK integration-test scenario-helper call: `.equals` / `.contains` /
     `.exists` / `.is_dict` / `.is_string` / `.is_true` / `.is_list`
 a direct, same-name `super().test_full_dag_runs_end_to_end()` delegation
     from a class whose base is imported from `application_sdk.testing.e2e`
-    or the contract-generated `app/generated/_e2e_base.py` (the SDK full-DAG
+    or the contract-generated `tests/e2e/generated/_e2e_base.py` (the SDK full-DAG
     scenario grades outcomes through its assertion ladder; an app-local
     intermediate base is not trusted)
 a `# should not raise` / `# must not raise` comment anywhere in the body
@@ -1368,7 +1368,7 @@ for an app whose extract genuinely produces no artifacts to bridge.
 
 **Rationale:** contract/app.pkl is the single source of truth for a connector's identity, and the
 contract toolkit already emits the whole e2e scaffold from it:
-app/generated/_e2e_base.py (<Name>GeneratedE2EBase with connector_short_name /
+tests/e2e/generated/_e2e_base.py (<Name>GeneratedE2EBase with connector_short_name /
 argo_package_name / argo_template_name / app_service_url / connection_type /
 connection_category, parented to SQLAppE2ETest or BaseE2ETest per the declared connector
 category), _e2e_credential.py (<Name>CredentialBody and <Name>AgentCredentialBody) and
@@ -1397,19 +1397,19 @@ shapes are flagged:
 1. An e2e harness subclass (transitively a `BaseE2ETest` / `SQLAppE2ETest`) that assigns
   any of `connector_short_name`, `argo_package_name`, `argo_template_name`,
   `app_service_url`, `connection_type`, `connection_category` — the exact attribute set
-  `app/generated/_e2e_base.py` emits.
+  `tests/e2e/generated/_e2e_base.py` emits.
 2. A `CredentialBody` subclass — generated as `<Name>CredentialBody` /
-  `<Name>AgentCredentialBody` in `app/generated/_e2e_credential.py`.
+  `<Name>AgentCredentialBody` in `tests/e2e/generated/_e2e_credential.py`.
 3. A `MustacheSubstitutions` / `SQLMustacheSubstitutions` subclass — generated as
-  `<Name>MustacheSubstitutions` in `app/generated/_e2e_substitutions.py`.
+  `<Name>MustacheSubstitutions` in `tests/e2e/generated/_e2e_substitutions.py`.
 
 **Fix:** import the generated modules and keep only what the contract cannot know — the
 source under test, the asset floors, and the run mode.
 `atlan-mysql-app/tests/e2e/test_mysql_e2e.py` is the reference:
 
 ```python
-from app.generated._e2e_base import MysqlGeneratedE2EBase
-from app.generated._e2e_credential import MysqlAgentCredentialBody
+from tests.e2e.generated._e2e_base import MysqlGeneratedE2EBase
+from tests.e2e.generated._e2e_credential import MysqlAgentCredentialBody
 
 class TestMySQLE2E(MysqlGeneratedE2EBase):
     mode = RunMode.AGENT
@@ -1629,9 +1629,9 @@ connector on the system pool can break the system apps' test beds.
 
 - **Compliant example:** application_sdk/testing/e2e/system_app.py — `SystemAppE2ETest` sets `_tenant_pool =
   TenantPool.SYSTEM`, which is what binds a suite to the system-app tenant pool; the
-  toolkit's contract-toolkit/examples/system-app/app/generated/_e2e_base.py shows the
-  generated base a `type = "system"` contract emits, already parented to it. None of the
-  reference apps is a system app.
+  toolkit's contract-toolkit/examples/system-app/tests/e2e/generated/_e2e_base.py shows
+  the generated base a `type = "system"` contract emits, already parented to it. None of
+  the reference apps is a system app.
 - **Migrate with:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 A person has to close a `system` finding, not the remediation lane: switching the base

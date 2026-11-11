@@ -76,6 +76,7 @@ from pkl_contract_layout import (  # noqa: E402
     CALLER_NODE_PATHSPEC,
     GENERATED_DIR,
     ROOT_FILES,
+    TESTS_GENERATED_DIR,
     format_generated_python,
 )
 
@@ -87,7 +88,8 @@ from renovate_pkl_sync import regenerate_tree  # noqa: E402
 # and renovate_pkl_sync.py.
 # CALLER_NODE_PATHSPEC names a system app's caller nodes only (FND-3563): the
 # rest of contract/generated/ is the app's.
-OUTPUT_PATHS = [GENERATED_DIR, CALLER_NODE_PATHSPEC, *ROOT_FILES]
+# TESTS_GENERATED_DIR is the e2e harness, emitted under tests/ (FND-4656).
+OUTPUT_PATHS = [GENERATED_DIR, TESTS_GENERATED_DIR, CALLER_NODE_PATHSPEC, *ROOT_FILES]
 
 # Toolkit properties that switch a root file's emission off. Setting one to
 # ``false`` is documented toolkit surface — ``contract-toolkit/src/App.pkl``

@@ -12,8 +12,19 @@ contract/app.pkl (developer writes)
     ├─▶ app/generated/{name}.json         — Workflow config (setup form)
     ├─▶ app/generated/atlan-connectors-{name}.json  — Credential config
     ├─▶ app/generated/manifest.json       — AE DAG
-    └─▶ app/generated/_input.py           — Python AppInputContract
+    ├─▶ app/generated/_input.py           — Python AppInputContract
+    └─▶ tests/e2e/generated/_e2e_*.py     — E2E test harness (tests only)
 ```
+
+**The e2e harness is generated under `tests/`, not `app/generated/`.**
+`_e2e_base.py`, `_e2e_credential.py` and `_e2e_substitutions.py` land in
+`tests/e2e/generated/` (a bundle: `tests/e2e/generated/<entrypoint_snake>/`),
+each directory with an empty `__init__.py`. They import
+`application_sdk.testing` and, through it, pytest; `app/` is what a connector
+image ships, so they do not belong there. Tests import them as
+`from tests.e2e.generated._e2e_base import <Name>GeneratedE2EBase`. The toolkit
+writes only `tests/e2e/generated/**`, never `tests/__init__.py` or
+`tests/e2e/__init__.py`, which stay the app's.
 
 **Generated Python is ruff-stable.** Every generated `.py` file
 (`_input.py`, `_e2e_base.py`, `_e2e_credential.py`, `_e2e_substitutions.py`
@@ -735,7 +746,7 @@ example. Not available on the legacy `NativeApp.pkl`.
 
 ### E2E Test Harness
 
-These fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
+These fields are emitted into `tests/e2e/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
@@ -746,7 +757,7 @@ A system app (`type = "system"`) gets a base that extends `SystemAppE2ETest` ins
 
 #### Credential bodies in `_e2e_credential.py` — direct + agent (both always emitted)
 
-Every credential-config app (`hasCredentialConfig` + non-empty `credentialAuthOptions`) gets **two** classes in `app/generated/_e2e_credential.py`. There is **no contract flag** — the credential mode is a per-test-run concern, so the e2e test imports whichever shape a given run needs (an app can be tested in both modes):
+Every credential-config app (`hasCredentialConfig` + non-empty `credentialAuthOptions`) gets **two** classes in `tests/e2e/generated/_e2e_credential.py`. There is **no contract flag** — the credential mode is a per-test-run concern, so the e2e test imports whichever shape a given run needs (an app can be tested in both modes):
 
 - **`<Name>CredentialBody`** — the **direct** body: `name`, `auth_type`, and every typed field derived from `credentialCommonFields` / `credentialUrlGroup` / `credentialAuthOptions` (host, port, username, password, …) plus any nested `extra` model. This is the full body the AE submit needs to *create* a credential when the e2e connects directly from the Atlan tenant.
 - **`<Name>AgentCredentialBody`** — the **agent / self-deployed-runtime (SDR)** body: `name`, `auth_type`, `connector_config_name`, and an open `extra` dict, with **no** inline credential fields. In agent mode the real host/username/password live in the agent's secret store and are resolved at runtime via agent-json ref keys. The harness serialises the body with a plain `model_dump(by_alias=True)` (no `exclude_unset`), so an inline credential field would be sent on the wire and make the orchestrator treat the submit as a *direct* credential — skipping credential creation and leaving `{{credentialGuid}}` unsubstituted. That's why the agent body must omit them.
@@ -1225,7 +1236,7 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 | `categories` | Listing\<String\> | `[]` | Marketplace category tags for this entrypoint. |
 | `docsUrl` | String? | null | Documentation URL. Falls back to the app-level `docsUrl` when null. |
 | `packageId` | String? | null | Stable marketplace package ID (e.g. `"@atlan/qlik-sense"`). When set, emits `package_id:` and `marketplace_card: true` in `atlan.yaml`. Required for multi-entrypoint apps to preserve backward compat with legacy Argo workflows that reference the app by its stable card ID. Entrypoints without a `packageId` are routable but do not appear as marketplace cards. |
-| `e2eOverrides` | E2EOverrides | `{}` | E2E-harness-only overrides for a bundle entrypoint. Optional `connectorShortName`, `argoPackageName`, `argoTemplateName` and `connectorConfigName` replace the values generated into `app/generated/<entrypoint>/_e2e_base.py`; an unset field keeps the derived value. Changes no other generated file: not `atlan.yaml`, the manifests or the marketplace card. Use it when an entrypoint's e2e identity can't be derived, e.g. its name matches no `argoPackageNames` leaf and `packageId` would re-key the card. |
+| `e2eOverrides` | E2EOverrides | `{}` | E2E-harness-only overrides for a bundle entrypoint. Optional `connectorShortName`, `argoPackageName`, `argoTemplateName` and `connectorConfigName` replace the values generated into `tests/e2e/generated/<entrypoint_snake>/_e2e_base.py`; an unset field keeps the derived value. Changes no other generated file: not `atlan.yaml`, the manifests or the marketplace card. Use it when an entrypoint's e2e identity can't be derived, e.g. its name matches no `argoPackageNames` leaf and `packageId` would re-key the card. |
 | `contract` | Typed? | null | The entrypoint's `App.pkl` contract whose `output.files` are emitted. |
 
 Bundle output layout:
@@ -4220,6 +4231,28 @@ Notes:
 ---
 
 ## Migration Notes
+
+### E2E harness moves from `app/generated/` to `tests/e2e/generated/` (FND-4656)
+
+**What changed:** `_e2e_base.py`, `_e2e_credential.py` and `_e2e_substitutions.py`
+are emitted under `tests/e2e/generated/` (a bundle:
+`tests/e2e/generated/<entrypoint_snake>/`, always snake_case so it imports), each
+directory with an empty `__init__.py`. Before, they were emitted under
+`app/generated/`, which every connector image copies, so test source that imports
+pytest shipped in production. Nothing else moves: `manifest_path` in the base
+still names `app/generated/.../manifest.json`.
+
+**What to do:**
+
+1. Regenerate (`pkl eval -m . contract/app.pkl`, or the app's own generate task).
+2. Delete the old `app/generated/**/_e2e_*.py`. A local `pkl eval` does not
+   remove files it no longer emits; CI regeneration replaces `app/generated/`
+   wholesale and drops them.
+3. Change test imports: `app.generated._e2e_base` → `tests.e2e.generated._e2e_base`
+   (same for `_e2e_credential` and `_e2e_substitutions`; bundle
+   `app.generated.<ep>._e2e_base` → `tests.e2e.generated.<ep_snake>._e2e_base`).
+
+Conformance K010 reports e2e scaffolding still committed under `app/generated/`.
 
 ### v0.17.0 — nested `deploy`/`pools` API; `deployOverrides` renamed to `overrides`
 

@@ -4,15 +4,15 @@
 and the contract toolkit already emits the whole e2e scaffold from it
 (``pkl eval -m . contract/app.pkl``):
 
-* ``app/generated/_e2e_base.py`` — ``<Name>GeneratedE2EBase``, carrying
+* ``tests/e2e/generated/_e2e_base.py`` — ``<Name>GeneratedE2EBase``, carrying
   ``connector_short_name``, ``argo_package_name``, ``argo_template_name``,
   ``app_service_url``, ``connection_type`` and ``connection_category``, and
   already parented to ``SQLAppE2ETest`` or ``BaseE2ETest`` according to the
   declared connector category.
-* ``app/generated/_e2e_credential.py`` — ``<Name>CredentialBody`` (direct) and
+* ``tests/e2e/generated/_e2e_credential.py`` — ``<Name>CredentialBody`` (direct) and
   ``<Name>AgentCredentialBody`` (the lightweight SDR body), typed from the
   contract's ``credentialCommonFields`` / ``credentialAuthOptions``.
-* ``app/generated/_e2e_substitutions.py`` — ``<Name>MustacheSubstitutions``,
+* ``tests/e2e/generated/_e2e_substitutions.py`` — ``<Name>MustacheSubstitutions``,
   typed from the contract's ``uiConfig`` inputs (including the
   ``Literal["direct", "agent"]`` widening that lets an AGENT-mode run submit
   ``extraction_method="agent"``).
@@ -21,6 +21,11 @@ A connector's e2e test is then a thin subclass that supplies only what the
 contract cannot know: the source under test, the asset floors, and the run
 mode.  ``atlan-mysql-app``'s ``tests/e2e/test_mysql_full_dag.py`` is the
 reference shape.
+
+(Toolkits before FND-4656 emitted them under ``app/generated/``; both
+locations are recognised, and K010 reports the old one.)  The generated modules
+are toolkit output, never graded as hand-written even though they now sit
+under ``tests/``.
 
 Hand-writing any of that scaffold inside ``tests/`` re-derives generated truth
 into a file no generator owns.  It looks correct in review and is **not**
@@ -125,16 +130,20 @@ _GENERATED_IDENTITY_ATTRS: tuple[str, ...] = (
 
 # Model bases the toolkit generates concrete subclasses of.
 _GENERATED_MODEL_BASES: dict[str, str] = {
-    "CredentialBody": "app/generated/_e2e_credential.py "
+    "CredentialBody": "tests/e2e/generated/_e2e_credential.py "
     "(<Name>CredentialBody / <Name>AgentCredentialBody)",
-    "MustacheSubstitutions": "app/generated/_e2e_substitutions.py "
+    "MustacheSubstitutions": "tests/e2e/generated/_e2e_substitutions.py "
     "(<Name>MustacheSubstitutions)",
-    "SQLMustacheSubstitutions": "app/generated/_e2e_substitutions.py "
+    "SQLMustacheSubstitutions": "tests/e2e/generated/_e2e_substitutions.py "
     "(<Name>MustacheSubstitutions)",
 }
 
 _MODE_ATTR = "mode"
 _GENERATED_BASE_FILENAME = "_e2e_base.py"
+
+#: Where the toolkit emits the e2e harness (FND-4656). Toolkit-owned: its files
+#: are indexed as generated bases, never graded as hand-written test code.
+_TESTS_GENERATED_DIR = Path("tests", "e2e", "generated")
 
 __all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
 
@@ -196,13 +205,17 @@ class _ClassInfo:
 def _generated_base_files(root: Path) -> list[Path]:
     """Locate committed ``_e2e_base.py`` modules the toolkit emitted.
 
-    Both the single-entrypoint (``app/generated/_e2e_base.py``) and the
-    multi-entrypoint (``app/generated/<entrypoint>/_e2e_base.py``) layouts are
-    covered, as is the ``contract/generated/`` variant some connectors emit to.
+    Both the single-entrypoint (``tests/e2e/generated/_e2e_base.py``) and the
+    multi-entrypoint (``tests/e2e/generated/<entrypoint>/_e2e_base.py``) layouts
+    are covered, as are the ``app/generated/`` location toolkits before FND-4656
+    emitted to and the ``contract/generated/`` variant some connectors emit to.
     """
     out: list[Path] = []
-    for parent in ("app", "contract"):
-        base = root / parent / "generated"
+    for base in (
+        root / _TESTS_GENERATED_DIR,
+        root / "app" / "generated",
+        root / "contract" / "generated",
+    ):
         if not base.is_dir():
             continue
         out.extend(
@@ -475,7 +488,7 @@ def _t023_identity_message(class_name: str, attrs: list[str]) -> str:
     return (
         f"class {class_name!r} hand-declares e2e identity attrs the contract toolkit "
         f"already generates from contract/app.pkl: {listed}. The generated "
-        "app/generated/_e2e_base.py defines <Name>GeneratedE2EBase with exactly these "
+        "tests/e2e/generated/_e2e_base.py defines <Name>GeneratedE2EBase with exactly these "
         "values, parented to SQLAppE2ETest or BaseE2ETest per the declared connector "
         "category. A hand-written copy is owned by no generator, so it stops agreeing "
         "with the contract the moment the contract moves (renamed Argo template, "
@@ -483,7 +496,7 @@ def _t023_identity_message(class_name: str, attrs: list[str]) -> str:
         "the drift only surfaces as a tenant-side AE failure in a 120-minute e2e run. "
         "Subclass the generated base instead and keep only the connector-specific "
         "knobs (mode, filters, database_spec(), asset floors): "
-        "`from app.generated._e2e_base import <Name>GeneratedE2EBase`. If the module "
+        "`from tests.e2e.generated._e2e_base import <Name>GeneratedE2EBase`. If the module "
         "is absent, regenerate with `pkl eval -m . contract/app.pkl` (see K010) — "
         "never hand-edit generated output."
     )
@@ -547,7 +560,13 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         _index_file(gen, rel_gen, index, by_name, aliases)
 
     test_files: list[tuple[Path, str, str]] = []
+    generated_dir = (root / _TESTS_GENERATED_DIR).resolve()
     for path in paths:
+        # Toolkit output under tests/: its bases were indexed above; the rest
+        # (the generated credential and substitution models) is neither graded
+        # nor indexed, exactly as when it lived under app/generated/.
+        if path.resolve().is_relative_to(generated_dir):
+            continue
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):

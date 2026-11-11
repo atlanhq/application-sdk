@@ -88,6 +88,7 @@ from pkl_contract_layout import (  # noqa: E402
     CALLER_NODE_PATHSPEC,
     GENERATED_DIR,
     ROOT_FILES,
+    TESTS_GENERATED_DIR,
     format_generated_python,
     root_files_not_emitted,
     run_post_generate,
@@ -101,7 +102,8 @@ LOCK_PATH = "contract/PklProject.deps.json"
 # Mirrors the cleanup list in contract-toolkit/scripts/regenerate-all.sh.
 # CALLER_NODE_PATHSPEC names a system app's caller nodes only (FND-3563): the
 # rest of contract/generated/ is the app's.
-OUTPUT_PATHS = [GENERATED_DIR, CALLER_NODE_PATHSPEC, *ROOT_FILES]
+# TESTS_GENERATED_DIR is the e2e harness, emitted under tests/ (FND-4656).
+OUTPUT_PATHS = [GENERATED_DIR, TESTS_GENERATED_DIR, CALLER_NODE_PATHSPEC, *ROOT_FILES]
 
 # `pkl eval` can fail transiently on a cold CI runner while fetching the remote
 # @app-contract-toolkit package — a network blip returns a non-zero code (not an

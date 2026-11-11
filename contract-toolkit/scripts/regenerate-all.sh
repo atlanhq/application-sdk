@@ -19,7 +19,7 @@ for pkl in examples/*/app.pkl; do
   example_dir="$(dirname "$pkl")"
 
   # Remove known generated paths before eval so stale artifacts don't linger.
-  rm -rf "${example_dir}/app/generated"
+  rm -rf "${example_dir}/app/generated" "${example_dir}/tests/e2e/generated"
   rm -f  "${example_dir}/atlan.yaml" "${example_dir}/app.yaml"
 
   echo ":: $pkl → $example_dir"

@@ -24,6 +24,6 @@ None of the three has a `tests/sdr/` or a `tests/full_dag/`, and none uses `Scen
 |---|---|---|
 | Handler functionality — auth, preflight | called directly, negative cases included | mysql `tests/integration/test_mysql_handler.py` (real MySQL); metabase `tests/unit/test_handler.py` (mocked client) |
 | Credential resolution | proven once in this repo (`tests/unit/credentials/`); per-app, against fake secret stores | mysql `tests/integration/test_credential_resolution.py` |
-| A full DAG, in either run mode | `tests/e2e/` via the generated `app/generated/_e2e_base.py` | mysql `tests/e2e/test_mysql_e2e.py` |
+| A full DAG, in either run mode | `tests/e2e/` via the generated `tests/e2e/generated/_e2e_base.py` | mysql `tests/e2e/test_mysql_e2e.py` |
 
 Tier 4 vs tier 5 is the `mode` ClassVar (`RunMode.AGENT` / `RunMode.DIRECT`) on one base class — not a different base class and not a separate test directory. See `docs/standards/connector-ci-e2e.md`.

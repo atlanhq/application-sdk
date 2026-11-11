@@ -263,7 +263,7 @@ residue for a human to apply, not an applied edit:
   outcome. Keep that delegation rather than deleting it or adding a redundant
   assertion. This exception is deliberately limited to that SDK scenario, reached
   through a base imported from `application_sdk.testing.e2e` or the generated
-  `app/generated/_e2e_base.py`; an app-local intermediate base, or an arbitrary
+  `tests/e2e/generated/_e2e_base.py`; an app-local intermediate base, or an arbitrary
   call to a superclass test/helper, still needs an outcome assertion.
 
   If the test's only real purpose is confirming a call doesn't raise (rare —
@@ -755,7 +755,7 @@ residue for a human to apply, not an applied edit:
   1. identity attrs (`connector_short_name`, `argo_package_name`,
      `argo_template_name`, `app_service_url`, `connection_type`,
      `connection_category`) on an e2e harness subclass — generated into
-     `app/generated/_e2e_base.py` as `<Name>GeneratedE2EBase`;
+     `tests/e2e/generated/_e2e_base.py` as `<Name>GeneratedE2EBase`;
   2. a `CredentialBody` subclass — generated into `_e2e_credential.py` as
      `<Name>CredentialBody` / `<Name>AgentCredentialBody`;
   3. a `MustacheSubstitutions` / `SQLMustacheSubstitutions` subclass — generated
@@ -772,8 +772,8 @@ residue for a human to apply, not an applied edit:
 
   ```python
   from application_sdk.testing.e2e import RunMode
-  from app.generated._e2e_base import MysqlGeneratedE2EBase
-  from app.generated._e2e_credential import MysqlAgentCredentialBody
+  from tests.e2e.generated._e2e_base import MysqlGeneratedE2EBase
+  from tests.e2e.generated._e2e_credential import MysqlAgentCredentialBody
 
   class TestMySQLE2E(MysqlGeneratedE2EBase):
       mode = RunMode.AGENT

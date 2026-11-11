@@ -3566,7 +3566,7 @@ class BaseE2ETest:
             f"v{DATABASE_SPEC_CREDENTIAL_TYPE_REMOVAL_VERSION}. {disposition} "
             f"Declare the credential-config name once, on the "
             f"`connector_config_name` ClassVar of the test class (a bundle "
-            f"gets it generated into app/generated/<entrypoint>/_e2e_base.py), "
+            f"gets it generated into tests/e2e/generated/<entrypoint_snake>/_e2e_base.py), "
             f"and drop it from database_spec()."
         )
         warnings.warn(message, DeprecationWarning, stacklevel=3)

@@ -272,6 +272,80 @@ def test_t023_clean_on_canonical_generated_shape(tmp_path: Path) -> None:
     assert "T023" not in _ids(_scan(root))
 
 
+# What the toolkit emits beside the base (FND-4656 moved both under tests/).
+_GENERATED_CREDENTIAL = """\
+# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.
+from application_sdk.testing.e2e.credential import CredentialBody
+from pydantic import Field
+
+
+class MysqlAgentCredentialBody(CredentialBody):
+    name: str = Field(alias="name")
+"""
+
+_TESTS_GENERATED_TEST = _CANONICAL_TEST.replace(
+    "app.generated._e2e_", "tests.e2e.generated._e2e_"
+)
+
+
+def test_t023_does_not_grade_the_generated_harness_under_tests(tmp_path: Path) -> None:
+    """The generated base declares the identity attrs and the generated
+    credential subclasses CredentialBody: both are toolkit output, so neither is
+    a hand-written copy even though they sit under tests/ (FND-4656)."""
+    root = _repo(
+        tmp_path,
+        tests={
+            "e2e/generated/__init__.py": "",
+            "e2e/generated/_e2e_base.py": _GENERATED_BASE,
+            "e2e/generated/_e2e_credential.py": _GENERATED_CREDENTIAL,
+            "e2e/test_mysql_full_dag.py": _TESTS_GENERATED_TEST,
+        },
+    )
+    assert _ids(_scan(root)) == []
+
+
+def test_t023_subclassing_the_generated_credential_under_tests_is_clean(
+    tmp_path: Path,
+) -> None:
+    """A test extending the generated model (not re-typing it) stays clean:
+    the generated module is not indexed as repo code, as under app/generated/."""
+    leaf = """\
+from tests.e2e.generated._e2e_credential import MysqlAgentCredentialBody
+
+
+class LocalCredential(MysqlAgentCredentialBody):
+    pass
+"""
+    root = _repo(
+        tmp_path,
+        tests={
+            "e2e/generated/_e2e_credential.py": _GENERATED_CREDENTIAL,
+            "e2e/helpers.py": leaf,
+        },
+    )
+    assert "T023" not in _ids(_scan(root))
+
+
+def test_t024_resolves_a_generated_base_under_tests(tmp_path: Path) -> None:
+    """The generated base under tests/e2e/generated still makes its subclass a
+    harness class, so a missing ``mode`` is reported."""
+    test_src = """\
+from tests.e2e.generated._e2e_base import MysqlGeneratedE2EBase
+
+
+class TestMySQLFullDAG(MysqlGeneratedE2EBase):
+    include_filter = "x"
+"""
+    root = _repo(
+        tmp_path,
+        tests={
+            "e2e/generated/_e2e_base.py": _GENERATED_BASE,
+            "e2e/test_mysql_full_dag.py": test_src,
+        },
+    )
+    assert _ids(_scan(root)) == ["T024"]
+
+
 def test_t023_ignores_non_harness_classes(tmp_path: Path) -> None:
     """A plain helper that happens to name one of the attrs is not a harness."""
     helper = """\

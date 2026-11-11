@@ -188,7 +188,7 @@ halves; ``atlan-mysql-app`` is the reference for each:
   catch it.
 * ``T023`` — E2EHarnessScaffoldHandWritten: a module under ``tests/`` declares
   scaffold the toolkit generates from ``contract/app.pkl`` — identity attrs on an
-  e2e harness subclass (``app/generated/_e2e_base.py``), a ``CredentialBody``
+  e2e harness subclass (``tests/e2e/generated/_e2e_base.py``), a ``CredentialBody``
   subclass (``_e2e_credential.py``), or a ``MustacheSubstitutions`` subclass
   (``_e2e_substitutions.py``).  The hand-written copy is owned by no generator, so
   it stops agreeing with the contract silently.  Companion to K010 (the generated
@@ -426,7 +426,7 @@ RULES: tuple[RuleDefinition, ...] = (
             ".. code-block:: python\n"
             "\n"
             "    from application_sdk.testing.e2e import RunMode\n"
-            "    from app.generated._e2e_base import MyAppGeneratedE2EBase\n"
+            "    from tests.e2e.generated._e2e_base import MyAppGeneratedE2EBase\n"
             "\n"
             "    @pytest.mark.e2e\n"
             "    class TestMyAppE2E(MyAppGeneratedE2EBase):\n"
@@ -604,7 +604,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "        `.exists` / `.is_dict` / `.is_string` / `.is_true` / `.is_list`\n"
             "    a direct, same-name `super().test_full_dag_runs_end_to_end()` delegation\n"
             "        from a class whose base is imported from `application_sdk.testing.e2e`\n"
-            "        or the contract-generated `app/generated/_e2e_base.py` (the SDK full-DAG\n"
+            "        or the contract-generated `tests/e2e/generated/_e2e_base.py` (the SDK full-DAG\n"
             "        scenario grades outcomes through its assertion ladder; an app-local\n"
             "        intermediate base is not trusted)\n"
             "    a `# should not raise` / `# must not raise` comment anywhere in the body\n"
@@ -1993,7 +1993,7 @@ RULES: tuple[RuleDefinition, ...] = (
         rationale=(
             "contract/app.pkl is the single source of truth for a connector's "
             "identity, and the contract toolkit already emits the whole e2e scaffold "
-            "from it: app/generated/_e2e_base.py (<Name>GeneratedE2EBase with "
+            "from it: tests/e2e/generated/_e2e_base.py (<Name>GeneratedE2EBase with "
             "connector_short_name / argo_package_name / argo_template_name / "
             "app_service_url / connection_type / connection_category, parented to "
             "SQLAppE2ETest or BaseE2ETest per the declared connector category), "
@@ -2021,20 +2021,20 @@ RULES: tuple[RuleDefinition, ...] = (
             "   ``SQLAppE2ETest``) that assigns any of ``connector_short_name``,\n"
             "   ``argo_package_name``, ``argo_template_name``, ``app_service_url``,\n"
             "   ``connection_type``, ``connection_category`` — the exact attribute\n"
-            "   set ``app/generated/_e2e_base.py`` emits.\n"
+            "   set ``tests/e2e/generated/_e2e_base.py`` emits.\n"
             "2. A ``CredentialBody`` subclass — generated as\n"
             "   ``<Name>CredentialBody`` / ``<Name>AgentCredentialBody`` in\n"
-            "   ``app/generated/_e2e_credential.py``.\n"
+            "   ``tests/e2e/generated/_e2e_credential.py``.\n"
             "3. A ``MustacheSubstitutions`` / ``SQLMustacheSubstitutions`` subclass —\n"
             "   generated as ``<Name>MustacheSubstitutions`` in\n"
-            "   ``app/generated/_e2e_substitutions.py``.\n"
+            "   ``tests/e2e/generated/_e2e_substitutions.py``.\n"
             "\n"
             "**Fix:** import the generated modules and keep only what the contract\n"
             "cannot know — the source under test, the asset floors, and the run mode.\n"
             "``atlan-mysql-app/tests/e2e/test_mysql_e2e.py`` is the reference::\n"
             "\n"
-            "    from app.generated._e2e_base import MysqlGeneratedE2EBase\n"
-            "    from app.generated._e2e_credential import MysqlAgentCredentialBody\n"
+            "    from tests.e2e.generated._e2e_base import MysqlGeneratedE2EBase\n"
+            "    from tests.e2e.generated._e2e_credential import MysqlAgentCredentialBody\n"
             "\n"
             "    class TestMySQLE2E(MysqlGeneratedE2EBase):\n"
             "        mode = RunMode.AGENT\n"
@@ -2290,7 +2290,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "application_sdk/testing/e2e/system_app.py — `SystemAppE2ETest` sets "
             "`_tenant_pool = TenantPool.SYSTEM`, which is what binds a suite to the "
             "system-app tenant pool; the toolkit's "
-            "contract-toolkit/examples/system-app/app/generated/_e2e_base.py shows "
+            "contract-toolkit/examples/system-app/tests/e2e/generated/_e2e_base.py shows "
             'the generated base a `type = "system"` contract emits, already '
             "parented to it. None of the reference apps is a system app."
         ),

@@ -878,10 +878,13 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K010",
         canonical_reference=(
-            "atlan-openapi-app app/generated/ — _e2e_base.py alongside _input.py, both "
-            "emitted from contract/app.pkl. tests/e2e/test_connection_create.py imports "
-            "that generated base, which is why the scaffold has to exist before the suite "
-            "can be written."
+            "atlan-openapi-app tests/e2e/test_openapi_e2e.py — subclasses "
+            "OpenapiGeneratedE2EBase, the base generated from contract/app.pkl, which "
+            "is why the scaffold has to exist before the suite can be written. The "
+            "toolkit now emits that module under tests/e2e/generated/ (see "
+            "contract-toolkit/examples/minimal/tests/e2e/generated/_e2e_base.py), "
+            "not app/generated/, where the openapi app still carries it until it "
+            "regenerates."
         ),
         fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
@@ -893,34 +896,46 @@ RULES: tuple[RuleDefinition, ...] = (
         since="0.12.0",
         orthogonal_gate="pkl-eval",
         rationale=(
-            "The toolkit emits app/generated/_e2e_base.py for every "
-            "single-entrypoint app, and the SDK's E2E framework imports it; a "
+            "The toolkit emits tests/e2e/generated/_e2e_base.py for every "
+            "single-entrypoint app, and the app's E2E tests import it; a "
             "missing file means the contract was never generated (or the output was "
             "deleted), so the app's E2E tests cannot resolve their typed base. "
             "Multi-entrypoint bundles emit E2E scaffolding into per-entrypoint "
-            "subfolders instead, so the rule only applies when the contract "
-            "declares no entrypoints block."
+            "subfolders instead, so the missing check only applies when the contract "
+            "declares no entrypoints block. Toolkits before FND-4656 emitted the "
+            "scaffolding under app/generated/, which the connector image copies; "
+            "those modules import application_sdk.testing and pytest, so a "
+            "committed _e2e_*.py under app/generated/ is test source shipped in "
+            "production, and is reported for every app, bundles included."
         ),
         short_description=(
-            "Single-entrypoint contract/app.pkl exists but generated "
-            "app/generated/_e2e_base.py is missing"
+            "Generated E2E scaffolding is missing from tests/e2e/generated/, or "
+            "still committed under app/generated/"
         ),
         full_description=(
-            "A single-entrypoint ``contract/app.pkl`` exists but its generated E2E "
-            "scaffolding ``app/generated/_e2e_base.py`` is absent. The toolkit emits "
-            "this module unconditionally for single-entrypoint apps, and "
-            "``application_sdk.testing.e2e`` imports it as the typed E2E base.\n"
+            "Two findings, both anchored on ``contract/app.pkl``:\n"
             "\n"
+            "* **Missing** — a single-entrypoint ``contract/app.pkl`` exists but "
+            "its generated E2E scaffolding ``tests/e2e/generated/_e2e_base.py`` is "
+            "absent. The toolkit emits this module unconditionally for "
+            "single-entrypoint apps, and the app's E2E suite subclasses it. "
             "Contracts that declare an ``entrypoints`` block (multi-entrypoint "
-            "bundles) are out of scope — their E2E scaffolding lands in "
-            "per-entrypoint subfolders, not the single-entrypoint path.\n"
+            "bundles) are out of scope for this one — their scaffolding lands in "
+            "``tests/e2e/generated/<entrypoint_snake>/``.\n"
+            "* **Wrong location** — any app commits ``_e2e_*.py`` under "
+            "``app/generated/``, where toolkits before FND-4656 emitted it. "
+            "``app/`` is what the connector image ships, and these modules import "
+            "``application_sdk.testing`` and pytest.\n"
             "\n"
-            "**Fix:** regenerate with ``pkl eval -m . contract/app.pkl`` and commit "
-            "the result.\n"
+            "**Fix:** upgrade ``app-contract-toolkit``, regenerate with "
+            "``pkl eval -m . contract/app.pkl`` (or the app's own generate task), "
+            "delete any ``app/generated/**/_e2e_*.py`` a local eval left behind, "
+            "change test imports from ``app.generated._e2e_*`` to "
+            "``tests.e2e.generated._e2e_*``, and commit the result.\n"
             "\n"
             "**Suppress** with ``// conformance: ignore[K010] <reason>`` on the "
             "``amends`` line of ``contract/app.pkl`` when the app legitimately ships "
-            "no E2E scaffolding.\n"
+            "no E2E scaffolding, or while a toolkit bump that moves it is pending.\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"

@@ -2457,7 +2457,7 @@ class Pipeline {
 
 /// Optional overrides for the generated e2e test harness of one bundle entrypoint.
 ///
-/// Affects only `app/generated/<entrypoint>/_e2e_base.py` — never `atlan.yaml`,
+/// Affects only `tests/e2e/generated/<entrypoint_snake>/_e2e_base.py` — never `atlan.yaml`,
 /// the manifests, the marketplace card or any runtime artifact. Every field is
 /// optional; an unset field keeps exactly the value the generator derives today.
 ///
@@ -5435,12 +5435,29 @@ local function bundleCallerNode(ep: Entrypoint): FileOutput =
   })
   c.output.files[c.inputContractPath]
 
+// Where the generated e2e test harness lands (`_e2e_base.py`,
+// `_e2e_credential.py`, `_e2e_substitutions.py`): under `tests/`, never
+// `app/generated/`. The modules import `application_sdk.testing` and, through
+// it, pytest; `app/` is what the image ships, so emitting them there put test
+// source in every production image (FND-4656). App tests import them as
+// `tests.e2e.generated._e2e_base`.
+local e2eGeneratedDir = "tests/e2e/generated"
+
+// A bundle entrypoint's e2e directory. Always snake_case, unlike
+// `bundleEntrypointDir`: nothing but Python lives here, so it must import as
+// `tests.e2e.generated.<ep_snake>._e2e_base`.
+local function bundleE2EDir(ep: Entrypoint): String =
+  "\(e2eGeneratedDir)/\(ep.name.replaceAll("-", "_"))"
+
 // Where a bundle re-exports one entrypoint contract's file. A system
 // sub-contract's caller node (`inputContractPath`), with or without a uiConfig,
-// goes to `contract/generated/<ep>/` instead of under `app/generated/<ep>/`.
+// goes to `contract/generated/<ep>/` instead of under `app/generated/<ep>/`, and
+// an e2e harness file to `tests/e2e/generated/<ep_snake>/`.
 local function bundleEntrypointFilePath(ep: Entrypoint, fileName: String): String =
   if (isSystemSubContract(ep) && fileName == ep.contract!!.inputContractPath)
     "contract/generated/\(ep.name)/\(fileName.split("/").last)"
+  else if (fileName.startsWith("\(e2eGeneratedDir)/"))
+    "\(bundleE2EDir(ep))/\(fileName.drop(e2eGeneratedDir.length + 1))"
   else "app/generated/\(bundleEntrypointDir(ep))/\(normalizeContractFileName(fileName))"
 
 // FND-3140: a bundle gives each entrypoint's input class a unique name and keeps
@@ -5704,13 +5721,16 @@ output =
             )
           }
         }
-        // e2e test-harness artifacts (independent of uiConfig)
-        ["app/generated/_e2e_base.py"] = generateE2EBasePy()
+        // e2e test-harness artifacts (independent of uiConfig). Emitted under
+        // `tests/`, not `app/generated/`: they import `application_sdk.testing`
+        // (and through it pytest), and `app/` is what the image ships (FND-4656).
+        ["\(e2eGeneratedDir)/__init__.py"] = new FileOutput { text = "" }
+        ["\(e2eGeneratedDir)/_e2e_base.py"] = generateE2EBasePy()
         when (_e2eCredOutput != null) {
-          ["app/generated/_e2e_credential.py"] = _e2eCredOutput!!
+          ["\(e2eGeneratedDir)/_e2e_credential.py"] = _e2eCredOutput!!
         }
         when (_e2eSubsOutput != null) {
-          ["app/generated/_e2e_substitutions.py"] = _e2eSubsOutput!!
+          ["\(e2eGeneratedDir)/_e2e_substitutions.py"] = _e2eSubsOutput!!
         }
         // artifact schema declarations (ADR-0020) — also independent of uiConfig:
         // a declaration describes data hand-offs, which an app has whether or not
@@ -5731,6 +5751,9 @@ output =
         }
         // per-entrypoint artifacts under app/generated/{entrypoint.name}/
         when (emitGeneratedArtifacts) {
+          when (entrypoints.toList().any((e) -> e.contract != null)) {
+            ["\(e2eGeneratedDir)/__init__.py"] = new FileOutput { text = "" }
+          }
           for (entrypoint in entrypoints) {
             when (entrypoint.contract != null) {
               for (fileName, fileOutput in entrypoint.contract!!.output.files) {
@@ -5738,9 +5761,14 @@ output =
                 // rendered it believing it was a standalone app, so its identity
                 // fields name the entrypoint instead of the bundle and it carries
                 // neither `manifest_path` nor `entrypoint`. The bundle-scoped
-                // generator below replaces it. Every other file relocates as before.
+                // generator below replaces it, and writes the package marker
+                // `__init__.py` too. Every other file relocates as before: e2e
+                // files to `tests/e2e/generated/<ep_snake>/`, the rest to
+                // `app/generated/<ep>/`.
                 when (normalizeContractFileName(fileName) != ""
                       && normalizeContractFileName(fileName) != "_e2e_base.py"
+                      && normalizeContractFileName(fileName) != "\(e2eGeneratedDir)/_e2e_base.py"
+                      && normalizeContractFileName(fileName) != "\(e2eGeneratedDir)/__init__.py"
                       && !isCredentialFile(entrypoint, fileName)) {
                   [bundleEntrypointFilePath(entrypoint, fileName)] =
                     if (normalizeContractFileName(fileName) == "_input.py") bundleInputPy(entrypoint.name, fileOutput)
@@ -5749,7 +5777,8 @@ output =
                     else fileOutput
                 }
               }
-              ["app/generated/\(bundleEntrypointDir(entrypoint))/_e2e_base.py"] = generateBundleE2EBasePy(entrypoint)
+              ["\(bundleE2EDir(entrypoint))/__init__.py"] = new FileOutput { text = "" }
+              ["\(bundleE2EDir(entrypoint))/_e2e_base.py"] = generateBundleE2EBasePy(entrypoint)
             }
           }
         }

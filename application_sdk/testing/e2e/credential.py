@@ -1,7 +1,7 @@
 """Base class for codegen'd per-connector credential body models.
 
 Each connector's ``contract/app.pkl`` generates a ``<Connector>CredentialBody``
-subclass in ``app/generated/_e2e_credential.py`` via
+subclass in ``tests/e2e/generated/_e2e_credential.py`` via
 ``generateE2ECredentialPy()`` in ``contract-toolkit/src/App.pkl``. Fields are
 derived from the union of: ``credentialUrlGroup`` host/port/extraFields,
 ``credentialSharedExtraFields``, ``credentialCommonFields``,

@@ -119,8 +119,9 @@ your-app/
   bundle. See the `bundle` and `card-split` examples.
 - An app may ship extra `contract/*.pkl` files (e.g. a reusable credential
   contract amending `Credential.pkl`) that generate their own
-  `app/generated/*.json`, plus e2e codegen files (`_e2e_*.py`) for agent-mode
-  apps. `app/generated/frontend/static/` (playground dist) is gitignored.
+  `app/generated/*.json`. The e2e harness (`_e2e_*.py`) is generated under
+  `tests/e2e/generated/`, never `app/generated/`, so it stays out of the image.
+  `app/generated/frontend/static/` (playground dist) is gitignored.
 
 `contract-toolkit/README.md` (§ App Repo Structure) is the live source if this
 tree drifts.

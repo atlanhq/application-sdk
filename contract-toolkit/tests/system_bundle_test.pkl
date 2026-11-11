@@ -15,8 +15,8 @@ import "../examples/system-bundle/digest.pkl" as Digest
 import "../src/App.pkl" as App
 
 local files = systemBundle.output.files
-local usageBase: String = files["app/generated/usage_analysis/_e2e_base.py"].text
-local digestBase: String = files["app/generated/digest/_e2e_base.py"].text
+local usageBase: String = files["tests/e2e/generated/usage_analysis/_e2e_base.py"].text
+local digestBase: String = files["tests/e2e/generated/digest/_e2e_base.py"].text
 
 // A non-system bundle root carrying one system sub-contract next to a
 // non-system one: only the system entrypoint changes layout.
@@ -41,7 +41,7 @@ local function withEntrypoint(c) = (bundleApp) {
   }
 }
 local systemUiBundle = withEntrypoint(DigestWithUi)
-local systemUiBase: String = systemUiBundle.output.files["app/generated/digest-ui/_e2e_base.py"].text
+local systemUiBase: String = systemUiBundle.output.files["tests/e2e/generated/digest_ui/_e2e_base.py"].text
 local connectorUiBundle = withEntrypoint((DigestWithUi) { type = "connector"; inputs = new Mapping {}; hasCredentialConfig = false })
 
 local minerOnlyBundle = (bundleApp) {
@@ -54,13 +54,16 @@ facts {
   ["System bundle renders one caller node per entrypoint under contract/generated/<ep>/"] {
     files.keys == Set(
       "atlan.yaml", "app.yaml",
+      "tests/e2e/generated/__init__.py",
       "app/generated/usage_analysis/_input.py",
       "app/generated/usage_analysis/__init__.py",
-      "app/generated/usage_analysis/_e2e_base.py",
+      "tests/e2e/generated/usage_analysis/__init__.py",
+      "tests/e2e/generated/usage_analysis/_e2e_base.py",
       "contract/generated/usage-analysis/input.pkl",
       "app/generated/digest/_input.py",
       "app/generated/digest/__init__.py",
-      "app/generated/digest/_e2e_base.py",
+      "tests/e2e/generated/digest/__init__.py",
+      "tests/e2e/generated/digest/_e2e_base.py",
       "contract/generated/digest/input.pkl")
     !files.keys.any((k) -> k.contains("app/generated/") && k.contains("contract/generated"))
   }
@@ -122,10 +125,10 @@ facts {
   ["A system sub-contract under a non-system root is handled the same way"] {
     mixedBundle.output.files.containsKey("app/generated/digest_step/_input.py")
     mixedBundle.output.files.containsKey("contract/generated/digest-step/input.pkl")
-    mixedBundle.output.files["app/generated/digest_step/_e2e_base.py"].text.contains("(SystemAppE2ETest):")
+    mixedBundle.output.files["tests/e2e/generated/digest_step/_e2e_base.py"].text.contains("(SystemAppE2ETest):")
     // The non-system entrypoint keeps its kebab dir, manifest wiring and base class.
-    mixedBundle.output.files["app/generated/miner/_e2e_base.py"].text
-      == minerOnlyBundle.output.files["app/generated/miner/_e2e_base.py"].text
+    mixedBundle.output.files["tests/e2e/generated/miner/_e2e_base.py"].text
+      == minerOnlyBundle.output.files["tests/e2e/generated/miner/_e2e_base.py"].text
     mixedBundle.output.files["app/generated/miner/manifest.json"].text
       == minerOnlyBundle.output.files["app/generated/miner/manifest.json"].text
   }
@@ -138,8 +141,8 @@ facts {
     !systemUiBase.contains("connector_config_name")
     !systemUiBase.contains("argo_package_name")
     !systemUiBase.contains("app_service_url")
-    connectorUiBundle.output.files["app/generated/digest-ui/_e2e_base.py"].text.contains("(BaseE2ETest):")
-    connectorUiBundle.output.files["app/generated/digest-ui/_e2e_base.py"].text.contains("connector_config_name")
+    connectorUiBundle.output.files["tests/e2e/generated/digest_ui/_e2e_base.py"].text.contains("(BaseE2ETest):")
+    connectorUiBundle.output.files["tests/e2e/generated/digest_ui/_e2e_base.py"].text.contains("connector_config_name")
     systemUiBundle.output.files.containsKey("app/generated/digest-ui/manifest.json")
     systemUiBundle.output.files.containsKey("contract/generated/digest-ui/input.pkl")
     !systemUiBundle.output.files.keys.any((k) -> k.startsWith("app/generated/digest_ui/"))
@@ -150,20 +153,43 @@ facts {
     bundleApp.output.files.keys == Set(
       "atlan.yaml", "app.yaml",
       "app/generated/atlan-connectors-bundle.json",
+      "tests/e2e/generated/__init__.py",
       "app/generated/crawler/crawler.json",
       "app/generated/crawler/manifest.json",
       "app/generated/crawler/_input.py",
       "app/generated/crawler/__init__.py",
-      "app/generated/crawler/_e2e_base.py",
-      "app/generated/crawler/_e2e_credential.py",
+      "tests/e2e/generated/crawler/__init__.py",
+      "tests/e2e/generated/crawler/_e2e_base.py",
+      "tests/e2e/generated/crawler/_e2e_credential.py",
       "app/generated/miner/miner.json",
       "app/generated/miner/manifest.json",
       "app/generated/miner/_input.py",
       "app/generated/miner/__init__.py",
-      "app/generated/miner/_e2e_base.py",
-      "app/generated/miner/_e2e_substitutions.py")
-    bundleApp.output.files["app/generated/crawler/_e2e_base.py"].text
+      "tests/e2e/generated/miner/__init__.py",
+      "tests/e2e/generated/miner/_e2e_base.py",
+      "tests/e2e/generated/miner/_e2e_substitutions.py")
+    bundleApp.output.files["tests/e2e/generated/crawler/_e2e_base.py"].text
       .contains("    manifest_path = \"app/generated/crawler/manifest.json\"\n")
+  }
+
+  // FND-4656: `app/` is what a connector image ships; the e2e harness imports
+  // pytest, so none of it may be emitted there, in either mode.
+  ["No e2e harness module is emitted under app/generated/"] {
+    for (app in List(bundleApp, systemBundle, systemApp)) {
+      !app.output.files.keys.any((k) -> k.startsWith("app/") && k.contains("_e2e_"))
+    }
+  }
+
+  ["Every generated e2e directory is a package that imports as tests.e2e.generated"] {
+    for (app in List(bundleApp, systemBundle, systemApp)) {
+      let (keys = app.output.files.keys)
+      keys
+        .filter((k) -> k.startsWith("tests/e2e/generated/") && k.endsWith("/_e2e_base.py"))
+        .every((k) -> keys.contains(k.replaceLast("_e2e_base.py", "__init__.py")))
+    }
+    for (app in List(bundleApp, systemBundle, systemApp)) {
+      app.output.files.containsKey("tests/e2e/generated/__init__.py")
+    }
   }
 
   ["Single-entrypoint system app keeps contract/generated/input.pkl"] {

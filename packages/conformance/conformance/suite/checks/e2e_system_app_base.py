@@ -48,8 +48,9 @@ Every collectable test class (``Test*`` in a ``test_*.py`` / ``*_test.py``
 file) under ``tests/e2e/`` that is an **SDK-harness class**: one that reaches
 ``BaseE2ETest``, ``SQLAppE2ETest`` or ``SystemAppE2ETest`` — directly, through a
 repo-local base anywhere under ``tests/``, or through a toolkit-generated
-``*GeneratedE2EBase`` in ``app/generated/**/_e2e_base.py`` (which for a
-``type = "system"`` contract already extends ``SystemAppE2ETest``).
+``*GeneratedE2EBase`` in ``tests/e2e/generated/**/_e2e_base.py`` (or, from a
+toolkit before FND-4656, ``app/generated/**/_e2e_base.py``), which for a
+``type = "system"`` contract already extends ``SystemAppE2ETest``.
 
 A base name counts as the SDK class only when it is imported from
 ``application_sdk.testing.e2e`` (or a submodule of it). A same-named class

@@ -91,8 +91,8 @@ local appNoArgoPkgs = (App) {
 
 local argoYaml = appArgoPkgs.output.files["atlan.yaml"].text
 local noArgoYaml = appNoArgoPkgs.output.files["atlan.yaml"].text
-local argoE2eBase = appArgoPkgs.output.files["app/generated/_e2e_base.py"].text
-local noArgoE2eBase = appNoArgoPkgs.output.files["app/generated/_e2e_base.py"].text
+local argoE2eBase = appArgoPkgs.output.files["tests/e2e/generated/_e2e_base.py"].text
+local noArgoE2eBase = appNoArgoPkgs.output.files["tests/e2e/generated/_e2e_base.py"].text
 
 // ── Gap 3: workflowType verbatim vs default ──────────────────────────────────
 local workflowUiConfig = new App.UIConfig {

@@ -78,6 +78,109 @@ def test_prefixed_replaces_wholesale(tree):
     assert not (tree / "app" / "generated" / "orphan.json").exists()
 
 
+# ── e2e harness under tests/e2e/generated (FND-4656) ─────────────────────────
+
+
+def test_detect_prefixed_from_e2e_harness_alone(tree: Path) -> None:
+    """An App.pkl contract whose only Python output is the e2e harness emits no
+    ``app/generated/``; it is still the prefixed family, not native."""
+    _write(tree / "out" / "tests" / "e2e" / "generated" / "_e2e_base.py")
+    _write(tree / "out" / "atlan.yaml")
+    assert mod.detect_layout(tree / "out") == "prefixed"
+
+
+def test_prefixed_places_e2e_harness_under_tests(tree: Path) -> None:
+    _write(tree / "out" / "app" / "generated" / "manifest.json", "fresh\n")
+    _write(tree / "out" / "tests" / "e2e" / "generated" / "__init__.py", "")
+    _write(tree / "out" / "tests" / "e2e" / "generated" / "_e2e_base.py", "base\n")
+
+    assert mod.swap_outputs(tree / "out") is True
+
+    gen = tree / "tests" / "e2e" / "generated"
+    assert (gen / "_e2e_base.py").read_text() == "base\n"
+    assert (gen / "__init__.py").exists()
+    assert not (tree / "app" / "generated" / "tests").exists()
+
+
+def test_prefixed_clears_e2e_harness_left_under_app_generated(tree: Path) -> None:
+    """A pre-FND-4656 toolkit emitted the harness under ``app/generated/``; the
+    wholesale replace drops it, so the image stops carrying test source."""
+    _write(tree / "app" / "generated" / "_e2e_base.py", "old\n")
+    _write(tree / "out" / "app" / "generated" / "manifest.json")
+    _write(tree / "out" / "tests" / "e2e" / "generated" / "_e2e_base.py", "new\n")
+
+    assert mod.swap_outputs(tree / "out") is True
+
+    assert not (tree / "app" / "generated" / "_e2e_base.py").exists()
+    assert (
+        tree / "tests" / "e2e" / "generated" / "_e2e_base.py"
+    ).read_text() == "new\n"
+
+
+def test_prefixed_replaces_e2e_harness_wholesale_but_not_app_tests(tree: Path) -> None:
+    """``tests/e2e/generated/`` is toolkit-owned (a removed bundle entrypoint's
+    dir is an orphan); the app's own tests beside it are not touched."""
+    _write(tree / "tests" / "e2e" / "generated" / "gone" / "_e2e_base.py")
+    _write(tree / "tests" / "e2e" / "test_app_e2e.py", "mine\n")
+    _write(tree / "tests" / "e2e" / "__init__.py", "mine\n")
+    _write(tree / "out" / "app" / "generated" / "manifest.json")
+    _write(tree / "out" / "tests" / "e2e" / "generated" / "crawler" / "_e2e_base.py")
+
+    assert mod.swap_outputs(tree / "out") is True
+
+    assert not (tree / "tests" / "e2e" / "generated" / "gone").exists()
+    assert (tree / "tests" / "e2e" / "generated" / "crawler" / "_e2e_base.py").exists()
+    assert (tree / "tests" / "e2e" / "test_app_e2e.py").read_text() == "mine\n"
+    assert (tree / "tests" / "e2e" / "__init__.py").read_text() == "mine\n"
+
+
+def test_prefixed_per_root_generated_dir_pairs_a_snake_case_tests_dir(
+    tree: Path,
+) -> None:
+    """One eval root per entrypoint places under ``app/generated/<root>``; its
+    harness goes under ``tests/e2e/generated/<root_snake>`` so it imports."""
+    _write(tree / "out" / "app" / "generated" / "manifest.json")
+    _write(tree / "out" / "tests" / "e2e" / "generated" / "_e2e_base.py", "b\n")
+
+    assert mod.swap_outputs(tree / "out", generated_dir="app/generated/my-crawler")
+
+    assert (tree / "app" / "generated" / "my-crawler" / "manifest.json").exists()
+    assert (
+        tree / "tests" / "e2e" / "generated" / "my_crawler" / "_e2e_base.py"
+    ).read_text() == "b\n"
+
+
+def test_native_never_touches_tests_generated(tree: Path) -> None:
+    """The native family emits no e2e harness under ``tests/``; an existing one
+    is not the native swap's to delete."""
+    _write(tree / "tests" / "e2e" / "generated" / "_e2e_base.py", "keep\n")
+    _write(tree / "app" / "generated" / "manifest.json")
+    _write(tree / "out" / "manifest.json", "fresh\n")
+
+    assert mod.swap_outputs(tree / "out") is True
+
+    assert (
+        tree / "tests" / "e2e" / "generated" / "_e2e_base.py"
+    ).read_text() == "keep\n"
+
+
+def test_format_generated_python_covers_the_e2e_harness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "app" / "generated").mkdir(parents=True)
+    (tmp_path / "app" / "generated" / "_input.py").write_text("import os\n")
+    (tmp_path / "tests" / "e2e" / "generated").mkdir(parents=True)
+    (tmp_path / "tests" / "e2e" / "generated" / "_e2e_base.py").write_text("x = 1\n")
+    monkeypatch.setattr(mod.shutil, "which", lambda name: f"/usr/bin/{name}")
+    calls: list[list[str]] = []
+
+    assert mod.format_generated_python(calls.append, tmp_path) is True
+
+    for cmd in calls:
+        assert str(tmp_path / "app" / "generated" / "_input.py") in cmd
+        assert str(tmp_path / "tests" / "e2e" / "generated" / "_e2e_base.py") in cmd
+
+
 def test_prefixed_creates_missing_target(tree):
     _write(tree / "out" / "app" / "generated" / "manifest.json", "fresh\n")
 

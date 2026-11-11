@@ -1,6 +1,6 @@
 """Fail if ruff would change any Python file the toolkit generates.
 
-Apps run ruff on ``app/generated/*.py`` in pre-commit. If the toolkit's raw
+Apps run ruff on ``app/generated/*.py`` and ``tests/e2e/generated/*.py`` in pre-commit. If the toolkit's raw
 output is not already ruff-clean, what an app commits differs from what
 ``pkl eval`` writes, and the contract-drift gate fails even when the contract
 has not changed.

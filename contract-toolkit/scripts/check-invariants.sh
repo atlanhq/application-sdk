@@ -917,7 +917,7 @@ fi
 # JSON-stringified array. Authors declare `defaultSelection` structurally and the
 # toolkit renders that string; hand-writing it is rejected, because an unescaped
 # quote in the value used to emit syntactically invalid Python into
-# `app/generated/_e2e_substitutions.py` (FND-1980).
+# the generated `_e2e_substitutions.py` (FND-1980).
 
 # $1 = label, $2 = the DropDown body, $3 = grep pattern the error must contain
 check_dropdown_default() {
