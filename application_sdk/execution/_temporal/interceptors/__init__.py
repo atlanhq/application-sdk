@@ -20,9 +20,6 @@ observability set:
 it is SDK-internal and wired only by ``create_worker`` when an ``on_activity``
 callback is supplied. Exposing it as a public interceptor would let callers add
 it manually and bypass the opt-in wiring — leave it out of ``__all__``.
-
-``LoopStallInterceptor`` (``loop_stall.py``) is SDK-internal for the same
-reason: ``create_worker`` always adds it to feed the event-loop stall watchdog.
 """
 
 from application_sdk.execution._temporal.interceptors.log import LogInterceptor

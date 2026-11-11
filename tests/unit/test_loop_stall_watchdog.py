@@ -1,36 +1,32 @@
-"""The event-loop stall watchdog ends a worker whose loop stops running.
+"""The event-loop stall watchdog ends a shutting-down worker whose loop stopped.
 
 The scenarios that end a process run ``run_worker_mode`` in a child
-(``tests/unit/loop_stall_probe.py``) and read its exit code and stderr; the
-rest drive ``LoopStallWatchdog`` in-process against a private faulthandler.
+(``tests/unit/loop_stall_probe.py``), send it a real SIGTERM and read its exit
+code and stderr; the rest drive ``LoopStallWatchdog`` in-process against a
+private faulthandler and signal module. The bound is 3 s, so each timer runs
+3.75 s (the bound plus one re-arm interval).
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import dataclasses
 import os
+import signal
 import subprocess
 import sys
 import textwrap
-from datetime import timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 import pytest
-from temporalio.testing import ActivityEnvironment
-from temporalio.worker import ActivityInboundInterceptor, ExecuteActivityInput
 
 import application_sdk._loop_stall_watchdog as watchdog_mod
 from application_sdk._loop_stall_watchdog import (
     LoopStallWatchdog,
-    RunningHeartbeatTimeouts,
-    rearm_interval_seconds,
+    largest_bound_within,
+    timer_seconds,
 )
-from application_sdk.execution._temporal.interceptors.loop_stall import (
-    LoopStallInterceptor,
-)
+from application_sdk.constants import load_worker_loop_stall_timeout_override
 from application_sdk.main import _PostDrainExitArm
 from tests.unit.private_stdlib import private_stdlib
 
@@ -38,16 +34,21 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # A hang guard only: a stalled child exits within seconds, and a healthy one
 # finishes on its own schedule. Generous because it covers interpreter start-up.
 _CHILD_HANG_GUARD_SECONDS = 120
+_TIMER_HEADER = "Timeout (0:00:03.750000)!"
+
+_posix_signals = pytest.mark.skipif(
+    sys.platform == "win32", reason="asyncio has no signal handlers on Windows"
+)
 
 
 def _run_probe(
     block: str,
     *,
-    timeout: str,
-    shutdown_after: float,
+    when: str,
+    sigterm_after: float,
+    drain: float = 0,
     linger: float = 0,
-    phase: str = "worker",
-    heartbeat: float = 0,
+    timeout: str = "3",
 ) -> subprocess.CompletedProcess[str]:
     env = {
         **os.environ,
@@ -61,12 +62,14 @@ def _run_probe(
             "-m",
             "tests.unit.loop_stall_probe",
             block,
-            str(shutdown_after),
+            "--when",
+            when,
+            "--sigterm-after",
+            str(sigterm_after),
+            "--drain",
+            str(drain),
+            "--linger",
             str(linger),
-            "--phase",
-            phase,
-            "--heartbeat",
-            str(heartbeat),
         ],
         cwd=_REPO_ROOT,
         env=env,
@@ -77,79 +80,63 @@ def _run_probe(
     )
 
 
-class TestStalledLoopExits:
-    """A worker whose loop stops running exits with every thread's stack."""
+@_posix_signals
+class TestStalledShutdownExits:
+    """A shutdown whose event loop stops running exits with every thread's stack."""
 
     @pytest.mark.parametrize(
         ("block", "culprit"),
         [("sleep", "_block_on_sleep"), ("lock", "_block_on_lock")],
     )
-    def test_blocked_loop_exits_1_with_the_blocking_frame_on_stderr(
-        self, block: str, culprit: str
-    ) -> None:
-        # The shutdown signal never comes: a blocked loop could not run it.
-        result = _run_probe(block, timeout="1", shutdown_after=3600)
+    def test_loop_frozen_before_sigterm(self, block: str, culprit: str) -> None:
+        """The loop never runs its shutdown handler; the process-level handler
+        arms the timer from inside the blocked call."""
+        result = _run_probe(block, when="before-sigterm", sigterm_after=1.5)
 
         assert result.returncode == 1, result.stderr
-        assert "Timeout (0:00:01)!" in result.stderr
+        assert _TIMER_HEADER in result.stderr
         assert f"in {culprit}" in result.stderr
         assert "probe exited cleanly" not in result.stdout
 
+    def test_loop_frozen_during_the_drain(self) -> None:
+        result = _run_probe("sleep", when="during-drain", sigterm_after=1)
 
-class TestHeartbeatAwareTimeout:
-    """The bound is the longest heartbeat timeout among running activities,
-    when that is longer than the configured one (2 s here)."""
+        assert result.returncode == 1, result.stderr
+        assert _TIMER_HEADER in result.stderr
+        assert "in _block_on_sleep" in result.stderr
 
-    def test_stall_shorter_than_a_running_heartbeat_timeout_survives(self) -> None:
-        result = _run_probe(
-            "sleep:4", timeout="2", shutdown_after=7, phase="activity", heartbeat=6
-        )
+
+@_posix_signals
+class TestNothingElseIsKilled:
+    def test_steady_state_block_far_past_the_bound_survives(self) -> None:
+        """Before shutdown a frozen loop is the liveness probe's job."""
+        result = _run_probe("sleep:7", when="steady", sigterm_after=8)
 
         assert result.returncode == 0, result.stderr
         assert "Timeout (" not in result.stderr
         assert "probe exited cleanly" in result.stdout
 
-    def test_stall_past_a_running_heartbeat_timeout_exits(self) -> None:
-        result = _run_probe(
-            "sleep", timeout="2", shutdown_after=3600, phase="activity", heartbeat=6
-        )
-
-        assert result.returncode == 1, result.stderr
-        assert "Timeout (0:00:06)!" in result.stderr
-        assert "in _block_on_sleep" in result.stderr
-
-    def test_finished_activity_drops_back_to_the_configured_timeout(self) -> None:
-        result = _run_probe(
-            "sleep",
-            timeout="2",
-            shutdown_after=3600,
-            phase="after-activity",
-            heartbeat=6,
-        )
-
-        assert result.returncode == 1, result.stderr
-        assert "Timeout (0:00:02)!" in result.stderr
-
-    def test_activity_without_heartbeat_timeout_does_not_extend_it(self) -> None:
-        result = _run_probe(
-            "sleep", timeout="2", shutdown_after=3600, phase="activity", heartbeat=0
-        )
-
-        assert result.returncode == 1, result.stderr
-        assert "Timeout (0:00:02)!" in result.stderr
-
-
-class TestHealthyLoopSurvives:
-    def test_ticking_loop_outlives_several_timeouts(self) -> None:
-        result = _run_probe("none", timeout="2", shutdown_after=6)
+    def test_drain_longer_than_the_bound_survives(self) -> None:
+        """A draining loop keeps re-arming, and asyncio's own SIGTERM handling
+        still drives the drain with the watchdog's handler chained in front."""
+        result = _run_probe("none", when="steady", sigterm_after=1, drain=7)
 
         assert result.returncode == 0, result.stderr
         assert "Timeout (" not in result.stderr
         assert "probe exited cleanly" in result.stdout
 
     def test_clean_shutdown_leaves_no_timer_armed(self) -> None:
-        """The process outlives the timeout twice over after the worker stops."""
-        result = _run_probe("none", timeout="2", shutdown_after=1, linger=4)
+        """The process outlives the timer after the worker stops."""
+        result = _run_probe("none", when="steady", sigterm_after=1, linger=5)
+
+        assert result.returncode == 0, result.stderr
+        assert "Timeout (" not in result.stderr
+        assert "probe exited cleanly" in result.stdout
+
+    def test_zero_turns_it_off(self) -> None:
+        result = _run_probe(
+            "sleep:5", when="before-sigterm", sigterm_after=1.5, timeout="0"
+        )
 
         assert result.returncode == 0, result.stderr
         assert "Timeout (" not in result.stderr
@@ -164,10 +151,27 @@ def fake_faulthandler():
         private_stdlib(watchdog_mod, "os") as local_os,
         patch.object(local_fh, "dump_traceback_later") as arm,
         patch.object(local_fh, "cancel_dump_traceback_later") as cancel,
-        # Windows has no register_at_fork; start() then skips the fork hooks.
+        # Windows has no register_at_fork; the watchdog then skips the hooks.
         patch.object(local_os, "register_at_fork", create=True),
     ):
         yield arm, cancel
+
+
+@pytest.fixture
+def fake_signal():
+    """The watchdog's view of the signal module, with no real handlers set."""
+    installed: dict[int, object] = {}
+    previous = MagicMock(name="previous_handler")
+    with (
+        private_stdlib(watchdog_mod, "signal") as local_signal,
+        patch.object(local_signal, "getsignal", return_value=previous),
+        patch.object(
+            local_signal,
+            "signal",
+            side_effect=lambda sig, handler: installed.__setitem__(sig, handler),
+        ),
+    ):
+        yield installed, previous, local_signal
 
 
 @pytest.fixture
@@ -185,40 +189,72 @@ def _timer_call(seconds: float):
     return call(seconds, repeat=False, file=2, exit=True)
 
 
-class TestWatchdogInProcess:
-    async def test_zero_timeout_arms_nothing(
-        self, fake_faulthandler, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+class TestShutdownArming:
+    def test_installing_arms_nothing(self, fake_faulthandler, fake_signal) -> None:
         arm, _ = fake_faulthandler
-        monkeypatch.setenv("ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS", "0")
-        watchdog = LoopStallWatchdog.from_settings()
+        installed, _, _ = fake_signal
 
-        watchdog.start()
-        await asyncio.sleep(0)
+        LoopStallWatchdog(3).install((signal.SIGINT, signal.SIGTERM))
+
+        assert set(installed) == {signal.SIGINT, signal.SIGTERM}
+        arm.assert_not_called()
+
+    def test_signal_arms_once_and_chains(self, fake_faulthandler, fake_signal) -> None:
+        arm, _ = fake_faulthandler
+        installed, previous, _ = fake_signal
+        LoopStallWatchdog(3).install((signal.SIGTERM,))
+        handler = installed[signal.SIGTERM]
+
+        handler(signal.SIGTERM, None)
+        handler(signal.SIGTERM, None)
+
+        assert arm.call_args_list == [_timer_call(3.75)]
+        assert previous.call_args_list == [call(signal.SIGTERM, None)] * 2
+
+    def test_zero_installs_nothing(self, fake_faulthandler, fake_signal) -> None:
+        installed, _, _ = fake_signal
+
+        LoopStallWatchdog(0).install((signal.SIGTERM,))
+
+        assert installed == {}
+
+    def test_off_the_main_thread_leaves_arming_to_the_loop(
+        self, fake_faulthandler, fake_signal
+    ) -> None:
+        _, _, local_signal = fake_signal
+        local_signal.signal.side_effect = ValueError("main thread only")
+
+        LoopStallWatchdog(3).install((signal.SIGTERM,))
+
+    def test_stopped_watchdog_ignores_the_signal(self, fake_faulthandler) -> None:
+        arm, _ = fake_faulthandler
+        watchdog = LoopStallWatchdog(3)
+        watchdog.stop()
+
+        watchdog.on_shutdown_signal()
 
         arm.assert_not_called()
 
-    async def test_arms_with_exit_and_stops_rearming_once_stopped(
+    async def test_loop_shutdown_handler_rearms_until_stopped(
         self, fake_faulthandler
     ) -> None:
         arm, cancel = fake_faulthandler
-        watchdog = LoopStallWatchdog(300, running=RunningHeartbeatTimeouts())
+        watchdog = LoopStallWatchdog(3)
 
-        watchdog.start()
+        watchdog.start_rearming()
         await asyncio.sleep(0)
-        assert arm.call_args_list == [_timer_call(300)]
+        assert arm.call_args_list == [_timer_call(3.75), _timer_call(3.75)]
 
         watchdog.stop()
         cancel.assert_called_once_with()
-        assert watchdog._arm() is None
-        assert arm.call_count == 1
+        assert watchdog._arm() is False
 
     async def test_cancelled_task_cancels_the_timer(self, fake_faulthandler) -> None:
         """A loop torn down without a drain (an exception, asyncio.run's
         cleanup) still leaves no timer behind."""
         _, cancel = fake_faulthandler
-        watchdog = LoopStallWatchdog(300, running=RunningHeartbeatTimeouts())
-        watchdog.start()
+        watchdog = LoopStallWatchdog(3)
+        watchdog.start_rearming()
         await asyncio.sleep(0)
 
         assert watchdog._task is not None
@@ -228,94 +264,38 @@ class TestWatchdogInProcess:
 
         cancel.assert_called_once_with()
 
-    @pytest.mark.parametrize(("timeout", "rearm"), [(300, 15.0), (2, 0.5)])
-    def test_rearms_several_times_per_timeout(
-        self, timeout: float, rearm: float
-    ) -> None:
-        assert rearm_interval_seconds(timeout) == rearm
 
+class TestTimerArithmetic:
+    @pytest.mark.parametrize(("bound", "timer"), [(3, 3.75), (60, 75), (300, 315)])
+    def test_timer_adds_one_rearm_interval(self, bound: float, timer: float) -> None:
+        assert timer_seconds(bound) == timer
+
+    @pytest.mark.parametrize("seconds", [5, 28, 75, 400, 86370])
+    def test_largest_bound_fills_the_limit(self, seconds: float) -> None:
+        assert timer_seconds(largest_bound_within(seconds)) == pytest.approx(seconds)
+
+
+class TestOverrideParsing:
     @pytest.mark.parametrize(
         ("raw", "expected"),
-        [(None, 300.0), ("45", 45.0), ("-5", 0.0), ("abc", 300.0), ("inf", 300.0)],
+        [(None, None), ("", None), ("0", 0.0), ("45", 45.0)],
     )
-    def test_timeout_env_parsing(
-        self, monkeypatch: pytest.MonkeyPatch, raw: str | None, expected: float
+    def test_valid(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str | None, expected: float | None
     ) -> None:
         if raw is None:
             monkeypatch.delenv("ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS")
         else:
             monkeypatch.setenv("ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS", raw)
-        warns = raw in ("abc", "inf")
-        with pytest.warns(UserWarning) if warns else contextlib.nullcontext():
-            watchdog = LoopStallWatchdog.from_settings()
-        assert watchdog.timeout_seconds == expected
+        assert load_worker_loop_stall_timeout_override() == expected
 
-
-class TestRunningActivities:
-    """How running activities move the timeout, in-process."""
-
-    def test_effective_timeout_is_the_longer_of_the_two(self) -> None:
-        running = RunningHeartbeatTimeouts()
-        watchdog = LoopStallWatchdog(300, running=running)
-
-        with running.track(60):
-            assert watchdog.effective_timeout_seconds() == 300
-            with running.track(3600), running.track(600):
-                assert watchdog.effective_timeout_seconds() == 3600
-            assert watchdog.effective_timeout_seconds() == 300
-        with running.track(None), running.track(0):
-            assert running.longest() == 0.0
-
-    async def test_start_and_finish_rearm_at_once(self, fake_faulthandler) -> None:
-        """The activity that starts may block the loop before the next tick,
-        and a shrunk timeout must not wait out a sleep sized for the old one."""
-        arm, _ = fake_faulthandler
-        running = RunningHeartbeatTimeouts()
-        changes: list[float] = []
-        watchdog = LoopStallWatchdog(
-            2, running=running, on_timeout_change=changes.append
-        )
-        watchdog.start()
-        await asyncio.sleep(0)
-        assert arm.call_args_list == [_timer_call(2)]
-
-        with running.track(3600):
-            assert arm.call_args_list[-1] == _timer_call(3600)
-        assert arm.call_args_list[-1] == _timer_call(2)
-
-        # The re-arm task was waiting out 15 s; it wakes and re-arms for 2 s.
-        calls_before_wake = arm.call_count
-        for _ in range(3):
-            await asyncio.sleep(0)
-        assert arm.call_count > calls_before_wake
-        assert arm.call_args_list[-1] == _timer_call(2)
-        assert changes == [3600, 2]
-
-        watchdog.stop()
-        assert running.on_change is None
-
-    async def test_interceptor_tracks_the_activity_heartbeat_timeout(self) -> None:
-        running = RunningHeartbeatTimeouts()
-        seen: list[float] = []
-
-        class _Body(ActivityInboundInterceptor):
-            def __init__(self) -> None:
-                pass
-
-            async def execute_activity(self, input: ExecuteActivityInput) -> None:
-                seen.append(running.longest())
-
-        chain = LoopStallInterceptor(running).intercept_activity(_Body())
-        activity_input = ExecuteActivityInput(
-            fn=len, args=(), executor=None, headers={}
-        )
-        for heartbeat in (timedelta(seconds=90), None):
-            env = ActivityEnvironment()
-            env.info = dataclasses.replace(env.info, heartbeat_timeout=heartbeat)
-            await env.run(chain.execute_activity, activity_input)
-
-        assert seen == [90.0, 0.0]
-        assert running.longest() == 0.0
+    @pytest.mark.parametrize("raw", ["abc", "-5", "inf", "nan"])
+    def test_invalid_falls_back_to_derived(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        monkeypatch.setenv("ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS", raw)
+        with pytest.warns(UserWarning):
+            assert load_worker_loop_stall_timeout_override() is None
 
 
 class TestForkHooks:
@@ -326,7 +306,7 @@ class TestForkHooks:
     ) -> None:
         """A thread that keeps forking cannot postpone a stopped loop's exit."""
         arm, cancel = fake_faulthandler
-        watchdog = LoopStallWatchdog(300, running=RunningHeartbeatTimeouts())
+        watchdog = LoopStallWatchdog(300)
         watchdog._arm()
 
         clock[0] += 200
@@ -334,16 +314,16 @@ class TestForkHooks:
         watchdog._resume_after_fork()
 
         cancel.assert_called_once_with()
-        assert arm.call_args_list == [_timer_call(300), _timer_call(100)]
+        assert arm.call_args_list == [_timer_call(315), _timer_call(115)]
 
     def test_deadline_passed_during_the_fork_fires_at_once(
         self, fake_faulthandler, clock
     ) -> None:
         arm, _ = fake_faulthandler
-        watchdog = LoopStallWatchdog(300, running=RunningHeartbeatTimeouts())
+        watchdog = LoopStallWatchdog(300)
         watchdog._arm()
 
-        clock[0] += 301
+        clock[0] += 316
         watchdog._pause_for_fork()
         watchdog._resume_after_fork()
 
@@ -351,7 +331,7 @@ class TestForkHooks:
 
     def test_child_side_leaves_the_timer_off(self, fake_faulthandler) -> None:
         arm, cancel = fake_faulthandler
-        watchdog = LoopStallWatchdog(300, running=RunningHeartbeatTimeouts())
+        watchdog = LoopStallWatchdog(300)
         watchdog._arm()
 
         watchdog._pause_for_fork()
@@ -365,7 +345,7 @@ class TestForkHooks:
 
     def test_fork_while_unarmed_arms_nothing(self, fake_faulthandler) -> None:
         arm, cancel = fake_faulthandler
-        watchdog = LoopStallWatchdog(300, running=RunningHeartbeatTimeouts())
+        watchdog = LoopStallWatchdog(300)
 
         watchdog._pause_for_fork()
         watchdog._resume_after_fork()

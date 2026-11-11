@@ -55,6 +55,7 @@ if _importlib_util.find_spec("application_sdk.handler.base") is None:
 from application_sdk._loop_stall_watchdog import (
     LOOP_STALL_TIMEOUT_ENV,
     LoopStallWatchdog,
+    largest_bound_within,
 )
 from application_sdk.app.base import _pascal_to_kebab
 from application_sdk.app.registry import AppRegistry, TaskRegistry
@@ -1332,13 +1333,15 @@ class _PostDrainExitArm:
         _start_post_drain_exit_deadline()
 
 
-def _log_shutdown_budget() -> None:
+def _log_shutdown_budget(loop_stall: _LoopStallBound | None = None) -> None:
     """Log the effective shutdown bounds once, and warn when they overrun the grace.
 
     Every bound has its own env override, so the effective values can disagree
     with the declared grace. A sum past the grace means SIGKILL lands before
     shutdown finishes; logging it at startup makes that visible before it
-    happens instead of after.
+    happens instead of after. The event-loop stall bound is checked against
+    its own ordering: above the longest a task may hold the loop, and within
+    the budget.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker startup only
         PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS,
@@ -1356,14 +1359,33 @@ def _log_shutdown_budget() -> None:
     post_drain = _post_drain_exit_timeout_seconds()
     logger.info(
         "Shutdown budget: grace=%s drain_delay=%ss drain=%ss post_drain=%ss "
-        "pushgateway_http_timeout=%ss pushgateway_delete_delay=%ss",
+        "pushgateway_http_timeout=%ss pushgateway_delete_delay=%ss loop_stall=%s",
         budget.grace_seconds if budget is not None else "undeclared",
         SHUTDOWN_DRAIN_DELAY_SECONDS,
         drain,
         post_drain,
         PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS,
         PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS,
+        f"{loop_stall.seconds:g}s"
+        if loop_stall is not None and loop_stall.seconds > 0
+        else "off",
     )
+    if loop_stall is not None and not loop_stall.in_order():
+        logger.warning(
+            "Event-loop stall bound out of order: the longest a registered task "
+            "may hold the loop (%gs: its heartbeat timeout, or its start-to-close "
+            "timeout when it has none) < loop_stall %gs <= what still fires before "
+            "SIGKILL (%s) must hold. %s",
+            loop_stall.longest_task_hold_seconds,
+            loop_stall.seconds,
+            f"{loop_stall.limit_seconds:g}s"
+            if loop_stall.limit_seconds is not None
+            else "unbounded",
+            f"Unset {LOOP_STALL_TIMEOUT_ENV} to derive it"
+            if loop_stall.overridden
+            else f"Raise {SHUTDOWN_GRACE_SECONDS_ENV} or lower that task's timeout; "
+            "until then a stall during the drain can end work Temporal still waits for",
+        )
     if budget is None:
         return
     # A disabled post-drain deadline (<= 0) is unbounded; count the derived
@@ -1426,25 +1448,96 @@ def _start_post_drain_exit_deadline(
     return timer
 
 
-def _log_stall_timeout_change(seconds: float) -> None:
-    # The dump's "Timeout (h:mm:ss)!" header records the bound that fired;
-    # this records when a running activity moved it.
-    logger.debug("Event-loop stall watchdog timeout is now %gs", seconds)
+# Kept between the longest a registered task may hold the loop and the stall
+# bound, so a task that holds it for exactly its own limit is never cut short.
+_LOOP_STALL_MARGIN_SECONDS = 15
 
 
-def _start_loop_stall_watchdog(watchdog: LoopStallWatchdog) -> None:
-    """Log the configured timeout once, then start the watchdog on this loop."""
-    if watchdog.timeout_seconds <= 0:
-        logger.info("Event-loop stall watchdog disabled (%s=0)", LOOP_STALL_TIMEOUT_ENV)
-        return
-    logger.info(
-        "Event-loop stall watchdog on: if the event loop does not run for %gs, or "
-        "for the longest heartbeat timeout among running activities if longer, the "
-        "process dumps every thread's stack to stderr and exits with code 1 (%s)",
-        watchdog.timeout_seconds,
-        LOOP_STALL_TIMEOUT_ENV,
+@dataclass(frozen=True)
+class _LoopStallBound:
+    """The event-loop stall bound for a shutting-down worker, and its inputs."""
+
+    seconds: float
+    """The bound; ``0`` turns the watchdog off."""
+    longest_task_hold_seconds: float
+    """The longest a registered task may hold the loop without Temporal giving up on it."""
+    limit_seconds: float | None
+    """The largest bound that still ends the process before SIGKILL; ``None``
+    when the grace is not declared."""
+    overridden: bool
+
+    def in_order(self) -> bool:
+        """``longest task hold < bound <= limit``, or the watchdog is off."""
+        if self.seconds <= 0:
+            return True
+        above_tasks = self.seconds > self.longest_task_hold_seconds
+        return above_tasks and (
+            self.limit_seconds is None or self.seconds <= self.limit_seconds
+        )
+
+
+def _longest_task_loop_hold_seconds() -> float:
+    """The longest any registered task may hold the event loop while Temporal
+    still waits for it.
+
+    That is its heartbeat timeout or, for a task without one, its start-to-close
+    timeout: Temporal gives up on a silent task only through heartbeats. The
+    SDK's default heartbeat timeout is the floor, which covers the SDK's own
+    activities.
+    """
+    from application_sdk.app.task import (  # noqa: PLC0415 — cold path: worker startup only
+        _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS,
     )
-    watchdog.start()
+
+    longest = float(_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS)
+    for tasks in TaskRegistry.get_instance().get_all_tasks().values():
+        for task in tasks:
+            hold = task.heartbeat_timeout_seconds or task.timeout_seconds
+            longest = max(longest, float(hold))
+    return longest
+
+
+def _loop_stall_bound() -> _LoopStallBound:
+    """Derive the stall bound from the registered tasks and the shutdown budget.
+
+    The bound sits just past the longest a registered task may hold the loop,
+    so a stall during the drain never ends work Temporal still waits for, and
+    within the budget, so the exit lands before SIGKILL with daprd's headroom
+    left; the budget wins when the two cannot both hold. An explicit
+    ``ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS`` replaces it, and ``0`` turns
+    the watchdog off.
+    """
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker startup only
+        load_shutdown_budget,
+        load_worker_loop_stall_timeout_override,
+    )
+
+    budget = load_shutdown_budget()
+    hold = _longest_task_loop_hold_seconds()
+    limit = (
+        largest_bound_within(budget.loop_stall_limit_seconds)
+        if budget is not None
+        else None
+    )
+    override = load_worker_loop_stall_timeout_override()
+    if override is not None:
+        return _LoopStallBound(override, hold, limit, overridden=True)
+    seconds = hold + _LOOP_STALL_MARGIN_SECONDS
+    if limit is not None:
+        seconds = min(seconds, limit)
+    return _LoopStallBound(seconds, hold, limit, overridden=False)
+
+
+def _install_loop_stall_watchdog(watchdog: LoopStallWatchdog) -> None:
+    """Arm the watchdog at the first SIGTERM or SIGINT. Call after the loop's
+    own signal handlers are installed, so it chains in front of them."""
+    watchdog.install((signal.SIGINT, signal.SIGTERM))
+    logger.info(
+        "Event-loop stall watchdog set for shutdown: after SIGTERM or SIGINT, if "
+        "the event loop does not run for %gs the process dumps every thread's "
+        "stack to stderr and exits with code 1",
+        watchdog.timeout_seconds,
+    )
 
 
 async def _observe_worker_poll_state(
@@ -1754,9 +1847,9 @@ async def run_worker_mode(
     runs until a shutdown signal is received.
     ``bound_post_drain_exit`` starts the post-drain exit deadline, which ends
     the whole process if teardown hangs, and the event-loop stall watchdog,
-    which ends it if the loop stops running. Only the process-owning entry
-    point sets it; leave it off when awaiting this from code that keeps the
-    process.
+    which ends it if the loop stops running during shutdown. Only the
+    process-owning entry point sets it; leave it off when awaiting this from
+    code that keeps the process.
     """
     global _worker_event_loop
     _worker_event_loop = asyncio.get_running_loop()
@@ -1929,33 +2022,37 @@ async def run_worker_mode(
     # Graceful shutdown
     shutdown_event = asyncio.Event()
 
-    def _signal_handler() -> None:
-        logger.info("Shutdown signal received")
-        shutdown_event.set()
-
     # Like the post-drain deadline it hands over to, the watchdog ends the
     # whole process, so only the process-owning entry point runs it.
+    loop_stall = _loop_stall_bound()
     stall_watchdog = (
-        LoopStallWatchdog.from_settings(on_timeout_change=_log_stall_timeout_change)
-        if bound_post_drain_exit
+        LoopStallWatchdog(loop_stall.seconds)
+        if bound_post_drain_exit and loop_stall.seconds > 0
         else None
     )
+
+    def _signal_handler() -> None:
+        logger.info("Shutdown signal received")
+        if stall_watchdog is not None:
+            stall_watchdog.start_rearming()
+        shutdown_event.set()
+
     # Read by _build_worker's on_drained hook, which only runs after this point.
     post_drain_arm = _PostDrainExitArm(
         enabled=bound_post_drain_exit,
         shutdown_event=shutdown_event,
         stall_watchdog=stall_watchdog,
     )
-    _log_shutdown_budget()
+    _log_shutdown_budget(loop_stall if bound_post_drain_exit else None)
 
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
+    if stall_watchdog is not None:
+        _install_loop_stall_watchdog(stall_watchdog)
 
     logger.info("Worker started: app=%s queue=%s", app_name, config.task_queue)
     _log_process_memory_baseline()
-    if stall_watchdog is not None:
-        _start_loop_stall_watchdog(stall_watchdog)
     # health_server stays up across worker restarts so the runtime keeps
     # answering health checks while the supervisor rebuilds a crashed worker.
     async with health_server:
@@ -2096,9 +2193,9 @@ async def run_combined_mode(
     event loop and shut down together on SIGINT/SIGTERM.
     ``bound_post_drain_exit`` starts the post-drain exit deadline, which ends
     the whole process if teardown hangs, and the event-loop stall watchdog,
-    which ends it if the loop stops running. Only the process-owning entry
-    point sets it; leave it off when awaiting this from code that keeps the
-    process.
+    which ends it if the loop stops running during shutdown. Only the
+    process-owning entry point sets it; leave it off when awaiting this from
+    code that keeps the process.
     """
     global _worker_event_loop
     _worker_event_loop = asyncio.get_running_loop()
@@ -2317,29 +2414,35 @@ async def run_combined_mode(
 
     shutdown_event = asyncio.Event()
 
+    # Like the post-drain deadline it hands over to, the watchdog ends the
+    # whole process, so only the process-owning entry point runs it.
+    loop_stall = _loop_stall_bound()
+    stall_watchdog = (
+        LoopStallWatchdog(loop_stall.seconds)
+        if bound_post_drain_exit and loop_stall.seconds > 0
+        else None
+    )
+
     def _signal_handler() -> None:
         logger.info("Shutdown signal received")
+        if stall_watchdog is not None:
+            stall_watchdog.start_rearming()
         shutdown_event.set()
         uvicorn_server.should_exit = True
 
-    # Like the post-drain deadline it hands over to, the watchdog ends the
-    # whole process, so only the process-owning entry point runs it.
-    stall_watchdog = (
-        LoopStallWatchdog.from_settings(on_timeout_change=_log_stall_timeout_change)
-        if bound_post_drain_exit
-        else None
-    )
     # Read by _build_worker's on_drained hook, which only runs after this point.
     post_drain_arm = _PostDrainExitArm(
         enabled=bound_post_drain_exit,
         shutdown_event=shutdown_event,
         stall_watchdog=stall_watchdog,
     )
-    _log_shutdown_budget()
+    _log_shutdown_budget(loop_stall if bound_post_drain_exit else None)
 
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
+    if stall_watchdog is not None:
+        _install_loop_stall_watchdog(stall_watchdog)
 
     logger.info(
         "Combined mode started: app=%s queue=%s port=%d",
@@ -2349,7 +2452,15 @@ async def run_combined_mode(
     )
     _log_process_memory_baseline()
     if stall_watchdog is not None:
-        _start_loop_stall_watchdog(stall_watchdog)
+        # While serving, uvicorn replaces the process-level SIGTERM and SIGINT
+        # handlers with its own handle_exit, so the arming has to go there too.
+        uvicorn_handle_exit = uvicorn_server.handle_exit
+
+        def _handle_exit(sig: int, frame: Any) -> None:
+            stall_watchdog.on_shutdown_signal()
+            uvicorn_handle_exit(sig, frame)
+
+        uvicorn_server.handle_exit = _handle_exit  # type: ignore[method-assign]
     # uvicorn keeps serving while the worker is supervised and restarted
     # independently; a shutdown signal (which also sets should_exit) stops both.
     async with health_server:
@@ -2737,10 +2848,10 @@ Environment Variables:
                            Seconds a fatal poll error may go without the worker
                            polling again before /live fails (default: 600; 0 = disabled).
   ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS
-                           Seconds the event loop may go without running before the
-                           process dumps every thread's stack and exits with code 1,
-                           or the longest heartbeat timeout among running activities
-                           if longer (default: 300; 0 = disabled).
+                           After SIGTERM/SIGINT, seconds the event loop may go without
+                           running before the process dumps every thread's stack and
+                           exits with code 1 (default: derived from the registered
+                           tasks' timeouts and the shutdown budget; 0 = disabled).
   ATLAN_LOG_LEVEL          Log level (default: INFO)
                            Falls back to LOG_LEVEL (v2)
 

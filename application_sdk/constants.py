@@ -319,6 +319,9 @@ class ShutdownBudget:
     (``post_drain_seconds``) — the Pushgateway final push, pre-DELETE hold and
     DELETE, closing infrastructure, the observability flush and interpreter exit
     hooks. ``headroom_seconds`` is left for daprd's stop after the process exits.
+    ``loop_stall_limit_seconds`` is how long after the signal an event-loop
+    stall may still end the process so that daprd keeps that headroom; the
+    worker's stall bound must fit inside it.
 
     The drain comes first. In-flight activities are the only step whose loss is
     not best-effort, and daprd stays up for the whole drain (the entrypoint only
@@ -332,6 +335,7 @@ class ShutdownBudget:
     headroom_seconds: int
     pushgateway_http_timeout_seconds: float
     pushgateway_shutdown_delete_delay_seconds: float
+    loop_stall_limit_seconds: int
 
 
 def derive_shutdown_budget(
@@ -398,6 +402,7 @@ def derive_shutdown_budget(
         headroom_seconds=headroom,
         pushgateway_http_timeout_seconds=http_timeout,
         pushgateway_shutdown_delete_delay_seconds=delete_delay,
+        loop_stall_limit_seconds=grace - headroom,
     )
 
 
@@ -802,19 +807,28 @@ def _load_worker_liveness_max_idle_seconds() -> float:
 WORKER_LIVENESS_MAX_IDLE_SECONDS = _load_worker_liveness_max_idle_seconds()
 
 
-#: Seconds the worker's event loop may go without running before the process
-#: dumps every thread's stack to stderr and exits with code 1 (while activities
-#: run, the longest of their heartbeat timeouts if longer). Shutdown signals
-#: are handled on the loop, so a blocked loop would otherwise never stop: the
-#: Temporal core keeps polling on its own threads and takes tasks it can never
-#: run until the pod's grace period ends. Far above any legitimate loop block;
-#: activity heartbeats already fail after a much shorter one. ``0`` disables
-#: the watchdog. Malformed or non-finite values fall back to 300. Read when the
-#: worker starts, not at import, like the other shutdown bounds.
-def load_worker_loop_stall_timeout_seconds() -> float:
-    return _load_non_negative_finite_float(
-        "ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS", 300.0
-    )
+#: Explicit event-loop stall bound for a shutting-down worker, replacing the
+#: one derived from its registered tasks and the shutdown budget (see
+#: ``_loop_stall_bound`` in ``main.py``). ``0`` turns the stall watchdog off,
+#: which is what a local debugging session wants: a breakpoint during shutdown
+#: would otherwise end the process. Unset, malformed, negative or non-finite
+#: values mean no override.
+def load_worker_loop_stall_timeout_override() -> float | None:
+    name = "ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS"
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not math.isfinite(value) or value < 0:
+        warnings.warn(
+            f"{name}={raw!r} is not a non-negative number; using the derived bound",
+            stacklevel=2,
+        )
+        return None
+    return value
 
 
 #: Consecutive definitive zero-poller readings after which the worker ``/live``
