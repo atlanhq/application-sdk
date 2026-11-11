@@ -192,9 +192,11 @@ class TestDaprCredentialVaultGetCredentials:
         )
         original_fetch = DaprCredentialVault._fetch_credential_config
 
-        async def _capturing_fetch(self_: Any, guid: str) -> dict[str, Any]:
+        async def _capturing_fetch(
+            self_: Any, guid: str, **kwargs: Any
+        ) -> dict[str, Any]:
             captured.append(guid)
-            return await original_fetch(self_, guid)
+            return await original_fetch(self_, guid, **kwargs)
 
         with (
             patch.object(
@@ -1166,6 +1168,54 @@ class TestDaprCredentialVaultMissingConfigBlob:
         assert isinstance(exc_info.value, CredentialConfigNotFoundError)
         # Code-keyed consumers must see the same code as before the subtype.
         assert exc_info.value.code == CredentialVaultError.code
+
+    async def test_caller_can_skip_the_missing_config_ladder(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        """A best-effort caller (e.g. a manifest hook reading an optional
+        credential on a request path) passes ``()``: one read, no backoff,
+        and the same typed not-found error, instead of ~17s of re-reads."""
+        mock_client = MagicMock()
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=_binding_500("error invoking output binding: object not found")
+        )
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            _vault_sleep() as sleep,
+        ):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialConfigNotFoundError) as exc_info:
+                await vault.get_credentials(
+                    "example-credential", missing_config_retry_delays=()
+                )
+
+        assert mock_client.invoke_binding.await_count == 1
+        assert sleep.await_args_list == []
+        assert "not-found on 1 attempts over 0s" in str(exc_info.value)
+        assert exc_info.value.code == CredentialVaultError.code
+
+    async def test_caller_supplied_missing_config_ladder_is_used(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        mock_client = MagicMock()
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=_binding_500("error invoking output binding: object not found")
+        )
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            _vault_sleep() as sleep,
+        ):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialConfigNotFoundError) as exc_info:
+                await vault.get_credentials(
+                    "example-credential", missing_config_retry_delays=[1.0]
+                )
+
+        assert mock_client.invoke_binding.await_count == 2
+        assert [c.args[0] for c in sleep.await_args_list] == [1.0]
+        assert "not-found on 2 attempts over 1s" in str(exc_info.value)
 
     async def test_empty_config_reply_is_not_reported_as_confirmed_absence(
         self, deterministic_dapr_cold_start_deadline
