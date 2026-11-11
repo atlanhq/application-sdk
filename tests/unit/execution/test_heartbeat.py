@@ -2,7 +2,7 @@
 
 Covers the heartbeat controllers, the auto-heartbeat loop and the stall
 watchdog that rides on its tick. The offload primitives this module re-exports
-are tested at their own home, ``tests/unit/runtime/test_offload.py``.
+are tested at their own home, ``tests/unit/_runtime/test_offload.py``.
 
 Strict no-real-loop policy: the auto-heartbeat loop tests use intervals well
 under 1 second with pre-set events to avoid hangs.

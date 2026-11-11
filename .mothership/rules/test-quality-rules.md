@@ -15,7 +15,7 @@ If the PR adds or significantly modifies a module in `application_sdk/`, there m
 application_sdk/app/base.py        → tests/unit/app/test_base.py
 application_sdk/contracts/types.py → tests/unit/contracts/test_types.py
 application_sdk/storage/ops.py     → tests/unit/storage/test_ops.py
-application_sdk/handler/service.py → tests/unit/handler/test_service.py
+application_sdk/handler/service.py → tests/unit/handler/test_service_*.py (split by route area)
 ```
 
 Flag as **Critical** if:

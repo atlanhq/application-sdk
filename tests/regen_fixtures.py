@@ -43,7 +43,8 @@ class RenderedFixture:
 _HANDLER_FIXTURES = _REPO / "tests" / "unit" / "handler" / "fixtures"
 
 FIXTURES: tuple[RenderedFixture, ...] = (
-    # Read by tests/unit/handler/test_validate_route_credentials.py.
+    # Read by tests/unit/handler/test_validate_route_credentials.py and
+    # (crawler/_input.py) tests/unit/handler/test_service_entrypoints.py.
     RenderedFixture(
         contract=_HANDLER_FIXTURES / "bigquery_contract" / "app.pkl",
         fixture=_HANDLER_FIXTURES / "generated_bigquery_credentials",
@@ -51,6 +52,7 @@ FIXTURES: tuple[RenderedFixture, ...] = (
             "atlan-connectors-bigquery.json",
             "crawler/bigquery-crawler.json",
             "crawler/manifest.json",
+            "crawler/_input.py",
         ),
     ),
 )
