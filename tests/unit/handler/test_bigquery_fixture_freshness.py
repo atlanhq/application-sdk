@@ -51,3 +51,33 @@ def test_fixture_matches_the_rendered_contract() -> None:
         "render of fixtures/bigquery_contract/app.pkl. Run "
         "`uv run poe regen-test-fixtures` and review the diff."
     )
+
+
+class TestMissingPkl:
+    """Without the pinned pkl the check skips, unless CI requires it."""
+
+    @pytest.fixture(autouse=True)
+    def _no_pkl(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "tests.unit.handler.test_bigquery_fixture_freshness._pinned_pkl",
+            lambda: None,
+        )
+
+    def test_required_pkl_fails_instead_of_skipping(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SDK_TESTS_REQUIRE_PKL", "1")
+
+        # Catch the skip too: left uncaught, a regression to skipping would
+        # report this test as skipped rather than failed.
+        with pytest.raises((pytest.fail.Exception, pytest.skip.Exception)) as caught:
+            test_fixture_matches_the_rendered_contract()
+
+        assert caught.type is pytest.fail.Exception
+        assert "SDK_TESTS_REQUIRE_PKL" in str(caught.value)
+
+    def test_unrequired_pkl_skips(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("SDK_TESTS_REQUIRE_PKL", raising=False)
+
+        with pytest.raises(pytest.skip.Exception, match=PKL_VERSION):
+            test_fixture_matches_the_rendered_contract()
