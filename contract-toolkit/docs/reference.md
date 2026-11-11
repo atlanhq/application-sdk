@@ -957,7 +957,7 @@ There is deliberately no `taskQueue` field — see [What `deploy.pools` generate
 ```pkl
 class DaprComponents {
   objectstore: Boolean = true   // required by the SDK — keep it on
-  secretstore: Boolean = false
+  secretstore: Boolean = false  // rendered true for apps that resolve credentials
   statestore: Boolean = false
   eventstore: Boolean = false
   subscription: Boolean = false
@@ -980,6 +980,12 @@ What changes in the generated `atlan.yaml`:
   enables no Dapr component unless `atlan.yaml` asks for it, so a contract that
   emitted no block got no object store. The other components render as `false`,
   which is also the chart's default for them.
+- `secretstore` renders `true` for any app that resolves credentials
+  (`hasCredentialConfig`, which is the default for non-system apps, or a
+  non-empty `additionalCredentialConfigs`), even when `dapr.secretstore` is
+  `false`, because the SDK reads every credential through the Dapr secret store.
+  Without it every credential lookup fails. System apps with no credentials keep
+  `secretstore: false` unless they set it.
 - `dapr { secretstore = true }` (any other component enabled) emits
   `objectstore: true`. Earlier toolkit releases emitted `objectstore: false`
   here, which left the app unable to start.

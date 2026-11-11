@@ -11,6 +11,7 @@
 amends "pkl:test"
 
 import "../src/App.pkl" as App
+import "../src/Connectors.pkl" as Connectors
 
 local function appWith(deployCfg: App.DeployConfig?) = (App) {
   name = "dapr-test"
@@ -25,6 +26,20 @@ local function appWith(deployCfg: App.DeployConfig?) = (App) {
         inputs {
           ["target"] = new App.TextInput { title = "Target" }
         }
+      }
+    }
+  }
+}
+
+local function credentialedWith(deployCfg: App.DeployConfig, extra: Boolean) = (appWith(deployCfg)) {
+  hasCredentialConfig = !extra
+  when (!extra) { connector = Connectors.TRINO }
+  when (extra) {
+    additionalCredentialConfigs {
+      new App.CredentialConfig {
+        name = "atlan-connectors-dapr-test-extra"
+        wrapper = false
+        authOptions { ["basic"] = new App.AuthOption { label = "Basic"; fields {} } }
       }
     }
   }
@@ -59,5 +74,22 @@ facts {
 
   ["an explicit false is rendered as written"] {
     deployOf(explicitFalse)["dapr"]["objectstore"] == false
+  }
+
+  // FND-4870: the SDK reads every credential through the Dapr secret store.
+  ["a credentialed app with an empty deploy block renders secretstore: true"] {
+    deployOf(credentialedWith(new App.DeployConfig {}, false))["dapr"]["secretstore"] == true
+  }
+
+  ["an explicit secretstore = false is overridden on a credentialed app"] {
+    deployOf(credentialedWith(new App.DeployConfig { dapr { secretstore = false } }, false))["dapr"]["secretstore"] == true
+  }
+
+  ["additionalCredentialConfigs alone also renders secretstore: true"] {
+    deployOf(credentialedWith(new App.DeployConfig {}, true))["dapr"]["secretstore"] == true
+  }
+
+  ["a system app keeps secretstore: false"] {
+    deployOf((appWith(new App.DeployConfig {})) { type = "system"; hasCredentialConfig = false })["dapr"]["secretstore"] == false
   }
 }

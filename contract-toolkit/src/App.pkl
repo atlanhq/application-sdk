@@ -5003,9 +5003,13 @@ local function renderWorkerPool(poolName: String, p: Pool): Mapping<String, Any>
   when (!p.envOverrides.isEmpty) { ["envOverrides"] = p.envOverrides }
 }
 
+// The SDK resolves every credential through the Dapr secret store, so an app
+// that resolves credentials always gets it, whatever `dapr.secretstore` says.
+local resolvesCredentials: Boolean = hasCredentialConfig || !additionalCredentialConfigs.isEmpty
+
 local function renderDapr(d: DaprComponents): Mapping<String, Any> = new Mapping {
   ["objectstore"] = d.objectstore
-  ["secretstore"] = d.secretstore
+  ["secretstore"] = d.secretstore || resolvesCredentials
   ["statestore"] = d.statestore
   ["eventstore"] = d.eventstore
   ["subscription"] = d.subscription

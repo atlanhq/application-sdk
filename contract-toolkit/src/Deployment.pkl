@@ -14,6 +14,10 @@ class DaprComponents {
   /// no Dapr component unless `atlan.yaml` asks for it, so omitting the block
   /// would leave the app without the store.
   objectstore: Boolean = true
+  /// The Dapr secret store. The renderer turns it on for apps that resolve
+  /// credentials (`hasCredentialConfig`, or a non-empty
+  /// `additionalCredentialConfigs`), because the SDK reads every credential
+  /// through it; an explicit `false` on such an app is overridden.
   secretstore: Boolean = false
   statestore: Boolean = false
   eventstore: Boolean = false
