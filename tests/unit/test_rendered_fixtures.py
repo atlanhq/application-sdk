@@ -1,11 +1,10 @@
-"""The BigQuery fixture is what the toolkit renders today (FND-4680).
+"""Each rendered fixture is what the toolkit renders today (FND-4680).
 
-``test_validate_route_credentials.py`` reads forms from
-``fixtures/generated_bigquery_credentials/``. Those files are rendered from
-``fixtures/bigquery_contract/app.pkl``; this test renders the contract again
-and compares bytes, so a toolkit change that alters the forms fails here, with
-the command that fixes it, rather than leaving the route tested against a shape
-the toolkit no longer emits.
+The fixtures in ``tests.regen_fixtures.FIXTURES`` are contracts rendered by
+the in-repo toolkit. This test renders each contract again and compares bytes,
+so a toolkit change that alters a fixture fails here, with the command that
+fixes it, rather than leaving its tests running against a shape the toolkit no
+longer emits.
 
 It needs ``pkl`` on ``PATH`` at the SDK pin. Without it the test skips, except
 where ``SDK_TESTS_REQUIRE_PKL`` is set: the Linux unit legs install the pin and
@@ -21,7 +20,7 @@ import pytest
 
 from application_sdk.dev.pkl import runtime_version
 from application_sdk.pkl_version import PKL_VERSION
-from tests.unit.handler import bigquery_fixture
+from tests.regen_fixtures import FIXTURES, RenderedFixture, checked_in, render
 
 
 def _pinned_pkl() -> str | None:
@@ -31,7 +30,8 @@ def _pinned_pkl() -> str | None:
     return found
 
 
-def test_fixture_matches_the_rendered_contract() -> None:
+@pytest.mark.parametrize("fixture", FIXTURES, ids=lambda f: f.fixture.name)
+def test_fixture_matches_the_rendered_contract(fixture: RenderedFixture) -> None:
     pkl = _pinned_pkl()
     if pkl is None:
         reason = f"needs pkl {PKL_VERSION} on PATH"
@@ -39,17 +39,15 @@ def test_fixture_matches_the_rendered_contract() -> None:
             pytest.fail(f"SDK_TESTS_REQUIRE_PKL is set but this test {reason}")
         pytest.skip(reason)
 
-    rendered = bigquery_fixture.render(pkl)
+    rendered = render(fixture, pkl)
 
     stale = [
-        name
-        for name, data in bigquery_fixture.checked_in().items()
-        if rendered[name] != data
+        name for name, data in checked_in(fixture).items() if rendered[name] != data
     ]
     assert not stale, (
-        f"{stale} under {bigquery_fixture.FIXTURE.name}/ differ from the toolkit's "
-        "render of fixtures/bigquery_contract/app.pkl. Run "
-        "`uv run poe regen-test-fixtures` and review the diff."
+        f"{stale} under {fixture.fixture.name}/ differ from the toolkit's render "
+        f"of {fixture.contract.name}. Run `uv run poe regen-test-fixtures` and "
+        "review the diff."
     )
 
 
@@ -59,8 +57,7 @@ class TestMissingPkl:
     @pytest.fixture(autouse=True)
     def _no_pkl(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "tests.unit.handler.test_bigquery_fixture_freshness._pinned_pkl",
-            lambda: None,
+            "tests.unit.test_rendered_fixtures._pinned_pkl", lambda: None
         )
 
     def test_required_pkl_fails_instead_of_skipping(
@@ -71,7 +68,7 @@ class TestMissingPkl:
         # Catch the skip too: left uncaught, a regression to skipping would
         # report this test as skipped rather than failed.
         with pytest.raises((pytest.fail.Exception, pytest.skip.Exception)) as caught:
-            test_fixture_matches_the_rendered_contract()
+            test_fixture_matches_the_rendered_contract(FIXTURES[0])
 
         assert caught.type is pytest.fail.Exception
         assert "SDK_TESTS_REQUIRE_PKL" in str(caught.value)
@@ -80,4 +77,4 @@ class TestMissingPkl:
         monkeypatch.delenv("SDK_TESTS_REQUIRE_PKL", raising=False)
 
         with pytest.raises(pytest.skip.Exception, match=PKL_VERSION):
-            test_fixture_matches_the_rendered_contract()
+            test_fixture_matches_the_rendered_contract(FIXTURES[0])

@@ -293,7 +293,7 @@ load-test-storage = "pytest tests/load -m load -v -s --timeout=0"
 test-scripts = "bats .github/scripts/tests"  # requires: bats-core (apt-get install -y bats)
 # Re-render the golden fixtures built from a toolkit contract; the freshness
 # test fails with this command when the checked-in copy is stale (FND-4680).
-regen-test-fixtures = "python -m tests.unit.handler.bigquery_fixture"
+regen-test-fixtures = "python -m tests.regen_fixtures"
 
 # API docs — must be before any sub-table header ([tool.poe.tasks.*])
 # or TOML nests it inside the sub-table rather than the parent tasks namespace

@@ -4,7 +4,7 @@
 /// form, reduced to what `test_validate_route_credentials.py` exercises, written
 /// as a contract so the fixture is toolkit output rather than a hand-trimmed
 /// copy. It amends the in-repo toolkit, so a toolkit change that alters these
-/// forms fails `test_bigquery_fixture_freshness.py` instead of going unnoticed.
+/// forms fails `tests/unit/test_rendered_fixtures.py` instead of going unnoticed.
 ///
 /// Regenerate after editing this contract or the toolkit:
 ///   uv run poe regen-test-fixtures
