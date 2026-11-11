@@ -24,10 +24,16 @@ _NOT_MIRRORED: dict[str, str] = {
 }
 
 
+# pytest's default ``python_files`` (pyproject sets no override): a directory
+# holding either form is collected, so either form must be mirrored.
+_TEST_FILE_GLOBS = ("test_*.py", "*_test.py")
+
+
 def _test_dirs() -> set[str]:
     return {
         path.parent.relative_to(_UNIT).as_posix()
-        for path in _UNIT.rglob("test_*.py")
+        for glob in _TEST_FILE_GLOBS
+        for path in _UNIT.rglob(glob)
         if "__pycache__" not in path.parts
     }
 

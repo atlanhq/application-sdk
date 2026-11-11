@@ -211,45 +211,38 @@ class TestStartWorkflowEndpoint:
         )
         assert response.status_code == 503
 
+    @pytest.mark.usefixtures("clean_app_registry", "clean_task_registry")
     def test_start_workflow_with_app_class_but_no_temporal_host_returns_503(
         self,
     ) -> None:
         from application_sdk.app.base import App
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
 
-        AppRegistry.reset()
-        TaskRegistry.reset()
+        @dataclass
+        class _StartInput(Input, allow_unbounded_fields=True):
+            name: str = ""
 
-        try:
+        @dataclass
+        class _StartOutput(Output, allow_unbounded_fields=True):
+            result: str = ""
 
-            @dataclass
-            class _StartInput(Input, allow_unbounded_fields=True):
-                name: str = ""
+        class _StartApp(App):
+            async def run(self, input: _StartInput) -> _StartOutput:
+                return _StartOutput()
 
-            @dataclass
-            class _StartOutput(Output, allow_unbounded_fields=True):
-                result: str = ""
-
-            class _StartApp(App):
-                async def run(self, input: _StartInput) -> _StartOutput:
-                    return _StartOutput()
-
-            # No temporal_host → is_configured() returns False
-            handler = _TestHandler()
-            app = create_app_handler_service(
-                handler,
-                app_name="start-test",
-                app_class=_StartApp,
-                temporal_host="",  # empty → not configured
-            )
-            client = TestClient(app)
-            response = client.post("/workflows/v1/start", json={"name": "world"})
-            assert response.status_code == 503
-        finally:
-            AppRegistry.reset()
-            TaskRegistry.reset()
+        # No temporal_host → is_configured() returns False
+        handler = _TestHandler()
+        app = create_app_handler_service(
+            handler,
+            app_name="start-test",
+            app_class=_StartApp,
+            temporal_host="",  # empty → not configured
+        )
+        client = TestClient(app)
+        response = client.post("/workflows/v1/start", json={"name": "world"})
+        assert response.status_code == 503
 
 
+@pytest.mark.usefixtures("clean_app_registry", "clean_task_registry")
 class TestErrorInfoDisclosure:
     """Regression: error responses must not leak internal exception details.
 
@@ -259,15 +252,35 @@ class TestErrorInfoDisclosure:
 
     def test_start_workflow_type_error_returns_generic_message(self) -> None:
         """TypeError handler on /start must not leak internal type info."""
-        # Send invalid JSON that triggers a TypeError in workflow start
-        client = _make_client()
-        response = client.post(
-            "/workflows/v1/start",
-            json={"deliberately": "wrong_shape"},
+        from unittest.mock import AsyncMock, MagicMock
+
+        from application_sdk.app.base import App
+
+        class _TypeErrorApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # A configured app whose Temporal start raises TypeError, so the
+        # request reaches the ``except TypeError`` branch (not the 503 guard).
+        leaked = "internal-type-detail-must-not-leak"
+        temporal = MagicMock()
+        temporal.start_workflow = AsyncMock(side_effect=TypeError(leaked))
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="type-error-test",
+            app_class=_TypeErrorApp,
+            temporal_host="temporal:7233",
         )
-        # May return 400 (TypeError) or 503 (not configured) depending on setup
-        # Either way, response body must not contain Python exception details
+        with patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=temporal),
+        ):
+            response = TestClient(svc).post("/workflows/v1/start", json={"name": "x"})
+        assert temporal.start_workflow.await_count == 1
+        assert response.status_code == 400
         body_str = str(response.json())
+        assert "Invalid input" in body_str
+        assert leaked not in body_str
         assert "Traceback" not in body_str
         assert "TypeError" not in body_str
 
@@ -284,20 +297,9 @@ class TestErrorInfoDisclosure:
         assert "File " not in body_str
 
 
+@pytest.mark.usefixtures("clean_app_registry", "clean_task_registry")
 class TestStartWorkflowRouting:
     """Tests for /workflows/v1/start entry-point routing logic."""
-
-    def setup_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def _make_routed_client(self, app_cls: type, *, patch_temporal: bool = True):  # type: ignore[return]
         """Create a TestClient wired to app_cls with Temporal mocked out."""
@@ -647,6 +649,7 @@ class TestStartWorkflowRouting:
             patcher.stop()
 
 
+@pytest.mark.usefixtures("clean_app_registry", "clean_task_registry")
 class TestStartWorkflowInvocability:
     """Tests that every entry-point combination is reachable via /workflows/v1/start.
 
@@ -657,18 +660,6 @@ class TestStartWorkflowInvocability:
       - mixed run() + @entrypoint: default (run, no ?entrypoint=), explicit by name
       - mixed run() + @entrypoints (multiple): same rules
     """
-
-    def setup_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def _make_routed_client(self, app_cls: type):  # type: ignore[return]
         from unittest.mock import AsyncMock, MagicMock
@@ -1189,21 +1180,10 @@ class TestStartCredentialStripping:
         assert "credentials" not in body or not body.get("credentials")
 
 
+@pytest.mark.usefixtures("clean_app_registry", "clean_task_registry")
 class TestStartWorkflowExtras:
     """Tests for /start beyond simple routing — explicit workflow_id, caller
     correlation_id, credential stripping, and error branches."""
-
-    def setup_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def _wire(self, app_cls):
         """Build service + patch _get_temporal_client. Caller must reset
@@ -1315,20 +1295,9 @@ class TestStartWorkflowExtras:
             patcher.stop()
 
 
+@pytest.mark.usefixtures("clean_app_registry", "clean_task_registry")
 class TestStartWorkflowExecutionTimeout:
     """Tests for execution_timeout wiring in /workflows/v1/start."""
-
-    def setup_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def _wire(self, app_cls, workflow_max_timeout_hours=None):
         from unittest.mock import AsyncMock, MagicMock

@@ -10,7 +10,6 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from application_sdk.contracts.base import Input
 from application_sdk.handler.contracts import (
     PreflightInput,
     PreflightOutput,
@@ -37,21 +36,19 @@ from tests.unit.handler._service_support import (
     _TestHandler,
 )
 
+# Toolkit output, rendered from fixtures/bigquery_contract/app.pkl.
+_GENERATED_CRAWLER_INPUT = (
+    Path(__file__).parent
+    / "fixtures"
+    / "generated_bigquery_credentials"
+    / "crawler"
+    / "_input.py"
+)
 
+
+@pytest.mark.usefixtures("clean_app_registry", "clean_task_registry")
 class TestInputContractEndpoint:
     """Tests for GET /workflows/v1/input-contract."""
-
-    def setup_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def _client(self, app_cls: type) -> TestClient:
         svc = create_app_handler_service(
@@ -136,59 +133,67 @@ class TestInputContractEndpoint:
         assert resp.status_code == 400
 
     @staticmethod
-    def _inject_generated_contract(ep_module: str, contract_cls: type):
-        """Register a fake app/generated/{ep}/_input.py:AppInputContract in
-        sys.modules so _published_input_contract can import it. Returns the list
-        of injected module paths for cleanup."""
+    def _inject_generated_contract(
+        monkeypatch: pytest.MonkeyPatch, ep_module: str, source: Path
+    ) -> type:
+        """Import *source* as ``app.generated.{ep_module}._input``.
+
+        Parents are added only when absent and the leaf through
+        ``monkeypatch``, so any module a previous import left in
+        ``sys.modules`` is restored afterwards, never dropped.
+        """
+        import importlib.util
         import sys
         import types
 
-        paths = ["app", "app.generated", f"app.generated.{ep_module}"]
-        for p in paths:
-            sys.modules.setdefault(p, types.ModuleType(p))
+        for parent in ("app", "app.generated", f"app.generated.{ep_module}"):
+            if parent not in sys.modules:
+                monkeypatch.setitem(sys.modules, parent, types.ModuleType(parent))
         leaf = f"app.generated.{ep_module}._input"
-        mod = types.ModuleType(leaf)
-        mod.AppInputContract = contract_cls
-        sys.modules[leaf] = mod
-        return paths + [leaf]
+        spec = importlib.util.spec_from_file_location(leaf, source)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        monkeypatch.setitem(sys.modules, leaf, module)
+        return module.AppInputContract
 
-    def test_prefers_generated_app_input_contract(self) -> None:
+    def test_prefers_generated_app_input_contract(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """When app/generated/{ep}/_input.py:AppInputContract is importable, the
-        endpoint returns its (rich) schema, not the thin runtime input_type."""
-        import sys
+        endpoint returns its (rich) schema, not the thin runtime input_type.
 
+        The module is real toolkit output: ``crawler/_input.py`` rendered from
+        ``fixtures/bigquery_contract/app.pkl`` (kept current by
+        ``tests/regen_fixtures.py``).
+        """
         from application_sdk.app.base import App
         from application_sdk.app.entrypoint import entrypoint
 
-        class _GenContract(Input, allow_unbounded_fields=True):  # type: ignore[call-arg]
-            region: str = "region-us"
-
         class _MultiEpGen(App):
             @entrypoint
-            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
                 return _RoutingOutput()
 
             @entrypoint
             async def load(self, input: _RoutingInput) -> _RoutingOutput:
                 return _RoutingOutput()
 
-        injected = self._inject_generated_contract("extract", _GenContract)
-        try:
-            resp = self._client(_MultiEpGen).get(
-                "/workflows/v1/input-contract?entrypoint=extract"
-            )
-            assert resp.status_code == 200
-            # rich generated contract, not the thin _RoutingInput
-            assert resp.json() == _GenContract.model_json_schema()
-            assert "region" in resp.json()["properties"]
-            # the entrypoint with no generated module still falls back
-            resp_load = self._client(_MultiEpGen).get(
-                "/workflows/v1/input-contract?entrypoint=load"
-            )
-            assert resp_load.json() == _RoutingInput.model_json_schema()
-        finally:
-            for p in injected:
-                sys.modules.pop(p, None)
+        contract = self._inject_generated_contract(
+            monkeypatch, "crawler", _GENERATED_CRAWLER_INPUT
+        )
+        resp = self._client(_MultiEpGen).get(
+            "/workflows/v1/input-contract?entrypoint=crawler"
+        )
+        assert resp.status_code == 200
+        # rich generated contract, not the thin _RoutingInput
+        assert resp.json() == contract.model_json_schema()
+        assert "crawler_credential" in resp.json()["properties"]
+        # the entrypoint with no generated module still falls back
+        resp_load = self._client(_MultiEpGen).get(
+            "/workflows/v1/input-contract?entrypoint=load"
+        )
+        assert resp_load.json() == _RoutingInput.model_json_schema()
 
     def test_published_contract_falls_back_to_input_type(self) -> None:
         """No generated module → _published_input_contract returns input_type."""
@@ -204,20 +209,9 @@ class TestInputContractEndpoint:
         assert _published_input_contract(ep) is _RoutingInput
 
 
+@pytest.mark.usefixtures("clean_app_registry", "clean_task_registry")
 class TestDefaultEntrypoint:
     """Tests for default-entrypoint resolution (@entrypoint(default=True))."""
-
-    def setup_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def test_resolver_rules(self) -> None:
         from application_sdk.app.entrypoint import (
@@ -561,6 +555,7 @@ class TestAgentJsonIngressOnTheHandlerPath:
         assert response.json()["detail"] == "Failed to start workflow"
 
 
+@pytest.mark.usefixtures("clean_app_registry", "clean_task_registry")
 class TestValidateWorkflowConfig:
     """``POST /workflows/v1/validate`` — a dry-run ``/start`` (FND-501)."""
 
@@ -1020,6 +1015,7 @@ class TestManifestPostTransport:
             svc_module.CONTRACT_GENERATED_DIR = original
 
 
+@pytest.mark.usefixtures("clean_app_registry", "clean_task_registry")
 class TestBundleMarketplaceEntrypoints:
     """Bundle ("uber") apps expose *marketplace* entry points only as generated
     contract dirs (``app/generated/<ep>/manifest.json``); their registry
@@ -1028,18 +1024,6 @@ class TestBundleMarketplaceEntrypoints:
     404-ing (production RCA: /v1/app creation failed for every bundle entry
     point with 'No input contract for entrypoint'). Bare /manifest stays 404
     by design until the declarative resolver (FND-180) can pick correctly."""
-
-    def setup_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     @staticmethod
     def _bundle_app() -> type:
@@ -1068,7 +1052,7 @@ class TestBundleMarketplaceEntrypoints:
         return TestClient(svc, raise_server_exceptions=False)
 
     def test_input_contract_resolves_marketplace_entrypoint_from_disk(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """?entrypoint=<marketplace-name> misses the registry but has a
         generated dir + relocated AppInputContract → 200 with its schema."""
@@ -1088,18 +1072,14 @@ class TestBundleMarketplaceEntrypoints:
         module = types.ModuleType("app.export._input")
         module.AppInputContract = AppInputContract  # type: ignore[attr-defined]
 
-        original = svc_module.CONTRACT_GENERATED_DIR
-        svc_module.CONTRACT_GENERATED_DIR = tmp_path
-        sys.modules["app.export._input"] = module
-        try:
-            resp = self._client(self._bundle_app()).get(
-                "/workflows/v1/input-contract?entrypoint=export"
-            )
-            assert resp.status_code == 200
-            assert resp.json() == AppInputContract.model_json_schema()
-        finally:
-            svc_module.CONTRACT_GENERATED_DIR = original
-            del sys.modules["app.export._input"]
+        # monkeypatch restores any app.export._input a prior import left.
+        monkeypatch.setattr(svc_module, "CONTRACT_GENERATED_DIR", tmp_path)
+        monkeypatch.setitem(sys.modules, "app.export._input", module)
+        resp = self._client(self._bundle_app()).get(
+            "/workflows/v1/input-contract?entrypoint=export"
+        )
+        assert resp.status_code == 200
+        assert resp.json() == AppInputContract.model_json_schema()
 
     def test_input_contract_404_when_no_generated_dir(self, tmp_path: Path) -> None:
         """A name with neither a registry entry nor a generated dir keeps the
