@@ -163,30 +163,72 @@ def removed_entry(dotted: str) -> tuple[str, RemovedModule] | None:
     return None
 
 
+#: Built-in exceptions whose handler also catches ``ModuleNotFoundError``.
+_CATCHES_IMPORT_ERROR = _IMPORT_PROBE_EXCEPTIONS | {"Exception", "BaseException"}
+
+
+def _builtin_exception_name(exc: ast.expr) -> str | None:
+    """The built-in exception *exc* names, or ``None`` when it may not be one.
+
+    Only a bare name (``ImportError``) or an explicit ``builtins.ImportError``
+    counts. Any other attribute (``app_errors.ImportError``) may be an
+    application-defined class that does not catch ``ModuleNotFoundError``, so
+    it is not read as a probe.
+    """
+    if isinstance(exc, ast.Name):
+        return exc.id
+    if (
+        isinstance(exc, ast.Attribute)
+        and isinstance(exc.value, ast.Name)
+        and exc.value.id == "builtins"
+    ):
+        return exc.attr
+    return None
+
+
 def _handler_catches_import_error(handler: ast.ExceptHandler) -> bool:
     """True when *handler* catches ImportError (bare ``except`` included)."""
     if handler.type is None:
         return True
     types = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
-    for exc in types:
-        name = exc.id if isinstance(exc, ast.Name) else getattr(exc, "attr", None)
-        if name in _IMPORT_PROBE_EXCEPTIONS or name in ("Exception", "BaseException"):
-            return True
-    return False
+    return any(_builtin_exception_name(exc) in _CATCHES_IMPORT_ERROR for exc in types)
+
+
+#: Scopes whose body does not run when the enclosing ``try`` does.
+_DEFERRED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+
+
+def _imports_run_by(stmt: ast.stmt) -> list[ast.Import | ast.ImportFrom]:
+    """Imports *stmt* executes immediately, not those in a deferred body.
+
+    An import inside a function defined in the ``try`` body runs when the
+    function is called, after the ``try`` has ended, so the handler does not
+    guard it. A class body runs at definition time and is walked; its methods
+    are not.
+    """
+    found: list[ast.Import | ast.ImportFrom] = []
+    stack: list[ast.AST] = [stmt]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.Import | ast.ImportFrom):
+            found.append(node)
+            continue
+        if isinstance(node, _DEFERRED_SCOPES):
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+    return found
 
 
 def _probe_guarded_imports(tree: ast.Module) -> set[int]:
-    """``id()`` of every import inside a ``try`` body that catches ImportError."""
+    """``id()`` of every import a ``try`` that catches ImportError guards."""
     guarded: set[int] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Try):
+        if not isinstance(node, ast.Try | ast.TryStar):
             continue
         if not any(_handler_catches_import_error(h) for h in node.handlers):
             continue
         for stmt in node.body:
-            for inner in ast.walk(stmt):
-                if isinstance(inner, ast.Import | ast.ImportFrom):
-                    guarded.add(id(inner))
+            guarded.update(id(inner) for inner in _imports_run_by(stmt))
     return guarded
 
 

@@ -124,6 +124,61 @@ def test_b009_still_fires_when_the_try_catches_something_else() -> None:
     assert [f.rule_id for f in _b009(src)] == ["B009"]
 
 
+@pytest.mark.parametrize(
+    "handler", ["app_errors.ImportError", "errors.ModuleNotFoundError"]
+)
+def test_b009_fires_when_the_handler_is_a_foreign_same_named_class(
+    handler: str,
+) -> None:
+    """``app_errors.ImportError`` may not catch the built-in, so no probe."""
+    src = (
+        "try:\n"
+        "    from application_sdk.test_utils.e2e.base import BaseTest\n"
+        f"except {handler}:\n"
+        "    pass\n"
+    )
+    assert [f.rule_id for f in _b009(src)] == ["B009"]
+
+
+def test_b009_accepts_an_explicit_builtins_handler() -> None:
+    src = (
+        "try:\n"
+        "    from application_sdk.test_utils.e2e.base import BaseTest\n"
+        "except builtins.ImportError:\n"
+        "    pass\n"
+    )
+    assert _b009(src) == []
+
+
+@pytest.mark.parametrize("kind", ["def", "async def"])
+def test_b009_fires_on_an_import_deferred_into_a_function(kind: str) -> None:
+    """The function runs after the ``try`` ends, so the handler guards nothing."""
+    src = (
+        "try:\n"
+        f"    {kind} load():\n"
+        "        from application_sdk.workflows import x\n"
+        "except ImportError:\n"
+        "    pass\n"
+    )
+    assert [f.rule_id for f in _b009(src)] == ["B009"]
+
+
+def test_b009_fires_on_a_method_import_but_not_a_class_body_import() -> None:
+    """A class body runs inside the ``try``; its methods do not."""
+    src = (
+        "try:\n"
+        "    class Shim:\n"
+        "        from application_sdk.test_utils.e2e import base\n"
+        "        def load(self):\n"
+        "            from application_sdk.workflows import x\n"
+        "except ImportError:\n"
+        "    pass\n"
+    )
+    findings = _b009(src)
+    assert [f.rule_id for f in findings] == ["B009"]
+    assert "application_sdk.workflows" in findings[0].message
+
+
 def test_b009_is_silent_in_a_repo_that_owns_application_sdk() -> None:
     """The SDK (or a vendored copy) is the authority on its own tree."""
     src = "from application_sdk.workflows import x\n"
