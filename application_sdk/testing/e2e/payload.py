@@ -30,6 +30,7 @@ from enum import Enum
 from typing import Any
 
 import orjson
+from typing_extensions import deprecated
 
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
@@ -158,7 +159,7 @@ def _resolve_auth_type(auth_type: str) -> str:
     derives its prefix from that field and an empty prefix is falsy, so *no*
     dotted key collapses and the connector's client sees no credentials — the
     exact FND-923 failure. A blank therefore takes :data:`_DEFAULT_AUTH_TYPE`,
-    the same fallback :func:`_agent_credential_ref_keys` uses for the prefix.
+    the same fallback :func:`agent_credential_ref_keys` uses for the prefix.
 
     Args:
         auth_type: The spec's ``auth_type`` (``DatabaseSpec.auth_type``).
@@ -169,7 +170,7 @@ def _resolve_auth_type(auth_type: str) -> str:
     return auth_type or _DEFAULT_AUTH_TYPE
 
 
-def _agent_credential_ref_keys(
+def agent_credential_ref_keys(
     *,
     auth_type: str,
     connector_short_name: str,
@@ -198,6 +199,26 @@ def _agent_credential_ref_keys(
         f"{prefix}.username": f"SDR_{upper}_USERNAME",
         f"{prefix}.password": f"SDR_{upper}_PASSWORD",
     }
+
+
+@deprecated(
+    "_agent_credential_ref_keys is deprecated; use agent_credential_ref_keys "
+    "from application_sdk.testing.e2e.payload, the same function under a public "
+    "name (FND-4661) — will be removed in v4.0.0."
+)
+def _agent_credential_ref_keys(
+    *,
+    auth_type: str,
+    connector_short_name: str,
+) -> dict[str, str]:
+    """Deprecated private alias of :func:`agent_credential_ref_keys`.
+
+    .. deprecated:: 3.56
+        Use :func:`agent_credential_ref_keys`. Will be removed in v4.0.0.
+    """
+    return agent_credential_ref_keys(
+        auth_type=auth_type, connector_short_name=connector_short_name
+    )
 
 
 def build_agent_json(
@@ -247,7 +268,7 @@ def build_agent_json(
         "key-type": agent.key_type,
         "aws-auth-method": agent.aws_auth_method,
         "azure-auth-method": agent.azure_auth_method,
-        **_agent_credential_ref_keys(
+        **agent_credential_ref_keys(
             auth_type=database.auth_type,
             connector_short_name=connector_short_name,
         ),

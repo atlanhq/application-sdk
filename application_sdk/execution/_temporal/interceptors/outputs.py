@@ -52,7 +52,7 @@ from temporalio.worker import (
 
 from application_sdk.contracts.base import Output
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs import _current_outputs
+from application_sdk.outputs import current_outputs
 from application_sdk.outputs.collector import OutputCollector
 
 logger = get_logger(__name__)
@@ -147,14 +147,14 @@ class OutputActivityInboundInterceptor(ActivityInboundInterceptor):
             The activity's return value, carrying its collected outputs.
         """
         collector = OutputCollector()
-        _current_outputs.set(collector)
+        current_outputs.set(collector)
 
         try:
             result = await super().execute_activity(input)
         finally:
             # Always reset so a failed/cancelled activity doesn't leak its
             # collector into the next task that runs on this thread.
-            _current_outputs.set(None)
+            current_outputs.set(None)
 
         try:
             return _attach_outputs(result, collector)
@@ -270,11 +270,11 @@ class OutputWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         Returns:
             The workflow result, enriched with collected outputs if any.
         """
-        _current_outputs.set(self._collector)
+        current_outputs.set(self._collector)
         try:
             result = await super().execute_workflow(input)
         finally:
-            _current_outputs.set(None)
+            current_outputs.set(None)
 
         # Only reached when super().execute_workflow() returned without raising.
         try:

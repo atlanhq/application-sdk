@@ -372,7 +372,7 @@ def test_the_worker_fixture_refuses_an_unregistered_app(
     """The worker fixture's own precondition, asserted through the fixture.
 
     ``test_unregistered_app_fails_before_the_worker_is_built`` in the unit
-    suite exercises ``_verify_registration`` directly, and
+    suite exercises ``verify_registration`` directly, and
     ``test_missing_app_cls_override_is_reported`` above fails on the fixture
     parameter without ever reaching the worker body. Neither holds the call
     site itself to anything: deleting line 519 of ``fixtures.py`` leaves both

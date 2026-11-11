@@ -26,7 +26,7 @@ includes unsuppressed WARNING results, which is where B-series remediation
 actually runs.
 
 The active scope decides which rules can appear: on a consumer app only
-B001/B007/B008 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
+B001/B007/B008/B009 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
 The runner
 auto-detects scope, so each repo only ever sees its own half.
 
@@ -373,6 +373,21 @@ human audit):
   error class from `application_sdk.storage.formats` is also a P045 finding;
   follow that prescription.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package): `.claude/skills/upgrade-v3` Phase 2d
   (positive-idiom check 1).
+
+- **B009 RemovedSdkImport** (app source and tests) — a migration rule
+  (`autofixable = false`): apply nothing, `classification = "judgment"`,
+  return a `migration_brief`.  The app imports an `application_sdk` module the
+  SDK has already removed (for example `application_sdk.test_utils.e2e`, cut
+  in v3.0.0), so the file fails at import and, in `tests/`, never collects.
+  Imports inside a `try` that catches `ImportError` are not flagged.  The
+  finding message names the removal version and, where one exists, the
+  replacement module.  The brief says, per file, whether to port it to the
+  replacement (`application_sdk.testing.e2e` for the old e2e base) or delete
+  it as dead code: a file that has not collected since the module was removed
+  has not run since then either, so check whether a newer file in the same
+  directory already covers it before porting.  Target shape: every SDK import
+  in `atlan-openapi-app` `tests/integration/conftest.py` names a module that
+  exists today.
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline `# conformance: ignore[Bxxx] <8–40 word justification>` when

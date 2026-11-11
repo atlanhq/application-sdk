@@ -672,4 +672,76 @@ RULES: tuple[RuleDefinition, ...] = (
             target="migrate-deprecated-symbols",
         ),
     ),
+    RuleDefinition(
+        id="B009",
+        canonical_reference=(
+            "atlan-openapi-app tests/integration/conftest.py — every SDK import "
+            "names a module the current SDK ships (application_sdk.testing."
+            "integration.fixtures); nothing under the three reference apps' "
+            "tests/ imports application_sdk.test_utils or another removed module."
+        ),
+        scope=RuleScope.APP,
+        name="RemovedSdkImport",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="sdk-removed-surface",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.57.0",
+        rationale=(
+            "A file that imports a module the SDK has removed fails at import. "
+            "In tests/ that means the file never collects, so every test in it "
+            "stops running, and the only signal is a collection error in a tier "
+            "CI may not run on every PR — it reads as missing coverage rather "
+            "than as a defect. Six connector e2e test files still import "
+            "application_sdk.test_utils.e2e, which the v3.0.0 cut deleted, and "
+            "none of their tests has run since (FND-4661). B001 cannot report "
+            "this: it reads the deprecated-symbol manifest, and a symbol leaves "
+            "that manifest when it is deleted at its horizon, which is exactly "
+            "when an app still importing it breaks. B008 cannot either, because "
+            "the module path is public. The rule reads a static registry of "
+            "removed SDK modules, because detect runs without the app's own SDK "
+            "installed and so cannot ask it whether a module still resolves. "
+            "WARN rather than BLOCK because the fleet has these imports today "
+            "and the fix is app-side; revisit once the count nears zero."
+        ),
+        short_description=(
+            "Imports an application_sdk module the SDK has removed — the file "
+            "fails at import, so its tests never collect"
+        ),
+        full_description=(
+            "Flags an absolute import of a removed SDK module, or of any module\n"
+            "beneath one.  Four shapes are matched:\n"
+            "\n"
+            "* ``from application_sdk.test_utils.e2e.base import BaseTest``;\n"
+            "* ``import application_sdk.workflows.metadata_extraction.sql``;\n"
+            "* ``from application_sdk.test_utils import e2e`` — the removed\n"
+            "  module named as the imported member;\n"
+            "* ``from application_sdk import workflows``.\n"
+            "\n"
+            "The registry lists each removed public module by its topmost removed\n"
+            "package, with the first SDK release that no longer shipped it.  It\n"
+            "is derived from the SDK's git history, and the conformance suite\n"
+            "checks every entry against the SDK tree, so a module that comes back\n"
+            "stops being flagged.\n"
+            "\n"
+            "**Not matched.**  An import inside a ``try`` whose handler catches\n"
+            "``ImportError`` or ``ModuleNotFoundError`` is a deliberate probe that\n"
+            "survives the module's absence.  ``importlib.import_module`` with a\n"
+            "string is not an import statement.  A removed *name* inside a module\n"
+            "that still exists is deprecated before removal, and B001 reports it\n"
+            "while the deprecation lasts.\n"
+            "\n"
+            "**Remediation.**  The finding names the removal version and, where\n"
+            "one exists, the replacement module.  Port the file to the\n"
+            "replacement (``application_sdk.testing.e2e`` for the old e2e base),\n"
+            "or delete it: it has not run since the module was removed, so check\n"
+            "whether a newer file already covers it before porting.\n"
+        ),
+        help_uri=f"{_HELP_BASE}#b009",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/deprecation.prose.md",
+        ),
+    ),
 )
