@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.55.3
-source-sha:    7bca1747e6cbdea33c12ce67215e93fcf65e1e0f
-source-date:   2026-11-11T01:15:58Z
+source-sha:    1e97d4bde1a98567d2b353ebc7415f4c47d38a27
+source-date:   2026-11-11T10:08:15Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 442 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 451 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 85 |
 
 ## Subpackage Details
@@ -3824,7 +3824,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `AEWorkflowClient`
 
 - **Import:** `from application_sdk.testing.full_dag import AEWorkflowClient`
-- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.client`
+- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.base`, `application_sdk.testing.full_dag.client`
 - **Signature:** `class AEWorkflowClient(tenant_url: str, ...)`
 - **Summary:** Thin sync wrapper over the harness's AE and Atlas readers.
 - **Defined in:** `application_sdk/testing/e2e/client.py`
@@ -3835,6 +3835,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class AEWorkflowSpec(*, ...)`
 - **Summary:** A workflow to start through the Automation Engine.
 - **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
+
+#### `AgentSpec`
+
+- **Import:** `from application_sdk.testing.full_dag.base import AgentSpec`
+- **Signature:** `class AgentSpec(agent_name: str, ...)`
+- **Summary:** Optional agent routing (tier 4 only).
+- **Defined in:** `application_sdk/testing/full_dag/payload.py`
 
 #### `APIType`
 
@@ -4006,6 +4013,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `BaseFullDAGE2ETest`
 
 - **Import:** `from application_sdk.testing.full_dag import BaseFullDAGE2ETest`
+- **Also importable from:** `application_sdk.testing.full_dag.base`
 - **Signature:** `class BaseFullDAGE2ETest`
 - **Summary:** Deprecated: pytest base — use ``application_sdk.testing.e2e.BaseE2ETest``.
 - **Defined in:** `application_sdk/testing/full_dag/base.py`
@@ -4105,6 +4113,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The ephemeral connection one harness run creates and then purges.
 - **Defined in:** `application_sdk/testing/harness/identity.py`
 
+#### `ConnectionSpec`
+
+- **Import:** `from application_sdk.testing.full_dag.base import ConnectionSpec`
+- **Signature:** `class ConnectionSpec(name: str, ...)`
+- **Summary:** Identity of the Connection the AE workflow will create.
+- **Defined in:** `application_sdk/testing/full_dag/payload.py`
+
 #### `CoreReads`
 
 - **Import:** `from application_sdk.testing.harness.cluster.kube import CoreReads`
@@ -4182,7 +4197,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `DAGRunResult`
 
 - **Import:** `from application_sdk.testing.e2e.client import DAGRunResult`
-- **Also importable from:** `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
+- **Also importable from:** `application_sdk.testing.full_dag.base`, `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGRunResult(run_id: str, ...)`
 - **Summary:** Full result of one ``native-status`` read.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
@@ -4204,10 +4219,11 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 #### `DatabaseSpec`
 
-- **Import:** `from application_sdk.testing.harness.seed import DatabaseSpec`
-- **Signature:** `class DatabaseSpec(*, name: str, schemas: tuple[SchemaSpec, ...] = ())`
-- **Summary:** One database and the schemas under it.
-- **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
+- **Import:** `from application_sdk.testing.full_dag.base import DatabaseSpec`
+- **Also importable from:** `application_sdk.testing.harness.seed`
+- **Signature:** `class DatabaseSpec(host: str, ...)`
+- **Summary:** DB connection details for the credential payload.
+- **Defined in:** `application_sdk/testing/full_dag/payload.py`
 
 #### `DataForgeSource`
 
@@ -4278,9 +4294,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `EvidenceLog`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import EvidenceLog`
-- **Signature:** `class EvidenceLog(label: str) -> None`
+- **Signature:** `class EvidenceLog(label: str)`
 - **Summary:** A mutable builder for one test's :class:`EvidenceBundle`.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `Exactly`
 
@@ -4375,6 +4391,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `FullDAGOutcome`
 
 - **Import:** `from application_sdk.testing.e2e import FullDAGOutcome`
+- **Also importable from:** `application_sdk.testing.full_dag.base`
 - **Signature:** `class FullDAGOutcome(ae_result: DAGRunResult, ...)`
 - **Summary:** Combined result of a single full-DAG run.
 - **Defined in:** `application_sdk/testing/e2e/base.py`
@@ -4433,6 +4450,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class GoldenRuleError(*, ...)`
 - **Summary:** A TypenameRule combines settings that contradict each other.
 - **Defined in:** `application_sdk/testing/integration/_errors.py`
+
+#### `HarnessMethodNotImplementedError`
+
+- **Import:** `from application_sdk.testing.full_dag.base import HarnessMethodNotImplementedError`
+- **Signature:** `class HarnessMethodNotImplementedError(*, ...)`
+- **Summary:** Abstract test harness method was not overridden by a connector subclass.
+- **Defined in:** `application_sdk/testing/e2e/_errors.py`
 
 #### `HarnessNotBuiltError`
 
@@ -4596,12 +4620,40 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** One line of container output.
 - **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
 
+#### `ManifestDagMissingError`
+
+- **Import:** `from application_sdk.testing.full_dag.base import ManifestDagMissingError`
+- **Signature:** `class ManifestDagMissingError(*, ...)`
+- **Summary:** The manifest file exists but contains no top-level ``dag`` object.
+- **Defined in:** `application_sdk/testing/e2e/_errors.py`
+
+#### `ManifestFileNotFoundError`
+
+- **Import:** `from application_sdk.testing.full_dag.base import ManifestFileNotFoundError`
+- **Signature:** `class ManifestFileNotFoundError(*, ...)`
+- **Summary:** The workflow manifest JSON file does not exist at the expected path.
+- **Defined in:** `application_sdk/testing/e2e/_errors.py`
+
 #### `Minter`
 
 - **Import:** `from application_sdk.testing.harness.identity import Minter`
 - **Signature:** `class Minter(*, clock: Callable[[], int], randbelow: Callable[[int], int], run_id_env: str | None = None) -> None`
 - **Summary:** Mints the per-run identifiers a harness run needs.
 - **Defined in:** `application_sdk/testing/harness/identity.py`
+
+#### `MissingHarnessClassAttrError`
+
+- **Import:** `from application_sdk.testing.full_dag.base import MissingHarnessClassAttrError`
+- **Signature:** `class MissingHarnessClassAttrError(*, ...)`
+- **Summary:** A required class-level attribute was not set on the test harness.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `MissingHarnessEnvError`
+
+- **Import:** `from application_sdk.testing.full_dag.base import MissingHarnessEnvError`
+- **Signature:** `class MissingHarnessEnvError(*, ...)`
+- **Summary:** Required environment variables for the full-DAG harness are absent.
+- **Defined in:** `application_sdk/testing/e2e/_errors.py`
 
 #### `MissingTenantEnvError`
 
@@ -4862,7 +4914,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `RunMode`
 
 - **Import:** `from application_sdk.testing.e2e import RunMode`
-- **Also importable from:** `application_sdk.testing.full_dag`
+- **Also importable from:** `application_sdk.testing.full_dag`, `application_sdk.testing.full_dag.base`
 - **Signature:** `class RunMode`
 - **Summary:** Whether the connector runs in tenant or in caller-controlled CI.
 - **Defined in:** `application_sdk/testing/e2e/payload.py`
@@ -5453,6 +5505,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `build_ae_payload`
 
 - **Import:** `from application_sdk.testing.full_dag import build_ae_payload`
+- **Also importable from:** `application_sdk.testing.full_dag.base`
 - **Signature:** `build_ae_payload(*, *, ...)`
 - **Summary:** Deprecated (v4.0) — AE submit body; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
@@ -5467,6 +5520,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `build_seed_dag`
 
 - **Import:** `from application_sdk.testing.full_dag import build_seed_dag`
+- **Also importable from:** `application_sdk.testing.full_dag.base`
 - **Signature:** `build_seed_dag(*, *, ...)`
 - **Summary:** Deprecated (v4.0) — seed-version DAG; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
@@ -5541,7 +5595,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `cold_start_submit_kwargs`
 
 - **Import:** `from application_sdk.testing.e2e.client import cold_start_submit_kwargs`
-- **Also importable from:** `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.retry`
+- **Also importable from:** `application_sdk.testing.full_dag.base`, `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.retry`
 - **Signature:** `cold_start_submit_kwargs(timeout_seconds: int, poll_interval_seconds: int)`
 - **Summary:** Re-size the AE submit's retry to a cold start.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/retry.py`
@@ -5861,142 +5915,142 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `harness_ae_client`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_ae_client`
-- **Signature:** `harness_ae_client(harness_tenant_auth: TenantAuth) -> AsyncIterator[AEClient]`
+- **Signature:** `harness_ae_client(harness_tenant_auth: TenantAuth)`
 - **Summary:** An Automation Engine client over one pooled connection, closed at teardown.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_app_under_test`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_app_under_test`
-- **Signature:** `harness_app_under_test() -> AppUnderTest`
+- **Signature:** `harness_app_under_test()`
 - **Summary:** Where to find the app under test inside a cluster.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_atlas_client`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_atlas_client`
-- **Signature:** `harness_atlas_client(harness_tenant_auth: TenantAuth) -> AsyncIterator[AsyncAtlanClient]`
+- **Signature:** `harness_atlas_client(harness_tenant_auth: TenantAuth)`
 - **Summary:** One ``AsyncAtlanClient`` for the whole test, closed at teardown.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_budget_profile`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_budget_profile`
-- **Signature:** `harness_budget_profile() -> BudgetProfile`
+- **Signature:** `harness_budget_profile()`
 - **Summary:** Which timing tier this suite's waits run on.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_cluster_reader`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_cluster_reader`
-- **Signature:** `harness_cluster_reader(harness_substrate: Substrate, harness_kube_context: str | None) -> ClusterReader`
+- **Signature:** `harness_cluster_reader(harness_substrate: Substrate, harness_kube_context: str | None)`
 - **Summary:** A read-only cluster reader for the declared substrate.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_connection_identity`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_connection_identity`
-- **Signature:** `harness_connection_identity(harness_minter: Minter, harness_connection_type: str) -> ConnectionIdentity`
+- **Signature:** `harness_connection_identity(harness_minter: Minter, harness_connection_type: str)`
 - **Summary:** The ephemeral connection this test creates, and teardown purges.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_connection_teardown`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_connection_teardown`
-- **Signature:** `harness_connection_teardown(harness_connection_identity: ConnectionIdentity, ...)`
+- **Signature:** `harness_connection_teardown(harness_connection_identity: ConnectionIdentity, harness_atlas_client: AsyncAtlanClient)`
 - **Summary:** Yield this test's connection identity, and purge it afterwards.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_connection_type`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_connection_type`
-- **Signature:** `harness_connection_type() -> str`
+- **Signature:** `harness_connection_type()`
 - **Summary:** Atlan catalog type segment for the connection this run creates.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_environ`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_environ`
-- **Signature:** `harness_environ() -> Mapping[str, str]`
+- **Signature:** `harness_environ()`
 - **Summary:** The environment this run reads, as one immutable snapshot.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_evidence`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_evidence`
-- **Signature:** `harness_evidence(request: pytest.FixtureRequest, ...)`
+- **Signature:** `harness_evidence(request: pytest.FixtureRequest, harness_environ: Mapping[str, str], harness_evidence_dir: Path | None)`
 - **Summary:** Accumulate evidence, and write it — redacted — if the test fails.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_evidence_dir`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_evidence_dir`
-- **Signature:** `harness_evidence_dir() -> Path | None`
+- **Signature:** `harness_evidence_dir()`
 - **Summary:** Directory a failed test's evidence bundle is written under.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_kube_context`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_kube_context`
-- **Signature:** `harness_kube_context() -> str | None`
+- **Signature:** `harness_kube_context()`
 - **Summary:** Kubeconfig context cluster reads go through.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_minter`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_minter`
-- **Signature:** `harness_minter(harness_environ: Mapping[str, str]) -> Minter`
+- **Signature:** `harness_minter(harness_environ: Mapping[str, str])`
 - **Summary:** The per-run identifier minter, wired to the real clock and CI run id.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_precondition_checks`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_precondition_checks`
-- **Signature:** `harness_precondition_checks(harness_worker_health_url: str | None, ...)`
+- **Signature:** `harness_precondition_checks(harness_worker_health_url: str | None, harness_budget_profile: BudgetProfile)`
 - **Summary:** What must be true before this suite dispatches any work.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_preconditions`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_preconditions`
-- **Signature:** `harness_preconditions(harness_precondition_checks: Sequence[PreconditionCheck]) -> GateReport`
+- **Signature:** `harness_preconditions(harness_precondition_checks: Sequence[PreconditionCheck])`
 - **Summary:** Assert the starting state before the test dispatches any work.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_run_id`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_run_id`
-- **Signature:** `harness_run_id(harness_minter: Minter) -> int`
+- **Signature:** `harness_run_id(harness_minter: Minter)`
 - **Summary:** Identifier scoping every name this run mints.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_substrate`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_substrate`
-- **Signature:** `harness_substrate() -> Substrate`
+- **Signature:** `harness_substrate()`
 - **Summary:** Where this suite is running, relative to the app under test.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_sync_bridge`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_sync_bridge`
-- **Signature:** `harness_sync_bridge() -> Iterator[None]`
+- **Signature:** `harness_sync_bridge()`
 - **Summary:** Close the sync bridge's event loop for this thread at teardown.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_tenant_auth`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_tenant_auth`
-- **Signature:** `harness_tenant_auth(harness_environ: Mapping[str, str]) -> TenantAuth`
+- **Signature:** `harness_tenant_auth(harness_environ: Mapping[str, str])`
 - **Summary:** How this run authenticates against the tenant under test.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `harness_worker_health_url`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_worker_health_url`
-- **Signature:** `harness_worker_health_url(harness_environ: Mapping[str, str]) -> str | None`
+- **Signature:** `harness_worker_health_url(harness_environ: Mapping[str, str])`
 - **Summary:** Health endpoint the default precondition polls, if there is one.
-- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `has_length`
 
@@ -6367,6 +6421,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `purge_connection(client: AsyncAtlanClient, connection_qualified_name: str)`
 - **Summary:** Delete every asset under *connection_qualified_name*, then the connection.
 - **Defined in:** `application_sdk/testing/harness/teardown/_purge.py`
+
+#### `pytest_runtest_makereport`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import pytest_runtest_makereport`
+- **Signature:** `pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None])`
+- **Summary:** Stash each phase's report on the item so a fixture can read the verdict.
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `read_app_identity`
 
@@ -6783,6 +6844,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/_setup_routes.py`
 
+#### `DEFAULT_EVIDENCE_DIR`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import DEFAULT_EVIDENCE_DIR`
+- **Signature:** `DEFAULT_EVIDENCE_DIR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
+
 #### `DEFAULT_POD_RECONCILE_WAIT_SECONDS`
 
 - **Import:** `from application_sdk.testing.setup_routes import DEFAULT_POD_RECONCILE_WAIT_SECONDS`
@@ -6853,10 +6921,11 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 #### `logger`
 
-- **Import:** `from application_sdk.testing.scale_data_generator.driver import logger`
+- **Import:** `from application_sdk.testing.harness.fixtures import logger`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.driver`
 - **Signature:** `logger`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/driver.py`
+- **Defined in:** `application_sdk/testing/harness/_fixtures.py`
 
 #### `MARKETPLACE_APPS_PATH`
 

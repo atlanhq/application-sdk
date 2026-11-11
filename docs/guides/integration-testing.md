@@ -13,7 +13,7 @@ Why this is the right pattern for v3:
 - **It tests typed inputs and outputs.** You call `execute_app(YourApp, YourInput(...))` and assert on the typed output dataclass. The contract is what the workflow code actually consumes; refactor-safe.
 - **You can read the artifacts.** The mocked `LocalStore` writes everything the workflow `self.upload`s to a tmp dir. Tests open the resulting JSONL files and assert on their contents — what the `transform_data` task actually produced, what `metabaseQuery` ended up stamped on each question, etc. HTTP scenario tests can only assert on the response body.
 
-The older `BaseIntegrationTest` (HTTP scenario) framework is still shipped for the narrow case where you need to lock the literal request/response contract of the app server's HTTP endpoints — see [Legacy: HTTP scenario tests](#legacy-http-scenario-tests) at the bottom. **For new connectors, do not start there.** Use the recommended pattern below.
+The older `BaseIntegrationTest` (HTTP scenario) framework is **deprecated and removed in v4.0.0** — see [Legacy: HTTP scenario tests](#legacy-http-scenario-tests) at the bottom. **Do not start there.** Use the recommended pattern below.
 
 ## Quick start (recommended pattern)
 
@@ -414,7 +414,7 @@ Three of those are worth a decision:
 
 ## Legacy: HTTP scenario tests
 
-> **Use the [recommended pattern](#the-recommended-pattern-in-process-workflow-tests) above for new connectors.** This section documents the older `BaseIntegrationTest` framework — kept for connectors that still need to lock the HTTP request/response contract of the app server (auth/preflight/metadata endpoints) for regression purposes.
+> **Deprecated in 3.56, removed in v4.0.0.** Use the [recommended pattern](#the-recommended-pattern-in-process-workflow-tests) above. Importing `BaseIntegrationTest`, `generate_test_methods` or `parametrize_scenarios` from `application_sdk.testing.integration` emits a `DeprecationWarning`, and conformance rule B001 reports it. The routes these scenarios call are SDK-owned (`application_sdk.handler.service`), so a scenario test mostly re-tests SDK code: app behaviour belongs in the fixture kit, and a deployed surface belongs in `tests/e2e`. Its one SDK subclass, `BaseSDRIntegrationTest`, is deprecated for v4.0 too. This section stays until the removal, for suites still migrating.
 
 The HTTP scenario framework provides a **declarative, data-driven** approach to testing the running app server's HTTP surface. Instead of writing procedural test code, you define **scenarios** that specify:
 

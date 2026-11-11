@@ -8,11 +8,14 @@ star-imports it into ``tests/integration/conftest.py`` and overrides the App
 class and its source. See ``docs/guides/integration-fixtures.md``.
 
 **Everything named in this module's ``__all__`` is the older**
-:class:`BaseIntegrationTest` **HTTP scenario framework, kept for the narrow case
-of locking the literal request/response contract of the app server's endpoints.
-For new connectors, do not start there** — see the "recommended pattern" and
-"Legacy: HTTP scenario tests" sections of
-``docs/guides/integration-testing.md``, which this docstring follows.
+:class:`BaseIntegrationTest` **HTTP scenario framework, deprecated in 3.56 and
+removed in v4.0.0** (FND-4659). Importing ``BaseIntegrationTest``,
+``generate_test_methods`` or ``parametrize_scenarios`` from this package emits a
+:class:`DeprecationWarning`, and conformance B001 flags it fleet-wide. Its only
+SDK subclass, :class:`~application_sdk.testing.sdr.BaseSDRIntegrationTest`, is
+itself deprecated for v4.0. See the "recommended pattern" and "Legacy: HTTP
+scenario tests" sections of ``docs/guides/integration-testing.md``, which this
+docstring follows.
 
 The distinction is not two ways of running the App — in both cases the App runs
 identically, as a worker executing workflows against Temporal. What differs is
@@ -85,6 +88,7 @@ For detailed documentation, see:
     docs/guides/integration-testing.md
 """
 
+import warnings
 from typing import TYPE_CHECKING
 
 # Imported eagerly, unlike every other re-export below, because ``lazy`` is both
@@ -284,9 +288,42 @@ _LAZY_SUBMODULES = frozenset(
 )
 
 
+#: name -> (replacement, why). The HTTP scenario framework's entry points,
+#: deprecated (FND-4659): the in-process fixture kit replaces it, and its one
+#: SDK subclass, ``BaseSDRIntegrationTest``, is itself deprecated for v4.0.
+#: Served by ``__getattr__`` below with a warning on every access and never
+#: cached, so each import still warns. ``application_sdk.testing.sdr`` imports
+#: from ``.runner`` directly, so the SDK's own SDR module stays quiet.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "BaseIntegrationTest": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "the HTTP scenario framework re-tests SDK-owned routes; app behaviour belongs in the fixture kit and deployed behaviour in tests/e2e (FND-4659)",
+    ),
+    "generate_test_methods": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "the HTTP scenario framework re-tests SDK-owned routes; app behaviour belongs in the fixture kit and deployed behaviour in tests/e2e (FND-4659)",
+    ),
+    "parametrize_scenarios": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "the HTTP scenario framework re-tests SDK-owned routes; app behaviour belongs in the fixture kit and deployed behaviour in tests/e2e (FND-4659)",
+    ),
+}
+
+
 def __getattr__(name: str) -> object:
     """Import the submodule owning *name* on first access (PEP 562)."""
     from importlib import import_module  # noqa: PLC0415
+
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is not None:
+        replacement, note = entry
+        warnings.warn(
+            f"{name} is deprecated; use {replacement} instead — {note}. "
+            "Will be removed in v4.0.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return getattr(import_module(".runner", __name__), name)
 
     # Exports are checked before the submodule shortcut so that a name shared
     # by a submodule and one of its functions resolves to the function — the

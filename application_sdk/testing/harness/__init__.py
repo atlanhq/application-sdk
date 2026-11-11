@@ -63,8 +63,10 @@ Module map:
 ``fixtures``
     The same lifecycle as async pytest fixtures, for a suite that inherits
     nothing (child I). **Not imported here**: it imports ``pytest``, and this
-    package stays importable in a process with no test framework. Import it as
-    ``application_sdk.testing.harness.fixtures``, or register it as a plugin.
+    package stays importable in a process with no test framework.
+    ``application_sdk.testing.harness.fixtures`` is deprecated and removed in
+    v4.0.0 (FND-4659): no connector composes it. Drive the
+    harness through ``BaseE2ETest``, or from synchronous code via ``run_sync``.
 ``cluster``
     Read-only Kubernetes Protocols, the states they return, and the typed
     ``kubeconfig`` backend behind them — which retired ``testing/e2e/pods.py``

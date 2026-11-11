@@ -30,8 +30,13 @@ from enum import Enum
 from typing import Any
 
 import orjson
+from typing_extensions import deprecated
 
 
+@deprecated(
+    "application_sdk.testing.full_dag.payload.RunMode is deprecated; use "
+    "application_sdk.testing.e2e.RunMode — will be removed in v4.0.0."
+)
 class RunMode(str, Enum):
     """Whether the connector runs in tenant or in caller-controlled CI."""
 
@@ -39,6 +44,10 @@ class RunMode(str, Enum):
     AGENT = "agent"
 
 
+@deprecated(
+    "application_sdk.testing.full_dag.payload.ConnectionSpec is deprecated; use "
+    "application_sdk.testing.e2e.payload.ConnectionSpec — will be removed in v4.0.0."
+)
 @dataclass(frozen=True)
 class ConnectionSpec:
     """Identity of the Connection the AE workflow will create.
@@ -83,6 +92,10 @@ class ConnectionSpec:
         }
 
 
+@deprecated(
+    "application_sdk.testing.full_dag.payload.DatabaseSpec is deprecated; use "
+    "application_sdk.testing.e2e.payload.DatabaseSpec — will be removed in v4.0.0."
+)
 @dataclass(frozen=True)
 class DatabaseSpec:
     """DB connection details for the credential payload."""
@@ -96,6 +109,10 @@ class DatabaseSpec:
     connector_config_name: str = ""  # e.g. atlan-connectors-mysql
 
 
+@deprecated(
+    "application_sdk.testing.full_dag.payload.AgentSpec is deprecated; use "
+    "application_sdk.testing.e2e.payload.AgentSpec — will be removed in v4.0.0."
+)
 @dataclass(frozen=True)
 class AgentSpec:
     """Optional agent routing (tier 4 only).
@@ -112,6 +129,10 @@ class AgentSpec:
     azure_auth_method: str = "managed_identity"
 
 
+@deprecated(
+    "application_sdk.testing.full_dag.payload.build_seed_dag is deprecated; use "
+    "application_sdk.testing.e2e.payload.build_seed_dag — will be removed in v4.0.0."
+)
 def build_seed_dag(
     *,
     connector_short_name: str,
@@ -339,6 +360,10 @@ def build_seed_dag(
     }
 
 
+@deprecated(
+    "application_sdk.testing.full_dag.payload.build_ae_payload is deprecated; use "
+    "application_sdk.testing.e2e.payload.build_ae_payload — will be removed in v4.0.0."
+)
 def build_ae_payload(
     *,
     run_id: int,

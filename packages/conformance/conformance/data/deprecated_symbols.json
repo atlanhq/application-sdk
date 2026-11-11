@@ -1027,6 +1027,15 @@
       "symbol": "AppConfig"
     },
     {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "LogCollector is deprecated; use application_sdk.testing.harness.evidence, which BaseE2ETest already writes on a failed run \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.e2e.logs",
+      "removal_version": "4.0.0",
+      "symbol": "LogCollector"
+    },
+    {
       "kind": "function",
       "marker_via": "decorator",
       "message": "_agent_credential_ref_keys is deprecated; use agent_credential_ref_keys from application_sdk.testing.e2e.payload, the same function under a public name (FND-4661) \u2014 will be removed in v4.0.0.",
@@ -1036,22 +1045,481 @@
       "symbol": "_agent_credential_ref_keys"
     },
     {
-      "kind": "class",
-      "marker_via": "warn",
-      "message": "application_sdk.testing.full_dag.BaseFullDAGE2ETest is deprecated; use application_sdk.testing.e2e.BaseE2ETest \u2014 will be removed in v4.0",
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "AdminRoleNotResolvedError is deprecated; use application_sdk.testing.e2e.BaseE2ETest, catching the application_sdk.errors leaf this class subclasses \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
-      "module": "application_sdk.testing.full_dag.base",
-      "removal_version": "4.0",
-      "symbol": "BaseFullDAGE2ETest"
+      "module": "application_sdk.testing.full_dag._errors",
+      "removal_version": "4.0.0",
+      "symbol": "AdminRoleNotResolvedError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "AgentSpecRequiredError is deprecated; use application_sdk.testing.e2e.BaseE2ETest, catching the application_sdk.errors leaf this class subclasses \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag._errors",
+      "removal_version": "4.0.0",
+      "symbol": "AgentSpecRequiredError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "AtlanApiHttpError is deprecated; use application_sdk.testing.e2e.BaseE2ETest, catching the application_sdk.errors leaf this class subclasses \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag._errors",
+      "removal_version": "4.0.0",
+      "symbol": "AtlanApiHttpError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "AtlanApiResponseInvariantError is deprecated; use application_sdk.testing.e2e.BaseE2ETest, catching the application_sdk.errors leaf this class subclasses \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag._errors",
+      "removal_version": "4.0.0",
+      "symbol": "AtlanApiResponseInvariantError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "AtlanApiTimeoutError is deprecated; use application_sdk.testing.e2e.BaseE2ETest, catching the application_sdk.errors leaf this class subclasses \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag._errors",
+      "removal_version": "4.0.0",
+      "symbol": "AtlanApiTimeoutError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "HarnessMethodNotImplementedError is deprecated; use application_sdk.testing.e2e.BaseE2ETest, catching the application_sdk.errors leaf this class subclasses \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag._errors",
+      "removal_version": "4.0.0",
+      "symbol": "HarnessMethodNotImplementedError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ManifestDagMissingError is deprecated; use application_sdk.testing.e2e.BaseE2ETest, catching the application_sdk.errors leaf this class subclasses \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag._errors",
+      "removal_version": "4.0.0",
+      "symbol": "ManifestDagMissingError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ManifestFileNotFoundError is deprecated; use application_sdk.testing.e2e.BaseE2ETest, catching the application_sdk.errors leaf this class subclasses \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag._errors",
+      "removal_version": "4.0.0",
+      "symbol": "ManifestFileNotFoundError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "MissingHarnessClassAttrError is deprecated; use application_sdk.testing.e2e.BaseE2ETest, catching the application_sdk.errors leaf this class subclasses \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag._errors",
+      "removal_version": "4.0.0",
+      "symbol": "MissingHarnessClassAttrError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "MissingHarnessEnvError is deprecated; use application_sdk.testing.e2e.BaseE2ETest, catching the application_sdk.errors leaf this class subclasses \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag._errors",
+      "removal_version": "4.0.0",
+      "symbol": "MissingHarnessEnvError"
     },
     {
       "kind": "class",
-      "marker_via": "warn",
-      "message": "application_sdk.testing.full_dag.SQLAppE2EFullTest is deprecated; use application_sdk.testing.e2e.SQLAppE2ETest \u2014 will be removed in v4.0",
+      "marker_via": "decorator",
+      "message": "application_sdk.testing.full_dag.BaseFullDAGE2ETest is deprecated; use application_sdk.testing.e2e.BaseE2ETest \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.base",
+      "removal_version": "4.0.0",
+      "symbol": "BaseFullDAGE2ETest"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DAGRunResult is deprecated; use application_sdk.testing.e2e.client.DAGRunResult \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.base",
+      "removal_version": "4.0.0",
+      "symbol": "DAGRunResult"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.testing.full_dag.FullDAGOutcome is deprecated; use application_sdk.testing.e2e.FullDAGOutcome \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.base",
+      "removal_version": "4.0.0",
+      "symbol": "FullDAGOutcome"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "cold_start_submit_kwargs is deprecated; use application_sdk.testing.e2e.client.cold_start_submit_kwargs \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.base",
+      "removal_version": "4.0.0",
+      "symbol": "cold_start_submit_kwargs"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "get_logger is deprecated; use application_sdk.observability.logger_adaptor.get_logger \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.base",
+      "removal_version": "4.0.0",
+      "symbol": "get_logger"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "logger is deprecated; use application_sdk.observability.logger_adaptor.get_logger(__name__) in your own module \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.base",
+      "removal_version": "4.0.0",
+      "symbol": "logger"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "AEWorkflowClient is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.client",
+      "removal_version": "4.0.0",
+      "symbol": "AEWorkflowClient"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DAGNodeResult is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.client",
+      "removal_version": "4.0.0",
+      "symbol": "DAGNodeResult"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DAGNodeStatus is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.client",
+      "removal_version": "4.0.0",
+      "symbol": "DAGNodeStatus"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DAGRunResult is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.client",
+      "removal_version": "4.0.0",
+      "symbol": "DAGRunResult"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DAGRunStatus is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.client",
+      "removal_version": "4.0.0",
+      "symbol": "DAGRunStatus"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "cold_start_submit_kwargs is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.client",
+      "removal_version": "4.0.0",
+      "symbol": "cold_start_submit_kwargs"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.testing.full_dag.payload.AgentSpec is deprecated; use application_sdk.testing.e2e.payload.AgentSpec \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.payload",
+      "removal_version": "4.0.0",
+      "symbol": "AgentSpec"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.testing.full_dag.payload.ConnectionSpec is deprecated; use application_sdk.testing.e2e.payload.ConnectionSpec \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.payload",
+      "removal_version": "4.0.0",
+      "symbol": "ConnectionSpec"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.testing.full_dag.payload.DatabaseSpec is deprecated; use application_sdk.testing.e2e.payload.DatabaseSpec \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.payload",
+      "removal_version": "4.0.0",
+      "symbol": "DatabaseSpec"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.testing.full_dag.payload.RunMode is deprecated; use application_sdk.testing.e2e.RunMode \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.payload",
+      "removal_version": "4.0.0",
+      "symbol": "RunMode"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.testing.full_dag.payload.build_ae_payload is deprecated; use application_sdk.testing.e2e.payload.build_ae_payload \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.payload",
+      "removal_version": "4.0.0",
+      "symbol": "build_ae_payload"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.testing.full_dag.payload.build_seed_dag is deprecated; use application_sdk.testing.e2e.payload.build_seed_dag \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.payload",
+      "removal_version": "4.0.0",
+      "symbol": "build_seed_dag"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.testing.full_dag.SQLAppE2EFullTest is deprecated; use application_sdk.testing.e2e.SQLAppE2ETest \u2014 will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.sql_app",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "SQLAppE2EFullTest"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DEFAULT_EVIDENCE_DIR is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "DEFAULT_EVIDENCE_DIR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "EvidenceLog is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "EvidenceLog"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_ae_client is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_ae_client"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_app_under_test is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_app_under_test"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_atlas_client is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_atlas_client"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_budget_profile is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_budget_profile"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_cluster_reader is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_cluster_reader"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_connection_identity is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_connection_identity"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_connection_teardown is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_connection_teardown"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_connection_type is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_connection_type"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_environ is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_environ"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_evidence is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_evidence"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_evidence_dir is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_evidence_dir"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_kube_context is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_kube_context"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_minter is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_minter"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_precondition_checks is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_precondition_checks"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_preconditions is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_preconditions"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_run_id is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_run_id"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_substrate is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_substrate"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_sync_bridge is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_sync_bridge"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_tenant_auth is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_tenant_auth"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "harness_worker_health_url is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "harness_worker_health_url"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "logger is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "logger"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "pytest_runtest_makereport is deprecated; use application_sdk.testing.e2e.BaseE2ETest, or application_sdk.testing.harness composed through application_sdk.testing.harness.run_sync \u2014 the harness fixture plugin has no consumer and leaves the package (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.harness.fixtures",
+      "removal_version": "4.0.0",
+      "symbol": "pytest_runtest_makereport"
     },
     {
       "kind": "constant",
@@ -1097,6 +1565,33 @@
       "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
       "removal_version": "4.0",
       "symbol": "workflow_event_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "BaseIntegrationTest is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 the HTTP scenario framework re-tests SDK-owned routes; app behaviour belongs in the fixture kit and deployed behaviour in tests/e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "BaseIntegrationTest"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "generate_test_methods is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 the HTTP scenario framework re-tests SDK-owned routes; app behaviour belongs in the fixture kit and deployed behaviour in tests/e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "generate_test_methods"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "parametrize_scenarios is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 the HTTP scenario framework re-tests SDK-owned routes; app behaviour belongs in the fixture kit and deployed behaviour in tests/e2e (FND-4659). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "parametrize_scenarios"
     },
     {
       "kind": "function",
