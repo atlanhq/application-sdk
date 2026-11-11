@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.55.3"
+version = "3.56.0"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -21,7 +21,7 @@ classifiers = [
 ]
 keywords = ["atlan", "sdk", "platform", "app", "development"]
 dependencies = [
-    "atlan-application-sdk-api==3.55.3",
+    "atlan-application-sdk-api==3.56.0",
     # The OTLP gRPC exporters only, not the opentelemetry-exporter-otlp meta
     # package: that also pulls the HTTP exporter, which nothing imports.
     "opentelemetry-exporter-otlp-proto-grpc>=1.45.0,<2.0.0",
