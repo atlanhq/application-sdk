@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.55.3
-source-sha:    9f75b2d970875ad942a5fe5a546a0de1f387e83c
-source-date:   2026-11-11T11:06:29Z
+source-sha:    4ad5bad81308d872a919a9775d35c403620cd048
+source-date:   2026-11-11T11:52:22Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 40 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 30 |
-| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 5 |
+| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 8 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
@@ -3292,6 +3292,13 @@ Output collectors and record models for Automation Engine
 - **Summary:** Collects metrics and artifacts during workflow or activity execution.
 - **Defined in:** `application_sdk/outputs/collector.py`
 
+#### `SkipReason`
+
+- **Import:** `from application_sdk.outputs import SkipReason`
+- **Signature:** `class SkipReason`
+- **Summary:** Why a record was skipped. A closed set, so skips aggregate across the fleet.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
 ### Functions
 
 #### `get_outputs`
@@ -3301,6 +3308,13 @@ Output collectors and record models for Automation Engine
 - **Summary:** Get the output collector for the current execution context.
 - **Defined in:** `application_sdk/outputs/__init__.py`
 
+#### `skip_record`
+
+- **Import:** `from application_sdk.outputs import skip_record`
+- **Signature:** `skip_record(record: SkippableRecord, reason: SkipReason, *, record_id: str, entity_type: str, detail: str | None = None)`
+- **Summary:** Skip a record on purpose, keeping it for review after the run.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
 ### Constants and Enums
 
 #### `current_outputs`
@@ -3309,6 +3323,13 @@ Output collectors and record models for Automation Engine
 - **Signature:** `current_outputs: contextvars.ContextVar[OutputCollector | None]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/outputs/__init__.py`
+
+#### `MAX_SKIPPED_RECORDS`
+
+- **Import:** `from application_sdk.outputs import MAX_SKIPPED_RECORDS`
+- **Signature:** `MAX_SKIPPED_RECORDS: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/skipped.py`
 
 ## `application_sdk.pkl_version`
 

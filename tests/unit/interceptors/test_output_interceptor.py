@@ -6,13 +6,14 @@ workflow outputs from activities.
 
 import asyncio
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 from unittest import mock
 
 import pytest
 
 import application_sdk.outputs as outputs_module
-from application_sdk.contracts.base import Output
+from application_sdk.contracts.base import Output, OutputStatus
 from application_sdk.execution._temporal.interceptors.outputs import (
     OutputActivityInboundInterceptor,
     OutputInterceptor,
@@ -22,9 +23,18 @@ from application_sdk.outputs import (
     Artifact,
     Metric,
     OutputCollector,
+    SkipReason,
     current_outputs,
     get_outputs,
+    skip_record,
 )
+from application_sdk.outputs.skipped import (
+    SKIPPED_RECORDS_METRIC,
+    SkippedRecordSink,
+    merge_run_skips,
+)
+
+_RUN_PREFIX = "artifacts/apps/app/workflows/wf-1/run-1"
 
 
 class _TaskOutput(Output):
@@ -558,3 +568,154 @@ class TestGetOutputsFunction:
         collector = get_outputs()
         assert collector is existing
         assert collector.to_dict()["metrics"]["test"] == 123
+
+
+class TestSkippedRecordsThroughInterceptors:
+    """FND-4881: skips reach the workflow output as metric, artifact and status."""
+
+    @pytest.fixture(autouse=True)
+    def cleanup_state(self):
+        current_outputs.set(None)
+        yield
+        current_outputs.set(None)
+
+    @pytest.fixture
+    def uploads(self, tmp_path):
+        """An object store double: parts uploaded by activities, read by the merge."""
+        store: dict[str, bytes] = {}
+
+        async def upload_file(key, local_path):
+            store[key] = Path(local_path).read_bytes()
+
+        async def list_data_keys(prefix):
+            return sorted(k for k in store if k.startswith(prefix))
+
+        async def download_file(key, local_path):
+            Path(local_path).write_bytes(store[key])
+
+        sink_dir = tmp_path / "scratch"
+        with (
+            mock.patch.multiple(
+                "application_sdk.storage",
+                upload_file=upload_file,
+                list_data_keys=list_data_keys,
+                download_file=download_file,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.activity_utils.build_output_path",
+                return_value=_RUN_PREFIX,
+            ),
+            mock.patch(
+                "application_sdk.outputs.skipped._new_sink",
+                side_effect=lambda: SkippedRecordSink(
+                    sink_dir / f"{len(store)}-{id(object())}.ndjson"
+                ),
+            ),
+        ):
+            yield store
+
+    @staticmethod
+    async def _run_activity(body) -> Any:
+        nxt = mock.AsyncMock()
+        nxt.execute_activity.side_effect = body
+        return await OutputActivityInboundInterceptor(nxt).execute_activity(
+            MockExecuteActivityInput()
+        )
+
+    @staticmethod
+    async def _run_workflow(carried: list[Any], result: Output) -> Any:
+        """Drive the workflow interceptor with the given activity results."""
+        nxt = mock.AsyncMock()
+        nxt.init = mock.MagicMock()
+        interceptor = OutputWorkflowInboundInterceptor(nxt)
+        outbound_next = mock.MagicMock()
+        interceptor.init(outbound_next)
+        outbound = nxt.init.call_args.args[0]
+        loop = asyncio.get_running_loop()
+        futures = []
+        for value in carried:
+            fut = loop.create_future()
+            fut.set_result(value)
+            futures.append(fut)
+        outbound_next.start_activity.side_effect = futures
+
+        async def run(input):
+            for _ in carried:
+                await outbound.start_activity(mock.MagicMock())
+            return result
+
+        nxt.execute_workflow.side_effect = run
+        return await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+    async def test_skips_reach_workflow_output(self, uploads, tmp_path):
+        async def extract(input):
+            for i in range(2):
+                await skip_record(
+                    {"name": f"t{i}", "schema": ""},
+                    SkipReason.BLANK_IDENTITY,
+                    record_id=f"t{i}",
+                    entity_type="Table",
+                )
+            return _TaskOutput(rows=10)
+
+        extracted = await self._run_activity(extract)
+        assert len(uploads) == 1
+        (part_key,) = uploads
+        assert part_key.startswith(f"{_RUN_PREFIX}/skipped-records/parts/")
+
+        # The run-end framework task, driven through the same activity interceptor.
+        async def merge(input):
+            await merge_run_skips(_RUN_PREFIX, str(tmp_path))
+            return Output()
+
+        merged = await self._run_activity(merge)
+
+        result = await self._run_workflow([extracted, merged], Output())
+
+        assert result.status == OutputStatus.PARTIAL_SUCCESS
+        assert result.metrics[SKIPPED_RECORDS_METRIC] == 2
+        assert result.metrics["skipped-records-blank-identity"] == 2
+        merged_key = f"{_RUN_PREFIX}/skipped-records.ndjson"
+        assert result.artifacts == {
+            "skipped-records": {"path": merged_key, "display_name": "Skipped records"}
+        }
+        assert len(uploads[merged_key].splitlines()) == 2
+
+    async def test_no_skips_means_no_artifact_metric_or_status_change(self, uploads):
+        async def extract(input):
+            get_outputs().add_metric(Metric(name="tables", value=3))
+            return _TaskOutput(rows=3)
+
+        extracted = await self._run_activity(extract)
+        result = await self._run_workflow([extracted], Output())
+
+        assert uploads == {}
+        assert result.status == OutputStatus.SUCCESS
+        assert result.artifacts is None
+        assert result.metrics == {"tables": 3}
+
+    async def test_failure_status_is_never_downgraded(self, uploads):
+        async def extract(input):
+            await skip_record(
+                {}, SkipReason.MALFORMED_RECORD, record_id="r", entity_type="Table"
+            )
+            return _TaskOutput()
+
+        extracted = await self._run_activity(extract)
+        result = await self._run_workflow(
+            [extracted], Output(status=OutputStatus.FAILURE)
+        )
+
+        assert result.status == OutputStatus.FAILURE
+        assert result.metrics[SKIPPED_RECORDS_METRIC] == 1
+
+    async def test_failed_activity_uploads_nothing(self, uploads):
+        async def extract(input):
+            await skip_record(
+                {}, SkipReason.MALFORMED_RECORD, record_id="r", entity_type="Table"
+            )
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            await self._run_activity(extract)
+        assert uploads == {}

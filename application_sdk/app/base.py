@@ -76,6 +76,10 @@ from application_sdk.contracts.cleanup import (
     StorageCleanupInput,
     StorageCleanupOutput,
 )
+from application_sdk.contracts.skipped_records import (
+    MergeSkippedRecordsInput,
+    MergeSkippedRecordsOutput,
+)
 from application_sdk.contracts.storage import (
     DownloadInput,
     DownloadOutput,
@@ -2688,6 +2692,46 @@ class App(ABC):
             error_count=errors,
         )
 
+    # A bounded merge of at most MAX_SKIPPED_RECORDS lines; the duration bound
+    # is enough, as for cleanup_files.
+    @task(timeout_seconds=300, retry_max_attempts=3, heartbeat_timeout_seconds=60)
+    async def merge_skipped_records(
+        self, input: MergeSkippedRecordsInput
+    ) -> MergeSkippedRecordsOutput:
+        """Framework task: merge the run's skipped-record parts into one artifact.
+
+        Scheduled by the workflow after ``run()`` returns, and only when the
+        run's ``skipped-records`` metric is above zero, so a run that skipped
+        nothing has no ``skipped-records`` artifact at all. Concatenates the
+        per-activity parts under ``{run prefix}/skipped-records/parts/`` into
+        ``{run prefix}/skipped-records.ndjson`` (capped at
+        ``MAX_SKIPPED_RECORDS`` lines), adds it as the run artifact
+        ``skipped-records``, and records ``skipped-records-truncated`` for every
+        skip that was counted but neither kept nor lost to a storage failure.
+        See ``application_sdk.outputs.skipped``.
+        """
+        from application_sdk.execution import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            build_output_path,
+        )
+        from application_sdk.execution._temporal.activity_utils import (  # noqa: PLC0415 — circular: as above
+            run_temp_dir,
+        )
+        from application_sdk.outputs import Metric, get_outputs  # noqa: PLC0415
+        from application_sdk.outputs.skipped import (  # noqa: PLC0415
+            SKIPPED_RECORDS_TRUNCATED_METRIC,
+            merge_run_skips,
+        )
+
+        merged = await merge_run_skips(build_output_path(), run_temp_dir())
+        truncated = max(0, input.skipped_count - input.unpersisted_count - merged.kept)
+        if truncated:
+            get_outputs().add_metric(
+                Metric(name=SKIPPED_RECORDS_TRUNCATED_METRIC, value=truncated)
+            )
+        return MergeSkippedRecordsOutput(
+            key=merged.key, kept=merged.kept, truncated=truncated
+        )
+
     async def on_complete(self) -> None:
         """Lifecycle hook called after ``run()`` finishes (success or failure).
 
@@ -2987,6 +3031,49 @@ def _collect_interaction_relays(
         relays[member_name] = relay
 
     return relays
+
+
+async def _merge_skipped_records(app_instance: "App") -> None:
+    """Schedule ``merge_skipped_records`` when the run skipped anything (FND-4881).
+
+    Workflow code. Reads the run's summed skip metrics from the workflow's
+    output collector, which already holds every completed activity's carried
+    outputs. A run with no skips schedules nothing, so its history — and the
+    replay of any run started before this path existed — is unchanged.
+    Fails open: a merge failure is logged and every skip not already counted
+    as unpersisted is recorded as ``skipped-records-unpersisted``.
+    """
+    from application_sdk.outputs import Metric, get_outputs  # noqa: PLC0415
+    from application_sdk.outputs.skipped import (  # noqa: PLC0415
+        SKIPPED_RECORDS_METRIC,
+        SKIPPED_RECORDS_UNPERSISTED_METRIC,
+    )
+
+    outputs = get_outputs()
+    skipped = int(outputs.numeric_metric(SKIPPED_RECORDS_METRIC))
+    if skipped <= 0:
+        return
+    unpersisted = int(outputs.numeric_metric(SKIPPED_RECORDS_UNPERSISTED_METRIC))
+    try:
+        await app_instance.merge_skipped_records(
+            MergeSkippedRecordsInput(
+                skipped_count=skipped, unpersisted_count=unpersisted
+            )
+        )
+    # conformance: ignore[E004] fail-open by design (FND-4881): logged via _safe_log with exc_info=True and counted in skipped-records-unpersisted
+    except Exception:
+        _safe_log(
+            "error",
+            "Failed to merge skipped-record parts; the run has no "
+            "skipped-records artifact (parts remain under the run prefix)",
+            skipped=skipped,
+            exc_info=True,
+        )
+        lost = skipped - unpersisted
+        if lost > 0:
+            outputs.add_metric(
+                Metric(name=SKIPPED_RECORDS_UNPERSISTED_METRIC, value=lost)
+            )
 
 
 async def _run_preflight_gate(
@@ -3870,6 +3957,7 @@ def generate_workflow_class(
             )
             entry_method = getattr(app_instance, entry_method_name)
             result = await entry_method(input_data)
+            await _merge_skipped_records(app_instance)
             return cast("Output", result)
 
         # conformance: ignore[E004] top-level entrypoint handler; logged via _safe_log with exc_info=True and re-raised as typed ApplicationError

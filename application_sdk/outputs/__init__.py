@@ -32,6 +32,11 @@ import warnings
 
 from application_sdk.outputs.collector import OutputCollector
 from application_sdk.outputs.models import Artifact, Metric
+from application_sdk.outputs.skipped import (
+    MAX_SKIPPED_RECORDS,
+    SkipReason,
+    skip_record,
+)
 
 current_outputs: contextvars.ContextVar[OutputCollector | None] = (
     contextvars.ContextVar("workflow_outputs", default=None)
@@ -85,4 +90,13 @@ def __getattr__(name: str) -> object:
     return current_outputs
 
 
-__all__ = ["get_outputs", "current_outputs", "Metric", "Artifact", "OutputCollector"]
+__all__ = [
+    "get_outputs",
+    "current_outputs",
+    "Metric",
+    "Artifact",
+    "OutputCollector",
+    "MAX_SKIPPED_RECORDS",
+    "SkipReason",
+    "skip_record",
+]

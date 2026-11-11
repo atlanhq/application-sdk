@@ -234,6 +234,23 @@ it is read instead of listing the prefix.
   from outside the run needs no reset at the workflow boundary, unlike `store`.
 - **Directory refs leave it `null`.**
 
+## The skipped-records artifact, layout and metrics
+
+| | |
+|---|---|
+| **Produced by** | `skip_record` and `merge_run_skips` in `application_sdk/outputs/skipped.py`; scheduled by `App.merge_skipped_records` ([ADR-0022](../adr/0022-skipped-record-capture.md)) |
+| **Layout** | `{run prefix}/skipped-records.ndjson` (merged, one per run) and `{run prefix}/skipped-records/parts/{activity_id}.ndjson`, where the run prefix is `WORKFLOW_OUTPUT_PATH_TEMPLATE` |
+| **Line shape** | `{"record_id", "entity_type", "reason", "detail", "record"}`; `reason` is a `SkipReason` value (`blank_identity`, `missing_required_field`, `malformed_record`, `unsupported_type`) |
+| **Run outputs** | artifact `skipped-records`; metrics `skipped-records`, `skipped-records-<reason>` (kebab-case), `skipped-records-truncated`, `skipped-records-unpersisted`; status `partial_success` |
+| **Read by** | Run-output consumers (the Automation Engine UI) and anyone aggregating skips across the fleet |
+| **Pinned by** | `tests/unit/outputs/test_skipped.py`, `TestSkippedRecordsThroughInterceptors` in `tests/unit/interceptors/test_output_interceptor.py`, `tests/unit/app/test_merge_skipped_records.py` |
+
+**Absence means zero.** A run that skipped nothing has none of these: no artifact,
+no metric, no file. Consumers must treat a missing `skipped-records` metric as 0
+rather than as "unknown". Renaming a `SkipReason` value or a metric breaks
+fleet-wide aggregation across SDK versions, so add new members rather than
+renaming existing ones.
+
 ## The connection-scoped `persistent-artifacts` layout
 
 | | |
