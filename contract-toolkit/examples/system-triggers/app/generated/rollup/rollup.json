@@ -1,0 +1,31 @@
+{
+  "id": "rollup",
+  "name": "Rollup",
+  "logo": "https://assets.atlan.com/assets/ph-gear-light.svg",
+  "config": {
+    "properties": {
+      "window-days": {
+        "type": "number",
+        "required": false,
+        "ui": {
+          "widget": "inputNumber",
+          "label": "Window (days)",
+          "hidden": false,
+          "help": "",
+          "grid": 8
+        },
+        "default": 1
+      }
+    },
+    "steps": [
+      {
+        "title": "Configuration",
+        "description": "",
+        "id": "configuration",
+        "properties": [
+          "window-days"
+        ]
+      }
+    ]
+  }
+}

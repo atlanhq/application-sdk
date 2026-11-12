@@ -1,0 +1,41 @@
+/// `feed` entrypoint of the system-triggers example: a system
+/// sub-contract started by streaming event triggers.
+amends "../../src/App.pkl"
+
+name = "feed"
+displayName = "Feed"
+icon = "https://assets.atlan.com/assets/ph-gear-light.svg"
+type = "system"
+
+pipeline {
+  publish = null
+}
+
+// See rollup.pkl: the uiConfig only makes the manifest exist.
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new TextInput {
+          title = "Target"
+          placeholderText = "example-target"
+        }
+      }
+    }
+  }
+}
+
+streamingWorkflowType = "system-triggers:feed-stream"
+
+events {
+  new EventTriggerSpec {
+    name = "example-entity-changes"
+    source = new EventSource {
+      name = "atlan-kafka"
+      topic = "example.cdc.entity"
+    }
+    triggerConfig = new EventTriggerConfig {
+      streaming { enabled = true }
+    }
+  }
+}
