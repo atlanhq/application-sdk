@@ -52,6 +52,7 @@ import urllib.parse
 import urllib.request
 from enum import Enum
 from pathlib import Path
+from typing import NamedTuple, cast
 
 # Sibling .github/scripts modules — imported, not copied. When invoked as
 # `python3 <path>/dataforge_source_lifecycle.py` the script's own dir is on
@@ -93,6 +94,15 @@ class State(str, Enum):
     PAUSING = "PAUSING"
     RESUMING = "RESUMING"
 
+
+# A source whose wake is slower than --ready-timeout-seconds says so: DataForge
+# returns ``expected_wake_seconds`` on the state read (a ThoughtSpot cluster
+# takes ~12-15 min; a provisioned resource omits it). The readiness deadline is
+# widened to that plus a margin, never narrowed, and capped below the wake
+# job's own 30-min timeout so the script still fails with a named error rather
+# than being killed by the runner.
+WAKE_MARGIN_SECONDS = 300
+MAX_READY_SECONDS = 25 * 60
 
 # States a wake can never recover from — fail fast with a named error rather than
 # polling to the readiness timeout.
@@ -142,8 +152,16 @@ def _df_request(method: str, url: str, token: str, *, timeout: int = 30) -> dict
         ) from exc
 
 
-def resource_status(base_url: str, token: str, resource_id: str) -> str:
-    """GET /api/v1/resources/{id} -> status string (resource:read)."""
+class ResourceState(NamedTuple):
+    """One state read: the status, and how long a wake typically takes (0 when
+    DataForge does not say, as for a provisioned resource)."""
+
+    status: str
+    expected_wake_seconds: int = 0
+
+
+def read_resource(base_url: str, token: str, resource_id: str) -> ResourceState:
+    """GET /api/v1/resources/{id} -> status + expected wake time (resource:read)."""
     url = f"{base_url}/api/v1/resources/{urllib.parse.quote(resource_id)}"
     doc = _df_request("GET", url, token)
     status = doc.get("status") if isinstance(doc, dict) else None
@@ -152,7 +170,30 @@ def resource_status(base_url: str, token: str, resource_id: str) -> str:
             "dataforge state read returned no status for the pinned resource "
             "(is DATAFORGE_RESOURCE_ID a resource UUID, not a name?)"
         )
-    return str(status)
+    fields = cast("dict[str, object]", doc)
+    raw = fields.get("expected_wake_seconds")
+    # bool is an int subclass; a malformed value is ignored, never fatal.
+    expected = (
+        raw if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0 else 0
+    )
+    return ResourceState(str(status), expected)
+
+
+def resource_status(base_url: str, token: str, resource_id: str) -> str:
+    """GET /api/v1/resources/{id} -> status string (resource:read)."""
+    return read_resource(base_url, token, resource_id).status
+
+
+def ready_deadline_seconds(
+    ready_timeout_seconds: int, expected_wake_seconds: int
+) -> int:
+    """How long to wait for PROVISIONED: the configured timeout, widened (never
+    narrowed) to the source's expected wake time plus a margin, capped at
+    MAX_READY_SECONDS. The cap never cuts below an explicitly larger timeout."""
+    if expected_wake_seconds <= 0:
+        return ready_timeout_seconds
+    widened = min(expected_wake_seconds + WAKE_MARGIN_SECONDS, MAX_READY_SECONDS)
+    return max(ready_timeout_seconds, widened)
 
 
 def resume_resource(base_url: str, token: str, resource_id: str) -> None:
@@ -261,11 +302,19 @@ def wake(
     create_holder(repo, resource_id, run_id, attempt)
     token = service_token(base_url)
 
-    deadline = time.monotonic() + ready_timeout_seconds
+    started = time.monotonic()
+    timeout = ready_timeout_seconds
     resumed = False
     status = ""
     while True:
-        status = resource_status(base_url, token, resource_id)
+        status, expected_wake = read_resource(base_url, token, resource_id)
+        widened = ready_deadline_seconds(ready_timeout_seconds, expected_wake)
+        if widened > timeout:
+            print(
+                f"dataforge says this source takes ~{expected_wake // 60} min to wake; "
+                f"waiting up to {widened // 60} min."
+            )
+            timeout = widened
         if status == State.PROVISIONED:
             print(f"dataforge source is {State.PROVISIONED.value} — ready.")
             return Outcome.READY
@@ -287,10 +336,10 @@ def wake(
                     raise
                 print("dataforge source was resumed by a concurrent run; polling.")
             resumed = True
-        if time.monotonic() >= deadline:
+        if time.monotonic() - started >= timeout:
             raise DataforgeLifecycleError(
                 f"pinned dataforge resource did not reach {State.PROVISIONED.value} "
-                f"within {ready_timeout_seconds}s (last status {status}). It may be stuck."
+                f"within {timeout}s (last status {status}). It may be stuck."
             )
         sleep(poll_seconds)
 
