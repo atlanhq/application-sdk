@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.55.3
-source-sha:    4ad5bad81308d872a919a9775d35c403620cd048
-source-date:   2026-11-11T11:52:22Z
+sdk-version:   3.56.0
+source-sha:    e544cfc5030e87ea6d103e9b896bb2dcfbc1efca
+source-date:   2026-11-12T08:50:04Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -33,7 +33,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 8 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 50 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 449 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 85 |
@@ -3608,7 +3608,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `exists_confirmed`
 
 - **Import:** `from application_sdk.storage import exists_confirmed`
-- **Signature:** `exists_confirmed(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True, listing_cache: dict[str, dict[str, tuple[int, str | None]]] | None = None)`
+- **Signature:** `exists_confirmed(key: str, *, ...)`
 - **Summary:** Like :func:`exists`, but confirm a miss with a listing.
 - **Defined in:** `application_sdk/storage/ops.py`
 
@@ -3622,7 +3622,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `get_file_meta_confirmed`
 
 - **Import:** `from application_sdk.storage import get_file_meta_confirmed`
-- **Signature:** `get_file_meta_confirmed(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True, listing_cache: dict[str, dict[str, tuple[int, str | None]]] | None = None)`
+- **Signature:** `get_file_meta_confirmed(key: str, *, ...)`
 - **Summary:** Like :func:`get_file_meta`, but confirm a miss with a listing.
 - **Defined in:** `application_sdk/storage/ops.py`
 
