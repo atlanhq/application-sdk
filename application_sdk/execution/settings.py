@@ -14,6 +14,7 @@ from dataclasses import dataclass
 # direction without providing any real isolation.
 from temporalio.common import VersioningBehavior
 
+from application_sdk.common._env import env_bool, env_float
 from application_sdk.constants import load_shutdown_budget
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -214,30 +215,11 @@ def load_interceptor_settings() -> InterceptorSettings:
     """Load interceptor settings from environment variables."""
 
     def _bool(env_var: str, default: bool = True) -> bool:
-        val = os.environ.get(env_var, "").lower()
-        if val in ("0", "false", "no"):
-            return False
-        if val in ("1", "true", "yes"):
-            return True
-        return default
+        return env_bool(env_var, default)
 
     def _float(env_var: str, default: float) -> float:
-        raw = os.environ.get(env_var, "").strip()
-        if not raw:
-            return default
-        try:
-            value = float(raw)
-        except ValueError:
-            logger.warning(
-                "%s=%r is not a number; using %s",
-                env_var,
-                raw,
-                default,
-                exc_info=True,
-            )
-            return default
         # Clamp rather than raise: a bad value must not stop workers starting.
-        return max(0.0, value)
+        return max(0.0, env_float(env_var, default))
 
     def _name_set(env_var: str) -> frozenset[str]:
         """Parse a comma-separated allow-list, tolerating Helm-file whitespace."""

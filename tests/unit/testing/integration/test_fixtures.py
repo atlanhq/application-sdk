@@ -341,18 +341,17 @@ class TestArtifactPreservation:
             pass
         assert warnings == []
 
-    @pytest.mark.parametrize("value", ["off", "disabled", "  false  ", "TRUE"])
+    @pytest.mark.parametrize("value", ["disabled", "maybe", "TRUE"])
     def test_every_value_the_sdk_reads_as_on_is_warned_about(
         self, monkeypatch: pytest.MonkeyPatch, value: str
     ) -> None:
         """The predicate must be the SDK's denylist, not a truthiness allowlist.
 
-        ``App.on_complete`` enables cleanup for everything outside
-        ``("0", "false", "no")`` and does not strip. An allowlist here
-        (``{"1", "true", "yes", "on"}``) stayed silent for each of these while
-        the SDK deleted the run's artifacts — the exact "output file missing"
-        failure the warning exists to name. ``"  false  "`` is included
-        deliberately: the SDK does not strip, so it means cleanup *on*.
+        ``App.on_complete`` reads the flag with ``env_bool(..., True)``, which
+        keeps cleanup on for every value outside the false words. An allowlist
+        here (``{"1", "true", "yes", "on"}``) stayed silent for an unrecognised
+        word while the SDK deleted the run's artifacts — the exact "output file
+        missing" failure the warning exists to name.
         """
         assert fixtures._cleanup_enabled(value), "premise: SDK leaves cleanup on"
         warnings = _capture_warnings(monkeypatch)
@@ -385,20 +384,24 @@ class TestArtifactPreservation:
             pass
         assert os.environ[CLEANUP_INTERCEPTOR_ENV] == ""
 
-    def test_the_predicate_matches_the_sdks_own_reader(self) -> None:
+    def test_the_predicate_matches_the_sdks_own_reader(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Pin the mirror, so the two readers cannot drift apart again.
 
-        This is the premise every case above rests on: it reproduces
-        ``App.on_complete``'s expression rather than trusting that
-        ``_cleanup_enabled`` still matches it.
+        This is the premise every case above rests on: it runs the reader
+        ``App.on_complete`` uses rather than trusting that ``_cleanup_enabled``
+        still matches it. Empty values are excluded: the kit treats them as
+        unset before it ever asks the predicate.
         """
+        from application_sdk.common._env import env_bool
+
         for value in [
             "true",
             "1",
             "yes",
             "on",
             "off",
-            "",
             "  false  ",
             "disabled",
             "false",
@@ -407,7 +410,8 @@ class TestArtifactPreservation:
             "TRUE",
             "False",
         ]:
-            sdk_leaves_cleanup_on = value.lower() not in ("0", "false", "no")
+            monkeypatch.setenv(CLEANUP_INTERCEPTOR_ENV, value)
+            sdk_leaves_cleanup_on = env_bool(CLEANUP_INTERCEPTOR_ENV, True)
             assert fixtures._cleanup_enabled(value) is sdk_leaves_cleanup_on, value
 
     def test_cleanup_runs_by_default(self) -> None:

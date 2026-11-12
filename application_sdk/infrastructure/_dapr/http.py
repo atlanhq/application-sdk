@@ -23,6 +23,7 @@ from httpx_retries import Retry, RetryTransport
 from opentelemetry import metrics as _otel_metrics
 from pydantic import BaseModel
 
+from application_sdk.common._env import env_float
 from application_sdk.common.backoff import Backoff, Jitter, RetryExhausted, retry_async
 from application_sdk.constants import (
     _HTTP_POOL_LIMITS,
@@ -153,7 +154,7 @@ _HEALTHZ_PATH = "/v1.0/healthz"
 # site's retry_past_dapr_cold_start budget. Overridable via env for
 # pathologically slow (or fast) environments.
 def _load_sidecar_wait_timeout() -> float:
-    return float(os.environ.get("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", "60"))
+    return env_float("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", 60.0)
 
 
 _DEFAULT_SIDECAR_WAIT_TIMEOUT = _load_sidecar_wait_timeout()
@@ -323,8 +324,8 @@ async def wait_for_dapr_sidecar(
 #: raising, so
 #: the worst-case total wait before final failure can exceed this value by
 #: up to one attempt's duration. Env-overridable for pathological runners.
-DAPR_COLD_START_MAX_WAIT_SECONDS: float = float(
-    os.environ.get("ATLAN_DAPR_COLD_START_MAX_WAIT_SECONDS", "120.0")
+DAPR_COLD_START_MAX_WAIT_SECONDS: float = env_float(
+    "ATLAN_DAPR_COLD_START_MAX_WAIT_SECONDS", 120.0
 )
 DAPR_COLD_START_BASE_DELAY_SECONDS: float = 2.0
 DAPR_COLD_START_MAX_DELAY_SECONDS: float = 10.0

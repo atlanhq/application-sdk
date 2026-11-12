@@ -1,5 +1,8 @@
 """Unit tests for env-var loaders in :mod:`application_sdk.constants`."""
 
+import ast
+from pathlib import Path
+
 import pytest
 
 import application_sdk.constants as constants
@@ -33,18 +36,18 @@ class TestLoadWorkerLivenessMaxIdleSeconds:
 
     def test_non_numeric_falls_back_to_zero(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS", "abc")
-        with pytest.warns(UserWarning, match="not a valid number"):
+        with pytest.warns(RuntimeWarning, match="not a number"):
             assert _load_worker_liveness_max_idle_seconds() == 0.0
 
     def test_inf_falls_back_to_zero(self, monkeypatch: pytest.MonkeyPatch):
         # ``inf`` parses but a window that can never trip is silently useless.
         monkeypatch.setenv("ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS", "inf")
-        with pytest.warns(UserWarning, match="not finite"):
+        with pytest.warns(RuntimeWarning, match="not finite"):
             assert _load_worker_liveness_max_idle_seconds() == 0.0
 
     def test_nan_falls_back_to_zero(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS", "nan")
-        with pytest.warns(UserWarning, match="not finite"):
+        with pytest.warns(RuntimeWarning, match="not finite"):
             assert _load_worker_liveness_max_idle_seconds() == 0.0
 
 
@@ -73,7 +76,7 @@ class TestLoadWorkerLivenessPollLoopChecks:
         Regression: a float parse truncated ``0.5`` to ``0`` (disabled).
         """
         monkeypatch.setenv("ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS", raw)
-        with pytest.warns(UserWarning, match="not a valid integer"):
+        with pytest.warns(RuntimeWarning, match="not an integer"):
             assert _load_worker_liveness_max_zero_poller_readings() == 5
 
     def test_fatal_recovery_default(self, monkeypatch: pytest.MonkeyPatch):
@@ -91,7 +94,7 @@ class TestLoadWorkerLivenessPollLoopChecks:
         self, monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.setenv("ATLAN_WORKER_LIVENESS_FATAL_RECOVERY_SECONDS", "inf")
-        with pytest.warns(UserWarning, match="not finite"):
+        with pytest.warns(RuntimeWarning, match="not finite"):
             assert (
                 _load_non_negative_finite_float(
                     "ATLAN_WORKER_LIVENESS_FATAL_RECOVERY_SECONDS", 600.0
@@ -129,7 +132,8 @@ class TestUseServerSideCursor:
         assert self._load() is True
 
     def test_empty_string_still_disables(self, monkeypatch: pytest.MonkeyPatch):
-        # The only opt-out that worked before the fix must keep working.
+        # The only opt-out that worked before the fix must keep working — the
+        # one flag where an explicitly empty value is not the default.
         monkeypatch.setenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "")
         assert self._load() is False
 
@@ -298,7 +302,7 @@ class TestLoadDirtyRestartMaxWaitSeconds:
     ):
         """A typo in a deployment must not stop a worker from running at all."""
         monkeypatch.setenv(self.ENV, "abc")
-        with pytest.warns(UserWarning, match="not a valid integer"):
+        with pytest.warns(RuntimeWarning, match="not an integer"):
             assert _load_dirty_restart_max_wait_seconds() == 150
 
 
@@ -380,5 +384,51 @@ class TestLoadOomRestartCheck:
         """Without this the typo would land on whichever branch is the else, and
         a fleet would quietly be running handling nobody selected."""
         monkeypatch.setenv(self.ENV, "apiserver")
-        with pytest.warns(UserWarning, match="is not one of"):
+        with pytest.warns(RuntimeWarning, match="is not one of"):
             assert _load_oom_restart_check() == "none"
+
+
+class TestEveryEnvReadIsTolerant:
+    """Guard for FND-4891: ``constants`` runs at import, before logging exists.
+
+    A bare ``int(os.getenv(...))`` there turns one empty Helm value into a
+    process that cannot start, and a hand-written ``== "true"`` brings back a
+    second boolean vocabulary. Typed reads go through ``application_sdk._env``.
+    """
+
+    @staticmethod
+    def _is_env_read(node: ast.AST) -> bool:
+        if not isinstance(node, ast.Call):
+            return False
+        func = node.func
+        text = ast.unparse(func)
+        return text in {"os.getenv", "os.environ.get"}
+
+    def test_no_bare_numeric_conversion_of_an_env_read(self) -> None:
+        tree = ast.parse(Path(constants.__file__).read_text())
+        offenders = [
+            ast.unparse(node)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in {"int", "float"}
+            and node.args
+            and self._is_env_read(node.args[0])
+        ]
+        assert offenders == []
+
+    def test_no_hand_written_boolean_comparison_of_an_env_read(self) -> None:
+        tree = ast.parse(Path(constants.__file__).read_text())
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare):
+                continue
+            calls = [n for n in ast.walk(node.left) if self._is_env_read(n)]
+            words = {
+                c.value
+                for c in node.comparators
+                if isinstance(c, ast.Constant) and isinstance(c.value, str)
+            }
+            if calls and words & {"true", "false"}:
+                offenders.append(ast.unparse(node))
+        assert offenders == []
