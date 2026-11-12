@@ -1324,6 +1324,8 @@ _FND1143_VALUES: dict[str, tuple[str, str]] = {
     "private_git_deps": ("      private-git-deps: true", "true"),
     "git_lfs_skip_smudge": ("      git-lfs-skip-smudge: true", "true"),
     "lfs": ("      lfs: true", "true"),
+    "test_lfs": ("      test-lfs: true", "true"),
+    "java_version": ('      java-version: "21"', "21"),
     "health_check_timeout_seconds": (
         '      health-check-timeout-seconds: "180"',
         "180",

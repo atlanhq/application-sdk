@@ -188,6 +188,8 @@ jobs:
 <% endif %><% if private_git_deps %>      private-git-deps: << private_git_deps >>
 <% endif %><% if git_lfs_skip_smudge %>      git-lfs-skip-smudge: << git_lfs_skip_smudge >>
 <% endif %><% if lfs %>      lfs: << lfs >>
+<% endif %><% if test_lfs %>      test-lfs: << test_lfs >>
+<% endif %><% if java_version %>      java-version: "<< java_version >>"
 <% endif %><% if health_check_timeout_seconds %>      health-check-timeout-seconds: "<< health_check_timeout_seconds >>"
 <% endif %><% if container_health_timeout_seconds %>      container-health-timeout-seconds: "<< container_health_timeout_seconds >>"
 <% endif %><% if runtime_sdk_ref %>      runtime-sdk-ref: "<< runtime_sdk_ref >>"

@@ -40,13 +40,34 @@ inputs:
       ORG_PAT_GITHUB here; the reusables mint a read-only fleet App token
       scoped to the app's private deps.
     default: ""
+  lfs:
+    required: false
+    description: |
+      "true" to check out the repo's git-LFS objects (actions/checkout
+      `lfs: true`), even when the job sets GIT_LFS_SKIP_SMUDGE=1. Any other
+      value (the default "false") checks out exactly as before, with no LFS
+      fetch.
+    default: "false"
 
 runs:
   using: "composite"
   steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      if: inputs.lfs != 'true'
       with:
         fetch-depth: 1
+
+    # Opt-in LFS checkout. The step-level GIT_LFS_SKIP_SMUDGE overrides a
+    # job-level "1" (tests-reusable's git-lfs-skip-smudge) for this checkout
+    # only: with the skip on, checkout would fetch the objects yet leave the
+    # pointers in the tree. Later clones (`uv sync`'s git deps) still skip.
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      if: inputs.lfs == 'true'
+      env:
+        GIT_LFS_SKIP_SMUDGE: "0"
+      with:
+        fetch-depth: 1
+        lfs: true
 
     # Test on the Python the app image ships (FND-4611). A literal default here
     # ("3.11" until FND-4611) let every connector's unit and integration tiers
