@@ -107,7 +107,7 @@ def captured_s3_config():
         return mock.Mock(name="S3Store")
 
     with mock.patch(
-        "application_sdk.storage._obstore_config.make_s3_store",
+        "application_sdk._obstore_config.make_s3_store",
         side_effect=_fake_make_s3_store,
     ):
         yield captured

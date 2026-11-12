@@ -10,11 +10,14 @@ consolidated API host register the same routes through
 :func:`register_object_routes`, and differ only in the store behind them:
 
 * the worker uses its Dapr-configured ``application_sdk.storage`` store;
-* the host has no Dapr, so it uses :class:`S3ObjectStore`, configured from the
-  chart-injected ``ATLAN_S3_BUCKET`` / ``ATLAN_S3_REGION`` with the pod's ambient AWS
-  identity (the ``aws`` extra), or on GCP from ``ATLAN_GCP_BUCKET`` (aliasing the
-  chart's ``GCP_BUCKET``) through GCS's S3-compatible API. Without a bucket the routes answer 503, exactly as the
-  worker does without a store.
+* the host has no Dapr, so :meth:`HostObjectStore.from_env` builds an obstore
+  store (the ``obstore`` extra) from the chart-injected aliases, with the same
+  constructors the worker uses (:mod:`application_sdk._obstore_config`): S3 from
+  ``ATLAN_S3_BUCKET`` / ``ATLAN_S3_REGION`` with the pod's ambient AWS identity;
+  on GCP, GCS from ``ATLAN_GCP_BUCKET`` through its S3-compatible API with the
+  chart's HMAC keys; on an Azure Blob tenant, the container from
+  ``ATLAN_AZURE_STORAGE_ACCOUNT`` / ``ATLAN_AZURE_STORAGE_CONTAINER``. Without
+  any, the routes answer 503, exactly as the worker does without a store.
 
 Both write a config to ``persistent-artifacts/apps/{app_name}/{type}/{id}/config.json``.
 On the host ``app_name`` is the hosted app's name, never the host's own, so the
@@ -32,15 +35,17 @@ import warnings
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import PurePosixPath
-from typing import Annotated, Any, Protocol, cast
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING, Annotated, Any, Protocol, cast
 from uuid import uuid4
 
 import orjson
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi import Path as PathParam
 from fastapi.responses import JSONResponse
+from typing_extensions import deprecated
 
+from application_sdk import _obstore_config
 from application_sdk._logging import get_logger
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.handler.contracts import FileUploadResponse
@@ -50,6 +55,9 @@ from application_sdk.handler.service_errors import (
     InvalidConfigTypeError,
     TempPathEscapeError,
 )
+
+if TYPE_CHECKING:
+    from obstore.store import ObjectStore
 
 logger = get_logger(__name__)
 
@@ -299,8 +307,32 @@ def _normalize_key(key: str) -> str:
     return "" if normalized == "." else normalized
 
 
+class ObjectStoreOps(Protocol):
+    """The three store calls :func:`host_object_source` makes."""
+
+    async def get_json(self, key: str) -> dict[str, Any] | None:
+        """The JSON object at ``key``, or ``None`` when it is missing."""
+        ...
+
+    async def put_json(self, key: str, body: dict[str, Any]) -> None:
+        """Store ``body`` as JSON at ``key``."""
+        ...
+
+    async def put_file(self, key: str, local_path: str) -> None:
+        """Store the local file at ``local_path`` under ``key``."""
+        ...
+
+
+@deprecated(
+    "application_sdk.handler.object_routes.S3Client is deprecated and will be "
+    "removed in v4.0.0 with S3ObjectStore; the host's store is HostObjectStore, "
+    "over obstore."
+)
 class S3Client(Protocol):
     """The boto3 S3 client calls :class:`S3ObjectStore` makes.
+
+    .. deprecated:: 3.57
+        :class:`S3ObjectStore` is deprecated. Will be removed in v4.0.0.
 
     A Protocol rather than the ``mypy_boto3_s3`` client type: boto3 is the
     ``aws`` extra, so it is never imported at module level here.
@@ -330,8 +362,17 @@ def _resolved_env(name: str) -> str:
     return "" if value.startswith("$(") else value
 
 
+@deprecated(
+    "application_sdk.handler.object_routes.S3ObjectStore is deprecated and will be "
+    "removed in v4.0.0. The host builds its store with HostObjectStore.from_env(), "
+    "over obstore, on S3, GCS and Azure Blob; pass a HostObjectStore to "
+    "build_asgi_app(object_store=...)."
+)
 class S3ObjectStore:
-    """One S3 bucket through a boto3 client: the host's store.
+    """One S3 bucket through a boto3 client: the host's former store.
+
+    .. deprecated:: 3.57
+        Use :class:`HostObjectStore`. Will be removed in v4.0.0.
 
     On AWS auth is ambient (node role / IRSA / env), exactly as the fleet's Dapr
     ``bindings.aws.s3`` components authenticate: their specs carry only a
@@ -449,8 +490,183 @@ class S3ObjectStore:
         )
 
 
+class HostObjectStore:
+    """One bucket or container through obstore: the host's store.
+
+    The store comes from the constructors the worker uses
+    (:mod:`application_sdk._obstore_config`), so the host gets the worker's
+    timeouts, retries, proxy and custom-CA settings. obstore runs its requests
+    on its own Rust runtime, so store latency never blocks the host's event
+    loop. Credentials stay inside the obstore store; ``repr`` names only the
+    kind of store.
+    """
+
+    def __init__(self, store: ObjectStore, *, kind: str = "obstore") -> None:
+        self._store = store
+        self._kind = kind
+
+    def __repr__(self) -> str:
+        return f"HostObjectStore({self._kind})"
+
+    @classmethod
+    def from_env(cls) -> HostObjectStore | None:
+        """The store the host's env names, or ``None`` when it names none.
+
+        A bucket wins over an Azure account, as in the chart: GCS from
+        ``ATLAN_GCP_BUCKET`` (the chart injects no ``S3_*`` on GCP, so the
+        host's ``ATLAN_S3_*`` aliases are unresolved there), else S3 from
+        ``ATLAN_S3_BUCKET`` (also an Azure tenant with S3 enabled), else Azure
+        Blob from ``ATLAN_AZURE_STORAGE_ACCOUNT``. An incomplete setting, a
+        missing ``obstore`` extra or a store obstore refuses to build is logged
+        and gives ``None``: the routes answer 503, never another cloud's store.
+        """
+        gcs_bucket = _resolved_env("ATLAN_GCP_BUCKET")
+        s3_bucket = _resolved_env("ATLAN_S3_BUCKET")
+        azure_account = _resolved_env("ATLAN_AZURE_STORAGE_ACCOUNT")
+        if gcs_bucket:
+            kind, build = "gcs", lambda: _gcs_store(gcs_bucket)
+        elif s3_bucket:
+            kind, build = "s3", lambda: _s3_store(s3_bucket)
+        elif azure_account:
+            kind, build = "azure", lambda: _azure_store(azure_account)
+        else:
+            return None
+        try:
+            store = build()
+        except ModuleNotFoundError as exc:
+            if exc.name != "obstore":
+                raise
+            logger.warning(
+                "A %s object store is configured but obstore is not installed, so "
+                "the config and file routes answer 503. Install "
+                "atlan-application-sdk-api[obstore].",
+                kind,
+            )
+            return None
+        except Exception as exc:
+            # Only the exception's type: obstore's message can quote the config
+            # it rejected, and that config carries the store's credential.
+            logger.warning(
+                "The %s object store could not be built (%s), so the config and "
+                "file routes answer 503.",
+                kind,
+                type(exc).__name__,
+            )
+            return None
+        return None if store is None else cls(store, kind=kind)
+
+    async def get_json(self, key: str) -> dict[str, Any] | None:
+        """The object at ``key``, or ``None`` when it is missing.
+
+        Any other failure (auth, network, throttling, a missing bucket or
+        container) raises: the store could not answer, which is not a missing
+        object.
+        """
+        import obstore  # noqa: PLC0415 — the obstore extra
+        from obstore.exceptions import NotFoundError  # noqa: PLC0415
+
+        try:
+            result = await obstore.get_async(self._store, key)
+            raw = await result.bytes_async()
+        except (FileNotFoundError, NotFoundError):
+            # Current obstore raises the built-in; older releases its own class.
+            # S3, GCS and Azure also answer a missing bucket or container with
+            # a 404, which obstore reports the same way. A listing under the key
+            # tells them apart: it succeeds (empty) when only the object is
+            # missing, and raises when the bucket or container is.
+            await obstore.list_with_delimiter_async(self._store, prefix=key)
+            return None
+        return orjson.loads(bytes(raw))
+
+    async def put_json(self, key: str, body: dict[str, Any]) -> None:
+        import obstore  # noqa: PLC0415 — the obstore extra
+
+        await obstore.put_async(
+            self._store,
+            key,
+            orjson.dumps(body),
+            attributes={"Content-Type": "application/json"},
+        )
+
+    async def put_file(self, key: str, local_path: str) -> None:
+        import obstore  # noqa: PLC0415 — the obstore extra
+
+        # obstore streams the file from disk, in parts when it is large.
+        await obstore.put_async(self._store, _normalize_key(key), Path(local_path))
+
+
+def _s3_store(bucket: str) -> ObjectStore:
+    """S3 with the pod's ambient AWS identity, as the fleet's Dapr
+    ``bindings.aws.s3`` components authenticate: their specs carry only a
+    bucket and a region."""
+    # As the worker's binding resolves it: obstore reads neither AWS_REGION nor
+    # AWS_DEFAULT_REGION once given a config, and defaults to us-east-1.
+    region = (
+        _resolved_env("ATLAN_S3_REGION")
+        or os.environ.get("AWS_REGION", "")
+        or os.environ.get("AWS_DEFAULT_REGION", "")
+    )
+    config = {"aws_region": region} if region else None
+    return _obstore_config.make_s3_store(bucket, config, label="host-s3")
+
+
+def _gcs_store(bucket: str) -> ObjectStore | None:
+    """GCS through its S3-compatible API, with the tenant's HMAC key pair.
+
+    The host's manifest aliases the atlan-app chart's GCP-only ``GCP_*`` names
+    as ``ATLAN_GCP_*``. The chart gives the app container no service-account
+    key and no Workload Identity, only these HMAC keys, so a native GCSStore
+    would have no credential. obstore sends no checksum headers unless asked,
+    so GCS's rejection of boto3's default CRC32 does not arise.
+    """
+    access_key = _resolved_env("ATLAN_GCP_HMAC_ACCESS_KEY")
+    secret = _resolved_env("ATLAN_GCP_HMAC_SECRET")
+    if not (access_key and secret):
+        logger.warning(
+            "ATLAN_GCP_BUCKET is set without ATLAN_GCP_HMAC_ACCESS_KEY / "
+            "ATLAN_GCP_HMAC_SECRET, so the config and file routes answer 503."
+        )
+        return None
+    config = {
+        "aws_endpoint": _GCS_ENDPOINT,
+        "aws_access_key_id": access_key,
+        "aws_secret_access_key": secret,
+        # GCS rejects x-amz-tagging, as the worker's binding notes for every
+        # non-AWS endpoint.
+        "aws_disable_tagging": "true",
+    }
+    region = _resolved_env("ATLAN_GCP_REGION")
+    if region:
+        config["aws_region"] = region
+    return _obstore_config.make_s3_store(bucket, config, label="host-gcs")
+
+
+def _azure_store(account: str) -> ObjectStore | None:
+    """The tenant's Blob container, as the chart's Dapr
+    ``bindings.azure.blobstorage`` component reaches it.
+
+    With ``ATLAN_AZURE_STORAGE_ACCESS_KEY`` it signs with that account key, and
+    the shared constructor strips the pod's ambient ``AZURE_*`` while it builds
+    the store, so the pod's own identity cannot outrank it. Without one, obstore
+    uses the pod's ambient identity (the chart labels Azure pods for workload
+    identity).
+    """
+    container = _resolved_env("ATLAN_AZURE_STORAGE_CONTAINER")
+    if not container:
+        logger.warning(
+            "ATLAN_AZURE_STORAGE_ACCOUNT is set without "
+            "ATLAN_AZURE_STORAGE_CONTAINER, so the config and file routes answer 503."
+        )
+        return None
+    config = {"azure_storage_account_name": account}
+    access_key = _resolved_env("ATLAN_AZURE_STORAGE_ACCESS_KEY")
+    if access_key:
+        config["azure_storage_account_key"] = access_key
+    return _obstore_config.make_azure_store(container, config, label="host-azure")
+
+
 def host_object_source(
-    app_name: str, store: S3ObjectStore | None
+    app_name: str, store: ObjectStoreOps | None
 ) -> ObjectRoutesSource:
     """The routes' store operations for one hosted app."""
 

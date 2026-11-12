@@ -788,7 +788,7 @@ def _create_s3_store(
     ``{"Storage-Class": value}`` when ``extra["storageClass"]`` is set,
     or ``None`` otherwise.
     """
-    from application_sdk.storage._obstore_config import make_s3_store  # noqa: PLC0415
+    from application_sdk._obstore_config import make_s3_store  # noqa: PLC0415
 
     bucket = extra.get("s3_bucket", "")
     if not bucket:
@@ -869,7 +869,7 @@ def _create_gcs_store(
     creds: dict[str, Any], extra: dict[str, Any]
 ) -> tuple[ObjectStore, dict[str, str] | None]:
     """Create a GCS store from credentials."""
-    from application_sdk.storage._obstore_config import make_gcs_store  # noqa: PLC0415
+    from application_sdk._obstore_config import make_gcs_store  # noqa: PLC0415
 
     bucket = extra.get("gcs_bucket", "")
     if not bucket:
@@ -894,7 +894,7 @@ def _create_azure_store(
     creds: dict[str, Any], extra: dict[str, Any]
 ) -> tuple[ObjectStore, dict[str, str] | None]:
     """Create an Azure (ADLS) store from credentials."""
-    from application_sdk.storage._obstore_config import (  # noqa: PLC0415
+    from application_sdk._obstore_config import (  # noqa: PLC0415
         make_azure_store,
     )
 

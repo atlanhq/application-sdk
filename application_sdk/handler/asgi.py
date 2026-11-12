@@ -47,7 +47,9 @@ from application_sdk.handler.metadata_routes import (
     register_metadata_routes,
 )
 from application_sdk.handler.object_routes import (
-    S3ObjectStore,
+    HostObjectStore,
+    ObjectStoreOps,
+    S3ObjectStore,  # noqa: F401 — deprecated; importable from here until v4.0.0
     host_object_source,
     register_object_routes,
 )
@@ -84,13 +86,13 @@ def app_env(app_name: str, key: str, default: str = "") -> str:
 
 
 @functools.cache
-def default_object_store() -> S3ObjectStore | None:
-    """The host's object store, built once by :meth:`S3ObjectStore.from_env`.
+def default_object_store() -> HostObjectStore | None:
+    """The host's object store, built once by :meth:`HostObjectStore.from_env`.
 
     One bucket and one client for every hosted app: each app's configs live
     under its own ``persistent-artifacts/apps/<app>/`` prefix in that bucket.
     """
-    return S3ObjectStore.from_env()
+    return HostObjectStore.from_env()
 
 
 class _Unset(Enum):
@@ -204,7 +206,7 @@ def build_asgi_app(
     app_package: str = "app",
     blocking_threads: int = DEFAULT_BLOCKING_THREADS,
     generated_dir: Path | None = None,
-    object_store: S3ObjectStore | None | Literal[_Unset.FROM_ENV] = _Unset.FROM_ENV,
+    object_store: ObjectStoreOps | None | Literal[_Unset.FROM_ENV] = _Unset.FROM_ENV,
 ) -> FastAPI:
     """A FastAPI app serving ``handler`` as ``app_name``.
 

@@ -122,7 +122,7 @@ an app answers identically from either one:
 | `POST /workflows/v1/metadata` | `Handler.fetch_metadata` |
 | `POST /workflows/v1/warmup` | `Handler.warmup` (optional) |
 | `GET /workflows/v1/configmap/{id}`, `/configmaps`, `/input-contract`, `GET`/`POST /workflows/v1/manifest` | The app's `generated/` folder, if the app package ships one |
-| `GET`/`POST /workflows/v1/config/{id}`, `POST /workflows/v1/file` | An S3 bucket named by `ATLAN_S3_BUCKET` (and `ATLAN_S3_REGION`), or on GCP by `ATLAN_GCP_BUCKET` (and `ATLAN_GCP_REGION`) through GCS's S3-compatible API with the `ATLAN_GCP_HMAC_ACCESS_KEY` / `ATLAN_GCP_HMAC_SECRET` keys; needs the `aws` extra. These routes return 503 when neither is set |
+| `GET`/`POST /workflows/v1/config/{id}`, `POST /workflows/v1/file` | The tenant object store through obstore; needs the `obstore` extra. An S3 bucket named by `ATLAN_S3_BUCKET` (and `ATLAN_S3_REGION`); on GCP, `ATLAN_GCP_BUCKET` (and `ATLAN_GCP_REGION`) through GCS's S3-compatible API with the `ATLAN_GCP_HMAC_ACCESS_KEY` / `ATLAN_GCP_HMAC_SECRET` keys; on Azure Blob, the container named by `ATLAN_AZURE_STORAGE_ACCOUNT` and `ATLAN_AZURE_STORAGE_CONTAINER`, with `ATLAN_AZURE_STORAGE_ACCESS_KEY` or the pod's own identity. A bucket wins over an Azure account. These routes return 503 when none is set |
 | Your own routes | FastAPI routers returned from `Handler.routers()`, served after the SDK's |
 
 `build_asgi_app` takes a few keyword options:
@@ -148,6 +148,7 @@ apps in one process don't block each other.
 | `application_sdk.common.logger` | `get_logger` |
 | `application_sdk.clients.sql` (`sql` extra) | The SQL client base |
 | `application_sdk.common.aws_utils` (`aws` extra) | AWS helpers |
+| `application_sdk._obstore_config` (`obstore` extra) | The object-store constructors the config and file routes use |
 
 The complete file list is in
 [`api-files.txt`](https://github.com/atlanhq/application-sdk/blob/main/packages/api/api-files.txt).

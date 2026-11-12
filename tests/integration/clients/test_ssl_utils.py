@@ -22,7 +22,7 @@ import pytest
 import trustme
 
 from application_sdk.clients.base import BaseClient
-from application_sdk.clients.ssl_utils import get_ssl_context
+from application_sdk.common.ssl_utils import get_ssl_context
 
 
 @pytest.fixture(autouse=True)
@@ -100,7 +100,7 @@ class TestSslContextWithPrivateServer:
             trustme_ca.cert_pem.write_to_path(ca_cert_path)  # type: ignore[no-untyped-call]
 
             with https_server("Hello from private HTTPS server!") as port:
-                with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+                with patch("application_sdk.common.ssl_utils.SSL_CERT_DIR", tmpdir):
                     client_ssl_context = get_ssl_context()
                     assert isinstance(client_ssl_context, ssl.SSLContext)
 
@@ -125,7 +125,7 @@ class TestSslContextWithPrivateServer:
             trustme_ca.cert_pem.write_to_path(ca_cert_path)  # type: ignore[no-untyped-call]
 
             with https_server("Hello from private HTTPS server!") as port:
-                with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+                with patch("application_sdk.common.ssl_utils.SSL_CERT_DIR", tmpdir):
                     async with BaseClient() as client:
                         response = await client.execute_http_get_request(
                             f"https://localhost:{port}/",
@@ -155,7 +155,7 @@ class TestSslContextWithPrivateServer:
             trustme_ca.cert_pem.write_to_path(ca_cert_path)  # type: ignore[no-untyped-call]
 
             with https_server("Private server response") as port:
-                with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+                with patch("application_sdk.common.ssl_utils.SSL_CERT_DIR", tmpdir):
                     client_ssl_context = get_ssl_context()
                     assert isinstance(client_ssl_context, ssl.SSLContext)
 
@@ -177,7 +177,7 @@ class TestSslContextPublicCertificates:
 
     async def test_httpx_ssl_context_works_with_public_url(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+            with patch("application_sdk.common.ssl_utils.SSL_CERT_DIR", tmpdir):
                 ssl_context = get_ssl_context()
                 assert isinstance(ssl_context, ssl.SSLContext)
                 async with httpx.AsyncClient(verify=ssl_context) as client:
@@ -185,7 +185,7 @@ class TestSslContextPublicCertificates:
                     assert response.status_code == 200
 
     async def test_default_ssl_works_with_public_url(self):
-        with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", ""):
+        with patch("application_sdk.common.ssl_utils.SSL_CERT_DIR", ""):
             ssl_context = get_ssl_context()
             assert ssl_context is True
             async with httpx.AsyncClient(verify=ssl_context) as client:

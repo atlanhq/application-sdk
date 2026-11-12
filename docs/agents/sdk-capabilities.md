@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.56.0
-source-sha:    40bea53cbae1db7caee2ede89d023488a210213f
-source-date:   2026-11-12T09:39:46Z
+source-sha:    fa5a9d184d3642a7e38c1b9dc95a693ab2444827
+source-date:   2026-11-12T10:58:00Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -19,7 +19,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | Subpackage | Purpose | Exports |
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 44 |
-| `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
+| `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 20 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 58 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 46 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
@@ -436,19 +436,56 @@ Connection clients (SQL, Redis, Azure) and ClientInterface ABC
 
 ### Functions
 
+#### `_get_default_ca_bundle_path`
+
+- **Import:** `from application_sdk.clients.ssl_utils import _get_default_ca_bundle_path`
+- **Signature:** `_get_default_ca_bundle_path()`
+- **Summary:** Get the path to the default CA certificate bundle.
+- **Defined in:** `application_sdk/common/ssl_utils.py`
+
+#### `_read_default_ca_certs`
+
+- **Import:** `from application_sdk.clients.ssl_utils import _read_default_ca_certs`
+- **Signature:** `_read_default_ca_certs()`
+- **Summary:** Read the default system CA certificates as bytes.
+- **Defined in:** `application_sdk/common/ssl_utils.py`
+
 #### `create_ssl_context_with_custom_certs`
 
 - **Import:** `from application_sdk.clients import create_ssl_context_with_custom_certs`
+- **Also importable from:** `application_sdk.clients.ssl_utils`
 - **Signature:** `create_ssl_context_with_custom_certs(cert_dir: str)`
 - **Summary:** Create an SSL context that includes both default system certificates and custom certificates.
-- **Defined in:** `application_sdk/clients/ssl_utils.py`
+- **Defined in:** `application_sdk/common/ssl_utils.py`
+
+#### `get_certificate_files`
+
+- **Import:** `from application_sdk.clients.ssl_utils import get_certificate_files`
+- **Signature:** `get_certificate_files(cert_dir: str)`
+- **Summary:** Get all certificate files from a directory.
+- **Defined in:** `application_sdk/common/ssl_utils.py`
+
+#### `get_custom_ca_cert_bytes`
+
+- **Import:** `from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes`
+- **Signature:** `get_custom_ca_cert_bytes()`
+- **Summary:** Get CA certificate bytes combining default system certificates AND custom certificates.
+- **Defined in:** `application_sdk/common/ssl_utils.py`
+
+#### `get_ssl_cert_dir`
+
+- **Import:** `from application_sdk.clients.ssl_utils import get_ssl_cert_dir`
+- **Signature:** `get_ssl_cert_dir()`
+- **Summary:** Get the SSL certificate directory from configuration.
+- **Defined in:** `application_sdk/common/ssl_utils.py`
 
 #### `get_ssl_context`
 
 - **Import:** `from application_sdk.clients import get_ssl_context`
+- **Also importable from:** `application_sdk.clients.ssl_utils`
 - **Signature:** `get_ssl_context()`
 - **Summary:** Get the SSL verification context for HTTP clients such as httpx.
-- **Defined in:** `application_sdk/clients/ssl_utils.py`
+- **Defined in:** `application_sdk/common/ssl_utils.py`
 
 ### Constants and Enums
 
@@ -458,6 +495,27 @@ Connection clients (SQL, Redis, Azure) and ClientInterface ABC
 - **Signature:** `AZURE_MANAGEMENT_API_ENDPOINT`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/clients/azure/__init__.py`
+
+#### `CERT_FILE_EXTENSIONS`
+
+- **Import:** `from application_sdk.clients.ssl_utils import CERT_FILE_EXTENSIONS`
+- **Signature:** `CERT_FILE_EXTENSIONS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/ssl_utils.py`
+
+#### `logger`
+
+- **Import:** `from application_sdk.clients.ssl_utils import logger`
+- **Signature:** `logger`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/ssl_utils.py`
+
+#### `SSL_CERT_DIR`
+
+- **Import:** `from application_sdk.clients.ssl_utils import SSL_CERT_DIR`
+- **Signature:** `SSL_CERT_DIR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/ssl_utils.py`
 
 ## `application_sdk.common`
 

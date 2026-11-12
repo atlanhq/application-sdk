@@ -18,8 +18,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from application_sdk.storage import _obstore_config
-from application_sdk.storage._obstore_config import (
+from application_sdk import _obstore_config
+from application_sdk._obstore_config import (
     _azure_config_has_explicit_credential,
     log_obstore_config,
     make_azure_store,
@@ -97,7 +97,7 @@ class TestClientOptionsOverrides:
         with (
             _getproxies(return_value={}),
             patch(
-                "application_sdk.clients.ssl_utils.get_custom_ca_cert_bytes",
+                "application_sdk.common.ssl_utils.get_custom_ca_cert_bytes",
                 return_value=None,
             ),
         ):
@@ -205,7 +205,7 @@ class TestClientOptionsRootCertificate:
         with (
             _getproxies(return_value={}),
             patch(
-                "application_sdk.clients.ssl_utils.get_custom_ca_cert_bytes",
+                "application_sdk.common.ssl_utils.get_custom_ca_cert_bytes",
                 return_value=pem,
             ),
         ):
@@ -216,7 +216,7 @@ class TestClientOptionsRootCertificate:
         with (
             _getproxies(return_value={}),
             patch(
-                "application_sdk.clients.ssl_utils.get_custom_ca_cert_bytes",
+                "application_sdk.common.ssl_utils.get_custom_ca_cert_bytes",
                 return_value=None,
             ),
         ):
@@ -294,7 +294,7 @@ class TestRetryConfig:
 
 class TestLogObstoreConfig:
     def test_logs_provider_and_options_at_info_level(self) -> None:
-        with patch("application_sdk.storage._obstore_config.logger") as mock_logger:
+        with patch("application_sdk._obstore_config.logger") as mock_logger:
             log_obstore_config(
                 "s3",
                 client_options={"timeout": "30m"},
@@ -307,7 +307,7 @@ class TestLogObstoreConfig:
         assert "30m" in formatted
 
     def test_logs_default_label_when_retry_config_is_none(self) -> None:
-        with patch("application_sdk.storage._obstore_config.logger") as mock_logger:
+        with patch("application_sdk._obstore_config.logger") as mock_logger:
             log_obstore_config("gcs", client_options={}, retry_config=None)
         # The default banner makes the next operator's RCA easier — they can
         # see the actual retry budget without grep'ing obstore source.
@@ -318,7 +318,7 @@ class TestLogObstoreConfig:
 
     def test_redacts_proxy_userinfo(self) -> None:
         """A proxy_url with credentials must not log the password."""
-        with patch("application_sdk.storage._obstore_config.logger") as mock_logger:
+        with patch("application_sdk._obstore_config.logger") as mock_logger:
             log_obstore_config(
                 "s3",
                 client_options={"proxy_url": "http://user:secretpass@proxy.corp:8080"},
@@ -334,7 +334,7 @@ class TestLogObstoreConfig:
         pem = (
             b"-----BEGIN CERTIFICATE-----\nsecretlookingcert\n-----END CERTIFICATE-----"
         )
-        with patch("application_sdk.storage._obstore_config.logger") as mock_logger:
+        with patch("application_sdk._obstore_config.logger") as mock_logger:
             log_obstore_config(
                 "s3",
                 client_options={"root_certificate": pem},
@@ -606,7 +606,7 @@ class TestS3ConfigPassthrough:
 
         with patch("obstore.store.S3Store") as mock_s3:
             mock_s3.return_value = MagicMock()
-            from application_sdk.storage._obstore_config import make_s3_store
+            from application_sdk._obstore_config import make_s3_store
 
             make_s3_store(
                 "test-bucket",
@@ -627,7 +627,7 @@ class TestS3ConfigPassthrough:
 
         with patch("obstore.store.S3Store") as mock_s3:
             mock_s3.return_value = MagicMock()
-            from application_sdk.storage._obstore_config import make_s3_store
+            from application_sdk._obstore_config import make_s3_store
 
             make_s3_store("test-bucket", None)
 
@@ -648,7 +648,7 @@ class TestGCSConfigPassthrough:
 
         with patch("obstore.store.GCSStore") as mock_gcs:
             mock_gcs.return_value = MagicMock()
-            from application_sdk.storage._obstore_config import make_gcs_store
+            from application_sdk._obstore_config import make_gcs_store
 
             make_gcs_store(
                 "test-bucket",
@@ -669,7 +669,7 @@ class TestGCSConfigPassthrough:
 
         with patch("obstore.store.GCSStore") as mock_gcs:
             mock_gcs.return_value = MagicMock()
-            from application_sdk.storage._obstore_config import make_gcs_store
+            from application_sdk._obstore_config import make_gcs_store
 
             make_gcs_store("test-bucket", None)
 

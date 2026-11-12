@@ -948,7 +948,7 @@ class TestS3RegionLookup:
 
     @staticmethod
     def _regions_built(monkeypatch):
-        from application_sdk.storage import _obstore_config
+        from application_sdk import _obstore_config
 
         built: list[str | None] = []
 
@@ -1121,7 +1121,8 @@ class TestS3RegionLookup:
         assert client_kwargs["timeout"] == 10.0
 
     async def test_rebuild_uses_credentials_as_given(self, monkeypatch):
-        from application_sdk.storage import _obstore_config, cloud
+        from application_sdk import _obstore_config
+        from application_sdk.storage import cloud
 
         built: list[tuple[str, dict]] = []
 
