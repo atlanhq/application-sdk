@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.56.0
-source-sha:    40bea53cbae1db7caee2ede89d023488a210213f
-source-date:   2026-11-12T09:39:46Z
+source-sha:    cdcab9e64a9742ad13b1edb6c8e5a89257fd7f9c
+source-date:   2026-11-12T12:48:39Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 39 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 30 |
-| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 8 |
+| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 13 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
@@ -3271,12 +3271,33 @@ Output collectors and record models for Automation Engine
 - **Summary:** A reference to a downloadable file artifact.
 - **Defined in:** `application_sdk/outputs/models.py`
 
+#### `BlankIdentity`
+
+- **Import:** `from application_sdk.outputs import BlankIdentity`
+- **Signature:** `class BlankIdentity`
+- **Summary:** A field the record's qualifiedName is built from is blank. See :class:`RecordSkipped`.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `MalformedRecord`
+
+- **Import:** `from application_sdk.outputs import MalformedRecord`
+- **Signature:** `class MalformedRecord`
+- **Summary:** The source record cannot be parsed or has the wrong shape. See :class:`RecordSkipped`.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
 #### `Metric`
 
 - **Import:** `from application_sdk.outputs import Metric`
 - **Signature:** `class Metric`
 - **Summary:** A single metric to expose in workflow output.
 - **Defined in:** `application_sdk/outputs/models.py`
+
+#### `MissingRequiredField`
+
+- **Import:** `from application_sdk.outputs import MissingRequiredField`
+- **Signature:** `class MissingRequiredField`
+- **Summary:** A required field other than an identity input is absent. See :class:`RecordSkipped`.
+- **Defined in:** `application_sdk/outputs/skipped.py`
 
 #### `OutputCollector`
 
@@ -3285,11 +3306,25 @@ Output collectors and record models for Automation Engine
 - **Summary:** Collects metrics and artifacts during workflow or activity execution.
 - **Defined in:** `application_sdk/outputs/collector.py`
 
+#### `RecordSkipped`
+
+- **Import:** `from application_sdk.outputs import RecordSkipped`
+- **Signature:** `class RecordSkipped(record: SkippableRecord, *, record_id: str, entity_type: str, detail: str | None = None)`
+- **Summary:** A synchronous mapper's way to hand a skipped record up to its ``@task`` loop.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
 #### `SkipReason`
 
 - **Import:** `from application_sdk.outputs import SkipReason`
 - **Signature:** `class SkipReason`
 - **Summary:** Why a record was skipped. A closed set, so skips aggregate across the fleet.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `UnsupportedType`
+
+- **Import:** `from application_sdk.outputs import UnsupportedType`
+- **Signature:** `class UnsupportedType`
+- **Summary:** The source record is of a type the app does not map. See :class:`RecordSkipped`.
 - **Defined in:** `application_sdk/outputs/skipped.py`
 
 ### Functions

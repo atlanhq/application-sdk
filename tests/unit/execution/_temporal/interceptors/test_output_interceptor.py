@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from unittest import mock
 
+import orjson
 import pytest
 
 import application_sdk.outputs as outputs_module
@@ -21,8 +22,10 @@ from application_sdk.execution._temporal.interceptors.outputs import (
 )
 from application_sdk.outputs import (
     Artifact,
+    BlankIdentity,
     Metric,
     OutputCollector,
+    RecordSkipped,
     SkipReason,
     current_outputs,
     get_outputs,
@@ -30,6 +33,7 @@ from application_sdk.outputs import (
 )
 from application_sdk.outputs.skipped import (
     SKIPPED_RECORDS_METRIC,
+    SkippableRecord,
     SkippedRecordSink,
     merge_run_skips,
 )
@@ -570,6 +574,43 @@ class TestGetOutputsFunction:
         assert collector.to_dict()["metrics"]["test"] == 123
 
 
+def _map_column(column: Mapping[str, object]) -> str:
+    """A sync, pure mapper in the canonical-app shape, guarding one identity input.
+
+    The value is handed to a stand-in "creator" that rejects names it does not
+    like with ``ValueError`` — the guard must not turn that into a skip.
+    """
+    if not column.get("name"):
+        raise BlankIdentity(
+            column,
+            record_id=str(column["id"]),
+            entity_type="Column",
+            detail="column name is blank",
+        )
+    name = str(column["name"])
+    if " " in name:
+        raise ValueError(f"creator rejects {name!r}")
+    return name
+
+
+async def _map_table_columns(table: Mapping[str, Any]) -> list[str]:
+    """A @task-style per-record loop over a nested record the loop never holds."""
+    mapped: list[str] = []
+    for column in table["columns"]:
+        try:
+            mapped.append(_map_column(column))
+        except RecordSkipped as skip:
+            await skip_record(
+                skip.record,
+                skip.reason,
+                record_id=skip.record_id,
+                entity_type=skip.entity_type,
+                detail=skip.detail,
+            )
+            continue
+    return mapped
+
+
 class TestSkippedRecordsThroughInterceptors:
     """FND-4881: skips reach the workflow output as metric, artifact and status."""
 
@@ -718,4 +759,54 @@ class TestSkippedRecordsThroughInterceptors:
 
         with pytest.raises(RuntimeError):
             await self._run_activity(extract)
+        assert uploads == {}
+
+    # FND-4963: a sync mapper hands its skip to the loop as RecordSkipped.
+
+    async def test_sync_mapper_skip_reaches_workflow_output(self, uploads, tmp_path):
+        blank: SkippableRecord = {"id": "c2", "name": "", "type": "int"}
+        table = {"id": "t1", "columns": [{"id": "c1", "name": "a"}, blank]}
+        mapped: list[str] = []
+
+        async def transform(input):
+            mapped.extend(await _map_table_columns(table))
+            return _TaskOutput(rows=len(mapped))
+
+        transformed = await self._run_activity(transform)
+
+        async def merge(input):
+            await merge_run_skips(_RUN_PREFIX, str(tmp_path))
+            return Output()
+
+        merged = await self._run_activity(merge)
+        result = await self._run_workflow([transformed, merged], Output())
+
+        assert mapped == ["a"]
+        assert result.status == OutputStatus.PARTIAL_SUCCESS
+        assert result.metrics[SKIPPED_RECORDS_METRIC] == 1
+        assert result.metrics["skipped-records-blank-identity"] == 1
+        merged_key = f"{_RUN_PREFIX}/skipped-records.ndjson"
+        assert result.artifacts == {
+            "skipped-records": {"path": merged_key, "display_name": "Skipped records"}
+        }
+        # The file keeps the nested record the mapper skipped, which the loop
+        # (holding only the table) could not have supplied itself.
+        (line,) = uploads[merged_key].splitlines()
+        assert orjson.loads(line) == {
+            "record_id": "c2",
+            "entity_type": "Column",
+            "reason": "blank_identity",
+            "detail": "column name is blank",
+            "record": blank,
+        }
+
+    async def test_creator_value_error_is_not_caught(self, uploads):
+        table = {"id": "t1", "columns": [{"id": "c1", "name": "bad name"}]}
+
+        async def transform(input):
+            await _map_table_columns(table)
+            return _TaskOutput()
+
+        with pytest.raises(ValueError, match="creator rejects"):
+            await self._run_activity(transform)
         assert uploads == {}
