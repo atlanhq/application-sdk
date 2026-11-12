@@ -24,7 +24,7 @@ This page covers **runtime** variables only. Variables starting `E2E_` configure
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAN_APP_MODULE` | _(required)_ | App class to load: `module.path:ClassName` (e.g. `app.app:MyExtractor`). Startup fails without it. Set in your `Dockerfile` as `ENV ATLAN_APP_MODULE=…` or pass via `--app` CLI flag. |
-| `ATLAN_APP_MODE` | `combined` | Run mode: `worker`, `handler`, or `combined`. Determines which subsystems start; override via `--mode` CLI flag. **v2-compat fallback:** `APPLICATION_MODE` (deprecated; mapped at startup to the equivalent v3 mode). |
+| `ATLAN_APP_MODE` | `combined` | Run mode: `worker`, `handler`, or `combined`. Determines which subsystems start; override via `--mode` CLI flag. **v2-compat fallback:** `APPLICATION_MODE` (deprecated; case-insensitive; `LOCAL`/`WORKER`/`SERVER` map to `combined`/`worker`/`handler`, and the v3 names are accepted as-is. An unrecognised value logs a warning and runs `combined`). |
 | `ATLAN_APPLICATION_NAME` | `default` | Application name. Used in object-store paths, logging, and workflow identification. The `default` fallback applies to those *identity* uses only — task-queue derivation treats the variable as genuinely unset (see [Task-queue naming](#task-queue-naming)). Set it as the **bare** name, with no `atlan-` prefix; the SDK adds the prefix. |
 | `ATLAN_DEPLOYMENT_NAME` | `local` | Deployment name. Distinguishes dev / staging / prod deployments of the same app. As with `ATLAN_APPLICATION_NAME`, the `local` fallback is an identity default and does not apply to task-queue derivation. |
 | `ATLAN_TENANT_ID` | `default` | Tenant identifier for multi-tenant deployments. |
@@ -257,9 +257,9 @@ Within each attempt of that budget, the Dapr HTTP client replays a failed GET up
 
 ---
 
-## Redis (Capacity Lock)
+## Redis (deprecated, removed in v4.0.0)
 
-Used by the distributed lock (`RedisClient` / `RedisClientAsync`). Leave empty for local development. These variables do not configure a capacity pool: `RedisCapacityPool` is deprecated and the framework never constructed one.
+These configure only the deprecated `RedisClient` / `RedisClientAsync`, which keep working until v4.0.0. The SDK's distributed lock is not wired in v3: `create_worker` registers no lock interceptor, so `needs_lock` has no effect whatever these are set to. These variables do not configure a capacity pool either: `RedisCapacityPool` is deprecated and the framework never constructed one. Leave them empty unless your app uses the deprecated clients.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -268,8 +268,8 @@ Used by the distributed lock (`RedisClient` / `RedisClientAsync`). Leave empty f
 | `REDIS_PASSWORD` | _(empty)_ | Redis password. |
 | `REDIS_SENTINEL_SERVICE_NAME` | `mymaster` | Redis Sentinel service name. |
 | `REDIS_SENTINEL_HOSTS` | _(empty)_ | Comma-separated `host:port` pairs for Redis Sentinel. |
-| `IS_LOCKING_DISABLED` | `true` | Disable distributed locking (safe default for local development). Set to `false` in production when using Redis. |
-| `LOCK_RETRY_INTERVAL_SECONDS` | `60` | Retry interval for lock acquisition attempts. |
+| `IS_LOCKING_DISABLED` | `true` | The Redis clients' connect guard: while `true`, `RedisClient` / `RedisClientAsync` do not connect and leave `redis_client` as `None`. Set to `false` to let them connect. It does not turn on distributed locking, which v3 does not wire. |
+| `LOCK_RETRY_INTERVAL_SECONDS` | `60` | Read only by the lock interceptor, which `create_worker` never registers. Has no effect. |
 
 ---
 
@@ -334,8 +334,8 @@ Used by the distributed lock (`RedisClient` / `RedisClientAsync`). Leave empty f
 | `ATLAN_LOG_BATCH_SIZE` | `100` | Records buffered before flushing to the object-store sink. |
 | `ATLAN_LOG_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between object-store sink flushes. |
 | `ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS` | `10` | Upper bound, in seconds, on stopping the observability background loop at process exit. Covers the final flush of every periodic sink (logs, metrics, traces, sizing) and the Segment sender's last batch together. Past it, the remaining work is abandoned. See [Monitoring](concepts/monitoring.md#the-background-flush-loop). |
-| `ATLAN_LOG_RETENTION_DAYS` | `30` | Days to retain log files in the object store before cleanup. |
-| `ATLAN_LOG_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old log files. Any non-empty string value (including `"false"`) is treated as `true` by `bool()`; unset or empty to disable. |
+| `ATLAN_LOG_RETENTION_DAYS` | _(removed)_ | No longer read; setting it logs a startup warning. The SDK never deletes exported files; bound object-store growth with a lifecycle rule on the bucket, for example expiring objects under `artifacts/apps/observability/` after N days. See [ADR-0012](adr/0012-observability-consolidation.md#addendum-retention-of-exported-files-belongs-to-the-bucket-not-the-sdk-fnd-4889). |
+| `ATLAN_LOG_CLEANUP_ENABLED` | _(removed)_ | No longer read; setting it logs a startup warning. See `ATLAN_LOG_RETENTION_DAYS`. |
 | `ATLAN_LOG_FILE_NAME` | `log.parquet` | Signal-type discriminator used internally to route records to the correct observability sub-path (logs / metrics / traces). **The default is kept as `log.parquet` for back-compat; the on-disk and object-store format is gzip-compressed NDJSON (`.json.gz`), not parquet.** |
 
 ---
@@ -346,8 +346,8 @@ Used by the distributed lock (`RedisClient` / `RedisClientAsync`). Leave empty f
 |----------|---------|-------------|
 | `ATLAN_METRICS_BATCH_SIZE` | `100` | Records buffered before flushing to the object-store sink. |
 | `ATLAN_METRICS_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between object-store sink flushes. |
-| `ATLAN_METRICS_RETENTION_DAYS` | `30` | Days to retain metric files in the object store before cleanup. |
-| `ATLAN_METRICS_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old metric files. Set to `false` to disable. |
+| `ATLAN_METRICS_RETENTION_DAYS` | _(removed)_ | No longer read; setting it logs a startup warning. The SDK never deleted exported metric files. Use a bucket lifecycle rule, as for `ATLAN_LOG_RETENTION_DAYS`. |
+| `ATLAN_METRICS_CLEANUP_ENABLED` | _(removed)_ | No longer read; setting it logs a startup warning. See `ATLAN_METRICS_RETENTION_DAYS`. |
 | `ATLAN_ENABLE_TEMPORAL_CORE_METRICS` | `true` | Bind the Temporal Rust-core Prometheus endpoint at `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` (loopback) in worker/combined mode so its metric set (`temporal_workflow_*`, `temporal_activity_*`, etc.) is reachable for the combined-mode FastAPI `/metrics` proxy and the worker's `TemporalCoreCollector`. The FastAPI `/metrics` route is always exposed regardless of this flag — when this flag is `false`, or in handler-only mode, the response simply omits the proxied Temporal Rust-core families. `run_dev_combined()` defaults to `false` to avoid hot-reload port collisions. See [Monitoring](concepts/monitoring.md). |
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` | _(empty)_ | Pushgateway URL workers push to (split deployment). Empty disables push — combined-mode pods leave it unset and rely on direct `/metrics` scrape. |
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS` | `30` | Periodic push interval. A final push always happens on shutdown. |

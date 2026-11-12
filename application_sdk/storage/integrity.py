@@ -203,23 +203,28 @@ async def read_expected_digest(
         store: Store holding the object.
         key: Data-object key (**not** the sidecar key).
         sidecar_present: What a prior listing already established about the
-            sidecar. ``False`` short-circuits with no request at all; ``True``
-            skips straight to the GET. ``None`` (no prior knowledge) issues a
-            HEAD first — a plain GET on a missing key burns the obstore retry
-            budget before it reports the 404, which is expensive at the
-            one-per-file rate a prefix download hits it.
+            sidecar. ``False`` short-circuits with no request at all — a
+            listing is the only miss trusted without asking the store. ``True``
+            or ``None`` (no prior knowledge) go straight to the GET.
+
+    Why a GET and never a HEAD probe first: a blobstorage gateway instance
+    whose routes have not synced answers HEAD with a 404 that has no body, so
+    the storage layer cannot tell it from a missing key, and a false "no
+    sidecar" here downloads the object unverified with no warning. A GET's 404
+    carries the gateway's body, so the storage seam recognises and retries it,
+    and a real 404 still comes back as ``None``. Confirming a HEAD miss would
+    need that same GET (or a listing) anyway, so the HEAD would only add a
+    round trip to every sidecar that exists. That holds with or without the
+    gateway problem, so this stays a GET after it is fixed.
     """
     if _is_internal_key(key) or sidecar_present is False:
         return None
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: ops imports this module at top level
         _get_bytes,
-        exists,
     )
 
     skey = sidecar_key(key)
     try:
-        if sidecar_present is None and not await exists(skey, store, normalize=False):
-            return None
         raw = await _get_bytes(skey, store, normalize=False)
     # conformance: ignore[E002] unreadable sidecar degrades to unverified-with-WARNING by design; see docstring
     except Exception:

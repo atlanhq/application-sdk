@@ -200,6 +200,78 @@
     },
     {
       "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.redis.BaseRedisClient is deprecated and will be removed in v4.0.0. It keeps working until then. Use redis-py (redis / redis.asyncio) directly; the SDK's distributed lock it was built for is not wired in v3.",
+      "migration_target": true,
+      "module": "application_sdk.clients.redis",
+      "removal_version": "4.0.0",
+      "symbol": "BaseRedisClient"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.redis.LockReleaseResult is deprecated and will be removed in v4.0.0. It keeps working until then. Use redis-py (redis / redis.asyncio) directly; the SDK's distributed lock it was built for is not wired in v3.",
+      "migration_target": true,
+      "module": "application_sdk.clients.redis",
+      "removal_version": "4.0.0",
+      "symbol": "LockReleaseResult"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.RedisClient is deprecated and will be removed in v4.0.0. It keeps working until then. Use redis-py (redis / redis.asyncio) directly; the SDK's distributed lock it was built for is not wired in v3.",
+      "migration_target": true,
+      "module": "application_sdk.clients.redis",
+      "removal_version": "4.0.0",
+      "symbol": "RedisClient"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.RedisClientAsync is deprecated and will be removed in v4.0.0. It keeps working until then. Use redis-py (redis / redis.asyncio) directly; the SDK's distributed lock it was built for is not wired in v3.",
+      "migration_target": true,
+      "module": "application_sdk.clients.redis",
+      "removal_version": "4.0.0",
+      "symbol": "RedisClientAsync"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.redis_errors.RedisConfigError is deprecated and will be removed in v4.0.0 with the deprecated RedisClient / RedisClientAsync that raise it. Catch the application_sdk.errors category leaf it subclasses.",
+      "migration_target": false,
+      "module": "application_sdk.clients.redis_errors",
+      "removal_version": "4.0.0",
+      "symbol": "RedisConfigError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.redis_errors.RedisConnectionError is deprecated and will be removed in v4.0.0 with the deprecated RedisClient / RedisClientAsync that raise it. Catch the application_sdk.errors category leaf it subclasses.",
+      "migration_target": false,
+      "module": "application_sdk.clients.redis_errors",
+      "removal_version": "4.0.0",
+      "symbol": "RedisConnectionError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.redis_errors.RedisProtocolError is deprecated and will be removed in v4.0.0 with the deprecated RedisClient / RedisClientAsync that raise it. Catch the application_sdk.errors category leaf it subclasses.",
+      "migration_target": false,
+      "module": "application_sdk.clients.redis_errors",
+      "removal_version": "4.0.0",
+      "symbol": "RedisProtocolError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.redis_errors.RedisTimeoutError is deprecated and will be removed in v4.0.0 with the deprecated RedisClient / RedisClientAsync that raise it. Catch the application_sdk.errors category leaf it subclasses.",
+      "migration_target": false,
+      "module": "application_sdk.clients.redis_errors",
+      "removal_version": "4.0.0",
+      "symbol": "RedisTimeoutError"
+    },
+    {
+      "kind": "class",
       "marker_via": "warn",
       "message": " (AtlanError subclass) is deprecated; use application_sdk.errors.AppError \u2014 will be removed in v4.0",
       "migration_target": true,
@@ -397,6 +469,159 @@
       "symbol": "FileUploadResponse"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "APPLICATION_MODE is deprecated; use the ATLAN_APP_MODE env var (application_sdk.main.AppConfig.mode) \u2014 the SDK no longer reads this constant; the run mode is resolved at startup. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "APPLICATION_MODE"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ApplicationMode is deprecated; use the v3 run modes 'worker', 'handler' and 'combined' (application_sdk.main.AppConfig.mode) \u2014 the v2 mode enum has no reader in the SDK. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "ApplicationMode"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DAPR_BINDING_OPERATION_CREATE is deprecated; use the literal \"create\" \u2014 the SDK never read this constant. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "DAPR_BINDING_OPERATION_CREATE"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "IS_LOCKING_DISABLED is deprecated: it only guards the deprecated RedisClient / RedisClientAsync connection. Read the IS_LOCKING_DISABLED environment variable instead; it will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "IS_LOCKING_DISABLED"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "LOCK_METADATA_KEY is deprecated and has no effect: needs_lock does nothing in v3 because create_worker registers no lock interceptor. Remove the import; it will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "LOCK_METADATA_KEY"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "LOCK_RETRY_INTERVAL_SECONDS is deprecated and has no effect: the lock interceptor that reads it is never registered by create_worker. Remove the import; it will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "LOCK_RETRY_INTERVAL_SECONDS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "LOG_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported log files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "LOG_CLEANUP_ENABLED"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "LOG_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported log files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "LOG_RETENTION_DAYS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "METRICS_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported metric files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "METRICS_CLEANUP_ENABLED"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "METRICS_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported metric files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "METRICS_RETENTION_DAYS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "REDIS_HOST is deprecated: it only configures the deprecated RedisClient. Read the REDIS_HOST environment variable instead; it will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "REDIS_HOST"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "REDIS_PASSWORD is deprecated: it only configures the deprecated RedisClient. Read the REDIS_PASSWORD environment variable instead; it will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "REDIS_PASSWORD"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "REDIS_PORT is deprecated: it only configures the deprecated RedisClient. Read the REDIS_PORT environment variable instead; it will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "REDIS_PORT"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "REDIS_SENTINEL_HOSTS is deprecated: it only configures the deprecated RedisClient. Read the REDIS_SENTINEL_HOSTS environment variable instead; it will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "REDIS_SENTINEL_HOSTS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "REDIS_SENTINEL_SERVICE_NAME is deprecated: it only configures the deprecated RedisClient. Read the REDIS_SENTINEL_SERVICE_NAME environment variable instead; it will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "REDIS_SENTINEL_SERVICE_NAME"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SIZING_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported sizing files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "SIZING_CLEANUP_ENABLED"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SIZING_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported sizing files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "SIZING_RETENTION_DAYS"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "ContractValidationError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
@@ -442,6 +667,42 @@
       "symbol": "DiscoveryError"
     },
     {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal._lock_errors.LockAcquisitionError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution._temporal._lock_errors",
+      "removal_version": "4.0.0",
+      "symbol": "LockAcquisitionError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal._lock_errors.MaxLocksInvalidError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution._temporal._lock_errors",
+      "removal_version": "4.0.0",
+      "symbol": "MaxLocksInvalidError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal._lock_errors.MissingScheduleToCloseTimeoutError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution._temporal._lock_errors",
+      "removal_version": "4.0.0",
+      "symbol": "MissingScheduleToCloseTimeoutError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal._lock_errors.RedisLockError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution._temporal._lock_errors",
+      "removal_version": "4.0.0",
+      "symbol": "RedisLockError"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "TEMPORARY_PATH is deprecated; use application_sdk.constants.TEMPORARY_PATH \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
@@ -449,6 +710,24 @@
       "module": "application_sdk.execution._temporal.activity_utils",
       "removal_version": "4.0.0",
       "symbol": "TEMPORARY_PATH"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal.interceptors.lock.RedisLockInterceptor has no effect: create_worker never registers it, nor the lock activities it schedules, so needs_lock does nothing in v3. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution._temporal.interceptors.lock",
+      "removal_version": "4.0.0",
+      "symbol": "RedisLockInterceptor"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal.interceptors.lock.RedisLockOutboundInterceptor has no effect: create_worker never registers it, nor the lock activities it schedules, so needs_lock does nothing in v3. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution._temporal.interceptors.lock",
+      "removal_version": "4.0.0",
+      "symbol": "RedisLockOutboundInterceptor"
     },
     {
       "kind": "constant",
@@ -467,6 +746,24 @@
       "module": "application_sdk.execution._temporal.interceptors.log",
       "removal_version": "3.41.0",
       "symbol": "COMMIT_SHA"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal.lock_activities.acquire_distributed_lock has no effect: create_worker never registers it, so it never runs in v3. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution._temporal.lock_activities",
+      "removal_version": "4.0.0",
+      "symbol": "acquire_distributed_lock"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal.lock_activities.release_distributed_lock has no effect: create_worker never registers it, so it never runs in v3. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution._temporal.lock_activities",
+      "removal_version": "4.0.0",
+      "symbol": "release_distributed_lock"
     },
     {
       "kind": "constant",
@@ -559,6 +856,15 @@
       "symbol": "_resolve_gate_enforcement"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "needs_lock has no effect: create_worker registers neither the lock interceptor nor the lock activities, so a decorated task runs with no concurrency limit. Remove the decorator; it will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution.decorators",
+      "removal_version": "4.0.0",
+      "symbol": "needs_lock"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "HandlerError is deprecated; use a typed application_sdk.errors.AppError subclass \u2014 will be removed in v4.0",
@@ -575,6 +881,42 @@
       "module": "application_sdk.handler.contracts",
       "removal_version": "3.40.0",
       "symbol": "PreflightStatus.PARTIAL"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "MessageHandler is deprecated; use SubscriptionConfig.handler in application_sdk.handler.contracts \u2014 it typed PubSub.subscribe handlers, which DaprPubSub never called. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure",
+      "removal_version": "4.0.0",
+      "symbol": "MessageHandler"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "DaprSubscription is deprecated and will be removed in v4.0.0. It never received a message; declare a SubscriptionConfig (application_sdk.handler.contracts) and pass it to create_app_handler_service(subscriptions=...) instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure._dapr.client",
+      "removal_version": "4.0.0",
+      "symbol": "DaprSubscription"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "MessageHandler is deprecated; use SubscriptionConfig.handler in application_sdk.handler.contracts \u2014 it typed PubSub.subscribe handlers, which DaprPubSub never called. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure._dapr.client",
+      "removal_version": "4.0.0",
+      "symbol": "MessageHandler"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "DaprPubSub.subscribe is deprecated and will be removed in v4.0.0. It never delivered a message: the handler is stored and nothing calls it. Declare a SubscriptionConfig (application_sdk.handler.contracts) and pass it to create_app_handler_service(subscriptions=...) instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure._dapr.client",
+      "removal_version": "4.0.0",
+      "symbol": "subscribe"
     },
     {
       "kind": "constant",
@@ -602,6 +944,33 @@
       "module": "application_sdk.infrastructure.bindings",
       "removal_version": "4.0",
       "symbol": "BindingError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "BindingRequest is deprecated and will be removed in v4.0.0. Nothing in the SDK accepts one; pass operation, data and metadata to Binding.invoke() instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.bindings",
+      "removal_version": "4.0.0",
+      "symbol": "BindingRequest"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "InputBinding is deprecated and will be removed in v4.0.0. The SDK ships no implementation and has no input-binding replacement; to receive messages, use SubscriptionConfig with create_app_handler_service(subscriptions=...).",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.bindings",
+      "removal_version": "4.0.0",
+      "symbol": "InputBinding"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "OutputBinding is deprecated and will be removed in v4.0.0. The SDK ships no implementation; use Binding (DaprBinding.invoke) instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.bindings",
+      "removal_version": "4.0.0",
+      "symbol": "OutputBinding"
     },
     {
       "kind": "class",
@@ -649,6 +1018,15 @@
       "symbol": "CredentialVaultError"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "MessageHandler is deprecated; use SubscriptionConfig.handler in application_sdk.handler.contracts \u2014 it typed PubSub.subscribe handlers, which DaprPubSub never called. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.pubsub",
+      "removal_version": "4.0.0",
+      "symbol": "MessageHandler"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "PubSubError is deprecated; use application_sdk.errors.DependencyUnavailableError \u2014 will be removed in v4.0",
@@ -659,12 +1037,138 @@
     },
     {
       "kind": "class",
+      "marker_via": "decorator",
+      "message": "Subscription is deprecated and will be removed in v4.0.0. DaprPubSub.subscribe never delivered a message to its handler; declare a SubscriptionConfig (application_sdk.handler.contracts) and pass it to create_app_handler_service(subscriptions=...) instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.pubsub",
+      "removal_version": "4.0.0",
+      "symbol": "Subscription"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "PubSub.subscribe is deprecated and will be removed in v4.0.0. DaprPubSub.subscribe never delivered a message to its handler; declare a SubscriptionConfig (application_sdk.handler.contracts) and pass it to create_app_handler_service(subscriptions=...) instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.pubsub",
+      "removal_version": "4.0.0",
+      "symbol": "subscribe"
+    },
+    {
+      "kind": "class",
       "marker_via": "warn",
       "message": "StateStoreError is deprecated; use application_sdk.errors.DependencyUnavailableError \u2014 will be removed in v4.0",
       "migration_target": true,
       "module": "application_sdk.infrastructure.state",
       "removal_version": "4.0",
       "symbol": "StateStoreError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "APPLICATION_NAME is deprecated; use application_sdk.constants.APPLICATION_NAME \u2014 this module no longer uses it (FND-4895). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability._objectstore_metric_exporter",
+      "removal_version": "4.0.0",
+      "symbol": "APPLICATION_NAME"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DEPLOYMENT_NAME is deprecated; use application_sdk.constants.DEPLOYMENT_NAME \u2014 this module no longer uses it (FND-4895). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability._objectstore_metric_exporter",
+      "removal_version": "4.0.0",
+      "symbol": "DEPLOYMENT_NAME"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DEPLOYMENT_OBJECT_STORE_NAME is deprecated; use application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME \u2014 this module no longer uses it (FND-4895). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability._objectstore_metric_exporter",
+      "removal_version": "4.0.0",
+      "symbol": "DEPLOYMENT_OBJECT_STORE_NAME"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ENABLE_ATLAN_UPLOAD is deprecated; use application_sdk.constants.ENABLE_ATLAN_UPLOAD \u2014 this module no longer uses it (FND-4895). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability._objectstore_metric_exporter",
+      "removal_version": "4.0.0",
+      "symbol": "ENABLE_ATLAN_UPLOAD"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "OBSERVABILITY_S3_PREFIX_MAP is deprecated; use application_sdk.observability.observability.OBSERVABILITY_S3_PREFIX_MAP \u2014 this module no longer uses it (FND-4895). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability._objectstore_metric_exporter",
+      "removal_version": "4.0.0",
+      "symbol": "OBSERVABILITY_S3_PREFIX_MAP"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "UPSTREAM_OBJECT_STORE_NAME is deprecated; use application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME \u2014 this module no longer uses it (FND-4895). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability._objectstore_metric_exporter",
+      "removal_version": "4.0.0",
+      "symbol": "UPSTREAM_OBJECT_STORE_NAME"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "LOG_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported log files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.logger_adaptor",
+      "removal_version": "4.0.0",
+      "symbol": "LOG_CLEANUP_ENABLED"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "LOG_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported log files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.logger_adaptor",
+      "removal_version": "4.0.0",
+      "symbol": "LOG_RETENTION_DAYS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "METRICS_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported metric files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.metrics_adaptor",
+      "removal_version": "4.0.0",
+      "symbol": "METRICS_CLEANUP_ENABLED"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "METRICS_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported metric files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.metrics_adaptor",
+      "removal_version": "4.0.0",
+      "symbol": "METRICS_RETENTION_DAYS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SIZING_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported sizing files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.sizing_sink",
+      "removal_version": "4.0.0",
+      "symbol": "SIZING_CLEANUP_ENABLED"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SIZING_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported sizing files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.sizing_sink",
+      "removal_version": "4.0.0",
+      "symbol": "SIZING_RETENTION_DAYS"
     },
     {
       "kind": "constant",
@@ -1403,6 +1907,15 @@
       "module": "application_sdk.testing.integration.runner",
       "removal_version": "4.0.0",
       "symbol": "_auto_discover_credentials"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "MockPubSub.subscribe is deprecated and will be removed in v4.0.0. It delivers published messages, but DaprPubSub.subscribe never did, so a test that passed here received nothing in production. Declare a SubscriptionConfig (application_sdk.handler.contracts) and call its handler directly in the test instead.",
+      "migration_target": true,
+      "module": "application_sdk.testing.mocks",
+      "removal_version": "4.0.0",
+      "symbol": "subscribe"
     },
     {
       "kind": "constant",

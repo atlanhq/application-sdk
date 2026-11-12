@@ -774,7 +774,7 @@ cid = ctx.correlation_id if ctx else None  # str (empty when unset) or None when
 
 ## Observability Store Sink
 
-By default, logs, metrics, and traces are also written to gzip-compressed NDJSON files (`.json.gz`) in the object store under `artifacts/apps/{app_name}/{deployment_name}/observability/`. This enables historical querying even when the live pipelines (OTLP for logs/traces, Prometheus scrape / Pushgateway push for metrics) are unavailable.
+By default, logs, metrics, and traces are also written to gzip-compressed NDJSON files (`.json.gz`) in the object store under `artifacts/apps/observability/{sdr|non-sdr}/{logs|metrics|traces|sizing}/year=YYYY/month=MM/day=DD/hour=HH/`. `sdr` is used when `ENABLE_ATLAN_UPLOAD` is true, `non-sdr` otherwise. Each file name carries the deployment and app names. This enables historical querying even when the live pipelines (OTLP for logs/traces, Prometheus scrape / Pushgateway push for metrics) are unavailable.
 
 Control with:
 
@@ -782,13 +782,14 @@ Control with:
 ATLAN_ENABLE_OBSERVABILITY_STORE_SINK=true   # default: true
 ```
 
-Retention and batching:
+Batching:
 
 ```bash
-ATLAN_LOG_RETENTION_DAYS=30
 ATLAN_LOG_BATCH_SIZE=100
 ATLAN_LOG_FLUSH_INTERVAL_SECONDS=10
 ```
+
+The SDK never deletes exported files; retention is the bucket owner's job, by design (see [ADR-0012](../adr/0012-observability-consolidation.md#addendum-retention-of-exported-files-belongs-to-the-bucket-not-the-sdk-fnd-4889)). To bound how long they are kept, add a lifecycle rule to the bucket that expires objects under `artifacts/apps/observability/`. The `ATLAN_LOG_*`, `ATLAN_METRICS_*` and `ATLAN_SIZING_*` `RETENTION_DAYS` / `CLEANUP_ENABLED` variables are no longer read; setting one logs a startup warning.
 
 See [Configuration](../configuration.md#logging) for all observability variables.
 
@@ -870,7 +871,6 @@ Rows are buffered and flushed on a timer as well as on batch size, because these
 ```bash
 ATLAN_SIZING_BATCH_SIZE=500
 ATLAN_SIZING_FLUSH_INTERVAL_SECONDS=60
-ATLAN_SIZING_RETENTION_DAYS=90
 ```
 
 This signal writes to the object store even when `ATLAN_ENABLE_OBSERVABILITY_STORE_SINK` is off. That switch covers logs, metrics and traces together, and an app disabling it to stop shipping those would otherwise silently lose a dataset it explicitly opted into — with an empty prefix as the only symptom. Collection is already gated twice, by the switch and the allow-list, so nothing is written unless an operator asked for it by name.

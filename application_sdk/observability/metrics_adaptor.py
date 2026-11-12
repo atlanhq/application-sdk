@@ -1,4 +1,5 @@
 import logging
+import warnings
 from time import time
 from typing import Any, ClassVar
 
@@ -8,10 +9,8 @@ from opentelemetry.sdk.metrics import MeterProvider
 from application_sdk.constants import (
     ENABLE_OBSERVABILITY_STORE_SINK,
     METRICS_BATCH_SIZE,
-    METRICS_CLEANUP_ENABLED,
     METRICS_FILE_NAME,
     METRICS_FLUSH_INTERVAL_SECONDS,
-    METRICS_RETENTION_DAYS,
     SEGMENT_API_URL,
     SEGMENT_BATCH_SIZE,
     SEGMENT_BATCH_TIMEOUT_SECONDS,
@@ -79,8 +78,6 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         super().__init__(
             batch_size=METRICS_BATCH_SIZE,
             flush_interval=METRICS_FLUSH_INTERVAL_SECONDS,
-            retention_days=METRICS_RETENTION_DAYS,
-            cleanup_enabled=METRICS_CLEANUP_ENABLED,
             data_dir=get_observability_dir(),
             file_name=METRICS_FILE_NAME,
         )
@@ -367,3 +364,36 @@ def get_metrics() -> AtlanMetricsAdapter:
     if _metrics_instance is None:
         _metrics_instance = AtlanMetricsAdapter()
     return _metrics_instance
+
+
+#: Retention-sweep constants this module used to re-export from
+#: ``application_sdk.constants``; served once more by ``__getattr__`` (PEP 562).
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "METRICS_RETENTION_DAYS": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported metric files",
+    ),
+    "METRICS_CLEANUP_ENABLED": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported metric files",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the removed constants once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    from application_sdk.constants import (  # noqa: PLC0415 — only reached on a deprecated access
+        _DEPRECATED_CONSTANT_VALUES,
+    )
+
+    return _DEPRECATED_CONSTANT_VALUES[name]

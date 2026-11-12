@@ -1339,6 +1339,18 @@ asyncio.run(run_dev_combined(
 
 ---
 
+## v2 run-mode constants (deprecated, removed in v4.0.0)
+
+The SDK no longer reads these constants: the run mode comes from `ATLAN_APP_MODE` (or `--mode`), resolved at startup into `AppConfig.mode`. They are still importable and warn on access. Reading `APPLICATION_MODE` no longer fails for an unrecognised `APPLICATION_MODE` env value; it falls back to `LOCAL`. B001 flags each import.
+
+| Deprecated | Replacement |
+|---|---|
+| `application_sdk.constants.APPLICATION_MODE` | the `ATLAN_APP_MODE` env var (`worker`, `handler` or `combined`) |
+| `application_sdk.constants.ApplicationMode` | the v3 run modes `worker`, `handler` and `combined` |
+| `application_sdk.constants.DAPR_BINDING_OPERATION_CREATE` | the literal `"create"` |
+
+---
+
 ## Transformer helpers (deprecated, removed in v4.0.0)
 
 `application_sdk.transformers` is removed in v4.0.0, including its helper modules, which many apps import without using a transformer. Move these imports before v4.0.0; B001 flags each one.
@@ -1372,6 +1384,37 @@ asyncio.run(run_dev_combined(
 | `testing.hypothesis.strategies.server.fastapi.*` | none; build strategies from your app's own models in its tests |
 
 `application_sdk.common.utils.download_file_from_upload_response` now accepts the handler's `FileUploadResponse`. Before this change it raised `ResponseTypeError: Unsupported response type: FileUploadResponse` for it, because it only recognised the v2 class.
+
+---
+
+## Distributed locks (deprecated, removed in v4.0.0)
+
+`needs_lock` has no effect in v3. `create_worker` registers neither the lock interceptor nor the `acquire_distributed_lock` / `release_distributed_lock` activities, and it takes no extra activities, so a task decorated with `needs_lock` runs with no concurrency limit. Setting `IS_LOCKING_DISABLED=false` does not change that. `needs_lock` now emits a `DeprecationWarning`, and `create_worker` logs a warning naming each decorated task.
+
+The SDK's Redis clients still work, but they are deprecated too: the lock was their only use inside the SDK. B001 flags each import.
+
+| Deprecated | Do this |
+|---|---|
+| `application_sdk.execution.needs_lock` | Remove the decorator. It never limited concurrency in v3. |
+| `RedisLockInterceptor`, `RedisLockOutboundInterceptor`, `acquire_distributed_lock`, `release_distributed_lock`, and the lock error leaves in `execution._temporal._lock_errors` | Remove the import |
+| `application_sdk.clients.RedisClient` / `RedisClientAsync` (and `clients.redis.BaseRedisClient`, `LockReleaseResult`, the `clients.redis_errors` leaves) | Use `redis` / `redis.asyncio` directly. `RedisClientAsync` still connects as before until v4.0.0. |
+| `application_sdk.constants.REDIS_*`, `IS_LOCKING_DISABLED`, `LOCK_METADATA_KEY`, `LOCK_RETRY_INTERVAL_SECONDS` | Read the env vars in your app. The env vars still configure the deprecated clients until v4.0.0. |
+| The `[distributed_lock]` extra | Depend on `redis` directly. The extra only installs it for the deprecated clients. |
+
+---
+
+## Pub/sub subscribe and unimplemented binding shapes (deprecated, removed in v4.0.0)
+
+`DaprPubSub.subscribe()` never delivered a message. It stored the handler, returned a handle whose `is_active` was `True`, and nothing ever called the handler. `MockPubSub.subscribe()` did deliver, so a test passed and the same code received nothing in production. Dapr delivers pub/sub messages to HTTP routes the app serves; the SDK builds those routes from `SubscriptionConfig`. Both `subscribe()` methods now emit a `DeprecationWarning`. `publish()` is unchanged. B001 flags each import.
+
+| Deprecated | Replacement |
+|---|---|
+| `DaprPubSub.subscribe`, `PubSub.subscribe`, `MockPubSub.subscribe` | a `SubscriptionConfig` from `application_sdk.handler.contracts`, passed to `create_app_handler_service(subscriptions=...)`. In tests, call its `handler` directly. |
+| `infrastructure.Subscription`, `DaprSubscription` | none; a `SubscriptionConfig` has no handle to hold |
+| `infrastructure.MessageHandler` | the `handler` field of `SubscriptionConfig` |
+| `infrastructure.OutputBinding` | `infrastructure.Binding` (`DaprBinding.invoke`); the SDK never shipped an implementation |
+| `infrastructure.InputBinding` | No input-binding replacement (the SDK never shipped an implementation). To receive messages, use `SubscriptionConfig` with `create_app_handler_service(subscriptions=...)` |
+| `infrastructure.BindingRequest` | pass `operation`, `data` and `metadata` to `Binding.invoke()`; nothing accepted a `BindingRequest` |
 
 ---
 

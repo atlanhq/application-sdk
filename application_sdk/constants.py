@@ -885,8 +885,6 @@ UPSTREAM_OBJECT_STORE_NAME = os.getenv(
 )
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
-#: DAPR binding operation for creating resources
-DAPR_BINDING_OPERATION_CREATE = "create"
 #: Version of worker start events used in the application
 WORKER_START_EVENT_VERSION = "v1"
 
@@ -1107,9 +1105,9 @@ LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS = env_float(
     "ATLAN_LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS", 60.0
 )
 
-# Log Retention configuration
-LOG_RETENTION_DAYS = env_int("ATLAN_LOG_RETENTION_DAYS", 30)
-LOG_CLEANUP_ENABLED = env_bool("ATLAN_LOG_CLEANUP_ENABLED")
+# REMOVED: ATLAN_LOG_RETENTION_DAYS / ATLAN_LOG_CLEANUP_ENABLED and the METRICS_
+# and SIZING_ pairs — the retention sweep they configured never deleted from the
+# object store. Use a bucket lifecycle rule. Deprecated aliases: _DEPRECATED_CONSTANTS.
 
 # Log Location configuration
 # NOTE: Despite the ".parquet" default value, LOG_FILE_NAME is used purely as a
@@ -1123,8 +1121,6 @@ LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
 # Metrics batching / sink configuration
 METRICS_BATCH_SIZE = env_int("ATLAN_METRICS_BATCH_SIZE", 100)
 METRICS_FLUSH_INTERVAL_SECONDS = env_int("ATLAN_METRICS_FLUSH_INTERVAL_SECONDS", 10)
-METRICS_RETENTION_DAYS = env_int("ATLAN_METRICS_RETENTION_DAYS", 30)
-METRICS_CLEANUP_ENABLED = env_bool("ATLAN_METRICS_CLEANUP_ENABLED")
 # Same signal-discriminator convention as LOG_FILE_NAME above — not a real file name.
 METRICS_FILE_NAME = os.environ.get("ATLAN_METRICS_FILE_NAME", "metrics.parquet")
 
@@ -1133,10 +1129,6 @@ METRICS_FILE_NAME = os.environ.get("ATLAN_METRICS_FILE_NAME", "metrics.parquet")
 # is offline evidence for fitting envelopes, not something watched live.
 SIZING_BATCH_SIZE = env_int("ATLAN_SIZING_BATCH_SIZE", 500)
 SIZING_FLUSH_INTERVAL_SECONDS = env_int("ATLAN_SIZING_FLUSH_INTERVAL_SECONDS", 60)
-# Longer than metrics' 30: fitting wants the tail, and the runs that matter most
-# for sizing are the rare big ones.
-SIZING_RETENTION_DAYS = env_int("ATLAN_SIZING_RETENTION_DAYS", 90)
-SIZING_CLEANUP_ENABLED = env_bool("ATLAN_SIZING_CLEANUP_ENABLED")
 SIZING_FILE_NAME = os.environ.get("ATLAN_SIZING_FILE_NAME", "sizing.parquet")
 TRACES_FILE_NAME = os.environ.get("ATLAN_TRACES_FILE_NAME", "traces.parquet")
 
@@ -1195,24 +1187,21 @@ ENABLE_OBSERVABILITY_STORE_SINK: bool = env_bool(
 # REMOVED: ATLAN_API_TOKEN_GUID, ATLAN_API_KEY, ATLAN_CLIENT_ID, ATLAN_CLIENT_SECRET — unused.
 # ATLAN_BASE_URL is still used by events interceptor (deferred import).
 ATLAN_BASE_URL = os.getenv("ATLAN_BASE_URL")
-# Lock Configuration
-LOCK_METADATA_KEY = "__lock_metadata__"
-
-# Redis Lock Configuration
-#: Redis host for direct connection (when not using Sentinel)
-REDIS_HOST = os.getenv("REDIS_HOST", "")
-#: Redis port for direct connection (when not using Sentinel)
-REDIS_PORT = os.getenv("REDIS_PORT", "")
-#: Redis password (required for authenticated Redis instances)
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
-#: Redis Sentinel service name. Default: mymaster
-REDIS_SENTINEL_SERVICE_NAME = os.getenv("REDIS_SENTINEL_SERVICE_NAME", "mymaster")
-#: Redis Sentinel hosts as comma-separated host:port pairs
-REDIS_SENTINEL_HOSTS = os.getenv("REDIS_SENTINEL_HOSTS", "")
-#: Whether to enable strict locking
-IS_LOCKING_DISABLED = env_bool("IS_LOCKING_DISABLED", True)
-#: Retry interval for lock acquisition
-LOCK_RETRY_INTERVAL_SECONDS = env_int("LOCK_RETRY_INTERVAL_SECONDS", 60)
+# Lock / Redis configuration — deprecated, removed in v4.0.0 (FND-4888).
+# Nothing in v3 consumes the lock metadata: ``create_worker`` registers neither
+# the lock interceptor nor the lock activities. The ``REDIS_*`` /
+# ``IS_LOCKING_DISABLED`` values still configure the deprecated ``RedisClient`` /
+# ``RedisClientAsync``, which keep working until v4.0.0. The public names are
+# served by ``__getattr__`` at the bottom of this module, with a warning.
+_LOCK_METADATA_KEY = "__lock_metadata__"
+_REDIS_HOST = os.getenv("REDIS_HOST", "")
+_REDIS_PORT = os.getenv("REDIS_PORT", "")
+_REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+_REDIS_SENTINEL_SERVICE_NAME = os.getenv("REDIS_SENTINEL_SERVICE_NAME", "mymaster")
+_REDIS_SENTINEL_HOSTS = os.getenv("REDIS_SENTINEL_HOSTS", "")
+#: The Redis client's connect guard: ``true`` (the default) leaves it unconnected.
+_IS_LOCKING_DISABLED = env_bool("IS_LOCKING_DISABLED", True)
+_LOCK_RETRY_INTERVAL_SECONDS = env_int("LOCK_RETRY_INTERVAL_SECONDS", 60)
 
 # MCP Configuration
 #: Flag to indicate if MCP should be enabled or not. Turning this to true will setup an MCP server along
@@ -1229,13 +1218,12 @@ WINDOWS_EXTENDED_PATH_PREFIX = "\\\\?\\"
 SSL_CERT_DIR = os.getenv("SSL_CERT_DIR", "")
 
 
-class ApplicationMode(str, Enum):
-    """Application execution mode.
+class _ApplicationMode(str, Enum):
+    """v2 execution mode, kept only to serve the deprecated ``ApplicationMode``.
 
-    Determines which components of the application are started:
-    - LOCAL: Starts both the worker (daemon mode) and the server. Used for local development.
-    - WORKER: Starts only the worker (non-daemon mode). Used in production for worker pods.
-    - SERVER: Starts only the server. Used in production for API server pods.
+    - LOCAL: worker and server in one process (v3 ``combined``).
+    - WORKER: worker only (v3 ``worker``).
+    - SERVER: server only (v3 ``handler``).
     """
 
     LOCAL = "LOCAL"
@@ -1243,7 +1231,44 @@ class ApplicationMode(str, Enum):
     SERVER = "SERVER"
 
 
-APPLICATION_MODE = ApplicationMode(os.getenv("APPLICATION_MODE", "LOCAL").upper())
+#: ``APPLICATION_MODE`` value (upper-cased) -> v3 run mode. Accepts the v2
+#: names and the v3 names, because the docs present ``APPLICATION_MODE`` as the
+#: fallback for ``ATLAN_APP_MODE``. ``main.AppConfig`` resolves the legacy
+#: variable through :func:`_legacy_app_mode`; nothing else reads it.
+_LEGACY_APP_MODES: dict[str, str] = {
+    "LOCAL": "combined",
+    "WORKER": "worker",
+    "SERVER": "handler",
+    "COMBINED": "combined",
+    "HANDLER": "handler",
+}
+
+_V3_TO_LEGACY_APP_MODE: dict[str, _ApplicationMode] = {
+    "combined": _ApplicationMode.LOCAL,
+    "worker": _ApplicationMode.WORKER,
+    "handler": _ApplicationMode.SERVER,
+}
+
+
+def _legacy_app_mode(raw: str) -> str | None:
+    """Map an ``APPLICATION_MODE`` value to a v3 run mode.
+
+    Case and surrounding whitespace are ignored. Returns ``None`` for an empty
+    or unrecognised value, so the caller decides what an unknown value means.
+    """
+    return _LEGACY_APP_MODES.get(raw.strip().upper())
+
+
+def _read_application_mode() -> _ApplicationMode:
+    """The deprecated ``APPLICATION_MODE`` constant's value, read on access.
+
+    An unrecognised value falls back to ``LOCAL`` rather than raising: the
+    constant has no reader in the SDK, and it used to stop the SDK importing
+    for any value outside ``LOCAL``/``WORKER``/``SERVER``.
+    """
+    mode = _legacy_app_mode(os.getenv("APPLICATION_MODE", ""))
+    return _V3_TO_LEGACY_APP_MODE[mode] if mode else _ApplicationMode.LOCAL
+
 
 # =============================================================================
 # Incremental Extraction Constants
@@ -1329,3 +1354,153 @@ in that directory are trusted in addition to system CAs.
 # module level — os.environ assignments call os.putenv(), which Temporal's
 # workflow sandbox flags as non-deterministic, causing worker eviction loops.
 # See: https://github.com/atlanhq/application-sdk/pull/1129
+
+
+#: name -> (replacement, why), or a self-contained notice string. For a tuple,
+#: the shared sentence and the removal version live in ``__getattr__`` below.
+#: Served lazily so reading ``APPLICATION_MODE`` can no longer fail the import
+#: of this module (FND-4890). The ``*_RETENTION_DAYS`` / ``*_CLEANUP_ENABLED``
+#: six configured an observability retention sweep that never deleted anything
+#: from the object store; nothing in the SDK reads them any more, so each
+#: returns its former default (FND-4889). The lock / Redis notices (FND-4888)
+#: are strings: the lock constants have no replacement, and the Redis ones
+#: point at their environment variable rather than the private ``_<name>`` value.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str] | str] = {
+    "APPLICATION_MODE": (
+        "the ATLAN_APP_MODE env var (application_sdk.main.AppConfig.mode)",
+        "the SDK no longer reads this constant; the run mode is resolved at startup",
+    ),
+    "ApplicationMode": (
+        "the v3 run modes 'worker', 'handler' and 'combined' (application_sdk.main.AppConfig.mode)",
+        "the v2 mode enum has no reader in the SDK",
+    ),
+    "DAPR_BINDING_OPERATION_CREATE": (
+        'the literal "create"',
+        "the SDK never read this constant",
+    ),
+    "LOG_RETENTION_DAYS": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported log files",
+    ),
+    "LOG_CLEANUP_ENABLED": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported log files",
+    ),
+    "METRICS_RETENTION_DAYS": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported metric files",
+    ),
+    "METRICS_CLEANUP_ENABLED": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported metric files",
+    ),
+    "SIZING_RETENTION_DAYS": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported sizing files",
+    ),
+    "SIZING_CLEANUP_ENABLED": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported sizing files",
+    ),
+    "LOCK_METADATA_KEY": (
+        "LOCK_METADATA_KEY is deprecated and has no effect: needs_lock does "
+        "nothing in v3 because create_worker registers no lock interceptor. "
+        "Remove the import; it will be removed in v4.0.0."
+    ),
+    "LOCK_RETRY_INTERVAL_SECONDS": (
+        "LOCK_RETRY_INTERVAL_SECONDS is deprecated and has no effect: the lock "
+        "interceptor that reads it is never registered by create_worker. "
+        "Remove the import; it will be removed in v4.0.0."
+    ),
+    "IS_LOCKING_DISABLED": (
+        "IS_LOCKING_DISABLED is deprecated: it only guards the deprecated "
+        "RedisClient / RedisClientAsync connection. Read the IS_LOCKING_DISABLED "
+        "environment variable instead; it will be removed in v4.0.0."
+    ),
+    "REDIS_HOST": (
+        "REDIS_HOST is deprecated: it only configures the deprecated RedisClient. "
+        "Read the REDIS_HOST environment variable instead; it will be removed "
+        "in v4.0.0."
+    ),
+    "REDIS_PORT": (
+        "REDIS_PORT is deprecated: it only configures the deprecated RedisClient. "
+        "Read the REDIS_PORT environment variable instead; it will be removed "
+        "in v4.0.0."
+    ),
+    "REDIS_PASSWORD": (
+        "REDIS_PASSWORD is deprecated: it only configures the deprecated "
+        "RedisClient. Read the REDIS_PASSWORD environment variable instead; it "
+        "will be removed in v4.0.0."
+    ),
+    "REDIS_SENTINEL_SERVICE_NAME": (
+        "REDIS_SENTINEL_SERVICE_NAME is deprecated: it only configures the "
+        "deprecated RedisClient. Read the REDIS_SENTINEL_SERVICE_NAME environment "
+        "variable instead; it will be removed in v4.0.0."
+    ),
+    "REDIS_SENTINEL_HOSTS": (
+        "REDIS_SENTINEL_HOSTS is deprecated: it only configures the deprecated "
+        "RedisClient. Read the REDIS_SENTINEL_HOSTS environment variable "
+        "instead; it will be removed in v4.0.0."
+    ),
+}
+
+#: Former defaults of the removed retention-sweep constants. Also read by the
+#: ``__getattr__`` aliases in the observability adaptor modules that re-exported them.
+_DEPRECATED_CONSTANT_VALUES: dict[str, object] = {
+    "LOG_RETENTION_DAYS": 30,
+    "LOG_CLEANUP_ENABLED": False,
+    "METRICS_RETENTION_DAYS": 30,
+    "METRICS_CLEANUP_ENABLED": False,
+    "SIZING_RETENTION_DAYS": 90,
+    "SIZING_CLEANUP_ENABLED": False,
+}
+
+#: Deprecated constants whose value is the private ``_<name>`` in this module.
+_PRIVATE_BACKED_CONSTANTS = frozenset(
+    {
+        "LOCK_METADATA_KEY",
+        "LOCK_RETRY_INTERVAL_SECONDS",
+        "IS_LOCKING_DISABLED",
+        "REDIS_HOST",
+        "REDIS_PORT",
+        "REDIS_PASSWORD",
+        "REDIS_SENTINEL_SERVICE_NAME",
+        "REDIS_SENTINEL_HOSTS",
+    }
+)
+
+
+def _deprecated_constant_value(name: str) -> object:
+    if name == "APPLICATION_MODE":
+        return _read_application_mode()
+    if name == "ApplicationMode":
+        return _ApplicationMode
+    if name == "DAPR_BINDING_OPERATION_CREATE":
+        return "create"
+    if name in _PRIVATE_BACKED_CONSTANTS:
+        return globals()[f"_{name}"]
+    if name in _DEPRECATED_CONSTANT_VALUES:
+        return _DEPRECATED_CONSTANT_VALUES[name]
+    raise AssertionError(name)
+
+
+def __getattr__(name: str) -> object:
+    """Serve the deprecated constants once more, with a warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    # The tuple branch's f-string comes first: the deprecation-manifest scanner
+    # reads the removal version from the first warn call in this function.
+    if isinstance(entry, tuple):
+        replacement, note = entry
+        warnings.warn(
+            f"{name} is deprecated; use {replacement} instead — {note}. "
+            "Will be removed in v4.0.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    else:
+        warnings.warn(
+            f"application_sdk.constants.{entry}", DeprecationWarning, stacklevel=2
+        )
+    return _deprecated_constant_value(name)

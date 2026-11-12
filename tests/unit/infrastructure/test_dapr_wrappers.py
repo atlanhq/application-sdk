@@ -727,34 +727,54 @@ class TestDaprBinding:
 
 
 class TestDaprSubscription:
+    """``DaprPubSub.subscribe`` never delivers, so it warns (FND-4892)."""
+
     def setup_method(self):
         self.client = MagicMock(spec=AsyncDaprClient)
         self.pubsub = DaprPubSub(self.client, pubsub_name="mypubsub")
 
-    async def test_subscribe_returns_subscription(self):
-        from application_sdk.infrastructure._dapr.client import DaprSubscription
-
-        handler = AsyncMock()
-        sub = await self.pubsub.subscribe("my-topic", handler)
-        assert isinstance(sub, DaprSubscription)
+    async def test_subscribe_warns_that_it_never_delivers(self):
+        with pytest.warns(
+            DeprecationWarning,
+            match=r"DaprPubSub\.subscribe is deprecated.*v4\.0\.0.*never delivered.*SubscriptionConfig",
+        ):
+            sub = await self.pubsub.subscribe("my-topic", AsyncMock())
         assert sub.topic == "my-topic"
         assert sub.is_active is True
 
-    async def test_unsubscribe_deactivates(self):
+    async def test_publish_does_not_reach_the_subscribed_handler(self):
+        """The defect the warning names: the handler is stored and never called."""
         handler = AsyncMock()
-        sub = await self.pubsub.subscribe("my-topic", handler)
-        assert sub.is_active is True
+        with pytest.warns(DeprecationWarning):
+            await self.pubsub.subscribe("my-topic", handler)
+        self.client.publish_event = AsyncMock()
+
+        await self.pubsub.publish("my-topic", {"k": "v"})
+
+        handler.assert_not_called()
+
+    async def test_unsubscribe_deactivates(self):
+        with pytest.warns(DeprecationWarning):
+            sub = await self.pubsub.subscribe("my-topic", AsyncMock())
         await sub.unsubscribe()
         assert sub.is_active is False
 
-    async def test_subscribe_multiple_topics(self):
-        sub1 = await self.pubsub.subscribe("topic-a", AsyncMock())
-        sub2 = await self.pubsub.subscribe("topic-b", AsyncMock())
-        assert sub1.topic == "topic-a"
-        assert sub2.topic == "topic-b"
-        await sub1.unsubscribe()
-        assert sub1.is_active is False
-        assert sub2.is_active is True
+    def test_subscribe_warns_exactly_once(self):
+        """The handle's own deprecation is suppressed inside subscribe()."""
+        import asyncio
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            asyncio.run(self.pubsub.subscribe("t", AsyncMock()))
+        assert [type(w.message) for w in caught] == [DeprecationWarning]
+
+    def test_dapr_subscription_name_warns(self):
+        from application_sdk.infrastructure._dapr.client import DaprSubscription
+
+        assert "v4.0.0" in DaprSubscription.__deprecated__
+        with pytest.warns(DeprecationWarning, match=r"DaprSubscription is deprecated"):
+            DaprSubscription("t", AsyncMock(), self.pubsub)
 
 
 # ---------------------------------------------------------------------------

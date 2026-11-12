@@ -1,13 +1,27 @@
 from typing import Any, Callable, Optional
 
-from application_sdk.constants import LOCK_METADATA_KEY
+from typing_extensions import deprecated
+
+# The public name in application_sdk.constants is a deprecated alias.
+from application_sdk.constants import _LOCK_METADATA_KEY as LOCK_METADATA_KEY
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 
+@deprecated(
+    "needs_lock has no effect: create_worker registers neither the lock "
+    "interceptor nor the lock activities, so a decorated task runs with no "
+    "concurrency limit. Remove the decorator; it will be removed in v4.0.0."
+)
 def needs_lock(max_locks: int = 5, lock_name: Optional[str] = None):
-    """Decorator to mark activities that require distributed locking.
+    """Deprecated and has no effect: ``create_worker`` registers no lock interceptor — removed in v4.0.0.
+
+    .. deprecated:: 3.57.0
+        Has no effect. It only records ``__lock_metadata__`` on the function,
+        and nothing in v3 reads it: ``create_worker`` registers neither the lock
+        interceptor nor the lock activities. Remove the decorator. Will be
+        removed in v4.0.0.
 
     This decorator attaches lock configuration directly to the activity
     definition that will be used by the workflow interceptor to acquire

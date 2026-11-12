@@ -352,3 +352,55 @@ class TestLockReleaseResultEnum:
         assert LockReleaseResult.SUCCESS.value == "success"
         assert LockReleaseResult.ALREADY_RELEASED.value == "already_released"
         assert LockReleaseResult.WRONG_OWNER.value == "wrong_owner"
+
+
+class TestDeprecation:
+    """FND-4888: the Redis clients are deprecated for v4.0.0 but keep working."""
+
+    @pytest.mark.parametrize("cls", [RedisClient, RedisClientAsync])
+    @patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", True)
+    def test_client_warns_and_still_constructs(self, cls) -> None:
+        with pytest.warns(DeprecationWarning, match=r"deprecated.*v4\.0\.0"):
+            client = cls()
+        assert client.redis_client is None
+
+    def test_base_client_warns(self) -> None:
+        from application_sdk.clients.redis import BaseRedisClient
+
+        with (
+            patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", True),
+            pytest.warns(DeprecationWarning, match=r"BaseRedisClient is deprecated"),
+        ):
+            BaseRedisClient()
+
+    def test_lock_release_result_lookup_warns(self) -> None:
+        with pytest.warns(DeprecationWarning, match="LockReleaseResult is deprecated"):
+            assert LockReleaseResult("success") is LockReleaseResult.SUCCESS
+
+    @pytest.mark.parametrize(
+        "cls",
+        [RedisConnectionError, RedisTimeoutError, RedisProtocolError, RedisConfigError],
+    )
+    def test_error_leaves_warn_on_construction(self, cls) -> None:
+        with pytest.warns(DeprecationWarning, match=r"v4\.0\.0"):
+            cls()
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "REDIS_HOST",
+            "REDIS_PORT",
+            "REDIS_PASSWORD",
+            "REDIS_SENTINEL_SERVICE_NAME",
+            "REDIS_SENTINEL_HOSTS",
+            "IS_LOCKING_DISABLED",
+        ],
+    )
+    def test_redis_constants_are_deprecated_aliases(self, name: str) -> None:
+        import application_sdk.constants as constants
+
+        with pytest.warns(
+            DeprecationWarning, match=rf"constants\.{name} is deprecated"
+        ):
+            value = getattr(constants, name)
+        assert value == getattr(constants, f"_{name}")

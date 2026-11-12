@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import gzip
 import os
+from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
 
+import orjson
 import pytest
 from opentelemetry.sdk.metrics import (
     Counter,
@@ -17,6 +20,7 @@ from opentelemetry.sdk.metrics import (
 from opentelemetry.sdk.metrics.export import (
     AggregationTemporality,
     InMemoryMetricReader,
+    MetricExportResult,
 )
 from opentelemetry.sdk.resources import Resource
 
@@ -27,6 +31,11 @@ from application_sdk.observability._objectstore_metric_exporter import (
 from application_sdk.observability._objectstore_metric_reader import (
     create_objectstore_metric_reader,
 )
+from application_sdk.observability.observability import (
+    OBSERVABILITY_S3_PREFIX_MAP,
+    AtlanObservability,
+)
+from application_sdk.storage.ops import BoundStore
 
 
 @pytest.fixture()
@@ -133,80 +142,177 @@ class TestSerialization:
         assert records == []
 
 
-class TestExport:
-    """Verify the export() method writes files and calls upload."""
+_EXPORTER_MOD = "application_sdk.observability._objectstore_metric_exporter"
+_OBS_MOD = "application_sdk.observability.observability"
+_PREFIX = OBSERVABILITY_S3_PREFIX_MAP["prometheus-metrics"]
 
-    @patch(
-        "application_sdk.observability._objectstore_metric_exporter.ENABLE_OBSERVABILITY_STORE_SINK",
-        True,
-    )
-    def test_export_writes_ndjson_gz(
+
+@pytest.fixture(autouse=True)
+def _fresh_shared_stores():
+    """The shared store cache and its log-once state are process-wide."""
+    AtlanObservability._reset_for_testing()
+    yield
+    AtlanObservability._reset_for_testing()
+
+
+def _record_counter(provider: MeterProvider, reader: InMemoryMetricReader, name: str):
+    provider.get_meter("test").create_counter(name).add(1, {"k": "v"})
+    return reader.get_metrics_data()
+
+
+class _UploadSpy:
+    """Fake ``upload_file``: records each call and the uploaded file's records."""
+
+    def __init__(self, fail_for: object | None = None) -> None:
+        self.calls: list[tuple[str, str, object]] = []
+        self.records: list[dict] = []
+        self._fail_for = fail_for
+
+    async def __call__(self, key, local_path, store=None, **_kw):
+        self.calls.append((key, str(local_path), store))
+        with gzip.open(local_path, "rb") as fh:
+            self.records.extend(orjson.loads(line) for line in fh if line.strip())
+        if self._fail_for is not None and store is self._fail_for:
+            raise OSError("upload boom")
+
+
+def _patch_stores(
+    upload: _UploadSpy,
+    *,
+    deployment: object | None = None,
+    upstream: object | None = None,
+    atlan_upload: bool = False,
+):
+    stack = ExitStack()
+    stack.enter_context(patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True))
+    stack.enter_context(patch(f"{_OBS_MOD}.ENABLE_ATLAN_UPLOAD", atlan_upload))
+    stack.enter_context(patch("application_sdk.storage.upload_file", new=upload))
+    if deployment is not None:
+        stack.enter_context(
+            patch.object(
+                AtlanObservability, "_get_deployment_store", return_value=deployment
+            )
+        )
+    if upstream is not None:
+        stack.enter_context(
+            patch.object(
+                AtlanObservability, "_get_upstream_store", return_value=upstream
+            )
+        )
+    return stack
+
+
+class TestExport:
+    """``export()`` writes through the shared observability writer."""
+
+    def test_export_uploads_through_upload_file_with_put_attrs(
         self,
         provider: MeterProvider,
         in_memory_reader: InMemoryMetricReader,
         exporter: ObjectStoreMetricExporter,
     ) -> None:
-        mock_store = MagicMock()
-        exporter._deployment_store = mock_store
+        """The deployment store is the shared ``BoundStore`` (its put
+        attributes carry a binding's ``storageClass``), and the upload goes
+        through ``upload_file`` rather than a raw ``store.put``."""
+        bound = BoundStore(MagicMock(name="obstore"), {"Storage-Class": "STANDARD_IA"})
+        upload = _UploadSpy()
+        metrics_data = _record_counter(provider, in_memory_reader, "export.test")
 
-        meter = provider.get_meter("test")
-        counter = meter.create_counter("export.test")
-        counter.add(1, {"k": "v"})
-
-        metrics_data = in_memory_reader.get_metrics_data()
-        result = exporter.export(metrics_data)
-
-        from opentelemetry.sdk.metrics.export import MetricExportResult
+        with _patch_stores(upload, deployment=bound):
+            result = exporter.export(metrics_data)
 
         assert result == MetricExportResult.SUCCESS
-        assert mock_store.put.called
-        # Verify the local file was cleaned up
-        uploaded_path = mock_store.put.call_args[0][1]
-        assert not os.path.exists(uploaded_path)
+        assert len(upload.calls) == 1
+        key, local_path, store = upload.calls[0]
+        assert store is bound
+        assert key.startswith(_PREFIX + "/year=")
+        assert key.endswith(".json.gz")
+        assert [r["name"] for r in upload.records] == ["export.test"]
+        # The local file was cleaned up.
+        assert not os.path.exists(local_path)
 
-    @patch(
-        "application_sdk.observability._objectstore_metric_exporter.ENABLE_OBSERVABILITY_STORE_SINK",
-        False,
-    )
     def test_export_noop_when_sink_disabled(
         self,
         provider: MeterProvider,
         in_memory_reader: InMemoryMetricReader,
         exporter: ObjectStoreMetricExporter,
     ) -> None:
-        meter = provider.get_meter("test")
-        counter = meter.create_counter("noop.test")
-        counter.add(1)
-
-        metrics_data = in_memory_reader.get_metrics_data()
-        from opentelemetry.sdk.metrics.export import MetricExportResult
-
-        result = exporter.export(metrics_data)
+        metrics_data = _record_counter(provider, in_memory_reader, "noop.test")
+        with (
+            patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", False),
+            patch(f"{_OBS_MOD}._write_and_upload_batch") as write,
+            patch(f"{_EXPORTER_MOD}._write_and_upload_batch", write),
+        ):
+            result = exporter.export(metrics_data)
         assert result == MetricExportResult.SUCCESS
+        write.assert_not_called()
 
-    @patch(
-        "application_sdk.observability._objectstore_metric_exporter.ENABLE_OBSERVABILITY_STORE_SINK",
-        True,
-    )
     def test_export_swallows_upload_failure(
         self,
         provider: MeterProvider,
         in_memory_reader: InMemoryMetricReader,
         exporter: ObjectStoreMetricExporter,
+        tmp_path,
     ) -> None:
-        mock_store = MagicMock()
-        mock_store.put.side_effect = Exception("upload boom")
-        exporter._deployment_store = mock_store
+        deployment = MagicMock(name="deployment_store")
+        upload = _UploadSpy(fail_for=deployment)
+        metrics_data = _record_counter(provider, in_memory_reader, "fail.test")
 
-        meter = provider.get_meter("test")
-        counter = meter.create_counter("fail.test")
-        counter.add(1)
+        with _patch_stores(upload, deployment=deployment):
+            result = exporter.export(metrics_data)
 
-        metrics_data = in_memory_reader.get_metrics_data()
-        from opentelemetry.sdk.metrics.export import MetricExportResult
-
-        result = exporter.export(metrics_data)
         assert result == MetricExportResult.SUCCESS
+        assert len(upload.calls) == 1
+        assert list(tmp_path.rglob("*.json.gz")) == []
+
+    def test_export_honours_dapr_components_path(
+        self,
+        provider: MeterProvider,
+        in_memory_reader: InMemoryMetricReader,
+        exporter: ObjectStoreMetricExporter,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """End to end through the real binding and ``upload_file``: the file
+        lands in the store the ``DAPR_COMPONENTS_PATH`` component names, as for
+        every other observability signal. The exporter used to read
+        ``./components`` only, so under embedded Dapr it never uploaded."""
+        components = tmp_path / "components"
+        components.mkdir()
+        root = tmp_path / "objectstore"
+        (components / "objectstore.yaml").write_text(
+            _LOCAL_COMPONENT.format(root=root.as_posix()), encoding="utf-8"
+        )
+        monkeypatch.setenv("DAPR_COMPONENTS_PATH", str(components))
+        metrics_data = _record_counter(provider, in_memory_reader, "dapr.path.test")
+
+        with (
+            patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True),
+            patch(f"{_OBS_MOD}.ENABLE_ATLAN_UPLOAD", False),
+        ):
+            exporter.export(metrics_data)
+
+        uploaded = list(root.rglob("*.json.gz"))
+        assert len(uploaded) == 1, list(root.rglob("*"))
+        rel = uploaded[0].relative_to(root).as_posix()
+        assert rel.startswith(_PREFIX + "/year=")
+        with gzip.open(uploaded[0], "rb") as fh:
+            names = [orjson.loads(line)["name"] for line in fh if line.strip()]
+        assert names == ["dapr.path.test"]
+
+
+_LOCAL_COMPONENT = """\
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: objectstore
+spec:
+  version: v1
+  type: bindings.localstorage
+  metadata:
+    - name: rootPath
+      value: "{root}"
+"""
 
 
 class TestExporterTemporality:
@@ -235,243 +341,169 @@ class TestExporterTemporality:
             provider.shutdown()
 
 
-_EXPORTER_MOD = "application_sdk.observability._objectstore_metric_exporter"
-
-
 class TestSdrUpstreamExport:
-    """SDR-mode (ENABLE_ATLAN_UPLOAD=true) upstream-store coverage.
+    """SDR mode (``ENABLE_ATLAN_UPLOAD=true``): both stores, one key."""
 
-    The existing ``TestExport`` cases exercise only the deployment store. In SDR
-    mode the exporter must *also* push each metric file to the upstream (Atlan)
-    store, under an ``sdr/prometheus-metrics`` path, and swallow upstream upload
-    failures so metric collection is never blocked.
-    """
-
-    @patch(f"{_EXPORTER_MOD}.ENABLE_ATLAN_UPLOAD", True)
-    @patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True)
-    def test_export_uploads_to_both_stores_under_sdr_path(
+    def test_export_uploads_to_both_stores_under_same_key(
         self,
         provider: MeterProvider,
         in_memory_reader: InMemoryMetricReader,
         exporter: ObjectStoreMetricExporter,
     ) -> None:
-        deployment_store = MagicMock(name="deployment_store")
-        upstream_store = MagicMock(name="upstream_store")
-        exporter._deployment_store = deployment_store
-        exporter._upstream_store = upstream_store
+        deployment = MagicMock(name="deployment_store")
+        upstream = MagicMock(name="upstream_store")
+        upload = _UploadSpy()
+        metrics_data = _record_counter(provider, in_memory_reader, "sdr.export")
 
-        meter = provider.get_meter("test")
-        counter = meter.create_counter("sdr.export.test")
-        counter.add(1, {"k": "v"})
-
-        metrics_data = in_memory_reader.get_metrics_data()
-        result = exporter.export(metrics_data)
-
-        from opentelemetry.sdk.metrics.export import MetricExportResult
+        with _patch_stores(
+            upload, deployment=deployment, upstream=upstream, atlan_upload=True
+        ):
+            result = exporter.export(metrics_data)
 
         assert result == MetricExportResult.SUCCESS
-        # Both stores receive exactly one put with the identical remote key.
-        assert deployment_store.put.call_count == 1
-        assert upstream_store.put.call_count == 1
-        dep_key = deployment_store.put.call_args[0][0]
-        up_key = upstream_store.put.call_args[0][0]
-        assert dep_key == up_key
-        assert "prometheus-metrics" in up_key
-        # The local file is written under the SDR subdirectory.
-        local_path = str(upstream_store.put.call_args[0][1])
-        assert os.path.join("sdr", "prometheus-metrics") in local_path
-        # Local file cleaned up afterwards.
-        assert not os.path.exists(local_path)
+        assert [c[2] for c in upload.calls] == [deployment, upstream]
+        assert upload.calls[0][0] == upload.calls[1][0]
+        assert "prometheus-metrics" in upload.calls[0][0]
+        assert not os.path.exists(upload.calls[0][1])
 
-    @patch(f"{_EXPORTER_MOD}.ENABLE_ATLAN_UPLOAD", True)
-    @patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True)
     def test_export_swallows_upstream_upload_failure(
         self,
         provider: MeterProvider,
         in_memory_reader: InMemoryMetricReader,
         exporter: ObjectStoreMetricExporter,
     ) -> None:
-        deployment_store = MagicMock(name="deployment_store")
-        upstream_store = MagicMock(name="upstream_store")
-        upstream_store.put.side_effect = Exception("upstream boom")
-        exporter._deployment_store = deployment_store
-        exporter._upstream_store = upstream_store
+        deployment = MagicMock(name="deployment_store")
+        upstream = MagicMock(name="upstream_store")
+        upload = _UploadSpy(fail_for=upstream)
+        metrics_data = _record_counter(provider, in_memory_reader, "sdr.fail")
 
-        meter = provider.get_meter("test")
-        counter = meter.create_counter("sdr.fail.test")
-        counter.add(1)
+        with _patch_stores(
+            upload, deployment=deployment, upstream=upstream, atlan_upload=True
+        ):
+            result = exporter.export(metrics_data)
 
-        metrics_data = in_memory_reader.get_metrics_data()
-        from opentelemetry.sdk.metrics.export import MetricExportResult
-
-        # Upstream raising must not block metric collection.
-        result = exporter.export(metrics_data)
         assert result == MetricExportResult.SUCCESS
-        # Deployment upload was still attempted; upstream failure was swallowed.
-        assert deployment_store.put.call_count == 1
-        assert upstream_store.put.call_count == 1
+        assert [c[2] for c in upload.calls] == [deployment, upstream]
 
-    def test_stores_resolved_lazily_not_at_init(self, tmp_path) -> None:
-        """Construction must not touch bindings (BLDX-1567 boot race).
 
-        Resolving eagerly in ``__init__`` meant a metrics-flush daemon thread
-        that constructed the exporter before the Dapr ``objectstore`` component
-        existed permanently disabled uploads. Stores must stay ``None`` until
-        the first ``_ensure_stores`` / ``export``.
-        """
-        with patch.object(ObjectStoreMetricExporter, "_resolve_store") as resolve_spy:
-            e = ObjectStoreMetricExporter(data_dir=str(tmp_path))
-        resolve_spy.assert_not_called()
-        assert e._deployment_store is None
-        assert e._upstream_store is None
+class TestStoreResolution:
+    """Store resolution tolerance, now in the shared writer (BLDX-1567)."""
 
-    def test_ensure_stores_resolves_upstream_only_in_sdr_mode(self, tmp_path) -> None:
-        """``_ensure_stores`` resolves the upstream store only in SDR mode."""
-        from application_sdk.constants import (
-            DEPLOYMENT_OBJECT_STORE_NAME,
-            UPSTREAM_OBJECT_STORE_NAME,
+    def test_stores_not_resolved_at_init(self, tmp_path) -> None:
+        """Construction must not touch bindings: the exporter can be built
+        during app-server boot, before the ``objectstore`` component exists."""
+        with (
+            patch.object(AtlanObservability, "_get_deployment_store") as dep,
+            patch.object(AtlanObservability, "_get_upstream_store") as up,
+        ):
+            ObjectStoreMetricExporter(data_dir=str(tmp_path))
+        dep.assert_not_called()
+        up.assert_not_called()
+
+    def test_transient_binding_gap_warned_once_then_heals(
+        self,
+        provider: MeterProvider,
+        in_memory_reader: InMemoryMetricReader,
+        exporter: ObjectStoreMetricExporter,
+    ) -> None:
+        """A missing or still-unresolved binding is retried on every export,
+        warned about once without a stacktrace, quiet at DEBUG after that, and
+        its heal announced at INFO."""
+        from application_sdk.storage.errors import (
+            StorageBindingBrokenError,
+            StorageBindingNotFoundError,
         )
 
-        resolved: dict[str, object] = {
-            DEPLOYMENT_OBJECT_STORE_NAME: MagicMock(name="deployment"),
-            UPSTREAM_OBJECT_STORE_NAME: MagicMock(name="upstream"),
-        }
-
-        def _fake_resolve(_self, name):
-            return resolved[name]
-
-        # SDR mode: both stores resolved on first ensure.
-        with (
-            patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True),
-            patch(f"{_EXPORTER_MOD}.ENABLE_ATLAN_UPLOAD", True),
-            patch.object(ObjectStoreMetricExporter, "_resolve_store", _fake_resolve),
-        ):
-            e = ObjectStoreMetricExporter(data_dir=str(tmp_path))
-            e._ensure_stores()
-        assert e._deployment_store is resolved[DEPLOYMENT_OBJECT_STORE_NAME]
-        assert e._upstream_store is resolved[UPSTREAM_OBJECT_STORE_NAME]
-
-        # Non-SDR mode: upstream store is never built.
-        with (
-            patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True),
-            patch(f"{_EXPORTER_MOD}.ENABLE_ATLAN_UPLOAD", False),
-            patch.object(ObjectStoreMetricExporter, "_resolve_store", _fake_resolve),
-        ):
-            e2 = ObjectStoreMetricExporter(data_dir=str(tmp_path))
-            e2._ensure_stores()
-        assert e2._deployment_store is resolved[DEPLOYMENT_OBJECT_STORE_NAME]
-        assert e2._upstream_store is None
-
-    def test_ensure_stores_retries_until_binding_appears(self, tmp_path) -> None:
-        """A transient missing binding must not latch uploads off (BLDX-1567).
-
-        First resolution returns ``None`` (component not written yet); a later
-        one succeeds. The store must then be cached and not re-resolved.
-        """
-        store = MagicMock(name="deployment")
-        # None on the first attempt (boot race), then the real store.
-        attempts = iter([None, store, store])
-
-        def _fake_resolve(_self, _name):
-            return next(attempts)
-
-        with (
-            patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True),
-            patch(f"{_EXPORTER_MOD}.ENABLE_ATLAN_UPLOAD", False),
-            patch.object(ObjectStoreMetricExporter, "_resolve_store", _fake_resolve),
-        ):
-            e = ObjectStoreMetricExporter(data_dir=str(tmp_path))
-            e._ensure_stores()
-            assert e._deployment_store is None  # still absent → retried later
-            e._ensure_stores()
-            assert e._deployment_store is store  # healed on retry
-            e._ensure_stores()
-            assert e._deployment_store is store  # cached, not re-resolved
-
-    def test_non_transient_error_logs_once_and_stops_retrying(self, tmp_path) -> None:
-        """A non-transient error must be logged once, not every export (BLDX-1567).
-
-        ``StorageConfigError`` (e.g. an unsupported binding type) will never
-        heal on retry. The exporter must record the store name, stop retrying
-        it, and warn exactly once — not re-log a full traceback every flush.
-        """
-        from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME
-        from application_sdk.storage.errors import StorageConfigError
-
-        boom = StorageConfigError("Unsupported binding type: 'nope'")
-
-        with (
-            patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True),
-            patch(f"{_EXPORTER_MOD}.ENABLE_ATLAN_UPLOAD", False),
-            patch(f"{_EXPORTER_MOD}.logger") as log,
-            patch(
-                "application_sdk.storage.binding.create_store_from_binding",
-                side_effect=boom,
-            ) as create,
-        ):
-            e = ObjectStoreMetricExporter(data_dir=str(tmp_path))
-            e._ensure_stores()
-            e._ensure_stores()
-            e._ensure_stores()
-
-        # Resolution attempted once, then skipped (name latched off).
-        assert create.call_count == 1
-        assert DEPLOYMENT_OBJECT_STORE_NAME in e._skip_stores
-        assert e._deployment_store is None
-        assert log.warning.call_count == 1
-        assert log.debug.call_count == 0
-
-    def test_binding_broken_is_transient_warned_once_then_healed(
-        self, tmp_path
-    ) -> None:
-        """A present-but-unresolved binding is a transient boot state (BLDX-1567).
-
-        ``StorageBindingBrokenError`` (placeholders / secret env not yet
-        substituted) heals once Dapr finishes boot, so it must be retried and
-        never latched into ``_skip_stores``. The deferral is warned exactly once
-        (so a persistent gap stays visible where DEBUG is filtered out), stays
-        quiet at DEBUG on subsequent flushes, and the heal is announced at INFO.
-        The first-deferral warning must carry no stacktrace — the condition is
-        expected and self-describing.
-        """
-        from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME
-        from application_sdk.storage.errors import StorageBindingBrokenError
-
-        store = MagicMock(name="deployment")
-        # Broken on the first two attempts (secret env not substituted yet), then healed.
-        attempts = [
-            StorageBindingBrokenError("unresolved", binding_name="x"),
+        store = MagicMock(name="deployment_store")
+        outcomes: list[object] = [
+            StorageBindingNotFoundError("not written yet", binding_name="x"),
             StorageBindingBrokenError("unresolved", binding_name="x"),
             store,
         ]
 
-        def _create(_name):
-            outcome = attempts.pop(0)
+        def _get():
+            outcome = outcomes.pop(0)
             if isinstance(outcome, Exception):
                 raise outcome
             return outcome
 
+        upload = _UploadSpy()
         with (
-            patch(f"{_EXPORTER_MOD}.ENABLE_OBSERVABILITY_STORE_SINK", True),
-            patch(f"{_EXPORTER_MOD}.ENABLE_ATLAN_UPLOAD", False),
-            patch(f"{_EXPORTER_MOD}.logger") as log,
-            patch(
-                "application_sdk.storage.binding.create_store_from_binding",
-                side_effect=_create,
-            ),
+            _patch_stores(upload),
+            patch.object(AtlanObservability, "_get_deployment_store", side_effect=_get),
+            patch(f"{_OBS_MOD}.logging") as log,
         ):
-            e = ObjectStoreMetricExporter(data_dir=str(tmp_path))
-            e._ensure_stores()  # first deferral → warn once
-            assert e._deployment_store is None  # broken → deferred, not skipped
-            assert DEPLOYMENT_OBJECT_STORE_NAME not in e._skip_stores
-            assert DEPLOYMENT_OBJECT_STORE_NAME in e._deferred
-            e._ensure_stores()  # still broken → quiet at debug
-            assert e._deployment_store is None
-            e._ensure_stores()  # healed on retry
-            assert e._deployment_store is store
+            for i in range(3):
+                exporter.export(
+                    _record_counter(provider, in_memory_reader, f"heal.{i}")
+                )
 
-        assert log.warning.call_count == 1  # deferral warned exactly once
-        assert "exc_info" not in log.warning.call_args.kwargs  # no stacktrace
-        assert log.debug.call_count == 1  # subsequent retry stayed quiet
-        assert log.info.call_count == 1  # heal announced
-        assert DEPLOYMENT_OBJECT_STORE_NAME not in e._deferred  # cleared on heal
+        assert [c[2] for c in upload.calls] == [store]
+        assert log.warning.call_count == 1
+        assert "exc_info" not in log.warning.call_args.kwargs
+        info_msgs = [c.args[0] for c in log.info.call_args_list]
+        assert any("now resolved" in m for m in info_msgs)
+        debug_msgs = [c.args[0] for c in log.debug.call_args_list]
+        assert any("still not resolvable" in m for m in debug_msgs)
+
+    def test_non_transient_error_logged_once_and_not_retried(
+        self,
+        provider: MeterProvider,
+        in_memory_reader: InMemoryMetricReader,
+        exporter: ObjectStoreMetricExporter,
+    ) -> None:
+        """A misconfiguration (e.g. an unsupported binding type) will not heal:
+        it is logged once and the store is not tried again on later exports."""
+        from application_sdk.storage.errors import StorageConfigError
+
+        upload = _UploadSpy()
+        with (
+            _patch_stores(upload),
+            patch.object(
+                AtlanObservability,
+                "_get_deployment_store",
+                side_effect=StorageConfigError("Unsupported binding type: 'nope'"),
+            ) as get,
+            patch(f"{_OBS_MOD}.logging") as log,
+        ):
+            for i in range(3):
+                exporter.export(_record_counter(provider, in_memory_reader, f"bad.{i}"))
+
+        assert get.call_count == 1
+        assert upload.calls == []
+        assert log.warning.call_count == 1
+
+
+class TestDeprecatedModuleAliases:
+    """Names the exporter module bound before FND-4895 stay importable, with a
+    ``DeprecationWarning``, until v4.0.0 (``docs/standards/symbols.md``)."""
+
+    @pytest.mark.parametrize(
+        ("name", "source"),
+        [
+            ("APPLICATION_NAME", "application_sdk.constants"),
+            ("DEPLOYMENT_NAME", "application_sdk.constants"),
+            ("DEPLOYMENT_OBJECT_STORE_NAME", "application_sdk.constants"),
+            ("ENABLE_ATLAN_UPLOAD", "application_sdk.constants"),
+            ("UPSTREAM_OBJECT_STORE_NAME", "application_sdk.constants"),
+            (
+                "OBSERVABILITY_S3_PREFIX_MAP",
+                "application_sdk.observability.observability",
+            ),
+        ],
+    )
+    def test_alias_warns_and_resolves_to_source(self, name: str, source: str) -> None:
+        import importlib
+
+        exporter_mod = importlib.import_module(_EXPORTER_MOD)
+        source_mod = importlib.import_module(source)
+        with pytest.warns(DeprecationWarning, match=f"{name} is deprecated here"):
+            value = getattr(exporter_mod, name)
+        assert value is getattr(source_mod, name)
+
+    def test_unknown_name_still_raises_attribute_error(self) -> None:
+        import importlib
+
+        exporter_mod = importlib.import_module(_EXPORTER_MOD)
+        with pytest.raises(AttributeError):
+            exporter_mod.NOT_A_NAME  # noqa: B018

@@ -1,9 +1,21 @@
-"""Pub/sub abstraction."""
+"""Pub/sub abstraction.
+
+.. deprecated:: 3.57
+    The subscribe half — ``PubSub.subscribe``, ``Subscription`` and
+    ``MessageHandler`` — is deprecated and will be removed in v4.0.0. The only
+    production implementation, ``DaprPubSub.subscribe``, never delivered a
+    message: it stored the handler and nothing called it. Declare a
+    ``SubscriptionConfig`` (``application_sdk.handler.contracts``) and pass it
+    to ``create_app_handler_service(subscriptions=...)``; Dapr then delivers
+    to the handler through the route the SDK serves. ``publish`` is unchanged.
+"""
 
 import warnings
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Protocol
+
+from typing_extensions import deprecated
 
 from application_sdk.errors import PUBSUB_ERROR, ErrorCode
 from application_sdk.errors.leaves import DependencyUnavailableError
@@ -64,12 +76,47 @@ class Message:
     topic: str | None = None
 
 
-# Type alias for message handlers
-MessageHandler = Callable[[Message], Awaitable[None]]
+# Private: the public name ``MessageHandler`` is deprecated and served by
+# ``__getattr__`` below, so it warns on access.
+_MessageHandler = Callable[[Message], Awaitable[None]]
+
+#: name -> (replacement, why). Served by ``__getattr__`` below with a warning
+#: on every access (FND-4892).
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "MessageHandler": (
+        "SubscriptionConfig.handler in application_sdk.handler.contracts",
+        "it typed PubSub.subscribe handlers, which DaprPubSub never called",
+    ),
+}
 
 
+def __getattr__(name: str) -> object:
+    """Serve the deprecated ``MessageHandler`` alias with a warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _MessageHandler
+
+
+@deprecated(
+    "Subscription is deprecated and will be removed in v4.0.0. "
+    "DaprPubSub.subscribe never delivered a message to its handler; declare a "
+    "SubscriptionConfig (application_sdk.handler.contracts) and pass it to "
+    "create_app_handler_service(subscriptions=...) instead."
+)
 class Subscription(Protocol):
-    """Protocol for pub/sub subscriptions."""
+    """Deprecated: protocol for pub/sub subscriptions — removed in v4.0.0.
+
+    No production implementation ever delivered a message. Use
+    ``SubscriptionConfig`` from ``application_sdk.handler.contracts``.
+    """
 
     @property
     def topic(self) -> str:
@@ -112,12 +159,22 @@ class PubSub(Protocol):
         """
         ...
 
+    @deprecated(
+        "PubSub.subscribe is deprecated and will be removed in v4.0.0. "
+        "DaprPubSub.subscribe never delivered a message to its handler; declare a "
+        "SubscriptionConfig (application_sdk.handler.contracts) and pass it to "
+        "create_app_handler_service(subscriptions=...) instead."
+    )
     async def subscribe(
         self,
         topic: str,
-        handler: MessageHandler,
+        handler: _MessageHandler,
     ) -> Subscription:
-        """Subscribe to a topic.
+        """Deprecated: subscribe to a topic — removed in v4.0.0.
+
+        ``DaprPubSub`` never delivered to the handler. Declare a
+        ``SubscriptionConfig`` and pass it to
+        ``create_app_handler_service(subscriptions=...)`` instead.
 
         Args:
             topic: Topic name.

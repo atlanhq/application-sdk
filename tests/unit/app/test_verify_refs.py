@@ -92,7 +92,7 @@ class TestVerifyRefs(_ResetsRegistries):
         refs = [_ref(e) for e in ("database", "schema", "table", "column")]
 
         with mock.patch(
-            "application_sdk.storage.ops.exists",
+            "application_sdk.storage.ops._exists_confirmed",
             new_callable=mock.AsyncMock,
             return_value=True,
         ) as head:
@@ -113,11 +113,15 @@ class TestVerifyRefs(_ResetsRegistries):
         refs = [_ref(e) for e in ("database", "schema", "table", "column")]
         lost = f"{PREFIX}/table/entities.json"
 
-        async def _exists(key: str, store=None, *, normalize: bool = True) -> bool:
+        async def _exists(
+            key: str, store=None, *, normalize: bool = True, listing_cache=None
+        ) -> bool:
             return key != lost
 
         with (
-            mock.patch("application_sdk.storage.ops.exists", side_effect=_exists),
+            mock.patch(
+                "application_sdk.storage.ops._exists_confirmed", side_effect=_exists
+            ),
             mock.patch(
                 "application_sdk.storage.batch.list_keys",
                 new_callable=mock.AsyncMock,
@@ -145,7 +149,7 @@ class TestVerifyRefs(_ResetsRegistries):
 
         with (
             mock.patch(
-                "application_sdk.storage.ops.exists",
+                "application_sdk.storage.ops._exists_confirmed",
                 new_callable=mock.AsyncMock,
                 return_value=True,
             ) as head,
@@ -164,7 +168,7 @@ class TestVerifyRefs(_ResetsRegistries):
 
         with (
             mock.patch(
-                "application_sdk.storage.ops.exists",
+                "application_sdk.storage.ops._exists_confirmed",
                 new_callable=mock.AsyncMock,
                 return_value=True,
             ),
@@ -224,7 +228,8 @@ class TestVerifyRefs(_ResetsRegistries):
                 return_value=[f"{PREFIX}/table/only.json"],
             ) as listing,
             mock.patch(
-                "application_sdk.storage.ops.exists", new_callable=mock.AsyncMock
+                "application_sdk.storage.ops._exists_confirmed",
+                new_callable=mock.AsyncMock,
             ) as head,
         ):
             out = await app.verify_refs(VerifyRefsInput(refs=[ref], prefix=PREFIX))
@@ -245,7 +250,8 @@ class TestVerifyRefs(_ResetsRegistries):
                 return_value=[f"{PREFIX}/table/{i}.json" for i in range(2)],
             ) as listing,
             mock.patch(
-                "application_sdk.storage.ops.exists", new_callable=mock.AsyncMock
+                "application_sdk.storage.ops._exists_confirmed",
+                new_callable=mock.AsyncMock,
             ) as head,
         ):
             await app.verify_refs(VerifyRefsInput(refs=[ref], prefix=PREFIX))
@@ -331,7 +337,7 @@ class TestVerifyRefs(_ResetsRegistries):
         app = _make_app()
 
         with mock.patch(
-            "application_sdk.storage.ops.exists",
+            "application_sdk.storage.ops._exists_confirmed",
             new_callable=mock.AsyncMock,
             return_value=True,
         ) as head:
@@ -347,7 +353,7 @@ class TestVerifyRefs(_ResetsRegistries):
         app = _make_app(upstream=upstream)
 
         with mock.patch(
-            "application_sdk.storage.ops.exists",
+            "application_sdk.storage.ops._exists_confirmed",
             new_callable=mock.AsyncMock,
             return_value=True,
         ) as head:
@@ -360,7 +366,7 @@ class TestVerifyRefs(_ResetsRegistries):
         app = _make_app(upstream=upstream)
 
         with mock.patch(
-            "application_sdk.storage.ops.exists",
+            "application_sdk.storage.ops._exists_confirmed",
             new_callable=mock.AsyncMock,
             return_value=True,
         ) as head:
@@ -374,7 +380,7 @@ class TestVerifyRefs(_ResetsRegistries):
         app = _make_app()
 
         with mock.patch(
-            "application_sdk.storage.ops.exists", new_callable=mock.AsyncMock
+            "application_sdk.storage.ops._exists_confirmed", new_callable=mock.AsyncMock
         ) as head:
             out = await app.verify_refs(VerifyRefsInput(refs=[], prefix=PREFIX))
 
@@ -400,7 +406,7 @@ class TestVerifyRefsFeedsTheStallWatchdog(_ResetsRegistries):
         refs = [_ref(e) for e in ("database", "schema", "table", "column")]
 
         with mock.patch(
-            "application_sdk.storage.ops.exists",
+            "application_sdk.storage.ops._exists_confirmed",
             new_callable=mock.AsyncMock,
             return_value=True,
         ):
@@ -417,7 +423,7 @@ class TestVerifyRefsFeedsTheStallWatchdog(_ResetsRegistries):
 
         with (
             mock.patch(
-                "application_sdk.storage.ops.exists",
+                "application_sdk.storage.ops._exists_confirmed",
                 new_callable=mock.AsyncMock,
                 return_value=False,
             ),

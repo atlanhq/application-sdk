@@ -9,6 +9,9 @@ Public API::
         AzureClient, AzureAuthProvider,
         get_ssl_context, create_ssl_context_with_custom_certs,
     )
+
+``RedisClient`` and ``RedisClientAsync`` are deprecated and will be removed in
+v4.0.0; they keep working until then. Use ``redis`` / ``redis.asyncio`` directly.
 """
 
 import importlib

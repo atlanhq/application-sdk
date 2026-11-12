@@ -34,8 +34,6 @@ def create_traces_adapter() -> Generator[AtlanTracesAdapter, None, None]:
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
             "TRACES_BATCH_SIZE": "100",
             "TRACES_FLUSH_INTERVAL_SECONDS": "1",
-            "TRACES_RETENTION_DAYS": "7",
-            "TRACES_CLEANUP_ENABLED": "true",
             "TRACES_FILE_NAME": "traces.parquet",
         },
     ):
@@ -184,30 +182,6 @@ def test_get_traces():
     traces2 = get_traces()
     assert traces1 is traces2
     assert isinstance(traces1, AtlanTracesAdapter)
-
-
-async def test_cleanup_old_records():
-    """Test cleanup of old records."""
-    with create_traces_adapter() as traces_adapter:
-        # Add some test traces
-        for i in range(3):
-            traces_adapter.record_trace(
-                name=f"test_span_{i}",
-                trace_id=f"trace_{i}",
-                span_id=f"span_{i}",
-                kind="SERVER",
-                status_code="OK",
-                attributes={"test": f"value_{i}"},
-                duration_ms=100.0,
-            )
-
-        # Force cleanup
-        await traces_adapter._cleanup_old_records()
-
-        # Verify cleanup was performed
-        # Note: In a real test, we would need to mock the file system operations
-        # and verify the cleanup logic. This is just a basic structure.
-        assert True
 
 
 class TestPeriodicFlushStartsOnSharedLoop:
