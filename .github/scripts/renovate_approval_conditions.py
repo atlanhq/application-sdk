@@ -292,7 +292,7 @@ CHECKS_POLL_SECONDS = 30
 #: the one that usually finishes last — the caller's anchor choice is wrong.
 MAX_CHECKS_WAIT_SECONDS = 15 * 60
 
-Runner = Callable[..., subprocess.CompletedProcess]
+Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
 class WaitOutcome(Enum):
@@ -651,21 +651,29 @@ def classify_artifact_state(payload: Any) -> str:
     return ARTIFACT_MISSING
 
 
-def count_signature_approvals(reviews: list[Any]) -> int:
+def count_signature_approvals(
+    reviews: list[Any],
+    *,
+    signature: str = APPROVAL_SIGNATURE,
+    approver: str = APPROVER_LOGIN,
+) -> int:
     """Condition (g): count live atlan-ci approvals bearing our signature.
 
     Only ``APPROVED`` counts. A push-dismissed review has state ``DISMISSED``, so
     it does not match and a fresh approval is correctly posted on the next green
     run. A human's approval, or an atlan-ci review carrying a different signature
     (``**SDK reviewer's verdict:**``), does not suppress ours.
+
+    ``signature`` and ``approver`` let ``vuln_auto_merge_gate`` count its own
+    approvals with the same rule instead of keeping a second copy of it.
     """
     return sum(
         1
         for r in reviews
         if isinstance(r, dict)
-        and (r.get("user") or {}).get("login") == APPROVER_LOGIN
+        and (r.get("user") or {}).get("login") == approver
         and r.get("state") == "APPROVED"
-        and str(r.get("body") or "").startswith(APPROVAL_SIGNATURE)
+        and str(r.get("body") or "").startswith(signature)
     )
 
 
@@ -681,7 +689,7 @@ def _json_bool(value: bool) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _gh(args: list[str], runner: Runner) -> subprocess.CompletedProcess:
+def _gh(args: list[str], runner: Runner) -> subprocess.CompletedProcess[str]:
     return runner(["gh", *args], check=False, capture_output=True, text=True)
 
 

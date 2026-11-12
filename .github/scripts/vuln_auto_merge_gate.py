@@ -51,6 +51,10 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
+# Run as a script, so its own directory is sys.path[0] and this resolves.
+import renovate_approval_conditions as renovate
+from renovate_approval_conditions import GhError
+
 ALLOWLIST_FILE = ".security/base-allowlist.json"
 # The SDK's root dependency manifests, plus the conformance lock: it path-sources
 # the SDK and records its dependencies, so a raised SDK floor must relock it too
@@ -82,7 +86,7 @@ DEFAULT_AUTHORS = "atlan-ci,atlan-app-fleet[bot]"
 # self-approval, so a PR authored by this identity is skipped for approval.
 DEFAULT_APPROVER = "atlan-ci"
 
-Runner = Callable[..., subprocess.CompletedProcess]
+Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
 # ---------------------------------------------------------------------------
@@ -163,45 +167,22 @@ def _gh_json(args: list[str], runner: Runner) -> Any:
     return json.loads(out)
 
 
-def resolve_pr_numbers(
-    repo: str, event_name: str, run_sha: str, dispatch_pr: str, runner: Runner
-) -> tuple[list[str], str]:
-    """Return (pr_numbers, eval_sha) for the triggering event."""
-    if event_name == "workflow_dispatch":
-        sha = _gh_text(
-            ["api", f"repos/{repo}/pulls/{dispatch_pr}", "--jq", ".head.sha"], runner
+def already_approved(repo: str, pr: str, approver_login: str, runner: Runner) -> bool:
+    """True iff ``approver_login`` holds a live APPROVED review with our signature.
+
+    Shares the review listing and the counting rule with the Renovate gate
+    (``fetch_reviews`` reads every page via ``--paginate --slurp``), so a PR with
+    more than one page of reviews is counted once, not once per page. A listing
+    that cannot be read raises :class:`GhError` rather than reading as "not
+    approved" and posting a duplicate approval.
+    """
+    reviews = renovate.fetch_reviews(repo, pr, runner)
+    return (
+        renovate.count_signature_approvals(
+            reviews, signature=APPROVAL_SIGNATURE, approver=approver_login
         )
-        return ([dispatch_pr] if dispatch_pr else []), (sha or "")
-    nums = _gh_text(
-        [
-            "api",
-            f"repos/{repo}/commits/{run_sha}/pulls",
-            "--jq",
-            '.[] | select(.state == "open") | .number',
-        ],
-        runner,
+        > 0
     )
-    if not nums:
-        return [], run_sha
-    return nums.split(), run_sha
-
-
-def already_approved(repo: str, pr: str, runner: Runner) -> bool:
-    n = _gh_text(
-        [
-            "api",
-            f"repos/{repo}/pulls/{pr}/reviews",
-            "--paginate",
-            "--jq",
-            '[.[] | select(.user.login == "atlan-ci" and .state == "APPROVED" '
-            f'and ((.body // "") | startswith("{APPROVAL_SIGNATURE}")))] | length',
-        ],
-        runner,
-    )
-    try:
-        return int(n or "0") > 0
-    except ValueError:
-        return False
 
 
 def approve(repo: str, pr: str, shape: str, runner: Runner) -> None:
@@ -300,7 +281,7 @@ def process_pr(
         enable_automerge(repo, pr, runner, check=False)
         return False
 
-    if already_approved(repo, pr, runner):
+    if already_approved(repo, pr, approver_login, runner):
         print(f"PR #{pr}: already approved by atlan-ci — ensuring auto-merge only.")
         enable_automerge(repo, pr, runner, check=False)
         return False
@@ -325,19 +306,29 @@ def main(runner: Runner = subprocess.run) -> int:
         if a.strip()
     }
 
-    pr_numbers, eval_sha = resolve_pr_numbers(
-        repo, event_name, run_sha, dispatch_pr, runner
-    )
+    try:
+        pr_numbers, eval_sha = renovate.resolve_prs(
+            repo, event_name, run_sha, dispatch_pr, runner
+        )
+    except GhError as exc:
+        print(f"::error::{exc}")
+        return 1
     if not pr_numbers:
         print(f"No open PRs to evaluate for SHA {eval_sha or '(none)'}.")
         return 0
 
+    failed = False
     for pr in pr_numbers:
         print(f"--- Evaluating PR #{pr} ---")
-        process_pr(
-            repo, pr, eval_sha, label_name, trusted_authors, approver_login, runner
-        )
-    return 0
+        try:
+            process_pr(
+                repo, pr, eval_sha, label_name, trusted_authors, approver_login, runner
+            )
+        except GhError as exc:
+            # One unreadable PR must not stop the others; the red step surfaces it.
+            print(f"::error::PR #{pr}: {exc}")
+            failed = True
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

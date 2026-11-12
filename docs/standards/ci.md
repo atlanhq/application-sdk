@@ -37,6 +37,21 @@ are stubbed, `git` runs against a throwaway repo in `tmp_path`, and every
 branch (opt-in gate, missing input, eval-failure fallback, no-change
 short-circuit) has a case.
 
+### Never aggregate over `gh api --paginate --jq`
+
+With `--paginate`, gh runs the `--jq` filter once per page. A filter that
+aggregates (`length`, `add`, `first`, `any`) therefore prints one result per
+page: a review count over two pages is `"1\n0"`, not `1`. Fetch the listing
+with `--paginate --slurp`, flatten it with `_flatten_pages`, and do the
+counting in Python. `renovate_approval_conditions.fetch_reviews` and
+`count_signature_approvals` do this for review counts, and
+`vuln_auto_merge_gate` imports them rather than keeping its own copy (FND-4898).
+A per-item filter such as `.[].filename` is fine, since its output does not
+depend on where the page boundaries fall.
+
+When two gate scripts do the same step, import one from the other. A fix to a
+private copy does not reach the other script.
+
 ### Enforced by a test (FND-4244)
 
 `.github/scripts/tests/test_no_conditional_run_blocks.py` walks every workflow

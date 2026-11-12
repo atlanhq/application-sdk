@@ -782,6 +782,23 @@ class TestSignatureApprovals:
     def test_malformed_entries_do_not_count(self, review):
         assert gate.count_signature_approvals([review]) == 0
 
+    def test_signature_and_approver_are_overridable(self):
+        # vuln_auto_merge_gate counts its own approvals with this function.
+        vuln = {
+            "user": {"login": "other-ci"},
+            "state": "APPROVED",
+            "body": "**Vuln auto-merge:** bump PR",
+        }
+        assert gate.count_signature_approvals([vuln]) == 0
+        assert (
+            gate.count_signature_approvals(
+                [vuln, APPROVED_REVIEW],
+                signature="**Vuln auto-merge:**",
+                approver="other-ci",
+            )
+            == 1
+        )
+
     def test_signature_is_the_documented_stable_string(self):
         # The dashboard scanner and this gate both key off it; changing it is a
         # cross-repo change, so pin the literal.
