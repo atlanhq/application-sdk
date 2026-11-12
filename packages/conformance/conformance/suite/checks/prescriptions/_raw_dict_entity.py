@@ -37,9 +37,10 @@ counts.  Everything else — a dict stored under a subscript, nested in another
 dict, passed to ``model_validate`` or returned from a non-mapper helper — is
 out of scope.
 
-WARN tier.  A type ``pyatlan_v9`` does not model is the one sanctioned
-carve-out: the dict must carry top-level ``"status": "ACTIVE"`` on a
-non-delete upsert, suppressed inline with a reason.
+WARN tier.  A type ``pyatlan_v9`` does not model is a pyatlan gap, not a
+suppression: the dict carries top-level ``"status": "ACTIVE"`` on a
+non-delete upsert and the finding stays open until a pyatlan release models
+the type and the app is raised to it.
 """
 
 from __future__ import annotations
@@ -63,9 +64,9 @@ _MAPPER_PREFIX = "map_"
 _HINT = (
     "Build it with a `pyatlan_v9.model.assets` creator and serialize through "
     "`application_sdk.common.asset_serialization.entity_bytes`. If pyatlan_v9 "
-    'does not model the type, the dict must carry top-level `"status": '
-    '"ACTIVE"` on a non-delete upsert; suppress with '
-    "`# conformance: ignore[P058] <reason>`"
+    "does not model the type, that is a pyatlan gap, not a suppression: keep "
+    'top-level `"status": "ACTIVE"` on a non-delete upsert and leave this open '
+    "until a pyatlan release models the type"
 )
 
 

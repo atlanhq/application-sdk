@@ -1504,13 +1504,14 @@ silently. The pyatlan asset .creator() factories own the grammar centrally.
 - **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
 - **Already correct when:** A justified inline `# conformance: ignore[P028] <reason>` is the correct end state in
   one case only: the f-string is not an asset qualifiedName. That is an object-store key
-  or prefix rooted at a qualifiedName, a `startswith` or prefix match, a cache or lookup
-  key, or log, report or display text, and the value never reaches a `qualifiedName`
-  field. The reason says which (for example `match prefix, not a qualifiedName`). Every
-  other site stays open until a creator produces its string: a type with no creator, a
-  creator that produces a different string, or a creator that needs an input the app
-  does not have is a gap to fill in pyatlan, and this finding is how the gap is found. A
-  directive on any such site hides the gap and is unremediated.
+  or prefix rooted at a qualifiedName, a `startswith` or prefix match, a cache key, or
+  log, report or display text; the value never reaches a `qualifiedName` field and is
+  never compared with or used to look up qualifiedNames. The reason says which (for
+  example `match prefix, not a qualifiedName`). Every other site stays open until a
+  creator produces its string: a type with no creator, a creator that produces a
+  different string, or a creator that needs an input the app does not have is a gap to
+  fill in pyatlan, and this finding is how the gap is found. A directive on any such
+  site hides the gap and is unremediated.
 
 An f-string composes a slash-delimited `qualifiedName` — it both interpolates a
 `*qualified_name` / `*_qn` value and contains a `/` separator (e.g.
@@ -1530,18 +1531,32 @@ Fix, by site:
   `X.creator(...)`.  To get only the string, read `X.creator(...).qualified_name` in a
   memoized helper; when the caller has only the id, pass it as `name` too and never emit
   that asset.
-- The creator raises on a blank or `None` input the app accepts: use it all the same and
-  let it raise.  Do not add an app-side guard and do not keep the f-string.  The site is
-  closed by the creator, not a gap: list each such input in the PR description.
+- The creator raises on a blank or `None` input (on purpose: the f-string published a
+  broken identity there).  The blank (an empty string or `None`) needs an app guard
+  before the creator, never a fallback string.  In the task's per-record loop, the guard
+  awaits `application_sdk.outputs.skip_record(record, SkipReason.BLANK_IDENTITY,
+  record_id=..., entity_type=...)` (async; un-awaited it records nothing) and skips the
+  record, so it is kept for review after the run; a log line alone is not a guard.
+  Where only a synchronous mapper sees the blank and the loop cannot without
+  restructuring it, the site holds.  List each guard in the PR description.  Where the
+  asset is valid without that value (a Table with no schema), use the creator's optional
+  parents instead (source reality wins); if the installed creator then raises or returns
+  another string, the site is a gap.
 - `Process` / `ColumnProcess` / `BIProcess`: call `generate_qualified_name(...,
   process_id=<everything after the connection qualifiedName>)`, which returns
   `{connection_qualified_name}/{process_id}`.  A blank `process_id` raises; never pass
   `None`: it falls back to an MD5 hash, a different identity.  A blank `name` or
-  connection qualifiedName raises too. `inputs` and `outputs` must be non-empty: when
-  only ids are known, pass placeholders.
+  connection qualifiedName raises too. `inputs` and `outputs` must be non-empty even
+  with a `process_id`: to read only the string, pass `[None]` placeholders and never
+  emit a Process built that way.
 - No creator for the type, a creator that produces a different string, a creator that
-  needs an input the app does not have, or a creator that rejects a non-blank input the
-  app accepts: keep the f-string in one helper per name shape and leave it unsuppressed.
+  needs an input the app does not have, or a creator that rejects a valid value the
+  source is shown to send: keep the f-string in one helper per name shape and leave it
+  unsuppressed. State which reason applies, with its proof (the creator check on the
+  installed pyatlan, both strings for one real input, the missing argument, or the
+  rejected value with its source and error). A valid value is never skipped to make a
+  creator fit.  Without evidence of such a value, a raise the app catches per record
+  would lose the asset quietly: there the site is a gap too.
 - Not a qualifiedName at all: `# conformance: ignore[P028] <reason>` (see the terminal
   state).
 
@@ -2800,12 +2815,15 @@ declared entity envelope and the placeholder-guid strip.  Bypassing it means non
 those apply, and no SDK-side fix can reach the app.
 
 Fix: serialize through `entity_bytes(asset, envelope=...)` with an envelope that keeps
-the connector's released wire shape — `to_nested_bytes()` / `to_nested_dict()` output
-matches `EnvelopeShape.PYATLAN`, `to_atlas_format()` output matches `FLATTENED` — and
-pass `connection_name` / `last_sync` unless the mapper already stamps them.  When the
-line needs a key the model cannot hold, decode what `entity_bytes` produced and decorate
-it.  WARN tier — suppress with `# conformance: ignore[P052] <reason>` only for a genuine
-non-entity use, such as a `ConnectionRef` built from `to_atlas_format`.
+the connector's released wire shape, judged from what the app publishes, not from the
+method it calls.  Output with relationships under `attributes` is `FLATTENED`: that is
+`to_atlas_format()`, and also `to_nested_bytes()` decoded and re-shaped by hand (delete
+only that reshape).  Output that keeps a top-level `relationshipAttributes` key is
+`EnvelopeShape.PYATLAN` — and pass `connection_name` / `last_sync` unless the mapper
+already stamps them.  When the line needs a key the model cannot hold, decode what
+`entity_bytes` produced and decorate it.  WARN tier — suppress with `# conformance:
+ignore[P052] <reason>` only for a genuine non-entity use, such as a `ConnectionRef`
+built from `to_atlas_format`.
 
 ---
 
@@ -3154,10 +3172,12 @@ assets puts every entity on that seam.
   `pyatlan_v9.model.assets` creator and app/connector.py writes each one through
   `entity_bytes(...)`; no entity is assembled as a `typeName` / `attributes` dict.
 - **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
-- **Already correct when:** A justified inline `# conformance: ignore[P058] <reason>` is correct only for a type
-  `pyatlan_v9` does not model, and only when the dict carries top-level `"status":
-  "ACTIVE"` on a non-delete upsert. The reason must name the unmodelled type. A
-  directive on a type `pyatlan_v9` models is unremediated.
+- **Already correct when:** The entity is a `pyatlan_v9.model.assets` object written through `entity_bytes`. No `#
+  conformance: ignore[P058]` is correct. A type `pyatlan_v9` does not model is a pyatlan
+  gap: the finding stays open until pyatlan models the type and its creator, a pyatlan
+  release ships it, the app's pyatlan is raised to that release, and the entity is
+  rebuilt with the creator. Until then the dict carries top-level `"status": "ACTIVE"`
+  on a non-delete upsert.
 
 App code under `app/` (`app/generated/` excluded) emits an Atlas entity it built as a
 raw dict — a dict display with literal `"typeName"` and `"attributes"` keys, or
@@ -3186,8 +3206,10 @@ when the payload carries `status: ACTIVE`.
 
 Fix: build the entity with the `pyatlan_v9.model.assets` creator for its type and
 serialize it with `entity_bytes`.  WARN tier — where `pyatlan_v9` does not model the
-type, keep the dict, give it top-level `"status": "ACTIVE"` on every non-delete upsert,
-and suppress with `# conformance: ignore[P058] <reason>` naming the type.
+type, that is a pyatlan gap, not a suppression: keep the dict with top-level `"status":
+"ACTIVE"` on every non-delete upsert and leave the finding open until a pyatlan release
+models the type, the app's pyatlan is raised to it, and the entity is built with that
+type's creator.
 
 ---
 
