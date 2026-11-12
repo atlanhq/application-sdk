@@ -111,6 +111,19 @@ class TestMockPubSub:
         assert pubsub.get_publish_calls() == []
         assert pubsub.get_published() == []
 
+    async def test_subscribe_warns(self) -> None:
+        """The mock delivered where DaprPubSub never did, so it warns too (FND-4892)."""
+        pubsub = MockPubSub()
+
+        async def handler(_message: object) -> None:
+            return None
+
+        with pytest.warns(
+            DeprecationWarning,
+            match=r"MockPubSub\.subscribe is deprecated.*v4\.0\.0.*DaprPubSub\.subscribe never did",
+        ):
+            await pubsub.subscribe("t", handler)
+
 
 class TestMockBinding:
     async def test_invoke_tracked(self) -> None:

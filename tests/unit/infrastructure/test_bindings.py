@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from application_sdk.infrastructure.bindings import (
     BindingError,
     BindingRequest,
@@ -14,7 +16,10 @@ class TestBindingDataclasses:
     """Tests for BindingRequest / BindingResponse dataclasses."""
 
     def test_binding_request_defaults(self) -> None:
-        req = BindingRequest(operation="get")
+        with pytest.warns(
+            DeprecationWarning, match=r"BindingRequest is deprecated.*v4\.0\.0"
+        ):
+            req = BindingRequest(operation="get")
         assert req.operation == "get"
         assert req.data is None
         assert req.metadata == {}
@@ -108,3 +113,23 @@ class TestMockBinding:
         await binding.invoke("op", b"data")
         op, data, metadata = binding.get_invocations()[0]
         assert metadata == {}
+
+
+@pytest.mark.parametrize("name", ["BindingRequest", "InputBinding", "OutputBinding"])
+def test_unimplemented_binding_shapes_are_deprecated(name: str) -> None:
+    """Nothing in the SDK implements or accepts these (FND-4892)."""
+    import application_sdk.infrastructure as infrastructure
+    from application_sdk.infrastructure import bindings
+
+    obj = getattr(bindings, name)
+    assert "v4.0.0" in obj.__deprecated__
+    # The package re-export is the same, still-marked object.
+    assert getattr(infrastructure, name) is obj
+
+
+@pytest.mark.parametrize("name", ["InputBinding", "OutputBinding"])
+def test_implementing_a_deprecated_binding_protocol_warns(name: str) -> None:
+    from application_sdk.infrastructure import bindings
+
+    with pytest.warns(DeprecationWarning, match=rf"{name} is deprecated"):
+        type("Impl", (getattr(bindings, name),), {})

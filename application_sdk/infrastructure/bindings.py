@@ -4,6 +4,8 @@ import warnings
 from dataclasses import dataclass, field
 from typing import ClassVar, Protocol
 
+from typing_extensions import deprecated
+
 from application_sdk.errors import BINDING_ERROR, ErrorCode
 from application_sdk.errors.leaves import DependencyUnavailableError
 
@@ -53,9 +55,17 @@ class BindingError(DependencyUnavailableError):
         return " | ".join(parts)
 
 
+@deprecated(
+    "BindingRequest is deprecated and will be removed in v4.0.0. Nothing in the "
+    "SDK accepts one; pass operation, data and metadata to Binding.invoke() "
+    "instead."
+)
 @dataclass(frozen=True)
 class BindingRequest:
-    """Request to invoke a binding."""
+    """Deprecated: request to invoke a binding — removed in v4.0.0.
+
+    Nothing accepts one. Pass the fields to ``Binding.invoke()`` directly.
+    """
 
     operation: str
     data: bytes | None = None
@@ -104,10 +114,17 @@ class Binding(Protocol):
         ...
 
 
+@deprecated(
+    "InputBinding is deprecated and will be removed in v4.0.0. The SDK ships no "
+    "implementation and has no input-binding replacement; to receive messages, "
+    "use SubscriptionConfig with create_app_handler_service(subscriptions=...)."
+)
 class InputBinding(Protocol):
-    """Protocol for input bindings (event sources).
+    """Deprecated: protocol for input bindings — removed in v4.0.0.
 
-    Input bindings receive events from external systems.
+    The SDK ships no implementation and has no input-binding replacement.
+    To receive messages, pass a ``SubscriptionConfig`` to
+    ``create_app_handler_service(subscriptions=...)``.
     """
 
     @property
@@ -127,10 +144,14 @@ class InputBinding(Protocol):
         ...
 
 
+@deprecated(
+    "OutputBinding is deprecated and will be removed in v4.0.0. The SDK ships no "
+    "implementation; use Binding (DaprBinding.invoke) instead."
+)
 class OutputBinding(Protocol):
-    """Protocol for output bindings (event sinks).
+    """Deprecated: protocol for output bindings — removed in v4.0.0.
 
-    Output bindings send events to external systems.
+    The SDK ships no implementation. Use :class:`Binding`.
     """
 
     @property
