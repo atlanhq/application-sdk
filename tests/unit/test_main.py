@@ -162,6 +162,45 @@ class TestAppConfigFromArgsAndEnv:
         config = AppConfig.from_args_and_env(self._make_args())
         assert config.mode == "combined"
 
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("worker", "worker"),
+            (" Server ", "handler"),
+            ("local", "combined"),
+            ("combined", "combined"),
+            ("HANDLER", "handler"),
+        ],
+    )
+    def test_legacy_application_mode_is_case_insensitive_and_accepts_v3_names(
+        self, monkeypatch: pytest.MonkeyPatch, value: str, expected: str
+    ) -> None:
+        monkeypatch.delenv("ATLAN_APP_MODE", raising=False)
+        monkeypatch.setenv("APPLICATION_MODE", value)
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        config = AppConfig.from_args_and_env(self._make_args())
+        assert config.mode == expected
+
+    def test_unrecognised_legacy_application_mode_warns_and_runs_combined(
+        self, monkeypatch: pytest.MonkeyPatch, loguru_capture: list[dict]
+    ) -> None:
+        monkeypatch.delenv("ATLAN_APP_MODE", raising=False)
+        monkeypatch.setenv("APPLICATION_MODE", "bogus")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        config = AppConfig.from_args_and_env(self._make_args())
+        assert config.mode == "combined"
+        warnings = [r for r in loguru_capture if r["level"].name == "WARNING"]
+        assert any("APPLICATION_MODE='bogus'" in r["message"] for r in warnings)
+
+    def test_recognised_legacy_application_mode_does_not_warn(
+        self, monkeypatch: pytest.MonkeyPatch, loguru_capture: list[dict]
+    ) -> None:
+        monkeypatch.delenv("ATLAN_APP_MODE", raising=False)
+        monkeypatch.setenv("APPLICATION_MODE", "WORKER")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        AppConfig.from_args_and_env(self._make_args())
+        assert not any("APPLICATION_MODE" in r["message"] for r in loguru_capture)
+
     def test_atlan_app_mode_takes_precedence(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

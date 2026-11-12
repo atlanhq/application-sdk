@@ -397,6 +397,33 @@
       "symbol": "FileUploadResponse"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "APPLICATION_MODE is deprecated; use the ATLAN_APP_MODE env var (application_sdk.main.AppConfig.mode) \u2014 the SDK no longer reads this constant; the run mode is resolved at startup. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "APPLICATION_MODE"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ApplicationMode is deprecated; use the v3 run modes 'worker', 'handler' and 'combined' (application_sdk.main.AppConfig.mode) \u2014 the v2 mode enum has no reader in the SDK. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "ApplicationMode"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DAPR_BINDING_OPERATION_CREATE is deprecated; use the literal \"create\" \u2014 the SDK never read this constant. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "DAPR_BINDING_OPERATION_CREATE"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "ContractValidationError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
