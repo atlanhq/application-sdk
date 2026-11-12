@@ -15,7 +15,7 @@ logger = get_logger(__name__)
     "concurrency limit. Remove the decorator; it will be removed in v4.0.0."
 )
 def needs_lock(max_locks: int = 5, lock_name: Optional[str] = None):
-    """Decorator to mark activities that require distributed locking.
+    """Deprecated and has no effect: ``create_worker`` registers no lock interceptor — removed in v4.0.0.
 
     .. deprecated:: 3.57.0
         Has no effect. It only records ``__lock_metadata__`` on the function,

@@ -204,7 +204,7 @@ class BaseRedisClient(_RedisClientBase):
     "for is not wired in v3."
 )
 class RedisClient(_RedisClientBase):
-    """Synchronous Redis client for distributed locking.
+    """Deprecated: use ``redis`` directly — removed in v4.0.0. Still works until then.
 
     .. deprecated:: 3.57.0
         Will be removed in v4.0.0. Use ``redis`` directly.
@@ -369,7 +369,7 @@ class RedisClient(_RedisClientBase):
     "for is not wired in v3."
 )
 class RedisClientAsync(_RedisClientBase):
-    """Asynchronous Redis client for distributed locking.
+    """Deprecated: use ``redis.asyncio`` directly — removed in v4.0.0. Still works until then.
 
     .. deprecated:: 3.57.0
         Will be removed in v4.0.0. Use ``redis.asyncio`` directly.
