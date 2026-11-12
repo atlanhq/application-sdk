@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from temporalio import activity
+from temporalio.exceptions import FailureError
 
 from application_sdk._runtime.progress import ProgressTracker, bind_progress_tracker
 from application_sdk.app.registry import AppRegistry, TaskRegistry
@@ -95,6 +96,70 @@ def _sever_cause_chain(exc: BaseException) -> None:
         current = nxt
 
 
+def _redacted_cause_chain(exc: BaseException) -> BaseException:
+    """Mirror ``exc``'s cause chain as ``ApplicationError``s with redacted messages.
+
+    Raise a translated failure ``from`` this, never ``from`` the original
+    exception. Temporal's failure converter serialises every link it walks
+    into workflow history as ``str(link)`` verbatim, and many
+    ``AppError.__str__`` overrides append ``{type(cause).__name__}: {cause}``
+    without redaction — so redacting only the top-level message leaves each
+    cause's credentials one level down.
+
+    The mirror has the shape Temporal would record for the original: each link
+    keeps its class name as the wire ``type`` and its traceback, and only its
+    message changes (redacted and capped by :func:`redact_and_cap`). The walk
+    follows the converter's own rule — ``__cause__`` for a plain exception,
+    ``__cause__`` then an unsuppressed ``__context__`` for a ``FailureError``
+    — stops at ``_MAX_CHAIN_DEPTH`` links, and stops at a revisited link, so a
+    cyclic chain terminates.
+
+    Args:
+        exc: The head of the chain, usually the exception the activity caught.
+            Not mutated.
+
+    Returns:
+        The head of the mirrored chain, to pass to ``raise ... from``.
+    """
+    from application_sdk.errors.base import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + errors imports observability transitively
+        redact_and_cap,
+    )
+    from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+        ApplicationError,
+    )
+
+    head: BaseException | None = None
+    tail: BaseException | None = None
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while (
+        current is not None and id(current) not in seen and len(seen) < _MAX_CHAIN_DEPTH
+    ):
+        seen.add(id(current))
+        try:
+            text = str(current)
+        except Exception:  # noqa: BLE001 — a broken __str__ must not replace the real failure
+            text = f"<unprintable {type(current).__name__}>"
+        mirror = ApplicationError(redact_and_cap(text), type=type(current).__name__)
+        mirror.__traceback__ = current.__traceback__
+        mirror.__suppress_context__ = True
+        if tail is None:
+            head = mirror
+        else:
+            tail.__cause__ = mirror
+        tail = mirror
+        nxt = current.__cause__
+        if (
+            nxt is None
+            and isinstance(current, FailureError)
+            and not current.__suppress_context__
+        ):
+            nxt = current.__context__
+        current = nxt
+    assert head is not None  # exc is not None, so the loop ran at least once
+    return head
+
+
 def _to_application_error(e: AppError) -> ApplicationError:
     """Translate a typed :class:`AppError` into the ``ApplicationError`` we raise.
 
@@ -110,7 +175,10 @@ def _to_application_error(e: AppError) -> ApplicationError:
     - ``_sever_cause_chain``, so Temporal's failure serializer can always
       complete (BLDX-1512);
     - ``non_retryable=not e.effective_retryable``, so the error's own retry
-      policy reaches Temporal instead of the default.
+      policy reaches Temporal instead of the default;
+    - ``redact_and_cap`` on the message, so the free text written to workflow
+      history is redacted and length-capped like the ``details`` envelope
+      beside it.
 
     Args:
         e: The typed error to translate. Mutated by the cause-chain severing,
@@ -119,9 +187,13 @@ def _to_application_error(e: AppError) -> ApplicationError:
 
     Returns:
         The ``ApplicationError`` to raise, with the error's class name as its
-        wire ``type``. Callers must still ``raise ... from`` the original
-        exception so the traceback keeps its chain.
+        wire ``type``. Callers ``raise ... from _redacted_cause_chain(<caught>)``,
+        not ``from <caught>``: the message is redacted here, and the cause
+        chain must be too, because Temporal serialises every link of it.
     """
+    from application_sdk.errors.base import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + errors imports observability transitively
+        redact_and_cap,
+    )
     from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
         ApplicationError,
     )
@@ -143,8 +215,13 @@ def _to_application_error(e: AppError) -> ApplicationError:
     # failure serializer walks them (BLDX-1512).
     _sever_cause_chain(e)
 
+    # The message sits in workflow history beside the redacted ``details``
+    # envelope, so it gets the same treatment: many ``AppError.__str__``
+    # overrides append ``{type(cause).__name__}: {cause}`` verbatim, and a
+    # driver's cause can carry a connection string. Redact and cap at this one
+    # seam rather than in each ``__str__`` copy.
     return ApplicationError(
-        str(e),
+        redact_and_cap(str(e)),
         *details,
         type=type(e).__name__,
         non_retryable=not e.effective_retryable,
@@ -720,7 +797,7 @@ def create_activity_from_task(
                                 "source connection that hung without erroring"
                             ),
                         )
-                    ) from e
+                    ) from _redacted_cause_chain(e)
 
                 from application_sdk.execution.shutdown import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
                     is_worker_shutting_down,
@@ -746,7 +823,7 @@ def create_activity_from_task(
                         *evicted_details,
                         type=WORKER_EVICTED_TYPE,
                         non_retryable=True,
-                    ) from e
+                    ) from _redacted_cause_chain(e)
                 raise
 
             # conformance: ignore[E004] exception translator: both branches re-raise; nothing is swallowed
@@ -756,7 +833,7 @@ def create_activity_from_task(
                 )
 
                 if isinstance(e, _AppError):
-                    raise _to_application_error(e) from e
+                    raise _to_application_error(e) from _redacted_cause_chain(e)
                 # A read-only / permission-denied local-write OSError (the
                 # artifact-filesystem pattern family) otherwise re-raises here
                 # untyped and re-files as a fresh unclassifiable pattern. Type it
@@ -767,7 +844,7 @@ def create_activity_from_task(
 
                 _typed = classify_unwritable_oserror(e)
                 if _typed is not None:
-                    raise _to_application_error(_typed) from e
+                    raise _to_application_error(_typed) from _redacted_cause_chain(e)
                 raise
 
             finally:
