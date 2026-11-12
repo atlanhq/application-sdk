@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_SCRIPTS_DIR))
@@ -119,7 +120,7 @@ def df(monkeypatch: pytest.MonkeyPatch):
     """Stub the DataForge calls. `statuses` is a queue the state read pops;
     `resumed`/`paused` record the mutating calls."""
 
-    state = {"statuses": ["PAUSED"], "resumed": 0, "paused": 0}
+    state = {"statuses": ["PAUSED"], "resumed": 0, "paused": 0, "expected_wake": 0}
 
     def _status(base, token, rid):
         q = state["statuses"]
@@ -127,6 +128,11 @@ def df(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(dfl, "service_token", lambda base: "svc")
     monkeypatch.setattr(dfl, "resource_status", _status)
+    monkeypatch.setattr(
+        dfl,
+        "read_resource",
+        lambda b, t, r: dfl.ResourceState(_status(b, t, r), state["expected_wake"]),
+    )
     monkeypatch.setattr(
         dfl,
         "resume_resource",
@@ -481,6 +487,184 @@ def test_wake_times_out_with_named_error(http: FakeHTTP, df):
             poll_seconds=0,
             sleep=lambda _: None,
         )
+
+
+@pytest.mark.parametrize(
+    ("timeout", "expected", "want"),
+    [
+        (600, 0, 600),  # a resource: unchanged
+        (600, 900, 1200),  # a slow external source: widened to expected + margin
+        (600, 60, 600),  # never narrowed
+        (600, 4000, dfl.MAX_READY_SECONDS),  # capped below the job timeout
+        (3000, 4000, 3000),  # an explicit larger timeout wins over the cap
+    ],
+)
+def test_ready_deadline_seconds(timeout: int, expected: int, want: int):
+    assert dfl.ready_deadline_seconds(timeout, expected) == want
+
+
+def test_wake_waits_for_a_slow_source_past_the_default_timeout(
+    http: FakeHTTP, df, monkeypatch: pytest.MonkeyPatch
+):
+    # DATFORG-325: a ThoughtSpot cluster takes ~12 min; the default 600s would
+    # fail the wake while the cluster is still starting. The clock advances 60s
+    # per poll, so 12 polls of RESUMING = 720s > 600s.
+    _stub_holder_create(http)
+    df["statuses"] = ["PAUSED"] + ["RESUMING"] * 12 + ["PROVISIONED"]
+    df["expected_wake"] = 900
+    clock = {"t": 0.0}
+    monkeypatch.setattr(dfl.time, "monotonic", lambda: clock["t"])
+
+    def _sleep(seconds):
+        clock["t"] += seconds
+
+    assert (
+        wake(
+            BASE,
+            RID,
+            REPO,
+            1,
+            1,
+            ready_timeout_seconds=600,
+            poll_seconds=60,
+            sleep=_sleep,
+        )
+        == Outcome.READY
+    )
+    assert df["resumed"] == 1
+
+
+def test_wake_still_times_out_at_the_widened_deadline(
+    http: FakeHTTP, df, monkeypatch: pytest.MonkeyPatch
+):
+    _stub_holder_create(http)
+    df["statuses"] = ["RESUMING"]
+    df["expected_wake"] = 900
+    clock = {"t": 0.0}
+    monkeypatch.setattr(dfl.time, "monotonic", lambda: clock["t"])
+
+    def _sleep(seconds):
+        clock["t"] += seconds
+
+    with pytest.raises(DataforgeLifecycleError, match="within 1200s"):
+        wake(
+            BASE,
+            RID,
+            REPO,
+            1,
+            1,
+            ready_timeout_seconds=600,
+            poll_seconds=60,
+            sleep=_sleep,
+        )
+
+
+def test_wake_times_out_named_within_the_job_budget_after_slow_setup(
+    http: FakeHTTP, df, monkeypatch: pytest.MonkeyPatch
+):
+    # lens F-a0a99c: setup (checkout + VPN) took 8 of the job's 30 min, and the
+    # source expects a 20-min wake. The 25-min cap would outlive the job; the
+    # wait must instead stop at what is left (22 min less the exit reserve), so
+    # the script raises its named error before the runner kills the job.
+    _stub_holder_create(http)
+    df["statuses"] = ["RESUMING"]
+    df["expected_wake"] = 1200
+    clock = {"t": 0.0}
+    monkeypatch.setattr(dfl.time, "monotonic", lambda: clock["t"])
+
+    def _sleep(seconds):
+        clock["t"] += seconds
+
+    job_started = 1_000_000.0
+    deadline = job_started + 30 * 60
+    after_setup = job_started + 8 * 60
+    budget = 22 * 60 - dfl.JOB_EXIT_RESERVE_SECONDS
+    with pytest.raises(
+        DataforgeLifecycleError, match=rf"within {budget}s — all the wake job had left"
+    ):
+        wake(
+            BASE,
+            RID,
+            REPO,
+            1,
+            1,
+            ready_timeout_seconds=600,
+            poll_seconds=60,
+            job_deadline_epoch=deadline,
+            sleep=_sleep,
+            wall_clock=lambda: after_setup,
+        )
+    assert clock["t"] <= budget  # never waited past the job's remaining time
+
+
+def test_wake_job_budget_does_not_shorten_a_wait_that_fits(
+    http: FakeHTTP, df, monkeypatch: pytest.MonkeyPatch
+):
+    _stub_holder_create(http)
+    df["statuses"] = ["RESUMING"]
+    df["expected_wake"] = 900
+    clock = {"t": 0.0}
+    monkeypatch.setattr(dfl.time, "monotonic", lambda: clock["t"])
+
+    def _sleep(seconds):
+        clock["t"] += seconds
+
+    with pytest.raises(DataforgeLifecycleError, match=r"within 1200s \(last"):
+        wake(
+            BASE,
+            RID,
+            REPO,
+            1,
+            1,
+            ready_timeout_seconds=600,
+            poll_seconds=60,
+            job_deadline_epoch=1_000_000.0 + 30 * 60,
+            sleep=_sleep,
+            wall_clock=lambda: 1_000_000.0 + 60,
+        )
+
+
+def test_wake_job_deadline_matches_the_workflow_timeout():
+    # The workflow records WAKE_JOB_DEADLINE as start + N min; N must be the
+    # wake job's timeout-minutes, or the bound protects against the wrong limit.
+    workflow = (_SCRIPTS_DIR.parent / "workflows" / "tests-reusable.yaml").read_text()
+    job = yaml.safe_load(workflow)["jobs"]["wake-dataforge-source"]
+    record = next(
+        s["run"]
+        for s in job["steps"]
+        if s.get("name") == "Record the wake job's deadline"
+    )
+    assert f"+ {job['timeout-minutes']} * 60" in record
+    assert job["steps"][0]["name"] == "Record the wake job's deadline"
+
+
+def test_main_reads_job_deadline_from_env(monkeypatch: pytest.MonkeyPatch):
+    seen: dict[str, object] = {}
+    monkeypatch.setenv("WAKE_JOB_DEADLINE", "1234.5")
+    monkeypatch.setattr(dfl, "wake", lambda *a, **k: seen.update(k))
+    assert (
+        dfl.main(
+            ["--mode", "wake", "--resource-id", RID, "--repo", REPO, "--run-id", "1"]
+        )
+        == 0
+    )
+    assert seen["job_deadline_epoch"] == 1234.5
+
+
+def test_read_resource_parses_expected_wake(monkeypatch: pytest.MonkeyPatch):
+    docs = iter(
+        [
+            {"status": "PAUSED", "expected_wake_seconds": 900},
+            {"status": "PROVISIONED"},
+            {"status": "PAUSED", "expected_wake_seconds": "900"},
+            {"status": "PAUSED", "expected_wake_seconds": True},
+        ]
+    )
+    monkeypatch.setattr(dfl, "_df_request", lambda *a, **k: next(docs))
+    assert dfl.read_resource(BASE, "t", RID) == dfl.ResourceState("PAUSED", 900)
+    assert dfl.read_resource(BASE, "t", RID) == dfl.ResourceState("PROVISIONED", 0)
+    assert dfl.read_resource(BASE, "t", RID).expected_wake_seconds == 0
+    assert dfl.read_resource(BASE, "t", RID).expected_wake_seconds == 0
 
 
 # --- main ------------------------------------------------------------------
