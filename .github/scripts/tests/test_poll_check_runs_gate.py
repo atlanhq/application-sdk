@@ -143,6 +143,21 @@ def test_gh_api_conditional_sends_if_none_match_only_with_an_etag(monkeypatch):
     assert 'If-None-Match: "v7"' in sent[1]
 
 
+@pytest.mark.parametrize(
+    "body_text",
+    ["<html>proxy error</html>", "[]", "null", ""],
+    ids=["html", "json-array", "json-null", "empty"],
+)
+def test_a_200_without_a_json_object_body_fails_closed(monkeypatch, body_text):
+    """A 200 the gate cannot read is not "no checks yet": treating it as an
+    empty listing would wait out the budget on a broken answer, and treating it
+    as a verdict would be worse. It raises, and only ``pr_head_sha`` catches."""
+    _stub(monkeypatch, lambda cmd, **kw: _completed_raw(200, body_text))
+
+    with pytest.raises(SystemExit, match="without a JSON object body"):
+        mod.gh_api_conditional("some/path")
+
+
 def test_a_transient_transport_failure_is_retried_not_fatal(monkeypatch):
     """The gate used to exit on the first curl failure of a two-hour poll. The
     shared transport retries a blip before the poll ever sees it."""

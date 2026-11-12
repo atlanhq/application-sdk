@@ -267,11 +267,13 @@ def test_an_authorization_header_is_refused_not_put_on_argv(
 
 
 def _argv_bearer_literals(path: Path) -> list[int]:
-    """Lines of string literals that START with an ``Authorization: Bearer``
-    header — the shape of a curl ``-H`` argument. The stdin form is a curl config
-    line (``header = "Authorization: ..."``), which does not start that way, and
-    an in-process client passes a dict key ``"Authorization"`` with the value
-    separately, which does not match either."""
+    """Lines of string literals that START with an ``Authorization:`` header line
+    — the shape of a curl ``-H`` argument, whatever the scheme and however the
+    rest is concatenated on (``"Authorization: " + f"Bearer {token}"`` starts a
+    literal with it too). The stdin form is a curl config line
+    (``header = "Authorization: ..."``), which does not start that way, and an
+    in-process client passes a dict key ``"Authorization"`` with no colon and the
+    value separately, which does not match either."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     lines: list[int] = []
     for node in ast.walk(tree):
@@ -282,11 +284,52 @@ def _argv_bearer_literals(path: Path) -> list[int]:
             text = node.value
         else:
             continue
-        if isinstance(text, str) and text.lstrip().lower().startswith(
-            "authorization: bearer"
-        ):
+        if isinstance(text, str) and text.lstrip().lower().startswith("authorization:"):
             lines.append(node.lineno)
-    return lines
+    # An f-string and the literal that opens it both match; report the line once.
+    return sorted(set(lines))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'cmd = ["-H", f"Authorization: Bearer {token}"]',
+        'cmd = ["-H", "Authorization: " + f"Bearer {token}"]',
+        'cmd = ["-H", "Authorization: Bearer " + token]',
+        'cmd = ["-H", "Authorization: token %s" % token]',
+    ],
+)
+def test_the_guard_catches_an_argv_header_however_it_is_built(
+    tmp_path: Path, source: str
+) -> None:
+    script = tmp_path / "offender.py"
+    script.write_text(f"token = 'x'\n{source}\n", encoding="utf-8")
+    assert _argv_bearer_literals(script) == [2]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        """config = f'header = "Authorization: Bearer {token}"\\n'""",
+        'headers = {"Authorization": f"Bearer {token}"}',
+        'request.add_header("Authorization", f"Bearer {token}")',
+    ],
+)
+def test_the_guard_leaves_stdin_and_in_process_headers_alone(
+    tmp_path: Path, source: str
+) -> None:
+    script = tmp_path / "fine.py"
+    script.write_text(f"token = 'x'\n{source}\n", encoding="utf-8")
+    assert _argv_bearer_literals(script) == []
+
+
+#: Scripts whose header line is built for somewhere other than argv, each with
+#: where it goes. Add one only with that reason: the guard cannot see where a
+#: string ends up, only how it is shaped.
+_HEADER_LINES_NOT_ON_ARGV = {
+    # git's http.extraheader, passed as GIT_CONFIG_VALUE_0 in the environment.
+    "resync_approval_conditions.py",
+}
 
 
 def test_no_script_builds_a_bearer_header_for_argv() -> None:
@@ -296,10 +339,13 @@ def test_no_script_builds_a_bearer_header_for_argv() -> None:
     offenders = {
         path.name: lines
         for path in sorted(_SCRIPTS.glob("*.py"))
-        if (lines := _argv_bearer_literals(path))
+        if path.name not in _HEADER_LINES_NOT_ON_ARGV
+        and (lines := _argv_bearer_literals(path))
     }
     assert not offenders, (
-        f"{offenders} build an 'Authorization: Bearer ...' header string, the "
-        "shape of a curl -H argument, which puts the token on argv. Call "
-        "_gh_refs.gh_request instead (it feeds the token with -K -)."
+        f"{offenders} build an 'Authorization: ...' header line, the shape of a "
+        "curl -H argument, which puts the token on argv. Call "
+        "_gh_refs.gh_request instead (it feeds the token with -K -). If the line "
+        "genuinely goes somewhere else, add the script to "
+        "_HEADER_LINES_NOT_ON_ARGV with where."
     )
