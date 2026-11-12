@@ -94,30 +94,23 @@ class TestWorkflowWiring:
                 f"conditional shell ({keyword!r}) is back in the run: block"
             )
 
-    def test_script_checkout_ref_is_a_literal_that_cannot_be_empty(self):
+    def test_script_checkout_ref_is_the_workflows_own_commit(self):
         # Regression, found by piloting this gate from a consumer repo before
         # merge: `ref: ${{ github.job_workflow_sha }}` renders EMPTY, so
         # actions/checkout treated the input as unsupplied and fetched the
         # default branch — a GREEN step that silently checked out a different
-        # commit's script than the workflow the caller pinned. It only surfaced
-        # because the script did not exist on main yet; after merge that mode
-        # would have run the wrong version quietly.
+        # commit's script than the workflow the caller pinned.
         #
-        # `main` is the right literal because every caller pins the reusable at
-        # @main. The assertion that matters is the second one: the ref must not
-        # come from an expression at all, since any expression can evaluate to
-        # empty and checkout reads empty as "not supplied".
+        # `job.workflow_sha` (the `job` context, not `github`) is populated and
+        # is the commit of this file (FND-4905, docs/standards/ci.md).
         workflow = yaml.safe_load(_WORKFLOW.read_text())
         steps = workflow["jobs"]["renovate-auto-approve"]["steps"]
         checkout = next(
             s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@")
         )
         ref = checkout["with"]["ref"]
-        assert ref == "main"
-        assert "${{" not in str(ref), (
-            "the checkout ref must be a literal — an expression that evaluates "
-            "to empty makes checkout silently take the default branch"
-        )
+        assert ref == "${{ job.workflow_sha }}"
+        assert "github.job_workflow_sha" not in str(ref)
         assert checkout["with"]["path"] == ".sdk-scripts"
 
     def test_driver_path_resolves(self):

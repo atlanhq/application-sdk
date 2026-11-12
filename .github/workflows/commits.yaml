@@ -78,7 +78,7 @@ on:
         type: string
         default: "dependabot[bot]"
       sdk_scripts_ref:
-        description: "Ref of atlanhq/application-sdk to pull the validator script from (default: main). Named explicitly because a reusable workflow cannot resolve its own ref — github.job_workflow_sha renders empty here, so an implicit checkout would silently take the default branch."
+        description: "Deprecated and ignored (FND-4905): SDK scripts are always checked out at job.workflow_sha, the commit this reusable was resolved at, so a caller cannot choose the code that runs with this job's secrets. Still declared so callers that pass it keep validating."
         required: false
         type: string
         default: "main"
@@ -142,7 +142,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: ${{ inputs.sdk_scripts_ref }}
+          ref: ${{ job.workflow_sha }}
           path: .sdk-scripts
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false

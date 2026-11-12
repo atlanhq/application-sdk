@@ -198,7 +198,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: main
+          ref: ${{ job.workflow_sha }}
           path: .sdk-entrypoint
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
@@ -229,7 +229,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: main
+          ref: ${{ job.workflow_sha }}
           path: .sdk-entrypoint
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
@@ -287,7 +287,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: main
+          ref: ${{ job.workflow_sha }}
           path: .sdk-entrypoint
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
@@ -453,7 +453,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: main
+          ref: ${{ job.workflow_sha }}
           path: sdk
           # The Dockerfile too: it holds the golden tag the Python pin reads.
           sparse-checkout: |
@@ -648,8 +648,10 @@ jobs:
           permission-contents: read
 
       - name: Checkout application-sdk (migration tooling)
-        # tools.migrate_v3 ships in the SDK repo, not the published package —
-        # pinned to main so the check tracks the latest released rules.
+        # tools.migrate_v3 ships in the SDK repo, not the published package.
+        # Pinned to this workflow's own commit, like every SDK checkout here
+        # (docs/standards/ci.md): callers resolve this reusable @main, so the
+        # check still tracks main's rules, but a re-run reuses the same ones.
         # application-sdk is public, so the caller's GITHUB_TOKEN could clone
         # it (as every tokenless "Checkout SDK helper scripts" step does); the
         # token below (the SDK-scoped App token minted above) is not what makes
@@ -657,7 +659,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: main
+          ref: ${{ job.workflow_sha }}
           path: sdk
           token: ${{ steps.app-token.outputs.token }}
           persist-credentials: false
@@ -892,14 +894,14 @@ jobs:
           repositories: application-sdk
 
       - name: Checkout SDK gate assets
-        # Pull only the vendored scanner + ruleset from the SDK at main, so the
-        # gate is self-contained at publish time (no private cross-repo fetch of
+        # Pull only the vendored scanner + ruleset from this workflow's SDK
+        # commit, so the gate is self-contained at publish time (no private cross-repo fetch of
         # the connector-pulse nightly skill). A token is required for the
         # cross-repo read a consumer app's scoped GITHUB_TOKEN cannot do.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: main
+          ref: ${{ job.workflow_sha }}
           path: sdk
           # Widened from .github/scripts/credential-leak-gate to the whole
           # scripts dir so with-retry.sh comes along for the gitleaks download
@@ -1052,14 +1054,14 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Checkout SDK helper scripts
-        # Pull only ``.github/scripts/`` from the SDK at main.
-        # github.workflow_ref and github.workflow_sha both resolve to the *caller's*
-        # ref in a reusable workflow context (GitHub bug) — ref is pinned to main
-        # so it always picks up the latest released version of the scripts.
+        # Pull only ``.github/scripts/`` from the SDK. github.workflow_ref and
+        # github.workflow_sha resolve to the *caller's* ref in a reusable
+        # workflow; job.workflow_sha is this file's own commit, so the scripts
+        # always match this YAML, including on a re-run (docs/standards/ci.md).
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: main
+          ref: ${{ job.workflow_sha }}
           path: .sdk-entrypoint
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
@@ -1419,7 +1421,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: main
+          ref: ${{ job.workflow_sha }}
           path: .sdk-entrypoint
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
@@ -1619,14 +1621,12 @@ jobs:
       - name: Checkout SDK helper scripts
         # resolve_release_actor.py lives in the SDK repo, not the caller repo —
         # this job has no checkout of its own, so pull only ``.github/scripts/``
-        # in before invoking it. Pinned to main for the same reason as the other
-        # two SDK-script checkouts in this workflow: github.workflow_ref and
-        # github.workflow_sha both resolve to the *caller's* ref in a reusable
-        # workflow (GitHub bug), so there is no self-ref to pin to.
+        # in before invoking it. Pinned to job.workflow_sha like every SDK
+        # checkout in this workflow (docs/standards/ci.md).
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: main
+          ref: ${{ job.workflow_sha }}
           path: .sdk-entrypoint
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false

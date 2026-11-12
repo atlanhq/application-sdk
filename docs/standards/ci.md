@@ -1503,16 +1503,14 @@ because the job name is a required context, and `renovate-auto-approve.yml`,
 
 A `uses:` reusable workflow does **not** bring its own repo's files into the
 caller's checkout. To run an SDK script from a reusable that other repos call,
-sparse-checkout it into a side path and invoke from there — the
-`.sdk-scripts` pattern used by `release-version-bump.yaml` and
-`generated-freshness.yaml`:
+sparse-checkout it into a side path and invoke from there:
 
 ```yaml
 - uses: actions/checkout@<sha>   # consumer repo (the working tree the script acts on)
 - uses: actions/checkout@<sha>   # SDK scripts, into a side path
   with:
     repository: atlanhq/application-sdk
-    ref: main
+    ref: ${{ job.workflow_sha }}
     sparse-checkout: .github/scripts
     sparse-checkout-cone-mode: false
     path: .sdk-scripts
@@ -1522,38 +1520,99 @@ sparse-checkout it into a side path and invoke from there — the
 The driver runs from the consumer's working directory, so it acts on the
 consumer's files; `.sdk-scripts` only holds SDK code and must never be staged.
 
-### Do not try to derive the ref from `github.job_workflow_sha`
+### The ref is always `job.workflow_sha`
 
-`ref: main` above is deliberate and is the default answer. Every consumer pins
-these reusables at `@main`, and several checkouts of this repo pin `main` for a
-stronger reason — they fetch *content* that must reflect `main` whatever ref the
-caller is on (`trivy-container.yaml`'s base allowlist,
-`vuln-reconcile-on-release.yml`'s scan baseline,
-`contract-toolkit-publish.yml`'s published content). Those carry their reasoning
-inline; leave them as they are.
+**Rule:** every `actions/checkout` of `repository: atlanhq/application-sdk` in
+`.github/workflows/` uses `ref: ${{ job.workflow_sha }}`. Not `main`, not an
+input, not omitted.
 
-The tempting "improvement" is to derive the ref so the script always matches the
-workflow that resolved it. `${{ github.job_workflow_sha }}` is documented in the
-`github` context as exactly that — the commit of the reusable workflow file the
-caller resolved. **It renders empty.** It is an OIDC token claim, not a usable
-expression value.
+`job.workflow_sha` is the commit of the workflow file that defines the current
+job. For a reusable, that is the commit the caller resolved when the run
+started, so the script always matches the YAML that invokes it:
+
+- **`ref: main` drifts.** The YAML is fixed when the run starts; a `main`
+  checkout resolves when the step runs. A re-run days later, or a run that
+  straddles a merge, executes old YAML against new scripts.
+- **A caller-supplied ref hands the caller the code.** An input such as
+  `sdk_scripts_ref` let the caller choose which SDK commit runs with the job's
+  secrets and tokens. Those inputs (`sdk_scripts_ref` on `commits.yaml`,
+  `release-version-bump.yaml` and `tag-and-release.yaml`; `sdk_ref` on
+  `conformance-upload-sarif-reusable.yaml`) are still declared, so callers that
+  pass them keep validating, and are ignored (FND-4905).
+- **An omitted ref is the default branch**, which is `main` with the same drift.
+
+Every consumer calls these reusables `@main`, so in steady state
+`job.workflow_sha` *is* main's head. The only runs where the two differ are
+re-runs, runs that straddle a merge, and a run piloting a branch: point the
+caller's `uses:` at the branch and the scripts follow, with no second edit.
+
+actionlint (≤1.7.12) does not model `job.workflow_sha` and reports
+`property "workflow_sha" is not defined`. That is a false positive; each file
+that uses it carries an ignore in `.github/actionlint.yaml`.
+
+### Not `github.job_workflow_sha`
+
+`${{ github.job_workflow_sha }}` is documented in the `github` context as the
+commit of the reusable workflow file the caller resolved. **It renders empty.**
+It is an OIDC token claim, not a usable expression value. The property that
+works lives on `job`, not `github`.
 
 The failure is silent and the wrong way round: `actions/checkout` treats an
 empty `ref` as *not supplied* and takes the default branch, so the step goes
 **green having fetched a different commit's script than the workflow the caller
-pinned** — the wrong version of every code path, with nothing red to show for
-it. FND-372 hit this; it only surfaced because the script did not exist on
-`main` yet, so the *next* step died on a missing file.
+pinned**. FND-372 hit this; it only surfaced because the script did not exist on
+`main` yet, so the *next* step died on a missing file. The same confusion is why
+several checkouts used to pin `main` "because a reusable cannot resolve its own
+ref": it can, through `job`.
 
 Generalising: never let a `with:` value that must not be blank come from an
-expression that can evaluate to empty. Prefer a shape where "unset" cannot be
-expressed over a guard that checks for it after the fact — a declared input with
-a default, or a literal.
+expression that can evaluate to empty. **When verifying a change to a workflow
+like this, read the checkout step's logged `ref:` rather than concluding from a
+green tick.**
 
-**When verifying any change to a workflow like this, read the checkout step's
-logged `ref:` rather than concluding from a green tick.** A step that fetched the
-wrong ref still passes; it is the next step that fails, and only if what it
-wanted happens to be absent from the fallback.
+### The exception: content that must track `main`
+
+A few checkouts fetch *content*, not code, whose value must reflect `main`
+whatever ref the caller resolved: the base vulnerability allowlist
+(`.security/base-allowlist.json`) read by `trivy-container.yaml` and
+`build-and-scan.yaml`'s security gate, so an entry merged today applies to
+today's re-run. Such a checkout opts out with an inline comment inside the step:
+
+```yaml
+- name: Checkout base allowlist from SDK
+  uses: actions/checkout@<sha>
+  with:
+    repository: atlanhq/application-sdk
+    # sdk-checkout-ref-exempt: the base allowlist is content that tracks main
+    ref: main
+    sparse-checkout: .security
+    sparse-checkout-cone-mode: false
+    path: _sdk
+- name: Checkout SDK scripts          # the code that reads it: pinned as usual
+  uses: actions/checkout@<sha>
+  with:
+    repository: atlanhq/application-sdk
+    ref: ${{ job.workflow_sha }}
+    sparse-checkout: .github/scripts
+    sparse-checkout-cone-mode: false
+    path: .sdk-scripts
+```
+
+An exempt checkout must be content only: a literal ref, and a sparse set that
+does not include `.github/scripts` or `.github/actions`. Code it needs comes from
+a second, pinned checkout, as above.
+
+Workflows that run only in this repo and check it out without `repository:`
+(`vuln-reconcile-on-release.yml`'s scan baseline, `contract-toolkit-publish.yml`
+and `conformance-publish.yml`'s published content, `tag-and-publish.yaml`) are
+outside this rule: they are not reusables, and `main` there is the ref being
+published.
+
+`.github/scripts/tests/test_sdk_checkout_ref_pinning.py` enforces the rule. It
+fails on a checkout of this repo whose ref is not `job.workflow_sha` and has no
+exemption, on an exempt checkout that carries code, on an exemption not in its
+reviewed list, and on a file using `job.workflow_sha` without the actionlint
+ignore.
 
 ## Self-references are `@main`
 

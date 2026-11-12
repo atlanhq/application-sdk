@@ -109,15 +109,30 @@ jobs:
           owner: atlanhq
           repositories: ${{ inputs.private_dep_repo && format('application-sdk,{0}', inputs.private_dep_repo) || '' }}
 
+      # Two checkouts, because the two halves have opposite ref needs
+      # (docs/standards/ci.md, "Reusing scripts from a reusable workflow").
+      # The allowlist is content that must reflect main whatever the caller
+      # resolved: an entry merged today applies to today's re-run. The scripts
+      # are code and come from this workflow's own commit.
       - name: Checkout base allowlist from SDK
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
+          # sdk-checkout-ref-exempt: the base allowlist is content that tracks main
           ref: main
-          sparse-checkout: |
-            .security
-            .github/scripts
+          sparse-checkout: .security
+          sparse-checkout-cone-mode: false
           path: _sdk
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Checkout SDK scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: .sdk-scripts
           token: ${{ steps.app-token.outputs.token }}
 
       # Composite handles build, Trivy JSON+SARIF scan, SARIF upload.
@@ -137,7 +152,7 @@ jobs:
         env:
           FAIL_ON_FINDINGS: ${{ inputs.fail-on-vulns }}
         run: >
-          python3 _sdk/.github/scripts/check_allowlist.py
+          python3 .sdk-scripts/.github/scripts/check_allowlist.py
           --trivy-results trivy-container-results.json
           --write-comment
 
