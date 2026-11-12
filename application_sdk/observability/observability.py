@@ -131,6 +131,7 @@ def _cancel_flush_task_for_testing(task: "asyncio.Task[None]", deadline: float) 
         logging.warning(
             "A dropped observability sink's batch flush did not stop within %ss",
             _RESET_STOP_TIMEOUT_SECONDS,
+            exc_info=True,
         )
 
 
