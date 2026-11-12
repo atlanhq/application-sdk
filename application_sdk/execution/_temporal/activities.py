@@ -834,6 +834,29 @@ def create_activity_from_task(
 
                 if isinstance(e, _AppError):
                     raise _to_application_error(e) from _redacted_cause_chain(e)
+                from application_sdk.outputs.skipped import (  # noqa: PLC0415 — circular
+                    RecordSkipped as _RecordSkipped,
+                )
+
+                if isinstance(e, _RecordSkipped):
+                    # A mapper skipped a record and the @task never caught it:
+                    # an app bug, and deterministic, so retrying cannot help.
+                    # str(e) names ids and reason only, never the record.
+                    from application_sdk.errors.leaves import (  # noqa: PLC0415 — circular
+                        InternalError as _InternalError,
+                    )
+
+                    raise _to_application_error(
+                        _InternalError(
+                            message=(
+                                f"{e} — {type(e).__name__} escaped the task "
+                                "uncaught; catch RecordSkipped in the per-record "
+                                "loop and pass it to skip_record"
+                            ),
+                            component=context.task_name,
+                            invariant="RecordSkipped is caught by the @task loop",
+                        )
+                    ) from _redacted_cause_chain(e)
                 # A read-only / permission-denied local-write OSError (the
                 # artifact-filesystem pattern family) otherwise re-raises here
                 # untyped and re-files as a fresh unclassifiable pattern. Type it

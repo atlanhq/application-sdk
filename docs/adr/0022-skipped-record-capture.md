@@ -58,6 +58,53 @@ travels on activity results, so no new field crosses Temporal history. `FAILURE`
 **Replay-safe.** The merge task is scheduled only when the count is above zero. A run started on an
 older SDK cannot carry that metric, so its history never gains the new activity on replay.
 
+## Sync mappers: `RecordSkipped` (FND-4963)
+
+`skip_record` is async because it writes off the event loop, but the canonical mapper is a plain
+`def`: a pure transform over sync pyatlan creators. Making mappers async to reach `skip_record`
+would add nothing. Instead **the mapper detects, the loop records**: the mapper raises a leaf of
+`RecordSkipped` and the `@task` loop catches it and awaits `skip_record`.
+
+```python
+def map_table(row: Row, connection_qn: str) -> Table:      # stays sync and pure
+    if not row.schema_name:
+        raise BlankIdentity(row, record_id=row.table_id, entity_type="Table",
+                            detail="schema name is blank")
+    return Table.creator(...)
+
+for row in rows:                                           # @task loop
+    try:
+        asset = map_table(row, connection_qn)
+    except RecordSkipped as skip:
+        await skip_record(skip.record, skip.reason, record_id=skip.record_id,
+                          entity_type=skip.entity_type, detail=skip.detail)
+        continue
+```
+
+* **One leaf per `SkipReason`, reason on the class.** `BlankIdentity`, `MissingRequiredField`,
+  `MalformedRecord`, `UnsupportedType`. As ADR-0013 does for error codes, a value that never varies
+  per instance is a ClassVar; the base `RecordSkipped` cannot be raised. The loop catches the base
+  and reads `skip.reason`, so one `except` covers every reason, and a test pins one leaf per reason.
+* **The loop catches only `RecordSkipped`.** A creator's `ValueError` for a value the mapper did
+  not guard still fails the task. Catching it per record would make the asset vanish with no guard
+  naming why.
+* **It carries the record.** Everything `skip_record` needs travels on the exception, including the
+  record, because a mapper may skip a nested record (one column of a table row, one path of a spec)
+  that the loop never holds, and the file must keep the record that was actually skipped. The
+  record is kept out of `args`, `str()` and `repr()`, so tracebacks, logs and Temporal failure text
+  name only `record_id`, `entity_type` and `reason`. It is picklable, for mappers run in a process
+  pool.
+* **Not an `AppError`.** A skip is a decision, not a failure: it has no category, owner or retry
+  policy, and a generic `except AppError` must never treat it as one.
+* **Uncaught fails visibly, once.** A `RecordSkipped` that escapes the `@task` is an app bug and
+  deterministic, so the activity boundary fails it as a non-retryable `InternalError` naming the
+  ids, the reason and the fix, rather than burning the retry budget on the same outcome.
+
+Rejected: a **sync `skip_record`** (needs thread-safety work for mappers run through
+`run_in_thread`, and a mapper with side effects is no longer pure), and an **async helper that calls
+the mapper and records the skip** (hides what the loop catches; the explicit `try/except` is four
+lines).
+
 ## Relationship to `AssetValidationReport`
 
 They answer different questions about different records. `AssetValidationReport` (ADR-0020) is the
@@ -78,7 +125,8 @@ type: a skip is a decision, not a finding.
 
 ## Consequences
 
-* Apps get one call and no storage code. The `migrate-asset-modeling` `creator-blank-guard` default
+* Apps get one call and no storage code; a sync mapper raises a `RecordSkipped` leaf for the loop
+  to record. The `migrate-asset-modeling` `creator-blank-guard` default
   can become "skip via `skip_record`".
 * Runs that skip anything gain one short framework activity at the end.
 * The object-store layout and metric names are a cross-repo contract

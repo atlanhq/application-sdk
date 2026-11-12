@@ -927,6 +927,39 @@ presence alone says there is something to review. `reason` must be a `SkipReason
 `MAX_SKIPPED_RECORDS` (10,000); the counts never are, and `skipped-records-truncated` /
 `skipped-records-unpersisted` account for every skip not in the file. Storage failures fail open.
 
+#### From a synchronous mapper (`RecordSkipped`)
+
+A mapper is usually a plain `def` and cannot await `skip_record`. It raises a `RecordSkipped` leaf
+instead — `BlankIdentity`, `MissingRequiredField`, `MalformedRecord` or `UnsupportedType`, one per
+`SkipReason` — carrying the record and its ids, and the `@task` loop records it:
+
+```python
+from application_sdk.outputs import BlankIdentity, RecordSkipped, skip_record
+
+def map_column(column: Row) -> Column:          # sync and pure
+    if not column.name:
+        raise BlankIdentity(column, record_id=column.id, entity_type="Column",
+                            detail="column name is blank")
+    return Column.creator(...)
+
+@task
+async def transform(self, input: TransformInput) -> TransformOutput:
+    for column in columns:
+        try:
+            asset = map_column(column)
+        except RecordSkipped as skip:
+            await skip_record(skip.record, skip.reason, record_id=skip.record_id,
+                              entity_type=skip.entity_type, detail=skip.detail)
+            continue
+        ...
+```
+
+Catch `RecordSkipped` only — never a creator's `ValueError`, which must still fail the task. Pass
+`skip.record`, not the loop's own variable: a mapper may skip a nested record the loop never holds.
+The record stays out of the exception's text, so tracebacks and logs never carry it. A
+`RecordSkipped` that escapes the `@task` uncaught fails the activity as a non-retryable
+`InternalError`.
+
 This is not asset validation: [Asset-Validation Outcome](#asset-validation-outcome) reports assets
 the app *did* emit that look wrong; `skip_record` records what the app *chose not to* emit. See
 [ADR-0022](../adr/0022-skipped-record-capture.md).

@@ -34,7 +34,12 @@ from application_sdk.outputs.collector import OutputCollector
 from application_sdk.outputs.models import Artifact, Metric
 from application_sdk.outputs.skipped import (
     MAX_SKIPPED_RECORDS,
+    BlankIdentity,
+    MalformedRecord,
+    MissingRequiredField,
+    RecordSkipped,
     SkipReason,
+    UnsupportedType,
     skip_record,
 )
 
@@ -99,4 +104,9 @@ __all__ = [
     "MAX_SKIPPED_RECORDS",
     "SkipReason",
     "skip_record",
+    "RecordSkipped",
+    "BlankIdentity",
+    "MissingRequiredField",
+    "MalformedRecord",
+    "UnsupportedType",
 ]
