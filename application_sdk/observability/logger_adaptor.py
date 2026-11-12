@@ -190,6 +190,22 @@ ARTIFACT_MODE_KEY = "artifact_validation_mode"
 ARTIFACT_CLASSIFICATION_KEY = "artifact_classification"
 ARTIFACT_ENFORCEMENT_KEY = "artifact_enforcement"
 
+# Lineage coverage outcome event keys, shared with the emitter
+# (``application_sdk.observability.lineage.outcome``). Per-verdict counts are
+# scalars; gap and category counts ride in one JSON string (JSONExtract-able).
+# Reason codes are high-cardinality and never appear here.
+LINEAGE_COVERAGE_SUMMARY_KEY = "lineage_coverage_summary"
+LINEAGE_COVERAGE_KEYS = (
+    "lineage_assets_total",
+    "lineage_valid",
+    "lineage_invalid",
+    "lineage_missing",
+    "lineage_valid_none",
+    "lineage_pending",
+    "lineage_coverage_rate",
+    LINEAGE_COVERAGE_SUMMARY_KEY,
+)
+
 # SDK-side allowlist that gates which kwargs reach OTLP.  When a logger is called
 # with structured kwargs (e.g. ``_log().info("Downloaded", storage_path=key)``),
 # loguru places the kwargs on ``record["extra"]`` rather than in the message
@@ -282,6 +298,8 @@ _KNOWN_EXTRA_KEYS = frozenset(
         ARTIFACT_MODE_KEY,
         ARTIFACT_CLASSIFICATION_KEY,
         ARTIFACT_ENFORCEMENT_KEY,
+        # ── Lineage coverage outcome event ───────────────────────────────
+        *LINEAGE_COVERAGE_KEYS,
         # ── Misc SDK ─────────────────────────────────────────────────────
         "log_type",
         "app_name",
