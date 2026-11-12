@@ -32,14 +32,17 @@ import threading
 from collections.abc import Iterator
 from contextlib import ExitStack
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 from unittest import mock
 
 import pytest
 
 from application_sdk.constants import LOG_FILE_NAME, METRICS_FILE_NAME, TRACES_FILE_NAME
 from application_sdk.observability import observability as obs_module
-from application_sdk.observability.background_loop import ObservabilityLoop
+from application_sdk.observability.background_loop import (
+    BackgroundTask,
+    ObservabilityLoop,
+)
 from application_sdk.observability.observability import AtlanObservability
 
 
@@ -805,3 +808,77 @@ class TestResetStopsDroppedSinks:
                 assert task.cancelled()
         finally:
             AtlanObservability._reset_for_testing()
+
+    def test_reset_cancels_a_batch_flush_started_while_it_stops_the_others(
+        self, own_loop, tmp_path
+    ):
+        """A batch flush ``add_record`` starts while the reset is stopping the
+        sink's earlier ones is stopped too, not left uploading past the reset.
+        Here the record arrives from the first flush's cancellation, the
+        window between the reset's look at the sink and its return."""
+        AtlanObservability._reset_for_testing()
+        stray = self._stray(tmp_path, batch_size=1)
+        upload_started = threading.Event()
+        late_tasks: list[asyncio.Task[None]] = []
+
+        async def _upload(key, local_path, store=None, **_kw):
+            upload_started.set()
+            try:
+                await asyncio.sleep(3600)  # a stalled store
+            except asyncio.CancelledError:
+                if not late_tasks:
+                    with stray._buffer_lock:
+                        before = set(stray._flush_tasks)
+                    stray.add_record(self._metric("late"))
+                    with stray._buffer_lock:
+                        late_tasks.extend(stray._flush_tasks - before)
+                raise
+
+        async def _add() -> None:
+            stray.add_record(self._metric("inflight"))
+
+        with ExitStack() as patches:
+            for p in _patched_sink(AtlanObservability, _upload):
+                patches.enter_context(p)
+            submitted = own_loop.submit(_add())
+            assert submitted is not None
+            submitted.result(timeout=30)
+            assert upload_started.wait(30)
+
+            AtlanObservability._reset_for_testing()
+
+            assert len(late_tasks) == 1, "the late record started no batch flush"
+            assert late_tasks[0].done(), "a batch flush started mid-reset escaped it"
+
+    def test_reset_clears_a_class_flush_guard_set_without_a_flush(
+        self, own_loop, tmp_path
+    ):
+        """An adaptor built after the loop shut down records its flush as
+        started though ``_start_periodic_flush`` returned no handle. The reset
+        clears that guard, so the next adaptor of the class starts a flush."""
+
+        class _Adaptor(_ConcreteObs):
+            _flush_task_started: ClassVar[bool] = False
+            _flush_task: ClassVar[BackgroundTask | None] = None
+
+            def __init__(self, data_dir: str) -> None:
+                super().__init__(
+                    batch_size=1000,
+                    flush_interval=60,
+                    data_dir=data_dir,
+                    file_name=METRICS_FILE_NAME,
+                )
+                # The shape every adaptor's constructor has.
+                if not _Adaptor._flush_task_started:
+                    _Adaptor._flush_task = self._start_periodic_flush()
+                    _Adaptor._flush_task_started = True
+
+        AtlanObservability._reset_for_testing()
+        own_loop.shutdown(timeout=5)
+        _Adaptor(str(tmp_path / "late"))
+        assert _Adaptor._flush_task is None
+        assert _Adaptor._flush_task_started
+
+        AtlanObservability._reset_for_testing()
+
+        assert not _Adaptor._flush_task_started

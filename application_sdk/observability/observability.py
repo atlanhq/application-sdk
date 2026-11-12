@@ -658,13 +658,13 @@ class AtlanObservability(Generic[T], ABC):
         cancelling the periodic flush triggers has nothing to write. Then the
         periodic flush is cancelled and waited for, and every batch flush
         ``add_record`` started is cancelled (see
-        :func:`_cancel_flush_task_for_testing`). The class-level handle that
-        logs, metrics, traces and sizing keep is cleared with it, so the next
-        sink of that class starts a fresh flush.
+        :func:`_cancel_flush_task_for_testing`), including one started while
+        the earlier ones were being stopped. The class-level handle that logs,
+        metrics, traces and sizing keep is cleared with it, so the next sink
+        of that class starts a fresh flush.
         """
         with self._buffer_lock:
             self._buffer = []
-            flush_tasks = list(self._flush_tasks)
         handle = self._periodic_flush_task
         self._periodic_flush_task = None
         if handle is not None:
@@ -680,15 +680,37 @@ class AtlanObservability(Generic[T], ABC):
                     "within %ss",
                     _RESET_STOP_TIMEOUT_SECONDS,
                 )
-            for owner in type(self).__mro__:
-                if "_flush_task" not in vars(owner):
-                    continue
-                if owner._flush_task is handle:  # type: ignore[attr-defined]  # — declared on this class, checked above
-                    owner._flush_task = None  # type: ignore[attr-defined]
-                    owner._flush_task_started = False  # type: ignore[attr-defined]
-                break
-        for task in flush_tasks:
-            _cancel_flush_task_for_testing(task, deadline)
+        # Matched by identity, ``None`` included: a sink built after the loop
+        # shut down got no handle, yet its constructor still set the guard.
+        for owner in type(self).__mro__:
+            if "_flush_task" not in vars(owner):
+                continue
+            if owner._flush_task is handle:  # type: ignore[attr-defined]  # — declared on this class, checked above
+                owner._flush_task = None  # type: ignore[attr-defined]
+                owner._flush_task_started = False  # type: ignore[attr-defined]
+            break
+        # ``add_record`` on another thread can start a batch flush while the
+        # ones already seen are being stopped, so look again until a pass
+        # finds none new. Tasks that are cancelled but not yet done (on the
+        # caller's own loop, or a stopped one) are not looked at twice.
+        seen: set[asyncio.Task[None]] = set()
+        while True:
+            with self._buffer_lock:
+                self._buffer = []
+                new_tasks = [t for t in self._flush_tasks if t not in seen]
+            if not new_tasks:
+                return
+            if monotonic() >= deadline:
+                logging.warning(
+                    "A dropped observability sink kept starting batch flushes "
+                    "for %ss; leaving %d running",
+                    _RESET_STOP_TIMEOUT_SECONDS,
+                    len(new_tasks),
+                )
+                return
+            seen.update(new_tasks)
+            for task in new_tasks:
+                _cancel_flush_task_for_testing(task, deadline)
 
     def _get_signal_type(self) -> str:
         """Map file_name to signal type (logs, metrics, traces, sizing).
