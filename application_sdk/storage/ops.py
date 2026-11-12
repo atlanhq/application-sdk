@@ -1957,13 +1957,22 @@ async def _confirm_head_miss(
     has no parent segment, so it lists the bucket root (no prefix) rather than
     ``"/"``, which only means the root because obstore's path parsing happens
     to strip it.
+
+    The listing is raw (``include_markers=True``). The question is whether an
+    object sits at exactly *key*, and the directory-marker filter answers a
+    different one: it drops a zero-byte key that has children, and decides
+    which zero-byte keys are phantom markers by HEADing them — the very HEAD a
+    gateway without routes answers with a bodiless 404. Filtered, a real
+    zero-byte ``dir`` beside ``dir/child`` would still read as absent.
     """
     parent = key.rpartition("/")[0]
     list_prefix = parent + "/" if parent else ""
     found = listing_cache.get(list_prefix) if listing_cache is not None else None
     if found is None:
         try:
-            items = await _list_items(resolved, list_prefix or None)
+            items = await _list_items(
+                resolved, list_prefix or None, include_markers=True
+            )
         # conformance: ignore[E004] always re-raises as StorageError; a listing that fails is not evidence the key is absent
         except Exception as exc:
             raise _storage_error_for(

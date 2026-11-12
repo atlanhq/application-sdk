@@ -2582,6 +2582,21 @@ class TestConfirmedHeadMiss:
         )
         assert not await exists_confirmed("a/b/data.json", store, normalize=False)
 
+    async def test_zero_byte_key_with_children_is_not_filtered_as_a_marker(
+        self, store
+    ) -> None:
+        """A real zero-byte ``dir`` beside ``dir/child`` looks like a folder
+        marker; the marker filter HEADs it (and the gateway 404s that too), so
+        the confirming listing must not filter it out."""
+        await _put("a/dir", b"", store, normalize=False)
+        await _put("a/dir/child.json", b"{}", store, normalize=False)
+
+        with _bodiless_head_404():
+            meta = await get_file_meta_confirmed("a/dir", store, normalize=False)
+
+        assert meta is not None
+        assert meta[0] == 0
+
     async def test_root_level_key_is_confirmed_under_the_bucket_root(
         self, store
     ) -> None:
