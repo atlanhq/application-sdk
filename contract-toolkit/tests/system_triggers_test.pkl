@@ -1,0 +1,166 @@
+// A system bundle whose entrypoint contracts declare `schedules` / `events`
+// renders an `entrypoints` block in `atlan.yaml`, so Local Marketplace (which
+// learns entrypoints only from that block) can reconcile the triggers. Every
+// entrypoint in it renders `marketplace_card: false`, so no card appears. A
+// system app with no trigger-bearing entrypoint still renders no block.
+
+amends "pkl:test"
+
+import "../examples/scheduled/app.pkl" as Scheduled
+import "../examples/system-app/app.pkl" as systemApp
+import "../examples/system-bundle/app.pkl" as systemBundle
+import "../examples/system-bundle/digest.pkl" as Digest
+import "../examples/system-triggers/app.pkl" as systemTriggers
+import "../examples/system-triggers/rollup.pkl" as Rollup
+import "../src/App.pkl" as App
+
+local triggersYaml: String = systemTriggers.output.files["atlan.yaml"].text
+
+local nightlyEp = new App.Entrypoint { name = "rollup"; type = "utility"; contract = Rollup }
+
+local function bundleOf(eps: Listing<App.Entrypoint>) = (systemTriggers) { entrypoints = eps }
+
+local uiLessWithSchedule = (Digest) {
+  schedules { new App.ScheduleSpec { name = "nightly"; cronExpression = "0 2 * * *" } }
+}
+
+local schedule = new App.ScheduleSpec { name = "nightly"; cronExpression = "0 2 * * *" }
+
+facts {
+  ["Trigger-bearing system bundle renders an entrypoints block with marketplace_card: false"] {
+    triggersYaml.contains("\ntype: system\n")
+    triggersYaml.contains("\nentrypoints:\n- name: rollup\n")
+    triggersYaml.contains("\n- name: feed\n")
+    triggersYaml.split("marketplace_card: false").length == 3
+    !triggersYaml.contains("marketplace_card: true")
+    !triggersYaml.contains("package_id:")
+    !triggersYaml.contains("type: system\n  ")
+  }
+
+  ["Each trigger-bearing entrypoint's manifest carries its triggers"] {
+    systemTriggers.output.files["app/generated/rollup/manifest.json"].text.contains("\"schedules\"")
+    systemTriggers.output.files["app/generated/feed/manifest.json"].text.contains("\"events\"")
+  }
+
+  ["Refuses a metadata marketplace_card other than false"] {
+    for (v in List(true, "yes")) {
+      module.catch(() -> bundleOf(new Listing {
+        (nightlyEp) { metadata { ["marketplace_card"] = v } }
+      }).output.files).contains("set metadata marketplace_card to a value other than false")
+    }
+  }
+
+  ["An explicit metadata marketplace_card = false renders once"] {
+    bundleOf(new Listing {
+      (nightlyEp) { metadata { ["marketplace_card"] = false } }
+    }).output.files["atlan.yaml"].text.split("marketplace_card: false").length == 2
+  }
+
+  ["Every system-bundle entrypoint manifest targets the bundle's queue"] {
+    // One worker polls the bundle's queue; a sub-contract's own default
+    // (`atlan-rollup-…`) has no worker, and the served-manifest stamp only
+    // rewrites this app's own `atlan-<name>-…` template, so it would ship as-is.
+    for (ep in List("rollup", "feed")) {
+      let (m = systemTriggers.output.files["app/generated/\(ep)/manifest.json"].text)
+        m.contains("\"task_queue\": \"atlan-system-triggers-{deployment_name}\"")
+          && !m.contains("\"task_queue\": \"atlan-\(ep)-{deployment_name}\"")
+    }
+  }
+
+  ["A sub-contract taskQueuePrefix is replaced by the system bundle's"] {
+    bundleOf(new Listing {
+      (nightlyEp) { contract = (Rollup) { taskQueuePrefix = "atlan-elsewhere" } }
+    }).output.files["app/generated/rollup/manifest.json"].text
+      .contains("\"task_queue\": \"atlan-system-triggers-{deployment_name}\"")
+  }
+
+  ["Refuses emitAtlanYaml = false with trigger-bearing entrypoints"] {
+    module.catch(() -> (systemTriggers) { emitAtlanYaml = false }.output.files)
+      .contains("emitAtlanYaml = false, but entrypoint(s) List(\"rollup\", \"feed\") declare schedules or events")
+  }
+
+  ["Refuses emitGeneratedArtifacts = false with trigger-bearing entrypoints"] {
+    module.catch(() -> (systemTriggers) { emitGeneratedArtifacts = false }.output.files)
+      .contains("emitGeneratedArtifacts = false, but entrypoint(s) List(\"rollup\", \"feed\") declare schedules or events")
+  }
+
+  ["Refuses emitEntrypoints = false with trigger-bearing entrypoints"] {
+    module.catch(() -> (systemTriggers) { emitEntrypoints = false }.output.files)
+      .contains("emitEntrypoints = false, but entrypoint(s) List(\"rollup\", \"feed\") declare schedules or events")
+  }
+
+  ["A mixed system bundle lists only its trigger-bearing entrypoints"] {
+    let (yaml = bundleOf(new Listing {
+      nightlyEp
+      new App.Entrypoint { name = "digest"; contract = Digest }
+    }).output.files["atlan.yaml"].text)
+      yaml.contains("\nentrypoints:\n- name: rollup\n")
+        && !yaml.contains("name: digest")
+        && yaml.split("marketplace_card: false").length == 2
+  }
+
+  ["A non-system sub-contract with triggers in a system bundle is listed as a non-card"] {
+    let (yaml = bundleOf(new Listing {
+      new App.Entrypoint { name = "scheduled"; type = "utility"; contract = Scheduled }
+    }).output.files["atlan.yaml"].text)
+      yaml.contains("\nentrypoints:\n- name: scheduled\n")
+        && yaml.contains("  marketplace_card: false\n")
+        && !yaml.contains("marketplace_card: true")
+        && !yaml.contains("package_id:")
+  }
+
+  ["A system bundle with no triggers renders no entrypoints block"] {
+    !systemBundle.output.files["atlan.yaml"].text.contains("entrypoints:")
+    !systemBundle.output.files["atlan.yaml"].text.contains("marketplace_card")
+    !systemApp.output.files["atlan.yaml"].text.contains("entrypoints:")
+  }
+
+  ["Existing system examples render byte-identical atlan.yaml"] {
+    systemBundle.output.files["atlan.yaml"].text == read("../examples/system-bundle/atlan.yaml").text
+    systemApp.output.files["atlan.yaml"].text == read("../examples/system-app/atlan.yaml").text
+  }
+
+  ["Refuses Entrypoint.type system or connector on a trigger-bearing entrypoint"] {
+    for (t in List("system", "connector")) {
+      module.catch(() -> bundleOf(new Listing {
+        (nightlyEp) { type = t }
+      }).output.files).contains("entrypoint(s) List(\"rollup (type = \\\"\(t)\\\")\") declare schedules or events")
+    }
+    // The default is connector, so leaving type unset is refused too.
+    module.catch(() -> bundleOf(new Listing {
+      new App.Entrypoint { name = "rollup"; contract = Rollup }
+    }).output.files).contains("Set `type = \"utility\"`")
+  }
+
+  ["Entrypoint.type = system is still accepted when no block is emitted"] {
+    (systemBundle) {
+      entrypoints = new Listing { new App.Entrypoint { name = "digest"; type = "system"; contract = Digest } }
+    }.output.files["atlan.yaml"].text != ""
+  }
+
+  ["Refuses triggers on an entrypoint whose contract renders no manifest"] {
+    module.catch(() -> bundleOf(new Listing {
+      nightlyEp
+      new App.Entrypoint { name = "digest"; contract = uiLessWithSchedule }
+    }).output.files).contains("entrypoint(s) List(\"digest\") declare schedules or events, but their contract generates no manifest.json")
+  }
+
+  ["Refuses schedules or events on a single-entrypoint system app root"] {
+    module.catch(() -> (systemApp) { schedules { schedule } }.output.files["atlan.yaml"].text)
+      .contains("declares schedules or events on its root contract")
+  }
+
+  ["Refuses root triggers even when atlan.yaml is not emitted"] {
+    module.catch(() -> (systemApp) { emitAtlanYaml = false; schedules { schedule } }.output.files)
+      .contains("declares schedules or events on its root contract")
+  }
+
+  ["Refuses schedules or events on a system bundle root"] {
+    module.catch(() -> (systemTriggers) { schedules { schedule } }.output.files["atlan.yaml"].text)
+      .contains("declares schedules or events on its root contract")
+  }
+
+  ["A system sub-contract with triggers is accepted as a bundle entrypoint"] {
+    systemTriggers.output.files.containsKey("app/generated/rollup/manifest.json")
+  }
+}

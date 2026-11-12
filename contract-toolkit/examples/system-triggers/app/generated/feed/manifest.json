@@ -1,0 +1,47 @@
+{
+  "execution_mode": "automation-engine",
+  "dag": {
+    "extract": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Extract Feed Metadata",
+      "app_name": "feed",
+      "inputs": {
+        "workflow_type": "system-triggers:feed-stream",
+        "app_name": "feed",
+        "app_id": "",
+        "argo_workflow_slug": "",
+        "task_queue": "atlan-system-triggers-{deployment_name}",
+        "args": {
+          "batch": "$.event.batch",
+          "batch_key": "$.event.batch_key",
+          "app_name": "feed",
+          "credential": "{{credential}}",
+          "agent_json": "{{agent-json}}",
+          "extraction_method": "{{extraction-method}}",
+          "target": "{{target}}"
+        }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
+      }
+    }
+  },
+  "triggers": {
+    "events": [
+      {
+        "name": "example-entity-changes",
+        "source": {
+          "name": "atlan-kafka",
+          "topic": "example.cdc.entity"
+        },
+        "trigger_config": {
+          "ack_paths": [
+            ""
+          ],
+          "streaming_enabled": true
+        },
+        "status": "ACTIVE"
+      }
+    ]
+  }
+}

@@ -179,8 +179,20 @@ creatorOrg: String?
 ///   - omits the `entrypoints` block from `atlan.yaml`, so no card can be
 ///     expanded from it (an entrypoint with no `marketplace_card` key is read
 ///     downstream as a card);
+///   - except in a system bundle where an entrypoint's contract declares
+///     `schedules` or `events`: the block is then emitted so Local Marketplace
+///     can reconcile those triggers. It lists ONLY the trigger-bearing
+///     entrypoints, each with `marketplace_card: false` and no `package_id`;
 ///   - refuses `marketplaceCard = true` and any `Entrypoint.packageId`, both of
-///     which would otherwise be dropped without a word.
+///     which would otherwise be dropped without a word;
+///   - refuses `schedules` / `events` on the system app's own root or on an
+///     entrypoint whose contract has no `uiConfig` (no manifest to carry them);
+///     `emitEntrypoints = false` with trigger-bearing entrypoints; a metadata
+///     `marketplace_card` other than `false`; and a trigger-bearing entrypoint
+///     whose `type` is `system` or `connector` (set `utility` or similar);
+///   - renders each bundle entrypoint's `manifest.json` against the bundle's
+///     `taskQueuePrefix`, replacing the sub-contract's own: one worker on one
+///     queue serves every entrypoint.
 ///
 /// It does not change `manifest.json`, the workflow configmap or `_input.py`:
 /// those still follow `uiConfig`, so a system app with a setup form keeps it.
@@ -245,14 +257,19 @@ tags: Listing<String> = new Listing {}
 /// per-entrypoint via `Entrypoint.packageId` instead.
 ///
 /// Defaults to `false` when `type = "system"`, and a system app may not set it
-/// to `true`: system apps render no `entrypoints` block, so there is nothing to
-/// carry the card.
+/// to `true`: a system app never renders a card. Its `entrypoints` block, when a
+/// bundle entrypoint declares `schedules` or `events`, carries each entrypoint
+/// with `marketplace_card: false`; otherwise it renders no block at all.
 marketplaceCard: Boolean = !isSystemApp
 
 /// Extra top-level metadata fields for atlan.yaml.
 metadata: Mapping<String, Any> = new Mapping {}
 
 /// Deep overrides applied to the rendered `atlan.yaml` after typed fields.
+///
+/// Caveat: overriding `entrypoints` away (or replacing it) in a system app with
+/// trigger-bearing entrypoints drops them from Local Marketplace's view, so
+/// their `schedules` / `events` are no longer reconciled. Nothing refuses this.
 atlanYamlOverrides: Mapping<String, Any> = new Mapping {}
 
 /// Whether to emit `atlan.yaml` in the output.
@@ -4929,7 +4946,15 @@ local function renderEntrypoint(e: Entrypoint): Mapping<String, Any> = new Mappi
     ["package_id"] = e.packageId
     ["marketplace_card"] = true
   }
-  ...e.metadata
+  // A system app's block lists only its trigger-bearing entrypoints, for the
+  // reconciler (see `emitsEntrypointsBlock`), so each one is an explicit non-card.
+  // `packageId` is refused in system mode, so this never meets the key above, and
+  // `_systemAppCheck` refuses a metadata `marketplace_card` other than `false`;
+  // the key is dropped from the spread so an explicit `false` does not collide.
+  when (isSystemApp) {
+    ["marketplace_card"] = false
+  }
+  ...(if (isSystemApp) e.metadata.toMap().remove("marketplace_card") else e.metadata)
 }
 
 local function renderKedaConfig(k: KedaConfig): Mapping<String, Any> = new Mapping {
@@ -5084,25 +5109,102 @@ local effectiveEntrypoints: Listing<Entrypoint> =
       }
     }
 
-/// Whether `atlan.yaml` carries an `entrypoints` block. A system app never does:
-/// downstream reads an entrypoint without `marketplace_card` as a card, and a
-/// system app's own listing is hidden by GM's `is_system_app`, which does not
-/// hide cards expanded from entrypoints. Omitting the block also keeps the
-/// top-level `type = "system"` out of the synthesized entrypoint: GM and CI
-/// publish do not accept `system` as an entrypoint type.
-local emitsEntrypointsBlock: Boolean = emitEntrypoints && !isSystemApp
+local function contractListingNonEmpty(c: Typed, property: String): Boolean =
+  let (v = c.getPropertyOrNull(property))
+  v is Listing && !(v as Listing).isEmpty
 
-/// Refuses system-app settings that would be dropped without a word, because a
-/// system app renders no `entrypoints` block to carry them.
+/// (Derived) Whether a bundle entrypoint's contract declares `schedules` or `events`.
+local function entrypointHasTriggers(ep: Entrypoint): Boolean =
+  ep.contract != null
+    && (contractListingNonEmpty(ep.contract!!, "schedules") || contractListingNonEmpty(ep.contract!!, "events"))
+
+/// (Derived) A system bundle's entrypoints whose contracts declare triggers.
+local systemTriggerEntrypoints: List<Entrypoint> =
+  if (isSystemApp) entrypoints.toList().filter((ep) -> entrypointHasTriggers(ep)) else List()
+
+/// Whether `atlan.yaml` carries an `entrypoints` block.
+///
+/// A non-system app always does (unless `emitEntrypoints = false`).
+///
+/// A system app does only when at least one bundle entrypoint's contract
+/// declares `schedules` or `events`, and the block then lists ONLY those
+/// entrypoints. Local Marketplace learns an app's entrypoints only from this
+/// block, and reconciles a trigger only for an entrypoint it knows, so without
+/// the block those triggers would never be created. The other entrypoints are
+/// started by callers' DAG nodes (`?entrypoint=`) and may have no manifest, so
+/// listing them would have the reconciler fetch manifests that do not exist.
+/// Every listed entrypoint renders `marketplace_card: false`:
+/// downstream reads an entrypoint with no `marketplace_card` key as a card, and
+/// GM's `is_system_app` hides the app's own listing but not cards expanded from
+/// entrypoints. `marketplace_card: false` hides the card; the reconcile still runs.
+///
+/// A system app with no trigger-bearing entrypoint renders no block, exactly as
+/// before. That also keeps the top-level `type = "system"` out of a synthesized
+/// entrypoint: GM and CI publish do not accept `system` as an entrypoint type.
+local emitsEntrypointsBlock: Boolean =
+  emitEntrypoints && (!isSystemApp || !systemTriggerEntrypoints.isEmpty)
+
+/// Refuses system-app settings that would be dropped without a word or rejected
+/// at publish:
+///
+///   - `marketplaceCard = true` and any `Entrypoint.packageId`: a system app
+///     never renders a card, so the card and `package_id` would be dropped;
+///   - an entrypoint with triggers whose contract generates no `manifest.json`
+///     (no `uiConfig`): the triggers live only in the manifest, so they would
+///     be dropped;
+///   - an `Entrypoint.metadata` `marketplace_card` other than `false`: a system
+///     app never renders a card;
+///   - trigger-bearing entrypoints with `emitAtlanYaml = false` or
+///     `emitEntrypoints = false`: the block that carries them to Local
+///     Marketplace would be suppressed; or with `emitGeneratedArtifacts =
+///     false`: the listed entrypoints' manifests would not be emitted;
+///   - a trigger-bearing entrypoint with `type` `system` (GM and CI publish
+///     reject it) or `connector` (the default; a system app's entrypoint is not
+///     a connector): set `type = "utility"` or another non-connector type.
+///
+/// Triggers on the system app's own root are refused by
+/// `_systemRootTriggersCheck`, forced by `atlan.yaml` (or by `output` when
+/// `emitAtlanYaml = false`).
 local _systemAppCheck: Any =
   if (!isSystemApp) null
   else if (marketplaceCard)
-    throw("App.pkl: type = \"system\" with marketplaceCard = true. A system app renders no `entrypoints` block, so no card would be emitted. Remove marketplaceCard, or use a non-system type if the app needs a marketplace card.")
+    throw("App.pkl: type = \"system\" with marketplaceCard = true. A system app never renders a marketplace card, so the card would be dropped. Remove marketplaceCard, or use a non-system type if the app needs a marketplace card.")
   else
     let (_withPkg = entrypoints.toList().filter((ep) -> ep.packageId != null))
+    let (_noManifest = systemTriggerEntrypoints
+      .filter((ep) -> !ep.contract!!.output.files.containsKey("app/generated/manifest.json")))
+    let (_cardMeta = entrypoints.toList()
+      .filter((ep) -> ep.metadata.containsKey("marketplace_card") && ep.metadata["marketplace_card"] != false))
+    let (_badType = systemTriggerEntrypoints.filter((ep) -> ep.type == "system" || ep.type == "connector"))
     if (!_withPkg.isEmpty)
-      throw("App.pkl: type = \"system\" with packageId set on entrypoint(s) \(_withPkg.map((ep) -> ep.name)). A system app renders no `entrypoints` block, so the package_id and card would be dropped. Remove packageId, or use a non-system type if the entrypoint needs a marketplace card.")
+      throw("App.pkl: type = \"system\" with packageId set on entrypoint(s) \(_withPkg.map((ep) -> ep.name)). A system app never renders a marketplace card, so the package_id and card would be dropped. Remove packageId, or use a non-system type if the entrypoint needs a marketplace card.")
+    else if (!_cardMeta.isEmpty)
+      throw("App.pkl: type = \"system\" entrypoint(s) \(_cardMeta.map((ep) -> ep.name)) set metadata marketplace_card to a value other than false. A system app never renders a marketplace card. Remove the key, or use a non-system type if the entrypoint needs a card.")
+    else if (!emitAtlanYaml && !systemTriggerEntrypoints.isEmpty)
+      throw("App.pkl: type = \"system\" with emitAtlanYaml = false, but entrypoint(s) \(systemTriggerEntrypoints.map((ep) -> ep.name)) declare schedules or events. Local Marketplace learns entrypoints only from atlan.yaml, so their triggers would never be reconciled. Remove emitAtlanYaml = false.")
+    else if (!emitGeneratedArtifacts && !systemTriggerEntrypoints.isEmpty)
+      throw("App.pkl: type = \"system\" with emitGeneratedArtifacts = false, but entrypoint(s) \(systemTriggerEntrypoints.map((ep) -> ep.name)) declare schedules or events. atlan.yaml lists them, but their app/generated/<entrypoint>/manifest.json, which carries the triggers and the bundle's task queue, would not be emitted, so Local Marketplace could not reconcile them. Remove emitGeneratedArtifacts = false.")
+    else if (!emitEntrypoints && !systemTriggerEntrypoints.isEmpty)
+      throw("App.pkl: type = \"system\" with emitEntrypoints = false, but entrypoint(s) \(systemTriggerEntrypoints.map((ep) -> ep.name)) declare schedules or events. Local Marketplace learns entrypoints only from atlan.yaml's `entrypoints` block, so their triggers would never be reconciled. Remove emitEntrypoints = false.")
+    else if (!_noManifest.isEmpty)
+      throw("App.pkl: type = \"system\" entrypoint(s) \(_noManifest.map((ep) -> ep.name)) declare schedules or events, but their contract generates no manifest.json (it has no uiConfig). Triggers render only into manifest.json, so they would be dropped. Give the entrypoint's contract a uiConfig, or remove its schedules and events.")
+    else if (!_badType.isEmpty)
+      throw("App.pkl: type = \"system\" entrypoint(s) \(_badType.map((ep) -> "\(ep.name) (type = \"\(ep.type)\")")) declare schedules or events, so they are listed in atlan.yaml's `entrypoints` block. GM and CI publish reject `system` as an entrypoint type, and a system app's entrypoint is not a `connector` (the default). Set `type = \"utility\"` or another non-connector type (miner, orchestrator, custom); the app-level `type = \"system\"` already marks the app.")
     else null
+
+/// Refuses `schedules` / `events` on a system app's own root contract. Its
+/// `atlan.yaml` never carries a root entrypoint (a single-entrypoint system app
+/// renders no `entrypoints` block, and a bundle root renders no manifest), so
+/// Local Marketplace would never reconcile them. Forced when `atlan.yaml`
+/// renders, or from `output` when `emitAtlanYaml = false`. A system
+/// sub-contract's own `atlan.yaml` is discarded by its bundle, so the same
+/// contract (with the default `emitAtlanYaml = true`) is accepted as a bundle
+/// entrypoint. Caveat: a sub-contract that sets `emitAtlanYaml = false` and
+/// declares triggers is refused too, since it cannot tell it is a sub-contract.
+local _systemRootTriggersCheck: Any =
+  if (isSystemApp && (!schedules.isEmpty || !events.isEmpty))
+    throw("App.pkl: type = \"system\" app declares schedules or events on its root contract. A system app's atlan.yaml carries no root entrypoint, so Local Marketplace would never reconcile them. Declare them on the `contract` of an entry in `entrypoints` (a system bundle) whose contract has a uiConfig; that entrypoint is then rendered with marketplace_card: false.")
+  else null
 
 local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   ["name"] = name
@@ -5122,7 +5224,7 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   when (tags.toList().length > 0) { ["tags"] = tags }
   when (emitsEntrypointsBlock) {
     ["entrypoints"] = new Listing {
-      for (ep in effectiveEntrypoints) {
+      for (ep in if (isSystemApp) systemTriggerEntrypoints else effectiveEntrypoints) {
         renderEntrypoint(ep)
       }
     }
@@ -5140,6 +5242,7 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
 }
 
 local atlanYamlData: Mapping<String, Any> =
+  let (_sysRootTriggerCheck = _systemRootTriggersCheck)
   deepMergeMapping(deepMergeMapping(generatedAtlanYamlData, metadata), atlanYamlOverrides)
 
 local generatedYamlHeader: String =
@@ -5445,6 +5548,20 @@ local function bundleCallerNode(ep: Entrypoint): FileOutput =
   })
   c.output.files[c.inputContractPath]
 
+// A system bundle entrypoint's `manifest.json`, rendered against the bundle's
+// task queue rather than the sub-contract's own. The bundle is one App class
+// served by one worker on one queue (see `bundleCallerNode`), so a sub-contract's
+// default `atlan-<entrypoint>-{deployment_name}` has no worker. The served-manifest
+// stamp does not correct it either: it rewrites only this app's own
+// `atlan-<name>-{deployment_name}` template and leaves any other queue as a foreign
+// app's. Triggers reconciled from such a manifest would dispatch to nothing.
+local function systemBundleManifest(ep: Entrypoint): FileOutput =
+  let (prefix = taskQueuePrefix)
+  let (c = (ep.contract!!) { taskQueuePrefix = prefix })
+  c.output.files[systemBundleManifestKey]
+
+local systemBundleManifestKey: String = "app/generated/manifest.json"
+
 // Where a bundle re-exports one entrypoint contract's file. A system
 // sub-contract's caller node (`inputContractPath`), with or without a uiConfig,
 // goes to `contract/generated/<ep>/` instead of under `app/generated/<ep>/`.
@@ -5641,6 +5758,8 @@ output =
   // Forced here because nothing that renders atlan.yaml reads it, so it would
   // otherwise never be evaluated.
   let (_sysAppCheck = _systemAppCheck)
+  // atlan.yaml forces this when it renders; without atlan.yaml nothing else does.
+  let (_sysRootTriggerCheck = if (emitAtlanYaml) null else _systemRootTriggersCheck)
   let (_inputsDeclCheck = _inputsCheck)
   // Forced here because a bundle root never evaluates manifestData, which is the only
   // other reader of legacyWorkflowTypes — the misplacement would otherwise stay lazy.
@@ -5756,6 +5875,8 @@ output =
                     if (normalizeContractFileName(fileName) == "_input.py") bundleInputPy(entrypoint.name, fileOutput)
                     else if (isSystemSubContract(entrypoint) && fileName == entrypoint.contract!!.inputContractPath)
                       bundleCallerNode(entrypoint)
+                    else if (isSystemApp && fileName == systemBundleManifestKey)
+                      systemBundleManifest(entrypoint)
                     else fileOutput
                 }
               }

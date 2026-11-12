@@ -1,0 +1,46 @@
+/// System-triggers example — a system bundle (`type = "system"`) whose
+/// entrypoints are started by their own `schedules` / `events` triggers, not
+/// by other apps' DAG nodes.
+///
+/// A system app normally renders no `entrypoints` block in `atlan.yaml`. Local
+/// Marketplace learns an app's entrypoints only from that block, and reconciles
+/// a trigger only for an entrypoint it knows, so here the block IS rendered:
+/// one entry per trigger-bearing entrypoint (others are left out), each with
+/// `marketplace_card: false` and no `package_id`. No marketplace card appears;
+/// the reconcile still runs.
+///
+/// Each trigger-bearing entrypoint needs a `uiConfig`, because triggers render
+/// only into the entrypoint's `manifest.json`, and a contract with no
+/// `uiConfig` generates none (refused at eval time).
+///
+/// Generated layout:
+///   atlan.yaml                           ← entrypoints, marketplace_card: false
+///   app.yaml                             ← SDR CI shim
+///   app/generated/rollup/manifest.json   ← triggers.schedules
+///   app/generated/feed/manifest.json     ← triggers.events (streaming)
+amends "../../src/App.pkl"
+
+import "rollup.pkl" as Rollup
+import "feed.pkl" as Feed
+
+name = "system-triggers"
+displayName = "System Triggers Example"
+icon = "https://assets.atlan.com/assets/ph-gear-light.svg"
+type = "system"
+
+entrypoints {
+  new Entrypoint {
+    name = "rollup"
+    displayName = "Rollup"
+    // A listed entrypoint may not be `system` (GM/CI reject it) or `connector`
+    // (the default); a system app's background job is a utility.
+    type = "utility"
+    contract = Rollup
+  }
+  new Entrypoint {
+    name = "feed"
+    displayName = "Feed"
+    type = "utility"
+    contract = Feed
+  }
+}

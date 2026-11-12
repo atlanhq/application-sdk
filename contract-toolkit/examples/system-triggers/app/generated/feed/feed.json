@@ -1,0 +1,31 @@
+{
+  "id": "feed",
+  "name": "Feed",
+  "logo": "https://assets.atlan.com/assets/ph-gear-light.svg",
+  "config": {
+    "properties": {
+      "target": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "input",
+          "label": "Target",
+          "hidden": false,
+          "help": "",
+          "placeholder": "example-target",
+          "grid": 8
+        }
+      }
+    },
+    "steps": [
+      {
+        "title": "Configuration",
+        "description": "",
+        "id": "configuration",
+        "properties": [
+          "target"
+        ]
+      }
+    ]
+  }
+}
