@@ -5,6 +5,7 @@ A histogram bucket cannot give you ``peak_per_input_byte`` per execution.
 from __future__ import annotations
 
 import threading
+import warnings
 from dataclasses import asdict
 from time import time
 from typing import Any, ClassVar
@@ -13,10 +14,8 @@ from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
     SIZING_BATCH_SIZE,
-    SIZING_CLEANUP_ENABLED,
     SIZING_FILE_NAME,
     SIZING_FLUSH_INTERVAL_SECONDS,
-    SIZING_RETENTION_DAYS,
 )
 from application_sdk.observability.background_loop import BackgroundTask
 from application_sdk.observability.logger_adaptor import get_logger
@@ -129,8 +128,6 @@ def get_sink() -> SizingObservabilitySink | None:
                 _sink = SizingObservabilitySink(
                     batch_size=SIZING_BATCH_SIZE,
                     flush_interval=SIZING_FLUSH_INTERVAL_SECONDS,
-                    retention_days=SIZING_RETENTION_DAYS,
-                    cleanup_enabled=SIZING_CLEANUP_ENABLED,
                     data_dir=get_observability_dir(),
                     file_name=SIZING_FILE_NAME,
                 )
@@ -178,3 +175,36 @@ def _reset_for_testing() -> None:
     with _sink_lock:
         _sink = None
         SizingObservabilitySink._reset_for_testing()
+
+
+#: Retention-sweep constants this module used to re-export from
+#: ``application_sdk.constants``; served once more by ``__getattr__`` (PEP 562).
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "SIZING_RETENTION_DAYS": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported sizing files",
+    ),
+    "SIZING_CLEANUP_ENABLED": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported sizing files",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the removed constants once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    from application_sdk.constants import (  # noqa: PLC0415 — only reached on a deprecated access
+        _DEPRECATED_CONSTANT_VALUES,
+    )
+
+    return _DEPRECATED_CONSTANT_VALUES[name]

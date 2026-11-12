@@ -323,3 +323,45 @@ Two pieces of background work stay off the loop on purpose. The console writer
 is a plain thread because its job is a blocking `write()` to stdout; on the
 shared loop a stalled pipe would stall every flush. The OTLP exporter's batch
 thread belongs to the OpenTelemetry SDK.
+
+## Addendum: retention of exported files belongs to the bucket, not the SDK (FND-4889)
+
+**Decision.** The SDK writes observability files to the object store and never
+deletes them. How long they are kept is set by a lifecycle rule on the bucket,
+owned by whoever owns the bucket. The SDK has no retention setting.
+
+**What was removed.** `AtlanObservability` carried a retention sweep
+(`_check_and_cleanup` / `_cleanup_old_records`), configured by
+`ATLAN_{LOG,METRICS,SIZING}_RETENTION_DAYS` and `…_CLEANUP_ENABLED`. It never
+deleted an exported file: it walked the pod's local partition tree, which is
+empty once each file is uploaded and unlinked; the key it deleted lacked the
+`artifacts/apps/observability/` prefix every upload uses; and
+`storage.delete` removes one object, not a prefix. With cleanup on, it still
+cost a state-store read on every flush. The sweep is gone. The env vars are in
+`_REMOVED_ENV_VARS` (warn when set), and the constants and constructor
+parameters are deprecated aliases until v4.0.0.
+
+**Why not fix it.** A working sweep is the wrong design, not just a missing
+piece:
+
+- **The prefix is shared.** Uploads go to
+  `artifacts/apps/observability/{sdr|non-sdr}/<signal>/year=…/hour=…/`, with no
+  app or deployment segment; only the file name carries those. One app's
+  retention setting would expire every other app's files under the same prefix.
+- **Every pod would run it.** Each worker of each app would list and delete
+  across that shared prefix, racing the others on the same keys. A lifecycle
+  rule does the same work once, inside the store, at no cost to the app.
+- **The SDK does not own the buckets.** Files go to the deployment
+  (customer) store, and in SDR mode also to the upstream (Atlan) store. Deleting
+  from either is the owner's decision, and the owner already has the tool for
+  it. This matches ADR-0014, where customers set lifecycle policies on the
+  artifact prefixes they hold.
+- **Nothing depends on it.** The sweep never deleted anything, so removing it
+  changes no observable behaviour. Making it work would start deleting data
+  across the fleet on a routine upgrade.
+
+**If SDK-side retention is ever wanted,** treat it as a new feature with its
+own ADR. It needs a per-app (or per-deployment) key layout, or a file-name
+filter, so one app cannot delete another's files; an explicit decision on the
+upstream store; and a single owner, such as one scheduled job, instead of
+every pod.

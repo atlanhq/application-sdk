@@ -84,8 +84,6 @@ def obs_instance(tmp_path):
     inst = _ConcreteObs(
         batch_size=100,
         flush_interval=60,
-        retention_days=7,
-        cleanup_enabled=False,
         data_dir=str(tmp_path),
         file_name=LOG_FILE_NAME,  # → signal type "logs"
     )
@@ -164,8 +162,6 @@ class TestObsModeDerivation:
             inst = _Obs(
                 batch_size=1,
                 flush_interval=60,
-                retention_days=7,
-                cleanup_enabled=False,
                 data_dir="/tmp/does-not-need-to-exist-obs-test",
                 file_name=file_name,
             )

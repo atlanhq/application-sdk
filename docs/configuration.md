@@ -334,8 +334,8 @@ Used by the distributed lock (`RedisClient` / `RedisClientAsync`). Leave empty f
 | `ATLAN_LOG_BATCH_SIZE` | `100` | Records buffered before flushing to the object-store sink. |
 | `ATLAN_LOG_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between object-store sink flushes. |
 | `ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS` | `10` | Upper bound, in seconds, on stopping the observability background loop at process exit. Covers the final flush of every periodic sink (logs, metrics, traces, sizing) and the Segment sender's last batch together. Past it, the remaining work is abandoned. See [Monitoring](concepts/monitoring.md#the-background-flush-loop). |
-| `ATLAN_LOG_RETENTION_DAYS` | `30` | Days to retain log files in the object store before cleanup. |
-| `ATLAN_LOG_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old log files. Any non-empty string value (including `"false"`) is treated as `true` by `bool()`; unset or empty to disable. |
+| `ATLAN_LOG_RETENTION_DAYS` | _(removed)_ | No longer read; setting it logs a startup warning. The SDK never deletes exported files; bound object-store growth with a lifecycle rule on the bucket, for example expiring objects under `artifacts/apps/observability/` after N days. See [ADR-0012](adr/0012-observability-consolidation.md#addendum-retention-of-exported-files-belongs-to-the-bucket-not-the-sdk-fnd-4889). |
+| `ATLAN_LOG_CLEANUP_ENABLED` | _(removed)_ | No longer read; setting it logs a startup warning. See `ATLAN_LOG_RETENTION_DAYS`. |
 | `ATLAN_LOG_FILE_NAME` | `log.parquet` | Signal-type discriminator used internally to route records to the correct observability sub-path (logs / metrics / traces). **The default is kept as `log.parquet` for back-compat; the on-disk and object-store format is gzip-compressed NDJSON (`.json.gz`), not parquet.** |
 
 ---
@@ -346,8 +346,8 @@ Used by the distributed lock (`RedisClient` / `RedisClientAsync`). Leave empty f
 |----------|---------|-------------|
 | `ATLAN_METRICS_BATCH_SIZE` | `100` | Records buffered before flushing to the object-store sink. |
 | `ATLAN_METRICS_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between object-store sink flushes. |
-| `ATLAN_METRICS_RETENTION_DAYS` | `30` | Days to retain metric files in the object store before cleanup. |
-| `ATLAN_METRICS_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old metric files. Set to `false` to disable. |
+| `ATLAN_METRICS_RETENTION_DAYS` | _(removed)_ | No longer read; setting it logs a startup warning. The SDK never deleted exported metric files. Use a bucket lifecycle rule, as for `ATLAN_LOG_RETENTION_DAYS`. |
+| `ATLAN_METRICS_CLEANUP_ENABLED` | _(removed)_ | No longer read; setting it logs a startup warning. See `ATLAN_METRICS_RETENTION_DAYS`. |
 | `ATLAN_ENABLE_TEMPORAL_CORE_METRICS` | `true` | Bind the Temporal Rust-core Prometheus endpoint at `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` (loopback) in worker/combined mode so its metric set (`temporal_workflow_*`, `temporal_activity_*`, etc.) is reachable for the combined-mode FastAPI `/metrics` proxy and the worker's `TemporalCoreCollector`. The FastAPI `/metrics` route is always exposed regardless of this flag — when this flag is `false`, or in handler-only mode, the response simply omits the proxied Temporal Rust-core families. `run_dev_combined()` defaults to `false` to avoid hot-reload port collisions. See [Monitoring](concepts/monitoring.md). |
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` | _(empty)_ | Pushgateway URL workers push to (split deployment). Empty disables push — combined-mode pods leave it unset and rely on direct `/metrics` scrape. |
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS` | `30` | Periodic push interval. A final push always happens on shutdown. |

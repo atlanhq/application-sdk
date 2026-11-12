@@ -424,6 +424,60 @@
       "symbol": "DAPR_BINDING_OPERATION_CREATE"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "LOG_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported log files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "LOG_CLEANUP_ENABLED"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "LOG_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported log files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "LOG_RETENTION_DAYS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "METRICS_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported metric files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "METRICS_CLEANUP_ENABLED"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "METRICS_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported metric files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "METRICS_RETENTION_DAYS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SIZING_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported sizing files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "SIZING_CLEANUP_ENABLED"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SIZING_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported sizing files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "SIZING_RETENTION_DAYS"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "ContractValidationError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
@@ -782,6 +836,60 @@
       "module": "application_sdk.infrastructure.state",
       "removal_version": "4.0",
       "symbol": "StateStoreError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "LOG_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported log files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.logger_adaptor",
+      "removal_version": "4.0.0",
+      "symbol": "LOG_CLEANUP_ENABLED"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "LOG_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported log files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.logger_adaptor",
+      "removal_version": "4.0.0",
+      "symbol": "LOG_RETENTION_DAYS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "METRICS_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported metric files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.metrics_adaptor",
+      "removal_version": "4.0.0",
+      "symbol": "METRICS_CLEANUP_ENABLED"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "METRICS_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported metric files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.metrics_adaptor",
+      "removal_version": "4.0.0",
+      "symbol": "METRICS_RETENTION_DAYS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SIZING_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported sizing files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.sizing_sink",
+      "removal_version": "4.0.0",
+      "symbol": "SIZING_CLEANUP_ENABLED"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SIZING_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported sizing files. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.sizing_sink",
+      "removal_version": "4.0.0",
+      "symbol": "SIZING_RETENTION_DAYS"
     },
     {
       "kind": "constant",

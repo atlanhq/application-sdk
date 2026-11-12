@@ -37,8 +37,6 @@ from application_sdk.observability.utils import (
 # support traces; the local sink is dormant until the trace pipeline lands.
 _TRACES_BATCH_SIZE = 100
 _TRACES_FLUSH_INTERVAL_SECONDS = 5
-_TRACES_RETENTION_DAYS = 30
-_TRACES_CLEANUP_ENABLED = True
 
 __all__ = ["TraceRecord", "AtlanTracesAdapter", "get_traces", "setup_tracer_provider"]
 
@@ -190,8 +188,6 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         super().__init__(
             batch_size=_TRACES_BATCH_SIZE,
             flush_interval=_TRACES_FLUSH_INTERVAL_SECONDS,
-            retention_days=_TRACES_RETENTION_DAYS,
-            cleanup_enabled=_TRACES_CLEANUP_ENABLED,
             data_dir=get_observability_dir(),
             file_name=TRACES_FILE_NAME,
         )

@@ -218,8 +218,6 @@ class _RecordingSink(AtlanObservability[Any]):
         super().__init__(
             batch_size=1000,
             flush_interval=3600,
-            retention_days=1,
-            cleanup_enabled=False,
             data_dir=str(tmp_path),
             file_name="test.parquet",
         )

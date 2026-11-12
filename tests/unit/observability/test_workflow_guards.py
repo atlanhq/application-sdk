@@ -6,8 +6,8 @@ support, and all three ask one shared predicate,
 
 * ``SegmentClient.flush()`` — the awaited cross-loop bridge that started this
   (``asyncio.wrap_future``).
-* ``AtlanObservability._flush_records()`` — blocking gzip file I/O, the
-  object-store upload, and the retention sweep's ``run_in_thread`` offload.
+* ``AtlanObservability._flush_records()`` — blocking gzip file I/O and the
+  object-store upload.
 * ``AtlanLoggerAdapter._sync_flush()`` — reached on every ERROR/CRITICAL log,
   including the generated workflow's own "App failed"; would otherwise spawn an
   un-awaited task on the workflow loop, or build a second event loop.
@@ -67,8 +67,6 @@ def obs_instance(tmp_path):
     instance = _ConcreteObs(
         batch_size=100,
         flush_interval=60,
-        retention_days=7,
-        cleanup_enabled=False,
         data_dir=str(tmp_path),
         file_name=LOG_FILE_NAME,  # → signal type "logs"
     )
