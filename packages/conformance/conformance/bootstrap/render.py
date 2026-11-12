@@ -319,6 +319,8 @@ def render(
     private_git_deps: str = "",
     git_lfs_skip_smudge: str = "",
     lfs: str = "",
+    test_lfs: str = "",
+    java_version: str = "",
     health_check_timeout_seconds: str = "",
     container_health_timeout_seconds: str = "",
     runtime_sdk_ref: str = "",
@@ -390,6 +392,8 @@ def render(
       ``pytest_args_block``, ``timeout_minutes``, ``apt_packages``,
       ``private_git_deps``, ``git_lfs_skip_smudge``, ``lfs`` (the e2e
       image-build checkout's LFS fetch, distinct from the smudge skip),
+      ``test_lfs`` and ``java_version`` (the Unit and Integration jobs'
+      LFS checkout and JDK),
       ``health_check_timeout_seconds``,
       ``container_health_timeout_seconds``, ``runtime_sdk_ref``,
       ``harness_sdk_ref``, ``e2e_test_path``, ``source_available``,
@@ -465,6 +469,8 @@ def render(
         private_git_deps=private_git_deps,
         git_lfs_skip_smudge=git_lfs_skip_smudge,
         lfs=lfs,
+        test_lfs=test_lfs,
+        java_version=java_version,
         health_check_timeout_seconds=health_check_timeout_seconds,
         container_health_timeout_seconds=container_health_timeout_seconds,
         runtime_sdk_ref=runtime_sdk_ref,
