@@ -30,11 +30,17 @@ so an SDK-side log still scans the same way as the connector-side worker log.
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import subprocess
 import sys
 import time
+from pathlib import Path
+
+# Sibling .github/scripts module — imported, not copied (FND-2674, FND-4899).
+# Run as `python3 <path>/poll_dispatched_run.py` the script's own dir is on
+# sys.path already; the insert covers importers loading it by file path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _gh_refs import gh_request  # noqa: E402
 
 # Statuses that mean "not finished yet"; anything else ends the poll.
 PENDING_STATUSES = {"in_progress", "queued", "pending", "waiting", "requested"}
@@ -49,11 +55,6 @@ GLYPHS = {
 }
 
 
-def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-    """Single seam so tests can stub the HTTP client."""
-    return subprocess.run(cmd, **kwargs)
-
-
 def glyph_for_status(status: str) -> str:
     return GLYPHS.get(status, "❔")
 
@@ -64,38 +65,33 @@ def fetch_run(repo: str, run_id: str) -> dict:
     Raising rather than returning a sentinel is the point: the caller decides
     that a failed read means "poll again", which is the behaviour the old shell
     got wrong by conflating an unreadable response with a concluded run.
+
+    The request goes through ``_gh_refs.gh_request``, the shared curl transport,
+    which feeds the token to curl on stdin rather than argv (FND-4899): this poll
+    holds the fleet App installation token for up to two hours, and an argv
+    token is readable by anything else on the runner for every one of those
+    requests. The transport also retries a transient curl failure or 5xx before
+    this function sees it, beneath ``poll``'s own consecutive-error budget.
     """
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
         raise SystemExit("::error::GH_TOKEN (or GITHUB_TOKEN) must be set")
 
-    result = run(
-        [
-            "curl",
-            "-sS",
-            "--fail",
-            "--max-time",
-            "30",
-            "-H",
-            "Accept: application/vnd.github+json",
-            "-H",
-            "X-GitHub-Api-Version: 2022-11-28",
-            "-H",
-            f"Authorization: Bearer {token}",
-            f"https://api.github.com/repos/{repo}/actions/runs/{run_id}",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"curl exited {result.returncode}: {result.stderr.strip()}")
     try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"response was not JSON: {exc}") from exc
+        response = gh_request("GET", f"repos/{repo}/actions/runs/{run_id}")
+    except SystemExit as exc:
+        # The transport exits once its own retries are spent, or on a response it
+        # cannot parse at all. Either is one unreadable poll, not a verdict.
+        raise RuntimeError(str(exc)) from None
+    if response.status >= 400:
+        raise RuntimeError(
+            f"HTTP {response.status}: {response.message or 'no message'}"
+        )
+    payload = response.body
     if not isinstance(payload, dict) or "status" not in payload:
-        raise RuntimeError(f"response has no status field: {result.stdout[:200]!r}")
+        raise RuntimeError(
+            f"HTTP {response.status} response has no status field: {payload!r:.200}"
+        )
     return payload
 
 

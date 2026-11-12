@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 144,
-    "warning": 6050
+    "warning": 5999
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -204,10 +204,10 @@
     },
     ".github/scripts/poll_check_runs_gate.py": {
       "warning:reportAttributeAccessIssue": 1,
-      "warning:reportUnknownMemberType": 29
+      "warning:reportUnknownMemberType": 22
     },
     ".github/scripts/poll_dispatched_run.py": {
-      "warning:reportUnknownMemberType": 6
+      "warning:reportUnknownMemberType": 2
     },
     ".github/scripts/pr_test_command.py": {
       "error:reportOptionalMemberAccess": 1,
@@ -583,11 +583,11 @@
       "warning:reportUnknownMemberType": 1
     },
     ".github/scripts/tests/test_poll_check_runs_gate.py": {
-      "warning:reportUnknownMemberType": 61
+      "warning:reportUnknownMemberType": 40
     },
     ".github/scripts/tests/test_poll_dispatched_run.py": {
       "warning:reportFunctionMemberAccess": 4,
-      "warning:reportUnknownMemberType": 21
+      "warning:reportUnknownMemberType": 2
     },
     ".github/scripts/tests/test_pr_test_command.py": {
       "warning:reportAttributeAccessIssue": 1,

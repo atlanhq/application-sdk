@@ -784,6 +784,10 @@ Since v4 the action reads the dispatched run's id straight out of the `workflow_
 >
 > The middle term is the receiver's own second line of defence, added after #2939: because both SDK call sites always pass `application_sdk_ref`, a dispatcher that drops `distinct_id` today degrades to per-SDK-SHA grouping rather than one global group. That narrows the blast radius; it does not remove the caller's obligation, and it only helps receivers that have adopted the fallback. On the SDK side the obligation is enforced, not just documented — `e2e-apps`'s `Require a distinct_id in workflow-inputs` step ([`validate_dispatch_inputs.py`](../../.github/scripts/validate_dispatch_inputs.py)) fails the job before dispatching if the key is missing or empty.
 
+### The SDK-side pollers and their tokens
+
+Two SDK-side scripts poll GitHub for up to two hours each: `poll_check_runs_gate.py` (the `Connector Tests Gate`, on the job token) and `poll_dispatched_run.py` (poll mode in `e2e-apps`, on the fleet App installation token). Both send every request through `_gh_refs.gh_request`, which feeds the token to curl on stdin (`-K -`), never argv — an argv token is readable from the process table by anything else on the runner for the life of each request. The same transport retries a transient curl failure or 5xx, so one network blip no longer ends the gate. `gh_request` takes extra request headers (the gate's `If-None-Match`, so an unchanged poll is a free 304) but refuses an `Authorization` header there, because those go on argv. `test_gh_refs.py` fails if any script in `.github/scripts/` builds an `Authorization: Bearer …` string for a curl `-H` argument (FND-4899).
+
 ### Sticky-comment behaviour
 
 The SDR composite renders one PR-comment body, writes it to `results/pr-comment-body.md`, and uploads it as part of the test artifact. Both posting sides (connector PR + cross-repo SDK PR) read this same file and post it as a sticky-update comment, swapping the marker line so updates don't collide.
