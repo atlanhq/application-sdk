@@ -34,10 +34,6 @@ jobs:
       workflow_run_id: ${{ github.event.workflow_run.id }}
       head_branch: ${{ github.event.workflow_run.head_branch }}
       head_sha: ${{ github.event.workflow_run.head_sha }}
-      # Read the availability probe out of the same commit that produced these
-      # results, not out of `main`: on this repo the two can differ, and the
-      # script is this repo's own.
-      sdk_ref: ${{ github.event.workflow_run.head_sha }}
       slugs: >-
         [{"slug": "ci", "name": "Upload CI SARIF"},
          {"slug": "error-handling", "name": "Upload Error-handling SARIF"},

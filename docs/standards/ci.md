@@ -1598,9 +1598,10 @@ today's re-run. Such a checkout opts out with an inline comment inside the step:
     path: .sdk-scripts
 ```
 
-An exempt checkout must be content only: a literal ref, and a sparse set that
-does not include `.github/scripts` or `.github/actions`. Code it needs comes from
-a second, pinned checkout, as above.
+An exempt checkout must be content only: the literal `ref: main`, and a sparse
+set of literal paths (no glob patterns, which could match code without sharing
+its prefix) that does not include `.github/scripts` or `.github/actions`. Code it
+needs comes from a second, pinned checkout, as above.
 
 Workflows that run only in this repo and check it out without `repository:`
 (`vuln-reconcile-on-release.yml`'s scan baseline, `contract-toolkit-publish.yml`

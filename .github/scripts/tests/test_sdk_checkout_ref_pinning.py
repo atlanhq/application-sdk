@@ -15,10 +15,11 @@ opts out with an inline comment inside the step::
 
     # sdk-checkout-ref-exempt: <why this content must track main>
 
-and an exempt checkout may not carry code: its ref must be a literal (an
-expression can render empty, and checkout reads empty as "default branch"), and
-its sparse set must not include `.github/scripts` or `.github/actions`. Code it
-needs comes from a second, pinned checkout.
+and an exempt checkout may not carry code: its ref must be the literal `main`
+(an expression can render empty, and checkout reads empty as "default branch";
+any other literal would stop the content tracking main), and its sparse set must
+be literal paths (no glob patterns) that do not include `.github/scripts` or
+`.github/actions`. Code it needs comes from a second, pinned checkout.
 """
 
 from __future__ import annotations
@@ -39,6 +40,8 @@ SDK_REPO = "atlanhq/application-sdk"
 PINNED_REF = "${{ job.workflow_sha }}"
 EXEMPT_MARKER = re.compile(r"#\s*sdk-checkout-ref-exempt:\s*(?P<reason>\S.*)$")
 CODE_PATHS = (".github/scripts", ".github/actions")
+# gitignore-style pattern syntax that non-cone sparse-checkout honours.
+_GLOB_CHARS = ("*", "?", "[", "!", "\\")
 ACTIONLINT_IGNORE = 'property "workflow_sha" is not defined'
 
 _STEP_START = re.compile(r"^(?P<indent>\s*)-\s")
@@ -162,13 +165,24 @@ def _sparse_paths(with_: dict[str, Any]) -> list[str]:
     ids=lambda c: c.where,
 )
 def test_an_exempt_checkout_fetches_content_not_code(checkout: Checkout) -> None:
-    ref = checkout.with_.get("ref")
-    assert isinstance(ref, str) and ref and "${{" not in ref, (
-        f"{checkout.where}: an exempt checkout needs a literal ref; an expression "
-        "can render empty and checkout then takes the default branch silently"
+    # The exemption exists for content that must track main, so the ref is the
+    # literal `main`: not an expression (which can render empty, and checkout
+    # then takes the default branch silently), and not another branch or tag,
+    # which would freeze the content the exemption is meant to keep current.
+    assert checkout.with_.get("ref") == "main", (
+        f"{checkout.where}: an exempt checkout must use the literal `ref: main`, "
+        f"got {checkout.with_.get('ref')!r}"
     )
     paths = _sparse_paths(checkout.with_)
     assert paths, f"{checkout.where}: an exempt checkout must be sparse (content only)"
+    # Literal paths only. In non-cone mode a pattern such as `.github/**` or
+    # `*` matches the code paths without sharing a prefix with them, so a
+    # prefix check alone cannot rule code out.
+    globbed = [p for p in paths if any(ch in p for ch in _GLOB_CHARS)]
+    assert not globbed, (
+        f"{checkout.where}: exempt checkout uses sparse patterns {globbed}; "
+        "list literal content paths so the code check below is sound"
+    )
     code = [
         p for p in paths if any(p.startswith(c) or c.startswith(p) for c in CODE_PATHS)
     ]
