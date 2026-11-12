@@ -1420,47 +1420,59 @@ in that directory are trusted in addition to system CAs.
 # See: https://github.com/atlanhq/application-sdk/pull/1129
 
 
-#: name -> (private value name, why). Served by ``__getattr__`` below (PEP 562).
-_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+#: name -> deprecation notice. Each value is served from ``_<name>`` by
+#: ``__getattr__`` below (PEP 562). Notices point at the environment variable,
+#: never at the private ``_<name>`` value, which is an SDK internal.
+_DEPRECATED_CONSTANTS: dict[str, str] = {
     "LOCK_METADATA_KEY": (
-        "_LOCK_METADATA_KEY",
-        "needs_lock has no effect in v3: create_worker registers no lock interceptor",
+        "LOCK_METADATA_KEY is deprecated and has no effect: needs_lock does "
+        "nothing in v3 because create_worker registers no lock interceptor. "
+        "Remove the import; it will be removed in v4.0.0."
     ),
     "LOCK_RETRY_INTERVAL_SECONDS": (
-        "_LOCK_RETRY_INTERVAL_SECONDS",
-        "the lock interceptor that reads it is never registered by create_worker",
+        "LOCK_RETRY_INTERVAL_SECONDS is deprecated and has no effect: the lock "
+        "interceptor that reads it is never registered by create_worker. "
+        "Remove the import; it will be removed in v4.0.0."
     ),
     "IS_LOCKING_DISABLED": (
-        "_IS_LOCKING_DISABLED",
-        "it only guards the deprecated RedisClient / RedisClientAsync connection",
+        "IS_LOCKING_DISABLED is deprecated: it only guards the deprecated "
+        "RedisClient / RedisClientAsync connection. Read the IS_LOCKING_DISABLED "
+        "environment variable instead; it will be removed in v4.0.0."
     ),
-    "REDIS_HOST": ("_REDIS_HOST", "it only configures the deprecated RedisClient"),
-    "REDIS_PORT": ("_REDIS_PORT", "it only configures the deprecated RedisClient"),
+    "REDIS_HOST": (
+        "REDIS_HOST is deprecated: it only configures the deprecated RedisClient. "
+        "Read the REDIS_HOST environment variable instead; it will be removed "
+        "in v4.0.0."
+    ),
+    "REDIS_PORT": (
+        "REDIS_PORT is deprecated: it only configures the deprecated RedisClient. "
+        "Read the REDIS_PORT environment variable instead; it will be removed "
+        "in v4.0.0."
+    ),
     "REDIS_PASSWORD": (
-        "_REDIS_PASSWORD",
-        "it only configures the deprecated RedisClient",
+        "REDIS_PASSWORD is deprecated: it only configures the deprecated "
+        "RedisClient. Read the REDIS_PASSWORD environment variable instead; it "
+        "will be removed in v4.0.0."
     ),
     "REDIS_SENTINEL_SERVICE_NAME": (
-        "_REDIS_SENTINEL_SERVICE_NAME",
-        "it only configures the deprecated RedisClient",
+        "REDIS_SENTINEL_SERVICE_NAME is deprecated: it only configures the "
+        "deprecated RedisClient. Read the REDIS_SENTINEL_SERVICE_NAME environment "
+        "variable instead; it will be removed in v4.0.0."
     ),
     "REDIS_SENTINEL_HOSTS": (
-        "_REDIS_SENTINEL_HOSTS",
-        "it only configures the deprecated RedisClient",
+        "REDIS_SENTINEL_HOSTS is deprecated: it only configures the deprecated "
+        "RedisClient. Read the REDIS_SENTINEL_HOSTS environment variable "
+        "instead; it will be removed in v4.0.0."
     ),
 }
 
 
 def __getattr__(name: str) -> object:
     """Serve the deprecated lock / Redis constants, with a warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
+    notice = _DEPRECATED_CONSTANTS.get(name)
+    if notice is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    private_name, why = entry
     warnings.warn(
-        f"application_sdk.constants.{name} is deprecated: {why}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
+        f"application_sdk.constants.{notice}", DeprecationWarning, stacklevel=2
     )
-    return globals()[private_name]
+    return globals()[f"_{name}"]

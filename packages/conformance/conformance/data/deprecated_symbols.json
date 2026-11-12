@@ -471,7 +471,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "IS_LOCKING_DISABLED is deprecated; use _IS_LOCKING_DISABLED \u2014 it only guards the deprecated RedisClient / RedisClientAsync connection. Will be removed in v4.0.0.",
+      "message": "IS_LOCKING_DISABLED is deprecated: it only guards the deprecated RedisClient / RedisClientAsync connection. Read the IS_LOCKING_DISABLED environment variable instead; it will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.constants",
       "removal_version": "4.0.0",
@@ -480,8 +480,8 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "LOCK_METADATA_KEY is deprecated; use _LOCK_METADATA_KEY \u2014 needs_lock has no effect in v3: create_worker registers no lock interceptor. Will be removed in v4.0.0.",
-      "migration_target": true,
+      "message": "LOCK_METADATA_KEY is deprecated and has no effect: needs_lock does nothing in v3 because create_worker registers no lock interceptor. Remove the import; it will be removed in v4.0.0.",
+      "migration_target": false,
       "module": "application_sdk.constants",
       "removal_version": "4.0.0",
       "symbol": "LOCK_METADATA_KEY"
@@ -489,8 +489,8 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "LOCK_RETRY_INTERVAL_SECONDS is deprecated; use _LOCK_RETRY_INTERVAL_SECONDS \u2014 the lock interceptor that reads it is never registered by create_worker. Will be removed in v4.0.0.",
-      "migration_target": true,
+      "message": "LOCK_RETRY_INTERVAL_SECONDS is deprecated and has no effect: the lock interceptor that reads it is never registered by create_worker. Remove the import; it will be removed in v4.0.0.",
+      "migration_target": false,
       "module": "application_sdk.constants",
       "removal_version": "4.0.0",
       "symbol": "LOCK_RETRY_INTERVAL_SECONDS"
@@ -498,7 +498,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "REDIS_HOST is deprecated; use _REDIS_HOST \u2014 it only configures the deprecated RedisClient. Will be removed in v4.0.0.",
+      "message": "REDIS_HOST is deprecated: it only configures the deprecated RedisClient. Read the REDIS_HOST environment variable instead; it will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.constants",
       "removal_version": "4.0.0",
@@ -507,7 +507,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "REDIS_PASSWORD is deprecated; use _REDIS_PASSWORD \u2014 it only configures the deprecated RedisClient. Will be removed in v4.0.0.",
+      "message": "REDIS_PASSWORD is deprecated: it only configures the deprecated RedisClient. Read the REDIS_PASSWORD environment variable instead; it will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.constants",
       "removal_version": "4.0.0",
@@ -516,7 +516,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "REDIS_PORT is deprecated; use _REDIS_PORT \u2014 it only configures the deprecated RedisClient. Will be removed in v4.0.0.",
+      "message": "REDIS_PORT is deprecated: it only configures the deprecated RedisClient. Read the REDIS_PORT environment variable instead; it will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.constants",
       "removal_version": "4.0.0",
@@ -525,7 +525,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "REDIS_SENTINEL_HOSTS is deprecated; use _REDIS_SENTINEL_HOSTS \u2014 it only configures the deprecated RedisClient. Will be removed in v4.0.0.",
+      "message": "REDIS_SENTINEL_HOSTS is deprecated: it only configures the deprecated RedisClient. Read the REDIS_SENTINEL_HOSTS environment variable instead; it will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.constants",
       "removal_version": "4.0.0",
@@ -534,7 +534,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "REDIS_SENTINEL_SERVICE_NAME is deprecated; use _REDIS_SENTINEL_SERVICE_NAME \u2014 it only configures the deprecated RedisClient. Will be removed in v4.0.0.",
+      "message": "REDIS_SENTINEL_SERVICE_NAME is deprecated: it only configures the deprecated RedisClient. Read the REDIS_SENTINEL_SERVICE_NAME environment variable instead; it will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.constants",
       "removal_version": "4.0.0",
