@@ -262,23 +262,26 @@ class AppConfig:
         """
 
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: lazy access to env-var-derived constants
+            _legacy_app_mode,
             _read_auth_enabled,
         )
 
         def _env(key: str, default: str = "") -> str:
             return os.environ.get(key, default)
 
-        _legacy_mode_map = {
-            "WORKER": "worker",
-            "SERVER": "handler",
-            "LOCAL": "combined",
-        }
-        mode = (
-            args.mode
-            or _env("ATLAN_APP_MODE")
-            or _legacy_mode_map.get(_env("APPLICATION_MODE"), "")
-            or "combined"
-        )
+        mode = args.mode or _env("ATLAN_APP_MODE")
+        if not mode:
+            # v2-compat: APPLICATION_MODE is the deprecated fallback.
+            legacy_raw = _env("APPLICATION_MODE")
+            legacy_mode = _legacy_app_mode(legacy_raw)
+            if legacy_raw.strip() and legacy_mode is None:
+                logger.warning(
+                    "APPLICATION_MODE=%r is not a recognised mode; running in "
+                    "combined mode. Set ATLAN_APP_MODE to worker, handler or "
+                    "combined instead",
+                    legacy_raw,
+                )
+            mode = legacy_mode or "combined"
 
         app_module_raw = args.app or _env("ATLAN_APP_MODULE")
         if not app_module_raw:

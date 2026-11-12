@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.56.0
-source-sha:    6c77cb8be0a6fb25f3b84578aa9898456c7adf74
-source-date:   2026-11-12T09:09:54Z
+source-sha:    5ec2454d6fb0c1f3473c1cf83869cbdb1f32bfee
+source-date:   2026-11-12T09:33:17Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -27,7 +27,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 76 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 51 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 28 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 40 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 39 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 30 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 8 |
@@ -2772,7 +2772,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import BindingRequest`
 - **Signature:** `class BindingRequest(operation: str, data: bytes | None = None, metadata: dict[str, str] = dict())`
-- **Summary:** Request to invoke a binding.
+- **Summary:** Deprecated: request to invoke a binding — removed in v4.0.0.
 - **Defined in:** `application_sdk/infrastructure/bindings.py`
 
 #### `BindingResponse`
@@ -2856,7 +2856,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import InputBinding`
 - **Signature:** `class InputBinding`
-- **Summary:** Protocol for input bindings (event sources).
+- **Summary:** Deprecated: protocol for input bindings — removed in v4.0.0.
 - **Defined in:** `application_sdk/infrastructure/bindings.py`
 
 #### `LocalCapacityPool`
@@ -2877,7 +2877,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import OutputBinding`
 - **Signature:** `class OutputBinding`
-- **Summary:** Protocol for output bindings (event sinks).
+- **Summary:** Deprecated: protocol for output bindings — removed in v4.0.0.
 - **Defined in:** `application_sdk/infrastructure/bindings.py`
 
 #### `PubSub`
@@ -2954,7 +2954,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import Subscription`
 - **Signature:** `class Subscription`
-- **Summary:** Protocol for pub/sub subscriptions.
+- **Summary:** Deprecated: protocol for pub/sub subscriptions — removed in v4.0.0.
 - **Defined in:** `application_sdk/infrastructure/pubsub.py`
 
 ### Functions
@@ -3016,13 +3016,6 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Signature:** `DAPR_SECRET_STORE_COMPONENT`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/infrastructure/_dapr/http.py`
-
-#### `MessageHandler`
-
-- **Import:** `from application_sdk.infrastructure import MessageHandler`
-- **Signature:** `MessageHandler`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/infrastructure/pubsub.py`
 
 ## `application_sdk.main`
 

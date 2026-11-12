@@ -1339,6 +1339,18 @@ asyncio.run(run_dev_combined(
 
 ---
 
+## v2 run-mode constants (deprecated, removed in v4.0.0)
+
+The SDK no longer reads these constants: the run mode comes from `ATLAN_APP_MODE` (or `--mode`), resolved at startup into `AppConfig.mode`. They are still importable and warn on access. Reading `APPLICATION_MODE` no longer fails for an unrecognised `APPLICATION_MODE` env value; it falls back to `LOCAL`. B001 flags each import.
+
+| Deprecated | Replacement |
+|---|---|
+| `application_sdk.constants.APPLICATION_MODE` | the `ATLAN_APP_MODE` env var (`worker`, `handler` or `combined`) |
+| `application_sdk.constants.ApplicationMode` | the v3 run modes `worker`, `handler` and `combined` |
+| `application_sdk.constants.DAPR_BINDING_OPERATION_CREATE` | the literal `"create"` |
+
+---
+
 ## Transformer helpers (deprecated, removed in v4.0.0)
 
 `application_sdk.transformers` is removed in v4.0.0, including its helper modules, which many apps import without using a transformer. Move these imports before v4.0.0; B001 flags each one.
@@ -1372,6 +1384,21 @@ asyncio.run(run_dev_combined(
 | `testing.hypothesis.strategies.server.fastapi.*` | none; build strategies from your app's own models in its tests |
 
 `application_sdk.common.utils.download_file_from_upload_response` now accepts the handler's `FileUploadResponse`. Before this change it raised `ResponseTypeError: Unsupported response type: FileUploadResponse` for it, because it only recognised the v2 class.
+
+---
+
+## Pub/sub subscribe and unimplemented binding shapes (deprecated, removed in v4.0.0)
+
+`DaprPubSub.subscribe()` never delivered a message. It stored the handler, returned a handle whose `is_active` was `True`, and nothing ever called the handler. `MockPubSub.subscribe()` did deliver, so a test passed and the same code received nothing in production. Dapr delivers pub/sub messages to HTTP routes the app serves; the SDK builds those routes from `SubscriptionConfig`. Both `subscribe()` methods now emit a `DeprecationWarning`. `publish()` is unchanged. B001 flags each import.
+
+| Deprecated | Replacement |
+|---|---|
+| `DaprPubSub.subscribe`, `PubSub.subscribe`, `MockPubSub.subscribe` | a `SubscriptionConfig` from `application_sdk.handler.contracts`, passed to `create_app_handler_service(subscriptions=...)`. In tests, call its `handler` directly. |
+| `infrastructure.Subscription`, `DaprSubscription` | none; a `SubscriptionConfig` has no handle to hold |
+| `infrastructure.MessageHandler` | the `handler` field of `SubscriptionConfig` |
+| `infrastructure.OutputBinding` | `infrastructure.Binding` (`DaprBinding.invoke`); the SDK never shipped an implementation |
+| `infrastructure.InputBinding` | No input-binding replacement (the SDK never shipped an implementation). To receive messages, use `SubscriptionConfig` with `create_app_handler_service(subscriptions=...)` |
+| `infrastructure.BindingRequest` | pass `operation`, `data` and `metadata` to `Binding.invoke()`; nothing accepted a `BindingRequest` |
 
 ---
 

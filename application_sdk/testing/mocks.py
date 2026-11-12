@@ -5,6 +5,7 @@ from collections.abc import Awaitable
 from typing import Any, Callable
 
 import orjson
+from typing_extensions import deprecated
 
 from application_sdk.credentials.ref import (
     CredentialRef,
@@ -195,12 +196,23 @@ class MockPubSub:
                 if subscription.is_active:
                     await handler(message)
 
+    @deprecated(
+        "MockPubSub.subscribe is deprecated and will be removed in v4.0.0. It "
+        "delivers published messages, but DaprPubSub.subscribe never did, so a test "
+        "that passed here received nothing in production. Declare a "
+        "SubscriptionConfig (application_sdk.handler.contracts) and call its "
+        "handler directly in the test instead."
+    )
     async def subscribe(
         self,
         topic: str,
         handler: Callable[[Message], Awaitable[None]],
     ) -> _MockSubscription:
-        """Subscribe to a topic."""
+        """Deprecated: subscribe to a topic — removed in v4.0.0.
+
+        Delivers on ``publish``, unlike ``DaprPubSub.subscribe``, which never
+        delivered. Test the ``SubscriptionConfig`` handler directly instead.
+        """
         if topic not in self._subscriptions:
             self._subscriptions[topic] = []
 
