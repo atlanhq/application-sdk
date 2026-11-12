@@ -4,6 +4,7 @@
 application_sdk/__init__.py
 application_sdk/_build_info.py
 application_sdk/_context_errors.py
+application_sdk/_env.py
 application_sdk/_install.py
 application_sdk/_logging.py
 application_sdk/_runtime/__init__.py

@@ -104,7 +104,7 @@ Workers scale to zero when the Temporal task queue is empty. Each new workflow r
 
 ## Production Environment Variables
 
-The full reference is in [Configuration](../configuration.md). The essential production set:
+The full reference is in [Configuration](../configuration.md). An empty or malformed value falls back to the variable's default with a warning rather than stopping the process, and boolean flags accept `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off` (see [How values are read](../configuration.md#how-values-are-read)). The essential production set:
 
 ```bash
 # Required

@@ -32,6 +32,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures.process import BrokenProcessPool
 from typing import Any, Generic, ParamSpec, TypeVar
 
+from application_sdk._env import env_float, env_int
 from application_sdk._logging import get_logger
 from application_sdk._runtime.cgroup import available_cpus
 from application_sdk._runtime.progress import (
@@ -581,7 +582,8 @@ _APPLICATION_NAME_ENV = "ATLAN_APPLICATION_NAME"
 #: Owner used when neither a binding nor ``ATLAN_APPLICATION_NAME`` names the app.
 _UNKNOWN_OWNER = "<unknown>"
 
-#: Cap values already reported as invalid, so a bad setting warns once.
+#: Messages for cap values already reported as invalid, so a bad setting warns
+#: once.
 _REPORTED_BAD_CAPS: set[str] = set()
 
 
@@ -615,24 +617,15 @@ def _per_app_cap() -> int | None:
     and ignored rather than raised: raising here would fail every offload in
     the process over a configuration typo.
     """
-    raw = os.environ.get(OFFLOAD_MAX_THREADS_PER_APP_ENV, "").strip()
-    if not raw:
-        return None
-    try:
-        cap = int(raw)
-    except ValueError:
-        cap = 0
-    if cap >= 1:
-        return cap
-    if raw not in _REPORTED_BAD_CAPS:
-        _REPORTED_BAD_CAPS.add(raw)
-        logger.warning(
-            "Ignoring %s=%r: expected a positive integer; offloads are not capped "
-            "per app",
-            OFFLOAD_MAX_THREADS_PER_APP_ENV,
-            raw,
-        )
-    return None
+    cap = env_int(OFFLOAD_MAX_THREADS_PER_APP_ENV, 0, minimum=1, report=_report_bad_cap)
+    return cap if cap >= 1 else None
+
+
+def _report_bad_cap(message: str) -> None:
+    if message in _REPORTED_BAD_CAPS:
+        return
+    _REPORTED_BAD_CAPS.add(message)
+    logger.warning("Ignoring env var: %s; offloads are not capped per app", message)
 
 
 class _OffloadSlot:
@@ -1318,24 +1311,19 @@ def _idle_seconds() -> float:
     default rather than raised: raising here would fail isolated work over a
     configuration typo.
     """
-    raw = os.environ.get(FAULT_ISOLATION_IDLE_SECONDS_ENV, "").strip()
-    if not raw:
-        return _DEFAULT_FAULT_ISOLATION_IDLE_SECONDS
-    try:
-        value = float(raw)
-    except ValueError:
-        value = -1.0
-    if value >= 0 and value != float("inf"):
-        return value
-    if raw not in _REPORTED_BAD_IDLE_SECONDS:
-        _REPORTED_BAD_IDLE_SECONDS.add(raw)
-        logger.warning(
-            "Ignoring %s=%r: expected a non-negative number of seconds; using %ss",
-            FAULT_ISOLATION_IDLE_SECONDS_ENV,
-            raw,
-            _DEFAULT_FAULT_ISOLATION_IDLE_SECONDS,
-        )
-    return _DEFAULT_FAULT_ISOLATION_IDLE_SECONDS
+    return env_float(
+        FAULT_ISOLATION_IDLE_SECONDS_ENV,
+        _DEFAULT_FAULT_ISOLATION_IDLE_SECONDS,
+        minimum=0.0,
+        report=_report_bad_idle_seconds,
+    )
+
+
+def _report_bad_idle_seconds(message: str) -> None:
+    if message in _REPORTED_BAD_IDLE_SECONDS:
+        return
+    _REPORTED_BAD_IDLE_SECONDS.add(message)
+    logger.warning("Ignoring env var: %s", message)
 
 
 class _IsolationPool:

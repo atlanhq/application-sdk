@@ -60,6 +60,8 @@ from enum import Enum
 import httpx
 from dotenv import load_dotenv
 
+from application_sdk._env import env_bool, env_choice, env_float, env_int
+
 load_dotenv(dotenv_path=".env")
 
 # Static Constants
@@ -168,14 +170,14 @@ PREFLIGHT_RESULTS_ENDPOINT = os.getenv(
 )
 #: Bound on that POST. Generous: the app opens a Polaris catalog, may create the
 #: table and commits a Parquet file. Nothing waits on it.
-PREFLIGHT_RESULTS_TIMEOUT_SECONDS = float(
-    os.getenv("ATLAN_PREFLIGHT_RESULTS_TIMEOUT_SECONDS", "30")
+PREFLIGHT_RESULTS_TIMEOUT_SECONDS = env_float(
+    "ATLAN_PREFLIGHT_RESULTS_TIMEOUT_SECONDS", 30.0
 )
 #: Bound on a SQL client's ``load()``: building the connection string (an STS
 #: AssumeRole for IAM-role auth) plus the first connect. Also handed to drivers
 #: with no connect timeout of their own, so a hung connect frees its thread.
-SQL_CLIENT_CONNECT_TIMEOUT_SECONDS = float(
-    os.getenv("ATLAN_SQL_CLIENT_CONNECT_TIMEOUT_SECONDS", "60")
+SQL_CLIENT_CONNECT_TIMEOUT_SECONDS = env_float(
+    "ATLAN_SQL_CLIENT_CONNECT_TIMEOUT_SECONDS", 60.0
 )
 # REMOVED: APP_DASHBOARD_HOST, APP_DASHBOARD_PORT, SQL_SERVER_MIN_VERSION,
 # SQL_QUERIES_PATH — unused internally, v2-only external consumers.
@@ -259,8 +261,8 @@ TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
 #: too high and the outer Prometheus scrape (typical 10s budget) hits its
 #: own timeout. Default 5s gives ~2.5× tail-latency headroom while staying
 #: well inside vmagent's per-target budget.
-TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS: float = float(
-    os.getenv("ATLAN_TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS", "5.0")
+TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS: float = env_float(
+    "ATLAN_TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS", 5.0
 )
 #: Upper bound on the bytes read from the loopback metrics endpoint by every
 #: reader of it: the worker's poller-gauge diagnostic, the combined-mode
@@ -272,8 +274,8 @@ TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS: float = float(
 #: ``reason="oversize"``, the collector skips the cycle. ~1 MiB is far above a
 #: healthy exposition (~460 series) and far below anything that could
 #: pressure the process.
-TEMPORAL_CORE_METRICS_MAX_BYTES: int = int(
-    os.getenv("ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES", str(1024 * 1024))
+TEMPORAL_CORE_METRICS_MAX_BYTES: int = env_int(
+    "ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES", 1024 * 1024
 )
 
 # Shutdown budget
@@ -285,7 +287,7 @@ TEMPORAL_CORE_METRICS_MAX_BYTES: int = int(
 #: it reaches complete_activity_task(), leaving the SDK with a phantom
 #: "in-use" task slot that blocks shutdown for the entire
 #: graceful_shutdown_timeout.
-SHUTDOWN_DRAIN_DELAY_SECONDS = int(os.getenv("ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS", 5))
+SHUTDOWN_DRAIN_DELAY_SECONDS = env_int("ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS", 5)
 
 #: Env var naming the pod's ``terminationGracePeriodSeconds``. The Downward API
 #: cannot expose that field, so the chart sets this from the same value.
@@ -404,8 +406,8 @@ def derive_shutdown_budget(
 def _preferred_drain_seconds() -> int:
     """The explicit drain if one is set and parses, else the 3600 s default.
 
-    A value that does not parse is left for ``load_execution_settings`` to
-    reject, as it always has; here it only falls back to the default.
+    A value that does not parse falls back to the default here silently;
+    ``load_execution_settings`` reads the same variable and reports it.
     """
     raw = os.environ.get(_DRAIN_ENV, "").strip()
     try:
@@ -457,33 +459,31 @@ _SHUTDOWN_BUDGET = load_shutdown_budget()
 #: everything via in-process proxy).
 PROMETHEUS_PUSHGATEWAY_URL = os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_URL", "")
 #: Periodic push interval (seconds). A final push always happens on shutdown.
-PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS = float(
-    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS", "30")
+PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS = env_float(
+    "ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS", 30.0
 )
 #: When True (default), call ``delete_from_gateway`` on graceful worker
 #: shutdown so stopped pods don't leave sticky data in the Pushgateway.
 #: Pushgateway has no built-in TTL, so without this every pod ever scraped
 #: leaks its series until manually deleted. Opt out only if you specifically
 #: need the last interval of metrics to persist after a graceful exit.
-PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN = (
-    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN", "true").lower()
-    == "true"
+PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN = env_bool(
+    "ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN", True
 )
 #: When True (default), sweep stale ``{job=mine, instance=other}`` groups on
 #: worker startup before the first push. Covers OOM / eviction / SIGKILL
 #: leaks that DELETE_ON_SHUTDOWN can't catch — the next worker tidies up
 #: after its predecessor. Strictly job-scoped (never touches other apps'
 #: groups) and threshold-gated (never reaps live siblings).
-PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START = (
-    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START", "true").lower()
-    == "true"
+PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START = env_bool(
+    "ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START", True
 )
 #: Staleness threshold for the startup sweep. Groups whose last push is more
 #: recent than this are left alone — protects live siblings during Temporal
 #: Worker Deployments overlap (old pod draining + new pod ramping). Default
 #: 300s = 10× the default push interval, comfortably above any normal blip.
-PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS = float(
-    os.getenv("ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS", "300")
+PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS = env_float(
+    "ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS", 300.0
 )
 #: Per-request HTTP timeout for every Pushgateway call (push, DELETE,
 #: sweep GET, sweep per-group DELETE). The prometheus_client default of 30s
@@ -491,15 +491,11 @@ PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS = float(
 #: under the post-drain deadline, which they share with the rest of shutdown.
 #: Default 10s; when ``ATLAN_SHUTDOWN_GRACE_SECONDS`` is set and this is not,
 #: derived from the grace (see :class:`ShutdownBudget`).
-PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS = float(
-    os.getenv(
-        "ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS",
-        str(
-            _SHUTDOWN_BUDGET.pushgateway_http_timeout_seconds
-            if _SHUTDOWN_BUDGET is not None
-            else _DEFAULT_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS
-        ),
-    )
+PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS = env_float(
+    "ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS",
+    _SHUTDOWN_BUDGET.pushgateway_http_timeout_seconds
+    if _SHUTDOWN_BUDGET is not None
+    else _DEFAULT_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS,
 )
 #: Sleep interval between the final push and the DELETE_ON_SHUTDOWN call
 #: so Prometheus has at least one scrape opportunity to read the final
@@ -512,15 +508,11 @@ PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS = float(
 #: post-drain deadline, so when ``ATLAN_SHUTDOWN_GRACE_SECONDS`` is set and
 #: this is not, it is derived from the grace and shrinks with a short one
 #: (see :class:`ShutdownBudget`). Set to 0 to disable.
-PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS = float(
-    os.getenv(
-        "ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS",
-        str(
-            _SHUTDOWN_BUDGET.pushgateway_shutdown_delete_delay_seconds
-            if _SHUTDOWN_BUDGET is not None
-            else _DEFAULT_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS
-        ),
-    )
+PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS = env_float(
+    "ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS",
+    _SHUTDOWN_BUDGET.pushgateway_shutdown_delete_delay_seconds
+    if _SHUTDOWN_BUDGET is not None
+    else _DEFAULT_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS,
 )
 
 # REMOVED: ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING, WORKFLOW_UI_HOST,
@@ -529,28 +521,24 @@ PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS = float(
 # REMOVED: MAX_CONCURRENT_ACTIVITIES — unused, see ExecutionSettings.max_concurrent_activities
 
 #: Maximum concurrent object-store transfers (uploads / downloads)
-MAX_CONCURRENT_STORAGE_TRANSFERS = int(
-    os.getenv("ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", "4")
-)
+MAX_CONCURRENT_STORAGE_TRANSFERS = env_int("ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", 4)
 
 # FileReference chunked-download configuration
 #: File size threshold above which downloads use parallel range GETs (default 32 MiB)
-FILE_REF_CHUNKED_THRESHOLD_BYTES = int(
-    os.getenv("ATLAN_FILE_REF_CHUNKED_THRESHOLD_BYTES", str(32 * 1024 * 1024))
+FILE_REF_CHUNKED_THRESHOLD_BYTES = env_int(
+    "ATLAN_FILE_REF_CHUNKED_THRESHOLD_BYTES", 32 * 1024 * 1024
 )
 #: Size of each range-GET chunk in a chunked download (default 16 MiB)
-FILE_REF_CHUNK_SIZE_BYTES = int(
-    os.getenv("ATLAN_FILE_REF_CHUNK_SIZE_BYTES", str(16 * 1024 * 1024))
-)
+FILE_REF_CHUNK_SIZE_BYTES = env_int("ATLAN_FILE_REF_CHUNK_SIZE_BYTES", 16 * 1024 * 1024)
 #: Maximum concurrent range-GET chunks per file (default 4)
-FILE_REF_CHUNK_CONCURRENCY = int(os.getenv("ATLAN_FILE_REF_CHUNK_CONCURRENCY", "4"))
+FILE_REF_CHUNK_CONCURRENCY = env_int("ATLAN_FILE_REF_CHUNK_CONCURRENCY", 4)
 
 #: Interval (seconds) between in-progress heartbeat logs during a long upload or
 #: download. A GB-class transfer at slow egress can run for minutes; without a
 #: heartbeat the only signals are start + finish, so a hung transfer is
 #: indistinguishable from a slow one. 0 disables heartbeats. (BLDX-1513)
-STORAGE_PROGRESS_LOG_INTERVAL_SECONDS = float(
-    os.getenv("ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS", "30")
+STORAGE_PROGRESS_LOG_INTERVAL_SECONDS = env_float(
+    "ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS", 30.0
 )
 
 
@@ -567,8 +555,8 @@ def _load_storage_lock_wait_progress_seconds() -> float:
     return max(
         1.0,
         min(
-            float(os.getenv("ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS", "30")),
-            float(os.getenv("ATLAN_MAX_NO_PROGRESS_SECONDS", "900")) / 4.0,
+            env_float("ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS", 30.0),
+            env_float("ATLAN_MAX_NO_PROGRESS_SECONDS", 900.0) / 4.0,
         ),
     )
 
@@ -589,8 +577,8 @@ STORAGE_LOCK_WAIT_PROGRESS_SECONDS = _load_storage_lock_wait_progress_seconds()
 #: 32 MiB is 153 parts and ~19s. Note this is *not* free — see
 #: ``STORAGE_UPLOAD_MAX_CONCURRENCY``, since peak memory is the product of the
 #: two, not this value alone.
-STORAGE_UPLOAD_PART_SIZE_BYTES = int(
-    os.getenv("ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES", str(8 * 1024 * 1024))
+STORAGE_UPLOAD_PART_SIZE_BYTES = env_int(
+    "ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES", 8 * 1024 * 1024
 )
 
 #: True when a deployment has explicitly set the part size, in which case it
@@ -608,9 +596,7 @@ STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN = (
 #: so a deployment that raises the part size to 64 MiB and leaves this at 12
 #: budgets ~768 MiB of buffer. Lower it alongside a larger part size to hold
 #: peak memory steady.
-STORAGE_UPLOAD_MAX_CONCURRENCY = int(
-    os.getenv("ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY", "12")
-)
+STORAGE_UPLOAD_MAX_CONCURRENCY = env_int("ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY", 12)
 
 #: Bytes of transfer buffers the SDK's file transfers in the process may hold
 #: at once: the range GETs, streaming downloads and multipart uploads behind
@@ -620,8 +606,8 @@ STORAGE_UPLOAD_MAX_CONCURRENCY = int(
 #: with each other; this is the one bound on their product. ``0`` (default)
 #: takes a quarter of the container memory limit, never under 128 MiB, and
 #: 1 GiB when no limit is known.
-STORAGE_TRANSFER_MEMORY_BUDGET_BYTES = int(
-    os.getenv("ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES", "0")
+STORAGE_TRANSFER_MEMORY_BUDGET_BYTES = env_int(
+    "ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES", 0
 )
 
 #: Kill-switch for resumable chunked downloads (BLDX-1523). When enabled
@@ -629,9 +615,7 @@ STORAGE_TRANSFER_MEMORY_BUDGET_BYTES = int(
 #: ``.transfer-state`` sidecar on disk, and a retry fetches only the missing
 #: ranges — valid only while the remote object's etag is unchanged. Set to
 #: "false" to restore delete-partial-on-failure behaviour fleet-wide.
-STORAGE_RESUME_DOWNLOADS = (
-    os.getenv("ATLAN_STORAGE_RESUME_DOWNLOADS", "true").strip().lower() != "false"
-)
+STORAGE_RESUME_DOWNLOADS = env_bool("ATLAN_STORAGE_RESUME_DOWNLOADS", True)
 
 #: Kill-switch for transfer integrity validation (FND-306). When enabled
 #: (default), every upload and download performed by the SDK transfer
@@ -645,9 +629,7 @@ STORAGE_RESUME_DOWNLOADS = (
 #:
 #: Set to "false" to skip the checks fleet-wide — the escape hatch for a
 #: backend whose HEAD-after-write is not read-your-writes consistent.
-STORAGE_VERIFY_TRANSFERS = (
-    os.getenv("ATLAN_STORAGE_VERIFY_TRANSFERS", "true").strip().lower() != "false"
-)
+STORAGE_VERIFY_TRANSFERS = env_bool("ATLAN_STORAGE_VERIFY_TRANSFERS", True)
 
 #: Kill-switch for ``{key}.sha256`` sidecar emission (FND-306). When enabled
 #: (default), :func:`~application_sdk.storage.ops.upload_file` writes a digest
@@ -657,9 +639,7 @@ STORAGE_VERIFY_TRANSFERS = (
 #: extra keys (e.g. a reader that globs a prefix without filtering sidecars).
 #: Sidecar *verification* is independent: a download still verifies whatever
 #: sidecars it finds.
-STORAGE_WRITE_SIDECARS = (
-    os.getenv("ATLAN_STORAGE_WRITE_SIDECARS", "true").strip().lower() != "false"
-)
+STORAGE_WRITE_SIDECARS = env_bool("ATLAN_STORAGE_WRITE_SIDECARS", True)
 
 
 #: Opt-in for the e2e ``sdk:store-assert`` node (FND-3571). The workflow is
@@ -667,7 +647,7 @@ STORAGE_WRITE_SIDECARS = (
 #: this unset the node reads nothing and reports itself disabled. Only e2e
 #: installs set it, per tenant, through ``deploy.env_overrides``.
 def _load_store_assert_enabled() -> bool:
-    return os.getenv("ATLAN_STORE_ASSERT_ENABLED", "false").strip().lower() == "true"
+    return env_bool("ATLAN_STORE_ASSERT_ENABLED")
 
 
 STORE_ASSERT_ENABLED = _load_store_assert_enabled()
@@ -689,10 +669,23 @@ APP_DEPLOYMENT_NAME = os.getenv("ATLAN_APP_DEPLOYMENT_NAME") or os.getenv(
 DEPLOYMENT_SECRET_PATH = os.getenv(
     "ATLAN_DEPLOYMENT_SECRET_PATH", "ATLAN_DEPLOYMENT_SECRETS"
 )
+
+
+def _read_auth_enabled() -> bool:
+    """Whether ``ATLAN_AUTH_ENABLED`` switches auth on: the one reader of it.
+
+    Both :data:`AUTH_ENABLED` (event auth) and ``AppConfig.auth_enabled``
+    (Temporal client auth) come from here, so one value can never switch one on
+    and leave the other off.
+    """
+    return env_bool("ATLAN_AUTH_ENABLED")
+
+
 #: Used by events interceptor at import time (before AppConfig exists).
 #: AppConfig.auth_enabled is the runtime equivalent — this constant remains
-#: because the interceptor reads it at module level.
-AUTH_ENABLED = os.getenv("ATLAN_AUTH_ENABLED", "false").lower() == "true"
+#: because the interceptor reads it at module level. Both read through
+#: :func:`_read_auth_enabled`.
+AUTH_ENABLED = _read_auth_enabled()
 #: OAuth2 authentication URL for workflow services
 AUTH_URL = os.getenv("ATLAN_AUTH_URL")
 # REMOVED: WORKFLOW_TLS_ENABLED — v2-only consumers, v3 is a breaking release.
@@ -739,16 +732,7 @@ WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
 #: the worst case (e.g. a flaky liveness probe masquerading as eviction).
 #: Validated to a non-negative integer; malformed values fall back to 3.
 def _load_worker_eviction_max_retries() -> int:
-    raw = os.getenv("ATLAN_WORKER_EVICTION_MAX_RETRIES", "3")
-    try:
-        value = int(raw)
-    except ValueError:
-        warnings.warn(
-            f"ATLAN_WORKER_EVICTION_MAX_RETRIES={raw!r} is not a valid integer; falling back to 3",
-            stacklevel=2,
-        )
-        return 3
-    return max(0, value)
+    return max(0, env_int("ATLAN_WORKER_EVICTION_MAX_RETRIES", 3))
 
 
 WORKER_EVICTION_MAX_RETRIES = _load_worker_eviction_max_retries()
@@ -773,24 +757,7 @@ def _load_non_negative_finite_float(name: str, default: float) -> float:
     bound is set but can never trip (``x > inf`` is always False), and ``nan``
     comparisons are always False too — both are silently useless.
     """
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        warnings.warn(
-            f"{name}={raw!r} is not a valid number; falling back to {default:g}",
-            stacklevel=3,
-        )
-        return default
-    if not math.isfinite(value):
-        warnings.warn(
-            f"{name}={raw!r} is not finite; falling back to {default:g}",
-            stacklevel=3,
-        )
-        return default
-    return max(0.0, value)
+    return max(0.0, env_float(name, default))
 
 
 def _load_worker_liveness_max_idle_seconds() -> float:
@@ -814,20 +781,7 @@ def _load_worker_liveness_max_zero_poller_readings() -> int:
     # A reading count is a whole number. Parse it as one: a float parse would
     # let ``0.5`` truncate to ``0`` and silently disable this default-on check,
     # so any non-integer warns and keeps the default instead.
-    name = "ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS"
-    default = 5
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        warnings.warn(
-            f"{name}={raw!r} is not a valid integer; falling back to {default}",
-            stacklevel=2,
-        )
-        return default
-    return max(0, value)
+    return max(0, env_int("ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS", 5))
 
 
 WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS = (
@@ -861,36 +815,10 @@ WORKER_LIVENESS_FATAL_RECOVERY_SECONDS = _load_non_negative_finite_float(
 #: going to be replaced anyway. An unparsable value (an unset Helm value renders
 #: as "") falls back rather than failing every worker.
 def _load_dirty_restart_max_wait_seconds() -> int:
-    raw = os.getenv("ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS", "150")
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        warnings.warn(
-            f"ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS={raw!r} is not a valid integer; "
-            "falling back to 150",
-            stacklevel=2,
-        )
-        return 150
+    return max(0, env_int("ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS", 150))
 
 
 DIRTY_RESTART_IDLE_MAX_SECONDS = _load_dirty_restart_max_wait_seconds()
-
-
-def _one_of(name: str, allowed: tuple[str, ...], default: str) -> str:
-    """Read a switch whose value is one of a fixed set of words.
-
-    An unrecognised word falls back to the default and says so, rather than
-    reaching the code that branches on it: a typo there would otherwise select
-    whichever branch happens to be the ``else``, silently and fleet-wide.
-    """
-    raw = os.getenv(name, default).strip().lower()
-    if raw in allowed:
-        return raw
-    warnings.warn(
-        f"{name}={raw!r} is not one of {allowed}; falling back to {default!r}",
-        stacklevel=2,
-    )
-    return default
 
 
 #: Whether a restarted worker asks what the restart earns before it polls again.
@@ -906,7 +834,7 @@ def _one_of(name: str, allowed: tuple[str, ...], default: str) -> str:
 #: parse - none of those establish that a replacement is coming, and holding a
 #: worker back is only worth its retry budget while one is.
 def _load_oom_restart_check() -> str:
-    return _one_of("ATLAN_OOM_RESTART_CHECK", ("api", "none"), default="none")
+    return env_choice("ATLAN_OOM_RESTART_CHECK", ("api", "none"), default="none")
 
 
 OOM_RESTART_CHECK = _load_oom_restart_check()
@@ -914,12 +842,15 @@ OOM_RESTART_CHECK = _load_oom_restart_check()
 
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations.
-#: Enabled by default; set ATLAN_SQL_USE_SERVER_SIDE_CURSOR to any value other
-#: than "true" (e.g. "false") to opt out.
+#: Enabled by default; set ATLAN_SQL_USE_SERVER_SIDE_CURSOR to a false word
+#: (e.g. "false") to opt out.
 def _load_use_server_side_cursor() -> bool:
-    return (
-        os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true").strip().lower() == "true"
-    )
+    # An explicitly empty value is the one exception to "empty is the default":
+    # it disabled server-side cursors before this flag had a working opt-out,
+    # so deployments that set it to "" to opt out must stay opted out.
+    if os.environ.get("ATLAN_SQL_USE_SERVER_SIDE_CURSOR") == "":
+        return False
+    return env_bool("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", True)
 
 
 USE_SERVER_SIDE_CURSOR = _load_use_server_side_cursor()
@@ -975,7 +906,7 @@ _HTTP_POOL_TIMEOUT_SECONDS = 30.0
 _HTTP_CONNECT_RETRIES = 3
 
 #: Whether to enable Atlan storage upload
-ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
+ENABLE_ATLAN_UPLOAD = env_bool("ENABLE_ATLAN_UPLOAD")
 
 #: When the Dapr ``eventstore`` output binding fails, publish lifecycle events
 #: (``worker_start``, ``token_refresh``, workflow/activity start/end) to Event
@@ -990,9 +921,7 @@ ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true
 #: event got no response (so nothing is double-delivered), backs off for 60 s
 #: after a failed attempt, and logs loudly that it is in effect. Set to
 #: ``false`` to disable.
-EVENT_INGRESS_DIRECT_FALLBACK = (
-    os.getenv("ATLAN_EVENT_INGRESS_DIRECT_FALLBACK", "true").lower() == "true"
-)
+EVENT_INGRESS_DIRECT_FALLBACK = env_bool("ATLAN_EVENT_INGRESS_DIRECT_FALLBACK", True)
 
 # Dual-write — BLDX-1464: when both stores are configured (SDR), App.upload writes
 # to the deployment (customer) store first, then to upstream (Atlan), at the same
@@ -1004,9 +933,11 @@ EVENT_INGRESS_DIRECT_FALLBACK = (
 #   best_effort — dual-write; deployment failure logs WARNING and run succeeds.
 #   required    — dual-write; deployment failure logs ERROR, upstream still runs,
 #                 then the run fails (customer copy missing is surfaced).
-_DEPLOYMENT_ARTIFACT_DUAL_WRITE: str = os.getenv(
-    "ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE", "best_effort"
-).lower()
+_DEPLOYMENT_ARTIFACT_DUAL_WRITE: str = env_choice(
+    "ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE",
+    ("disabled", "best_effort", "required"),
+    default="best_effort",
+)
 #: True when dual-write is active (best_effort or required).
 DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED: bool = (
     _DEPLOYMENT_ARTIFACT_DUAL_WRITE != "disabled"
@@ -1037,15 +968,13 @@ if DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED:
 #: not that one bug (ADR-0017). Its children exit once the pool is idle for
 #: ``ATLAN_FAULT_ISOLATION_IDLE_SECONDS`` (FND-4278), so the scan holds memory
 #: only while it runs. Set to "false" to disable per-deployment.
-VALIDATE_ASSETS_ON_UPLOAD: bool = (
-    os.getenv("ATLAN_VALIDATE_ASSETS_ON_UPLOAD", "true").lower() == "true"
-)
+VALIDATE_ASSETS_ON_UPLOAD: bool = env_bool("ATLAN_VALIDATE_ASSETS_ON_UPLOAD", True)
 #: Upper bound in seconds for one upload's asset-validation scan. The scan runs
 #: in an isolated child process; past this bound the child is killed and the
 #: upload proceeds with a warning — warn-only validation must not be able to
 #: stall a handoff any more than it may crash one.
-VALIDATE_ASSETS_TIMEOUT_SECONDS: float = float(
-    os.getenv("ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS", "600")
+VALIDATE_ASSETS_TIMEOUT_SECONDS: float = env_float(
+    "ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS", 600.0
 )
 #: ADR-0020 step 7: when True, the activity interceptor validates every
 #: ``FileReference`` artifact against its declared artifact schema on both sides
@@ -1057,9 +986,7 @@ VALIDATE_ASSETS_TIMEOUT_SECONDS: float = float(
 #: whether a verdict blocks is the app's artifact-validation posture (FND-692),
 #: and turning this off stops the outcome events too, which is exactly why it is
 #: a switch an operator flips deliberately rather than a per-app default.
-VALIDATE_ARTIFACTS: bool = (
-    os.getenv("ATLAN_VALIDATE_ARTIFACTS", "true").lower() == "true"
-)
+VALIDATE_ARTIFACTS: bool = env_bool("ATLAN_VALIDATE_ARTIFACTS", True)
 #: The single "rows per axis" cap for every validation drill-down surface —
 #: one number, so the human-readable ``format_report(max_items=...)`` listing and
 #: the structured matrix telemetry can never drift apart.
@@ -1081,9 +1008,7 @@ ASSET_VALIDATION_MAX_ITEMS_PER_AXIS: int = ARTIFACT_VALIDATION_MAX_ITEMS_PER_AXI
 #: Maximum gRPC message length in bytes for Dapr client.
 #:
 #: Default: 100MB
-DAPR_MAX_GRPC_MESSAGE_LENGTH = int(
-    os.getenv("DAPR_MAX_GRPC_MESSAGE_LENGTH", "104857600")
-)
+DAPR_MAX_GRPC_MESSAGE_LENGTH = env_int("DAPR_MAX_GRPC_MESSAGE_LENGTH", 104857600)
 
 #: Name of the deployment secret store component in DAPR
 DEPLOYMENT_SECRET_STORE_NAME = os.getenv(
@@ -1118,7 +1043,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
 #: Whether to enable OpenTelemetry log export
-ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
+ENABLE_OTLP_LOGS: bool = env_bool("ENABLE_OTLP_LOGS")
 #: Whether console tracebacks annotate each frame with the *values* of the names
 #: on its source line (loguru's ``diagnose``). Default is False, unlike loguru's
 #: own default of True: those values reach the console verbatim, so a local
@@ -1134,14 +1059,12 @@ ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true
 #: Deliberately its own variable rather than a function of ``LOG_LEVEL``: raising
 #: a tenant's log verbosity to DEBUG must not silently re-enable value rendering.
 #: Set to True for local debugging, where the annotation is genuinely useful.
-ENABLE_LOG_DIAGNOSE: bool = os.getenv("ATLAN_LOG_DIAGNOSE", "false").lower() == "true"
+ENABLE_LOG_DIAGNOSE: bool = env_bool("ATLAN_LOG_DIAGNOSE")
 #: Whether to emit SDK logger output during Temporal workflow replay.
 #: Default is False, matching Temporal's native ``workflow.logger`` behaviour.
 #: Set to True to re-enable replay logs for debugging (e.g. when using the
 #: ``temporalio.worker.Replayer`` to inspect history locally).
-ENABLE_WORKFLOW_REPLAY_LOGS: bool = (
-    os.getenv("ENABLE_WORKFLOW_REPLAY_LOGS", "false").lower() == "true"
-)
+ENABLE_WORKFLOW_REPLAY_LOGS: bool = env_bool("ENABLE_WORKFLOW_REPLAY_LOGS")
 #: Provenance label stamped as the ``source`` attribute on log lines emitted
 #: by non-SDK, non-dependency code in this process. Defaults to the
 #: application's own name (e.g. ``mysql``) so a reader immediately sees WHICH
@@ -1154,9 +1077,7 @@ LOG_SOURCE_APP_LABEL: str = os.getenv("ATLAN_LOG_SOURCE") or APPLICATION_NAME
 #: Whether to enable a secondary OpenTelemetry log exporter for workflow-log
 #: archival (e.g. S3 sink). When true, logs are emitted to both the primary
 #: OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_WORKFLOW_LOGS_ENDPOINT.
-ENABLE_OTLP_WORKFLOW_LOGS: bool = (
-    os.getenv("ENABLE_OTLP_WORKFLOW_LOGS", "false").lower() == "true"
-)
+ENABLE_OTLP_WORKFLOW_LOGS: bool = env_bool("ENABLE_OTLP_WORKFLOW_LOGS")
 #: Endpoint for the secondary archival OTel collector
 OTEL_WORKFLOW_LOGS_ENDPOINT: str = os.getenv("OTEL_WORKFLOW_LOGS_ENDPOINT", "")
 
@@ -1164,31 +1085,31 @@ OTEL_WORKFLOW_LOGS_ENDPOINT: str = os.getenv("OTEL_WORKFLOW_LOGS_ENDPOINT", "")
 #: Node name for workflow telemetry
 OTEL_WF_NODE_NAME = os.getenv("OTEL_WF_NODE_NAME", "")
 #: Timeout for OpenTelemetry exporters in seconds
-OTEL_EXPORTER_TIMEOUT_SECONDS = int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30"))
+OTEL_EXPORTER_TIMEOUT_SECONDS = env_int("OTEL_EXPORTER_TIMEOUT_SECONDS", 30)
 #: Delay between batch exports in milliseconds
-OTEL_BATCH_DELAY_MS = int(os.getenv("OTEL_BATCH_DELAY_MS", "5000"))
+OTEL_BATCH_DELAY_MS = env_int("OTEL_BATCH_DELAY_MS", 5000)
 #: Maximum size of export batches
-OTEL_BATCH_SIZE = int(os.getenv("OTEL_BATCH_SIZE", "512"))
+OTEL_BATCH_SIZE = env_int("OTEL_BATCH_SIZE", 512)
 #: Maximum size of the export queue
-OTEL_QUEUE_SIZE = int(os.getenv("OTEL_QUEUE_SIZE", "2048"))
+OTEL_QUEUE_SIZE = env_int("OTEL_QUEUE_SIZE", 2048)
 
 # AWS Constants
 #: AWS Session Name
 AWS_SESSION_NAME = os.getenv("AWS_SESSION_NAME", "temp-session")
 
 # Log batching configuration
-LOG_BATCH_SIZE = int(os.environ.get("ATLAN_LOG_BATCH_SIZE", 100))
-LOG_FLUSH_INTERVAL_SECONDS = int(os.environ.get("ATLAN_LOG_FLUSH_INTERVAL_SECONDS", 10))
+LOG_BATCH_SIZE = env_int("ATLAN_LOG_BATCH_SIZE", 100)
+LOG_FLUSH_INTERVAL_SECONDS = env_int("ATLAN_LOG_FLUSH_INTERVAL_SECONDS", 10)
 #: Minimum seconds between repeated INFO summaries for the Cloudflare 504
 #: long-poll suppression filter (TFKB ERROR-NET-001).  Increase for very
 #: chatty multi-worker deployments; decrease to see summaries more frequently.
-LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS = float(
-    os.environ.get("ATLAN_LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS", "60")
+LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS = env_float(
+    "ATLAN_LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS", 60.0
 )
 
 # Log Retention configuration
-LOG_RETENTION_DAYS = int(os.environ.get("ATLAN_LOG_RETENTION_DAYS", 30))
-LOG_CLEANUP_ENABLED = os.getenv("ATLAN_LOG_CLEANUP_ENABLED", "false").lower() == "true"
+LOG_RETENTION_DAYS = env_int("ATLAN_LOG_RETENTION_DAYS", 30)
+LOG_CLEANUP_ENABLED = env_bool("ATLAN_LOG_CLEANUP_ENABLED")
 
 # Log Location configuration
 # NOTE: Despite the ".parquet" default value, LOG_FILE_NAME is used purely as a
@@ -1200,30 +1121,22 @@ LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
 # REMOVED: ENABLE_HIVE_PARTITIONING — unused.
 
 # Metrics batching / sink configuration
-METRICS_BATCH_SIZE = int(os.environ.get("ATLAN_METRICS_BATCH_SIZE", 100))
-METRICS_FLUSH_INTERVAL_SECONDS = int(
-    os.environ.get("ATLAN_METRICS_FLUSH_INTERVAL_SECONDS", 10)
-)
-METRICS_RETENTION_DAYS = int(os.environ.get("ATLAN_METRICS_RETENTION_DAYS", 30))
-METRICS_CLEANUP_ENABLED = (
-    os.getenv("ATLAN_METRICS_CLEANUP_ENABLED", "false").lower() == "true"
-)
+METRICS_BATCH_SIZE = env_int("ATLAN_METRICS_BATCH_SIZE", 100)
+METRICS_FLUSH_INTERVAL_SECONDS = env_int("ATLAN_METRICS_FLUSH_INTERVAL_SECONDS", 10)
+METRICS_RETENTION_DAYS = env_int("ATLAN_METRICS_RETENTION_DAYS", 30)
+METRICS_CLEANUP_ENABLED = env_bool("ATLAN_METRICS_CLEANUP_ENABLED")
 # Same signal-discriminator convention as LOG_FILE_NAME above — not a real file name.
 METRICS_FILE_NAME = os.environ.get("ATLAN_METRICS_FILE_NAME", "metrics.parquet")
 
 # --- Activity sizing telemetry ------------------------------------------------
 # One record per execution, batched larger and flushed slower than metrics: this
 # is offline evidence for fitting envelopes, not something watched live.
-SIZING_BATCH_SIZE = int(os.environ.get("ATLAN_SIZING_BATCH_SIZE", 500))
-SIZING_FLUSH_INTERVAL_SECONDS = int(
-    os.environ.get("ATLAN_SIZING_FLUSH_INTERVAL_SECONDS", 60)
-)
+SIZING_BATCH_SIZE = env_int("ATLAN_SIZING_BATCH_SIZE", 500)
+SIZING_FLUSH_INTERVAL_SECONDS = env_int("ATLAN_SIZING_FLUSH_INTERVAL_SECONDS", 60)
 # Longer than metrics' 30: fitting wants the tail, and the runs that matter most
 # for sizing are the rare big ones.
-SIZING_RETENTION_DAYS = int(os.environ.get("ATLAN_SIZING_RETENTION_DAYS", 90))
-SIZING_CLEANUP_ENABLED = (
-    os.getenv("ATLAN_SIZING_CLEANUP_ENABLED", "false").lower() == "true"
-)
+SIZING_RETENTION_DAYS = env_int("ATLAN_SIZING_RETENTION_DAYS", 90)
+SIZING_CLEANUP_ENABLED = env_bool("ATLAN_SIZING_CLEANUP_ENABLED")
 SIZING_FILE_NAME = os.environ.get("ATLAN_SIZING_FILE_NAME", "sizing.parquet")
 TRACES_FILE_NAME = os.environ.get("ATLAN_TRACES_FILE_NAME", "traces.parquet")
 
@@ -1231,8 +1144,8 @@ TRACES_FILE_NAME = os.environ.get("ATLAN_TRACES_FILE_NAME", "traces.parquet")
 #: loop at process exit: the final flush of every periodic sink (logs,
 #: metrics, traces, sizing) and the Segment worker's last batch, together.
 #: See ``application_sdk.observability.background_loop``.
-OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS = float(
-    os.environ.get("ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS", "10")
+OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS = env_float(
+    "ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS", 10.0
 )
 
 # Segment Configuration
@@ -1243,46 +1156,41 @@ SEGMENT_WRITE_KEY = os.getenv("ATLAN_SEGMENT_WRITE_KEY", "")
 #: Default user ID for Segment events
 SEGMENT_DEFAULT_USER_ID = "atlan.automation"
 #: Maximum batch size for Segment events
-SEGMENT_BATCH_SIZE = int(os.getenv("ATLAN_SEGMENT_BATCH_SIZE", "100"))
+SEGMENT_BATCH_SIZE = env_int("ATLAN_SEGMENT_BATCH_SIZE", 100)
 #: Maximum time to wait before sending a batch (in seconds)
-SEGMENT_BATCH_TIMEOUT_SECONDS = float(
-    os.getenv("ATLAN_SEGMENT_BATCH_TIMEOUT_SECONDS", "10.0")
-)
+SEGMENT_BATCH_TIMEOUT_SECONDS = env_float("ATLAN_SEGMENT_BATCH_TIMEOUT_SECONDS", 10.0)
 
 # Traces Configuration
 #: Whether to register Temporal's OTel TracingInterceptor and emit spans.
 #: Production does not yet support traces; default is False.
 #: The single read of ``ATLAN_ENABLE_OTLP_TRACES``: ``run_main``, the
 #: ``TraceInterceptor`` and the traces adapter all consult this constant.
-ENABLE_OTLP_TRACES = os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true"
+ENABLE_OTLP_TRACES = env_bool("ATLAN_ENABLE_OTLP_TRACES")
 #: Development only: also print every span to stdout via OTel's
 #: ``ConsoleSpanExporter``. Has no effect unless ``ENABLE_OTLP_TRACES`` is on.
 #: Default False — in a deployed pod it would serialise every span onto the
 #: log stream.
-ENABLE_TRACES_CONSOLE = (
-    os.getenv("ATLAN_ENABLE_TRACES_CONSOLE", "false").lower() == "true"
-)
+ENABLE_TRACES_CONSOLE = env_bool("ATLAN_ENABLE_TRACES_CONSOLE")
 
 
 def _read_enable_tri_state(name: str) -> tuple[str | None, bool | None]:
     """Return ``(raw, parsed)`` for an ``ATLAN_ENABLE_*`` env var.
 
     ``raw`` is the literal env value (or ``None`` if unset).
-    ``parsed`` is ``True``/``False`` for "true"/"false", ``None`` if unset.
+    ``parsed`` is ``None`` if unset, else the value read by :func:`env_bool`
+    (so ``1`` / ``yes`` enable, and an unrecognised word warns and reads as
+    ``False``).
     """
     raw = os.getenv(name)
     if raw is None:
         return None, None
-    return raw, raw.strip().lower() == "true"
+    return raw, env_bool(name, False)
 
 
 # Store Sink Configuration (defaults to enabled)
-ENABLE_OBSERVABILITY_STORE_SINK: bool = (
-    os.getenv(
-        "ATLAN_ENABLE_OBSERVABILITY_STORE_SINK",
-        os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true"),
-    ).lower()
-    == "true"
+ENABLE_OBSERVABILITY_STORE_SINK: bool = env_bool(
+    "ATLAN_ENABLE_OBSERVABILITY_STORE_SINK",
+    env_bool("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", True),
 )
 # REMOVED: ATLAN_API_TOKEN_GUID, ATLAN_API_KEY, ATLAN_CLIENT_ID, ATLAN_CLIENT_SECRET — unused.
 # ATLAN_BASE_URL is still used by events interceptor (deferred import).
@@ -1302,14 +1210,14 @@ REDIS_SENTINEL_SERVICE_NAME = os.getenv("REDIS_SENTINEL_SERVICE_NAME", "mymaster
 #: Redis Sentinel hosts as comma-separated host:port pairs
 REDIS_SENTINEL_HOSTS = os.getenv("REDIS_SENTINEL_HOSTS", "")
 #: Whether to enable strict locking
-IS_LOCKING_DISABLED = os.getenv("IS_LOCKING_DISABLED", "true").lower() == "true"
+IS_LOCKING_DISABLED = env_bool("IS_LOCKING_DISABLED", True)
 #: Retry interval for lock acquisition
-LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60"))
+LOCK_RETRY_INTERVAL_SECONDS = env_int("LOCK_RETRY_INTERVAL_SECONDS", 60)
 
 # MCP Configuration
 #: Flag to indicate if MCP should be enabled or not. Turning this to true will setup an MCP server along
 #: with the application.
-ENABLE_MCP = os.getenv("ENABLE_MCP", "false").lower() == "true"
+ENABLE_MCP = env_bool("ENABLE_MCP")
 MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
 
 #: Windows extended-length path prefix

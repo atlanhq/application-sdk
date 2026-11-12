@@ -99,6 +99,22 @@ class TestLoadExecutionSettingsFromEnv:
         settings = load_execution_settings()
         assert settings.graceful_shutdown_timeout_seconds == 7200
 
+    @pytest.mark.parametrize("raw", ["", "abc", "-5"])
+    def test_bad_graceful_shutdown_timeout_falls_back(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        """An empty Helm value or a typo must not stop the worker starting."""
+        monkeypatch.setenv("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", raw)
+        monkeypatch.delenv("ATLAN_SHUTDOWN_GRACE_SECONDS", raising=False)
+        assert load_execution_settings().graceful_shutdown_timeout_seconds == 3600
+
+    @pytest.mark.parametrize("raw", ["abc", "0", "-1"])
+    def test_bad_max_concurrent_activities_falls_back(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        monkeypatch.setenv("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", raw)
+        assert load_execution_settings().max_concurrent_activities == 100
+
     def test_defaults_when_env_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for key in [
             "TEMPORAL_HOST",
