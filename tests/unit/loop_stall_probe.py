@@ -17,7 +17,11 @@ Arguments:
         ``sleep:N`` (blocked for N seconds, then free again).
     --when: ``steady`` or ``before-sigterm``: half a second after the worker
         starts. ``during-drain``: half a second into the drain.
-    --sigterm-after: Seconds after start until a thread sends SIGTERM.
+    --sigterm-after: Seconds after the worker starts until a thread sends
+        SIGTERM. Counted from the worker's start, not the process's, because
+        ``run_worker_mode`` installs its signal handlers only after startup
+        setup: a SIGTERM before then would hit the default disposition on a
+        slow CI runner and kill the probe without exercising the watchdog.
     --drain: Seconds the worker's drain takes, with the loop running.
     --linger: Seconds to stay alive after ``run_worker_mode`` returns, so a
         timer left armed by a clean shutdown would still fire.
@@ -69,12 +73,20 @@ class _Worker:
     """Stands in for the Temporal worker: entering it is the worker starting,
     leaving it is the drain."""
 
-    def __init__(self, block: str, when: str, drain: float) -> None:
+    def __init__(
+        self, block: str, when: str, drain: float, sigterm: threading.Timer
+    ) -> None:
         self._blocker = _blocker(block)
         self._when = when
         self._drain = drain
+        self._sigterm = sigterm
 
     async def __aenter__(self) -> _Worker:
+        # run_worker_mode installs both SIGTERM handlers before it enters the
+        # worker, so the countdown starts here. A supervised restart re-enters
+        # the worker; the timer starts only once.
+        if self._sigterm.ident is None:
+            self._sigterm.start()
         if self._blocker is not None and self._when != "during-drain":
             asyncio.get_running_loop().call_later(BLOCK_AFTER_SECONDS, self._blocker)
         return self
@@ -108,12 +120,12 @@ def main(argv: list[str]) -> None:
     app_class._app_name = "probe-app"
     app_class._app_version = "1.0.0"
 
-    # A thread, so the signal is sent even while the loop is blocked.
+    # A thread, so the signal is sent even while the loop is blocked. Started
+    # by the fake worker once the signal handlers are in place.
     sigterm = threading.Timer(
         args.sigterm_after, os.kill, (os.getpid(), signal.SIGTERM)
     )
     sigterm.daemon = True
-    sigterm.start()
 
     with (
         patch(
@@ -139,7 +151,9 @@ def main(argv: list[str]) -> None:
         ),
         patch(
             "application_sdk.execution._temporal.worker.create_worker",
-            side_effect=lambda *_, **__: _Worker(args.block, args.when, args.drain),
+            side_effect=lambda *_, **__: _Worker(
+                args.block, args.when, args.drain, sigterm
+            ),
         ),
         patch(
             "application_sdk.server.health.WorkerHealthServer",

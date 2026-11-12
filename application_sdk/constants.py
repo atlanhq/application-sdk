@@ -335,7 +335,14 @@ class ShutdownBudget:
     headroom_seconds: int
     pushgateway_http_timeout_seconds: float
     pushgateway_shutdown_delete_delay_seconds: float
-    loop_stall_limit_seconds: int
+
+    # A property, not a field, so the constructor keeps the six fields callers
+    # already pass.
+    @property
+    def loop_stall_limit_seconds(self) -> int:
+        """How long after the signal a stall exit may land and still leave
+        daprd its headroom before SIGKILL."""
+        return self.grace_seconds - self.headroom_seconds
 
 
 def derive_shutdown_budget(
@@ -402,7 +409,6 @@ def derive_shutdown_budget(
         headroom_seconds=headroom,
         pushgateway_http_timeout_seconds=http_timeout,
         pushgateway_shutdown_delete_delay_seconds=delete_delay,
-        loop_stall_limit_seconds=grace - headroom,
     )
 
 
