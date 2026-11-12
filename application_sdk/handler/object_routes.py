@@ -546,7 +546,7 @@ class AzureBlobObjectStore:
         try:
             return cls(account, container, access_key)
         except (binascii.Error, ValueError):
-            # Never exc_info: the error could quote the key.
+            # conformance: ignore[L004] the error could quote the key, so no traceback.
             logger.warning(
                 "ATLAN_AZURE_STORAGE_ACCESS_KEY is not a base64 account key, so the "
                 "config and file routes answer 503."
