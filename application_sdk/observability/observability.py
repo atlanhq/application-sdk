@@ -99,6 +99,24 @@ class _PartitionWriter:
     file: gzip.GzipFile
 
 
+def _warn_retention_params_deprecated() -> None:
+    """Warn that ``retention_days`` / ``cleanup_enabled`` are accepted but ignored.
+
+    A module-level helper rather than inline in ``AtlanObservability.__init__``:
+    the deprecation scanner attributes a warn emitted directly by ``__init__`` to
+    the whole class, and only these two parameters are deprecated.
+    ``stacklevel=3`` points at the code constructing the sink.
+    """
+    warnings.warn(
+        "AtlanObservability retention_days and cleanup_enabled are "
+        "deprecated and ignored; use an object-store bucket lifecycle "
+        "rule instead — the SDK retention sweep never deleted exported "
+        "files. Will be removed in v3.60.0.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
 class AtlanObservability(Generic[T], ABC):
     """Base class for Atlan observability functionality.
 
@@ -203,14 +221,7 @@ class AtlanObservability(Generic[T], ABC):
                 Will be removed in v3.60.0.
         """
         if retention_days is not None or cleanup_enabled is not None:
-            warnings.warn(
-                "AtlanObservability retention_days and cleanup_enabled are "
-                "deprecated and ignored; use an object-store bucket lifecycle "
-                "rule instead — the SDK retention sweep never deleted exported "
-                "files. Will be removed in v3.60.0.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
+            _warn_retention_params_deprecated()
         # Initialize instance variables
         self._buffer: list[dict[str, object]] = []
         self._buffer_lock = threading.Lock()
