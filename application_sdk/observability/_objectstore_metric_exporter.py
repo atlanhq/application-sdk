@@ -1,9 +1,10 @@
 """ObjectStore metric exporter for the OTel SDK.
 
 Receives ``MetricsData`` from ``PeriodicExportingMetricReader`` on a
-background thread, serializes each data point as an NDJSON record,
-writes a ``.json.gz`` file to local disk, and uploads it to the
-deployment and (optionally) upstream object stores.
+background thread, serializes each data point as an NDJSON record, and
+hands the batch to the observability writer the ``AtlanObservability``
+sinks use, which writes a ``.json.gz`` file and uploads it to the
+deployment and (in SDR mode) upstream object stores.
 
 Best-effort: upload failures are logged and swallowed — the exporter
 always returns ``SUCCESS`` so a flaky store never blocks metric
@@ -12,15 +13,8 @@ collection.
 
 from __future__ import annotations
 
-import gzip
-import os
-import posixpath
-from collections.abc import Sequence
-from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import orjson
 from opentelemetry.sdk.metrics import (
     Counter,
     Histogram,
@@ -38,31 +32,21 @@ from opentelemetry.sdk.metrics.export import Gauge as GaugeData
 from opentelemetry.sdk.metrics.export import Histogram as HistogramData
 from opentelemetry.sdk.metrics.export import Sum as SumData
 
-from application_sdk.constants import (
-    APPLICATION_NAME,
-    DEPLOYMENT_NAME,
-    DEPLOYMENT_OBJECT_STORE_NAME,
-    ENABLE_ATLAN_UPLOAD,
-    ENABLE_OBSERVABILITY_STORE_SINK,
-    UPSTREAM_OBJECT_STORE_NAME,
-)
+from application_sdk.constants import ENABLE_OBSERVABILITY_STORE_SINK
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.observability.observability import OBSERVABILITY_S3_PREFIX_MAP
+from application_sdk.observability.observability import _write_and_upload_batch
 from application_sdk.observability.utils import get_observability_dir
 
 if TYPE_CHECKING:
-    from obstore.store import ObjectStore
     from opentelemetry.sdk.metrics.export import HistogramDataPoint, NumberDataPoint
     from opentelemetry.sdk.resources import Resource
 
 logger = get_logger(__name__)
 
-#: S3 prefix for OTel-sourced Prometheus metrics.  Kept separate from the
-#: ``metrics/`` prefix used by ``record_metric()`` data so consumers can
-#: distinguish the two streams.
-_S3_PREFIX = OBSERVABILITY_S3_PREFIX_MAP.get(
-    "metrics", "artifacts/apps/observability/sdr/metrics"
-).replace("/metrics", "/prometheus-metrics")
+#: Signal key in ``LOCAL_OBS_SUBDIR_MAP`` / ``OBSERVABILITY_S3_PREFIX_MAP`` for
+#: OTel-sourced Prometheus metrics. Kept separate from the ``metrics`` signal
+#: used by ``record_metric()`` data so consumers can tell the two streams apart.
+_SIGNAL = "prometheus-metrics"
 
 
 def _resource_attrs(resource: Resource) -> dict[str, str]:
@@ -188,14 +172,6 @@ def _serialize_metrics_data(metrics_data: MetricsData | None) -> list[dict[str, 
     return records
 
 
-def _write_ndjson_gz(records: Sequence[dict[str, Any]], path: str) -> None:
-    """Write records as gzip-compressed NDJSON to *path*."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with gzip.open(path, "wb") as f:
-        for record in records:
-            f.write(orjson.dumps(record) + b"\n")
-
-
 class ObjectStoreMetricExporter(MetricExporter):
     """Exports OTel metrics as NDJSON.gz files to ObjectStore.
 
@@ -215,126 +191,10 @@ class ObjectStoreMetricExporter(MetricExporter):
             },
         )
         self._data_dir = data_dir or get_observability_dir()
-        # Stores are resolved lazily on the first export, not here (BLDX-1567).
-        # The metrics flush runs on a daemon thread that can construct this
-        # exporter during app-server boot — before the Dapr ``objectstore``
-        # component YAML has been written to ``./components``. Resolving eagerly
-        # turned that transient boot race into *permanent* metric-upload
-        # disablement for the whole process (and logged a full traceback at
-        # boot). Lazy resolution retries on each export until the binding
-        # appears, so a slow-to-materialise component self-heals.
-        self._deployment_store: ObjectStore | None = None
-        self._upstream_store: ObjectStore | None = None
-        # Store names that hit a *non-transient* resolution error (e.g. an
-        # unsupported binding type). These will never heal on retry, so they are
-        # resolved once, logged once, and then skipped — otherwise the per-export
-        # retry below would re-log a full traceback every flush (~60s) for the
-        # life of the process (BLDX-1567 regression guard).
-        self._skip_stores: set[str] = set()
-        # Store names for which a *transient* deferral has already been warned
-        # about. The transient boot race is retried every flush, so we warn once
-        # (a persistent gap stays visible in prod) then stay quiet at DEBUG —
-        # same log-once-by-name discipline as ``_skip_stores`` above.
-        self._deferred: set[str] = set()
+        # Stores are resolved by the shared writer on each export, never here
+        # (BLDX-1567): this exporter can be built during app-server boot, before
+        # the Dapr ``objectstore`` component is written.
         self._writer_seq = 0
-
-    def _ensure_stores(self) -> None:
-        """Resolve the deployment/upstream stores, retrying until they appear.
-
-        Idempotent and cheap once resolved (each store is resolved at most
-        once successfully, then cached). While a binding is still in a
-        *transient* boot state (component not yet written, or present but with
-        placeholders/secret env not yet substituted) resolution is retried on
-        the next export rather than being latched off — that retry is what makes
-        a boot-time binding gap self-healing. A store that hit a non-transient
-        error is recorded in ``_skip_stores`` and not retried, so a genuine
-        misconfiguration is logged once, not every flush.
-        """
-        if not ENABLE_OBSERVABILITY_STORE_SINK:
-            return
-        if (
-            self._deployment_store is None
-            and DEPLOYMENT_OBJECT_STORE_NAME not in self._skip_stores
-        ):
-            self._deployment_store = self._resolve_store(DEPLOYMENT_OBJECT_STORE_NAME)
-        if (
-            self._upstream_store is None
-            and ENABLE_ATLAN_UPLOAD
-            and UPSTREAM_OBJECT_STORE_NAME not in self._skip_stores
-        ):
-            self._upstream_store = self._resolve_store(UPSTREAM_OBJECT_STORE_NAME)
-
-    def _resolve_store(self, name: str) -> ObjectStore | None:
-        from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
-            create_store_from_binding,
-        )
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
-            StorageBindingBrokenError,
-            StorageBindingNotFoundError,
-            StorageConfigError,
-        )
-
-        try:
-            store = create_store_from_binding(name)
-        except (StorageBindingNotFoundError, StorageBindingBrokenError):
-            # Transient boot states: the component is not written yet, or it is
-            # present but its placeholders / ``secretKeyRef`` env vars are not
-            # substituted yet. Both heal once Dapr finishes writing and the
-            # secret env materialises, so retry on the next export. Both
-            # subclass StorageConfigError, so this clause must precede it.
-            #
-            # Warn once (so a *persistent* gap stays visible in prod, where
-            # DEBUG is filtered out) then drop to DEBUG on subsequent flushes so
-            # the ~60s retry does not spam. No stacktrace: the condition is
-            # expected and self-describing, and a traceback for "not ready yet"
-            # reads as a failure. The heal is logged at INFO in the ``else``
-            # branch, so an unmatched warning is the signal it is truly stuck.
-            if name in self._deferred:
-                logger.debug(
-                    "Object store '%s' binding still not resolvable; metric upload still deferred",
-                    name,
-                )
-            else:
-                self._deferred.add(name)
-                # conformance: ignore[L004] transient boot-race deferral, not a failure — logged once without a stacktrace by design (see block comment above); a traceback for "not ready yet" reads as a failure.
-                logger.warning(
-                    "Object store '%s' binding not resolvable yet; metric upload deferred, "
-                    "retrying each flush until it appears",
-                    name,
-                )
-            return None
-        except StorageConfigError:
-            # Non-transient misconfiguration (e.g. unsupported binding type). It
-            # will not heal on retry, so record the name to stop retrying and
-            # log exactly once instead of every flush.
-            self._skip_stores.add(name)
-            logger.warning(
-                "Object store '%s' misconfigured; metric upload disabled",
-                name,
-                exc_info=True,
-            )
-            return None
-        except Exception:
-            # Unknown failure — also treated as non-transient: log once and stop
-            # retrying so an unexpected error cannot spam warnings every flush.
-            self._skip_stores.add(name)
-            logger.warning(
-                "Object store '%s' setup failed; metric upload disabled",
-                name,
-                exc_info=True,
-            )
-            return None
-        else:
-            # Resolved. If we had previously deferred this store, announce the
-            # heal at INFO so the earlier warning is closed out and a boot-time
-            # gap is observably self-healing.
-            if name in self._deferred:
-                self._deferred.discard(name)
-                logger.info(
-                    "Object store '%s' binding now resolved; metric upload active",
-                    name,
-                )
-            return store
 
     def export(
         self,
@@ -349,61 +209,18 @@ class ObjectStoreMetricExporter(MetricExporter):
             records = _serialize_metrics_data(metrics_data)
             if not records:
                 return MetricExportResult.SUCCESS
-
-            # Resolve stores on first use (and retry until a boot-time binding
-            # gap heals). Only attempted when there is data to write.
-            self._ensure_stores()
-
-            now = datetime.now()
-            ts_ns = int(now.timestamp() * 1e9)
             self._writer_seq += 1
-            filename = f"{ts_ns}_{self._writer_seq:06d}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
-
-            local_dir = os.path.join(
-                self._data_dir,
-                "sdr" if ENABLE_ATLAN_UPLOAD else "non-sdr",
-                "prometheus-metrics",
-                f"year={now.year}",
-                f"month={now.month:02d}",
-                f"day={now.day:02d}",
-                f"hour={now.hour:02d}",
+            # The same writer the AtlanObservability sinks use: store bindings
+            # resolved from DAPR_COMPONENTS_PATH with their put attributes
+            # (``storageClass``), uploads through ``upload_file``, and a binding
+            # still missing at boot retried on each export until it appears.
+            _write_and_upload_batch(
+                records,
+                signal=_SIGNAL,
+                data_dir=self._data_dir,
+                seq=self._writer_seq,
+                timeout=timeout_millis / 1000,
             )
-            local_path = os.path.join(local_dir, filename)
-
-            remote_key = posixpath.join(
-                _S3_PREFIX,
-                f"year={now.year}",
-                f"month={now.month:02d}",
-                f"day={now.day:02d}",
-                f"hour={now.hour:02d}",
-                filename,
-            )
-
-            _write_ndjson_gz(records, local_path)
-
-            try:
-                if self._deployment_store is not None:
-                    try:
-                        self._deployment_store.put(remote_key, Path(local_path))
-                    except Exception:
-                        logger.warning(
-                            "ObjectStore metric upload to deployment store failed",
-                            exc_info=True,
-                        )
-                if self._upstream_store is not None:
-                    try:
-                        self._upstream_store.put(remote_key, Path(local_path))
-                    except Exception:
-                        logger.warning(
-                            "ObjectStore metric upload to upstream store failed",
-                            exc_info=True,
-                        )
-            finally:
-                try:
-                    os.unlink(local_path)
-                except OSError:  # conformance: ignore[E002] best-effort local metric-file cleanup; never block export
-                    pass
-
         except Exception:
             logger.warning("ObjectStore metric export failed", exc_info=True)
 

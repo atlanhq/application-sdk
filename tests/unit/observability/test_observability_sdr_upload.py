@@ -115,12 +115,14 @@ class TestObsModeDerivation:
             "metrics": "sdr/metrics",
             "traces": "sdr/traces",
             "sizing": "sdr/sizing",
+            "prometheus-metrics": "sdr/prometheus-metrics",
         }
         assert mod.OBSERVABILITY_S3_PREFIX_MAP == {
             "logs": "artifacts/apps/observability/sdr/logs",
             "metrics": "artifacts/apps/observability/sdr/metrics",
             "traces": "artifacts/apps/observability/sdr/traces",
             "sizing": "artifacts/apps/observability/sdr/sizing",
+            "prometheus-metrics": "artifacts/apps/observability/sdr/prometheus-metrics",
         }
 
     def test_non_sdr_mode_when_atlan_upload_disabled(self):

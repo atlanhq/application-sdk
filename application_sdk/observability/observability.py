@@ -2,9 +2,11 @@ import asyncio
 import gzip
 import logging
 import os
+import posixpath
 import threading
 import warnings
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from time import time
@@ -60,6 +62,10 @@ LOCAL_OBS_SUBDIR_MAP = {
     # Must be added alongside the S3 prefix below: a signal in only one map writes
     # to ``other/`` locally while uploading to ``sizing/``.
     "sizing": f"{_OBS_MODE}/sizing",
+    # OTel-sourced metrics from ``ObjectStoreMetricExporter``. Kept apart from
+    # ``metrics`` (the ``record_metric()`` stream) so consumers can tell the
+    # two streams apart.
+    "prometheus-metrics": f"{_OBS_MODE}/prometheus-metrics",
 }
 
 # Map of signal type → S3 remote key prefix
@@ -70,6 +76,7 @@ OBSERVABILITY_S3_PREFIX_MAP = {
     # Its own prefix, not the "other" fallback: this dataset has to be selectable
     # across tenants without filtering out everything else in "other".
     "sizing": f"artifacts/apps/observability/{_OBS_MODE}/sizing",
+    "prometheus-metrics": f"artifacts/apps/observability/{_OBS_MODE}/prometheus-metrics",
 }
 
 
@@ -115,6 +122,264 @@ def _warn_retention_params_deprecated() -> None:
         DeprecationWarning,
         stacklevel=3,
     )
+
+
+# --- Shared object-store writer ---
+# Every observability signal that reaches the object store goes through the
+# helpers below: the ``AtlanObservability`` sinks (logs, metrics, traces,
+# sizing) and ``ObjectStoreMetricExporter`` (OTel ``prometheus-metrics``). One
+# path layout, one store resolution (``DAPR_COMPONENTS_PATH``, the binding's put
+# attributes), one upload seam (``upload_file``: retries, gateway no-route
+# handling, transfer telemetry), so a fix to one writer reaches all of them.
+
+# Store names whose binding was not resolvable yet (a transient boot state):
+# warned about once, then retried quietly on each upload until they resolve.
+_deferred_stores: set[str] = set()
+# Store names whose resolution failed for a reason a retry will not fix: warned
+# about once, then never retried for the life of the process.
+_disabled_stores: set[str] = set()
+_store_state_lock = threading.Lock()
+
+
+def _partition_segments(timestamp: datetime) -> tuple[str, str, str, str]:
+    """The ``year=/month=/day=/hour=`` path segments for *timestamp*."""
+    return (
+        f"year={timestamp.year}",
+        f"month={timestamp.month:02d}",
+        f"day={timestamp.day:02d}",
+        f"hour={timestamp.hour:02d}",
+    )
+
+
+def _local_partition_dir(data_dir: str, signal: str, timestamp: datetime) -> str:
+    """Local hour-partition directory for *signal* under *data_dir*."""
+    local_subdir = LOCAL_OBS_SUBDIR_MAP.get(signal, f"{_OBS_MODE}/other")
+    return os.path.join(data_dir, local_subdir, *_partition_segments(timestamp))
+
+
+def _remote_partition_key(signal: str, timestamp: datetime, filename: str) -> str:
+    """Object-store key for *filename* in *signal*'s hour partition."""
+    prefix = OBSERVABILITY_S3_PREFIX_MAP.get(
+        signal, f"artifacts/apps/observability/{_OBS_MODE}/other"
+    )
+    return posixpath.join(prefix, *_partition_segments(timestamp), filename)
+
+
+def _partition_filename(seq: int) -> str:
+    """Lexically sortable, unique partition filename.
+
+    ``datetime.now()`` rather than ``time.time_ns()``: the latter is restricted
+    inside Temporal's workflow sandbox, while ``datetime.now()`` is patched to be
+    safe there. *seq* is the writer's monotonic tie-breaker for when the clock
+    has too coarse a resolution (~15 ms on Windows) to tell two files apart.
+    """
+    ts_ns = int(datetime.now().timestamp() * 1e9)
+    return f"{ts_ns}_{seq:06d}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
+
+
+def _store_or_none(
+    name: str, get_store: "Callable[[], BoundStore]"
+) -> "BoundStore | None":
+    """Resolve the store *get_store* builds for binding *name*, or ``None``.
+
+    Uploads are best-effort, so a store that cannot be built yet is skipped
+    rather than raised. Two cases:
+
+    * A transient boot state: the Dapr component is not written yet, or its
+      placeholders / ``secretKeyRef`` env vars are not substituted yet
+      (``StorageBindingNotFoundError`` / ``StorageBindingBrokenError``). The
+      metrics-flush thread can upload during app-server boot, before either is
+      done, so this is retried on every upload and heals on its own. Warned
+      about once with no stacktrace (it is expected, and a persistent gap must
+      stay visible where DEBUG is filtered out), then quiet at DEBUG; the heal
+      is logged at INFO, so an unmatched warning means the gap never closed.
+    * Anything else (an unsupported binding type, an api-only install without
+      the storage extras): a retry will not fix it, so it is logged once with
+      its stacktrace and the store is not tried again.
+
+    The successful store is cached by *get_store* itself.
+    """
+    with _store_state_lock:
+        if name in _disabled_stores:
+            return None
+    try:
+        store = get_store()
+    except Exception as exc:
+        if _is_transient_binding_error(exc):
+            with _store_state_lock:
+                first = name not in _deferred_stores
+                _deferred_stores.add(name)
+            if first:
+                # conformance: ignore[L004] transient boot-race deferral, not a failure — logged once without a stacktrace by design; a traceback for "not ready yet" reads as a failure.
+                logging.warning(
+                    "Object store '%s' binding not resolvable yet; observability "
+                    "upload deferred, retrying each flush until it appears",
+                    name,
+                )
+            else:
+                logging.debug(
+                    "Object store '%s' binding still not resolvable; observability "
+                    "upload still deferred",
+                    name,
+                )
+            return None
+        with _store_state_lock:
+            _disabled_stores.add(name)
+        logging.warning(
+            "Object store '%s' could not be set up; observability upload to it disabled",
+            name,
+            exc_info=True,
+        )
+        return None
+    with _store_state_lock:
+        healed = name in _deferred_stores
+        _deferred_stores.discard(name)
+    if healed:
+        logging.info(
+            "Object store '%s' binding now resolved; observability upload active",
+            name,
+        )
+    return store
+
+
+def _is_transient_binding_error(exc: Exception) -> bool:
+    """Whether *exc* is a binding that is missing or unresolved *for now*."""
+    try:
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
+            StorageBindingBrokenError,
+            StorageBindingNotFoundError,
+        )
+    except ModuleNotFoundError:
+        # api-only install: no storage layer, so nothing here can heal.
+        return False
+    return isinstance(exc, (StorageBindingNotFoundError, StorageBindingBrokenError))
+
+
+async def _upload_to_observability_stores(
+    local_path: str,
+    remote_key: str,
+    *,
+    get_deployment_store: "Callable[[], BoundStore]",
+    get_upstream_store: "Callable[[], BoundStore]",
+) -> None:
+    """Upload *local_path* to *remote_key* in both stores, then delete it.
+
+    The deployment-store upload is non-fatal (logged at WARNING). The
+    upstream-store upload (only when ``ENABLE_ATLAN_UPLOAD``) propagates its
+    failure to the caller. A store whose binding cannot be resolved is skipped
+    (see :func:`_store_or_none`). The local file is always deleted.
+    """
+    try:
+        try:
+            from application_sdk.storage import upload_file  # noqa: PLC0415
+        except ModuleNotFoundError as exc:
+            if not worker_only_missing(exc):
+                raise
+            # api-only install (the API host): no object store to export to.
+            raise ObjectStoreNotConfiguredError() from exc
+
+        # write_sidecar=False: telemetry exports are not artifacts anyone
+        # downloads through the SDK, and the ingestion pipelines that read these
+        # prefixes enumerate them directly — a `.sha256` next to every
+        # `.json.gz` would double the object count there for no verification
+        # anyone performs. The upload-side size validation still applies.
+        deployment_store = _store_or_none(
+            DEPLOYMENT_OBJECT_STORE_NAME, get_deployment_store
+        )
+        if deployment_store is not None:
+            try:
+                await upload_file(
+                    remote_key,
+                    local_path,
+                    store=deployment_store,
+                    write_sidecar=False,
+                )
+            except Exception:
+                logging.warning(
+                    "Deployment objectstore upload failed (non-fatal)",
+                    exc_info=True,
+                )
+
+        if ENABLE_ATLAN_UPLOAD:
+            upstream_store = _store_or_none(
+                UPSTREAM_OBJECT_STORE_NAME, get_upstream_store
+            )
+            if upstream_store is not None:
+                await upload_file(
+                    remote_key,
+                    local_path,
+                    store=upstream_store,
+                    write_sidecar=False,
+                )
+
+        logging.debug("Exported records → %s", remote_key)
+    finally:
+        if os.path.exists(local_path):
+            os.unlink(local_path)
+
+
+def _write_and_upload_batch(
+    records: Sequence[dict[str, Any]],
+    *,
+    signal: str,
+    data_dir: str,
+    seq: int,
+    timeout: float,
+) -> None:
+    """Write *records* as one NDJSON.gz file under *signal* and upload it.
+
+    For a synchronous caller on its own thread (``ObjectStoreMetricExporter``
+    runs on OTel's ``PeriodicExportingMetricReader`` thread). The file is
+    written on the calling thread; the upload runs on the shared observability
+    loop through :func:`_upload_to_observability_stores`, the same path the
+    ``AtlanObservability`` sinks use, and this waits up to *timeout* seconds
+    for it. On timeout the upload carries on in the background and still
+    deletes the file; the ``TimeoutError`` is raised to the caller.
+
+    Once the observability loop has shut down (interpreter exit) the upload
+    runs on the calling thread instead, so a final export is not lost.
+    """
+    now = datetime.now()
+    filename = _partition_filename(seq)
+    local_dir = _local_partition_dir(data_dir, signal, now)
+    local_path = os.path.join(local_dir, filename)
+    remote_key = _remote_partition_key(signal, now, filename)
+
+    os.makedirs(local_dir, exist_ok=True)
+    try:
+        with gzip.open(local_path, "wb") as fh:
+            for record in records:
+                fh.write(orjson.dumps(record) + b"\n")
+    except BaseException:
+        if os.path.exists(local_path):
+            os.unlink(local_path)
+        raise
+
+    def _upload() -> "Coroutine[Any, Any, None]":
+        return _upload_to_observability_stores(
+            local_path,
+            remote_key,
+            get_deployment_store=AtlanObservability._get_deployment_store,
+            get_upstream_store=AtlanObservability._get_upstream_store,
+        )
+
+    future = observability_loop.submit(_upload())
+    if future is None:
+        if _has_running_loop():
+            # Cannot run a coroutine to completion from inside a running loop
+            # without blocking it; drop this batch rather than leak its file.
+            os.unlink(local_path)
+            raise RuntimeError(
+                "observability loop is shut down and the calling thread is "
+                "running an event loop; batch dropped"
+            )
+        asyncio.run(_upload())
+        return
+    if observability_loop.in_loop_thread():
+        # Waiting here would block the loop the upload needs; it deletes the
+        # file itself when it finishes.
+        return
+    future.result(timeout=timeout)
 
 
 class AtlanObservability(Generic[T], ABC):
@@ -327,6 +592,9 @@ class AtlanObservability(Generic[T], ABC):
         AtlanObservability._instances.clear()
         AtlanObservability._deployment_store = None
         AtlanObservability._upstream_store = None
+        with _store_state_lock:
+            _deferred_stores.clear()
+            _disabled_stores.clear()
 
     def _get_signal_type(self) -> str:
         """Map file_name to signal type (logs, metrics, traces, sizing).
@@ -363,17 +631,7 @@ class AtlanObservability(Generic[T], ABC):
         Returns:
             str: The local partition path
         """
-        signal_type = self._get_signal_type()
-        local_subdir = LOCAL_OBS_SUBDIR_MAP.get(signal_type, f"{_OBS_MODE}/other")
-
-        return os.path.join(
-            self.data_dir,
-            local_subdir,
-            f"year={timestamp.year}",
-            f"month={timestamp.month:02d}",
-            f"day={timestamp.day:02d}",
-            f"hour={timestamp.hour:02d}",
-        )
+        return _local_partition_dir(self.data_dir, self._get_signal_type(), timestamp)
 
     def _build_remote_key(self, partition_time: datetime, filename: str) -> str:
         """Build the S3 remote key for a partition file.
@@ -386,71 +644,28 @@ class AtlanObservability(Generic[T], ABC):
             str: The fully qualified S3 key, e.g.
                 ``artifacts/apps/observability/sdr/logs/year=2025/month=06/day=29/hour=14/<filename>``.
         """
-        signal_type = self._get_signal_type()
-        s3_prefix = OBSERVABILITY_S3_PREFIX_MAP.get(
-            signal_type,
-            f"artifacts/apps/observability/{_OBS_MODE}/other",
-        )
-        return os.path.join(
-            s3_prefix,
-            f"year={partition_time.year}",
-            f"month={partition_time.month:02d}",
-            f"day={partition_time.day:02d}",
-            f"hour={partition_time.hour:02d}",
-            filename,
-        )
+        return _remote_partition_key(self._get_signal_type(), partition_time, filename)
 
     async def _upload_and_delete(self, local_path: str, remote_key: str) -> None:
         """Upload *local_path* to object store(s) then remove the local file.
 
-        The deployment-store upload is non-fatal (failure is logged at WARNING and
-        the method continues). The upstream-store upload (when ``ENABLE_ATLAN_UPLOAD``
-        is true) is allowed to propagate — the caller handles it.  The local file is
-        always deleted in the ``finally`` block to prevent disk leaks.
+        Delegates to :func:`_upload_to_observability_stores`, the writer
+        ``ObjectStoreMetricExporter`` shares. The deployment-store upload is
+        non-fatal (failure is logged at WARNING and the method continues). The
+        upstream-store upload (when ``ENABLE_ATLAN_UPLOAD`` is true) is allowed
+        to propagate — the caller handles it. A store whose binding cannot be
+        resolved is skipped. The local file is always deleted.
 
         Args:
             local_path: Absolute path to the local ``.json.gz`` file.
             remote_key: S3 key (from :meth:`_build_remote_key`) to upload to.
         """
-        try:
-            from application_sdk.storage import upload_file  # noqa: PLC0415
-        except ModuleNotFoundError as exc:
-            if not worker_only_missing(exc):
-                raise
-            # api-only install (the API host): no object store to export to.
-            raise ObjectStoreNotConfiguredError() from exc
-
-        # write_sidecar=False: telemetry exports are not artifacts anyone
-        # downloads through the SDK, and the ingestion pipelines that read this
-        # prefix enumerate it directly — a `.sha256` next to every rotated
-        # `.json.gz` would double the object count there for no verification
-        # anyone performs. The upload-side size validation still applies.
-        try:
-            try:
-                await upload_file(
-                    remote_key,
-                    local_path,
-                    store=self._get_deployment_store(),
-                    write_sidecar=False,
-                )
-            except Exception:
-                logging.warning(
-                    "Deployment objectstore upload failed (non-fatal)",
-                    exc_info=True,
-                )
-
-            if ENABLE_ATLAN_UPLOAD:
-                await upload_file(
-                    remote_key,
-                    local_path,
-                    store=self._get_upstream_store(),
-                    write_sidecar=False,
-                )
-
-            logging.debug("Exported records → %s", remote_key)
-        finally:
-            if os.path.exists(local_path):
-                os.unlink(local_path)
+        await _upload_to_observability_stores(
+            local_path,
+            remote_key,
+            get_deployment_store=self._get_deployment_store,
+            get_upstream_store=self._get_upstream_store,
+        )
 
     @abstractmethod
     def process_record(self, record: T) -> dict[str, Any]:
@@ -647,17 +862,8 @@ class AtlanObservability(Generic[T], ABC):
 
                         # Open a fresh gzip file for the new partition.
                         os.makedirs(partition_path, exist_ok=True)
-                        # Lexi-sortable filename.
-                        # Use datetime.now() rather than time.time_ns(): the latter is
-                        # restricted inside Temporal's workflow sandbox (non-deterministic),
-                        # while datetime.now() is patched by the SDK to be safe there.
-                        # The monotonic _writer_seq counter is a tie-breaker for when
-                        # datetime.now() has insufficient resolution (e.g. ~15 ms on
-                        # Windows), which would otherwise produce duplicate filenames
-                        # when two partition switches happen within the same clock tick.
-                        ts_ns = int(datetime.now().timestamp() * 1e9)
                         self._writer_seq += 1
-                        filename = f"{ts_ns}_{self._writer_seq:06d}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
+                        filename = _partition_filename(self._writer_seq)
                         local_path = os.path.join(partition_path, filename)
                         current_writer = _PartitionWriter(
                             partition_path=partition_path,
