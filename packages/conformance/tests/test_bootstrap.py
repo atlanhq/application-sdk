@@ -153,6 +153,9 @@ def test_parse_bootstrap_args_defaults() -> None:
         "release_private_git_auth": "",
         "build_publish_private_git_auth": "",
         "checks_private_git_deps": "",
+        # The certify gate's apt packages: read off build-and-publish.yaml,
+        # else inherited from system-deps. No flag of its own.
+        "build_publish_apt_packages": "",
         "enforce": "",
         "conformance_blocking": "",
         "renovate_automerge": "",

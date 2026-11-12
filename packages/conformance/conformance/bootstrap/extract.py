@@ -43,6 +43,15 @@ _APT_INSTALL_RE = re.compile(
 # dropped on extraction rather than escaped.
 APT_PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+/=:-]*$")
 
+# The narrower grammar the build-and-publish reusable's certify job validates
+# its ``apt_packages`` input against (``build-and-publish-app.yaml``'s
+# "Install apt packages" step: ``[a-z0-9][a-z0-9+.-]*`` per token). A token
+# ``APT_PACKAGE_RE`` accepts but this does not — a version pin
+# (``pkg=1.2-3``), a release (``pkg/bookworm``), an arch (``pkg:amd64``),
+# uppercase — fails that validation, and with it the certify job, before
+# anything is installed. Keep the two in step with that step's ``grep -xE``.
+CERTIFY_APT_PACKAGE_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]*$")
+
 # Ends the package list: whatever follows belongs to another command.
 _SHELL_OPERATOR_RE = re.compile(r"[;&|]")
 
@@ -1272,6 +1281,45 @@ def extract_build_publish_private_git_auth(text: str) -> str:
     so the opt-in is the one input line. Only a literal ``true`` survives.
     """
     return "true" if extract_field(text, "private_git_auth") == "true" else ""
+
+
+def extract_build_publish_apt_packages(text: str) -> str:
+    """Return the apt packages *text* (a ``build-and-publish.yaml``) installs in
+    the certify gate before ``uv sync``, as a space-separated list, else ``""``.
+
+    The reusable's ``apt_packages`` input. An app whose Python dependencies
+    build a native extension the runner lacks headers for (hive's
+    ``pykerberos`` needs ``libkrb5-dev`` for ``gssapi/gssapi.h``) cannot
+    install its dependencies in "Certify app" without it, so the release
+    build is blocked — while every PR check stays green, because tests.yaml
+    and checks.yml install the same packages on their own. This shim is
+    always-overwrite, so without the read-back a hand-added line is deleted on
+    every bootstrap run (a conformance resync did exactly that).
+
+    Re-normalised through ``certify_apt_packages``, so a hand-edited input
+    cannot put anything into the rendered file that the reusable's own package
+    validation would reject.
+    """
+    return certify_apt_packages(extract_field(text, "apt_packages"))
+
+
+def certify_apt_packages(text: str) -> str:
+    """Return the tokens of *text* the certify job's ``apt_packages``
+    validation accepts, space-separated, in order.
+
+    ``sanitize_package_list`` first (shell-operator and comment truncation,
+    ``APT_PACKAGE_RE``), then ``CERTIFY_APT_PACKAGE_RE``: ``system_deps``
+    legitimately carries ``pkg=1.2-3`` or ``pkg/bookworm`` for ``apt-get`` in
+    checks.yml and tests.yaml, but the reusable rejects the whole input over
+    one such token, failing certify before it installs anything. Such a token
+    is dropped rather than rewritten (stripping a pin would install a version
+    the repo did not ask for); the rest of the list still installs.
+    """
+    return " ".join(
+        token
+        for token in sanitize_package_list(text)
+        if CERTIFY_APT_PACKAGE_RE.match(token)
+    )
 
 
 def extract_checks_private_git_deps(text: str) -> str:
