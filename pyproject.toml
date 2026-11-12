@@ -156,6 +156,9 @@ azure = [
     # azure-storage-{blob,file-datalake} were dropped (FND-4252): the SDK never
     # imported them. A connector that uses the Azure SDK directly declares them.
 ]
+# Deprecated, removed in v4.0.0 (FND-4888): only the deprecated RedisClient /
+# RedisClientAsync import redis, and needs_lock has no effect in v3. An app that
+# talks to Redis itself declares redis directly.
 distributed_lock = [
     "redis[hiredis]>=5.2.0,<9.0.0",
 ]

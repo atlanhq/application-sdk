@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from application_sdk.constants import LOCK_METADATA_KEY
+from application_sdk.constants import _LOCK_METADATA_KEY as LOCK_METADATA_KEY
 from application_sdk.execution import needs_lock
 from application_sdk.execution._temporal.interceptors.lock import (
     RedisLockOutboundInterceptor,
@@ -114,3 +114,22 @@ async def test_interceptor_acquires_the_lock_the_decorator_declared(
     acquire = execute_activity.await_args_list[0]
     assert acquire.args == ("acquire_distributed_lock",)
     assert acquire.kwargs["args"][:3] == [lock_name, max_locks, 600]
+
+
+def test_needs_lock_warns_that_it_has_no_effect() -> None:
+    """FND-4888: create_worker wires no lock interceptor, so the decorator says so."""
+
+    async def fetch_tables() -> None:
+        return None
+
+    with pytest.warns(DeprecationWarning, match=r"has no effect.*v4\.0\.0"):
+        needs_lock()(fetch_tables)
+
+
+@pytest.mark.parametrize("name", ["LOCK_METADATA_KEY", "LOCK_RETRY_INTERVAL_SECONDS"])
+def test_lock_constants_are_deprecated_aliases(name: str) -> None:
+    import application_sdk.constants as constants
+
+    with pytest.warns(DeprecationWarning, match=rf"constants\.{name} is deprecated"):
+        value = getattr(constants, name)
+    assert value == getattr(constants, f"_{name}")

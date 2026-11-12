@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.56.0
-source-sha:    5ec2454d6fb0c1f3473c1cf83869cbdb1f32bfee
-source-date:   2026-11-12T09:33:17Z
+source-sha:    40bea53cbae1db7caee2ede89d023488a210213f
+source-date:   2026-11-12T09:39:46Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -424,14 +424,14 @@ Connection clients (SQL, Redis, Azure) and ClientInterface ABC
 
 - **Import:** `from application_sdk.clients import RedisClient`
 - **Signature:** `class RedisClient()`
-- **Summary:** Synchronous Redis client for distributed locking.
+- **Summary:** Deprecated: use ``redis`` directly — removed in v4.0.0. Still works until then.
 - **Defined in:** `application_sdk/clients/redis.py`
 
 #### `RedisClientAsync`
 
 - **Import:** `from application_sdk.clients import RedisClientAsync`
 - **Signature:** `class RedisClientAsync()`
-- **Summary:** Asynchronous Redis client for distributed locking.
+- **Summary:** Deprecated: use ``redis.asyncio`` directly — removed in v4.0.0. Still works until then.
 - **Defined in:** `application_sdk/clients/redis.py`
 
 ### Functions
@@ -2434,7 +2434,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 
 - **Import:** `from application_sdk.execution import needs_lock`
 - **Signature:** `needs_lock(max_locks: int = 5, lock_name: Optional[str] = None)`
-- **Summary:** Decorator to mark activities that require distributed locking.
+- **Summary:** Deprecated and has no effect: ``create_worker`` registers no lock interceptor — removed in v4.0.0.
 - **Defined in:** `application_sdk/execution/decorators.py`
 
 #### `raise_if_cancelled`

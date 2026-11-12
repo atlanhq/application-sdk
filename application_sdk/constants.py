@@ -1187,24 +1187,21 @@ ENABLE_OBSERVABILITY_STORE_SINK: bool = env_bool(
 # REMOVED: ATLAN_API_TOKEN_GUID, ATLAN_API_KEY, ATLAN_CLIENT_ID, ATLAN_CLIENT_SECRET — unused.
 # ATLAN_BASE_URL is still used by events interceptor (deferred import).
 ATLAN_BASE_URL = os.getenv("ATLAN_BASE_URL")
-# Lock Configuration
-LOCK_METADATA_KEY = "__lock_metadata__"
-
-# Redis Lock Configuration
-#: Redis host for direct connection (when not using Sentinel)
-REDIS_HOST = os.getenv("REDIS_HOST", "")
-#: Redis port for direct connection (when not using Sentinel)
-REDIS_PORT = os.getenv("REDIS_PORT", "")
-#: Redis password (required for authenticated Redis instances)
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
-#: Redis Sentinel service name. Default: mymaster
-REDIS_SENTINEL_SERVICE_NAME = os.getenv("REDIS_SENTINEL_SERVICE_NAME", "mymaster")
-#: Redis Sentinel hosts as comma-separated host:port pairs
-REDIS_SENTINEL_HOSTS = os.getenv("REDIS_SENTINEL_HOSTS", "")
-#: Whether to enable strict locking
-IS_LOCKING_DISABLED = env_bool("IS_LOCKING_DISABLED", True)
-#: Retry interval for lock acquisition
-LOCK_RETRY_INTERVAL_SECONDS = env_int("LOCK_RETRY_INTERVAL_SECONDS", 60)
+# Lock / Redis configuration — deprecated, removed in v4.0.0 (FND-4888).
+# Nothing in v3 consumes the lock metadata: ``create_worker`` registers neither
+# the lock interceptor nor the lock activities. The ``REDIS_*`` /
+# ``IS_LOCKING_DISABLED`` values still configure the deprecated ``RedisClient`` /
+# ``RedisClientAsync``, which keep working until v4.0.0. The public names are
+# served by ``__getattr__`` at the bottom of this module, with a warning.
+_LOCK_METADATA_KEY = "__lock_metadata__"
+_REDIS_HOST = os.getenv("REDIS_HOST", "")
+_REDIS_PORT = os.getenv("REDIS_PORT", "")
+_REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+_REDIS_SENTINEL_SERVICE_NAME = os.getenv("REDIS_SENTINEL_SERVICE_NAME", "mymaster")
+_REDIS_SENTINEL_HOSTS = os.getenv("REDIS_SENTINEL_HOSTS", "")
+#: The Redis client's connect guard: ``true`` (the default) leaves it unconnected.
+_IS_LOCKING_DISABLED = env_bool("IS_LOCKING_DISABLED", True)
+_LOCK_RETRY_INTERVAL_SECONDS = env_int("LOCK_RETRY_INTERVAL_SECONDS", 60)
 
 # MCP Configuration
 #: Flag to indicate if MCP should be enabled or not. Turning this to true will setup an MCP server along
@@ -1359,13 +1356,16 @@ in that directory are trusted in addition to system CAs.
 # See: https://github.com/atlanhq/application-sdk/pull/1129
 
 
-#: name -> (replacement, why). The shared sentence and the removal version live
-#: in ``__getattr__`` below. Served lazily so reading ``APPLICATION_MODE`` can no
-#: longer fail the import of this module (FND-4890). The ``*_RETENTION_DAYS`` /
-#: ``*_CLEANUP_ENABLED`` six configured an observability retention sweep that
-#: never deleted anything from the object store; nothing in the SDK reads them
-#: any more, so each returns its former default (FND-4889).
-_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+#: name -> (replacement, why), or a self-contained notice string. For a tuple,
+#: the shared sentence and the removal version live in ``__getattr__`` below.
+#: Served lazily so reading ``APPLICATION_MODE`` can no longer fail the import
+#: of this module (FND-4890). The ``*_RETENTION_DAYS`` / ``*_CLEANUP_ENABLED``
+#: six configured an observability retention sweep that never deleted anything
+#: from the object store; nothing in the SDK reads them any more, so each
+#: returns its former default (FND-4889). The lock / Redis notices (FND-4888)
+#: are strings: the lock constants have no replacement, and the Redis ones
+#: point at their environment variable rather than the private ``_<name>`` value.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str] | str] = {
     "APPLICATION_MODE": (
         "the ATLAN_APP_MODE env var (application_sdk.main.AppConfig.mode)",
         "the SDK no longer reads this constant; the run mode is resolved at startup",
@@ -1402,6 +1402,46 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
         "an object-store bucket lifecycle rule",
         "the SDK retention sweep never deleted exported sizing files",
     ),
+    "LOCK_METADATA_KEY": (
+        "LOCK_METADATA_KEY is deprecated and has no effect: needs_lock does "
+        "nothing in v3 because create_worker registers no lock interceptor. "
+        "Remove the import; it will be removed in v4.0.0."
+    ),
+    "LOCK_RETRY_INTERVAL_SECONDS": (
+        "LOCK_RETRY_INTERVAL_SECONDS is deprecated and has no effect: the lock "
+        "interceptor that reads it is never registered by create_worker. "
+        "Remove the import; it will be removed in v4.0.0."
+    ),
+    "IS_LOCKING_DISABLED": (
+        "IS_LOCKING_DISABLED is deprecated: it only guards the deprecated "
+        "RedisClient / RedisClientAsync connection. Read the IS_LOCKING_DISABLED "
+        "environment variable instead; it will be removed in v4.0.0."
+    ),
+    "REDIS_HOST": (
+        "REDIS_HOST is deprecated: it only configures the deprecated RedisClient. "
+        "Read the REDIS_HOST environment variable instead; it will be removed "
+        "in v4.0.0."
+    ),
+    "REDIS_PORT": (
+        "REDIS_PORT is deprecated: it only configures the deprecated RedisClient. "
+        "Read the REDIS_PORT environment variable instead; it will be removed "
+        "in v4.0.0."
+    ),
+    "REDIS_PASSWORD": (
+        "REDIS_PASSWORD is deprecated: it only configures the deprecated "
+        "RedisClient. Read the REDIS_PASSWORD environment variable instead; it "
+        "will be removed in v4.0.0."
+    ),
+    "REDIS_SENTINEL_SERVICE_NAME": (
+        "REDIS_SENTINEL_SERVICE_NAME is deprecated: it only configures the "
+        "deprecated RedisClient. Read the REDIS_SENTINEL_SERVICE_NAME environment "
+        "variable instead; it will be removed in v4.0.0."
+    ),
+    "REDIS_SENTINEL_HOSTS": (
+        "REDIS_SENTINEL_HOSTS is deprecated: it only configures the deprecated "
+        "RedisClient. Read the REDIS_SENTINEL_HOSTS environment variable "
+        "instead; it will be removed in v4.0.0."
+    ),
 }
 
 #: Former defaults of the removed retention-sweep constants. Also read by the
@@ -1415,6 +1455,20 @@ _DEPRECATED_CONSTANT_VALUES: dict[str, object] = {
     "SIZING_CLEANUP_ENABLED": False,
 }
 
+#: Deprecated constants whose value is the private ``_<name>`` in this module.
+_PRIVATE_BACKED_CONSTANTS = frozenset(
+    {
+        "LOCK_METADATA_KEY",
+        "LOCK_RETRY_INTERVAL_SECONDS",
+        "IS_LOCKING_DISABLED",
+        "REDIS_HOST",
+        "REDIS_PORT",
+        "REDIS_PASSWORD",
+        "REDIS_SENTINEL_SERVICE_NAME",
+        "REDIS_SENTINEL_HOSTS",
+    }
+)
+
 
 def _deprecated_constant_value(name: str) -> object:
     if name == "APPLICATION_MODE":
@@ -1423,6 +1477,8 @@ def _deprecated_constant_value(name: str) -> object:
         return _ApplicationMode
     if name == "DAPR_BINDING_OPERATION_CREATE":
         return "create"
+    if name in _PRIVATE_BACKED_CONSTANTS:
+        return globals()[f"_{name}"]
     if name in _DEPRECATED_CONSTANT_VALUES:
         return _DEPRECATED_CONSTANT_VALUES[name]
     raise AssertionError(name)
@@ -1433,11 +1489,18 @@ def __getattr__(name: str) -> object:
     entry = _DEPRECATED_CONSTANTS.get(name)
     if entry is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
+    # The tuple branch's f-string comes first: the deprecation-manifest scanner
+    # reads the removal version from the first warn call in this function.
+    if isinstance(entry, tuple):
+        replacement, note = entry
+        warnings.warn(
+            f"{name} is deprecated; use {replacement} instead — {note}. "
+            "Will be removed in v4.0.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    else:
+        warnings.warn(
+            f"application_sdk.constants.{entry}", DeprecationWarning, stacklevel=2
+        )
     return _deprecated_constant_value(name)

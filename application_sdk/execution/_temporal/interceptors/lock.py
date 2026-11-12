@@ -7,6 +7,13 @@ IMPORTANT: Uses regular activities (not local activities) for lock operations to
 workflow task blocking and deadlocks. Local activities would block the workflow task during
 lock acquisition retries, preventing lock releases from executing and causing infinite deadlock
 when all lock slots are taken.
+
+.. deprecated:: 3.57.0
+    Not wired in v3: ``create_worker`` registers neither this interceptor nor
+    the ``acquire_distributed_lock`` / ``release_distributed_lock`` activities
+    it schedules, and it accepts no extra activities, so adding the interceptor
+    by hand still cannot work. ``needs_lock`` therefore has no effect. Removed
+    in v4.0.0.
 """
 
 from datetime import timedelta
@@ -21,13 +28,15 @@ from temporalio.worker import (
     WorkflowInterceptorClassInput,
     WorkflowOutboundInterceptor,
 )
+from typing_extensions import deprecated
 
+# The public names in application_sdk.constants are deprecated aliases.
+from application_sdk.constants import _IS_LOCKING_DISABLED as IS_LOCKING_DISABLED
+from application_sdk.constants import _LOCK_METADATA_KEY as LOCK_METADATA_KEY
 from application_sdk.constants import (
-    APPLICATION_NAME,
-    IS_LOCKING_DISABLED,
-    LOCK_METADATA_KEY,
-    LOCK_RETRY_INTERVAL_SECONDS,
+    _LOCK_RETRY_INTERVAL_SECONDS as LOCK_RETRY_INTERVAL_SECONDS,
 )
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.execution._temporal._lock_errors import (
     MissingScheduleToCloseTimeoutError,
 )
@@ -36,6 +45,11 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
+@deprecated(
+    "application_sdk.execution._temporal.interceptors.lock.RedisLockInterceptor "
+    "has no effect: create_worker never registers it, nor the lock activities it "
+    "schedules, so needs_lock does nothing in v3. Will be removed in v4.0.0."
+)
 class RedisLockInterceptor(Interceptor):
     """Main interceptor class for Redis distributed locking."""
 
@@ -63,6 +77,11 @@ class RedisLockInterceptor(Interceptor):
         return RedisLockWorkflowInboundInterceptor
 
 
+@deprecated(
+    "application_sdk.execution._temporal.interceptors.lock.RedisLockOutboundInterceptor "
+    "has no effect: create_worker never registers it, nor the lock activities it "
+    "schedules, so needs_lock does nothing in v3. Will be removed in v4.0.0."
+)
 class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
     """Outbound interceptor that acquires Redis locks before activity execution."""
 

@@ -243,11 +243,11 @@ class MyApiClient(BaseClient):
 
 ## Redis Client (`redis.py`)
 
-`RedisClient` and `RedisClientAsync` are distributed-lock helpers — they implement a low-level acquire/release lock protocol via Redis, and back the SDK's task lock activities (`execution/_temporal/lock_activities.py`). They are unrelated to the deprecated `CapacityPool` (see [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool-deprecated)).
+**Deprecated — removal in v4.0.0.** `RedisClient` and `RedisClientAsync` still work and emit a `DeprecationWarning`. Use `redis` / `redis.asyncio` directly instead.
 
-Requires the `[distributed_lock]` extra: `uv add 'atlan-application-sdk[distributed_lock]'`.
+They were built as distributed-lock helpers for the task lock activities (`execution/_temporal/lock_activities.py`). Those activities, and the lock interceptor that schedules them, are not registered by `create_worker` in v3, so `needs_lock` has no effect (see [Distributed locks](../upgrade-guide-v3.md#distributed-locks-deprecated-removed-in-v400)). They are unrelated to the deprecated `CapacityPool` (see [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md#capacitypool-deprecated)).
 
-Configuration env vars: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`. See `docs/configuration.md` for the full list including sentinel and lock settings.
+Requires the deprecated `[distributed_lock]` extra. Configuration env vars: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, and `IS_LOCKING_DISABLED=false` to let the client connect. See `docs/configuration.md` for the full list.
 
 ## Azure Client (`azure/`)
 

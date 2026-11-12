@@ -376,8 +376,8 @@ MODULE_MAP: dict[str, tuple[str, bool, str]] = {
     ),
     "application_sdk.activities.lock_management": (
         "application_sdk.execution._temporal.lock_activities",
-        False,
-        "",
+        True,
+        "Remove this import — v3 does not wire distributed locks: create_worker never registers these activities, and they are deprecated (removed in v4.0.0).",
     ),
     # Handlers
     "application_sdk.handlers": (
@@ -477,7 +477,7 @@ MODULE_MAP: dict[str, tuple[str, bool, str]] = {
     "application_sdk.interceptors.lock": (
         "application_sdk.interceptors.lock",
         True,
-        "Remove this import — interceptors are auto-registered by create_worker() in v3.",
+        "Remove this import — v3 does not wire distributed locks: create_worker() never registers the lock interceptor, and needs_lock has no effect (removed in v4.0.0).",
     ),
     "application_sdk.interceptors.correlation_context": (
         "application_sdk.interceptors.correlation_context",

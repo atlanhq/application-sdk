@@ -257,9 +257,9 @@ Within each attempt of that budget, the Dapr HTTP client replays a failed GET up
 
 ---
 
-## Redis (Capacity Lock)
+## Redis (deprecated, removed in v4.0.0)
 
-Used by the distributed lock (`RedisClient` / `RedisClientAsync`). Leave empty for local development. These variables do not configure a capacity pool: `RedisCapacityPool` is deprecated and the framework never constructed one.
+These configure only the deprecated `RedisClient` / `RedisClientAsync`, which keep working until v4.0.0. The SDK's distributed lock is not wired in v3: `create_worker` registers no lock interceptor, so `needs_lock` has no effect whatever these are set to. These variables do not configure a capacity pool either: `RedisCapacityPool` is deprecated and the framework never constructed one. Leave them empty unless your app uses the deprecated clients.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -268,8 +268,8 @@ Used by the distributed lock (`RedisClient` / `RedisClientAsync`). Leave empty f
 | `REDIS_PASSWORD` | _(empty)_ | Redis password. |
 | `REDIS_SENTINEL_SERVICE_NAME` | `mymaster` | Redis Sentinel service name. |
 | `REDIS_SENTINEL_HOSTS` | _(empty)_ | Comma-separated `host:port` pairs for Redis Sentinel. |
-| `IS_LOCKING_DISABLED` | `true` | Disable distributed locking (safe default for local development). Set to `false` in production when using Redis. |
-| `LOCK_RETRY_INTERVAL_SECONDS` | `60` | Retry interval for lock acquisition attempts. |
+| `IS_LOCKING_DISABLED` | `true` | The Redis clients' connect guard: while `true`, `RedisClient` / `RedisClientAsync` do not connect and leave `redis_client` as `None`. Set to `false` to let them connect. It does not turn on distributed locking, which v3 does not wire. |
+| `LOCK_RETRY_INTERVAL_SECONDS` | `60` | Read only by the lock interceptor, which `create_worker` never registers. Has no effect. |
 
 ---
 

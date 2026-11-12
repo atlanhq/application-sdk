@@ -28,6 +28,7 @@ from application_sdk.app.registry import (
     resolve_pool_queue,
 )
 from application_sdk.constants import (
+    _LOCK_METADATA_KEY,
     APP_BUILD_ID,
     APP_DEPLOYMENT_NAME,
     PREFLIGHT_GATE_MODE_ENV,
@@ -1046,6 +1047,23 @@ def create_worker(
                     )
     if _pool_queue_map:
         logger.info("Pool queue map: %s", _pool_queue_map)
+
+    # needs_lock is deprecated and has no effect: nothing here registers the lock
+    # interceptor or the lock activities. Its DeprecationWarning fires at import,
+    # where default filters hide it, so say it once more where operators look.
+    _locked_tasks = sorted(
+        _tm.name
+        for _tasks in task_registry.get_all_tasks().values()
+        for _tm in _tasks
+        if getattr(_tm.func, _LOCK_METADATA_KEY, None)
+    )
+    if _locked_tasks:
+        logger.warning(
+            "Tasks %s are decorated with needs_lock, which has no effect: the "
+            "worker registers no distributed-lock interceptor, so they run with no "
+            "concurrency limit. Remove the decorator; it will be removed in v4.0.0.",
+            _locked_tasks,
+        )
 
     if interceptor_settings.enable_event_interceptor:
         from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution

@@ -3,6 +3,10 @@
 These activities handle the actual Redis lock acquisition and release,
 allowing the workflow to orchestrate locking without hitting Temporal's
 deadlock timeout.
+
+.. deprecated:: 3.57.0
+    ``create_worker`` never registers these activities (nor the lock interceptor
+    that schedules them), so they never run in v3. Removed in v4.0.0.
 """
 
 import uuid
@@ -10,6 +14,7 @@ import zlib
 from typing import Any
 
 from temporalio import activity
+from typing_extensions import deprecated
 
 from application_sdk.clients.redis import RedisClientAsync
 from application_sdk.errors import AppError
@@ -77,6 +82,11 @@ async def _scan_slots(
     return None, None
 
 
+@deprecated(
+    "application_sdk.execution._temporal.lock_activities.acquire_distributed_lock has no effect: "
+    "create_worker never registers it, so it never runs in v3. Will be removed "
+    "in v4.0.0."
+)
 @activity.defn
 async def acquire_distributed_lock(
     lock_name: str,
@@ -160,6 +170,11 @@ async def acquire_distributed_lock(
         ) from e
 
 
+@deprecated(
+    "application_sdk.execution._temporal.lock_activities.release_distributed_lock has no effect: "
+    "create_worker never registers it, so it never runs in v3. Will be removed "
+    "in v4.0.0."
+)
 @activity.defn
 async def release_distributed_lock(
     resource_id: str, owner_id: str = "default_owner"
