@@ -325,8 +325,8 @@ class ObjectStoreOps(Protocol):
 
 @deprecated(
     "application_sdk.handler.object_routes.S3Client is deprecated and will be "
-    "removed in v4.0.0 with S3ObjectStore; the host's store is HostObjectStore, "
-    "over obstore."
+    "removed in v4.0.0 with S3ObjectStore. Use HostObjectStore, over obstore, "
+    "instead."
 )
 class S3Client(Protocol):
     """The boto3 S3 client calls :class:`S3ObjectStore` makes.
@@ -364,8 +364,8 @@ def _resolved_env(name: str) -> str:
 
 @deprecated(
     "application_sdk.handler.object_routes.S3ObjectStore is deprecated and will be "
-    "removed in v4.0.0. The host builds its store with HostObjectStore.from_env(), "
-    "over obstore, on S3, GCS and Azure Blob; pass a HostObjectStore to "
+    "removed in v4.0.0. Use HostObjectStore.from_env() instead: it builds the "
+    "store over obstore, on S3, GCS and Azure Blob; pass it to "
     "build_asgi_app(object_store=...)."
 )
 class S3ObjectStore:
@@ -536,6 +536,7 @@ class HostObjectStore:
         except ModuleNotFoundError as exc:
             if exc.name != "obstore":
                 raise
+            # conformance: ignore[L004] the cause is fully named (obstore missing); its traceback adds nothing.
             logger.warning(
                 "A %s object store is configured but obstore is not installed, so "
                 "the config and file routes answer 503. Install "
@@ -546,6 +547,7 @@ class HostObjectStore:
         except Exception as exc:
             # Only the exception's type: obstore's message can quote the config
             # it rejected, and that config carries the store's credential.
+            # conformance: ignore[L004] exc_info would log that message, and the credential with it.
             logger.warning(
                 "The %s object store could not be built (%s), so the config and "
                 "file routes answer 503.",

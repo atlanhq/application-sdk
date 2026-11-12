@@ -885,8 +885,8 @@
     {
       "kind": "class",
       "marker_via": "decorator",
-      "message": "application_sdk.handler.object_routes.S3Client is deprecated and will be removed in v4.0.0 with S3ObjectStore; the host's store is HostObjectStore, over obstore.",
-      "migration_target": false,
+      "message": "application_sdk.handler.object_routes.S3Client is deprecated and will be removed in v4.0.0 with S3ObjectStore. Use HostObjectStore, over obstore, instead.",
+      "migration_target": true,
       "module": "application_sdk.handler.object_routes",
       "removal_version": "4.0.0",
       "symbol": "S3Client"
@@ -894,8 +894,8 @@
     {
       "kind": "class",
       "marker_via": "decorator",
-      "message": "application_sdk.handler.object_routes.S3ObjectStore is deprecated and will be removed in v4.0.0. The host builds its store with HostObjectStore.from_env(), over obstore, on S3, GCS and Azure Blob; pass a HostObjectStore to build_asgi_app(object_store=...).",
-      "migration_target": false,
+      "message": "application_sdk.handler.object_routes.S3ObjectStore is deprecated and will be removed in v4.0.0. Use HostObjectStore.from_env() instead: it builds the store over obstore, on S3, GCS and Azure Blob; pass it to build_asgi_app(object_store=...).",
+      "migration_target": true,
       "module": "application_sdk.handler.object_routes",
       "removal_version": "4.0.0",
       "symbol": "S3ObjectStore"
