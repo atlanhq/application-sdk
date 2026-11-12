@@ -120,3 +120,38 @@ def test_setup_deps_checks_out_lfs_only_on_opt_in() -> None:
     # Without this, a job-level GIT_LFS_SKIP_SMUDGE=1 (git-lfs-skip-smudge)
     # leaves pointers in the tree even though checkout fetched the objects.
     assert opt_in["env"] == {"GIT_LFS_SKIP_SMUDGE": "0"}
+
+
+MATERIALISE_STEP_NAME = "Materialise LFS files"
+
+
+def test_setup_deps_materialises_lfs_files_after_the_opt_in_checkout() -> None:
+    # An earlier checkout of the same commit with the smudge skipped (the
+    # private-git-deps "Checkout app" step) leaves pointers that the opt-in
+    # checkout does not rewrite; `git lfs checkout` writes the real files.
+    steps = _load(ACTIONS / "setup-deps" / "action.yaml")["runs"]["steps"]
+    named = [s for s in steps if s.get("name") == MATERIALISE_STEP_NAME]
+    assert len(named) == 1, f"missing '{MATERIALISE_STEP_NAME}'"
+    step = named[0]
+    assert step["if"] == "inputs.lfs == 'true'", "default path must not run it"
+    assert step["shell"] == "bash"
+    # `git lfs checkout` exits 0 when an object is missing; fsck fails closed.
+    assert step["run"].splitlines() == [
+        "git lfs checkout",
+        "git lfs fsck --objects HEAD",
+    ]
+    # A job-level GIT_LFS_SKIP_SMUDGE=1 must not turn it into a no-op.
+    assert step["env"] == {"GIT_LFS_SKIP_SMUDGE": "0"}
+
+    opt_in = next(
+        s
+        for s in steps
+        if str(s.get("uses", "")).startswith("actions/checkout@")
+        and s.get("if") == "inputs.lfs == 'true'"
+    )
+    assert steps.index(step) == steps.index(opt_in) + 1, (
+        "must run right after the opt-in checkout, before anything reads the tree"
+    )
+    # No other step is gated on the opt-in.
+    lfs_guarded = [s for s in steps if s.get("if") == "inputs.lfs == 'true'"]
+    assert lfs_guarded == [opt_in, step]
