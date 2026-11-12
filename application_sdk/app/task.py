@@ -69,7 +69,8 @@ _START_TO_CLOSE_BACKSTOP_SECONDS = 86_400
 # Env-var-driven defaults for @task timeouts. Read once at import time so the
 # value is stable for the process lifetime (same pattern as constants.py).
 # Apps that need a different per-task value pass it explicitly to @task().
-_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS: int = env_int("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 60)
+HEARTBEAT_TIMEOUT_ENV = "ATLAN_HEARTBEAT_TIMEOUT_SECONDS"
+_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS: int = env_int(HEARTBEAT_TIMEOUT_ENV, 60)
 _DEFAULT_TIMEOUT_SECONDS: int = env_int(
     "ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", _START_TO_CLOSE_BACKSTOP_SECONDS
 )

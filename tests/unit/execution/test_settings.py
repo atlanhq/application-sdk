@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 from temporalio.common import VersioningBehavior
 
-from application_sdk.constants import derive_shutdown_budget, load_shutdown_budget
+from application_sdk.constants import (
+    ShutdownBudget,
+    derive_shutdown_budget,
+    load_shutdown_budget,
+)
 from application_sdk.execution import settings as settings_mod
 from application_sdk.execution.settings import (
     ExecutionSettings,
@@ -229,6 +233,20 @@ class TestLoadInterceptorSettingsFromEnv:
 
 class TestShutdownBudget:
     """One grace period drives every shutdown bound (FND-4645)."""
+
+    def test_constructor_keeps_its_six_fields(self) -> None:
+        """ShutdownBudget is public: callers that build it from its six fields
+        keep working, and the stall limit is derived from them."""
+        b = ShutdownBudget(
+            grace_seconds=30,
+            drain_seconds=15,
+            post_drain_seconds=8,
+            headroom_seconds=2,
+            pushgateway_http_timeout_seconds=1.0,
+            pushgateway_shutdown_delete_delay_seconds=2.0,
+        )
+        assert b.loop_stall_limit_seconds == 28
+        assert derive_shutdown_budget(30, drain_delay_seconds=5) == b
 
     def test_short_grace_fits_every_step_inside_it(self) -> None:
         """A 30 s grace (SDR installs) must not keep the 1 h drain or 120 s bound."""
