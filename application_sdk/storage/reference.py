@@ -1275,9 +1275,9 @@ async def _materialize_single_file(
         StorageNotFoundError,
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _get_file_meta_confirmed,
         download_file,
         download_file_chunked,
-        get_file_meta,
     )
 
     # ── Single file ────────────────────────────────────────────────────
@@ -1343,8 +1343,14 @@ async def _materialize_single_file(
     #
     # The dispatcher makes exactly this HEAD to decide it should route here at
     # all, and hands the result down; only a direct caller leaves it unset.
+    #
+    # A miss here is terminal (``StorageNotFoundError`` is non-retryable), so it
+    # is confirmed by a listing first: a gateway instance without routes
+    # answers HEAD with a bodiless 404 for an object that exists.
     if remote_meta is None:
-        remote_meta = await get_file_meta(ref.storage_path, store, normalize=False)
+        remote_meta = await _get_file_meta_confirmed(
+            ref.storage_path, store, normalize=False
+        )
     remote_size, remote_etag = remote_meta if remote_meta is not None else (None, None)
     if remote_size is None:
         raise StorageNotFoundError(
