@@ -1532,9 +1532,10 @@ Fix, by site:
   that asset.
 - The creator raises on a blank or `None` input (on purpose: the f-string published a
   broken identity there).  The blank (an empty string or `None`) needs an app guard
-  before the creator, never a fallback string.  The guard uses the app's existing
-  bad-record handling; if the app has none, it skips the record and logs a warning that
-  names it.  List each guard and what it does with the record in the PR description.
+  before the creator, never a fallback string.  Per record, at each creator call, the
+  guard calls `application_sdk.outputs.skip_record(record, SkipReason.BLANK_IDENTITY,
+  record_id=..., entity_type=...)` and skips the record, so it is kept for review after
+  the run; a log line alone is not a guard.  List each guard in the PR description.
   Where the asset is valid without that value (a Table with no schema), use the
   creator's optional parents instead (source reality wins); if the installed creator
   then raises or returns another string, the site is a gap.

@@ -62,12 +62,13 @@ outputs:
    makes a creator's rejection of it matter. Two cases differ:
    - a **blank** (an empty string or `None` at the site, nothing else) already
      published a broken identity (`{conn}//{schema}`, `…/None`), so it gets
-     an app guard (FND-3887), never a fallback string. The guard uses the
-     app's existing bad-record handling; if the app has none, it skips the
-     record and logs a warning that names it (lane owner's decision,
-     2026-11-10: it keeps the app's fail-soft behaviour, and an asset with an
-     empty name part was never valid). Each guard and what it does with the
-     record is listed per site in the PR for the app owner to accept. Where
+     an app guard (FND-3887), never a fallback string. The guard skips the
+     record, and a skip that only logs is lost after the run: it calls
+     `skip_record(record, SkipReason.BLANK_IDENTITY, record_id=...,
+     entity_type=...)` and then skips that record, so the record and its
+     reason are kept for review (FND-4881, ADR 0022). It sits at each creator
+     call, per record, never as one check for the whole run. Each guard is
+     listed per site in the PR for the app owner to accept. Where
      the asset is valid without that value (a Table with no
      schema), the creator must accept it; if the installed creator raises or
      returns another string, the identity would change (principle 1): the
@@ -135,6 +136,10 @@ without breaking 1 and 2, and how to prove it.
   once per transform activity, outside the per-record loop, and pass it as
   `last_sync=`; pass `connection_name=` unless the mapper stamps it.
   `entity_bytes` returns bytes: the sink must accept bytes.
+- `skip_record` (`application_sdk.outputs`, SDK 3.56.0) takes a closed
+  `SkipReason`; each call writes the record and its reason to the run's
+  `skipped-records` artifact, adds skip metrics and logs one warning, and a
+  run that skipped any record ends `PARTIAL_SUCCESS`.
 
 ## What each rule fires on
 
@@ -169,8 +174,8 @@ End state per site, from the rule's `full_description`:
   `X.creator(...).qualified_name` helper; when only the id is known, pass it
   as `name` too and never emit that asset;
 - the same, but the creator raises on a blank input (pyatlan does, on
-  purpose): the guard principle 4 describes, never a fallback string; list
-  each guard and what it does with the record in the PR;
+  purpose): the per-record `skip_record` guard principle 4 describes, never
+  a fallback string; list each guard in the PR;
 - a Process, ColumnProcess or BIProcess `{connection_qn}/{suffix}`:
   `generate_qualified_name(..., process_id=<suffix>)`;
 - the string never reaches a `qualifiedName` field or a reference (follow
@@ -245,7 +250,8 @@ Sites that share a mapper or an identity move in one unit.
 ## Before you change anything
 
 1. SDK version from `uv.lock`: 3.39.0 or later, or raise it when the app
-   will emit creator-built assets. Below 3.20.0: stop and run
+   will emit creator-built assets; 3.56.0 or later where a site needs the
+   blank guard (`skip_record`). Below 3.20.0: stop and run
    `migrate-off-daft`.
 2. A creator missing in the locked pyatlan but present in a newer pyatlan
    release inside the allowed range (pyatlan is first-party: no release-age
@@ -370,7 +376,7 @@ sites planned with that `fix_shape` for a person.
 
 ```decided-defaults
 {"rule": "P028", "fix_shape": "creator-string", "decision": "Read the string from a memoized helper returning X.creator(...).qualified_name; when only the id is known pass it as name too and never emit that asset.", "why": "Reference shape: atlan-metabase-app app/qualified_names.py collection_qn; atlan-mysql-app app/mysql.py _database_qn.", "interface": false}
-{"rule": "P028", "fix_shape": "creator-blank-guard", "decision": "Use the creator. Guard an empty string or None input (nothing else) in the app before the creator, never with a fallback string: use the app's existing bad-record handling; if the app has none, skip the record and log a warning that names it. List each guard and what it does with the record in the PR. Where the asset is valid without the value, use the creator's optional parents as the source record carries them; if the installed creator then raises or returns another string, the site is a gap. Never change existing test inputs to make a creator accept a record.", "why": "FND-3887: blanks get an app guard. The guard action is the lane owner's decision of 2026-11-10: it keeps the app's fail-soft behaviour (the standing rule for sweep fixes), matches the approved azure-event-hub case (blank-topic rows skipped), and an asset with an empty name part was never valid; stopping a whole run for it does more harm.", "pr_note": true, "interface": false}
+{"rule": "P028", "fix_shape": "creator-blank-guard", "decision": "Use the creator. Guard an empty string or None input (nothing else) per record, at each creator call, never with a fallback string: call application_sdk.outputs.skip_record(record, SkipReason.BLANK_IDENTITY, record_id=..., entity_type=...) and skip that record; a log line alone is not a guard. List each guard in the PR. Where the asset is valid without the value, use the creator's optional parents as the source record carries them; if the installed creator then raises or returns another string, the site is a gap. Never change existing test inputs to make a creator accept a record.", "why": "FND-3887: blanks get an app guard. FND-4881 and ADR 0022: a skipped record and its reason are captured for review after the run. Chris's review of #4811: skip the record, but through skip_record, not a log line.", "pr_note": true, "interface": false}
 {"rule": "P028", "fix_shape": "process-id", "decision": "generate_qualified_name(name=..., connection_qualified_name=..., inputs=[None], outputs=[None], process_id=<everything after the connection qualifiedName>) for Process, ColumnProcess and BIProcess. A blank name or connection qualifiedName raises; guard it as for creator-blank-guard.", "why": "Returns {connection_qualified_name}/{process_id}, the same string by construction. Reference shape: atlan-metabase-app app/qualified_names.py process_qn.", "interface": false}
 {"rule": "P028", "fix_shape": "not-identity-ignore", "decision": "# conformance: ignore[P028] <kind>, not a qualifiedName on the line above, where kind is match prefix, object-store key or message text; only after following every reader of the value. Never for a string stored in any attribute of a published entity, or compared with or used to look up qualifiedNames: that string is an identity and is migrated or a gap.", "why": "The rule's terminal state allows an ignore only for a string that is not an asset qualifiedName. In a held-out lane run, a field holding another asset's qualifiedName was ignored as a lookup key.", "suppress": true, "reason": "not a qualifiedName", "interface": false}
 {"rule": "P028", "fix_shape": "gap", "decision": "Leave the f-string in one helper per name shape, unsuppressed; do not change the string. State which gap reason applies and its proof: the creator check on the installed pyatlan (\"creator\" in vars(X)), both strings for one real input, the creator argument the source record lacks, or the rejected value with its source and the error. Without the proof, hold the site instead.", "why": "No creator can produce this identity for a value the source is shown to send; changing the string changes asset identity and suppressing hides the gap. A gap claim is a checkable fact: in one lane run an editor claimed four types had no creator when all four had one."}
@@ -378,6 +384,7 @@ sites planned with that `fix_shape` for a person.
 {"rule": "P028", "fix_shape": "^gap$", "block": "No creator produces this qualifiedName: the type has no creator in a usable pyatlan, the creator produces a different string, needs an input the source record lacks, or rejects a valid value the source is shown to send. Changing the string changes asset identity.", "brief": "Add or fix the creator in pyatlan, then apply the creator fix to this site."}
 {"rule": "P028", "fix_shape": "^creator-string$", "block": "The app's lock resolves pyatlan below the version that carries the creators these sites need.", "brief": "Raise pyatlan to a version with these creators (a dependency update), then apply the creator fix.", "requires": {"package": "pyatlan", "min": "11.7.0"}}
 {"rule": "P028", "fix_shape": "^creator-blank-guard$", "block": "The app's lock resolves pyatlan below the version that carries the creators these sites need.", "brief": "Raise pyatlan to a version with these creators (a dependency update), then apply the creator fix.", "requires": {"package": "pyatlan", "min": "11.7.0"}}
+{"rule": "P028", "fix_shape": "^creator-blank-guard$", "block": "The app's lock resolves an atlan-application-sdk below the version that carries skip_record, which the blank guard needs.", "brief": "Raise atlan-application-sdk to a version with skip_record (a dependency update), then apply the blank guard.", "requires": {"package": "atlan-application-sdk", "min": "3.56.0"}}
 {"rule": "P028", "fix_shape": "^hold$", "block": "Held: this site's identity or published output cannot be proven unchanged, or its payload is not publish output. The planner's reason for this site says what is missing.", "brief": "Add what the planner's reason names as missing, or answer its question, then re-run the unit."}
 {"rule": "P052", "fix_shape": "released-envelope", "decision": "Write the entity with entity_bytes and the envelope that matches what the app publishes today; delete only the code that rebuilds that envelope by hand; keep every other change the app makes, applied to the decoded entity_bytes output.", "why": "entity_bytes is the seam for central fixes; the envelope choice keeps the published output unchanged except the documented stamps.", "pr_note": true}
 {"rule": "P052", "fix_shape": "^hold$", "block": "Held: this site's identity or published output cannot be proven unchanged, or its payload is not publish output. The planner's reason for this site says what is missing.", "brief": "Add what the planner's reason names as missing, or answer its question, then re-run the unit."}
