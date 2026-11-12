@@ -218,10 +218,10 @@ class TestEmitTokenRefreshEvent:
         expires_at = datetime(2026, 6, 15, 10, 30, 0, tzinfo=UTC)
 
         with (
-            mock.patch("application_sdk.execution._temporal.auth.time.time") as now,
+            private_stdlib("application_sdk.execution._temporal.auth", "time") as t,
+            mock.patch.object(t, "time", return_value=expires_at.timestamp() - 90.0),
             mock.patch(_PUBLISH_TARGET) as mock_publish,
         ):
-            now.return_value = expires_at.timestamp() - 90.0
             mock_publish.return_value = None
 
             await manager._emit_token_refresh_event(expires_at)
