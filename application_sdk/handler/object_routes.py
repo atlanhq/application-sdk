@@ -10,11 +10,15 @@ consolidated API host register the same routes through
 :func:`register_object_routes`, and differ only in the store behind them:
 
 * the worker uses its Dapr-configured ``application_sdk.storage`` store;
-* the host has no Dapr, so it uses :class:`S3ObjectStore`, configured from the
-  chart-injected ``ATLAN_S3_BUCKET`` / ``ATLAN_S3_REGION`` with the pod's ambient AWS
-  identity (the ``aws`` extra), or on GCP from ``ATLAN_GCP_BUCKET`` (aliasing the
-  chart's ``GCP_BUCKET``) through GCS's S3-compatible API. Without a bucket the routes answer 503, exactly as the
-  worker does without a store.
+* the host has no Dapr, so :func:`object_store_from_env` builds one: an
+  :class:`S3ObjectStore` from the chart-injected ``ATLAN_S3_BUCKET`` /
+  ``ATLAN_S3_REGION`` with the pod's ambient AWS identity (the ``aws`` extra), or
+  on GCP from ``ATLAN_GCP_BUCKET`` (aliasing the chart's ``GCP_BUCKET``) through
+  GCS's S3-compatible API, or on a native Azure Blob tenant an
+  :class:`AzureBlobObjectStore` from ``ATLAN_AZURE_STORAGE_ACCOUNT`` /
+  ``ATLAN_AZURE_STORAGE_ACCESS_KEY`` / ``ATLAN_AZURE_STORAGE_CONTAINER``, the
+  names the chart's Dapr ``bindings.azure.blobstorage`` component reads. Without
+  any of them the routes answer 503, exactly as the worker does without a store.
 
 Both write a config to ``persistent-artifacts/apps/{app_name}/{type}/{id}/config.json``.
 On the host ``app_name`` is the hosted app's name, never the host's own, so the
@@ -23,6 +27,10 @@ key is the one that app's worker reads.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
 import mimetypes
 import os
 import re
@@ -32,10 +40,13 @@ import warnings
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from email.utils import formatdate
 from pathlib import PurePosixPath
 from typing import Annotated, Any, Protocol, cast
+from urllib.parse import quote
 from uuid import uuid4
 
+import httpx
 import orjson
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi import Path as PathParam
@@ -299,6 +310,21 @@ def _normalize_key(key: str) -> str:
     return "" if normalized == "." else normalized
 
 
+class HostObjectStore(Protocol):
+    """The store calls the host's config and file routes make."""
+
+    async def get_json(self, key: str) -> dict[str, Any] | None: ...
+
+    async def put_json(self, key: str, body: dict[str, Any]) -> None: ...
+
+    async def put_file(self, key: str, local_path: str) -> None: ...
+
+
+#: Reads one setting; ``""`` when unset. The host's env by default, or one
+#: hosted app's ``ATLAN_APPENV__<APP>__*`` (``asgi.app_object_store``).
+EnvLookup = Callable[[str], str]
+
+
 class S3Client(Protocol):
     """The boto3 S3 client calls :class:`S3ObjectStore` makes.
 
@@ -352,20 +378,20 @@ class S3ObjectStore:
         self._bucket = bucket
 
     @classmethod
-    def from_env(cls) -> S3ObjectStore | None:
+    def from_env(cls, env: EnvLookup = _resolved_env) -> S3ObjectStore | None:
         """From ``ATLAN_S3_BUCKET`` / ``ATLAN_S3_REGION``, or on GCP from
         ``ATLAN_GCP_BUCKET`` (:meth:`_gcs_from_env`); ``None`` when no bucket is set."""
-        gcs_bucket = _resolved_env("ATLAN_GCP_BUCKET")
+        gcs_bucket = env("ATLAN_GCP_BUCKET")
         if gcs_bucket:
             # First: the chart injects no S3_* on GCP, so the host's ATLAN_S3_*
             # aliases are unresolved there.
-            return cls._gcs_from_env(gcs_bucket)
-        # Azure Blob tenants get no S3_* either: no bucket (Blob is not served yet).
-        bucket = _resolved_env("ATLAN_S3_BUCKET")
+            return cls._gcs_from_env(gcs_bucket, env)
+        # Native Azure Blob tenants get no S3_* either: see AzureBlobObjectStore.
+        bucket = env("ATLAN_S3_BUCKET")
         if not bucket:
             return None
         try:
-            return cls(bucket, _resolved_env("ATLAN_S3_REGION") or None)
+            return cls(bucket, env("ATLAN_S3_REGION") or None)
         except ModuleNotFoundError:
             logger.warning(
                 "ATLAN_S3_BUCKET is set but boto3 is not installed, so the config and "
@@ -375,14 +401,16 @@ class S3ObjectStore:
             return None
 
     @classmethod
-    def _gcs_from_env(cls, bucket: str) -> S3ObjectStore | None:
+    def _gcs_from_env(
+        cls, bucket: str, env: EnvLookup = _resolved_env
+    ) -> S3ObjectStore | None:
         """GCS through its S3-compatible API, with the tenant's HMAC key pair.
 
         The host's manifest aliases the atlan-app chart's GCP-only ``GCP_*``
         names as ``ATLAN_GCP_*``; elsewhere they are unresolved, so unset.
         """
-        access_key = _resolved_env("ATLAN_GCP_HMAC_ACCESS_KEY")
-        secret = _resolved_env("ATLAN_GCP_HMAC_SECRET")
+        access_key = env("ATLAN_GCP_HMAC_ACCESS_KEY")
+        secret = env("ATLAN_GCP_HMAC_SECRET")
         if not (access_key and secret):
             logger.warning(
                 "ATLAN_GCP_BUCKET is set without ATLAN_GCP_HMAC_ACCESS_KEY / "
@@ -402,7 +430,7 @@ class S3ObjectStore:
         client = boto3.client(
             "s3",
             endpoint_url=_GCS_ENDPOINT,
-            region_name=_resolved_env("ATLAN_GCP_REGION") or None,
+            region_name=env("ATLAN_GCP_REGION") or None,
             aws_access_key_id=access_key,
             aws_secret_access_key=secret,
             # boto3 >= 1.36 sends CRC32 checksums (aws-chunked uploads, checksum
@@ -449,8 +477,186 @@ class S3ObjectStore:
         )
 
 
+#: The Blob REST API version the host's Azure store speaks.
+_AZURE_BLOB_API_VERSION = "2021-08-06"
+
+#: The standard headers a Shared Key signature covers, in signing order.
+_AZURE_SIGNED_HEADERS = (
+    "content-encoding",
+    "content-language",
+    "content-length",
+    "content-md5",
+    "content-type",
+    "date",
+    "if-modified-since",
+    "if-match",
+    "if-none-match",
+    "if-unmodified-since",
+    "range",
+)
+
+
+class AzureBlobObjectStore:
+    """One Azure Blob container through the Blob REST API: the host's store on
+    a native Azure Blob tenant.
+
+    It uses the account, key and container the atlan-app chart gives every
+    app's Dapr ``bindings.azure.blobstorage`` component, so it reads and writes
+    the same blobs the app's worker does. Requests are signed with the account
+    key (Shared Key) over httpx, a core dependency: no extra. The key never
+    leaves this object and is never logged. Calls run on the app's
+    ``run_in_thread`` pool, as :class:`S3ObjectStore`'s do.
+    """
+
+    def __init__(
+        self,
+        account: str,
+        container: str,
+        access_key: str,
+        *,
+        endpoint: str | None = None,
+        client: httpx.Client | None = None,
+    ):
+        self._account = account
+        self._container = container
+        self._key = base64.b64decode(access_key, validate=True)
+        self._endpoint = (
+            endpoint or f"https://{account}.blob.core.windows.net"
+        ).rstrip("/")
+        self._client = client or httpx.Client(timeout=30.0)
+
+    def __repr__(self) -> str:
+        return f"AzureBlobObjectStore(account={self._account!r}, container={self._container!r})"
+
+    @classmethod
+    def from_env(cls, env: EnvLookup = _resolved_env) -> AzureBlobObjectStore | None:
+        """From ``ATLAN_AZURE_STORAGE_ACCOUNT`` / ``_ACCESS_KEY`` / ``_CONTAINER``;
+        ``None`` when the account is unset, or with a warning when the rest is."""
+        account = env("ATLAN_AZURE_STORAGE_ACCOUNT")
+        if not account:
+            return None
+        access_key = env("ATLAN_AZURE_STORAGE_ACCESS_KEY")
+        container = env("ATLAN_AZURE_STORAGE_CONTAINER")
+        if not (access_key and container):
+            logger.warning(
+                "ATLAN_AZURE_STORAGE_ACCOUNT is set without ATLAN_AZURE_STORAGE_ACCESS_KEY "
+                "/ ATLAN_AZURE_STORAGE_CONTAINER, so the config and file routes answer 503."
+            )
+            return None
+        try:
+            return cls(account, container, access_key)
+        except (binascii.Error, ValueError):
+            # Never exc_info: the error could quote the key.
+            logger.warning(
+                "ATLAN_AZURE_STORAGE_ACCESS_KEY is not a base64 account key, so the "
+                "config and file routes answer 503."
+            )
+            return None
+
+    def _path(self, key: str) -> str:
+        return f"/{self._container}/{quote(key, safe='/')}"
+
+    def _authorization(self, method: str, path: str, headers: dict[str, str]) -> str:
+        """The Shared Key ``Authorization`` value for one request."""
+        lower = {name.lower(): value for name, value in headers.items()}
+        if lower.get("content-length") == "0":
+            del lower["content-length"]  # signed empty since API version 2015-02-21
+        ms_headers = "".join(
+            f"{name}:{lower[name]}\n"
+            for name in sorted(lower)
+            if name.startswith("x-ms-")
+        )
+        string_to_sign = (
+            "\n".join([method, *(lower.get(h, "") for h in _AZURE_SIGNED_HEADERS)])
+            + "\n"
+            + ms_headers
+            + f"/{self._account}{path}"
+        )
+        digest = hmac.new(self._key, string_to_sign.encode(), hashlib.sha256).digest()
+        return f"SharedKey {self._account}:{base64.b64encode(digest).decode()}"
+
+    def _request(
+        self,
+        method: str,
+        key: str,
+        *,
+        content: Any = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        path = self._path(key)
+        signed = {
+            "x-ms-date": formatdate(usegmt=True),
+            "x-ms-version": _AZURE_BLOB_API_VERSION,
+            **(headers or {}),
+        }
+        signed["Authorization"] = self._authorization(method, path, signed)
+        return self._client.request(
+            method, self._endpoint + path, content=content, headers=signed
+        )
+
+    def _put(self, key: str, content: Any, length: int, content_type: str) -> None:
+        response = self._request(
+            "PUT",
+            key,
+            content=content,
+            headers={
+                "Content-Length": str(length),
+                "Content-Type": content_type,
+                "x-ms-blob-type": "BlockBlob",
+            },
+        )
+        response.raise_for_status()
+
+    async def get_json(self, key: str) -> dict[str, Any] | None:
+        """The blob at ``key``, or ``None`` when it is missing.
+
+        Any other failure (auth, network, a missing container) raises: the
+        store could not answer, which is not a missing blob.
+        """
+
+        def _get() -> bytes | None:
+            response = self._request("GET", key)
+            if (
+                response.status_code == 404
+                and response.headers.get("x-ms-error-code") == "BlobNotFound"
+            ):
+                return None
+            response.raise_for_status()
+            return response.content
+
+        raw = await run_in_thread(_get)
+        return None if raw is None else orjson.loads(raw)
+
+    async def put_json(self, key: str, body: dict[str, Any]) -> None:
+        data = orjson.dumps(body)
+        await run_in_thread(self._put, key, data, len(data), "application/json")
+
+    async def put_file(self, key: str, local_path: str) -> None:
+        def _upload() -> None:
+            with open(local_path, "rb") as f:
+                self._put(
+                    _normalize_key(key),
+                    f,
+                    os.fstat(f.fileno()).st_size,
+                    "application/octet-stream",
+                )
+
+        await run_in_thread(_upload)
+
+
+def object_store_from_env(env: EnvLookup = _resolved_env) -> HostObjectStore | None:
+    """The store *env* names: GCS or S3 when it names a bucket, else Azure Blob.
+
+    S3 before Azure mirrors the chart: an Azure tenant with S3 enabled gets an
+    S3 Dapr component and a resolved ``S3_BUCKET``. ``None`` when none is set.
+    """
+    if env("ATLAN_GCP_BUCKET") or env("ATLAN_S3_BUCKET"):
+        return S3ObjectStore.from_env(env)
+    return AzureBlobObjectStore.from_env(env)
+
+
 def host_object_source(
-    app_name: str, store: S3ObjectStore | None
+    app_name: str, store: HostObjectStore | None
 ) -> ObjectRoutesSource:
     """The routes' store operations for one hosted app."""
 

@@ -122,7 +122,7 @@ an app answers identically from either one:
 | `POST /workflows/v1/metadata` | `Handler.fetch_metadata` |
 | `POST /workflows/v1/warmup` | `Handler.warmup` (optional) |
 | `GET /workflows/v1/configmap/{id}`, `/configmaps`, `/input-contract`, `GET`/`POST /workflows/v1/manifest` | The app's `generated/` folder, if the app package ships one |
-| `GET`/`POST /workflows/v1/config/{id}`, `POST /workflows/v1/file` | An S3 bucket named by `ATLAN_S3_BUCKET` (and `ATLAN_S3_REGION`), or on GCP by `ATLAN_GCP_BUCKET` (and `ATLAN_GCP_REGION`) through GCS's S3-compatible API with the `ATLAN_GCP_HMAC_ACCESS_KEY` / `ATLAN_GCP_HMAC_SECRET` keys; needs the `aws` extra. These routes return 503 when neither is set |
+| `GET`/`POST /workflows/v1/config/{id}`, `POST /workflows/v1/file` | An S3 bucket named by `ATLAN_S3_BUCKET` (and `ATLAN_S3_REGION`), or on GCP by `ATLAN_GCP_BUCKET` (and `ATLAN_GCP_REGION`) through GCS's S3-compatible API with the `ATLAN_GCP_HMAC_ACCESS_KEY` / `ATLAN_GCP_HMAC_SECRET` keys; needs the `aws` extra. On a native Azure Blob tenant, the container named by `ATLAN_AZURE_STORAGE_ACCOUNT`, `ATLAN_AZURE_STORAGE_ACCESS_KEY` and `ATLAN_AZURE_STORAGE_CONTAINER` (no extra). An app's own `ATLAN_APPENV__<APP>__` copies of these take precedence for that app. These routes return 503 when none is set |
 | Your own routes | FastAPI routers returned from `Handler.routers()`, served after the SDK's |
 
 `build_asgi_app` takes a few keyword options:

@@ -47,8 +47,10 @@ from application_sdk.handler.metadata_routes import (
     register_metadata_routes,
 )
 from application_sdk.handler.object_routes import (
-    S3ObjectStore,
+    HostObjectStore,
+    S3ObjectStore,  # noqa: F401 — importable from here in earlier releases
     host_object_source,
+    object_store_from_env,
     register_object_routes,
 )
 from application_sdk.handler.routes import (
@@ -84,13 +86,53 @@ def app_env(app_name: str, key: str, default: str = "") -> str:
 
 
 @functools.cache
-def default_object_store() -> S3ObjectStore | None:
-    """The host's object store, built once by :meth:`S3ObjectStore.from_env`.
+def default_object_store() -> HostObjectStore | None:
+    """The host's object store, built once by :func:`object_store_from_env`.
 
-    One bucket and one client for every hosted app: each app's configs live
-    under its own ``persistent-artifacts/apps/<app>/`` prefix in that bucket.
+    One bucket (or Blob container) and one client for every hosted app that
+    declares no store of its own: each app's configs live under its own
+    ``persistent-artifacts/apps/<app>/`` prefix there.
     """
-    return S3ObjectStore.from_env()
+    return object_store_from_env()
+
+
+#: The settings that make a hosted app declare its own store.
+_APP_STORE_SELECTORS = (
+    "ATLAN_GCP_BUCKET",
+    "ATLAN_S3_BUCKET",
+    "ATLAN_AZURE_STORAGE_ACCOUNT",
+)
+
+
+@functools.cache
+def app_object_store(
+    app_name: str, *, own_only: bool = False
+) -> HostObjectStore | None:
+    """*app_name*'s own object store, built once.
+
+    From the app's ``ATLAN_APPENV__<APP>__ATLAN_{S3,GCP,AZURE_STORAGE}_*`` (its
+    deploy env, synced by the host's app-env), read exactly as
+    :func:`default_object_store` reads the host's: the same bucket or container
+    and credentials as the app's own Dapr store. Once the app names a bucket or
+    account, its settings alone decide: a partial set is ``None`` (503), never
+    the host's store. An app that declares none gets :func:`default_object_store`,
+    or ``None`` with ``own_only``.
+    """
+
+    def scoped(key: str) -> str:
+        value = app_env(app_name, key).strip()
+        return "" if value.startswith("$(") else value
+
+    if any(scoped(name) for name in _APP_STORE_SELECTORS):
+        store = object_store_from_env(scoped)
+        if store is None:
+            logger.warning(
+                "Hosted app %s declares an incomplete object store, so its store "
+                "routes answer 503.",
+                app_name,
+            )
+        return store
+    return None if own_only else default_object_store()
 
 
 class _Unset(Enum):
@@ -204,7 +246,7 @@ def build_asgi_app(
     app_package: str = "app",
     blocking_threads: int = DEFAULT_BLOCKING_THREADS,
     generated_dir: Path | None = None,
-    object_store: S3ObjectStore | None | Literal[_Unset.FROM_ENV] = _Unset.FROM_ENV,
+    object_store: HostObjectStore | None | Literal[_Unset.FROM_ENV] = _Unset.FROM_ENV,
 ) -> FastAPI:
     """A FastAPI app serving ``handler`` as ``app_name``.
 
@@ -215,7 +257,7 @@ def build_asgi_app(
     the host to shut down. The metadata routes are served when the app ships a
     generated folder (``generated_dir``, else ``<app_package>/generated``). The
     config and file routes use ``object_store`` (by default
-    :func:`default_object_store`) and answer 503 without one.
+    :func:`app_object_store`) and answer 503 without one.
     """
     app = FastAPI(title=app_name)
     app.state.app_name = app_name
@@ -259,7 +301,9 @@ def build_asgi_app(
                 from_process_env=False,
             ),
         )
-    store = default_object_store() if object_store is _Unset.FROM_ENV else object_store
+    store = (
+        app_object_store(app_name) if object_store is _Unset.FROM_ENV else object_store
+    )
     register_object_routes(app, host_object_source(app_name, store))
     # The app's own routers go last, so one that redefines an SDK route is refused.
     include_app_routers_on(app, handler, app_name)
