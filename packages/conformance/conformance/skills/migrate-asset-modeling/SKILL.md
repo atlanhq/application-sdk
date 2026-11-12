@@ -63,11 +63,15 @@ outputs:
    - a **blank** (an empty string or `None` at the site, nothing else) already
      published a broken identity (`{conn}//{schema}`, `…/None`), so it gets
      an app guard (FND-3887), never a fallback string. The guard skips the
-     record, and a skip that only logs is lost after the run: it calls
+     record, and a skip that only logs is lost after the run: it awaits
      `skip_record(record, SkipReason.BLANK_IDENTITY, record_id=...,
      entity_type=...)` and then skips that record, so the record and its
-     reason are kept for review (FND-4881, ADR 0022). It sits at each creator
-     call, per record, never as one check for the whole run. Each guard is
+     reason are kept for review (FND-4881, ADR 0022). The helper is async:
+     un-awaited it does nothing. It belongs in the task's per-record loop
+     (ADR 0022), per record, never as one check for the whole run. A
+     synchronous mapper cannot call it, and the SDK documents no pattern for
+     passing the blank up to that loop: where the loop cannot see the blank
+     without restructuring the mapper, hold the site and say so. Each guard is
      listed per site in the PR for the app owner to accept. Where
      the asset is valid without that value (a Table with no
      schema), the creator must accept it; if the installed creator raises or
@@ -136,8 +140,11 @@ without breaking 1 and 2, and how to prove it.
   once per transform activity, outside the per-record loop, and pass it as
   `last_sync=`; pass `connection_name=` unless the mapper stamps it.
   `entity_bytes` returns bytes: the sink must accept bytes.
-- `skip_record` (`application_sdk.outputs`, SDK 3.56.0) takes a closed
-  `SkipReason`; each call writes the record and its reason to the run's
+- `skip_record` (`application_sdk.outputs`, SDK 3.56.0) is a coroutine:
+  `await` it from inside a `@task`'s per-record loop (ADR 0022); a call
+  without `await` records nothing, and the SDK has no synchronous form. It
+  takes a closed `SkipReason`; each awaited call writes the record and its
+  reason to the run's
   `skipped-records` artifact, adds skip metrics and logs one warning, and a
   run that skipped any record ends `PARTIAL_SUCCESS`.
 
@@ -174,8 +181,8 @@ End state per site, from the rule's `full_description`:
   `X.creator(...).qualified_name` helper; when only the id is known, pass it
   as `name` too and never emit that asset;
 - the same, but the creator raises on a blank input (pyatlan does, on
-  purpose): the per-record `skip_record` guard principle 4 describes, never
-  a fallback string; list each guard in the PR;
+  purpose): the awaited, per-record `skip_record` guard principle 4
+  describes, never a fallback string; list each guard in the PR;
 - a Process, ColumnProcess or BIProcess `{connection_qn}/{suffix}`:
   `generate_qualified_name(..., process_id=<suffix>)`;
 - the string never reaches a `qualifiedName` field or a reference (follow
@@ -376,7 +383,7 @@ sites planned with that `fix_shape` for a person.
 
 ```decided-defaults
 {"rule": "P028", "fix_shape": "creator-string", "decision": "Read the string from a memoized helper returning X.creator(...).qualified_name; when only the id is known pass it as name too and never emit that asset.", "why": "Reference shape: atlan-metabase-app app/qualified_names.py collection_qn; atlan-mysql-app app/mysql.py _database_qn.", "interface": false}
-{"rule": "P028", "fix_shape": "creator-blank-guard", "decision": "Use the creator. Guard an empty string or None input (nothing else) per record, at each creator call, never with a fallback string: call application_sdk.outputs.skip_record(record, SkipReason.BLANK_IDENTITY, record_id=..., entity_type=...) and skip that record; a log line alone is not a guard. List each guard in the PR. Where the asset is valid without the value, use the creator's optional parents as the source record carries them; if the installed creator then raises or returns another string, the site is a gap. Never change existing test inputs to make a creator accept a record.", "why": "FND-3887: blanks get an app guard. FND-4881 and ADR 0022: a skipped record and its reason are captured for review after the run. Chris's review of #4811: skip the record, but through skip_record, not a log line.", "pr_note": true, "interface": false}
+{"rule": "P028", "fix_shape": "creator-blank-guard", "decision": "Use the creator. Guard an empty string or None input (nothing else) in the task's per-record loop, never with a fallback string: await application_sdk.outputs.skip_record(record, SkipReason.BLANK_IDENTITY, record_id=..., entity_type=...) (async; un-awaited it records nothing) and skip that record; a log line alone is not a guard. Where only a synchronous mapper sees the blank and the loop cannot without restructuring it, hold the site. List each guard in the PR. Where the asset is valid without the value, use the creator's optional parents as the source record carries them; if the installed creator then raises or returns another string, the site is a gap. Never change existing test inputs to make a creator accept a record.", "why": "FND-3887: blanks get an app guard. FND-4881 and ADR 0022: a skipped record and its reason are captured for review after the run. Chris's review of #4811: skip the record, but through skip_record, not a log line.", "pr_note": true, "interface": false}
 {"rule": "P028", "fix_shape": "process-id", "decision": "generate_qualified_name(name=..., connection_qualified_name=..., inputs=[None], outputs=[None], process_id=<everything after the connection qualifiedName>) for Process, ColumnProcess and BIProcess. A blank name or connection qualifiedName raises; guard it as for creator-blank-guard.", "why": "Returns {connection_qualified_name}/{process_id}, the same string by construction. Reference shape: atlan-metabase-app app/qualified_names.py process_qn.", "interface": false}
 {"rule": "P028", "fix_shape": "not-identity-ignore", "decision": "# conformance: ignore[P028] <kind>, not a qualifiedName on the line above, where kind is match prefix, object-store key or message text; only after following every reader of the value. Never for a string stored in any attribute of a published entity, or compared with or used to look up qualifiedNames: that string is an identity and is migrated or a gap.", "why": "The rule's terminal state allows an ignore only for a string that is not an asset qualifiedName. In a held-out lane run, a field holding another asset's qualifiedName was ignored as a lookup key.", "suppress": true, "reason": "not a qualifiedName", "interface": false}
 {"rule": "P028", "fix_shape": "gap", "decision": "Leave the f-string in one helper per name shape, unsuppressed; do not change the string. State which gap reason applies and its proof: the creator check on the installed pyatlan (\"creator\" in vars(X)), both strings for one real input, the creator argument the source record lacks, or the rejected value with its source and the error. Without the proof, hold the site instead.", "why": "No creator can produce this identity for a value the source is shown to send; changing the string changes asset identity and suppressing hides the gap. A gap claim is a checkable fact: in one lane run an editor claimed four types had no creator when all four had one."}

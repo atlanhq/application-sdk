@@ -1532,13 +1532,15 @@ Fix, by site:
   that asset.
 - The creator raises on a blank or `None` input (on purpose: the f-string published a
   broken identity there).  The blank (an empty string or `None`) needs an app guard
-  before the creator, never a fallback string.  Per record, at each creator call, the
-  guard calls `application_sdk.outputs.skip_record(record, SkipReason.BLANK_IDENTITY,
-  record_id=..., entity_type=...)` and skips the record, so it is kept for review after
-  the run; a log line alone is not a guard.  List each guard in the PR description.
-  Where the asset is valid without that value (a Table with no schema), use the
-  creator's optional parents instead (source reality wins); if the installed creator
-  then raises or returns another string, the site is a gap.
+  before the creator, never a fallback string.  In the task's per-record loop, the guard
+  awaits `application_sdk.outputs.skip_record(record, SkipReason.BLANK_IDENTITY,
+  record_id=..., entity_type=...)` (async; un-awaited it records nothing) and skips the
+  record, so it is kept for review after the run; a log line alone is not a guard.
+  Where only a synchronous mapper sees the blank and the loop cannot without
+  restructuring it, the site holds.  List each guard in the PR description.  Where the
+  asset is valid without that value (a Table with no schema), use the creator's optional
+  parents instead (source reality wins); if the installed creator then raises or returns
+  another string, the site is a gap.
 - `Process` / `ColumnProcess` / `BIProcess`: call `generate_qualified_name(...,
   process_id=<everything after the connection qualifiedName>)`, which returns
   `{connection_qualified_name}/{process_id}`.  A blank `process_id` raises; never pass
