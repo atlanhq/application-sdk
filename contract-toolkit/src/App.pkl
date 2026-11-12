@@ -189,7 +189,10 @@ creatorOrg: String?
 ///     entrypoint whose contract has no `uiConfig` (no manifest to carry them);
 ///     `emitEntrypoints = false` with trigger-bearing entrypoints; a metadata
 ///     `marketplace_card` other than `false`; and a trigger-bearing entrypoint
-///     whose `type` is `system` or `connector` (set `utility` or similar).
+///     whose `type` is `system` or `connector` (set `utility` or similar);
+///   - renders each bundle entrypoint's `manifest.json` against the bundle's
+///     `taskQueuePrefix`, replacing the sub-contract's own: one worker on one
+///     queue serves every entrypoint.
 ///
 /// It does not change `manifest.json`, the workflow configmap or `_input.py`:
 /// those still follow `uiConfig`, so a system app with a setup form keeps it.
@@ -5151,8 +5154,9 @@ local emitsEntrypointsBlock: Boolean =
 ///     be dropped;
 ///   - an `Entrypoint.metadata` `marketplace_card` other than `false`: a system
 ///     app never renders a card;
-///   - trigger-bearing entrypoints with `emitEntrypoints = false`: the block
-///     that carries them to Local Marketplace would be suppressed;
+///   - trigger-bearing entrypoints with `emitAtlanYaml = false` or
+///     `emitEntrypoints = false`: the block that carries them to Local
+///     Marketplace would be suppressed;
 ///   - a trigger-bearing entrypoint with `type` `system` (GM and CI publish
 ///     reject it) or `connector` (the default; a system app's entrypoint is not
 ///     a connector): set `type = "utility"` or another non-connector type.
@@ -5175,6 +5179,8 @@ local _systemAppCheck: Any =
       throw("App.pkl: type = \"system\" with packageId set on entrypoint(s) \(_withPkg.map((ep) -> ep.name)). A system app never renders a marketplace card, so the package_id and card would be dropped. Remove packageId, or use a non-system type if the entrypoint needs a marketplace card.")
     else if (!_cardMeta.isEmpty)
       throw("App.pkl: type = \"system\" entrypoint(s) \(_cardMeta.map((ep) -> ep.name)) set metadata marketplace_card to a value other than false. A system app never renders a marketplace card. Remove the key, or use a non-system type if the entrypoint needs a card.")
+    else if (!emitAtlanYaml && !systemTriggerEntrypoints.isEmpty)
+      throw("App.pkl: type = \"system\" with emitAtlanYaml = false, but entrypoint(s) \(systemTriggerEntrypoints.map((ep) -> ep.name)) declare schedules or events. Local Marketplace learns entrypoints only from atlan.yaml, so their triggers would never be reconciled. Remove emitAtlanYaml = false.")
     else if (!emitEntrypoints && !systemTriggerEntrypoints.isEmpty)
       throw("App.pkl: type = \"system\" with emitEntrypoints = false, but entrypoint(s) \(systemTriggerEntrypoints.map((ep) -> ep.name)) declare schedules or events. Local Marketplace learns entrypoints only from atlan.yaml's `entrypoints` block, so their triggers would never be reconciled. Remove emitEntrypoints = false.")
     else if (!_noManifest.isEmpty)
@@ -5539,6 +5545,20 @@ local function bundleCallerNode(ep: Entrypoint): FileOutput =
   })
   c.output.files[c.inputContractPath]
 
+// A system bundle entrypoint's `manifest.json`, rendered against the bundle's
+// task queue rather than the sub-contract's own. The bundle is one App class
+// served by one worker on one queue (see `bundleCallerNode`), so a sub-contract's
+// default `atlan-<entrypoint>-{deployment_name}` has no worker. The served-manifest
+// stamp does not correct it either: it rewrites only this app's own
+// `atlan-<name>-{deployment_name}` template and leaves any other queue as a foreign
+// app's. Triggers reconciled from such a manifest would dispatch to nothing.
+local function systemBundleManifest(ep: Entrypoint): FileOutput =
+  let (prefix = taskQueuePrefix)
+  let (c = (ep.contract!!) { taskQueuePrefix = prefix })
+  c.output.files[systemBundleManifestKey]
+
+local systemBundleManifestKey: String = "app/generated/manifest.json"
+
 // Where a bundle re-exports one entrypoint contract's file. A system
 // sub-contract's caller node (`inputContractPath`), with or without a uiConfig,
 // goes to `contract/generated/<ep>/` instead of under `app/generated/<ep>/`.
@@ -5852,6 +5872,8 @@ output =
                     if (normalizeContractFileName(fileName) == "_input.py") bundleInputPy(entrypoint.name, fileOutput)
                     else if (isSystemSubContract(entrypoint) && fileName == entrypoint.contract!!.inputContractPath)
                       bundleCallerNode(entrypoint)
+                    else if (isSystemApp && fileName == systemBundleManifestKey)
+                      systemBundleManifest(entrypoint)
                     else fileOutput
                 }
               }

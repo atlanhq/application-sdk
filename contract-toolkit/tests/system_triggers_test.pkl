@@ -56,6 +56,29 @@ facts {
     }).output.files["atlan.yaml"].text.split("marketplace_card: false").length == 2
   }
 
+  ["Every system-bundle entrypoint manifest targets the bundle's queue"] {
+    // One worker polls the bundle's queue; a sub-contract's own default
+    // (`atlan-rollup-…`) has no worker, and the served-manifest stamp only
+    // rewrites this app's own `atlan-<name>-…` template, so it would ship as-is.
+    for (ep in List("rollup", "feed")) {
+      let (m = systemTriggers.output.files["app/generated/\(ep)/manifest.json"].text)
+        m.contains("\"task_queue\": \"atlan-system-triggers-{deployment_name}\"")
+          && !m.contains("\"task_queue\": \"atlan-\(ep)-{deployment_name}\"")
+    }
+  }
+
+  ["A sub-contract taskQueuePrefix is replaced by the system bundle's"] {
+    bundleOf(new Listing {
+      (nightlyEp) { contract = (Rollup) { taskQueuePrefix = "atlan-elsewhere" } }
+    }).output.files["app/generated/rollup/manifest.json"].text
+      .contains("\"task_queue\": \"atlan-system-triggers-{deployment_name}\"")
+  }
+
+  ["Refuses emitAtlanYaml = false with trigger-bearing entrypoints"] {
+    module.catch(() -> (systemTriggers) { emitAtlanYaml = false }.output.files)
+      .contains("emitAtlanYaml = false, but entrypoint(s) List(\"rollup\", \"feed\") declare schedules or events")
+  }
+
   ["Refuses emitEntrypoints = false with trigger-bearing entrypoints"] {
     module.catch(() -> (systemTriggers) { emitEntrypoints = false }.output.files)
       .contains("emitEntrypoints = false, but entrypoint(s) List(\"rollup\", \"feed\") declare schedules or events")

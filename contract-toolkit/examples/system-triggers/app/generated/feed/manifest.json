@@ -10,7 +10,7 @@
         "app_name": "feed",
         "app_id": "",
         "argo_workflow_slug": "",
-        "task_queue": "atlan-feed-{deployment_name}",
+        "task_queue": "atlan-system-triggers-{deployment_name}",
         "args": {
           "batch": "$.event.batch",
           "batch_key": "$.event.batch_key",
