@@ -107,6 +107,16 @@
       "allowedVersions": "<3.15"
     },
     {
+      "description": "Hold pymdown-extensions (docs dependency group) below 13. Every 13.x release requires Python >=3.11.5, but the SDK declares requires-python >=3.11, and uv resolves the lock for every Python the project allows, so the 3.11.0-3.11.4 split has no solution and `uv lock` fails. Renovate then opens the PR with a pyproject.toml bump and a stale uv.lock (renovate/artifacts: failure), as on application-sdk PR 4855. Raising requires-python would change the floor every consuming app installs under, which a docs-only dependency does not justify. Remove this cap when requires-python moves to >=3.11.5 or higher.",
+      "matchDatasources": [
+        "pypi"
+      ],
+      "matchPackageNames": [
+        "pymdown-extensions"
+      ],
+      "allowedVersions": "<13"
+    },
+    {
       "description": "Put the uv cache-key bump in the same PR as the setup-uv `version:` bump it must track. The fleet preset's github-actions group rule matches on matchManagers github-actions only, so a shared depName is not enough: the regex manager's astral-sh/uv bump fell outside the group and a github-actions PR bumped the install without the key, failing test_setup_deps_uv_cache_key.py. Same groupName and auto-merge settings as the preset's rule, because Renovate auto-merges a group only when every member does.",
       "matchManagers": [
         "custom.regex"
