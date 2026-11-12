@@ -120,9 +120,12 @@ without breaking 1 and 2, and how to prove it.
   method it calls.
 - `FLATTENED` is known to differ from a hand reshape of nested output in at
   least these places, which a unit test rarely reaches (observed on seven
-  apps, not a complete list): a reference set to `None` is written as
+  apps, not a complete list): on a `pyatlan_v9` asset (the
+  `to_atlas_format` path), a reference set to `None` is written as
   `attributes.<ref>: null`, which clears that relationship on publish (the
-  nested encoder omits it); `meanings` stays top-level only and loses
+  nested encoder omits it); on a plain dict or a v1 model (the generic
+  `flatten_envelope` path) a `None` reference is left out, as in nested
+  output; `meanings` stays top-level only and loses
   `semantic` (nested output also carries it under `relationshipAttributes`);
   every set reference is emitted, including ones the app used to drop. Both
   encoders omit a field that was never set (`entity_envelope` module docs):
@@ -143,10 +146,14 @@ without breaking 1 and 2, and how to prove it.
 - `skip_record` (`application_sdk.outputs`, SDK 3.56.0) is a coroutine:
   `await` it from inside a `@task`'s per-record loop (ADR 0022); a call
   without `await` records nothing, and the SDK has no synchronous form. It
-  takes a closed `SkipReason`; each awaited call writes the record and its
-  reason to the run's
-  `skipped-records` artifact, adds skip metrics and logs one warning, and a
-  run that skipped any record ends `PARTIAL_SUCCESS`.
+  takes a closed `SkipReason`. Each awaited call counts the skip in the run
+  metrics and, up to `MAX_SKIPPED_RECORDS` (10,000) per activity, writes the
+  record and its reason to the activity's skipped-records file and logs one
+  warning; skips past the cap are counted (`skipped-records-truncated`) but
+  not kept. The file is uploaded only when the activity returns, so an
+  activity that fails after a skip keeps nothing from that attempt. A run
+  that completes after skipping ends `PARTIAL_SUCCESS` with a
+  `skipped-records` artifact; a failed run stays `FAILURE`.
 
 ## What each rule fires on
 

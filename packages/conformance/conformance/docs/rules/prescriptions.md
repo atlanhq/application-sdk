@@ -1504,13 +1504,14 @@ silently. The pyatlan asset .creator() factories own the grammar centrally.
 - **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
 - **Already correct when:** A justified inline `# conformance: ignore[P028] <reason>` is the correct end state in
   one case only: the f-string is not an asset qualifiedName. That is an object-store key
-  or prefix rooted at a qualifiedName, a `startswith` or prefix match, a cache or lookup
-  key, or log, report or display text, and the value never reaches a `qualifiedName`
-  field. The reason says which (for example `match prefix, not a qualifiedName`). Every
-  other site stays open until a creator produces its string: a type with no creator, a
-  creator that produces a different string, or a creator that needs an input the app
-  does not have is a gap to fill in pyatlan, and this finding is how the gap is found. A
-  directive on any such site hides the gap and is unremediated.
+  or prefix rooted at a qualifiedName, a `startswith` or prefix match, a cache key, or
+  log, report or display text; the value never reaches a `qualifiedName` field and is
+  never compared with or used to look up qualifiedNames. The reason says which (for
+  example `match prefix, not a qualifiedName`). Every other site stays open until a
+  creator produces its string: a type with no creator, a creator that produces a
+  different string, or a creator that needs an input the app does not have is a gap to
+  fill in pyatlan, and this finding is how the gap is found. A directive on any such
+  site hides the gap and is unremediated.
 
 An f-string composes a slash-delimited `qualifiedName` — it both interpolates a
 `*qualified_name` / `*_qn` value and contains a `/` separator (e.g.
