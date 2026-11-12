@@ -899,6 +899,45 @@ class TestFailureMessageIsRedactedAtTheActivityBoundary:
             await activity_fn(ctx, _AfnIn(name="x"))
         return exc_info.value
 
+    @staticmethod
+    def _history_text(err: BaseException) -> str:
+        """Serialise ``err`` exactly as the worker does and return the proto text.
+
+        Runs the SDK's data converter (``backend.py``), whose failure converter
+        walks every ``__cause__`` link into ``Failure.cause``. The protobuf text
+        form prints each nested ``message`` and each payload's bytes, so a scan
+        of it sees everything workflow history would hold.
+        """
+        from temporalio.api.failure.v1 import Failure
+        from temporalio.contrib.pydantic import pydantic_data_converter
+
+        failure = Failure()
+        pydantic_data_converter.failure_converter.to_failure(
+            err, pydantic_data_converter.payload_converter, failure
+        )
+        return str(failure)
+
+    async def test_no_link_of_the_serialised_failure_carries_the_secret(
+        self,
+    ) -> None:
+        from application_sdk.storage.errors import StorageError
+
+        err = StorageError(
+            "upload failed",
+            key="artifacts/k.json",
+            cause=RuntimeError("connect postgres://svc:hunter2@db/x?token=abc123"),
+        )
+
+        app_err = await self._run_task_raising(err)
+        text = self._history_text(app_err)
+
+        assert "hunter2" not in text
+        assert "abc123" not in text
+        # The chain keeps Temporal's shape: each link's class name as its type.
+        assert 'type: "StorageError"' in text
+        assert 'type: "RuntimeError"' in text
+        assert "RuntimeError: connect postgres://" in text
+
     async def test_cause_appended_by_str_is_redacted(self) -> None:
         from application_sdk.storage.errors import StorageError
 
@@ -944,3 +983,64 @@ class TestFailureMessageIsRedactedAtTheActivityBoundary:
 
         assert "pw@" not in app_err.message
         assert "pw@" not in app_err.details[0].message
+
+
+class TestRedactedCauseChain:
+    """``_redacted_cause_chain`` mirrors a chain the way Temporal walks it."""
+
+    def test_mirrors_types_and_redacts_each_link(self) -> None:
+        from application_sdk.execution._temporal.activities import (
+            _redacted_cause_chain,
+        )
+
+        root = ValueError("password=hunter2")
+        mid = KeyError("k")
+        mid.__cause__ = root
+        head = RuntimeError("top")
+        head.__cause__ = mid
+
+        mirror = _redacted_cause_chain(head)
+
+        types: list[str | None] = []
+        messages: list[str] = []
+        link: BaseException | None = mirror
+        while link is not None:
+            types.append(getattr(link, "type", None))
+            messages.append(getattr(link, "message", ""))
+            link = link.__cause__
+        assert types == ["RuntimeError", "KeyError", "ValueError"]
+        assert "hunter2" not in "".join(messages)
+        assert head.__cause__ is mid  # the original chain is not mutated
+
+    def test_plain_exception_context_is_not_followed(self) -> None:
+        # Temporal follows only ``__cause__`` from a plain exception; an implicit
+        # ``__context__`` never reached history, so the mirror must not add it.
+        from application_sdk.execution._temporal.activities import (
+            _redacted_cause_chain,
+        )
+
+        head = RuntimeError("top")
+        head.__context__ = ValueError("other")
+
+        assert _redacted_cause_chain(head).__cause__ is None
+
+    def test_cyclic_chain_terminates(self) -> None:
+        from application_sdk.execution._temporal.activities import (
+            _MAX_CHAIN_DEPTH,
+            _redacted_cause_chain,
+        )
+
+        a = RuntimeError("a")
+        b = RuntimeError("b")
+        a.__cause__ = b
+        b.__cause__ = a
+
+        mirror = _redacted_cause_chain(a)
+
+        depth = 0
+        link: BaseException | None = mirror
+        while link is not None:
+            depth += 1
+            link = link.__cause__
+        assert depth == 2
+        assert depth <= _MAX_CHAIN_DEPTH
