@@ -406,8 +406,8 @@ def derive_shutdown_budget(
 def _preferred_drain_seconds() -> int:
     """The explicit drain if one is set and parses, else the 3600 s default.
 
-    A value that does not parse is left for ``load_execution_settings`` to
-    reject, as it always has; here it only falls back to the default.
+    A value that does not parse falls back to the default here silently;
+    ``load_execution_settings`` reads the same variable and reports it.
     """
     raw = os.environ.get(_DRAIN_ENV, "").strip()
     try:

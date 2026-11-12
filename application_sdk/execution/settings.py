@@ -14,7 +14,7 @@ from dataclasses import dataclass
 # direction without providing any real isolation.
 from temporalio.common import VersioningBehavior
 
-from application_sdk.common._env import env_bool, env_float
+from application_sdk.common._env import env_bool, env_float, env_int
 from application_sdk.constants import load_shutdown_budget
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -157,15 +157,16 @@ def _load_graceful_shutdown_timeout() -> int:
     """Explicit ``TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT``, else the grace-derived drain.
 
     With neither set the drain stays 3600 s, the value every deployment ran
-    with before the shutdown budget existed.
+    with before the shutdown budget existed. An empty, malformed or negative
+    explicit value warns and falls back the same way.
     """
-    explicit = os.environ.get("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT")
-    if explicit is not None:
-        return int(explicit)
     budget = load_shutdown_budget()
-    if budget is not None:
-        return budget.drain_seconds
-    return ExecutionSettings.graceful_shutdown_timeout_seconds
+    fallback = (
+        budget.drain_seconds
+        if budget is not None
+        else ExecutionSettings.graceful_shutdown_timeout_seconds
+    )
+    return env_int("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", fallback, minimum=0)
 
 
 def _derive_max_concurrent_activities(cpus: int, memory_bytes: int | None) -> int:
@@ -187,9 +188,13 @@ def _load_max_concurrent_activities() -> int:
 
 
 def _explicit_max_concurrent_activities() -> int | None:
-    """``TEMPORAL_MAX_CONCURRENT_ACTIVITIES`` as an int, or ``None`` when unset or blank."""
-    explicit = os.environ.get(_MAX_CONCURRENT_ACTIVITIES_ENV, "").strip()
-    return int(explicit) if explicit else None
+    """``TEMPORAL_MAX_CONCURRENT_ACTIVITIES`` as a positive int, else ``None``.
+
+    ``None`` when unset or blank, and when the value is not a positive integer
+    (which warns): the caller then uses its default as if nothing were set.
+    """
+    explicit = env_int(_MAX_CONCURRENT_ACTIVITIES_ENV, 0, minimum=1)
+    return explicit if explicit >= 1 else None
 
 
 def load_execution_settings() -> ExecutionSettings:
