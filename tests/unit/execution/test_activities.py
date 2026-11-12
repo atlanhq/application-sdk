@@ -841,3 +841,106 @@ class TestSqlWrapRetryabilityReachesTheWire:
         )
         app_err = await self._run_task_raising(err)
         assert app_err.non_retryable is True
+
+
+class TestFailureMessageIsRedactedAtTheActivityBoundary:
+    """FND-4894: the Temporal failure message gets the envelope's redaction.
+
+    ``ApplicationError.message`` is written to workflow history beside
+    ``details[0]`` (the ``FailureDetails`` envelope, redacted on construction).
+    Many ``AppError.__str__`` overrides append the cause verbatim, so without
+    redaction at the activity boundary the same failure appears there twice:
+    once redacted, once not.
+    """
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    async def _run_task_raising(self, err: Exception):
+        from application_sdk.execution.errors import ApplicationError
+
+        class _RedactFailApp(App):
+            @task(timeout_seconds=60)
+            async def crawl(self, input: _AfnIn) -> _AfnOut:
+                raise err
+
+            async def run(self, input: _AfnIn) -> _AfnOut:
+                return await self.crawl(input)
+
+        app_slug = "_redact-fail-app"
+        tasks = TaskRegistry.get_instance().get_tasks_for_app(app_slug)
+        activity_fn = create_activity_from_task(
+            next(t for t in tasks if t.name == "crawl")
+        )
+        ctx = TaskContext(
+            app_name=app_slug,
+            task_name="crawl",
+            run_id="run-1",
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+        )
+        with (
+            mock.patch.object(
+                activities_module.activity,
+                "info",
+                return_value=mock.MagicMock(workflow_id="wf-redact"),
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=None,
+            ),
+            pytest.raises(ApplicationError) as exc_info,
+        ):
+            await activity_fn(ctx, _AfnIn(name="x"))
+        return exc_info.value
+
+    async def test_cause_appended_by_str_is_redacted(self) -> None:
+        from application_sdk.storage.errors import StorageError
+
+        # StorageError.__str__ appends ``{type(cause).__name__}: {cause}``
+        # without redaction — the shape the audit found in 13 ``__str__`` copies.
+        err = StorageError(
+            "upload failed",
+            key="artifacts/k.json",
+            cause=RuntimeError("connect postgres://svc:hunter2@db/x?token=abc123"),
+        )
+        assert "hunter2" in str(err)  # precondition: the class does not redact
+
+        app_err = await self._run_task_raising(err)
+
+        assert "hunter2" not in app_err.message
+        assert "abc123" not in app_err.message
+        # The diagnostic survives: only the secret-bearing parts are masked.
+        assert "upload failed" in app_err.message
+        assert "key=artifacts/k.json" in app_err.message
+        assert "RuntimeError: connect postgres://" in app_err.message
+
+    async def test_long_message_is_capped_keeping_both_ends(self) -> None:
+        from application_sdk.storage.errors import StorageError
+
+        err = StorageError(
+            "HEAD-" + "x" * 5000,
+            cause=RuntimeError("provider said: TAIL-REASON"),
+        )
+
+        app_err = await self._run_task_raising(err)
+
+        assert len(app_err.message) < len(str(err))
+        assert "chars elided]" in app_err.message
+        assert "HEAD-" in app_err.message
+        assert app_err.message.endswith("TAIL-REASON")
+
+    async def test_message_matches_the_envelope_redaction(self) -> None:
+        from application_sdk.errors.leaves import AuthError
+
+        err = AuthError(message="login failed for postgres://u:pw@h/db")
+
+        app_err = await self._run_task_raising(err)
+
+        assert "pw@" not in app_err.message
+        assert "pw@" not in app_err.details[0].message

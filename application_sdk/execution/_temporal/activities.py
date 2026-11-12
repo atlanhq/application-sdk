@@ -110,7 +110,10 @@ def _to_application_error(e: AppError) -> ApplicationError:
     - ``_sever_cause_chain``, so Temporal's failure serializer can always
       complete (BLDX-1512);
     - ``non_retryable=not e.effective_retryable``, so the error's own retry
-      policy reaches Temporal instead of the default.
+      policy reaches Temporal instead of the default;
+    - ``redact_and_cap`` on the message, so the free text written to workflow
+      history is redacted and length-capped like the ``details`` envelope
+      beside it.
 
     Args:
         e: The typed error to translate. Mutated by the cause-chain severing,
@@ -122,6 +125,9 @@ def _to_application_error(e: AppError) -> ApplicationError:
         wire ``type``. Callers must still ``raise ... from`` the original
         exception so the traceback keeps its chain.
     """
+    from application_sdk.errors.base import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + errors imports observability transitively
+        redact_and_cap,
+    )
     from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
         ApplicationError,
     )
@@ -143,8 +149,13 @@ def _to_application_error(e: AppError) -> ApplicationError:
     # failure serializer walks them (BLDX-1512).
     _sever_cause_chain(e)
 
+    # The message sits in workflow history beside the redacted ``details``
+    # envelope, so it gets the same treatment: many ``AppError.__str__``
+    # overrides append ``{type(cause).__name__}: {cause}`` verbatim, and a
+    # driver's cause can carry a connection string. Redact and cap at this one
+    # seam rather than in each ``__str__`` copy.
     return ApplicationError(
-        str(e),
+        redact_and_cap(str(e)),
         *details,
         type=type(e).__name__,
         non_retryable=not e.effective_retryable,

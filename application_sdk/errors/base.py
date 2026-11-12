@@ -377,9 +377,10 @@ def redact_and_cap(text: str) -> str:
     """Redact secrets in ``text``, then cap it, keeping both ends.
 
     The one cap block: :func:`sanitize_cause_repr` builds on it for cause
-    exceptions, and the preflight outcome rows call it on the handler's own
-    ``message`` before it becomes a log attribute. Not re-exported from
-    ``application_sdk.errors`` — those are its two consumers.
+    exceptions, the preflight outcome rows call it on the handler's own
+    ``message`` before it becomes a log attribute, and the activity boundary
+    calls it on ``str(e)`` before it becomes the Temporal failure message. Not
+    re-exported from ``application_sdk.errors`` — those are its consumers.
 
     Truncation keeps both ends because a backend error puts the request URL at
     the head and what the provider said at the tail; a head-only cut spends the
