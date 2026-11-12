@@ -29,6 +29,8 @@ import asyncio
 import gzip
 import importlib.util
 import threading
+from collections.abc import Iterator
+from contextlib import ExitStack
 from datetime import datetime
 from typing import Any
 from unittest import mock
@@ -37,6 +39,7 @@ import pytest
 
 from application_sdk.constants import LOG_FILE_NAME, METRICS_FILE_NAME, TRACES_FILE_NAME
 from application_sdk.observability import observability as obs_module
+from application_sdk.observability.background_loop import ObservabilityLoop
 from application_sdk.observability.observability import AtlanObservability
 
 
@@ -648,3 +651,157 @@ class TestStoreStateLockAfterFork:
             assert resolved == [store]
         finally:
             inherited.release()
+
+
+class TestResetStopsDroppedSinks:
+    """``_reset_for_testing`` stops the flush work of every sink it drops.
+
+    ``_patched_sink`` patches ``upload_file`` for the whole process, so any
+    sink still flushing inside a test's patch window delivers into that test's
+    sink. A reset that only forgot the instances left their periodic flushes
+    running on the shared loop: a metrics batch from an earlier test, with no
+    ``message`` key, reached a later test's sink.
+    """
+
+    @pytest.fixture
+    def own_loop(self, monkeypatch) -> Iterator[ObservabilityLoop]:
+        """A private observability loop, so the process-wide one is untouched."""
+        loop = ObservabilityLoop()
+        monkeypatch.setattr(obs_module, "observability_loop", loop)
+        try:
+            yield loop
+        finally:
+            loop.shutdown(timeout=5)
+            AtlanObservability._reset_for_testing()
+
+    @staticmethod
+    def _stray(tmp_path, batch_size: int = 1000) -> _ConcreteObs:
+        return _ConcreteObs(
+            batch_size=batch_size,
+            flush_interval=60,
+            data_dir=str(tmp_path / "stray"),
+            file_name=METRICS_FILE_NAME,
+        )
+
+    @staticmethod
+    def _metric(name: str) -> dict[str, Any]:
+        # Metrics-shaped: no ``message`` key, like the batch that leaked.
+        return {
+            "timestamp": datetime(2025, 6, 15, 10, 30, 0).timestamp(),
+            "metric_name": name,
+        }
+
+    def test_dropped_sinks_periodic_flush_never_reaches_a_later_sink(
+        self, own_loop, tmp_path
+    ):
+        import orjson
+
+        AtlanObservability._reset_for_testing()
+        stray = self._stray(tmp_path)
+        # Short, so a flush still running after the reset lands in the window
+        # below many times over.
+        stray._flush_interval = 0.01  # type: ignore[assignment]
+        delivered: list[dict[str, Any]] = []
+        reached = threading.Event()
+
+        async def _upload(key, local_path, store=None, **_kw):
+            with gzip.open(local_path, "rb") as fh:
+                delivered.extend(orjson.loads(line) for line in fh if line.strip())
+            reached.set()
+
+        # Every sink's store, not one instance's: the stray must be able to
+        # reach the later patch window if its flush survives the reset.
+        with ExitStack() as patches:
+            for p in _patched_sink(AtlanObservability, _upload):
+                patches.enter_context(p)
+            handle = stray._start_periodic_flush()
+            assert handle is not None
+            # Precondition: inside a patch window, this sink's periodic flush
+            # does reach the patched store.
+            with stray._buffer_lock:
+                stray._buffer.append(self._metric("before"))
+            assert reached.wait(30)
+
+        with stray._buffer_lock:
+            stray._buffer.append(self._metric("pending"))
+        AtlanObservability._reset_for_testing()
+        assert handle.done(), "the dropped sink's periodic flush is still running"
+
+        delivered.clear()
+        reached.clear()
+        with ExitStack() as patches:
+            for p in _patched_sink(AtlanObservability, _upload):
+                patches.enter_context(p)
+            # A record that reaches the dropped sink after the reset, e.g.
+            # from code still holding a reference to it.
+            with stray._buffer_lock:
+                stray._buffer.append(self._metric("after"))
+            # Twenty of the stray's flush intervals.
+            reached.wait(0.2)
+        assert delivered == []
+
+    def test_reset_cancels_a_dropped_sinks_batch_flush_on_another_loop(
+        self, own_loop, tmp_path
+    ):
+        """A batch flush ``add_record`` started on a loop running on another
+        thread is cancelled and waited for: it never finishes its upload, and
+        its half-written partition is deleted."""
+        AtlanObservability._reset_for_testing()
+        stray = self._stray(tmp_path, batch_size=1)
+        upload_started = threading.Event()
+        finished: list[str] = []
+
+        async def _upload(key, local_path, store=None, **_kw):
+            upload_started.set()
+            await asyncio.sleep(3600)  # a stalled store
+            finished.append(key)
+
+        async def _add() -> None:
+            stray.add_record(self._metric("inflight"))
+
+        with ExitStack() as patches:
+            for p in _patched_sink(AtlanObservability, _upload):
+                patches.enter_context(p)
+            submitted = own_loop.submit(_add())
+            assert submitted is not None
+            submitted.result(timeout=30)
+            assert upload_started.wait(30)
+            with stray._buffer_lock:
+                (task,) = stray._flush_tasks
+
+            AtlanObservability._reset_for_testing()
+
+            assert task.done(), "the dropped sink's batch flush is still uploading"
+            assert task.cancelled()
+        assert finished == []
+        assert not list((tmp_path / "stray").rglob("*.json.gz"))
+
+    async def test_reset_on_the_flush_tasks_own_loop_cancels_without_waiting(
+        self, tmp_path
+    ):
+        """Called on the loop that owns a batch flush, the reset cannot wait
+        for it (the flush only runs once the caller yields), so it cancels it
+        and returns at once instead of blocking its own loop."""
+        AtlanObservability._reset_for_testing()
+        stray = self._stray(tmp_path, batch_size=1)
+        upload_started = asyncio.Event()
+
+        async def _upload(key, local_path, store=None, **_kw):
+            upload_started.set()
+            await asyncio.sleep(3600)  # a stalled store
+
+        try:
+            with ExitStack() as patches:
+                for p in _patched_sink(AtlanObservability, _upload):
+                    patches.enter_context(p)
+                stray.add_record(self._metric("inflight"))
+                await asyncio.wait_for(upload_started.wait(), timeout=30)
+                with stray._buffer_lock:
+                    (task,) = stray._flush_tasks
+
+                AtlanObservability._reset_for_testing()
+
+                await asyncio.wait({task}, timeout=30)
+                assert task.cancelled()
+        finally:
+            AtlanObservability._reset_for_testing()
