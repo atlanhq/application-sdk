@@ -301,7 +301,7 @@ application_sdk/
 │   ├── azure/              # Azure-specific auth and client helpers ([azure] extra)
 │   ├── base.py             # BaseClient ABC
 │   ├── models.py           # DatabaseConfig and shared client models
-│   ├── redis.py            # RedisClient, RedisClientAsync (lazy via [distributed_lock] extra)
+│   ├── redis.py            # RedisClient, RedisClientAsync (deprecated, removed in v4.0.0)
 │   ├── sql.py              # BaseSQLClient (load, run_query, run_count_query)
 │   └── ssl_utils.py        # Custom CA certificate loading for httpx
 │

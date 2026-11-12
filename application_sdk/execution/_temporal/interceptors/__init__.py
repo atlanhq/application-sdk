@@ -14,7 +14,9 @@ observability set:
 
 * ``EventInterceptor`` (``events.py``) — v3 lifecycle event publishing.
 * ``OutputInterceptor`` (``outputs.py``) — UI metrics / artifacts collection.
-* ``RedisLockInterceptor`` (``lock.py``) — distributed activity locks.
+* ``RedisLockInterceptor`` (``lock.py``) — deprecated, removed in v4.0.0.
+  ``create_worker`` never registers it or its lock activities, so
+  ``needs_lock`` has no effect.
 
 ``LivenessInterceptor`` (``liveness.py``) is intentionally NOT re-exported here:
 it is SDK-internal and wired only by ``create_worker`` when an ``on_activity``

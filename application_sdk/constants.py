@@ -1287,24 +1287,21 @@ ENABLE_OBSERVABILITY_STORE_SINK: bool = (
 # REMOVED: ATLAN_API_TOKEN_GUID, ATLAN_API_KEY, ATLAN_CLIENT_ID, ATLAN_CLIENT_SECRET — unused.
 # ATLAN_BASE_URL is still used by events interceptor (deferred import).
 ATLAN_BASE_URL = os.getenv("ATLAN_BASE_URL")
-# Lock Configuration
-LOCK_METADATA_KEY = "__lock_metadata__"
-
-# Redis Lock Configuration
-#: Redis host for direct connection (when not using Sentinel)
-REDIS_HOST = os.getenv("REDIS_HOST", "")
-#: Redis port for direct connection (when not using Sentinel)
-REDIS_PORT = os.getenv("REDIS_PORT", "")
-#: Redis password (required for authenticated Redis instances)
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
-#: Redis Sentinel service name. Default: mymaster
-REDIS_SENTINEL_SERVICE_NAME = os.getenv("REDIS_SENTINEL_SERVICE_NAME", "mymaster")
-#: Redis Sentinel hosts as comma-separated host:port pairs
-REDIS_SENTINEL_HOSTS = os.getenv("REDIS_SENTINEL_HOSTS", "")
-#: Whether to enable strict locking
-IS_LOCKING_DISABLED = os.getenv("IS_LOCKING_DISABLED", "true").lower() == "true"
-#: Retry interval for lock acquisition
-LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60"))
+# Lock / Redis configuration — deprecated, removed in v4.0.0 (FND-4888).
+# Nothing in v3 consumes the lock metadata: ``create_worker`` registers neither
+# the lock interceptor nor the lock activities. The ``REDIS_*`` /
+# ``IS_LOCKING_DISABLED`` values still configure the deprecated ``RedisClient`` /
+# ``RedisClientAsync``, which keep working until v4.0.0. The public names are
+# served by ``__getattr__`` at the bottom of this module, with a warning.
+_LOCK_METADATA_KEY = "__lock_metadata__"
+_REDIS_HOST = os.getenv("REDIS_HOST", "")
+_REDIS_PORT = os.getenv("REDIS_PORT", "")
+_REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+_REDIS_SENTINEL_SERVICE_NAME = os.getenv("REDIS_SENTINEL_SERVICE_NAME", "mymaster")
+_REDIS_SENTINEL_HOSTS = os.getenv("REDIS_SENTINEL_HOSTS", "")
+#: The Redis client's connect guard: ``true`` (the default) leaves it unconnected.
+_IS_LOCKING_DISABLED = os.getenv("IS_LOCKING_DISABLED", "true").lower() == "true"
+_LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60"))
 
 # MCP Configuration
 #: Flag to indicate if MCP should be enabled or not. Turning this to true will setup an MCP server along
@@ -1421,3 +1418,49 @@ in that directory are trusted in addition to system CAs.
 # module level — os.environ assignments call os.putenv(), which Temporal's
 # workflow sandbox flags as non-deterministic, causing worker eviction loops.
 # See: https://github.com/atlanhq/application-sdk/pull/1129
+
+
+#: name -> (private value name, why). Served by ``__getattr__`` below (PEP 562).
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "LOCK_METADATA_KEY": (
+        "_LOCK_METADATA_KEY",
+        "needs_lock has no effect in v3: create_worker registers no lock interceptor",
+    ),
+    "LOCK_RETRY_INTERVAL_SECONDS": (
+        "_LOCK_RETRY_INTERVAL_SECONDS",
+        "the lock interceptor that reads it is never registered by create_worker",
+    ),
+    "IS_LOCKING_DISABLED": (
+        "_IS_LOCKING_DISABLED",
+        "it only guards the deprecated RedisClient / RedisClientAsync connection",
+    ),
+    "REDIS_HOST": ("_REDIS_HOST", "it only configures the deprecated RedisClient"),
+    "REDIS_PORT": ("_REDIS_PORT", "it only configures the deprecated RedisClient"),
+    "REDIS_PASSWORD": (
+        "_REDIS_PASSWORD",
+        "it only configures the deprecated RedisClient",
+    ),
+    "REDIS_SENTINEL_SERVICE_NAME": (
+        "_REDIS_SENTINEL_SERVICE_NAME",
+        "it only configures the deprecated RedisClient",
+    ),
+    "REDIS_SENTINEL_HOSTS": (
+        "_REDIS_SENTINEL_HOSTS",
+        "it only configures the deprecated RedisClient",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the deprecated lock / Redis constants, with a warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    private_name, why = entry
+    warnings.warn(
+        f"application_sdk.constants.{name} is deprecated: {why}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return globals()[private_name]

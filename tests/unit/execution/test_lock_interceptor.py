@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from application_sdk.constants import LOCK_METADATA_KEY
+from application_sdk.constants import _LOCK_METADATA_KEY as LOCK_METADATA_KEY
 
 
 class _AwaitableHandle:
@@ -625,3 +625,53 @@ class TestAcquireDistributedLockIdempotent:
                 await acquire_distributed_lock("res", 2, 60, "app:run-1")
 
         assert fake.data == {"res:0": b"other:1", "res:1": b"other:2"}
+
+
+# ---------------------------------------------------------------------------
+# Deprecation (FND-4888): create_worker never wires the lock path
+# ---------------------------------------------------------------------------
+
+
+def test_lock_interceptor_warns_that_it_has_no_effect() -> None:
+    from application_sdk.execution._temporal.interceptors.lock import (
+        RedisLockInterceptor,
+    )
+
+    with pytest.warns(DeprecationWarning, match=r"has no effect.*v4\.0\.0"):
+        RedisLockInterceptor({})
+
+
+def test_lock_outbound_interceptor_warns_that_it_has_no_effect() -> None:
+    from application_sdk.execution._temporal.interceptors.lock import (
+        RedisLockOutboundInterceptor,
+    )
+
+    with pytest.warns(DeprecationWarning, match=r"has no effect.*v4\.0\.0"):
+        RedisLockOutboundInterceptor(MagicMock(), {})
+
+
+@pytest.mark.parametrize(
+    "name", ["acquire_distributed_lock", "release_distributed_lock"]
+)
+def test_lock_activities_are_deprecated(name: str) -> None:
+    from application_sdk.execution._temporal import lock_activities
+
+    fn = getattr(lock_activities, name)
+    assert "has no effect" in fn.__deprecated__
+    assert "v4.0.0" in fn.__deprecated__
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "LockAcquisitionError",
+        "MaxLocksInvalidError",
+        "RedisLockError",
+        "MissingScheduleToCloseTimeoutError",
+    ],
+)
+def test_lock_error_leaves_warn_on_construction(name: str) -> None:
+    from application_sdk.execution._temporal import _lock_errors
+
+    with pytest.warns(DeprecationWarning, match=r"has no effect.*v4\.0\.0"):
+        getattr(_lock_errors, name)(message="lock failed")

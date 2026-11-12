@@ -1375,6 +1375,22 @@ asyncio.run(run_dev_combined(
 
 ---
 
+## Distributed locks (deprecated, removed in v4.0.0)
+
+`needs_lock` has no effect in v3. `create_worker` registers neither the lock interceptor nor the `acquire_distributed_lock` / `release_distributed_lock` activities, and it takes no extra activities, so a task decorated with `needs_lock` runs with no concurrency limit. Setting `IS_LOCKING_DISABLED=false` does not change that. `needs_lock` now emits a `DeprecationWarning`, and `create_worker` logs a warning naming each decorated task.
+
+The SDK's Redis clients still work, but they are deprecated too: the lock was their only use inside the SDK. B001 flags each import.
+
+| Deprecated | Do this |
+|---|---|
+| `application_sdk.execution.needs_lock` | Remove the decorator. It never limited concurrency in v3. |
+| `RedisLockInterceptor`, `RedisLockOutboundInterceptor`, `acquire_distributed_lock`, `release_distributed_lock`, and the lock error leaves in `execution._temporal._lock_errors` | Remove the import |
+| `application_sdk.clients.RedisClient` / `RedisClientAsync` (and `clients.redis.BaseRedisClient`, `LockReleaseResult`, the `clients.redis_errors` leaves) | Use `redis` / `redis.asyncio` directly. `RedisClientAsync` still connects as before until v4.0.0. |
+| `application_sdk.constants.REDIS_*`, `IS_LOCKING_DISABLED`, `LOCK_METADATA_KEY`, `LOCK_RETRY_INTERVAL_SECONDS` | Read the env vars in your app. The env vars still configure the deprecated clients until v4.0.0. |
+| The `[distributed_lock]` extra | Depend on `redis` directly. The extra only installs it for the deprecated clients. |
+
+---
+
 ## Removed in v3.0.0
 
 All of the following were removed in v3.0.0. They no longer exist — importing them will raise `ImportError`. Use the v3 replacement listed in each row.

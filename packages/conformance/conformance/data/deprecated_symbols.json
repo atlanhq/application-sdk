@@ -200,6 +200,78 @@
     },
     {
       "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.redis.BaseRedisClient is deprecated and will be removed in v4.0.0. It keeps working until then. Use redis-py (redis / redis.asyncio) directly; the SDK's distributed lock it was built for is not wired in v3.",
+      "migration_target": true,
+      "module": "application_sdk.clients.redis",
+      "removal_version": "4.0.0",
+      "symbol": "BaseRedisClient"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.redis.LockReleaseResult is deprecated and will be removed in v4.0.0. It keeps working until then. Use redis-py (redis / redis.asyncio) directly; the SDK's distributed lock it was built for is not wired in v3.",
+      "migration_target": true,
+      "module": "application_sdk.clients.redis",
+      "removal_version": "4.0.0",
+      "symbol": "LockReleaseResult"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.RedisClient is deprecated and will be removed in v4.0.0. It keeps working until then. Use redis-py (redis / redis.asyncio) directly; the SDK's distributed lock it was built for is not wired in v3.",
+      "migration_target": true,
+      "module": "application_sdk.clients.redis",
+      "removal_version": "4.0.0",
+      "symbol": "RedisClient"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.RedisClientAsync is deprecated and will be removed in v4.0.0. It keeps working until then. Use redis-py (redis / redis.asyncio) directly; the SDK's distributed lock it was built for is not wired in v3.",
+      "migration_target": true,
+      "module": "application_sdk.clients.redis",
+      "removal_version": "4.0.0",
+      "symbol": "RedisClientAsync"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.redis_errors.RedisConfigError is deprecated and will be removed in v4.0.0 with the deprecated RedisClient / RedisClientAsync that raise it. Catch the application_sdk.errors category leaf it subclasses.",
+      "migration_target": false,
+      "module": "application_sdk.clients.redis_errors",
+      "removal_version": "4.0.0",
+      "symbol": "RedisConfigError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.redis_errors.RedisConnectionError is deprecated and will be removed in v4.0.0 with the deprecated RedisClient / RedisClientAsync that raise it. Catch the application_sdk.errors category leaf it subclasses.",
+      "migration_target": false,
+      "module": "application_sdk.clients.redis_errors",
+      "removal_version": "4.0.0",
+      "symbol": "RedisConnectionError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.redis_errors.RedisProtocolError is deprecated and will be removed in v4.0.0 with the deprecated RedisClient / RedisClientAsync that raise it. Catch the application_sdk.errors category leaf it subclasses.",
+      "migration_target": false,
+      "module": "application_sdk.clients.redis_errors",
+      "removal_version": "4.0.0",
+      "symbol": "RedisProtocolError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.redis_errors.RedisTimeoutError is deprecated and will be removed in v4.0.0 with the deprecated RedisClient / RedisClientAsync that raise it. Catch the application_sdk.errors category leaf it subclasses.",
+      "migration_target": false,
+      "module": "application_sdk.clients.redis_errors",
+      "removal_version": "4.0.0",
+      "symbol": "RedisTimeoutError"
+    },
+    {
+      "kind": "class",
       "marker_via": "warn",
       "message": " (AtlanError subclass) is deprecated; use application_sdk.errors.AppError \u2014 will be removed in v4.0",
       "migration_target": true,
@@ -397,6 +469,78 @@
       "symbol": "FileUploadResponse"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "IS_LOCKING_DISABLED is deprecated; use _IS_LOCKING_DISABLED \u2014 it only guards the deprecated RedisClient / RedisClientAsync connection. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "IS_LOCKING_DISABLED"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "LOCK_METADATA_KEY is deprecated; use _LOCK_METADATA_KEY \u2014 needs_lock has no effect in v3: create_worker registers no lock interceptor. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "LOCK_METADATA_KEY"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "LOCK_RETRY_INTERVAL_SECONDS is deprecated; use _LOCK_RETRY_INTERVAL_SECONDS \u2014 the lock interceptor that reads it is never registered by create_worker. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "LOCK_RETRY_INTERVAL_SECONDS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "REDIS_HOST is deprecated; use _REDIS_HOST \u2014 it only configures the deprecated RedisClient. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "REDIS_HOST"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "REDIS_PASSWORD is deprecated; use _REDIS_PASSWORD \u2014 it only configures the deprecated RedisClient. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "REDIS_PASSWORD"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "REDIS_PORT is deprecated; use _REDIS_PORT \u2014 it only configures the deprecated RedisClient. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "REDIS_PORT"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "REDIS_SENTINEL_HOSTS is deprecated; use _REDIS_SENTINEL_HOSTS \u2014 it only configures the deprecated RedisClient. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "REDIS_SENTINEL_HOSTS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "REDIS_SENTINEL_SERVICE_NAME is deprecated; use _REDIS_SENTINEL_SERVICE_NAME \u2014 it only configures the deprecated RedisClient. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "REDIS_SENTINEL_SERVICE_NAME"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "ContractValidationError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
@@ -442,6 +586,42 @@
       "symbol": "DiscoveryError"
     },
     {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal._lock_errors.LockAcquisitionError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution._temporal._lock_errors",
+      "removal_version": "4.0.0",
+      "symbol": "LockAcquisitionError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal._lock_errors.MaxLocksInvalidError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution._temporal._lock_errors",
+      "removal_version": "4.0.0",
+      "symbol": "MaxLocksInvalidError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal._lock_errors.MissingScheduleToCloseTimeoutError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution._temporal._lock_errors",
+      "removal_version": "4.0.0",
+      "symbol": "MissingScheduleToCloseTimeoutError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal._lock_errors.RedisLockError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution._temporal._lock_errors",
+      "removal_version": "4.0.0",
+      "symbol": "RedisLockError"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "TEMPORARY_PATH is deprecated; use application_sdk.constants.TEMPORARY_PATH \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
@@ -449,6 +629,24 @@
       "module": "application_sdk.execution._temporal.activity_utils",
       "removal_version": "4.0.0",
       "symbol": "TEMPORARY_PATH"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal.interceptors.lock.RedisLockInterceptor has no effect: create_worker never registers it, nor the lock activities it schedules, so needs_lock does nothing in v3. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution._temporal.interceptors.lock",
+      "removal_version": "4.0.0",
+      "symbol": "RedisLockInterceptor"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal.interceptors.lock.RedisLockOutboundInterceptor has no effect: create_worker never registers it, nor the lock activities it schedules, so needs_lock does nothing in v3. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution._temporal.interceptors.lock",
+      "removal_version": "4.0.0",
+      "symbol": "RedisLockOutboundInterceptor"
     },
     {
       "kind": "constant",
@@ -467,6 +665,24 @@
       "module": "application_sdk.execution._temporal.interceptors.log",
       "removal_version": "3.41.0",
       "symbol": "COMMIT_SHA"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal.lock_activities.acquire_distributed_lock has no effect: create_worker never registers it, so it never runs in v3. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution._temporal.lock_activities",
+      "removal_version": "4.0.0",
+      "symbol": "acquire_distributed_lock"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal.lock_activities.release_distributed_lock has no effect: create_worker never registers it, so it never runs in v3. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution._temporal.lock_activities",
+      "removal_version": "4.0.0",
+      "symbol": "release_distributed_lock"
     },
     {
       "kind": "constant",
@@ -557,6 +773,15 @@
       "module": "application_sdk.execution._temporal.worker",
       "removal_version": "3.40.0",
       "symbol": "_resolve_gate_enforcement"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "needs_lock has no effect: create_worker registers neither the lock interceptor nor the lock activities, so a decorated task runs with no concurrency limit. Remove the decorator; it will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.execution.decorators",
+      "removal_version": "4.0.0",
+      "symbol": "needs_lock"
     },
     {
       "kind": "class",

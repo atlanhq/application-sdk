@@ -1,4 +1,12 @@
-"""Redis client for distributed locking with high availability support."""
+"""Redis client for distributed locking with high availability support.
+
+.. deprecated:: 3.57.0
+    :class:`RedisClient`, :class:`RedisClientAsync`, :class:`BaseRedisClient` and
+    :class:`LockReleaseResult` are deprecated and will be removed in v4.0.0. They
+    keep working until then. The SDK's distributed lock they were built for is
+    not wired in v3 (``needs_lock`` has no effect), so the SDK has no use for a
+    Redis client of its own. Use ``redis`` / ``redis.asyncio`` directly.
+"""
 
 from enum import Enum
 from typing import NoReturn
@@ -6,6 +14,7 @@ from typing import NoReturn
 import redis
 import redis.asyncio as async_redis
 from redis.exceptions import ConnectionError, RedisError, TimeoutError
+from typing_extensions import deprecated
 
 from application_sdk.clients.redis_errors import (
     RedisConfigError,
@@ -13,13 +22,16 @@ from application_sdk.clients.redis_errors import (
     RedisProtocolError,
     RedisTimeoutError,
 )
+
+# The public names in application_sdk.constants are deprecated aliases; read the
+# values directly so the client does not warn on every import.
+from application_sdk.constants import _IS_LOCKING_DISABLED as IS_LOCKING_DISABLED
+from application_sdk.constants import _REDIS_HOST as REDIS_HOST
+from application_sdk.constants import _REDIS_PASSWORD as REDIS_PASSWORD
+from application_sdk.constants import _REDIS_PORT as REDIS_PORT
+from application_sdk.constants import _REDIS_SENTINEL_HOSTS as REDIS_SENTINEL_HOSTS
 from application_sdk.constants import (
-    IS_LOCKING_DISABLED,
-    REDIS_HOST,
-    REDIS_PASSWORD,
-    REDIS_PORT,
-    REDIS_SENTINEL_HOSTS,
-    REDIS_SENTINEL_SERVICE_NAME,
+    _REDIS_SENTINEL_SERVICE_NAME as REDIS_SENTINEL_SERVICE_NAME,
 )
 from application_sdk.errors import AppError
 from application_sdk.observability.logger_adaptor import get_logger
@@ -48,6 +60,12 @@ def _handle_redis_error(e: Exception) -> NoReturn:
         raise RedisConnectionError(cause=e) from e
 
 
+@deprecated(
+    "application_sdk.clients.redis.LockReleaseResult is deprecated and "
+    "will be removed in v4.0.0. It keeps working until then. Use redis-py "
+    "(redis / redis.asyncio) directly; the SDK's distributed lock it was built "
+    "for is not wired in v3."
+)
 class LockReleaseResult(Enum):
     """Enum for lock release operation results."""
 
@@ -68,8 +86,13 @@ _LOCK_RELEASE_LUA_SCRIPT = """
 """
 
 
-class BaseRedisClient:
-    """Base Redis client with common functionality."""
+class _RedisClientBase:
+    """Shared configuration and lock-release handling for the Redis clients.
+
+    Private and undecorated so that defining :class:`RedisClient` and
+    :class:`RedisClientAsync` on it does not warn: subclassing a
+    ``@deprecated`` class warns at class definition, i.e. on every import.
+    """
 
     def __init__(self):
         """Initialize Redis client configuration."""
@@ -155,8 +178,37 @@ class BaseRedisClient:
             raise RedisProtocolError(message="Unknown Redis eval result")
 
 
-class RedisClient(BaseRedisClient):
-    """Synchronous Redis client for distributed locking."""
+@deprecated(
+    "application_sdk.clients.redis.BaseRedisClient is deprecated and "
+    "will be removed in v4.0.0. It keeps working until then. Use redis-py "
+    "(redis / redis.asyncio) directly; the SDK's distributed lock it was built "
+    "for is not wired in v3."
+)
+class BaseRedisClient(_RedisClientBase):
+    """Base Redis client with common functionality.
+
+    .. deprecated:: 3.57.0
+        Will be removed in v4.0.0. :class:`RedisClient` and
+        :class:`RedisClientAsync` no longer subclass it.
+    """
+
+    def __init__(self):
+        """Initialize Redis client configuration."""
+        super().__init__()
+
+
+@deprecated(
+    "application_sdk.clients.RedisClient is deprecated and "
+    "will be removed in v4.0.0. It keeps working until then. Use redis-py "
+    "(redis / redis.asyncio) directly; the SDK's distributed lock it was built "
+    "for is not wired in v3."
+)
+class RedisClient(_RedisClientBase):
+    """Synchronous Redis client for distributed locking.
+
+    .. deprecated:: 3.57.0
+        Will be removed in v4.0.0. Use ``redis`` directly.
+    """
 
     def __init__(self):
         """Initialize sync Redis client."""
@@ -310,8 +362,18 @@ class RedisClient(BaseRedisClient):
             _handle_redis_error(e)
 
 
-class RedisClientAsync(BaseRedisClient):
-    """Asynchronous Redis client for distributed locking."""
+@deprecated(
+    "application_sdk.clients.RedisClientAsync is deprecated and "
+    "will be removed in v4.0.0. It keeps working until then. Use redis-py "
+    "(redis / redis.asyncio) directly; the SDK's distributed lock it was built "
+    "for is not wired in v3."
+)
+class RedisClientAsync(_RedisClientBase):
+    """Asynchronous Redis client for distributed locking.
+
+    .. deprecated:: 3.57.0
+        Will be removed in v4.0.0. Use ``redis.asyncio`` directly.
+    """
 
     def __init__(self):
         """Initialize async Redis client."""

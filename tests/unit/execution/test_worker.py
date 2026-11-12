@@ -1470,6 +1470,66 @@ class TestWorkerPoolQueueResolution:
         assert pool_warn.args[1] == "heavy"
 
 
+class TestNeedsLockNoEffectWarning:
+    """FND-4888: needs_lock has no effect, so create_worker says so in its log.
+
+    The decorator's DeprecationWarning fires at import, where default filters
+    hide it in production; this warning is the one operators see.
+    """
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _lock_warnings(self, locked: bool) -> list[mock._Call]:
+        from application_sdk.execution import needs_lock
+
+        def _maybe_lock(fn):
+            if not locked:
+                return fn
+            with pytest.warns(DeprecationWarning, match="needs_lock has no effect"):
+                return needs_lock(max_locks=2)(fn)
+
+        class _LockApp(App):
+            @task
+            @_maybe_lock
+            async def fetch_tables(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        mock_logger = mock.MagicMock()
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.worker.Worker"
+            ) as MockWorker,
+            mock.patch(
+                "application_sdk.execution._temporal.worker.logger", mock_logger
+            ),
+        ):
+            MockWorker.return_value = mock.MagicMock()
+            create_worker(_make_mock_client())
+        return [
+            c
+            for c in mock_logger.warning.call_args_list
+            if c.args and "needs_lock" in str(c.args[0])
+        ]
+
+    def test_locked_task_is_named_in_a_warning(self) -> None:
+        calls = self._lock_warnings(locked=True)
+        assert len(calls) == 1
+        assert "has no effect" in calls[0].args[0]
+        assert calls[0].args[1] == ["fetch_tables"]
+
+    def test_no_warning_without_needs_lock(self) -> None:
+        assert self._lock_warnings(locked=False) == []
+
+
 class TestWorkflowFailureExceptionTypes:
     """Pre-user-code failures must fail the run, not retry the task forever."""
 
