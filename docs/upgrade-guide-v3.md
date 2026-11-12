@@ -1375,6 +1375,20 @@ asyncio.run(run_dev_combined(
 
 ---
 
+## Pub/sub subscribe and unimplemented binding shapes (deprecated, removed in v4.0.0)
+
+`DaprPubSub.subscribe()` never delivered a message. It stored the handler, returned a handle whose `is_active` was `True`, and nothing ever called the handler. `MockPubSub.subscribe()` did deliver, so a test passed and the same code received nothing in production. Dapr delivers pub/sub messages to HTTP routes the app serves; the SDK builds those routes from `SubscriptionConfig`. Both `subscribe()` methods now emit a `DeprecationWarning`. `publish()` is unchanged. B001 flags each import.
+
+| Deprecated | Replacement |
+|---|---|
+| `DaprPubSub.subscribe`, `PubSub.subscribe`, `MockPubSub.subscribe` | a `SubscriptionConfig` from `application_sdk.handler.contracts`, passed to `create_app_handler_service(subscriptions=...)`. In tests, call its `handler` directly. |
+| `infrastructure.Subscription`, `DaprSubscription` | none; a `SubscriptionConfig` has no handle to hold |
+| `infrastructure.MessageHandler` | the `handler` field of `SubscriptionConfig` |
+| `infrastructure.InputBinding`, `OutputBinding` | `infrastructure.Binding` (`DaprBinding.invoke`); the SDK never shipped an implementation of either |
+| `infrastructure.BindingRequest` | pass `operation`, `data` and `metadata` to `Binding.invoke()`; nothing accepted a `BindingRequest` |
+
+---
+
 ## Removed in v3.0.0
 
 All of the following were removed in v3.0.0. They no longer exist — importing them will raise `ImportError`. Use the v3 replacement listed in each row.

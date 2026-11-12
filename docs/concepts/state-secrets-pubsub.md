@@ -105,7 +105,7 @@ See [Credentials](credentials.md) for the full credential resolution flow, and [
 
 ## PubSub
 
-Topic-based publish/subscribe messaging. Use it when your app needs to emit events or react to external triggers asynchronously — for example, notifying downstream apps when extraction completes, or subscribing to incremental change feeds.
+Topic-based messaging. Use `PubSub` to publish events — for example, notifying downstream apps when extraction completes. To receive them, declare a `SubscriptionConfig` (below).
 
 **Protocol:**
 
@@ -118,27 +118,45 @@ class PubSub(Protocol):
         *,
         metadata: dict[str, str] | None = None,
     ) -> None: ...
-
-    async def subscribe(
-        self,
-        topic: str,
-        handler: MessageHandler,
-    ) -> Subscription: ...
 ```
+
+!!! warning "`subscribe()` is deprecated — removal in v4.0.0"
+
+    `PubSub.subscribe()`, `Subscription` and `MessageHandler` are deprecated. `DaprPubSub.subscribe()` never delivered a message: it stored the handler and nothing called it. `MockPubSub.subscribe()` did deliver, so a test could pass while production received nothing. Both now emit a `DeprecationWarning`.
+
+    To receive messages, declare a `SubscriptionConfig` and pass it to the handler service. The SDK lists it at `/dapr/subscribe` and mounts `handler` as a FastAPI `POST` route at `/subscriptions/v1/{route}`, where Dapr delivers each message:
+
+    ```python
+    from application_sdk.handler.contracts import SubscriptionConfig
+
+    async def on_extraction_complete(event: dict) -> None:
+        ...
+
+    subscriptions = [
+        SubscriptionConfig(
+            component_name="pubsub",
+            topic="extraction-complete",
+            route="extraction-complete",
+            handler=on_extraction_complete,
+        )
+    ]
+    # create_app_handler_service(..., subscriptions=subscriptions)
+    ```
+
+    In a unit test, call `on_extraction_complete` directly.
 
 **Publishing a message:**
 
 `PubSub` is not part of `InfrastructureContext`. Use `DaprPubSub` from `application_sdk.infrastructure` — it implements the `PubSub` Protocol and handles serialisation and error wrapping:
 
 ```python
-import os
 from application_sdk.infrastructure import AsyncDaprClient, DaprPubSub
 
 @task(timeout_seconds=60)
 async def notify_complete(self, input: NotifyInput) -> NotifyOutput:
     async with AsyncDaprClient() as dapr:
-        # DaprPubSub constructor default is "pubsub"; pass EVENT_STORE_NAME to match the Dapr component name ("eventstore" by default)
-        pubsub = DaprPubSub(dapr, pubsub_name=os.getenv("EVENT_STORE_NAME", "eventstore"))
+        # Targets the Dapr pub/sub component named "pubsub" (components/pubsub.yaml).
+        pubsub = DaprPubSub(dapr)
         await pubsub.publish(
             topic="extraction-complete",
             data={"workflow_id": input.workflow_id, "record_count": input.record_count},
@@ -165,7 +183,7 @@ dapr:
     enabled: true
 ```
 
-The component name is read from `EVENT_STORE_NAME` at module import time (default: `eventstore`).
+`DaprPubSub` publishes to the component named `pubsub` unless you pass `pubsub_name`. Do not pass `EVENT_STORE_NAME`: `eventstore` is a **binding** component (`bindings.localstorage` locally), which the SDK uses for its own lifecycle events through `get_infrastructure().event_binding`. It is not a pub/sub component.
 
 **Testing without Dapr:**
 
@@ -173,7 +191,8 @@ The component name is read from `EVENT_STORE_NAME` at module import time (defaul
 from application_sdk.testing import MockPubSub
 
 mock_pubsub = MockPubSub()
-# Supports publish/subscribe and records calls; use mock_pubsub.get_published(topic) to assert
+# Records publish calls; use mock_pubsub.get_published(topic) to assert.
+# Its subscribe() is deprecated (see above).
 ```
 
 ---
@@ -182,7 +201,7 @@ mock_pubsub = MockPubSub()
 
 Generic I/O bindings connect your app to external resources — object stores, queues, HTTP endpoints, email gateways — using Dapr's binding abstraction. For object storage (the most common use case), prefer the `storage` module's `upload_file`/`download_file` helpers (see [Storage](storage.md)); bindings are for everything else.
 
-**Protocols:**
+**Protocol:**
 
 ```python
 class Binding(Protocol):
@@ -195,42 +214,20 @@ class Binding(Protocol):
         data: bytes | None = None,
         metadata: dict[str, str] | None = None,
     ) -> BindingResponse: ...
-
-
-class InputBinding(Protocol):
-    """Receives data from an external source (e.g. a queue)."""
-    @property
-    def name(self) -> str: ...
-
-    async def read(self) -> tuple[bytes, dict[str, str]]: ...
-
-
-class OutputBinding(Protocol):
-    """Sends data to an external target (e.g. an HTTP endpoint or email)."""
-    @property
-    def name(self) -> str: ...
-
-    async def write(
-        self,
-        data: bytes,
-        metadata: dict[str, str] | None = None,
-    ) -> None: ...
 ```
 
-**Request/response types:**
+**Response type:**
 
 ```python
-@dataclass(frozen=True)
-class BindingRequest:
-    operation: str
-    data: bytes | None = None
-    metadata: dict[str, str] = field(default_factory=dict)
-
 @dataclass(frozen=True)
 class BindingResponse:
     data: bytes | None = None
     metadata: dict[str, str] = field(default_factory=dict)
 ```
+
+!!! warning "`InputBinding`, `OutputBinding` and `BindingRequest` are deprecated — removal in v4.0.0"
+
+    The SDK never shipped an implementation of `InputBinding` or `OutputBinding`, and nothing accepts a `BindingRequest`. Use `Binding.invoke(operation, data, metadata)`, which `DaprBinding` implements.
 
 ---
 
@@ -259,10 +256,10 @@ class BindingResponse:
 | `StateStore` | `statestore` (`STATE_STORE_NAME`) | `MockStateStore` | `get_infrastructure().state_store` | Checkpoint / resume |
 | `SecretStore` | Dapr secret store | `MockSecretStore` | `get_infrastructure().secret_store` | Credential resolution |
 | `Binding` | Dapr binding | `MockBinding` | `get_infrastructure().event_binding` | External I/O |
-| `PubSub` | `eventstore` (`EVENT_STORE_NAME`) | `MockPubSub` | Dapr client directly | Event emission/subscription |
+| `PubSub` | `pubsub` | `MockPubSub` | `DaprPubSub(AsyncDaprClient())` | Event publishing (`subscribe()` deprecated) |
 | `CapacityPool` (deprecated) | — | `LocalCapacityPool` | `get_capacity_pool()` | Deprecated; removal in v4.0.0 |
 
-`StateStore`, `SecretStore`, and `Binding` are held in `InfrastructureContext` and accessed via `get_infrastructure()`. `PubSub` is accessed via the Dapr client directly. `CapacityPool` is deprecated (see [above](#capacitypool-deprecated)). See [Infrastructure](infrastructure.md) for the test fixture pattern and `set_infrastructure()` / `clear_infrastructure()` usage.
+`StateStore`, `SecretStore`, and `Binding` are held in `InfrastructureContext` and accessed via `get_infrastructure()`. `PubSub` is built from a Dapr client with `DaprPubSub`. `CapacityPool` is deprecated (see [above](#capacitypool-deprecated)). See [Infrastructure](infrastructure.md) for the test fixture pattern and `set_infrastructure()` / `clear_infrastructure()` usage.
 
 ## See Also
 
