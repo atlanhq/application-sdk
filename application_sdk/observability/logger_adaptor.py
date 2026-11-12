@@ -1863,7 +1863,7 @@ def __getattr__(name: str) -> object:
     replacement, note = entry
     warnings.warn(
         f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v3.60.0.",
+        "Will be removed in v4.0.0.",
         DeprecationWarning,
         stacklevel=2,
     )

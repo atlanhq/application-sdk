@@ -24,7 +24,7 @@ This page covers **runtime** variables only. Variables starting `E2E_` configure
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAN_APP_MODULE` | _(required)_ | App class to load: `module.path:ClassName` (e.g. `app.app:MyExtractor`). Startup fails without it. Set in your `Dockerfile` as `ENV ATLAN_APP_MODULE=…` or pass via `--app` CLI flag. |
-| `ATLAN_APP_MODE` | `combined` | Run mode: `worker`, `handler`, or `combined`. Determines which subsystems start; override via `--mode` CLI flag. **v2-compat fallback:** `APPLICATION_MODE` (deprecated; mapped at startup to the equivalent v3 mode). |
+| `ATLAN_APP_MODE` | `combined` | Run mode: `worker`, `handler`, or `combined`. Determines which subsystems start; override via `--mode` CLI flag. **v2-compat fallback:** `APPLICATION_MODE` (deprecated; case-insensitive; `LOCAL`/`WORKER`/`SERVER` map to `combined`/`worker`/`handler`, and the v3 names are accepted as-is. An unrecognised value logs a warning and runs `combined`). |
 | `ATLAN_APPLICATION_NAME` | `default` | Application name. Used in object-store paths, logging, and workflow identification. The `default` fallback applies to those *identity* uses only — task-queue derivation treats the variable as genuinely unset (see [Task-queue naming](#task-queue-naming)). Set it as the **bare** name, with no `atlan-` prefix; the SDK adds the prefix. |
 | `ATLAN_DEPLOYMENT_NAME` | `local` | Deployment name. Distinguishes dev / staging / prod deployments of the same app. As with `ATLAN_APPLICATION_NAME`, the `local` fallback is an identity default and does not apply to task-queue derivation. |
 | `ATLAN_TENANT_ID` | `default` | Tenant identifier for multi-tenant deployments. |

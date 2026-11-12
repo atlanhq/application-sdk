@@ -51,7 +51,7 @@ application-sdk --mode {worker,handler,combined} --app MODULE:CLASS [options]
 
 | Flag | Env var | Default | Description |
 |------|---------|---------|-------------|
-| `--mode` | `ATLAN_APP_MODE` | `combined` | Execution mode: `worker`, `handler`, or `combined`. Falls back to `APPLICATION_MODE` (v2 legacy). Default is resolved by `AppConfig`, so `--help` shows no default. |
+| `--mode` | `ATLAN_APP_MODE` | `combined` | Execution mode: `worker`, `handler`, or `combined`. Falls back to `APPLICATION_MODE` (v2 legacy, case-insensitive; `LOCAL`/`WORKER`/`SERVER` or the v3 names; anything else warns and runs `combined`). Default is resolved by `AppConfig`, so `--help` shows no default. |
 | `--log-level` | `ATLAN_LOG_LEVEL` | `INFO` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. (`CRITICAL` is not a recommended level per ADR-0011.) |
 | `--service-name` | `ATLAN_SERVICE_NAME`, `OTEL_SERVICE_NAME` | _(derived from app)_ | Service name for observability |
 

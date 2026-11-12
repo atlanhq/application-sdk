@@ -111,7 +111,7 @@ def _warn_retention_params_deprecated() -> None:
         "AtlanObservability retention_days and cleanup_enabled are "
         "deprecated and ignored; use an object-store bucket lifecycle "
         "rule instead — the SDK retention sweep never deleted exported "
-        "files. Will be removed in v3.60.0.",
+        "files. Will be removed in v4.0.0.",
         DeprecationWarning,
         stacklevel=3,
     )
@@ -216,9 +216,9 @@ class AtlanObservability(Generic[T], ABC):
             file_name: Signal discriminator (see ``_get_signal_type``).
             retention_days: Deprecated and ignored. The retention sweep never
                 deleted anything from the object store; use a bucket
-                lifecycle rule instead. Will be removed in v3.60.0.
+                lifecycle rule instead. Will be removed in v4.0.0.
             cleanup_enabled: Deprecated and ignored, as ``retention_days``.
-                Will be removed in v3.60.0.
+                Will be removed in v4.0.0.
         """
         if retention_days is not None or cleanup_enabled is not None:
             _warn_retention_params_deprecated()

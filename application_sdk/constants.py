@@ -885,8 +885,6 @@ UPSTREAM_OBJECT_STORE_NAME = os.getenv(
 )
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
-#: DAPR binding operation for creating resources
-DAPR_BINDING_OPERATION_CREATE = "create"
 #: Version of worker start events used in the application
 WORKER_START_EVENT_VERSION = "v1"
 
@@ -1223,13 +1221,12 @@ WINDOWS_EXTENDED_PATH_PREFIX = "\\\\?\\"
 SSL_CERT_DIR = os.getenv("SSL_CERT_DIR", "")
 
 
-class ApplicationMode(str, Enum):
-    """Application execution mode.
+class _ApplicationMode(str, Enum):
+    """v2 execution mode, kept only to serve the deprecated ``ApplicationMode``.
 
-    Determines which components of the application are started:
-    - LOCAL: Starts both the worker (daemon mode) and the server. Used for local development.
-    - WORKER: Starts only the worker (non-daemon mode). Used in production for worker pods.
-    - SERVER: Starts only the server. Used in production for API server pods.
+    - LOCAL: worker and server in one process (v3 ``combined``).
+    - WORKER: worker only (v3 ``worker``).
+    - SERVER: server only (v3 ``handler``).
     """
 
     LOCAL = "LOCAL"
@@ -1237,7 +1234,44 @@ class ApplicationMode(str, Enum):
     SERVER = "SERVER"
 
 
-APPLICATION_MODE = ApplicationMode(os.getenv("APPLICATION_MODE", "LOCAL").upper())
+#: ``APPLICATION_MODE`` value (upper-cased) -> v3 run mode. Accepts the v2
+#: names and the v3 names, because the docs present ``APPLICATION_MODE`` as the
+#: fallback for ``ATLAN_APP_MODE``. ``main.AppConfig`` resolves the legacy
+#: variable through :func:`_legacy_app_mode`; nothing else reads it.
+_LEGACY_APP_MODES: dict[str, str] = {
+    "LOCAL": "combined",
+    "WORKER": "worker",
+    "SERVER": "handler",
+    "COMBINED": "combined",
+    "HANDLER": "handler",
+}
+
+_V3_TO_LEGACY_APP_MODE: dict[str, _ApplicationMode] = {
+    "combined": _ApplicationMode.LOCAL,
+    "worker": _ApplicationMode.WORKER,
+    "handler": _ApplicationMode.SERVER,
+}
+
+
+def _legacy_app_mode(raw: str) -> str | None:
+    """Map an ``APPLICATION_MODE`` value to a v3 run mode.
+
+    Case and surrounding whitespace are ignored. Returns ``None`` for an empty
+    or unrecognised value, so the caller decides what an unknown value means.
+    """
+    return _LEGACY_APP_MODES.get(raw.strip().upper())
+
+
+def _read_application_mode() -> _ApplicationMode:
+    """The deprecated ``APPLICATION_MODE`` constant's value, read on access.
+
+    An unrecognised value falls back to ``LOCAL`` rather than raising: the
+    constant has no reader in the SDK, and it used to stop the SDK importing
+    for any value outside ``LOCAL``/``WORKER``/``SERVER``.
+    """
+    mode = _legacy_app_mode(os.getenv("APPLICATION_MODE", ""))
+    return _V3_TO_LEGACY_APP_MODE[mode] if mode else _ApplicationMode.LOCAL
+
 
 # =============================================================================
 # Incremental Extraction Constants
@@ -1325,11 +1359,25 @@ in that directory are trusted in addition to system CAs.
 # See: https://github.com/atlanhq/application-sdk/pull/1129
 
 
-#: Removed constants still served once more by ``__getattr__`` below (PEP 562).
-#: name -> (replacement, why). The six configured an observability retention
-#: sweep that never deleted anything from the object store; nothing in the SDK
-#: reads them any more, so each alias returns its former default.
+#: name -> (replacement, why). The shared sentence and the removal version live
+#: in ``__getattr__`` below. Served lazily so reading ``APPLICATION_MODE`` can no
+#: longer fail the import of this module (FND-4890). The ``*_RETENTION_DAYS`` /
+#: ``*_CLEANUP_ENABLED`` six configured an observability retention sweep that
+#: never deleted anything from the object store; nothing in the SDK reads them
+#: any more, so each returns its former default (FND-4889).
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "APPLICATION_MODE": (
+        "the ATLAN_APP_MODE env var (application_sdk.main.AppConfig.mode)",
+        "the SDK no longer reads this constant; the run mode is resolved at startup",
+    ),
+    "ApplicationMode": (
+        "the v3 run modes 'worker', 'handler' and 'combined' (application_sdk.main.AppConfig.mode)",
+        "the v2 mode enum has no reader in the SDK",
+    ),
+    "DAPR_BINDING_OPERATION_CREATE": (
+        'the literal "create"',
+        "the SDK never read this constant",
+    ),
     "LOG_RETENTION_DAYS": (
         "an object-store bucket lifecycle rule",
         "the SDK retention sweep never deleted exported log files",
@@ -1356,6 +1404,8 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
     ),
 }
 
+#: Former defaults of the removed retention-sweep constants. Also read by the
+#: ``__getattr__`` aliases in the observability adaptor modules that re-exported them.
 _DEPRECATED_CONSTANT_VALUES: dict[str, object] = {
     "LOG_RETENTION_DAYS": 30,
     "LOG_CLEANUP_ENABLED": False,
@@ -1366,16 +1416,28 @@ _DEPRECATED_CONSTANT_VALUES: dict[str, object] = {
 }
 
 
+def _deprecated_constant_value(name: str) -> object:
+    if name == "APPLICATION_MODE":
+        return _read_application_mode()
+    if name == "ApplicationMode":
+        return _ApplicationMode
+    if name == "DAPR_BINDING_OPERATION_CREATE":
+        return "create"
+    if name in _DEPRECATED_CONSTANT_VALUES:
+        return _DEPRECATED_CONSTANT_VALUES[name]
+    raise AssertionError(name)
+
+
 def __getattr__(name: str) -> object:
-    """Serve the removed constants once more, with a deprecation warning (PEP 562)."""
+    """Serve the deprecated constants once more, with a warning (PEP 562)."""
     entry = _DEPRECATED_CONSTANTS.get(name)
     if entry is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     replacement, note = entry
     warnings.warn(
         f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v3.60.0.",
+        "Will be removed in v4.0.0.",
         DeprecationWarning,
         stacklevel=2,
     )
-    return _DEPRECATED_CONSTANT_VALUES[name]
+    return _deprecated_constant_value(name)

@@ -1339,6 +1339,18 @@ asyncio.run(run_dev_combined(
 
 ---
 
+## v2 run-mode constants (deprecated, removed in v4.0.0)
+
+The SDK no longer reads these constants: the run mode comes from `ATLAN_APP_MODE` (or `--mode`), resolved at startup into `AppConfig.mode`. They are still importable and warn on access. Reading `APPLICATION_MODE` no longer fails for an unrecognised `APPLICATION_MODE` env value; it falls back to `LOCAL`. B001 flags each import.
+
+| Deprecated | Replacement |
+|---|---|
+| `application_sdk.constants.APPLICATION_MODE` | the `ATLAN_APP_MODE` env var (`worker`, `handler` or `combined`) |
+| `application_sdk.constants.ApplicationMode` | the v3 run modes `worker`, `handler` and `combined` |
+| `application_sdk.constants.DAPR_BINDING_OPERATION_CREATE` | the literal `"create"` |
+
+---
+
 ## Transformer helpers (deprecated, removed in v4.0.0)
 
 `application_sdk.transformers` is removed in v4.0.0, including its helper modules, which many apps import without using a transformer. Move these imports before v4.0.0; B001 flags each one.
