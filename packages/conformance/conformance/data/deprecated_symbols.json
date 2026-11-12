@@ -651,7 +651,7 @@
     {
       "kind": "class",
       "marker_via": "decorator",
-      "message": "InputBinding is deprecated and will be removed in v4.0.0. The SDK ships no implementation; use Binding (DaprBinding.invoke) instead.",
+      "message": "InputBinding is deprecated and will be removed in v4.0.0. The SDK ships no implementation and has no input-binding replacement; to receive messages, use SubscriptionConfig with create_app_handler_service(subscriptions=...).",
       "migration_target": true,
       "module": "application_sdk.infrastructure.bindings",
       "removal_version": "4.0.0",

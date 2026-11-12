@@ -1384,7 +1384,8 @@ asyncio.run(run_dev_combined(
 | `DaprPubSub.subscribe`, `PubSub.subscribe`, `MockPubSub.subscribe` | a `SubscriptionConfig` from `application_sdk.handler.contracts`, passed to `create_app_handler_service(subscriptions=...)`. In tests, call its `handler` directly. |
 | `infrastructure.Subscription`, `DaprSubscription` | none; a `SubscriptionConfig` has no handle to hold |
 | `infrastructure.MessageHandler` | the `handler` field of `SubscriptionConfig` |
-| `infrastructure.InputBinding`, `OutputBinding` | `infrastructure.Binding` (`DaprBinding.invoke`); the SDK never shipped an implementation of either |
+| `infrastructure.OutputBinding` | `infrastructure.Binding` (`DaprBinding.invoke`); the SDK never shipped an implementation |
+| `infrastructure.InputBinding` | No input-binding replacement (the SDK never shipped an implementation). To receive messages, use `SubscriptionConfig` with `create_app_handler_service(subscriptions=...)` |
 | `infrastructure.BindingRequest` | pass `operation`, `data` and `metadata` to `Binding.invoke()`; nothing accepted a `BindingRequest` |
 
 ---

@@ -116,12 +116,15 @@ class Binding(Protocol):
 
 @deprecated(
     "InputBinding is deprecated and will be removed in v4.0.0. The SDK ships no "
-    "implementation; use Binding (DaprBinding.invoke) instead."
+    "implementation and has no input-binding replacement; to receive messages, "
+    "use SubscriptionConfig with create_app_handler_service(subscriptions=...)."
 )
 class InputBinding(Protocol):
     """Deprecated: protocol for input bindings — removed in v4.0.0.
 
-    The SDK ships no implementation. Use :class:`Binding`.
+    The SDK ships no implementation and has no input-binding replacement.
+    To receive messages, pass a ``SubscriptionConfig`` to
+    ``create_app_handler_service(subscriptions=...)``.
     """
 
     @property

@@ -183,7 +183,7 @@ dapr:
     enabled: true
 ```
 
-`DaprPubSub` publishes to the component named `pubsub` unless you pass `pubsub_name`. Do not pass `EVENT_STORE_NAME`: `eventstore` is a **binding** component (`bindings.localstorage` locally), which the SDK uses for its own lifecycle events through `get_infrastructure().event_binding`. It is not a pub/sub component.
+`DaprPubSub` publishes to the component named `pubsub` unless you pass `pubsub_name`. Do not point it at `EVENT_STORE_NAME` (`eventstore`) by default: the SDK uses that component for its own lifecycle events through `get_infrastructure().event_binding`, and locally it is a **binding** (`bindings.localstorage`), not pub/sub. `create_app_handler_service(event_triggers=...)` does subscribe through `EVENT_STORE_NAME`, so in deployments where that component is pub/sub it receives Atlan events; publishing your own topics belongs on `pubsub`.
 
 **Testing without Dapr:**
 
@@ -227,7 +227,7 @@ class BindingResponse:
 
 !!! warning "`InputBinding`, `OutputBinding` and `BindingRequest` are deprecated — removal in v4.0.0"
 
-    The SDK never shipped an implementation of `InputBinding` or `OutputBinding`, and nothing accepts a `BindingRequest`. Use `Binding.invoke(operation, data, metadata)`, which `DaprBinding` implements.
+    The SDK never shipped an implementation of `InputBinding` or `OutputBinding`, and nothing accepts a `BindingRequest`. For outbound calls use `Binding.invoke(operation, data, metadata)`, which `DaprBinding` implements. There is no input-binding replacement: to receive messages, use `SubscriptionConfig` with `create_app_handler_service(subscriptions=...)`.
 
 ---
 
