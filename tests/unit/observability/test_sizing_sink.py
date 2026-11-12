@@ -59,8 +59,6 @@ def sink(tmp_path):
     s = SizingObservabilitySink(
         batch_size=1000,
         flush_interval=3600,
-        retention_days=1,
-        cleanup_enabled=False,
         data_dir=str(tmp_path),
         file_name=SIZING_FILE_NAME,
     )
@@ -106,8 +104,6 @@ class TestStoreSinkGate:
         other = _Other(
             batch_size=1,
             flush_interval=3600,
-            retention_days=1,
-            cleanup_enabled=False,
             data_dir=str(tmp_path),
             file_name=LOG_FILE_NAME,
         )

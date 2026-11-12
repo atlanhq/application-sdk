@@ -2022,7 +2022,7 @@ class App(ABC):
             StorageHandoffIncompleteError,
         )
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
-            exists,
+            _exists_confirmed,
         )
         from application_sdk.storage.reference import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
             _fetch_manifest,
@@ -2043,7 +2043,7 @@ class App(ABC):
         # prefix. Sibling refs share a parent, so during a gateway outage that
         # fails many HEADs one listing answers all of them instead of
         # re-enumerating the same folder once per ref.
-        parent_listings: dict[str, frozenset[str]] = {}
+        parent_listings: dict[str, dict[str, tuple[int, str | None]]] = {}
 
         for ref in input.refs:
             raw_key = ref.storage_path or ""
@@ -2124,27 +2124,14 @@ class App(ABC):
                 if len(found) < ref.file_count:
                     missing.append(f"{key}/ ({len(found)}/{ref.file_count} objects)")
                     continue
-            elif not await exists(key, store=store, normalize=False):
-                # A gateway replica without routes can answer HEAD with a
-                # bodiless 404 for an existing object. A listing is
-                # body-bearing, so its gateway errors ride the storage layer's
-                # no-route retry. It lists the parent folder because a listing
-                # prefix matches whole path segments: listing the key itself
-                # never returns the key. A root-level key has no parent
-                # segment, so it lists the empty (bucket-root) prefix
-                # explicitly rather than "/", which only means the root
-                # because obstore's path parsing happens to strip it.
-                parent = key.rpartition("/")[0]
-                list_prefix = parent + "/" if parent else ""
-                found = parent_listings.get(list_prefix)
-                if found is None:
-                    found = frozenset(
-                        await list_data_keys(list_prefix, store=store, normalize=False)
-                    )
-                    parent_listings[list_prefix] = found
-                if key not in found:
-                    missing.append(key)
-                    continue
+            elif not await _exists_confirmed(
+                key, store=store, normalize=False, listing_cache=parent_listings
+            ):
+                # Confirmed, not a bare HEAD: a gateway replica without routes
+                # answers HEAD with a bodiless 404 for an existing object, so a
+                # miss is checked against a (cached) listing of the parent.
+                missing.append(key)
+                continue
             verified_file_count += ref.file_count
             # One store round-trip completed. A file boundary, not a record
             # boundary (ADR-0018) — and without it this loop is a run of bare

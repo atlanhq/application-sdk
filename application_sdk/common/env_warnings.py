@@ -38,6 +38,15 @@ _REMOVED_ENV_VARS: frozenset[str] = frozenset(
         "ATLAN_TRACES_CLEANUP_ENABLED",
         "ATLAN_TRACES_FLUSH_INTERVAL_SECONDS",
         "ATLAN_TRACES_RETENTION_DAYS",
+        # The observability retention sweep was removed: it walked the pod's
+        # local partition tree (empty after upload) and deleted object-store
+        # keys that never matched the uploaded paths. Use a bucket lifecycle rule.
+        "ATLAN_LOG_CLEANUP_ENABLED",
+        "ATLAN_LOG_RETENTION_DAYS",
+        "ATLAN_METRICS_CLEANUP_ENABLED",
+        "ATLAN_METRICS_RETENTION_DAYS",
+        "ATLAN_SIZING_CLEANUP_ENABLED",
+        "ATLAN_SIZING_RETENTION_DAYS",
         # CorrelationContextInterceptor was folded into LogInterceptor;
         # no longer toggleable.
         "APPLICATION_SDK_ENABLE_CORRELATION_INTERCEPTOR",

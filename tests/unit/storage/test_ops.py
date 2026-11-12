@@ -19,7 +19,9 @@ from application_sdk.storage.chunked import _part_path, _transfer_state_path
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
 from application_sdk.storage.factory import create_local_store, create_memory_store
 from application_sdk.storage.ops import (
+    _exists_confirmed,
     _get_bytes,
+    _get_file_meta_confirmed,
     _put,
     delete,
     download_file,
@@ -899,6 +901,8 @@ class TestResumableChunkedDownload:
         seen_options: list[dict] = []
 
         async def counting_get(st, key, **kw):
+            if key.endswith(".sha256"):  # the integrity sidecar read, not a range GET
+                return await real_get(st, key, **kw)
             seen_options.append(kw.get("options") or {})
             return await real_get(st, key, **kw)
 
@@ -955,6 +959,8 @@ class TestResumableChunkedDownload:
         fetched_ranges: list[tuple] = []
 
         async def counting_get(st, key, **kw):
+            if key.endswith(".sha256"):  # the integrity sidecar read, not a range GET
+                return await real_get(st, key, **kw)
             fetched_ranges.append((kw.get("options") or {}).get("range"))
             return await real_get(st, key, **kw)
 
@@ -1243,6 +1249,8 @@ class TestResumableChunkedDownload:
         real_get = __import__("obstore").get_async
 
         async def counting_get(st, key, **kw):
+            if key.endswith(".sha256"):  # the integrity sidecar read, not a range GET
+                return await real_get(st, key, **kw)
             fetched.append((kw.get("options") or {}).get("range"))
             return await real_get(st, key, **kw)
 
@@ -1492,6 +1500,8 @@ class TestResumableChunkedDownload:
         fetched: list[int] = []
 
         async def counting_get(st, key, **kw):
+            if key.endswith(".sha256"):  # the integrity sidecar read, not a range GET
+                return await real_get(st, key, **kw)
             fetched.append(1)
             return await real_get(st, key, **kw)
 
@@ -2516,3 +2526,151 @@ class TestUploadFileGatewayAuthClassification:
             side_effect=FileNotFoundError("Object at location test/k.json not found"),
         ):
             assert await call(store) is expected
+
+
+# ---------------------------------------------------------------------------
+# HEAD-miss confirmation (FND-4896)
+# ---------------------------------------------------------------------------
+
+_GATEWAY_LIST_404 = (
+    "Server returned non-2xx status code: 404 Not Found: "
+    '{"message":"no Route matched with those values"}'
+)
+
+
+def _bodiless_head_404(missed: set[str] | None = None):
+    """Make HEAD answer a bodiless 404 — the shape a gateway without routes
+    gives — for *missed* keys (every key when ``None``), and hit the store
+    for the rest."""
+    real_head = obstore.head_async
+
+    async def head(st, key):
+        if missed is None or key in missed:
+            raise FileNotFoundError(f"Object at location {key} not found")
+        return await real_head(st, key)
+
+    return patch("application_sdk.storage.ops.obstore.head_async", side_effect=head)
+
+
+class TestConfirmedHeadMiss:
+    async def test_bodiless_head_miss_on_a_present_object_is_overruled_by_listing(
+        self, store
+    ) -> None:
+        await _put("a/b/data.json", b"0123456789", store, normalize=False)
+
+        with _bodiless_head_404():
+            # The plain lookups report the existing object absent ...
+            assert await get_file_meta("a/b/data.json", store, normalize=False) is None
+            assert await exists("a/b/data.json", store, normalize=False) is False
+            # ... the confirmed ones do not, and carry the listed size.
+            meta = await _get_file_meta_confirmed(
+                "a/b/data.json", store, normalize=False
+            )
+            assert await _exists_confirmed("a/b/data.json", store, normalize=False)
+
+        assert meta is not None
+        assert meta[0] == 10
+
+    async def test_real_miss_stays_a_miss(self, store) -> None:
+        await _put("a/b/other.json", b"{}", store, normalize=False)
+        await _put("a/b/data.json.sha256", b"{}", store, normalize=False)
+
+        # A sibling, and the key's own sidecar, cannot stand in for the key.
+        assert (
+            await _get_file_meta_confirmed("a/b/data.json", store, normalize=False)
+            is None
+        )
+        assert not await _exists_confirmed("a/b/data.json", store, normalize=False)
+
+    async def test_zero_byte_key_with_children_is_not_filtered_as_a_marker(
+        self, store
+    ) -> None:
+        """A real zero-byte ``dir`` beside ``dir/child`` looks like a folder
+        marker; the marker filter HEADs it (and the gateway 404s that too), so
+        the confirming listing must not filter it out."""
+        await _put("a/dir", b"", store, normalize=False)
+        await _put("a/dir/child.json", b"{}", store, normalize=False)
+
+        with _bodiless_head_404():
+            meta = await _get_file_meta_confirmed("a/dir", store, normalize=False)
+
+        assert meta is not None
+        assert meta[0] == 0
+
+    async def test_root_level_key_is_confirmed_under_the_bucket_root(
+        self, store
+    ) -> None:
+        await _put("leaf.json", b"{}", store, normalize=False)
+
+        with _bodiless_head_404():
+            assert await _exists_confirmed("leaf.json", store, normalize=False)
+
+    async def test_normalize_applies_to_the_key_before_the_lookup(self, store) -> None:
+        key = normalize_key("a/data.json")
+        await _put(key, b"{}", store, normalize=False)
+
+        with _bodiless_head_404():
+            assert await _exists_confirmed("a/data.json", store)
+
+    async def test_head_hit_does_not_list(self, store) -> None:
+        await _put("a/data.json", b"{}", store, normalize=False)
+
+        with patch(
+            "application_sdk.storage.ops.obstore.list",
+            side_effect=AssertionError("listed on a hit"),
+        ):
+            assert await _exists_confirmed("a/data.json", store, normalize=False)
+
+    async def test_shared_listing_cache_lists_each_parent_once(self, store) -> None:
+        keys = [f"a/b/chunk-{i}.json" for i in range(5)]
+        for key in keys:
+            await _put(key, b"{}", store, normalize=False)
+        cache: dict[str, dict[str, tuple[int, str | None]]] = {}
+        real_list = obstore.list
+
+        with (
+            _bodiless_head_404(),
+            patch(
+                "application_sdk.storage.ops.obstore.list", side_effect=real_list
+            ) as listing,
+        ):
+            for key in keys:
+                assert await _exists_confirmed(
+                    key, store, normalize=False, listing_cache=cache
+                )
+
+        assert listing.call_count == 1
+        assert set(cache) == {"a/b/"}
+
+    async def test_failed_listing_raises_retryable_error_not_absent(
+        self, store
+    ) -> None:
+        from application_sdk.storage import ops
+        from application_sdk.storage.errors import StorageGatewayNoRouteError
+
+        async def listing(_store, *, prefix):
+            raise RuntimeError(_GATEWAY_LIST_404)
+            yield []  # Make the stand-in an async listing stream.
+
+        with (
+            _bodiless_head_404(),
+            patch("application_sdk.storage.ops.obstore.list", side_effect=listing),
+            patch.object(ops, "_retry_sleep", AsyncMock()),
+            pytest.raises(StorageGatewayNoRouteError) as exc,
+        ):
+            await _get_file_meta_confirmed("a/data.json", store, normalize=False)
+
+        assert exc.value.effective_retryable is True
+
+    async def test_upload_readback_survives_a_bodiless_head_miss(
+        self, store, tmp_path
+    ) -> None:
+        """The upload landed; a gateway's bodiless HEAD 404 on the readback
+        must not report it absent and fail the upload."""
+        f = tmp_path / "x.json"
+        f.write_bytes(b"0123456789")
+
+        with _bodiless_head_404({"up/x.json"}):
+            digest = await upload_file("up/x.json", f, store, normalize=False)
+
+        assert digest == hashlib.sha256(b"0123456789").hexdigest()

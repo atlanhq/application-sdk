@@ -1105,9 +1105,9 @@ LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS = env_float(
     "ATLAN_LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS", 60.0
 )
 
-# Log Retention configuration
-LOG_RETENTION_DAYS = env_int("ATLAN_LOG_RETENTION_DAYS", 30)
-LOG_CLEANUP_ENABLED = env_bool("ATLAN_LOG_CLEANUP_ENABLED")
+# REMOVED: ATLAN_LOG_RETENTION_DAYS / ATLAN_LOG_CLEANUP_ENABLED and the METRICS_
+# and SIZING_ pairs — the retention sweep they configured never deleted from the
+# object store. Use a bucket lifecycle rule. Deprecated aliases: _DEPRECATED_CONSTANTS.
 
 # Log Location configuration
 # NOTE: Despite the ".parquet" default value, LOG_FILE_NAME is used purely as a
@@ -1121,8 +1121,6 @@ LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
 # Metrics batching / sink configuration
 METRICS_BATCH_SIZE = env_int("ATLAN_METRICS_BATCH_SIZE", 100)
 METRICS_FLUSH_INTERVAL_SECONDS = env_int("ATLAN_METRICS_FLUSH_INTERVAL_SECONDS", 10)
-METRICS_RETENTION_DAYS = env_int("ATLAN_METRICS_RETENTION_DAYS", 30)
-METRICS_CLEANUP_ENABLED = env_bool("ATLAN_METRICS_CLEANUP_ENABLED")
 # Same signal-discriminator convention as LOG_FILE_NAME above — not a real file name.
 METRICS_FILE_NAME = os.environ.get("ATLAN_METRICS_FILE_NAME", "metrics.parquet")
 
@@ -1131,10 +1129,6 @@ METRICS_FILE_NAME = os.environ.get("ATLAN_METRICS_FILE_NAME", "metrics.parquet")
 # is offline evidence for fitting envelopes, not something watched live.
 SIZING_BATCH_SIZE = env_int("ATLAN_SIZING_BATCH_SIZE", 500)
 SIZING_FLUSH_INTERVAL_SECONDS = env_int("ATLAN_SIZING_FLUSH_INTERVAL_SECONDS", 60)
-# Longer than metrics' 30: fitting wants the tail, and the runs that matter most
-# for sizing are the rare big ones.
-SIZING_RETENTION_DAYS = env_int("ATLAN_SIZING_RETENTION_DAYS", 90)
-SIZING_CLEANUP_ENABLED = env_bool("ATLAN_SIZING_CLEANUP_ENABLED")
 SIZING_FILE_NAME = os.environ.get("ATLAN_SIZING_FILE_NAME", "sizing.parquet")
 TRACES_FILE_NAME = os.environ.get("ATLAN_TRACES_FILE_NAME", "traces.parquet")
 
@@ -1365,9 +1359,12 @@ in that directory are trusted in addition to system CAs.
 #: name -> (replacement, why), or a self-contained notice string. For a tuple,
 #: the shared sentence and the removal version live in ``__getattr__`` below.
 #: Served lazily so reading ``APPLICATION_MODE`` can no longer fail the import
-#: of this module (FND-4890). The lock / Redis notices (FND-4888) are strings:
-#: the lock constants have no replacement, and the Redis ones point at their
-#: environment variable rather than the private ``_<name>`` value.
+#: of this module (FND-4890). The ``*_RETENTION_DAYS`` / ``*_CLEANUP_ENABLED``
+#: six configured an observability retention sweep that never deleted anything
+#: from the object store; nothing in the SDK reads them any more, so each
+#: returns its former default (FND-4889). The lock / Redis notices (FND-4888)
+#: are strings: the lock constants have no replacement, and the Redis ones
+#: point at their environment variable rather than the private ``_<name>`` value.
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str] | str] = {
     "APPLICATION_MODE": (
         "the ATLAN_APP_MODE env var (application_sdk.main.AppConfig.mode)",
@@ -1380,6 +1377,30 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str] | str] = {
     "DAPR_BINDING_OPERATION_CREATE": (
         'the literal "create"',
         "the SDK never read this constant",
+    ),
+    "LOG_RETENTION_DAYS": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported log files",
+    ),
+    "LOG_CLEANUP_ENABLED": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported log files",
+    ),
+    "METRICS_RETENTION_DAYS": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported metric files",
+    ),
+    "METRICS_CLEANUP_ENABLED": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported metric files",
+    ),
+    "SIZING_RETENTION_DAYS": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported sizing files",
+    ),
+    "SIZING_CLEANUP_ENABLED": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported sizing files",
     ),
     "LOCK_METADATA_KEY": (
         "LOCK_METADATA_KEY is deprecated and has no effect: needs_lock does "
@@ -1423,6 +1444,17 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str] | str] = {
     ),
 }
 
+#: Former defaults of the removed retention-sweep constants. Also read by the
+#: ``__getattr__`` aliases in the observability adaptor modules that re-exported them.
+_DEPRECATED_CONSTANT_VALUES: dict[str, object] = {
+    "LOG_RETENTION_DAYS": 30,
+    "LOG_CLEANUP_ENABLED": False,
+    "METRICS_RETENTION_DAYS": 30,
+    "METRICS_CLEANUP_ENABLED": False,
+    "SIZING_RETENTION_DAYS": 90,
+    "SIZING_CLEANUP_ENABLED": False,
+}
+
 #: Deprecated constants whose value is the private ``_<name>`` in this module.
 _PRIVATE_BACKED_CONSTANTS = frozenset(
     {
@@ -1447,6 +1479,8 @@ def _deprecated_constant_value(name: str) -> object:
         return "create"
     if name in _PRIVATE_BACKED_CONSTANTS:
         return globals()[f"_{name}"]
+    if name in _DEPRECATED_CONSTANT_VALUES:
+        return _DEPRECATED_CONSTANT_VALUES[name]
     raise AssertionError(name)
 
 
