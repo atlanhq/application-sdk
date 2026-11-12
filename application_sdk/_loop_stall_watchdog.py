@@ -80,17 +80,29 @@ class LoopStallWatchdog:
     The shutdown budget sets the drain's graceful timeout to end before
     ``exit_by_seconds``, so the cap ends only a drain that has overrun it, such
     as an activity still running after it was cancelled. That exit writes the
-    same stack dump and code 1 even though the loop may still be running.
+    same stack dump and code 1 even though the loop may still be running, so
+    the last re-arm before the deadline calls ``on_exit_deadline`` from the
+    running loop, letting the caller log that a dump which follows is the
+    deadline and not a stall.
     """
 
     def __init__(
-        self, timeout_seconds: float, exit_by_seconds: float | None = None
+        self,
+        timeout_seconds: float,
+        exit_by_seconds: float | None = None,
+        *,
+        on_exit_deadline: Callable[[float], None] | None = None,
     ) -> None:
         self.timeout_seconds = timeout_seconds
         # How long after the signal the exit must land; None leaves it to the
         # bound alone (no grace period declared).
         self.exit_by_seconds = exit_by_seconds
         self._exit_by: float | None = None
+        # Told, once, the seconds left when only the exit deadline can still end
+        # the process. A callback rather than a log call: this module must not
+        # import the SDK logger (see the module docstring).
+        self._on_exit_deadline = on_exit_deadline
+        self._exit_deadline_reported = False
         self._lock = threading.Lock()
         self._armed = False
         self._paused_for_fork = False
@@ -170,7 +182,26 @@ class LoopStallWatchdog:
             seconds = self._timer_from(now)
             self._deadline = now + seconds
             self._set_timer(seconds)
-            return True
+            final = self._is_final_arm(now)
+        # Outside the lock, and only here on the loop: never from the signal
+        # handler, which may have interrupted code holding the logging lock.
+        if final and not self._exit_deadline_reported:
+            self._exit_deadline_reported = True
+            if self._on_exit_deadline is not None:
+                self._on_exit_deadline(seconds)
+        return True
+
+    def _is_final_arm(self, now: float) -> bool:
+        """Whether the exit deadline comes before the next re-arm would.
+
+        From then on the deadline, not a stall, ends the process unless the
+        drain finishes first. Only the loop re-arms, so reaching this means the
+        loop is still running. A timer merely shortened by the deadline is not
+        enough: on a short grace that is every re-arm of a normal drain.
+        """
+        if self._exit_by is None:
+            return False
+        return self._exit_by - now <= rearm_interval_seconds(self.timeout_seconds)
 
     def _timer_from(self, now: float) -> float:
         seconds = timer_seconds(self.timeout_seconds)

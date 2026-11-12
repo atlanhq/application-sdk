@@ -28,6 +28,7 @@ from application_sdk.main import (
     _install_excepthook,
     _install_graceful_signal_handlers,
     _log_dapr_components,
+    _log_exit_deadline_reached,
     _log_process_memory_baseline,
     _log_shutdown_budget,
     _loop_exception_handler,
@@ -1927,7 +1928,9 @@ class TestRunWorkerMode:
             watchdog.start_rearming.assert_not_called()
             handlers[0]()
 
-        cls.assert_called_once_with(75, 300)
+        cls.assert_called_once_with(
+            75, 300, on_exit_deadline=_log_exit_deadline_reached
+        )
         assert order == [
             "loop handlers",
             "set for shutdown",
@@ -2451,7 +2454,9 @@ class TestRunCombinedMode:
                 bound_post_drain_exit=True,
             )
 
-        cls.assert_called_once_with(75, 300)
+        cls.assert_called_once_with(
+            75, 300, on_exit_deadline=_log_exit_deadline_reached
+        )
         assert order == ["set for shutdown", "drained", "watchdog off", "deadline"]
         uvicorn_server.handle_exit(signal.SIGTERM, None)
         watchdog.on_shutdown_signal.assert_called_once_with()
@@ -3687,6 +3692,15 @@ class TestLogShutdownBudget:
             _log_shutdown_budget()
         assert "undeclared" in log.info.call_args.args
         log.warning.assert_not_called()
+
+
+def test_exit_deadline_log_says_the_dump_is_not_a_stall() -> None:
+    with patch("application_sdk.main.logger") as log:
+        _log_exit_deadline_reached(7.5)
+    log.warning.assert_called_once()
+    message, seconds = log.warning.call_args.args
+    assert seconds == 7.5
+    assert "not a stalled loop" in message
 
 
 class TestLoopStallBound:

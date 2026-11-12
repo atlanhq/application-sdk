@@ -1634,6 +1634,20 @@ def _loop_stall_bound() -> _LoopStallBound:
     )
 
 
+def _log_exit_deadline_reached(seconds: float) -> None:
+    """Label the stack dump the shutdown exit deadline is about to write.
+
+    Called from the running loop, so the dump that may follow is not a stall.
+    """
+    logger.warning(
+        "Shutdown drain still running at the exit deadline: unless it finishes "
+        "within %gs, the process dumps every thread's stack and exits with code 1 "
+        "before SIGKILL. The event loop is still running, so that dump marks the "
+        "deadline, not a stalled loop",
+        seconds,
+    )
+
+
 def _install_loop_stall_watchdog(watchdog: LoopStallWatchdog) -> None:
     """Arm the watchdog at the first SIGTERM or SIGINT. Call after the loop's
     own signal handlers are installed, so it chains in front of them."""
@@ -2132,7 +2146,11 @@ async def run_worker_mode(
     # whole process, so only the process-owning entry point runs it.
     loop_stall = _loop_stall_bound()
     stall_watchdog = (
-        LoopStallWatchdog(loop_stall.seconds, loop_stall.exit_by_seconds)
+        LoopStallWatchdog(
+            loop_stall.seconds,
+            loop_stall.exit_by_seconds,
+            on_exit_deadline=_log_exit_deadline_reached,
+        )
         if bound_post_drain_exit and loop_stall.seconds > 0
         else None
     )
@@ -2524,7 +2542,11 @@ async def run_combined_mode(
     # whole process, so only the process-owning entry point runs it.
     loop_stall = _loop_stall_bound()
     stall_watchdog = (
-        LoopStallWatchdog(loop_stall.seconds, loop_stall.exit_by_seconds)
+        LoopStallWatchdog(
+            loop_stall.seconds,
+            loop_stall.exit_by_seconds,
+            on_exit_deadline=_log_exit_deadline_reached,
+        )
         if bound_post_drain_exit and loop_stall.seconds > 0
         else None
     )

@@ -437,6 +437,70 @@ class TestExitBy:
         assert arm.call_args_list == [_timer_call(28)]
 
 
+class TestExitDeadlineReport:
+    """The loop says, once, when only the exit deadline can still end it, so
+    the dump that follows is not read as a stall."""
+
+    def test_reported_once_at_the_last_rearm_before_the_deadline(
+        self, fake_faulthandler, clock
+    ) -> None:
+        reported = MagicMock()
+        # Bound 60 s: re-arms every 15 s, so 15 s or less left is the last one.
+        watchdog = LoopStallWatchdog(60, exit_by_seconds=100, on_exit_deadline=reported)
+
+        watchdog.on_shutdown_signal()
+        clock[0] += 50
+        watchdog._arm()  # 50 s left: timer capped, but more re-arms to come
+        reported.assert_not_called()
+        clock[0] += 40
+        watchdog._arm()  # 10 s left: the last re-arm
+        clock[0] += 5
+        watchdog._arm()  # 5 s left
+
+        reported.assert_called_once_with(10)
+
+    def test_short_grace_drain_capped_from_the_start_is_not_reported(
+        self, fake_faulthandler, clock
+    ) -> None:
+        """On a 30 s grace the derived bound's timer is the whole limit, so
+        every re-arm of a normal drain is capped; that alone must not report."""
+        reported = MagicMock()
+        bound = largest_bound_within(28)
+        watchdog = LoopStallWatchdog(
+            bound, exit_by_seconds=28, on_exit_deadline=reported
+        )
+
+        watchdog.on_shutdown_signal()
+        clock[0] += 5.6
+        watchdog._arm()  # 22.4 s left, below the full timer but not the last
+
+        reported.assert_not_called()
+
+    def test_signal_handler_never_reports(self, fake_faulthandler, clock) -> None:
+        """A deadline already within one re-arm at the signal is reported by the
+        loop's first re-arm, never from inside the signal handler."""
+        reported = MagicMock()
+        watchdog = LoopStallWatchdog(300, exit_by_seconds=10, on_exit_deadline=reported)
+
+        watchdog.on_shutdown_signal()
+        reported.assert_not_called()
+
+        watchdog._arm()
+        reported.assert_called_once_with(10)
+
+    def test_without_a_deadline_nothing_is_reported(
+        self, fake_faulthandler, clock
+    ) -> None:
+        reported = MagicMock()
+        watchdog = LoopStallWatchdog(60, on_exit_deadline=reported)
+
+        watchdog.on_shutdown_signal()
+        clock[0] += 500
+        watchdog._arm()
+
+        reported.assert_not_called()
+
+
 class TestHandoffToPostDrainDeadline:
     def test_drain_on_shutdown_stops_the_watchdog(self) -> None:
         event = asyncio.Event()
