@@ -789,7 +789,7 @@ ATLAN_LOG_BATCH_SIZE=100
 ATLAN_LOG_FLUSH_INTERVAL_SECONDS=10
 ```
 
-The SDK does not delete exported files. To bound how long they are kept, add a lifecycle rule to the bucket that expires objects under `artifacts/apps/observability/`. The `ATLAN_LOG_*`, `ATLAN_METRICS_*` and `ATLAN_SIZING_*` `RETENTION_DAYS` / `CLEANUP_ENABLED` variables are no longer read; setting one logs a startup warning.
+The SDK never deletes exported files; retention is the bucket owner's job, by design (see [ADR-0012](../adr/0012-observability-consolidation.md#addendum-retention-of-exported-files-belongs-to-the-bucket-not-the-sdk-fnd-4889)). To bound how long they are kept, add a lifecycle rule to the bucket that expires objects under `artifacts/apps/observability/`. The `ATLAN_LOG_*`, `ATLAN_METRICS_*` and `ATLAN_SIZING_*` `RETENTION_DAYS` / `CLEANUP_ENABLED` variables are no longer read; setting one logs a startup warning.
 
 See [Configuration](../configuration.md#logging) for all observability variables.
 
