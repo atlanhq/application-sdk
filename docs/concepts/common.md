@@ -150,6 +150,17 @@ the `{key}.sha256` sidecar PUT, `download_file` and the chunked range GETs, `exi
 retries are spent. No path treats this 404 as a missing key: it raises the typed error, which is
 retryable, instead of returning "absent" or raising the non-retryable `StorageNotFoundError`.
 
+HEAD is the exception. A HEAD response has no body, so the gateway's no-route 404 on a HEAD
+cannot be told from a real missing key, and `exists` / `get_file_meta` report the object absent.
+Where a miss is the exception and acting on a false one is expensive, callers use
+`exists_confirmed` / `get_file_meta_confirmed` instead: a HEAD hit costs nothing extra, and a miss
+is checked against a listing of the key's parent folder (body-bearing, so it rides the retry
+above). `verify_refs`, the single-file `FileReference` materialise and the post-upload readback
+use them. The integrity sidecar is read with a GET rather than probed with a HEAD, so a gateway
+answer cannot pass for "no sidecar". Plain `exists` / `get_file_meta` stay for callers where a
+miss is the normal answer. Both confirmed helpers go away once the gateway answers a no-route HEAD
+with something the storage layer can recognise.
+
 ### ColdStartRaceError — the cross-domain transient marker
 
 `ColdStartRaceError(DependencyUnavailableError)` is not a domain umbrella itself — it's a

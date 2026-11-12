@@ -853,6 +853,33 @@ class TestMaterializeFileReference:
         with pytest.raises(StorageNotFoundError):
             await materialize_file_reference(store, ref)
 
+    async def test_single_file_bodiless_head_miss_still_downloads(
+        self, store, tmp_path
+    ) -> None:
+        """A gateway instance without routes answers HEAD with a bodiless 404.
+
+        Taken at its word, that raised the non-retryable, user-facing
+        ``StorageNotFoundError`` for an object that is there. The miss is
+        confirmed by a listing first, so the download goes ahead.
+        """
+        await _put("k/present.bin", b"payload", store, normalize=False)
+        ref = FileReference(
+            local_path=str(tmp_path / "present.bin"),
+            is_durable=True,
+            storage_path="k/present.bin",
+        )
+        real_head = ops.obstore.head_async
+
+        async def head(st, key):
+            if key == "k/present.bin":
+                raise FileNotFoundError(f"Object at location {key} not found")
+            return await real_head(st, key)
+
+        with patch.object(ops.obstore, "head_async", side_effect=head):
+            result = await materialize_file_reference(store, ref)
+
+        assert Path(result.local_path).read_bytes() == b"payload"
+
     async def test_single_file_sha256_mismatch_after_download_raises(
         self, store, tmp_path
     ) -> None:

@@ -280,8 +280,13 @@ class TestReadExpectedDigest:
     async def test_sidecar_present_false_short_circuits(self, store, tmp_path) -> None:
         art = await _seed(store, tmp_path, "a/b.json", b'{"x": 1}')
         # Listing already told us there is no sidecar — believe it, no requests.
-        with patch.object(
-            obstore, "head_async", side_effect=AssertionError("probed anyway")
+        with (
+            patch.object(
+                obstore, "head_async", side_effect=AssertionError("probed anyway")
+            ),
+            patch.object(
+                obstore, "get_async", side_effect=AssertionError("read anyway")
+            ),
         ):
             assert (
                 await integrity.read_expected_digest(
@@ -289,6 +294,41 @@ class TestReadExpectedDigest:
                 )
                 is None
             )
+
+    async def test_bodiless_head_404_does_not_hide_the_sidecar(
+        self, store, tmp_path
+    ) -> None:
+        """A gateway instance without routes answers HEAD with a bodiless 404
+        that reads as "missing". Probing the sidecar with HEAD turned that into
+        "no sidecar", and the download went ahead unverified without a word."""
+        art = await _seed(store, tmp_path, "a/b.json", b'{"x": 1}')
+        with patch.object(
+            obstore,
+            "head_async",
+            side_effect=FileNotFoundError("Object at location not found"),
+        ):
+            assert await integrity.read_expected_digest(store, art.key) == art.digest
+
+    async def test_unknown_sidecar_is_read_with_one_get_and_no_head(
+        self, store, tmp_path
+    ) -> None:
+        art = await _seed(store, tmp_path, "a/b.json", b'{"x": 1}')
+        real_get = obstore.get_async
+        gets: list[str] = []
+
+        async def counting_get(st, key, **kw):
+            gets.append(key)
+            return await real_get(st, key, **kw)
+
+        with (
+            patch.object(
+                obstore, "head_async", side_effect=AssertionError("probed with HEAD")
+            ),
+            patch.object(obstore, "get_async", side_effect=counting_get),
+        ):
+            assert await integrity.read_expected_digest(store, art.key) == art.digest
+
+        assert gets == [art.key + ".sha256"]
 
     async def test_unreadable_sidecar_degrades_to_unverified(
         self, store, tmp_path, caplog
@@ -466,10 +506,16 @@ class TestUploadValidation:
         S3-style empty-object case — must not pass silently."""
         f = tmp_path / "x.json"
         f.write_bytes(b"{}")
+        # Both halves of the confirmed readback come up empty: the HEAD and the
+        # parent listing. A HEAD miss alone is confirmed by the listing first.
         with (
             patch(
                 "application_sdk.storage.ops.get_file_meta",
                 new=_async_return(None),
+            ),
+            patch(
+                "application_sdk.storage.ops._list_items",
+                new=_async_return([]),
             ),
             pytest.raises(StorageError) as exc,
         ):

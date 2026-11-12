@@ -1055,7 +1055,9 @@ async def _finalize_upload_integrity(
         integrity.check_local_file_stable(
             key, path, declared_size=declared_size, bytes_read=bytes_sent
         )
-        remote_meta = await get_file_meta(key, resolved, normalize=False)
+        # Confirmed: a gateway instance without routes answers this HEAD with
+        # a bodiless 404, which would fail an upload that landed.
+        remote_meta = await get_file_meta_confirmed(key, resolved, normalize=False)
         if remote_meta is None:
             # The writer reported success but the object is not there. The
             # zero-byte case is the known one (some S3-style backends drop
@@ -1923,3 +1925,127 @@ async def exists(
         raise _storage_error_for(
             exc, key, f"Failed to check existence of key '{key}'", resolved
         ) from exc
+
+
+# ---------------------------------------------------------------------------
+# HEAD-miss confirmation
+# ---------------------------------------------------------------------------
+#
+# A blobstorage gateway instance whose routes have not synced answers HEAD with
+# a 404 that has no body. ``_is_gateway_no_route`` recognises the transient 404
+# by its body text, so on a HEAD it cannot, and obstore types the answer as
+# not-found: ``exists`` / ``get_file_meta`` then report a real object absent.
+# A listing is body-bearing, so its gateway errors are recognised and ride the
+# seam's no-route retry. The two functions below spend one listing on a HEAD
+# miss to tell the two apart.
+#
+# Remove them (and point their callers back at ``exists`` / ``get_file_meta``)
+# once the gateway answers a no-route HEAD with something
+# ``_is_gateway_no_route`` can see — a distinct status or a header — rather than
+# a bare 404.
+
+
+async def _confirm_head_miss(
+    resolved: ObjectStore,
+    key: str,
+    listing_cache: dict[str, dict[str, tuple[int, str | None]]] | None,
+) -> tuple[int, str | None] | None:
+    """Look *key* up in a listing of its parent, after a HEAD said it is absent.
+
+    It lists the parent folder because a listing prefix matches whole path
+    segments: listing the key itself never returns the key. A root-level key
+    has no parent segment, so it lists the bucket root (no prefix) rather than
+    ``"/"``, which only means the root because obstore's path parsing happens
+    to strip it.
+    """
+    parent = key.rpartition("/")[0]
+    list_prefix = parent + "/" if parent else ""
+    found = listing_cache.get(list_prefix) if listing_cache is not None else None
+    if found is None:
+        try:
+            items = await _list_items(resolved, list_prefix or None)
+        # conformance: ignore[E004] always re-raises as StorageError; a listing that fails is not evidence the key is absent
+        except Exception as exc:
+            raise _storage_error_for(
+                exc,
+                list_prefix,
+                f"Failed to list prefix '{list_prefix}' to confirm a HEAD miss "
+                f"on key '{key}'",
+                resolved,
+            ) from exc
+        found = {path: (size, etag) for path, size, etag in items}
+        if listing_cache is not None:
+            listing_cache[list_prefix] = found
+    return found.get(key)
+
+
+async def get_file_meta_confirmed(
+    key: str,
+    store: BoundStore | ObjectStore | None = None,
+    *,
+    normalize: bool = True,
+    listing_cache: dict[str, dict[str, tuple[int, str | None]]] | None = None,
+) -> tuple[int, str | None] | None:
+    """Like :func:`get_file_meta`, but confirm a miss with a listing.
+
+    For callers where a miss is the exception and acting on a false one is
+    expensive — a non-retryable not-found error, a failed hand-off. A blobstorage
+    gateway instance without routes answers HEAD with a bodiless 404 for an
+    object that exists; on a HEAD miss this lists the key's parent folder (a
+    body-bearing request, so the gateway's 404 there is recognised and retried)
+    and answers from the listing. A hit costs the one HEAD, as before; only a
+    miss pays the listing.
+
+    Not a replacement for :func:`get_file_meta` where a miss is the normal
+    answer (a dedup probe, a sidecar lookup): there it would add a listing to
+    the common path.
+
+    Remove once the gateway answers a no-route HEAD with something the storage
+    layer can recognise (a distinct status or header) instead of a bare 404;
+    callers then go back to :func:`get_file_meta`.
+
+    Args:
+        key: Object key / path.  Normalised by default.
+        store: An obstore-compatible store instance, or ``None`` to use the
+            store from the current infrastructure context.
+        normalize: When ``True`` (default), normalise *key* before use.
+        listing_cache: Parent listings already taken, keyed by listing prefix.
+            Pass the same dict across calls for sibling keys so one listing
+            answers every miss under a folder — during a gateway outage that
+            fails many HEADs at once, without it each one re-lists the folder.
+            Only reuse it while the keys under those folders are not changing.
+
+    Returns:
+        ``(size_bytes, e_tag)``, or ``None`` when neither the HEAD nor the
+        listing finds *key*.
+
+    Raises:
+        StorageError: For non-404 HEAD errors, and for a listing that fails
+            (including a persistent gateway no-route, which stays retryable).
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
+    """
+    resolved = _resolve_store(store)
+    if normalize:
+        key = normalize_key(key)
+    meta = await get_file_meta(key, resolved, normalize=False)
+    if meta is not None:
+        return meta
+    return await _confirm_head_miss(resolved, key, listing_cache)
+
+
+async def exists_confirmed(
+    key: str,
+    store: BoundStore | ObjectStore | None = None,
+    *,
+    normalize: bool = True,
+    listing_cache: dict[str, dict[str, tuple[int, str | None]]] | None = None,
+) -> bool:
+    """Like :func:`exists`, but confirm a miss with a listing.
+
+    Same contract, cost and removal condition as
+    :func:`get_file_meta_confirmed`, which this wraps.
+    """
+    meta = await get_file_meta_confirmed(
+        key, store, normalize=normalize, listing_cache=listing_cache
+    )
+    return meta is not None

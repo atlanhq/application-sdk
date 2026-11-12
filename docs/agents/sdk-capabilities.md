@@ -3605,11 +3605,25 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Return ``True`` if *key* exists in the store.
 - **Defined in:** `application_sdk/storage/ops.py`
 
+#### `exists_confirmed`
+
+- **Import:** `from application_sdk.storage import exists_confirmed`
+- **Signature:** `exists_confirmed(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True, listing_cache: dict[str, dict[str, tuple[int, str | None]]] | None = None)`
+- **Summary:** Like :func:`exists`, but confirm a miss with a listing.
+- **Defined in:** `application_sdk/storage/ops.py`
+
 #### `get_file_meta`
 
 - **Import:** `from application_sdk.storage import get_file_meta`
 - **Signature:** `get_file_meta(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Return ``(size_bytes, e_tag)`` for *key*, or ``None`` if not found.
+- **Defined in:** `application_sdk/storage/ops.py`
+
+#### `get_file_meta_confirmed`
+
+- **Import:** `from application_sdk.storage import get_file_meta_confirmed`
+- **Signature:** `get_file_meta_confirmed(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True, listing_cache: dict[str, dict[str, tuple[int, str | None]]] | None = None)`
+- **Summary:** Like :func:`get_file_meta`, but confirm a miss with a listing.
 - **Defined in:** `application_sdk/storage/ops.py`
 
 #### `is_sidecar_key`
