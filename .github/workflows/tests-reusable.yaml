@@ -1908,6 +1908,12 @@ jobs:
       # tunnel every call fails at connect on POST /oauth/token. All steps gated
       # on the pin being set and repo creds absent, so a caller without a
       # dataforge pin does nothing.
+      #
+      # Recorded FIRST, before checkout + VPN setup, so the wake script can bound
+      # its readiness wait by what is left of this job's timeout rather than
+      # starting a fresh clock after setup. The 30 must match timeout-minutes.
+      - name: Record the wake job's deadline
+        run: echo "WAKE_JOB_DEADLINE=$(( $(date +%s) + 30 * 60 ))" >> "$GITHUB_ENV"
       - name: Fetch SDK CI scripts + VPN actions
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

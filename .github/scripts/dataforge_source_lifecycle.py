@@ -98,11 +98,15 @@ class State(str, Enum):
 # A source whose wake is slower than --ready-timeout-seconds says so: DataForge
 # returns ``expected_wake_seconds`` on the state read (a ThoughtSpot cluster
 # takes ~12-15 min; a provisioned resource omits it). The readiness deadline is
-# widened to that plus a margin, never narrowed, and capped below the wake
-# job's own 30-min timeout so the script still fails with a named error rather
-# than being killed by the runner.
+# widened to that plus a margin, never narrowed, and capped at MAX_READY_SECONDS.
 WAKE_MARGIN_SECONDS = 300
 MAX_READY_SECONDS = 25 * 60
+# The cap alone cannot keep the wait inside the wake job's timeout: checkout and
+# VPN setup run first and their duration varies (Twingate alone may take 8 min).
+# So the workflow passes the job's wall-clock deadline (--job-deadline-epoch) and
+# the wait is also bounded by what is left of it, minus this reserve for the
+# script to raise its named error and exit before the runner kills the job.
+JOB_EXIT_RESERVE_SECONDS = 60
 
 # States a wake can never recover from — fail fast with a named error rather than
 # polling to the readiness timeout.
@@ -290,7 +294,9 @@ def wake(
     *,
     ready_timeout_seconds: int,
     poll_seconds: int,
+    job_deadline_epoch: float | None = None,
     sleep=time.sleep,
+    wall_clock=time.time,
 ) -> Outcome:
     """Register a holder, resume if PAUSED, poll to PROVISIONED.
 
@@ -298,17 +304,30 @@ def wake(
     already sees us. One loop over the async state machine
     (PAUSED→RESUMING→PROVISIONED, driven by a Temporal workflow): resume is issued
     ONLY from PAUSED, at most once; every other non-ready state is waited out.
+
+    ``job_deadline_epoch`` (wall-clock epoch seconds) is when the runner kills
+    the job; the readiness wait never runs past it (less a reserve), so a slow
+    source fails with the named timeout error rather than a runner kill.
     """
     create_holder(repo, resource_id, run_id, attempt)
     token = service_token(base_url)
 
     started = time.monotonic()
-    timeout = ready_timeout_seconds
+    job_budget = (
+        None
+        if job_deadline_epoch is None
+        else max(0, int(job_deadline_epoch - wall_clock()) - JOB_EXIT_RESERVE_SECONDS)
+    )
+
+    def bounded(seconds: int) -> int:
+        return seconds if job_budget is None else min(seconds, job_budget)
+
+    timeout = bounded(ready_timeout_seconds)
     resumed = False
     status = ""
     while True:
         status, expected_wake = read_resource(base_url, token, resource_id)
-        widened = ready_deadline_seconds(ready_timeout_seconds, expected_wake)
+        widened = bounded(ready_deadline_seconds(ready_timeout_seconds, expected_wake))
         if widened > timeout:
             print(
                 f"dataforge says this source takes ~{expected_wake // 60} min to wake; "
@@ -337,9 +356,14 @@ def wake(
                 print("dataforge source was resumed by a concurrent run; polling.")
             resumed = True
         if time.monotonic() - started >= timeout:
+            limit = (
+                " — all the wake job had left after setup"
+                if job_budget is not None and timeout == job_budget
+                else ""
+            )
             raise DataforgeLifecycleError(
                 f"pinned dataforge resource did not reach {State.PROVISIONED.value} "
-                f"within {timeout}s (last status {status}). It may be stuck."
+                f"within {timeout}s{limit} (last status {status}). It may be stuck."
             )
         sleep(poll_seconds)
 
@@ -459,6 +483,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--ready-timeout-seconds", type=int, default=600)
     parser.add_argument("--poll-seconds", type=int, default=15)
+    parser.add_argument(
+        "--job-deadline-epoch",
+        type=float,
+        default=float(os.environ.get("WAKE_JOB_DEADLINE", "0") or "0"),
+        help="Wall-clock epoch seconds at which the runner kills the job; "
+        "0 = unbounded.",
+    )
     parser.add_argument("--ttl-seconds", type=int, default=16200)
     parser.add_argument(
         "--base-url", default=os.environ.get("DATAFORGE_BASE_URL", DEFAULT_BASE_URL)
@@ -485,6 +516,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.run_attempt,
                 ready_timeout_seconds=args.ready_timeout_seconds,
                 poll_seconds=args.poll_seconds,
+                job_deadline_epoch=args.job_deadline_epoch or None,
             )
         else:
             pause_source(
