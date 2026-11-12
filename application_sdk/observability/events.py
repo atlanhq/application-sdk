@@ -69,6 +69,13 @@ ARTIFACT_VALIDATION_EVENT: Final = "Artifact validation outcome"
 #: adoption are invisible from outcomes alone.
 ARTIFACT_VALIDATION_POSTURE_EVENT: Final = "Artifact validation posture"
 
+# ── Lineage coverage (observability/lineage/) ───────────────────────────────
+
+#: One row per run with the app's lineage coverage totals: assets per verdict,
+#: plus gap and category counts as one JSON string. Per-asset rows go to the
+#: run's artifacts, never to logs.
+LINEAGE_COVERAGE_EVENT: Final = "Lineage coverage outcome"
+
 
 #: Every pinned event body, for tests and introspection. Membership here is the
 #: definition of "this string is a contract".
@@ -80,6 +87,7 @@ OUTCOME_EVENT_NAMES: Final[frozenset[str]] = frozenset(
         ASSET_VALIDATION_EVENT,
         ARTIFACT_VALIDATION_EVENT,
         ARTIFACT_VALIDATION_POSTURE_EVENT,
+        LINEAGE_COVERAGE_EVENT,
     }
 )
 
@@ -87,6 +95,7 @@ __all__ = [
     "ARTIFACT_VALIDATION_EVENT",
     "ARTIFACT_VALIDATION_POSTURE_EVENT",
     "ASSET_VALIDATION_EVENT",
+    "LINEAGE_COVERAGE_EVENT",
     "OUTCOME_EVENT_NAMES",
     "PREFLIGHT_CHECK_EVENT",
     "PREFLIGHT_OUTCOME_EVENT",
