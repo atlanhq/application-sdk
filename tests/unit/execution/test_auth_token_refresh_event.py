@@ -14,7 +14,11 @@ from unittest import mock
 
 import pytest
 
-from application_sdk.contracts.events import ApplicationEventNames, EventTypes
+from application_sdk.contracts.events import (
+    ApplicationEventNames,
+    EventTypes,
+    WorkerTokenRefreshEventData,
+)
 from application_sdk.execution._temporal._activity_errors import (
     TemporalAuthConfigError,
     TemporalAuthTokenAcquireError,
@@ -203,6 +207,35 @@ class TestEmitTokenRefreshEvent:
             assert event.event_type == "application_events"
             assert event.event_name == "token_refresh"
 
+    async def test_payload_is_the_contract_model_with_string_values(self) -> None:
+        """The wire payload is exactly WorkerTokenRefreshEventData, all strings.
+
+        Round-tripping through the model must not change a single value: a
+        model typed ``bool``/``float`` would coerce ``"true"`` to ``True`` and
+        fail this, which is how the contract drifted from the wire before.
+        """
+        manager = _make_manager()
+        expires_at = datetime(2026, 6, 15, 10, 30, 0, tzinfo=UTC)
+
+        with (
+            mock.patch("application_sdk.execution._temporal.auth.time.time") as now,
+            mock.patch(_PUBLISH_TARGET) as mock_publish,
+        ):
+            now.return_value = expires_at.timestamp() - 90.0
+            mock_publish.return_value = None
+
+            await manager._emit_token_refresh_event(expires_at)
+
+            data = mock_publish.call_args[0][0].data
+
+        assert set(data) == set(WorkerTokenRefreshEventData.model_fields)
+        assert all(isinstance(v, str) for v in data.values())
+        assert WorkerTokenRefreshEventData.model_validate(data).model_dump() == data
+        assert data["force_refresh"] == "true"
+        assert data["token_expiry_time"] == str(expires_at.timestamp())
+        assert data["time_until_expiry"] == "90.0"
+        assert data["refresh_timestamp"] == str(expires_at.timestamp() - 90.0)
+
 
 # ---------------------------------------------------------------------------
 # Inline-import contract tests.
@@ -236,6 +269,7 @@ class TestInlineImportContracts:
             ApplicationEventNames,
             Event,
             EventTypes,
+            WorkerTokenRefreshEventData,
         )
 
     def test_get_token_service_runs_inline_imports(self) -> None:
