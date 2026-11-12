@@ -118,7 +118,8 @@ forward_signal() {
     exit ${signal_exit}
 }
 
-trap forward_signal SIGTERM SIGINT
+# POSIX signal names: dash rejects the SIG prefix ("bad trap").
+trap forward_signal TERM INT
 
 # ---------------------------------------------------------------------------
 # Start daprd directly (not via `dapr run`)
@@ -207,17 +208,21 @@ uv run --no-sync python -m application_sdk.main "$@" &
 APP_PID=$!
 echo "[entrypoint] App started with PID ${APP_PID}"
 
-# Wait for the app to exit
-wait "${APP_PID}"
-EXIT_CODE=$?
+# Wait for the app to exit. `|| EXIT_CODE=$?` keeps errexit from ending the
+# script on a non-zero exit, so the lines below run for a failing app too.
+EXIT_CODE=0
+wait "${APP_PID}" || EXIT_CODE=$?
 
 echo "[entrypoint] App exited with code ${EXIT_CODE}"
 if [ "${EXIT_CODE}" -eq 137 ]; then
     echo "[entrypoint] CRITICAL: exit code 137 = SIGKILL — almost certainly an OOM kill. Check: kubectl describe pod ${K8S_POD_NAME:-<pod-name>}; kubectl get events -n ${K8S_POD_NAMESPACE:-<namespace>} --field-selector=reason=OOMKilling" >&2
 fi
 
-# Stop daprd after the app exits (normal path — signal handler covers SIGTERM path)
-if kill -0 "${DAPRD_PID}" 2>/dev/null; then
+# Stop daprd after a clean exit (normal path — signal handler covers SIGTERM
+# path). A crashed app has nothing in flight for daprd to finish, and waiting
+# up to DAPR_STOP_TIMEOUT_SECONDS would only delay a crash-looping pod's
+# restart; the container's exit tears daprd down instead, as it always has.
+if [ "${EXIT_CODE}" -eq 0 ] && kill -0 "${DAPRD_PID}" 2>/dev/null; then
     echo "[entrypoint] Stopping daprd"
     stop_daprd
 fi
