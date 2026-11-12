@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import importlib.util
+import threading
 from datetime import datetime
 from typing import Any
 from unittest import mock
@@ -612,3 +613,38 @@ class TestPeriodicFlushSurvivesErrors:
             await asyncio.gather(task, return_exceptions=True)
 
         assert calls >= 3
+
+
+class TestStoreStateLockAfterFork:
+    """A forked child must not inherit ``_store_state_lock`` held by a parent
+    thread that no longer exists in it: its restarted flushes would block on
+    their next store resolution forever."""
+
+    def test_child_gets_a_fresh_store_state_lock(self):
+        from application_sdk.observability import background_loop
+
+        assert obs_module._reset_store_state_lock_after_fork in (
+            background_loop._after_fork_resets
+        )
+
+        inherited = obs_module._store_state_lock
+        # The state a fork can leave behind: held, with no owner to release it.
+        inherited.acquire()
+        try:
+            obs_module._reset_store_state_lock_after_fork()
+            store = mock.MagicMock(name="store")
+            resolved: list[Any] = []
+            worker = threading.Thread(
+                target=lambda: resolved.append(
+                    obs_module._store_or_none("objectstore", lambda: store)
+                ),
+                daemon=True,
+            )
+            worker.start()
+            worker.join(timeout=5)
+            assert not worker.is_alive(), (
+                "store resolution blocked on the inherited lock"
+            )
+            assert resolved == [store]
+        finally:
+            inherited.release()

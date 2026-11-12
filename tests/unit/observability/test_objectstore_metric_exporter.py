@@ -472,3 +472,38 @@ class TestStoreResolution:
         assert get.call_count == 1
         assert upload.calls == []
         assert log.warning.call_count == 1
+
+
+class TestDeprecatedModuleAliases:
+    """Names the exporter module bound before FND-4895 stay importable, with a
+    ``DeprecationWarning``, until v4.0.0 (``docs/standards/symbols.md``)."""
+
+    @pytest.mark.parametrize(
+        ("name", "source"),
+        [
+            ("APPLICATION_NAME", "application_sdk.constants"),
+            ("DEPLOYMENT_NAME", "application_sdk.constants"),
+            ("DEPLOYMENT_OBJECT_STORE_NAME", "application_sdk.constants"),
+            ("ENABLE_ATLAN_UPLOAD", "application_sdk.constants"),
+            ("UPSTREAM_OBJECT_STORE_NAME", "application_sdk.constants"),
+            (
+                "OBSERVABILITY_S3_PREFIX_MAP",
+                "application_sdk.observability.observability",
+            ),
+        ],
+    )
+    def test_alias_warns_and_resolves_to_source(self, name: str, source: str) -> None:
+        import importlib
+
+        exporter_mod = importlib.import_module(_EXPORTER_MOD)
+        source_mod = importlib.import_module(source)
+        with pytest.warns(DeprecationWarning, match=f"{name} is deprecated here"):
+            value = getattr(exporter_mod, name)
+        assert value is getattr(source_mod, name)
+
+    def test_unknown_name_still_raises_attribute_error(self) -> None:
+        import importlib
+
+        exporter_mod = importlib.import_module(_EXPORTER_MOD)
+        with pytest.raises(AttributeError):
+            exporter_mod.NOT_A_NAME  # noqa: B018

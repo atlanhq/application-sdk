@@ -959,6 +959,18 @@ class AtlanObservability(Generic[T], ABC):
             logging.error("Error adding record", exc_info=True)
 
 
+def _reset_store_state_lock_after_fork() -> None:
+    """Give a forked child a fresh ``_store_state_lock``.
+
+    A parent thread may have held it in ``_store_or_none`` at the moment of the
+    fork; the child inherits it locked with no thread left to release it, and
+    its restarted periodic flushes would block on their next upload.
+    """
+    global _store_state_lock
+    _store_state_lock = threading.Lock()
+
+
+register_after_fork(_reset_store_state_lock_after_fork)
 register_after_fork(
     AtlanObservability._restart_periodic_flushes_after_fork, restarts_work=True
 )

@@ -13,6 +13,7 @@ collection.
 
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry.sdk.metrics import (
@@ -47,6 +48,55 @@ logger = get_logger(__name__)
 #: OTel-sourced Prometheus metrics. Kept separate from the ``metrics`` signal
 #: used by ``record_metric()`` data so consumers can tell the two streams apart.
 _SIGNAL = "prometheus-metrics"
+
+#: Names this module bound at module scope before it delegated to the shared
+#: observability writer (FND-4895). Served once more, with a warning, by
+#: ``__getattr__`` below; read them from where they are defined.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "APPLICATION_NAME": (
+        "application_sdk.constants.APPLICATION_NAME",
+        "this module no longer uses it (FND-4895)",
+    ),
+    "DEPLOYMENT_NAME": (
+        "application_sdk.constants.DEPLOYMENT_NAME",
+        "this module no longer uses it (FND-4895)",
+    ),
+    "DEPLOYMENT_OBJECT_STORE_NAME": (
+        "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME",
+        "this module no longer uses it (FND-4895)",
+    ),
+    "ENABLE_ATLAN_UPLOAD": (
+        "application_sdk.constants.ENABLE_ATLAN_UPLOAD",
+        "this module no longer uses it (FND-4895)",
+    ),
+    "UPSTREAM_OBJECT_STORE_NAME": (
+        "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME",
+        "this module no longer uses it (FND-4895)",
+    ),
+    "OBSERVABILITY_S3_PREFIX_MAP": (
+        "application_sdk.observability.observability.OBSERVABILITY_S3_PREFIX_MAP",
+        "this module no longer uses it (FND-4895)",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the names this module no longer binds, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated here; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    if name == "OBSERVABILITY_S3_PREFIX_MAP":
+        from application_sdk.observability import observability as _source  # noqa: PLC0415
+    else:
+        from application_sdk import constants as _source  # noqa: PLC0415
+    return getattr(_source, name)
 
 
 def _resource_attrs(resource: Resource) -> dict[str, str]:
