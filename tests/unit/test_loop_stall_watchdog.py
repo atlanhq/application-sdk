@@ -144,8 +144,11 @@ class TestNothingElseIsKilled:
 
 
 @pytest.fixture
-def fake_faulthandler():
-    """faulthandler holds one timer per process; keep tests off the real one."""
+def fake_faulthandler(monkeypatch: pytest.MonkeyPatch):
+    """faulthandler holds one timer per process; keep tests off the real one.
+    The fork hooks are module state, so each test starts with none registered."""
+    monkeypatch.setattr(watchdog_mod, "_fork_hooks_registered", False)
+    monkeypatch.setattr(watchdog_mod, "_fork_target", None)
     with (
         private_stdlib(watchdog_mod, "faulthandler") as local_fh,
         private_stdlib(watchdog_mod, "os") as local_os,
@@ -343,6 +346,39 @@ class TestForkHooks:
         # The child can still take the lock, so stop() there does not hang.
         watchdog.stop()
 
+    def test_hooks_register_once_and_follow_the_latest_watchdog(
+        self, fake_faulthandler
+    ) -> None:
+        """A process that runs the worker twice registers one set of hooks,
+        and they act on the watchdog installed last."""
+        arm, cancel = fake_faulthandler
+        first, second = LoopStallWatchdog(300), LoopStallWatchdog(300)
+
+        first._register_fork_hooks()
+        second._register_fork_hooks()
+        second._arm()
+        watchdog_mod._pause_for_fork()
+        watchdog_mod._resume_after_fork()
+
+        assert watchdog_mod.os.register_at_fork.call_count == 1
+        cancel.assert_called_once_with()
+        assert arm.call_count == 2
+        assert second._armed and not first._armed
+
+    def test_a_fork_releases_the_watchdog_it_paused(self, fake_faulthandler) -> None:
+        """Installing another watchdog mid-fork must not release the wrong lock."""
+        first, second = LoopStallWatchdog(300), LoopStallWatchdog(300)
+        first._register_fork_hooks()
+
+        watchdog_mod._pause_for_fork()
+        second._register_fork_hooks()
+        watchdog_mod._resume_after_fork()
+
+        assert first._lock.acquire(blocking=False)
+        first._lock.release()
+        assert second._lock.acquire(blocking=False)
+        second._lock.release()
+
     def test_fork_while_unarmed_arms_nothing(self, fake_faulthandler) -> None:
         arm, cancel = fake_faulthandler
         watchdog = LoopStallWatchdog(300)
@@ -352,6 +388,53 @@ class TestForkHooks:
 
         arm.assert_not_called()
         cancel.assert_not_called()
+
+
+class TestExitBy:
+    """Re-arms during the drain never push the exit past the shutdown budget."""
+
+    def test_freeze_late_in_the_drain_still_exits_by_the_deadline(
+        self, fake_faulthandler, clock
+    ) -> None:
+        arm, _ = fake_faulthandler
+        watchdog = LoopStallWatchdog(60, exit_by_seconds=100)
+
+        watchdog.on_shutdown_signal()  # timer 75 s, within the 100 s
+        clock[0] += 50
+        watchdog._arm()  # 50 s left: capped
+        clock[0] += 45
+        watchdog._arm()  # 5 s left
+        clock[0] += 10
+        watchdog._arm()  # deadline passed: fires at once
+
+        assert arm.call_args_list == [
+            _timer_call(75),
+            _timer_call(50),
+            _timer_call(5),
+            _timer_call(0.001),
+        ]
+
+    def test_without_a_deadline_each_rearm_gets_the_full_timer(
+        self, fake_faulthandler, clock
+    ) -> None:
+        arm, _ = fake_faulthandler
+        watchdog = LoopStallWatchdog(60)
+
+        watchdog.on_shutdown_signal()
+        clock[0] += 500
+        watchdog._arm()
+
+        assert arm.call_args_list == [_timer_call(75), _timer_call(75)]
+
+    def test_override_past_the_deadline_is_cut_at_the_signal(
+        self, fake_faulthandler, clock
+    ) -> None:
+        arm, _ = fake_faulthandler
+        watchdog = LoopStallWatchdog(300, exit_by_seconds=28)
+
+        watchdog.on_shutdown_signal()
+
+        assert arm.call_args_list == [_timer_call(28)]
 
 
 class TestHandoffToPostDrainDeadline:

@@ -31,7 +31,8 @@ def rearm_interval_seconds(timeout_seconds: float) -> float:
 
 def timer_seconds(timeout_seconds: float) -> float:
     """How long each arm lasts: the bound plus one re-arm interval, so the loop
-    has been silent for at least the bound whenever the timer fires."""
+    has been silent for at least the bound when the timer fires, unless the
+    exit deadline cut the arm short."""
     return timeout_seconds + rearm_interval_seconds(timeout_seconds)
 
 
@@ -64,20 +65,32 @@ class LoopStallWatchdog:
     returns, whether or not it released the GIL, and one that never returns
     never arms it: such a freeze is left to SIGKILL. A freeze that starts
     after the signal is always covered, because the timer is then armed
-    already. The timer runs on a C thread that needs neither the loop nor the
+    already; with ``exit_by_seconds`` it still ends the process that long
+    after the signal at the latest, however late in the drain it starts. The
+    timer runs on a C thread that needs neither the loop nor the
     GIL: when it runs out it writes every thread's stack to stderr (the
     evidence of what blocked) and exits with code 1. faulthandler keeps one
     such timer per process, so nothing else in the SDK may use
     ``dump_traceback_later``.
 
     While the loop runs, the shutdown handler's re-arm task keeps pushing the
-    deadline back, through the whole drain. Once the worker has drained,
-    ``_PostDrainExitArm`` stops it and the post-drain exit deadline bounds the
-    rest, so a normal exit never trips it.
+    deadline back through the drain, never past ``exit_by_seconds`` after the
+    signal. Once the worker has drained, ``_PostDrainExitArm`` stops it and the
+    post-drain exit deadline bounds the rest, so a normal exit never trips it.
+    The shutdown budget sets the drain's graceful timeout to end before
+    ``exit_by_seconds``, so the cap ends only a drain that has overrun it, such
+    as an activity still running after it was cancelled. That exit writes the
+    same stack dump and code 1 even though the loop may still be running.
     """
 
-    def __init__(self, timeout_seconds: float) -> None:
+    def __init__(
+        self, timeout_seconds: float, exit_by_seconds: float | None = None
+    ) -> None:
         self.timeout_seconds = timeout_seconds
+        # How long after the signal the exit must land; None leaves it to the
+        # bound alone (no grace period declared).
+        self.exit_by_seconds = exit_by_seconds
+        self._exit_by: float | None = None
         self._lock = threading.Lock()
         self._armed = False
         self._paused_for_fork = False
@@ -125,8 +138,11 @@ class LoopStallWatchdog:
         if self._shutting_down or self._stopped or self.timeout_seconds <= 0:
             return
         self._shutting_down = True
-        seconds = timer_seconds(self.timeout_seconds)
-        self._deadline = time.monotonic() + seconds
+        now = time.monotonic()
+        if self.exit_by_seconds is not None:
+            self._exit_by = now + self.exit_by_seconds
+        seconds = self._timer_from(now)
+        self._deadline = now + seconds
         self._set_timer(seconds)
 
     def start_rearming(self) -> None:
@@ -150,10 +166,17 @@ class LoopStallWatchdog:
         with self._lock:
             if self._stopped:
                 return False
-            seconds = timer_seconds(self.timeout_seconds)
-            self._deadline = time.monotonic() + seconds
+            now = time.monotonic()
+            seconds = self._timer_from(now)
+            self._deadline = now + seconds
             self._set_timer(seconds)
             return True
+
+    def _timer_from(self, now: float) -> float:
+        seconds = timer_seconds(self.timeout_seconds)
+        if self._exit_by is None:
+            return seconds
+        return max(min(seconds, self._exit_by - now), _MIN_TIMER_SECONDS)
 
     def _set_timer(self, seconds: float) -> None:
         # A file descriptor, not sys.stderr: the timer writes from C after the
@@ -162,16 +185,22 @@ class LoopStallWatchdog:
         self._armed = True
 
     def _register_fork_hooks(self) -> None:
-        if not hasattr(os, "register_at_fork"):
-            return
         # A forked child inherits the armed timer but not its thread, and an
         # interpreter exit in that child then waits on the thread forever.
-        # Disarm across the fork; the parent re-arms after it.
+        # Disarm across the fork; the parent re-arms after it. faulthandler
+        # keeps one timer per process, so the hooks follow the latest watchdog
+        # and are registered once: os.register_at_fork cannot unregister. Only
+        # the latest can be armed, since a process runs one worker at a time.
+        global _fork_target, _fork_hooks_registered
+        _fork_target = self
+        if _fork_hooks_registered or not hasattr(os, "register_at_fork"):
+            return
         os.register_at_fork(
-            before=self._pause_for_fork,
-            after_in_parent=self._resume_after_fork,
-            after_in_child=self._release_after_fork,
+            before=_pause_for_fork,
+            after_in_parent=_resume_after_fork,
+            after_in_child=_release_after_fork,
         )
+        _fork_hooks_registered = True
 
     # The lock is held from before the fork until after it, so the loop cannot
     # re-arm in between and hand the child a live timer.
@@ -203,3 +232,31 @@ class LoopStallWatchdog:
                 await asyncio.sleep(rearm_interval_seconds(self.timeout_seconds))
         finally:
             self.stop()
+
+
+_fork_target: LoopStallWatchdog | None = None
+_fork_hooks_registered = False
+# The watchdog paused by the current fork, so both sides release the lock the
+# same one took even if a new watchdog is installed in between.
+_forking: LoopStallWatchdog | None = None
+
+
+def _pause_for_fork() -> None:
+    global _forking
+    _forking = _fork_target
+    if _forking is not None:
+        _forking._pause_for_fork()
+
+
+def _resume_after_fork() -> None:
+    global _forking
+    watchdog, _forking = _forking, None
+    if watchdog is not None:
+        watchdog._resume_after_fork()
+
+
+def _release_after_fork() -> None:
+    global _forking
+    watchdog, _forking = _forking, None
+    if watchdog is not None:
+        watchdog._release_after_fork()

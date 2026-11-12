@@ -1907,7 +1907,9 @@ class TestRunWorkerMode:
             ) as cls,
             patch(
                 "application_sdk.main._loop_stall_bound",
-                return_value=_LoopStallBound(75, 60, None, overridden=False),
+                return_value=_LoopStallBound(
+                    75, 60, None, overridden=False, exit_by_seconds=300
+                ),
             ),
             patch(
                 "application_sdk.main._install_graceful_signal_handlers",
@@ -1925,7 +1927,7 @@ class TestRunWorkerMode:
             watchdog.start_rearming.assert_not_called()
             handlers[0]()
 
-        cls.assert_called_once_with(75)
+        cls.assert_called_once_with(75, 300)
         assert order == [
             "loop handlers",
             "set for shutdown",
@@ -2430,10 +2432,14 @@ class TestRunCombinedMode:
         uvicorn_exit = uvicorn_server.handle_exit
 
         with (
-            patch("application_sdk.main.LoopStallWatchdog", return_value=watchdog),
+            patch(
+                "application_sdk.main.LoopStallWatchdog", return_value=watchdog
+            ) as cls,
             patch(
                 "application_sdk.main._loop_stall_bound",
-                return_value=_LoopStallBound(75, 60, None, overridden=False),
+                return_value=_LoopStallBound(
+                    75, 60, None, overridden=False, exit_by_seconds=300
+                ),
             ),
             patch(
                 "application_sdk.main._start_post_drain_exit_deadline",
@@ -2445,6 +2451,7 @@ class TestRunCombinedMode:
                 bound_post_drain_exit=True,
             )
 
+        cls.assert_called_once_with(75, 300)
         assert order == ["set for shutdown", "drained", "watchdog off", "deadline"]
         uvicorn_server.handle_exit(signal.SIGTERM, None)
         watchdog.on_shutdown_signal.assert_called_once_with()
@@ -3720,7 +3727,9 @@ class TestLoopStallBound:
         bound = _loop_stall_bound()
 
         assert (bound.seconds, bound.longest_heartbeat_seconds) == (75, 60)
+        assert bound.heartbeat_task is None
         assert bound.limit_seconds is None
+        assert bound.exit_by_seconds is None
         assert bound.unwatched_tasks == ()
         assert bound.in_order()
 
@@ -3744,6 +3753,7 @@ class TestLoopStallBound:
         bound = _loop_stall_bound()
 
         assert bound.seconds == 135
+        assert bound.heartbeat_task == "stall-app.extract"
         assert timer_seconds(bound.seconds) == 150
         assert bound.unwatched_tasks == ("stall-app.publish (86400s)",)
         assert bound.in_order()
@@ -3787,6 +3797,8 @@ class TestLoopStallBound:
         assert bound.limit_seconds == pytest.approx(22.4)
         assert bound.seconds == pytest.approx(22.4)
         assert timer_seconds(bound.seconds) == pytest.approx(28)
+        assert bound.exit_by_seconds == 28
+        assert bound.heartbeat_task is None
         assert not bound.in_order()
 
     def test_override_replaces_the_derived_bound(
@@ -3813,8 +3825,28 @@ class TestLoopStallBound:
             (_LoopStallBound(30, 60, None, overridden=True), "Unset"),
             # An override past what still fires before SIGKILL.
             (_LoopStallBound(500, 60, 400, overridden=True), "Unset"),
-            # A derived bound the grace cut below the longest heartbeat timeout.
-            (_LoopStallBound(22.4, 60, 22.4, overridden=False), "Raise"),
+            # A derived bound the grace cut below a task's own heartbeat timeout.
+            (
+                _LoopStallBound(
+                    135,
+                    300,
+                    135,
+                    overridden=False,
+                    heartbeat_task="stall-app.extract",
+                ),
+                "lower the heartbeat timeout of stall-app.extract below 135s",
+            ),
+            # Cut below the default too: lowering the task alone cannot fix it.
+            (
+                _LoopStallBound(
+                    46.4,
+                    120,
+                    46.4,
+                    overridden=False,
+                    heartbeat_task="stall-app.extract",
+                ),
+                "does not restore the order",
+            ),
         ],
     )
     def test_out_of_order_bound_warns(
@@ -3826,6 +3858,26 @@ class TestLoopStallBound:
         message = log.warning.call_args.args[0] % log.warning.call_args.args[1:]
         assert "out of order" in message
         assert advice in message
+
+    def test_short_grace_below_the_default_heartbeat_logs_info(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the SDK's default heartbeat timeout outlasts a 30 s grace: no
+        app change can fix that, so it is not a WARNING on every start."""
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "30")
+        bound = _loop_stall_bound()
+        assert not bound.in_order()
+
+        with patch("application_sdk.main.logger") as log:
+            _log_shutdown_budget(bound)
+
+        log.warning.assert_not_called()
+        messages = [c.args[0] % c.args[1:] for c in log.info.call_args_list]
+        assert any(
+            "below the default heartbeat timeout (60s, ATLAN_HEARTBEAT_TIMEOUT_SECONDS)"
+            in m
+            for m in messages
+        )
 
 
 class TestFatalTeardownWatchdog:
