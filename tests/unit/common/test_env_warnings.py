@@ -90,3 +90,25 @@ class TestWarnRemovedEnvVars:
         with ctx:
             warn_removed_env_vars()
         mock_logger.warning.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "ATLAN_LOG_CLEANUP_ENABLED",
+            "ATLAN_LOG_RETENTION_DAYS",
+            "ATLAN_METRICS_CLEANUP_ENABLED",
+            "ATLAN_METRICS_RETENTION_DAYS",
+            "ATLAN_SIZING_CLEANUP_ENABLED",
+            "ATLAN_SIZING_RETENTION_DAYS",
+        ],
+    )
+    def test_retention_sweep_vars_warn_when_set(
+        self, monkeypatch: pytest.MonkeyPatch, name: str
+    ) -> None:
+        """The observability retention sweep was removed; its config is inert."""
+        monkeypatch.setenv(name, "true")
+        ctx, mock_logger = self._patch_logger()
+        with ctx:
+            warn_removed_env_vars()
+
+        assert name in self._formatted_message(mock_logger)

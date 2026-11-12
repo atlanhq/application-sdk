@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 import traceback as tb_module
+import warnings
 from typing import Any, Callable, ClassVar
 
 from loguru import logger
@@ -23,12 +24,10 @@ from application_sdk.constants import (
     ENABLE_OTLP_WORKFLOW_LOGS,
     ENABLE_WORKFLOW_REPLAY_LOGS,
     LOG_BATCH_SIZE,
-    LOG_CLEANUP_ENABLED,
     LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS,
     LOG_FILE_NAME,
     LOG_FLUSH_INTERVAL_SECONDS,
     LOG_LEVEL,
-    LOG_RETENTION_DAYS,
     LOG_SOURCE_APP_LABEL,
     OTEL_BATCH_DELAY_MS,
     OTEL_BATCH_SIZE,
@@ -957,8 +956,6 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         super().__init__(
             batch_size=LOG_BATCH_SIZE,
             flush_interval=LOG_FLUSH_INTERVAL_SECONDS,
-            retention_days=LOG_RETENTION_DAYS,
-            cleanup_enabled=LOG_CLEANUP_ENABLED,
             data_dir=get_observability_dir(),
             file_name=LOG_FILE_NAME,
         )
@@ -1842,3 +1839,36 @@ def get_logger(name: str | None = None) -> AtlanLoggerAdapter:
 
 # Initialize the default logger
 default_logger = get_logger()  # Use a different name instead of redefining 'logger'
+
+
+#: Retention-sweep constants this module used to re-export from
+#: ``application_sdk.constants``; served once more by ``__getattr__`` (PEP 562).
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "LOG_RETENTION_DAYS": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported log files",
+    ),
+    "LOG_CLEANUP_ENABLED": (
+        "an object-store bucket lifecycle rule",
+        "the SDK retention sweep never deleted exported log files",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the removed constants once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v3.60.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    from application_sdk.constants import (  # noqa: PLC0415 — only reached on a deprecated access
+        _DEPRECATED_CONSTANT_VALUES,
+    )
+
+    return _DEPRECATED_CONSTANT_VALUES[name]

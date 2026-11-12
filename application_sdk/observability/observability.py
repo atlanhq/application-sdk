@@ -2,11 +2,11 @@ import asyncio
 import gzip
 import logging
 import os
-import shutil
 import threading
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from time import time
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
@@ -103,22 +103,22 @@ class AtlanObservability(Generic[T], ABC):
     """Base class for Atlan observability functionality.
 
     This abstract base class provides core functionality for observability features
-    including buffering, flushing, and cleanup of observability data.
+    including buffering and flushing of observability data.
+
+    Retention of exported files is not handled here: bound object-store growth
+    with a lifecycle rule on the bucket.
 
     Features:
     - Buffered record storage
     - Periodic flushing to storage
-    - Data retention management
     - Error handling and signal management
     - Gzip-compressed NDJSON file storage
     - Dapr object store integration
 
     Attributes:
-        _last_cleanup_key: Key for tracking last cleanup time
         _instances: List of all active instances
     """
 
-    _last_cleanup_key = "last_cleanup_time"
     _instances: ClassVar[list[Any]] = []
     # Resolved once for the whole hierarchy. Both getters below read and write
     # these through ``AtlanObservability`` explicitly rather than through
@@ -184,20 +184,39 @@ class AtlanObservability(Generic[T], ABC):
         self,
         batch_size: int,
         flush_interval: int,
-        retention_days: int,
-        cleanup_enabled: bool,
         data_dir: str,
         file_name: str,
+        retention_days: int | None = None,
+        cleanup_enabled: bool | None = None,
     ):
-        """Initialize the observability base class."""
+        """Initialize the observability base class.
+
+        Args:
+            batch_size: Records buffered before a flush.
+            flush_interval: Seconds between periodic flushes.
+            data_dir: Local directory partition files are written to.
+            file_name: Signal discriminator (see ``_get_signal_type``).
+            retention_days: Deprecated and ignored. The retention sweep never
+                deleted anything from the object store; use a bucket
+                lifecycle rule instead. Will be removed in v3.60.0.
+            cleanup_enabled: Deprecated and ignored, as ``retention_days``.
+                Will be removed in v3.60.0.
+        """
+        if retention_days is not None or cleanup_enabled is not None:
+            warnings.warn(
+                "AtlanObservability retention_days and cleanup_enabled are "
+                "deprecated and ignored; use an object-store bucket lifecycle "
+                "rule instead — the SDK retention sweep never deleted exported "
+                "files. Will be removed in v3.60.0.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         # Initialize instance variables
         self._buffer: list[dict[str, object]] = []
         self._buffer_lock = threading.Lock()
         self._last_flush_time = time()
         self._batch_size = batch_size
         self._flush_interval = flush_interval
-        self._retention_days = retention_days
-        self._cleanup_enabled = cleanup_enabled
         self.data_dir = data_dir
         self.file_name = file_name
         self._writer_seq = 0
@@ -561,9 +580,8 @@ class AtlanObservability(Generic[T], ABC):
         if not self._store_sink_enabled() or not records:
             return
 
-        # Blocking file I/O, the object-store upload and the retention sweep's
-        # thread offload below are all illegal on Temporal's deterministic
-        # workflow loop — so don't write here. Every caller has already taken
+        # Blocking file I/O and the object-store upload below are both illegal
+        # on Temporal's deterministic workflow loop — so don't write here. Every caller has already taken
         # *records* out of the buffer, so put them back at the front rather
         # than dropping them: the batch holds whatever any workflow or activity
         # on this worker logged since the last flush, and the periodic flush on
@@ -653,10 +671,6 @@ class AtlanObservability(Generic[T], ABC):
                 finally:
                     current_writer = None
 
-            # Clean up old records if enabled
-            if self._cleanup_enabled:
-                await self._check_and_cleanup()
-
         except Exception:
             logging.error("Error flushing records batch", exc_info=True)
 
@@ -670,134 +684,6 @@ class AtlanObservability(Generic[T], ABC):
                     logging.warning("Error closing orphaned gzip file", exc_info=True)
                 if os.path.exists(current_writer.local_path):
                     os.unlink(current_writer.local_path)
-
-    async def _check_and_cleanup(self):
-        """Check if cleanup is needed and perform it if necessary.
-
-        This method:
-        - Checks last cleanup time from state store
-        - Performs cleanup if more than a day has passed
-        - Updates last cleanup time after successful cleanup
-        """
-        try:
-            try:
-                from application_sdk.infrastructure.context import (  # noqa: PLC0415 — circular: infrastructure imports observability
-                    get_infrastructure,
-                )
-            except ModuleNotFoundError as exc:
-                if not worker_only_missing(exc):
-                    raise
-                # api-only install (the API host): no worker infrastructure.
-                return
-
-            infra = get_infrastructure()
-            state_store = infra.state_store if infra else None
-
-            last_cleanup: str | None = None
-            if state_store:
-                state = await state_store.load(self._last_cleanup_key)
-                last_cleanup = state.get("value") if state else None
-
-            # If no last cleanup or it's been more than a day, perform cleanup
-            if not last_cleanup or (
-                datetime.now() - datetime.fromisoformat(last_cleanup)
-            ) > timedelta(days=1):
-                await self._cleanup_old_records()
-                # Update last cleanup time
-                if state_store:
-                    await state_store.save(
-                        self._last_cleanup_key,
-                        {"value": datetime.now().isoformat()},
-                    )
-        except Exception:
-            logging.error("Error checking cleanup status", exc_info=True)
-
-    async def _cleanup_old_records(self):
-        """Clean up records older than retention_days.
-
-        This method:
-        - Uses the centralized SDR path
-        - Walks through the partition directories
-        - Removes records older than retention period
-        - Updates or deletes files as needed
-        - Syncs changes with object store
-        """
-        try:
-            from application_sdk._runtime.offload import (  # noqa: PLC0415 — circular: offload imports observability.logger_adaptor, which imports this module
-                run_in_thread,
-            )
-
-            try:
-                from application_sdk.storage import delete  # noqa: PLC0415
-            except ModuleNotFoundError as exc:
-                if not worker_only_missing(exc):
-                    raise
-                # api-only install (the API host): nothing was exported to delete.
-                return
-
-            # Use local subdir (same as _get_partition_path)
-            signal_type = self._get_signal_type()
-            local_subdir = LOCAL_OBS_SUBDIR_MAP.get(signal_type, f"{_OBS_MODE}/other")
-            data_dir = os.path.join(self.data_dir, local_subdir)
-            if not os.path.exists(data_dir):
-                return
-
-            cutoff_date = datetime.now() - timedelta(days=self._retention_days)
-
-            # Walk through the partition directories
-            for year_dir in os.listdir(data_dir):
-                year_path = os.path.join(data_dir, year_dir)
-                if not os.path.isdir(year_path) or not year_dir.startswith("year="):
-                    continue
-
-                year = int(year_dir.split("=")[1])
-                if year < cutoff_date.year:
-                    # Delete entire year directory. Offloaded: a year of
-                    # partitions is an unbounded tree, and rmtree on the event
-                    # loop stalls every other coroutine for its full duration.
-                    await run_in_thread(shutil.rmtree, year_path)
-                    continue
-
-                for month_dir in os.listdir(year_path):
-                    month_path = os.path.join(year_path, month_dir)
-                    if not os.path.isdir(month_path) or not month_dir.startswith(
-                        "month="
-                    ):
-                        continue
-
-                    month = int(month_dir.split("=")[1])
-                    if year == cutoff_date.year and month < cutoff_date.month:
-                        await run_in_thread(shutil.rmtree, month_path)
-                        continue
-
-                    for day_dir in os.listdir(month_path):
-                        day_path = os.path.join(month_path, day_dir)
-                        if not os.path.isdir(day_path) or not day_dir.startswith(
-                            "day="
-                        ):
-                            continue
-
-                        day = int(day_dir.split("=")[1])
-                        partition_date = datetime(year, month, day)
-
-                        if partition_date.date() < cutoff_date.date():
-                            # Delete entire partition directory
-                            await run_in_thread(shutil.rmtree, day_path)
-
-                            # Delete from object store
-                            partition_key = os.path.relpath(day_path, self.data_dir)
-                            await delete(
-                                partition_key,
-                                store=self._get_deployment_store(),
-                            )
-                            if ENABLE_ATLAN_UPLOAD:
-                                await delete(
-                                    partition_key,
-                                    store=self._get_upstream_store(),
-                                )
-
-        except Exception:
-            logging.error("Error cleaning up old records", exc_info=True)
 
     def add_record(self, record: T):
         """Add a record to the buffer and process it.
