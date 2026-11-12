@@ -153,13 +153,19 @@ retryable, instead of returning "absent" or raising the non-retryable `StorageNo
 HEAD is the exception. A HEAD response has no body, so the gateway's no-route 404 on a HEAD
 cannot be told from a real missing key, and `exists` / `get_file_meta` report the object absent.
 Where a miss is the exception and acting on a false one is expensive, callers use
-`exists_confirmed` / `get_file_meta_confirmed` instead: a HEAD hit costs nothing extra, and a miss
+`_exists_confirmed` / `_get_file_meta_confirmed` instead: a HEAD hit costs nothing extra, and a miss
 is checked against a listing of the key's parent folder (body-bearing, so it rides the retry
 above). `verify_refs`, the single-file `FileReference` materialise and the post-upload readback
 use them. The integrity sidecar is read with a GET rather than probed with a HEAD, so a gateway
 answer cannot pass for "no sidecar". Plain `exists` / `get_file_meta` stay for callers where a
-miss is the normal answer. Both confirmed helpers go away once the gateway answers a no-route HEAD
-with something the storage layer can recognise.
+miss is the normal answer.
+
+The confirmed helpers are private and temporary. The fix for the 404 itself is on the platform:
+Kong answers "no Route matched" only while a load balancer sends it traffic before its routes have
+loaded, and every load balancer in front of Kong gating on `/status/ready` stops that. Once the
+fleet shows no more no-route 404s, the helpers go and their callers return to `exists` /
+`get_file_meta`. Reading the sidecar with a GET stays: it is one round trip fewer whenever a
+sidecar exists.
 
 ### ColdStartRaceError — the cross-domain transient marker
 

@@ -17,9 +17,6 @@ Public API:
     get_file_meta(key, store=None)    → (size, e_tag) | None  (single HEAD)
     delete(key, store=None)           → bool
     exists(key, store=None)           → bool
-    get_file_meta_confirmed(key, ...) → (size, e_tag) | None  (HEAD; a miss is
-        confirmed by a parent listing — for callers where a miss is exceptional)
-    exists_confirmed(key, ...)        → bool  (same, as a bool)
     delete_prefix(prefix, store=None) → int  (returns count deleted)
     list_keys(prefix, suffix=...)     → list[str]
     list_keys_with_meta(prefix, ...)  → list[(key, size, e_tag)]
@@ -93,9 +90,7 @@ from application_sdk.storage.ops import (
     download_file,
     download_file_chunked,
     exists,
-    exists_confirmed,
     get_file_meta,
-    get_file_meta_confirmed,
     normalize_key,
     put_json,
     upload_file,
@@ -127,9 +122,7 @@ __all__ = [
     "delete",
     "delete_prefix",
     "exists",
-    "exists_confirmed",
     "get_file_meta",
-    "get_file_meta_confirmed",
     "list_keys",
     "list_keys_with_meta",
     "list_data_keys",

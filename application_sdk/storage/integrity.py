@@ -214,8 +214,8 @@ async def read_expected_digest(
     carries the gateway's body, so the storage seam recognises and retries it,
     and a real 404 still comes back as ``None``. Confirming a HEAD miss would
     need that same GET (or a listing) anyway, so the HEAD would only add a
-    round trip to every sidecar that exists. Revisit once the gateway answers
-    a no-route HEAD with something the storage layer can recognise.
+    round trip to every sidecar that exists. That holds with or without the
+    gateway problem, so this stays a GET after it is fixed.
     """
     if _is_internal_key(key) or sidecar_present is False:
         return None

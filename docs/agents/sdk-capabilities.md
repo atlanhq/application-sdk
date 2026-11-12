@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.56.0
-source-sha:    e544cfc5030e87ea6d103e9b896bb2dcfbc1efca
-source-date:   2026-11-12T08:50:04Z
+source-sha:    6c77cb8be0a6fb25f3b84578aa9898456c7adf74
+source-date:   2026-11-12T09:09:54Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -33,7 +33,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 8 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 50 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 449 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 85 |
@@ -3605,25 +3605,11 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Return ``True`` if *key* exists in the store.
 - **Defined in:** `application_sdk/storage/ops.py`
 
-#### `exists_confirmed`
-
-- **Import:** `from application_sdk.storage import exists_confirmed`
-- **Signature:** `exists_confirmed(key: str, *, ...)`
-- **Summary:** Like :func:`exists`, but confirm a miss with a listing.
-- **Defined in:** `application_sdk/storage/ops.py`
-
 #### `get_file_meta`
 
 - **Import:** `from application_sdk.storage import get_file_meta`
 - **Signature:** `get_file_meta(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Return ``(size_bytes, e_tag)`` for *key*, or ``None`` if not found.
-- **Defined in:** `application_sdk/storage/ops.py`
-
-#### `get_file_meta_confirmed`
-
-- **Import:** `from application_sdk.storage import get_file_meta_confirmed`
-- **Signature:** `get_file_meta_confirmed(key: str, *, ...)`
-- **Summary:** Like :func:`get_file_meta`, but confirm a miss with a listing.
 - **Defined in:** `application_sdk/storage/ops.py`
 
 #### `is_sidecar_key`

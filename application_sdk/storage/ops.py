@@ -1057,7 +1057,7 @@ async def _finalize_upload_integrity(
         )
         # Confirmed: a gateway instance without routes answers this HEAD with
         # a bodiless 404, which would fail an upload that landed.
-        remote_meta = await get_file_meta_confirmed(key, resolved, normalize=False)
+        remote_meta = await _get_file_meta_confirmed(key, resolved, normalize=False)
         if remote_meta is None:
             # The writer reported success but the object is not there. The
             # zero-byte case is the known one (some S3-style backends drop
@@ -1939,10 +1939,13 @@ async def exists(
 # seam's no-route retry. The two functions below spend one listing on a HEAD
 # miss to tell the two apart.
 #
-# Remove them (and point their callers back at ``exists`` / ``get_file_meta``)
-# once the gateway answers a no-route HEAD with something
-# ``_is_gateway_no_route`` can see — a distinct status or a header — rather than
-# a bare 404.
+# The real fix is on the platform, not here: the gateway is Kong, and a Kong
+# instance answers "no Route matched" only while a load balancer sends it
+# traffic before its routes have loaded. Once every load balancer in front of
+# Kong gates on ``/status/ready`` (APPPLAT-375 and its per-cloud follow-ups) and
+# the fleet's gateway logs show no more no-route 404s, remove these two and
+# point their callers back at ``exists`` / ``get_file_meta``. They are private
+# so that removal needs no deprecation cycle.
 
 
 async def _confirm_head_miss(
@@ -1988,7 +1991,7 @@ async def _confirm_head_miss(
     return found.get(key)
 
 
-async def get_file_meta_confirmed(
+async def _get_file_meta_confirmed(
     key: str,
     store: BoundStore | ObjectStore | None = None,
     *,
@@ -2009,9 +2012,8 @@ async def get_file_meta_confirmed(
     answer (a dedup probe, a sidecar lookup): there it would add a listing to
     the common path.
 
-    Remove once the gateway answers a no-route HEAD with something the storage
-    layer can recognise (a distinct status or header) instead of a bare 404;
-    callers then go back to :func:`get_file_meta`.
+    Remove once Kong no longer takes traffic before its routes load (see the
+    section comment above); callers then go back to :func:`get_file_meta`.
 
     Args:
         key: Object key / path.  Normalised by default.
@@ -2042,7 +2044,7 @@ async def get_file_meta_confirmed(
     return await _confirm_head_miss(resolved, key, listing_cache)
 
 
-async def exists_confirmed(
+async def _exists_confirmed(
     key: str,
     store: BoundStore | ObjectStore | None = None,
     *,
@@ -2052,9 +2054,9 @@ async def exists_confirmed(
     """Like :func:`exists`, but confirm a miss with a listing.
 
     Same contract, cost and removal condition as
-    :func:`get_file_meta_confirmed`, which this wraps.
+    :func:`_get_file_meta_confirmed`, which this wraps.
     """
-    meta = await get_file_meta_confirmed(
+    meta = await _get_file_meta_confirmed(
         key, store, normalize=normalize, listing_cache=listing_cache
     )
     return meta is not None

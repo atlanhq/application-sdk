@@ -19,15 +19,15 @@ from application_sdk.storage.chunked import _part_path, _transfer_state_path
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
 from application_sdk.storage.factory import create_local_store, create_memory_store
 from application_sdk.storage.ops import (
+    _exists_confirmed,
     _get_bytes,
+    _get_file_meta_confirmed,
     _put,
     delete,
     download_file,
     download_file_chunked,
     exists,
-    exists_confirmed,
     get_file_meta,
-    get_file_meta_confirmed,
     get_file_size,
     normalize_key,
     put_json,
@@ -2563,10 +2563,10 @@ class TestConfirmedHeadMiss:
             assert await get_file_meta("a/b/data.json", store, normalize=False) is None
             assert await exists("a/b/data.json", store, normalize=False) is False
             # ... the confirmed ones do not, and carry the listed size.
-            meta = await get_file_meta_confirmed(
+            meta = await _get_file_meta_confirmed(
                 "a/b/data.json", store, normalize=False
             )
-            assert await exists_confirmed("a/b/data.json", store, normalize=False)
+            assert await _exists_confirmed("a/b/data.json", store, normalize=False)
 
         assert meta is not None
         assert meta[0] == 10
@@ -2577,10 +2577,10 @@ class TestConfirmedHeadMiss:
 
         # A sibling, and the key's own sidecar, cannot stand in for the key.
         assert (
-            await get_file_meta_confirmed("a/b/data.json", store, normalize=False)
+            await _get_file_meta_confirmed("a/b/data.json", store, normalize=False)
             is None
         )
-        assert not await exists_confirmed("a/b/data.json", store, normalize=False)
+        assert not await _exists_confirmed("a/b/data.json", store, normalize=False)
 
     async def test_zero_byte_key_with_children_is_not_filtered_as_a_marker(
         self, store
@@ -2592,7 +2592,7 @@ class TestConfirmedHeadMiss:
         await _put("a/dir/child.json", b"{}", store, normalize=False)
 
         with _bodiless_head_404():
-            meta = await get_file_meta_confirmed("a/dir", store, normalize=False)
+            meta = await _get_file_meta_confirmed("a/dir", store, normalize=False)
 
         assert meta is not None
         assert meta[0] == 0
@@ -2603,14 +2603,14 @@ class TestConfirmedHeadMiss:
         await _put("leaf.json", b"{}", store, normalize=False)
 
         with _bodiless_head_404():
-            assert await exists_confirmed("leaf.json", store, normalize=False)
+            assert await _exists_confirmed("leaf.json", store, normalize=False)
 
     async def test_normalize_applies_to_the_key_before_the_lookup(self, store) -> None:
         key = normalize_key("a/data.json")
         await _put(key, b"{}", store, normalize=False)
 
         with _bodiless_head_404():
-            assert await exists_confirmed("a/data.json", store)
+            assert await _exists_confirmed("a/data.json", store)
 
     async def test_head_hit_does_not_list(self, store) -> None:
         await _put("a/data.json", b"{}", store, normalize=False)
@@ -2619,7 +2619,7 @@ class TestConfirmedHeadMiss:
             "application_sdk.storage.ops.obstore.list",
             side_effect=AssertionError("listed on a hit"),
         ):
-            assert await exists_confirmed("a/data.json", store, normalize=False)
+            assert await _exists_confirmed("a/data.json", store, normalize=False)
 
     async def test_shared_listing_cache_lists_each_parent_once(self, store) -> None:
         keys = [f"a/b/chunk-{i}.json" for i in range(5)]
@@ -2635,7 +2635,7 @@ class TestConfirmedHeadMiss:
             ) as listing,
         ):
             for key in keys:
-                assert await exists_confirmed(
+                assert await _exists_confirmed(
                     key, store, normalize=False, listing_cache=cache
                 )
 
@@ -2658,7 +2658,7 @@ class TestConfirmedHeadMiss:
             patch.object(ops, "_retry_sleep", AsyncMock()),
             pytest.raises(StorageGatewayNoRouteError) as exc,
         ):
-            await get_file_meta_confirmed("a/data.json", store, normalize=False)
+            await _get_file_meta_confirmed("a/data.json", store, normalize=False)
 
         assert exc.value.effective_retryable is True
 

@@ -2022,7 +2022,7 @@ class App(ABC):
             StorageHandoffIncompleteError,
         )
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
-            exists_confirmed,
+            _exists_confirmed,
         )
         from application_sdk.storage.reference import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
             _fetch_manifest,
@@ -2124,7 +2124,7 @@ class App(ABC):
                 if len(found) < ref.file_count:
                     missing.append(f"{key}/ ({len(found)}/{ref.file_count} objects)")
                     continue
-            elif not await exists_confirmed(
+            elif not await _exists_confirmed(
                 key, store=store, normalize=False, listing_cache=parent_listings
             ):
                 # Confirmed, not a bare HEAD: a gateway replica without routes
