@@ -52,6 +52,11 @@ if _importlib_util.find_spec("application_sdk.handler.base") is None:
         "pip install --force-reinstall --no-deps atlan-application-sdk-api"
     )
 
+from application_sdk._loop_stall_watchdog import (
+    LOOP_STALL_TIMEOUT_ENV,
+    LoopStallWatchdog,
+    largest_bound_within,
+)
 from application_sdk.app.base import _pascal_to_kebab
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.common import restart_marker
@@ -1287,11 +1292,21 @@ class _PostDrainExitArm:
     after the supervisor returns, as a fallback for a stop that never reached
     the hook. A worker that stops without a shutdown signal (a supervised
     restart after a fatal error) never arms it.
+
+    Starting it also stops ``stall_watchdog``: from here on the post-drain
+    deadline alone bounds the shutdown, as it does when no watchdog runs.
     """
 
-    def __init__(self, *, enabled: bool, shutdown_event: asyncio.Event) -> None:
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        shutdown_event: asyncio.Event,
+        stall_watchdog: LoopStallWatchdog | None = None,
+    ) -> None:
         self._enabled = enabled
         self._shutdown_event = shutdown_event
+        self._stall_watchdog = stall_watchdog
         self._lock = threading.Lock()
         self._started = False
 
@@ -1300,6 +1315,8 @@ class _PostDrainExitArm:
             self.start()
 
     def start(self) -> None:
+        if self._stall_watchdog is not None:
+            self._stall_watchdog.stop()
         if not self._enabled:
             return
         with self._lock:
@@ -1309,14 +1326,19 @@ class _PostDrainExitArm:
         _start_post_drain_exit_deadline()
 
 
-def _log_shutdown_budget() -> None:
+def _log_shutdown_budget(loop_stall: _LoopStallBound | None = None) -> None:
     """Log the effective shutdown bounds once, and warn when they overrun the grace.
 
     Every bound has its own env override, so the effective values can disagree
     with the declared grace. A sum past the grace means SIGKILL lands before
     shutdown finishes; logging it at startup makes that visible before it
-    happens instead of after.
+    happens instead of after. The event-loop stall bound is checked against
+    its own ordering: above the longest heartbeat timeout, and within the
+    budget.
     """
+    from application_sdk.app.task import (  # noqa: PLC0415 — cold path: worker startup only
+        HEARTBEAT_TIMEOUT_ENV,
+    )
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker startup only
         PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS,
         PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS,
@@ -1333,14 +1355,54 @@ def _log_shutdown_budget() -> None:
     post_drain = _post_drain_exit_timeout_seconds()
     logger.info(
         "Shutdown budget: grace=%s drain_delay=%ss drain=%ss post_drain=%ss "
-        "pushgateway_http_timeout=%ss pushgateway_delete_delay=%ss",
+        "pushgateway_http_timeout=%ss pushgateway_delete_delay=%ss loop_stall=%s",
         budget.grace_seconds if budget is not None else "undeclared",
         SHUTDOWN_DRAIN_DELAY_SECONDS,
         drain,
         post_drain,
         PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS,
         PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS,
+        f"{loop_stall.seconds:g}s"
+        if loop_stall is not None and loop_stall.seconds > 0
+        else "off",
     )
+    if loop_stall is not None and not loop_stall.in_order():
+        if not loop_stall.overridden and loop_stall.heartbeat_task is None:
+            # Only the SDK's default heartbeat timeout is past what the grace
+            # allows: expected for a short grace, and nothing in the app to fix.
+            logger.info(
+                "Event-loop stall bound %gs is below the default heartbeat timeout "
+                "(%gs, %s) because %s=%s leaves no more room before SIGKILL; a "
+                "task holding the event loop longer than that during the drain "
+                "is ended as a stall",
+                loop_stall.seconds,
+                loop_stall.longest_heartbeat_seconds,
+                HEARTBEAT_TIMEOUT_ENV,
+                SHUTDOWN_GRACE_SECONDS_ENV,
+                budget.grace_seconds if budget is not None else "undeclared",
+            )
+        else:
+            logger.warning(
+                "Event-loop stall bound out of order: the longest registered "
+                "heartbeat timeout (%gs) < loop_stall %gs <= what still fires "
+                "before SIGKILL (%s) must hold. %s",
+                loop_stall.longest_heartbeat_seconds,
+                loop_stall.seconds,
+                f"{loop_stall.limit_seconds:g}s"
+                if loop_stall.limit_seconds is not None
+                else "unbounded",
+                _loop_stall_order_advice(loop_stall),
+            )
+    if loop_stall is not None and loop_stall.unwatched_tasks:
+        logger.warning(
+            "Tasks without a heartbeat timeout may run past the event-loop stall "
+            "bound (loop_stall %gs): %s. If one holds the event loop during "
+            "shutdown, the watchdog ends the process after %gs instead of waiting "
+            "for it. Give them a heartbeat timeout to make the wait explicit",
+            loop_stall.seconds,
+            ", ".join(loop_stall.unwatched_tasks),
+            loop_stall.seconds,
+        )
     if budget is None:
         return
     # A disabled post-drain deadline (<= 0) is unbounded; count the derived
@@ -1401,6 +1463,194 @@ def _start_post_drain_exit_deadline(
     timer.daemon = True
     timer.start()
     return timer
+
+
+# Kept between the longest heartbeat timeout and the stall bound, so a task
+# that holds the loop for exactly its heartbeat timeout is never cut short.
+_LOOP_STALL_MARGIN_SECONDS = 15
+
+
+@dataclass(frozen=True)
+class _LoopStallBound:
+    """The event-loop stall bound for a shutting-down worker, and its inputs."""
+
+    seconds: float
+    """The bound; ``0`` turns the watchdog off."""
+    longest_heartbeat_seconds: float
+    """The longest heartbeat timeout among the registered tasks."""
+    limit_seconds: float | None
+    """The largest bound that still ends the process before SIGKILL; ``None``
+    when the grace is not declared."""
+    overridden: bool
+    unwatched_tasks: tuple[str, ...] = ()
+    """App tasks without a heartbeat timeout that may run longer than the bound,
+    as ``app.task (start-to-close s)``."""
+    heartbeat_task: str | None = None
+    """The task whose heartbeat timeout is the longest, as ``app.task``, when it
+    is longer than the SDK's default; ``None`` when the default is the longest."""
+    exit_by_seconds: float | None = None
+    """How long after the signal the watchdog's exit must land so daprd keeps
+    its headroom; ``None`` when the grace is not declared."""
+
+    def in_order(self) -> bool:
+        """``longest heartbeat timeout < bound <= limit``, or the watchdog is off."""
+        if self.seconds <= 0:
+            return True
+        above_heartbeats = self.seconds > self.longest_heartbeat_seconds
+        return above_heartbeats and (
+            self.limit_seconds is None or self.seconds <= self.limit_seconds
+        )
+
+
+def _loop_stall_order_advice(loop_stall: _LoopStallBound) -> str:
+    """What restores ``longest heartbeat timeout < bound <= limit``."""
+    from application_sdk.app.task import (  # noqa: PLC0415 — cold path: worker startup only
+        _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS,
+        HEARTBEAT_TIMEOUT_ENV,
+    )
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker startup only
+        SHUTDOWN_GRACE_SECONDS_ENV,
+    )
+
+    if loop_stall.overridden:
+        return f"Unset {LOOP_STALL_TIMEOUT_ENV} to derive it"
+    consequence = (
+        "; until then a stall during the drain can end work Temporal still counts "
+        "as alive"
+    )
+    if loop_stall.seconds <= _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS:
+        # Even the default heartbeat timeout does not fit, so no task change helps.
+        return (
+            f"Raise {SHUTDOWN_GRACE_SECONDS_ENV}: this grace leaves less than the "
+            f"default heartbeat timeout ({_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS}s, "
+            f"{HEARTBEAT_TIMEOUT_ENV}), so lowering {loop_stall.heartbeat_task} "
+            f"alone does not restore the order{consequence}"
+        )
+    return (
+        f"Raise {SHUTDOWN_GRACE_SECONDS_ENV} or lower the heartbeat timeout of "
+        f"{loop_stall.heartbeat_task} below {loop_stall.seconds:g}s{consequence}"
+    )
+
+
+def _registered_tasks() -> list[Any]:
+    return [
+        task
+        for tasks in TaskRegistry.get_instance().get_all_tasks().values()
+        for task in tasks
+    ]
+
+
+def _longest_heartbeat_timeout() -> tuple[float, str | None]:
+    """The longest heartbeat timeout among the registered tasks, and the task
+    that sets it when that is longer than the SDK's default (else ``None``).
+
+    A task that holds the event loop for less than its heartbeat timeout is
+    still alive to Temporal, so a stall during the drain must outlast it. The
+    SDK's default heartbeat timeout is the floor. A task without a heartbeat
+    timeout does not count: once the loop stops, it is indistinguishable from
+    a freeze, and Temporal reclaims it only at its start-to-close timeout,
+    which would leave the bound no use (see ``_unwatched_tasks``).
+    """
+    from application_sdk.app.task import (  # noqa: PLC0415 — cold path: worker startup only
+        _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS,
+    )
+
+    longest: tuple[float, str | None] = (
+        float(_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS),
+        None,
+    )
+    for task in _registered_tasks():
+        if (
+            task.heartbeat_timeout_seconds
+            and task.heartbeat_timeout_seconds > longest[0]
+        ):
+            longest = (
+                float(task.heartbeat_timeout_seconds),
+                f"{task.app_name}.{task.name}",
+            )
+    return longest
+
+
+def _unwatched_tasks(bound_seconds: float) -> tuple[str, ...]:
+    """App tasks without a heartbeat timeout that may run past the bound.
+
+    The watchdog will not wait for them at shutdown if they hold the loop, so
+    their owners are told at startup. The SDK's own tasks are left out: they
+    await their I/O rather than hold the loop.
+    """
+    return tuple(
+        f"{task.app_name}.{task.name} ({task.timeout_seconds}s)"
+        for task in _registered_tasks()
+        if not task.heartbeat_timeout_seconds
+        and task.timeout_seconds > bound_seconds
+        and not getattr(task.func, "__module__", "").startswith("application_sdk.")
+    )
+
+
+def _loop_stall_bound() -> _LoopStallBound:
+    """Derive the stall bound from the registered tasks and the shutdown budget.
+
+    The bound sits just past the longest registered heartbeat timeout, so a
+    stall during the drain never ends work Temporal still counts as alive, and
+    within the budget, so the exit lands before SIGKILL with daprd's headroom
+    left; the budget wins when the two cannot both hold. An explicit
+    ``ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS`` replaces it, and ``0`` turns
+    the watchdog off.
+    """
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker startup only
+        load_shutdown_budget,
+        load_worker_loop_stall_timeout_override,
+    )
+
+    budget = load_shutdown_budget()
+    heartbeat, heartbeat_task = _longest_heartbeat_timeout()
+    limit = (
+        largest_bound_within(budget.loop_stall_limit_seconds)
+        if budget is not None
+        else None
+    )
+    override = load_worker_loop_stall_timeout_override()
+    if override is not None:
+        seconds, overridden = override, True
+    else:
+        seconds, overridden = heartbeat + _LOOP_STALL_MARGIN_SECONDS, False
+        if limit is not None:
+            seconds = min(seconds, limit)
+    return _LoopStallBound(
+        seconds,
+        heartbeat,
+        limit,
+        overridden=overridden,
+        unwatched_tasks=_unwatched_tasks(seconds) if seconds > 0 else (),
+        heartbeat_task=heartbeat_task,
+        exit_by_seconds=budget.loop_stall_limit_seconds if budget is not None else None,
+    )
+
+
+def _log_exit_deadline_reached(seconds: float) -> None:
+    """Label the stack dump the shutdown exit deadline is about to write.
+
+    Called from the running loop, so the dump that may follow is not a stall.
+    """
+    logger.warning(
+        "Shutdown drain still running at the exit deadline: unless it finishes "
+        "within %gs, the process dumps every thread's stack and exits with code 1 "
+        "before SIGKILL. The event loop is still running, so that dump marks the "
+        "deadline, not a stalled loop",
+        seconds,
+    )
+
+
+def _install_loop_stall_watchdog(watchdog: LoopStallWatchdog) -> None:
+    """Arm the watchdog at the first SIGTERM or SIGINT. Call after the loop's
+    own signal handlers are installed, so it chains in front of them."""
+    watchdog.install((signal.SIGINT, signal.SIGTERM))
+    logger.info(
+        "Event-loop stall watchdog set for shutdown: after SIGTERM or SIGINT, if "
+        "the event loop does not run for %gs the process dumps every thread's "
+        "stack to stderr and exits with code 1",
+        watchdog.timeout_seconds,
+    )
 
 
 async def _observe_worker_poll_state(
@@ -1709,8 +1959,10 @@ async def run_worker_mode(
     Loads the app class, connects to Temporal, creates a worker, and
     runs until a shutdown signal is received.
     ``bound_post_drain_exit`` starts the post-drain exit deadline, which ends
-    the whole process if teardown hangs. Only the process-owning entry point
-    sets it; leave it off when awaiting this from code that keeps the process.
+    the whole process if teardown hangs, and the event-loop stall watchdog,
+    which ends it if the loop stops running during shutdown. Only the
+    process-owning entry point sets it; leave it off when awaiting this from
+    code that keeps the process.
     """
     global _worker_event_loop
     _worker_event_loop = asyncio.get_running_loop()
@@ -1883,19 +2135,38 @@ async def run_worker_mode(
     # Graceful shutdown
     shutdown_event = asyncio.Event()
 
+    # Like the post-drain deadline it hands over to, the watchdog ends the
+    # whole process, so only the process-owning entry point runs it.
+    loop_stall = _loop_stall_bound()
+    stall_watchdog = (
+        LoopStallWatchdog(
+            loop_stall.seconds,
+            loop_stall.exit_by_seconds,
+            on_exit_deadline=_log_exit_deadline_reached,
+        )
+        if bound_post_drain_exit and loop_stall.seconds > 0
+        else None
+    )
+
     def _signal_handler() -> None:
         logger.info("Shutdown signal received")
+        if stall_watchdog is not None:
+            stall_watchdog.start_rearming()
         shutdown_event.set()
 
     # Read by _build_worker's on_drained hook, which only runs after this point.
     post_drain_arm = _PostDrainExitArm(
-        enabled=bound_post_drain_exit, shutdown_event=shutdown_event
+        enabled=bound_post_drain_exit,
+        shutdown_event=shutdown_event,
+        stall_watchdog=stall_watchdog,
     )
-    _log_shutdown_budget()
+    _log_shutdown_budget(loop_stall if bound_post_drain_exit else None)
 
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
+    if stall_watchdog is not None:
+        _install_loop_stall_watchdog(stall_watchdog)
 
     logger.info("Worker started: app=%s queue=%s", app_name, config.task_queue)
     _log_process_memory_baseline()
@@ -2038,8 +2309,10 @@ async def run_combined_mode(
     enabling single-container deployment. Both components share the same
     event loop and shut down together on SIGINT/SIGTERM.
     ``bound_post_drain_exit`` starts the post-drain exit deadline, which ends
-    the whole process if teardown hangs. Only the process-owning entry point
-    sets it; leave it off when awaiting this from code that keeps the process.
+    the whole process if teardown hangs, and the event-loop stall watchdog,
+    which ends it if the loop stops running during shutdown. Only the
+    process-owning entry point sets it; leave it off when awaiting this from
+    code that keeps the process.
     """
     global _worker_event_loop
     _worker_event_loop = asyncio.get_running_loop()
@@ -2258,20 +2531,39 @@ async def run_combined_mode(
 
     shutdown_event = asyncio.Event()
 
+    # Like the post-drain deadline it hands over to, the watchdog ends the
+    # whole process, so only the process-owning entry point runs it.
+    loop_stall = _loop_stall_bound()
+    stall_watchdog = (
+        LoopStallWatchdog(
+            loop_stall.seconds,
+            loop_stall.exit_by_seconds,
+            on_exit_deadline=_log_exit_deadline_reached,
+        )
+        if bound_post_drain_exit and loop_stall.seconds > 0
+        else None
+    )
+
     def _signal_handler() -> None:
         logger.info("Shutdown signal received")
+        if stall_watchdog is not None:
+            stall_watchdog.start_rearming()
         shutdown_event.set()
         uvicorn_server.should_exit = True
 
     # Read by _build_worker's on_drained hook, which only runs after this point.
     post_drain_arm = _PostDrainExitArm(
-        enabled=bound_post_drain_exit, shutdown_event=shutdown_event
+        enabled=bound_post_drain_exit,
+        shutdown_event=shutdown_event,
+        stall_watchdog=stall_watchdog,
     )
-    _log_shutdown_budget()
+    _log_shutdown_budget(loop_stall if bound_post_drain_exit else None)
 
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
     _install_graceful_signal_handlers(loop, _signal_handler)
+    if stall_watchdog is not None:
+        _install_loop_stall_watchdog(stall_watchdog)
 
     logger.info(
         "Combined mode started: app=%s queue=%s port=%d",
@@ -2280,6 +2572,16 @@ async def run_combined_mode(
         config.handler_port,
     )
     _log_process_memory_baseline()
+    if stall_watchdog is not None:
+        # While serving, uvicorn replaces the process-level SIGTERM and SIGINT
+        # handlers with its own handle_exit, so the arming has to go there too.
+        uvicorn_handle_exit = uvicorn_server.handle_exit
+
+        def _handle_exit(sig: int, frame: Any) -> None:
+            stall_watchdog.on_shutdown_signal()
+            uvicorn_handle_exit(sig, frame)
+
+        uvicorn_server.handle_exit = _handle_exit  # type: ignore[method-assign]
     # uvicorn keeps serving while the worker is supervised and restarted
     # independently; a shutdown signal (which also sets should_exit) stops both.
     async with health_server:
@@ -2666,6 +2968,12 @@ Environment Variables:
   ATLAN_WORKER_LIVENESS_FATAL_RECOVERY_SECONDS
                            Seconds a fatal poll error may go without the worker
                            polling again before /live fails (default: 600; 0 = disabled).
+  ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS
+                           After SIGTERM/SIGINT, seconds the event loop may go without
+                           running before the process dumps every thread's stack and
+                           exits with code 1 (default: derived from the registered
+                           tasks' heartbeat timeouts and the shutdown budget;
+                           0 = disabled).
   ATLAN_LOG_LEVEL          Log level (default: INFO)
                            Falls back to LOG_LEVEL (v2)
 

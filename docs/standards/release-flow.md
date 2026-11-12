@@ -326,7 +326,9 @@ resolves a semver image to its release, since `:0.3.0` carries no SHA.
 
 The SDK reads the file at startup (`application_sdk.constants.load_build_info`)
 and reports `app_version` and `commit_sha` on `worker_start` and on every
-`token_refresh`. The baked file wins over `ATLAN_APPLICATION_VERSION`: the env
+`token_refresh` (payload shapes: `WorkerStartEventData` and
+`WorkerTokenRefreshEventData` in `application_sdk/contracts/events.py`; the
+`token_refresh` flag and timing fields are strings on the wire). The baked file wins over `ATLAN_APPLICATION_VERSION`: the env
 var describes what a deployer thinks it deployed, the file describes the image.
 Single-app SDR customers set no version env vars and only bump the tag when
 they upgrade, so the file is the one identity that survives their upgrades.

@@ -16,6 +16,10 @@ calls :func:`skip_record` from inside its per-record loop::
         )
         continue
 
+A synchronous mapper cannot await :func:`skip_record`; it raises a
+:class:`RecordSkipped` leaf such as :class:`BlankIdentity` and the loop records
+it (see :class:`RecordSkipped`).
+
 Each call:
 
 * appends one NDJSON line ``{record_id, entity_type, reason, detail, record}``
@@ -54,7 +58,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Final
+from typing import ClassVar, Final
 
 import orjson
 from pydantic import BaseModel
@@ -108,13 +112,147 @@ class SkipReason(StrEnum):
     UNSUPPORTED_TYPE = "unsupported_type"
 
 
+SkippableRecord = Mapping[str, object] | BaseModel
+"""A record :func:`skip_record` accepts: a mapping (a source row) or a pydantic model."""
+
+
+class RecordSkipped(Exception):
+    """A synchronous mapper's way to hand a skipped record up to its ``@task`` loop.
+
+    :func:`skip_record` is async, so a plain ``def`` mapper cannot call it. The
+    mapper raises a leaf of this class instead, carrying everything
+    :func:`skip_record` needs; the loop catches it and records the skip::
+
+        # mapper: stays sync and pure
+        def map_table(row: Row, connection_qn: str) -> Table:
+            if not row.schema_name:
+                raise BlankIdentity(
+                    row,
+                    record_id=row.table_id,
+                    entity_type="Table",
+                    detail="schema name is blank",
+                )
+            return Table.creator(...)
+
+        # @task loop
+        for row in rows:
+            try:
+                asset = map_table(row, connection_qn)
+            except RecordSkipped as skip:
+                await skip_record(
+                    skip.record,
+                    skip.reason,
+                    record_id=skip.record_id,
+                    entity_type=skip.entity_type,
+                    detail=skip.detail,
+                )
+                continue
+
+    The loop catches only this class. A creator's ``ValueError`` for a value
+    the mapper did not guard still fails the task, so an asset never vanishes
+    without a guard naming why.
+
+    Raise a leaf, never this base: the reason is the leaf's identity (a
+    ClassVar, as ADR-0013 does for error codes), so it cannot differ per
+    instance. There is one leaf per :class:`SkipReason`.
+
+    Not an :class:`~application_sdk.errors.AppError`: a skip is a decision, not
+    a failure, and has no category, owner or retry policy. One that escapes the
+    ``@task`` uncaught fails the activity as a non-retryable ``InternalError``.
+
+    The exception carries the record itself, not just its ids: a mapper may
+    skip a nested record (one column of a table row, one path of a spec) that
+    the loop never holds, and the file must keep the record that was actually
+    skipped. The record is customer source data, so it is kept out of
+    ``args``, ``str()`` and ``repr()`` — tracebacks, logs and Temporal failure
+    text name only ``record_id``, ``entity_type`` and ``reason``.
+
+    Attributes:
+        record: The skipped source record, as :func:`skip_record` takes it.
+        reason: Why the record was skipped. Fixed per leaf.
+        record_id: A non-sensitive identifier for the record.
+        entity_type: The entity the record would have become, e.g. ``"Table"``.
+        detail: Optional specifics for the reviewer; reaches the file only.
+    """
+
+    reason: ClassVar[SkipReason]
+
+    def __init__(
+        self,
+        record: SkippableRecord,
+        *,
+        record_id: str,
+        entity_type: str,
+        detail: str | None = None,
+    ) -> None:
+        if type(self) is RecordSkipped:
+            raise TypeError(
+                "raise a RecordSkipped leaf such as BlankIdentity; the reason is "
+                "fixed by the class"
+            )
+        # ``args`` feeds repr() and traceback text: ids only, never the record.
+        super().__init__(record_id, entity_type)
+        self.record = record
+        self.record_id = record_id
+        self.entity_type = entity_type
+        self.detail = detail
+
+    def __str__(self) -> str:
+        # ids and reason only: ``detail`` is for the file, not logs.
+        return f"{self.entity_type} {self.record_id} skipped: {self.reason.value}"
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(record_id={self.record_id!r}, "
+            f"entity_type={self.entity_type!r})"
+        )
+
+    def __reduce__(self) -> tuple[object, ...]:
+        # Keyword-only __init__ breaks Exception's default pickling, which a
+        # mapper run in a process pool depends on.
+        return (
+            _rebuild_record_skipped,
+            (type(self), self.record, self.record_id, self.entity_type, self.detail),
+        )
+
+
+def _rebuild_record_skipped(
+    cls: type[RecordSkipped],
+    record: SkippableRecord,
+    record_id: str,
+    entity_type: str,
+    detail: str | None,
+) -> RecordSkipped:
+    return cls(record, record_id=record_id, entity_type=entity_type, detail=detail)
+
+
+class BlankIdentity(RecordSkipped):
+    """A field the record's qualifiedName is built from is blank. See :class:`RecordSkipped`."""
+
+    reason: ClassVar[SkipReason] = SkipReason.BLANK_IDENTITY
+
+
+class MissingRequiredField(RecordSkipped):
+    """A required field other than an identity input is absent. See :class:`RecordSkipped`."""
+
+    reason: ClassVar[SkipReason] = SkipReason.MISSING_REQUIRED_FIELD
+
+
+class MalformedRecord(RecordSkipped):
+    """The source record cannot be parsed or has the wrong shape. See :class:`RecordSkipped`."""
+
+    reason: ClassVar[SkipReason] = SkipReason.MALFORMED_RECORD
+
+
+class UnsupportedType(RecordSkipped):
+    """The source record is of a type the app does not map. See :class:`RecordSkipped`."""
+
+    reason: ClassVar[SkipReason] = SkipReason.UNSUPPORTED_TYPE
+
+
 def reason_metric_name(reason: SkipReason) -> str:
     """The per-reason metric name, e.g. ``skipped-records-blank-identity``."""
     return f"{SKIPPED_RECORDS_METRIC}-{reason.value.replace('_', '-')}"
-
-
-SkippableRecord = Mapping[str, object] | BaseModel
-"""A record :func:`skip_record` accepts: a mapping (a source row) or a pydantic model."""
 
 
 class _RollbackFailedError(Exception):

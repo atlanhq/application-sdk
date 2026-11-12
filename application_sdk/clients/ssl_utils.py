@@ -15,8 +15,8 @@ from application_sdk._logging import get_logger
 from application_sdk.common.ssl_utils import (
     CERT_FILE_EXTENSIONS,
     SSL_CERT_DIR,
-    _get_default_ca_bundle_path,
-    _read_default_ca_certs,
+    _get_default_ca_bundle_path,  # noqa: F401 — importable from here before the move
+    _read_default_ca_certs,  # noqa: F401 — importable from here before the move
     create_ssl_context_with_custom_certs,
     get_certificate_files,
     get_custom_ca_cert_bytes,
@@ -35,6 +35,4 @@ __all__ = [
     "get_ssl_cert_dir",
     "get_ssl_context",
     "logger",
-    "_get_default_ca_bundle_path",
-    "_read_default_ca_certs",
 ]

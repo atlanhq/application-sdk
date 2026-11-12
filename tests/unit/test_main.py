@@ -15,6 +15,10 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk._loop_stall_watchdog import LoopStallWatchdog, timer_seconds
+from application_sdk.app.registry import TaskRegistry
+from application_sdk.app.task import TaskMetadata
+from application_sdk.contracts.base import Input, Output
 from application_sdk.main import (
     AppConfig,
     _create_infrastructure,
@@ -24,9 +28,12 @@ from application_sdk.main import (
     _install_excepthook,
     _install_graceful_signal_handlers,
     _log_dapr_components,
+    _log_exit_deadline_reached,
     _log_process_memory_baseline,
     _log_shutdown_budget,
     _loop_exception_handler,
+    _loop_stall_bound,
+    _LoopStallBound,
     _observe_worker_poll_state,
     _parse_all_component_yamls,
     _parse_workflow_max_timeout_hours,
@@ -1916,6 +1923,88 @@ class TestRunWorkerMode:
 
         start.assert_not_called()
 
+    async def test_stall_watchdog_is_set_for_shutdown_only(
+        self, worker_patches, wait_patch
+    ) -> None:
+        """Chained after the loop's signal handlers, re-armed by the loop's
+        shutdown handler, and handed over to the post-drain deadline."""
+        order: list[str] = []
+        handlers: list[Any] = []
+        watchdog = MagicMock(spec=LoopStallWatchdog)
+        watchdog.timeout_seconds = 75
+        watchdog.install.side_effect = lambda *_: order.append("set for shutdown")
+        watchdog.stop.side_effect = lambda: order.append("watchdog off")
+        health_cm = worker_patches["health"].return_value
+        health_cm.__aexit__.side_effect = lambda *_: order.append("drained")
+
+        def _install(loop: Any, handler: Any) -> None:
+            order.append("loop handlers")
+            handlers.append(handler)
+
+        with (
+            patch(
+                "application_sdk.main.LoopStallWatchdog", return_value=watchdog
+            ) as cls,
+            patch(
+                "application_sdk.main._loop_stall_bound",
+                return_value=_LoopStallBound(
+                    75, 60, None, overridden=False, exit_by_seconds=300
+                ),
+            ),
+            patch(
+                "application_sdk.main._install_graceful_signal_handlers",
+                side_effect=_install,
+            ),
+            patch(
+                "application_sdk.main._start_post_drain_exit_deadline",
+                side_effect=lambda: order.append("deadline"),
+            ),
+        ):
+            await run_worker_mode(
+                AppConfig(mode="worker", app_module="pkg:FakeApp"),
+                bound_post_drain_exit=True,
+            )
+            watchdog.start_rearming.assert_not_called()
+            handlers[0]()
+
+        cls.assert_called_once_with(
+            75, 300, on_exit_deadline=_log_exit_deadline_reached
+        )
+        assert order == [
+            "loop handlers",
+            "set for shutdown",
+            "drained",
+            "watchdog off",
+            "deadline",
+        ]
+        watchdog.start_rearming.assert_called_once_with()
+
+    async def test_stall_watchdog_off_when_awaited_directly(
+        self, worker_patches, wait_patch
+    ) -> None:
+        """It ends the process, so a caller that keeps the process gets none."""
+        with patch("application_sdk.main.LoopStallWatchdog") as cls:
+            await run_worker_mode(AppConfig(mode="worker", app_module="pkg:FakeApp"))
+
+        cls.assert_not_called()
+
+    async def test_stall_watchdog_off_when_the_bound_is_zero(
+        self, worker_patches, wait_patch
+    ) -> None:
+        with (
+            patch("application_sdk.main.LoopStallWatchdog") as cls,
+            patch(
+                "application_sdk.main._loop_stall_bound",
+                return_value=_LoopStallBound(0, 60, None, overridden=True),
+            ),
+        ):
+            await run_worker_mode(
+                AppConfig(mode="worker", app_module="pkg:FakeApp"),
+                bound_post_drain_exit=True,
+            )
+
+        cls.assert_not_called()
+
     async def test_auth_enabled_acquires_token(
         self, worker_patches, auth_manager, wait_patch
     ) -> None:
@@ -2368,6 +2457,60 @@ class TestRunCombinedMode:
             )
 
         start.assert_not_called()
+
+    async def test_stall_watchdog_is_set_for_shutdown_only(
+        self, combined_patches
+    ) -> None:
+        """As in worker mode, and uvicorn's own exit handler arms it too: while
+        serving, uvicorn replaces the process-level signal handlers."""
+        order: list[str] = []
+        watchdog = MagicMock(spec=LoopStallWatchdog)
+        watchdog.timeout_seconds = 75
+        watchdog.install.side_effect = lambda *_: order.append("set for shutdown")
+        watchdog.stop.side_effect = lambda: order.append("watchdog off")
+        health_cm = combined_patches["health"].return_value
+        health_cm.__aexit__.side_effect = lambda *_: order.append("drained")
+        uvicorn_server = combined_patches["uvicorn_server"]
+        uvicorn_exit = uvicorn_server.handle_exit
+
+        with (
+            patch(
+                "application_sdk.main.LoopStallWatchdog", return_value=watchdog
+            ) as cls,
+            patch(
+                "application_sdk.main._loop_stall_bound",
+                return_value=_LoopStallBound(
+                    75, 60, None, overridden=False, exit_by_seconds=300
+                ),
+            ),
+            patch(
+                "application_sdk.main._start_post_drain_exit_deadline",
+                side_effect=lambda: order.append("deadline"),
+            ),
+        ):
+            await run_combined_mode(
+                AppConfig(mode="combined", app_module="pkg:FakeApp"),
+                bound_post_drain_exit=True,
+            )
+
+        cls.assert_called_once_with(
+            75, 300, on_exit_deadline=_log_exit_deadline_reached
+        )
+        assert order == ["set for shutdown", "drained", "watchdog off", "deadline"]
+        uvicorn_server.handle_exit(signal.SIGTERM, None)
+        watchdog.on_shutdown_signal.assert_called_once_with()
+        uvicorn_exit.assert_called_once_with(signal.SIGTERM, None)
+
+    async def test_stall_watchdog_off_when_awaited_directly(
+        self, combined_patches
+    ) -> None:
+        """It ends the process, so a caller that keeps the process gets none."""
+        with patch("application_sdk.main.LoopStallWatchdog") as cls:
+            await run_combined_mode(
+                AppConfig(mode="combined", app_module="pkg:FakeApp")
+            )
+
+        cls.assert_not_called()
 
     async def test_reuses_existing_infrastructure(self, combined_patches) -> None:
         """If infra is already set, _create_infrastructure must NOT be called."""
@@ -3588,6 +3731,206 @@ class TestLogShutdownBudget:
             _log_shutdown_budget()
         assert "undeclared" in log.info.call_args.args
         log.warning.assert_not_called()
+
+
+def test_exit_deadline_log_says_the_dump_is_not_a_stall() -> None:
+    with patch("application_sdk.main.logger") as log:
+        _log_exit_deadline_reached(7.5)
+    log.warning.assert_called_once()
+    message, seconds = log.warning.call_args.args
+    assert seconds == 7.5
+    assert "not a stalled loop" in message
+
+
+class TestLoopStallBound:
+    """The stall bound: past the longest heartbeat timeout, within the budget."""
+
+    @pytest.fixture(autouse=True)
+    def _no_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS", raising=False)
+        monkeypatch.delenv("ATLAN_SHUTDOWN_GRACE_SECONDS", raising=False)
+
+    @staticmethod
+    def _register(
+        name: str,
+        *,
+        heartbeat: int | None,
+        timeout: int,
+        module: str = "app.activities",
+    ) -> None:
+        def func(*_: Any) -> None:
+            return None
+
+        func.__module__ = module
+        TaskRegistry.get_instance().register(
+            "stall-app",
+            TaskMetadata(
+                name=name,
+                func=func,
+                input_type=Input,
+                output_type=Output,
+                heartbeat_timeout_seconds=heartbeat,
+                timeout_seconds=timeout,
+            ),
+        )
+
+    def test_default_tasks_give_a_bound_past_the_default_heartbeat(self) -> None:
+        self._register("quick", heartbeat=30, timeout=600)
+
+        bound = _loop_stall_bound()
+
+        assert (bound.seconds, bound.longest_heartbeat_seconds) == (75, 60)
+        assert bound.heartbeat_task is None
+        assert bound.limit_seconds is None
+        assert bound.exit_by_seconds is None
+        assert bound.unwatched_tasks == ()
+        assert bound.in_order()
+
+    def test_tasks_without_heartbeat_do_not_count_and_are_named(self) -> None:
+        """A worker shaped like a connector's: 120 s heartbeats plus the SDK's
+        own 300 s cleanup task and an app task with no heartbeat timeout and
+        the 86 400 s start-to-close default. Counting those would push the
+        bound past a day and switch the watchdog off in practice."""
+        self._register("extract", heartbeat=120, timeout=7200)
+        self._register("transform", heartbeat=120, timeout=7200)
+        self._register(
+            "cleanup_storage",
+            heartbeat=None,
+            timeout=300,
+            module="application_sdk.app.base",
+        )
+        self._register("publish", heartbeat=None, timeout=86400)
+        # Finishes within the bound even if it holds the loop, so not named.
+        self._register("tidy", heartbeat=None, timeout=60)
+
+        bound = _loop_stall_bound()
+
+        assert bound.seconds == 135
+        assert bound.heartbeat_task == "stall-app.extract"
+        assert timer_seconds(bound.seconds) == 150
+        assert bound.unwatched_tasks == ("stall-app.publish (86400s)",)
+        assert bound.in_order()
+
+    def test_unwatched_tasks_are_named_in_a_warning(self) -> None:
+        bound = _LoopStallBound(
+            135,
+            120,
+            None,
+            overridden=False,
+            unwatched_tasks=("stall-app.publish (86400s)",),
+        )
+        with patch("application_sdk.main.logger") as log:
+            _log_shutdown_budget(bound)
+
+        log.warning.assert_called_once()
+        message = log.warning.call_args.args[0] % log.warning.call_args.args[1:]
+        assert "stall-app.publish (86400s)" in message
+        assert "heartbeat timeout" in message
+
+    def test_long_grace_keeps_the_task_derived_bound(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "86400")
+        self._register("long", heartbeat=3600, timeout=7200)
+
+        bound = _loop_stall_bound()
+
+        assert bound.seconds == 3615
+        assert bound.in_order()
+
+    def test_short_grace_still_fires_before_sigkill(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 30 s grace keeps 2 s for daprd: the timer, bound plus one re-arm
+        interval, must run out within 28 s of the signal."""
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "30")
+
+        bound = _loop_stall_bound()
+
+        assert bound.limit_seconds == pytest.approx(22.4)
+        assert bound.seconds == pytest.approx(22.4)
+        assert timer_seconds(bound.seconds) == pytest.approx(28)
+        assert bound.exit_by_seconds == 28
+        assert bound.heartbeat_task is None
+        assert not bound.in_order()
+
+    def test_override_replaces_the_derived_bound(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS", "0")
+        assert _loop_stall_bound().seconds == 0
+        assert _loop_stall_bound().in_order()
+
+        monkeypatch.setenv("ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS", "90")
+        bound = _loop_stall_bound()
+        assert (bound.seconds, bound.overridden) == (90, True)
+
+    def test_budget_line_names_the_bound(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        with patch("application_sdk.main.logger") as log:
+            _log_shutdown_budget(_LoopStallBound(75, 60, None, overridden=False))
+        assert "75s" in log.info.call_args.args
+        log.warning.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("bound", "advice"),
+        [
+            # An override at or below the longest heartbeat timeout.
+            (_LoopStallBound(30, 60, None, overridden=True), "Unset"),
+            # An override past what still fires before SIGKILL.
+            (_LoopStallBound(500, 60, 400, overridden=True), "Unset"),
+            # A derived bound the grace cut below a task's own heartbeat timeout.
+            (
+                _LoopStallBound(
+                    135,
+                    300,
+                    135,
+                    overridden=False,
+                    heartbeat_task="stall-app.extract",
+                ),
+                "lower the heartbeat timeout of stall-app.extract below 135s",
+            ),
+            # Cut below the default too: lowering the task alone cannot fix it.
+            (
+                _LoopStallBound(
+                    46.4,
+                    120,
+                    46.4,
+                    overridden=False,
+                    heartbeat_task="stall-app.extract",
+                ),
+                "does not restore the order",
+            ),
+        ],
+    )
+    def test_out_of_order_bound_warns(
+        self, bound: _LoopStallBound, advice: str
+    ) -> None:
+        with patch("application_sdk.main.logger") as log:
+            _log_shutdown_budget(bound)
+        log.warning.assert_called_once()
+        message = log.warning.call_args.args[0] % log.warning.call_args.args[1:]
+        assert "out of order" in message
+        assert advice in message
+
+    def test_short_grace_below_the_default_heartbeat_logs_info(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the SDK's default heartbeat timeout outlasts a 30 s grace: no
+        app change can fix that, so it is not a WARNING on every start."""
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "30")
+        bound = _loop_stall_bound()
+        assert not bound.in_order()
+
+        with patch("application_sdk.main.logger") as log:
+            _log_shutdown_budget(bound)
+
+        log.warning.assert_not_called()
+        messages = [c.args[0] % c.args[1:] for c in log.info.call_args_list]
+        assert any(
+            "below the default heartbeat timeout (60s, ATLAN_HEARTBEAT_TIMEOUT_SECONDS)"
+            in m
+            for m in messages
+        )
 
 
 class TestFatalTeardownWatchdog:

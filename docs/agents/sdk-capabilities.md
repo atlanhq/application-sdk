@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.56.0
-source-sha:    fa5a9d184d3642a7e38c1b9dc95a693ab2444827
-source-date:   2026-11-12T10:58:00Z
+source-sha:    25b9b4e82ddf78f9fbb3a9555bd4e900c9d01170
+source-date:   2026-11-12T13:07:25Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -19,7 +19,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | Subpackage | Purpose | Exports |
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 44 |
-| `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 20 |
+| `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 19 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 58 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 46 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 39 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 30 |
-| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 8 |
+| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 13 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
@@ -436,20 +436,6 @@ Connection clients (SQL, Redis, Azure) and ClientInterface ABC
 
 ### Functions
 
-#### `_get_default_ca_bundle_path`
-
-- **Import:** `from application_sdk.clients.ssl_utils import _get_default_ca_bundle_path`
-- **Signature:** `_get_default_ca_bundle_path()`
-- **Summary:** Get the path to the default CA certificate bundle.
-- **Defined in:** `application_sdk/common/ssl_utils.py`
-
-#### `_read_default_ca_certs`
-
-- **Import:** `from application_sdk.clients.ssl_utils import _read_default_ca_certs`
-- **Signature:** `_read_default_ca_certs()`
-- **Summary:** Read the default system CA certificates as bytes.
-- **Defined in:** `application_sdk/common/ssl_utils.py`
-
 #### `create_ssl_context_with_custom_certs`
 
 - **Import:** `from application_sdk.clients import create_ssl_context_with_custom_certs`
@@ -471,6 +457,13 @@ Connection clients (SQL, Redis, Azure) and ClientInterface ABC
 - **Signature:** `get_custom_ca_cert_bytes()`
 - **Summary:** Get CA certificate bytes combining default system certificates AND custom certificates.
 - **Defined in:** `application_sdk/common/ssl_utils.py`
+
+#### `get_logger`
+
+- **Import:** `from application_sdk.clients.ssl_utils import get_logger`
+- **Signature:** `get_logger(name: str | None = None)`
+- **Summary:** The SDK logger for ``name``, or a stdlib logger on an api-only install.
+- **Defined in:** `application_sdk/_logging.py`
 
 #### `get_ssl_cert_dir`
 
@@ -3329,12 +3322,33 @@ Output collectors and record models for Automation Engine
 - **Summary:** A reference to a downloadable file artifact.
 - **Defined in:** `application_sdk/outputs/models.py`
 
+#### `BlankIdentity`
+
+- **Import:** `from application_sdk.outputs import BlankIdentity`
+- **Signature:** `class BlankIdentity`
+- **Summary:** A field the record's qualifiedName is built from is blank. See :class:`RecordSkipped`.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `MalformedRecord`
+
+- **Import:** `from application_sdk.outputs import MalformedRecord`
+- **Signature:** `class MalformedRecord`
+- **Summary:** The source record cannot be parsed or has the wrong shape. See :class:`RecordSkipped`.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
 #### `Metric`
 
 - **Import:** `from application_sdk.outputs import Metric`
 - **Signature:** `class Metric`
 - **Summary:** A single metric to expose in workflow output.
 - **Defined in:** `application_sdk/outputs/models.py`
+
+#### `MissingRequiredField`
+
+- **Import:** `from application_sdk.outputs import MissingRequiredField`
+- **Signature:** `class MissingRequiredField`
+- **Summary:** A required field other than an identity input is absent. See :class:`RecordSkipped`.
+- **Defined in:** `application_sdk/outputs/skipped.py`
 
 #### `OutputCollector`
 
@@ -3343,11 +3357,25 @@ Output collectors and record models for Automation Engine
 - **Summary:** Collects metrics and artifacts during workflow or activity execution.
 - **Defined in:** `application_sdk/outputs/collector.py`
 
+#### `RecordSkipped`
+
+- **Import:** `from application_sdk.outputs import RecordSkipped`
+- **Signature:** `class RecordSkipped(record: SkippableRecord, *, record_id: str, entity_type: str, detail: str | None = None)`
+- **Summary:** A synchronous mapper's way to hand a skipped record up to its ``@task`` loop.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
 #### `SkipReason`
 
 - **Import:** `from application_sdk.outputs import SkipReason`
 - **Signature:** `class SkipReason`
 - **Summary:** Why a record was skipped. A closed set, so skips aggregate across the fleet.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `UnsupportedType`
+
+- **Import:** `from application_sdk.outputs import UnsupportedType`
+- **Signature:** `class UnsupportedType`
+- **Summary:** The source record is of a type the app does not map. See :class:`RecordSkipped`.
 - **Defined in:** `application_sdk/outputs/skipped.py`
 
 ### Functions
