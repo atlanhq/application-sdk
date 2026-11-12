@@ -733,7 +733,13 @@ def _flatten_pages(payload: Any) -> Any:
 
 
 def resolve_prs(
-    repo: str, event_name: str, run_sha: str, dispatch_pr: str, runner: Runner
+    repo: str,
+    event_name: str,
+    run_sha: str,
+    dispatch_pr: str,
+    runner: Runner,
+    *,
+    strict: bool = False,
 ) -> tuple[list[str], str]:
     """Return ``(pr_numbers, eval_sha)`` for the triggering event.
 
@@ -748,6 +754,10 @@ def resolve_prs(
     lookup raises (a manual re-evaluation of a PR that cannot be read is a
     mistake worth surfacing), while a failed commit→PRs lookup yields no
     candidates and the step exits cleanly. Both approve nothing.
+
+    ``strict=True`` makes the commit→PRs lookup raise too, so a caller can tell
+    a failed lookup from a commit that heads no open PR. ``vuln_auto_merge_gate``
+    uses it to fail its step rather than exit clean on an unread listing.
     """
     if event_name == "workflow_dispatch":
         prs = [p.strip() for p in dispatch_pr.split(",") if p.strip()]
@@ -776,8 +786,12 @@ def resolve_prs(
             what=f"listing PRs for {run_sha}",
         )
     except GhError:
+        if strict:
+            raise
         return [], run_sha
     if not isinstance(listing, list):
+        if strict:
+            raise GhError(f"listing PRs for {run_sha}: unexpected payload shape")
         return [], run_sha
     return [
         str(pr["number"])

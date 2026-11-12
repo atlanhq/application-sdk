@@ -307,8 +307,9 @@ def main(runner: Runner = subprocess.run) -> int:
     }
 
     try:
+        # strict: an unreadable PR listing fails the step; it is not "no PRs".
         pr_numbers, eval_sha = renovate.resolve_prs(
-            repo, event_name, run_sha, dispatch_pr, runner
+            repo, event_name, run_sha, dispatch_pr, runner, strict=True
         )
     except GhError as exc:
         print(f"::error::{exc}")

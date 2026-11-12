@@ -848,6 +848,18 @@ class TestResolvePrs:
         fake = FakeGh(**_defaults(commit_pulls=None))
         assert gate.resolve_prs(REPO, "workflow_run", SHA, "", fake) == ([], SHA)
 
+    def test_workflow_run_api_error_raises_when_strict(self):
+        # vuln_auto_merge_gate must tell a failed lookup from "no open PRs".
+        fake = FakeGh(commit_pulls=None)
+        with pytest.raises(gate.GhError):
+            gate.resolve_prs(REPO, "workflow_run", SHA, "", fake, strict=True)
+
+    def test_workflow_run_non_list_payload_raises_when_strict(self):
+        fake = FakeGh(commit_pulls={"message": "odd"})
+        assert gate.resolve_prs(REPO, "workflow_run", SHA, "", fake) == ([], SHA)
+        with pytest.raises(gate.GhError):
+            gate.resolve_prs(REPO, "workflow_run", SHA, "", fake, strict=True)
+
     def test_dispatch_evaluates_the_named_pr_at_its_current_head(self):
         fake = FakeGh(**_defaults(meta=pr_payload(head="feedface")))
         assert gate.resolve_prs(REPO, "workflow_dispatch", "", "7", fake) == (

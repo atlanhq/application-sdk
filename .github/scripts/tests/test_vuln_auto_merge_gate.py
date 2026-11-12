@@ -175,6 +175,7 @@ class _FakeRunner:
         review_pages: list[list[Review]] | None = None,
         reviews_fail: bool = False,
         commit_prs: list[dict[str, Any]] | None = None,
+        commit_prs_fail: bool = False,
     ) -> None:
         self.meta = meta
         self.files = files
@@ -183,6 +184,7 @@ class _FakeRunner:
         )
         self.reviews_fail = reviews_fail
         self.commit_prs: list[dict[str, Any]] = commit_prs or []
+        self.commit_prs_fail = commit_prs_fail
         self.reviews: list[list[str]] = []
         self.merges: list[list[str]] = []
 
@@ -217,7 +219,10 @@ class _FakeRunner:
                     for page in self.review_pages
                 )
         elif "/commits/" in joined:
-            out = json.dumps(self.commit_prs)
+            if self.commit_prs_fail:
+                rc, out = 1, '{"message": "Server Error"}'
+            else:
+                out = json.dumps(self.commit_prs)
         elif "/pulls/" in joined and "--jq" in joined:
             out = json.dumps(self.meta)
         elif cmd[:3] == ["gh", "pr", "review"]:
@@ -389,4 +394,25 @@ def test_main_fails_the_step_when_a_pr_cannot_be_read(
         commit_prs=[{"number": 5, "state": "open"}],
     )
     assert gate.main(r) == 1
+    assert r.reviews == []
+
+
+def test_main_fails_the_step_when_the_pr_listing_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An unread commit->PRs listing is not "no open PRs": the step must go red
+    # rather than exit 0 having evaluated nothing.
+    _env(monkeypatch, EVENT_NAME="workflow_run", RUN_SHA="abc")
+    r = _FakeRunner(_meta(), [".security/base-allowlist.json"], commit_prs_fail=True)
+    assert gate.main(r) == 1
+    assert r.reviews == []
+    assert r.merges == []
+
+
+def test_main_exits_clean_when_no_open_pr_heads_the_sha(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _env(monkeypatch, EVENT_NAME="workflow_run", RUN_SHA="abc")
+    r = _FakeRunner(_meta(), [".security/base-allowlist.json"], commit_prs=[])
+    assert gate.main(r) == 0
     assert r.reviews == []
