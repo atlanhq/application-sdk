@@ -1,25 +1,27 @@
-"""Every checkout of this repo from a workflow is pinned to `job.workflow_sha`.
+"""Every checkout of this repo from a workflow uses one of two refs.
 
 Policy and rationale: "Reusing scripts from a reusable workflow" in
-docs/standards/ci.md (FND-4905). A reusable's YAML is fixed at the commit the
-caller resolved when the run started; `job.workflow_sha` is that commit. A
-`ref: main` checkout resolves when the *step* runs, so a re-run days later, or
-a run that straddles a merge, executes old YAML against new scripts. A
-caller-supplied ref lets the caller choose the code that runs with the job's
-secrets. Before this guard the tree had 61 such checkouts under four ref
-policies (`job.workflow_sha`, `main`, a caller input, none).
+docs/standards/ci.md (FND-4905). A checkout of `atlanhq/application-sdk` uses
+either the literal `ref: main` (the default) or `ref: ${{ job.workflow_sha }}`
+(where this repo's own CI must exercise its own copy). Before this guard the
+tree also had checkouts at a caller-supplied input and one with no ref at all.
 
-The one exception is a *content* checkout: a file whose value must reflect
-`main` whatever the caller resolved (the base vulnerability allowlist). It
-opts out with an inline comment inside the step::
+What the guard rules out, and why:
 
-    # sdk-checkout-ref-exempt: <why this content must track main>
+- A caller-supplied ref. Every consumer calls these reusables `@main`; an input
+  that picks another SDK ref is a pinning knob, and pinning is what the fleet
+  is moving away from.
+- An omitted ref. It reads as "main" but says nothing, and the next edit can
+  make it something else.
+- Any other expression, above all `github.job_workflow_sha`, which renders
+  empty: checkout then reads `ref` as unsupplied and silently takes the default
+  branch.
 
-and an exempt checkout may not carry code: its ref must be the literal `main`
-(an expression can render empty, and checkout reads empty as "default branch";
-any other literal would stop the content tracking main), and its sparse set must
-be literal paths (no glob patterns) that do not include `.github/scripts` or
-`.github/actions`. Code it needs comes from a second, pinned checkout.
+A deliberate exception carries an inline comment inside the step::
+
+    # sdk-checkout-ref-exempt: <why>
+
+and must also be on the reviewed list in this file.
 """
 
 from __future__ import annotations
@@ -37,11 +39,8 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 ACTIONLINT = REPO_ROOT / ".github" / "actionlint.yaml"
 
 SDK_REPO = "atlanhq/application-sdk"
-PINNED_REF = "${{ job.workflow_sha }}"
+ALLOWED_REFS = ("main", "${{ job.workflow_sha }}")
 EXEMPT_MARKER = re.compile(r"#\s*sdk-checkout-ref-exempt:\s*(?P<reason>\S.*)$")
-CODE_PATHS = (".github/scripts", ".github/actions")
-# gitignore-style pattern syntax that non-cone sparse-checkout honours.
-_GLOB_CHARS = ("*", "?", "[", "!", "\\")
 ACTIONLINT_IGNORE = 'property "workflow_sha" is not defined'
 
 _STEP_START = re.compile(r"^(?P<indent>\s*)-\s")
@@ -138,67 +137,29 @@ def test_the_scan_finds_the_checkouts() -> None:
     assert len(CHECKOUTS) > 40
 
 
-def test_every_sdk_checkout_is_pinned_to_job_workflow_sha() -> None:
+def test_every_sdk_checkout_uses_main_or_job_workflow_sha() -> None:
     offenders = [
         f"{c.where}: ref={c.with_.get('ref')!r}"
         for c in CHECKOUTS
-        if c.exempt_reason is None and c.with_.get("ref") != PINNED_REF
+        if c.exempt_reason is None and c.with_.get("ref") not in ALLOWED_REFS
     ]
     assert not offenders, (
-        f"checkouts of {SDK_REPO} must use `ref: {PINNED_REF}` "
-        "(docs/standards/ci.md, 'Reusing scripts from a reusable workflow'), or "
-        "carry `# sdk-checkout-ref-exempt: <reason>` if they fetch content that "
-        "must track main:\n  " + "\n  ".join(offenders)
+        f"checkouts of {SDK_REPO} must use `ref: main` or "
+        "`ref: ${{ job.workflow_sha }}` (docs/standards/ci.md, 'Reusing scripts "
+        "from a reusable workflow'); not a caller input, not omitted, not "
+        "`github.job_workflow_sha`:\n  " + "\n  ".join(offenders)
     )
 
 
-def _sparse_paths(with_: dict[str, Any]) -> list[str]:
-    raw = with_.get("sparse-checkout")
-    if raw is None:
-        return []
-    return [p.strip().lstrip("/") for p in str(raw).splitlines() if p.strip()]
-
-
-@pytest.mark.parametrize(
-    "checkout",
-    [c for c in CHECKOUTS if c.exempt_reason is not None],
-    ids=lambda c: c.where,
-)
-def test_an_exempt_checkout_fetches_content_not_code(checkout: Checkout) -> None:
-    # The exemption exists for content that must track main, so the ref is the
-    # literal `main`: not an expression (which can render empty, and checkout
-    # then takes the default branch silently), and not another branch or tag,
-    # which would freeze the content the exemption is meant to keep current.
-    assert checkout.with_.get("ref") == "main", (
-        f"{checkout.where}: an exempt checkout must use the literal `ref: main`, "
-        f"got {checkout.with_.get('ref')!r}"
-    )
-    paths = _sparse_paths(checkout.with_)
-    assert paths, f"{checkout.where}: an exempt checkout must be sparse (content only)"
-    # Literal paths only. In non-cone mode a pattern such as `.github/**` or
-    # `*` matches the code paths without sharing a prefix with them, so a
-    # prefix check alone cannot rule code out.
-    globbed = [p for p in paths if any(ch in p for ch in _GLOB_CHARS)]
-    assert not globbed, (
-        f"{checkout.where}: exempt checkout uses sparse patterns {globbed}; "
-        "list literal content paths so the code check below is sound"
-    )
-    code = [
-        p for p in paths if any(p.startswith(c) or c.startswith(p) for c in CODE_PATHS)
-    ]
-    assert not code, (
-        f"{checkout.where}: exempt (unpinned) checkout carries code {code}; "
-        f"fetch scripts from a second checkout at `{PINNED_REF}`"
-    )
-
-
-def test_only_the_content_checkouts_are_exempt() -> None:
+def test_only_the_reviewed_checkouts_are_exempt() -> None:
     # Adding an exemption should be a reviewed change to this list, not just a
     # comment in a workflow.
     exempt = sorted((c.file, c.job) for c in CHECKOUTS if c.exempt_reason is not None)
     assert exempt == [
-        (".github/workflows/build-and-scan.yaml", "security-gate"),
-        (".github/workflows/trivy-container.yaml", "build"),
+        # The callback that completes the mirrored check on a dispatching SDK
+        # PR: `application-sdk-ref` is set by this repo's own cross-repo
+        # dispatch, not by a consumer, so the PR tests its own callback scripts.
+        (".github/workflows/tests-reusable.yaml", "report-to-sdk"),
     ]
 
 
@@ -234,11 +195,11 @@ def test_every_workflow_using_job_workflow_sha_ignores_the_actionlint_false_posi
             "        uses: actions/checkout@abc\n"
             "        with:\n"
             "          repository: atlanhq/application-sdk\n"
-            "          # sdk-checkout-ref-exempt: allowlist tracks main\n"
-            "          ref: main\n"
+            "          # sdk-checkout-ref-exempt: dispatched by our own CI\n"
+            "          ref: ${{ inputs.x }}\n"
             "      # sdk-checkout-ref-exempt: belongs to the NEXT step\n"
             "      - name: y\n",
-            "allowlist tracks main",
+            "dispatched by our own CI",
         ),
         (
             "      - name: x\n"

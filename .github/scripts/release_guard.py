@@ -100,7 +100,7 @@ TRIPLE_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 # commit the closed PR produced (``github.event.pull_request.merge_commit_sha``).
 # An env var rather than a CLI flag: it was added while callers could still pin
 # an older ``sdk_scripts_ref`` whose release.py did not know about it. That input
-# is ignored since FND-4905 (scripts come from ``job.workflow_sha``).
+# is ignored since FND-4905 (scripts come from ``main``).
 MERGE_COMMIT_ENV = "PR_MERGE_COMMIT_SHA"
 
 

@@ -53,8 +53,8 @@ on:
       sdk_ref:
         description: >-
           Deprecated and ignored (FND-4905). The availability probe is read
-          from job.workflow_sha, the commit this reusable was resolved at.
-          Still declared so callers that pass it keep validating.
+          from main, like the @main this reusable is called at. Still
+          declared so callers that pass it keep validating.
         type: string
         required: false
         default: "main"
@@ -115,7 +115,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
+          ref: main
           persist-credentials: false
           sparse-checkout: .github/scripts/probe_code_scanning.py
           sparse-checkout-cone-mode: false

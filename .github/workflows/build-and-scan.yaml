@@ -760,30 +760,15 @@ jobs:
           owner: atlanhq
           repositories: application-sdk
 
-      # Two checkouts, because the two halves have opposite ref needs
-      # (docs/standards/ci.md, "Reusing scripts from a reusable workflow").
-      # The allowlist is content that must reflect main whatever the caller
-      # resolved: an entry merged today applies to today's re-run. The scripts
-      # are code and come from this workflow's own commit.
       - name: Checkout base allowlist from SDK
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          # sdk-checkout-ref-exempt: the base allowlist is content that tracks main
           ref: main
-          sparse-checkout: .security
-          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            .security
+            .github/scripts
           path: _sdk
-          token: ${{ steps.app-token.outputs.token }}
-
-      - name: Checkout SDK scripts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts
-          sparse-checkout-cone-mode: false
-          path: .sdk-scripts
           token: ${{ steps.app-token.outputs.token }}
 
       # Both attempts stay continue-on-error: this job is the required check, so
@@ -828,7 +813,7 @@ jobs:
           # sending every reader to the scanner. Build and scan are one job now,
           # so there is one upstream result to pass.
           BUILD_RESULT: ${{ needs.build.result }}
-        run: python3 .sdk-scripts/.github/scripts/check_allowlist.py --trivy-results /tmp/trivy_results.json --write-comment
+        run: python3 _sdk/.github/scripts/check_allowlist.py --trivy-results /tmp/trivy_results.json --write-comment
 
       # The bump PR's candidate passed a BLOCKING gate: copy the exact digest
       # that was scanned to `scanned-<tree>`, the tag the release looks up and
@@ -844,7 +829,7 @@ jobs:
           EXPECTED_REPO: ${{ github.event.repository.name }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
-        run: python3 .sdk-scripts/.github/scripts/release_candidate.py mark
+        run: python3 _sdk/.github/scripts/release_candidate.py mark
 
       - name: Comment on PR
         if: always() && github.event_name == 'pull_request'
