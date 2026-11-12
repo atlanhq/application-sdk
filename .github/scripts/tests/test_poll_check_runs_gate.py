@@ -12,7 +12,8 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import poll_check_runs_gate as mod
+import _gh_refs  # noqa: E402
+import poll_check_runs_gate as mod  # noqa: E402
 
 REPO = "atlanhq/application-sdk"
 SHA = "abc123"
@@ -22,6 +23,17 @@ NAMES = ["Connector E2E run / atlan-openapi-app", "Connector E2E run / atlan-mys
 @pytest.fixture(autouse=True)
 def _gh_token(monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "test-token")
+
+
+def _stub(monkeypatch, fake_run) -> None:
+    """Route every subprocess the gate starts through ``fake_run``.
+
+    Two seams, one fake: HTTP goes through the shared transport
+    (``_gh_refs.run``, FND-4899) and the ``gh api --paginate`` fallback through
+    the gate's own ``run``. Tests that answer both route on ``cmd`` themselves.
+    """
+    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(_gh_refs, "run", fake_run)
 
 
 def _http_response(
@@ -54,8 +66,8 @@ def _completed_raw(status: int, body_text: str) -> subprocess.CompletedProcess:
 
 
 def test_gh_api_conditional_parses_200_and_etag(monkeypatch):
-    monkeypatch.setattr(
-        mod, "run", lambda cmd, **kw: _http_response(200, '"v1"', {"check_runs": []})
+    _stub(
+        monkeypatch, lambda cmd, **kw: _http_response(200, '"v1"', {"check_runs": []})
     )
 
     status, etag, body = mod.gh_api_conditional("some/path")
@@ -71,7 +83,7 @@ def test_gh_api_conditional_304_has_no_body_and_keeps_prior_etag(monkeypatch):
     # "gh: HTTP 304" instead of the response) — indistinguishable from a
     # genuine error. curl without --fail returns 0 and the real response
     # for ANY status code, so a 304 must parse cleanly here, not raise.
-    monkeypatch.setattr(mod, "run", lambda cmd, **kw: _http_response(304, None, None))
+    _stub(monkeypatch, lambda cmd, **kw: _http_response(304, None, None))
 
     status, etag, body = mod.gh_api_conditional("some/path", etag='"v1"')
     assert status == 304
@@ -84,15 +96,83 @@ def test_gh_api_conditional_uses_curl_not_gh(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
+        captured["input"] = kwargs.get("input")
         return _http_response(200, '"v1"', {"check_runs": []})
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
     mod.gh_api_conditional("some/path")
 
     assert captured["cmd"][0] == "curl"
     assert "gh" not in captured["cmd"]
-    assert any("Authorization: Bearer test-token" == p for p in captured["cmd"])
     assert captured["cmd"][-1] == "https://api.github.com/some/path"
+
+
+def test_the_job_token_reaches_curl_on_stdin_never_argv(monkeypatch):
+    """FND-4899: this used to pass ``-H "Authorization: Bearer <token>"``, which
+    leaves the job token readable from the process table by anything else on the
+    runner for the life of every request of a 130-minute poll."""
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["input"] = kwargs.get("input")
+        return _http_response(200, '"v1"', {"check_runs": []})
+
+    _stub(monkeypatch, fake_run)
+    mod.gh_api_conditional("some/path")
+
+    assert not any("test-token" in part for part in captured["cmd"])
+    assert "-K" in captured["cmd"]
+    assert "Authorization: Bearer test-token" in captured["input"]
+
+
+def test_gh_api_conditional_sends_if_none_match_only_with_an_etag(monkeypatch):
+    """The conditional request is what makes an unchanged poll a free 304; it
+    must survive the move onto the shared transport."""
+    sent: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        sent.append(cmd)
+        return _http_response(304, None, None)
+
+    _stub(monkeypatch, fake_run)
+    mod.gh_api_conditional("some/path")
+    mod.gh_api_conditional("some/path", etag='"v7"')
+
+    assert not any("If-None-Match" in part for part in sent[0])
+    assert 'If-None-Match: "v7"' in sent[1]
+
+
+@pytest.mark.parametrize(
+    "body_text",
+    ["<html>proxy error</html>", "[]", "null", ""],
+    ids=["html", "json-array", "json-null", "empty"],
+)
+def test_a_200_without_a_json_object_body_fails_closed(monkeypatch, body_text):
+    """A 200 the gate cannot read is not "no checks yet": treating it as an
+    empty listing would wait out the budget on a broken answer, and treating it
+    as a verdict would be worse. It raises, and only ``pr_head_sha`` catches."""
+    _stub(monkeypatch, lambda cmd, **kw: _completed_raw(200, body_text))
+
+    with pytest.raises(SystemExit, match="without a JSON object body"):
+        mod.gh_api_conditional("some/path")
+
+
+def test_a_transient_transport_failure_is_retried_not_fatal(monkeypatch):
+    """The gate used to exit on the first curl failure of a two-hour poll. The
+    shared transport retries a blip before the poll ever sees it."""
+    answers = iter(
+        [
+            subprocess.CompletedProcess(
+                args=[], returncode=28, stdout="", stderr="curl: (28) timed out"
+            ),
+            _http_response(200, '"v1"', {"check_runs": []}),
+        ]
+    )
+    _stub(monkeypatch, lambda cmd, **kw: next(answers))
+
+    status, etag, body = mod.gh_api_conditional("some/path")
+    assert (status, etag, body) == (200, '"v1"', {"check_runs": []})
 
 
 def test_gh_api_conditional_requires_a_token(monkeypatch):
@@ -112,7 +192,7 @@ def test_gh_api_conditional_raises_on_transport_failure(monkeypatch):
             args=[], returncode=28, stdout="", stderr="curl: (28) Operation timed out"
         )
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
 
     try:
         mod.gh_api_conditional("some/path")
@@ -122,9 +202,8 @@ def test_gh_api_conditional_raises_on_transport_failure(monkeypatch):
 
 
 def test_gh_api_conditional_raises_on_http_error_status(monkeypatch):
-    monkeypatch.setattr(
-        mod,
-        "run",
+    _stub(
+        monkeypatch,
         lambda cmd, **kw: _completed_raw(403, '{"message": "API rate limit exceeded"}'),
     )
 
@@ -143,7 +222,7 @@ def test_wait_for_checks_succeeds_immediately_when_all_pass(monkeypatch):
         ]
         return _http_response(200, '"v1"', _check_runs_body(runs))
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
     ok = mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None)
     assert ok is True
 
@@ -161,7 +240,7 @@ def test_wait_for_checks_polls_until_completed(monkeypatch):
         ]
         return _http_response(200, '"v2"', _check_runs_body(runs))
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
     ok = mod.wait_for_checks(
         REPO, SHA, NAMES, interval_seconds=1, timeout_seconds=10, sleep=lambda s: None
     )
@@ -184,7 +263,7 @@ def test_wait_for_checks_uses_304_cache_without_losing_state(monkeypatch):
         # first successful call must still be treated as authoritative.
         return _http_response(304, None, None)
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
     ok = mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None)
     assert ok is True
     assert calls["n"] == 1  # loop breaks right after the first (complete) poll
@@ -197,7 +276,7 @@ def test_list_all_check_runs_uses_paginate_and_parses_ndjson(monkeypatch):
         captured["cmd"] = cmd
         return _ndjson([{"id": 1, "name": NAMES[0]}, {"id": 2, "name": NAMES[1]}])
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
 
     runs = mod.list_all_check_runs(REPO, SHA)
 
@@ -212,7 +291,7 @@ def test_list_all_check_runs_raises_on_failure(monkeypatch):
             args=[], returncode=1, stdout="", stderr="rate limited"
         )
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
 
     try:
         mod.list_all_check_runs(REPO, SHA)
@@ -246,7 +325,7 @@ def test_wait_for_checks_falls_back_to_full_pagination_when_truncated(monkeypatc
         ]
         return _ndjson(runs)
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
 
     ok = mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None)
 
@@ -276,7 +355,7 @@ def test_wait_for_checks_stays_in_full_pagination_mode_across_attempts(monkeypat
             ]
         return _ndjson(runs)
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
 
     ok = mod.wait_for_checks(
         REPO, SHA, NAMES, interval_seconds=1, timeout_seconds=10, sleep=lambda s: None
@@ -298,7 +377,7 @@ def test_wait_for_checks_fails_on_bad_conclusion(monkeypatch):
         ]
         return _http_response(200, '"v1"', _check_runs_body(runs))
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
     ok = mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None)
     assert ok is False
 
@@ -317,7 +396,7 @@ def test_the_failure_annotation_names_each_conclusion(monkeypatch, capsys):
         ]
         return _http_response(200, '"v1"', _check_runs_body(runs))
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
     assert mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None) is False
     out = capsys.readouterr().out
     assert f"{NAMES[0]} (failure)" in out
@@ -332,7 +411,7 @@ def test_a_cancelled_check_gets_the_eviction_explanation(monkeypatch, capsys):
         ]
         return _http_response(200, '"v1"', _check_runs_body(runs))
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
     # Still blocks: an un-run connector test cannot green the merge.
     assert mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None) is False
     out = capsys.readouterr().out
@@ -349,7 +428,7 @@ def test_no_eviction_explanation_when_nothing_was_cancelled(monkeypatch, capsys)
         ]
         return _http_response(200, '"v1"', _check_runs_body(runs))
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
     assert mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None) is False
     assert "cancelled, not failed" not in capsys.readouterr().out
 
@@ -359,7 +438,7 @@ def test_wait_for_checks_times_out_when_never_complete(monkeypatch):
         runs = [{"name": NAMES[0], "status": "in_progress"}]
         return _http_response(200, '"v1"', _check_runs_body(runs))
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
     ok = mod.wait_for_checks(
         REPO, SHA, NAMES, interval_seconds=1, timeout_seconds=3, sleep=lambda s: None
     )
@@ -380,7 +459,7 @@ def test_wait_for_checks_ceiling_divides_timeout_into_attempts(monkeypatch):
             runs = [{"name": NAMES[0], "status": "completed", "conclusion": "success"}]
         return _http_response(200, '"v1"', _check_runs_body(runs))
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
     ok = mod.wait_for_checks(
         REPO,
         SHA,
@@ -400,7 +479,7 @@ def test_main_exit_codes(monkeypatch):
         ]
         return _http_response(200, '"v1"', _check_runs_body(runs))
 
-    monkeypatch.setattr(mod, "run", fake_run_pass)
+    _stub(monkeypatch, fake_run_pass)
     rc = mod.main(
         ["--repo", REPO, "--sha", SHA, "--name", NAMES[0], "--name", NAMES[1]]
     )
@@ -410,7 +489,7 @@ def test_main_exit_codes(monkeypatch):
         runs = [{"name": NAMES[0], "status": "completed", "conclusion": "failure"}]
         return _http_response(200, '"v1"', _check_runs_body(runs))
 
-    monkeypatch.setattr(mod, "run", fake_run_fail)
+    _stub(monkeypatch, fake_run_fail)
     rc = mod.main(
         [
             "--repo",
@@ -435,7 +514,7 @@ def test_main_accepts_names_json(monkeypatch):
         ]
         return _http_response(200, '"v1"', _check_runs_body(runs))
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
     rc = mod.main(["--repo", REPO, "--sha", SHA, "--names-json", json.dumps(NAMES)])
     assert rc == 0
 
@@ -489,7 +568,7 @@ def _route(monkeypatch, *, pr_answer, check_runs):
             return pr_answer
         return _http_response(200, '"v1"', _check_runs_body(check_runs))
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    _stub(monkeypatch, fake_run)
     return seen
 
 
@@ -714,9 +793,8 @@ def test_wait_for_checks_keeps_the_newest_of_two_same_named_checks(
     monkeypatch, newest_first
 ):
     listing = [FRESH_PASS, STALE_FAIL] if newest_first else [STALE_FAIL, FRESH_PASS]
-    monkeypatch.setattr(
-        mod,
-        "run",
+    _stub(
+        monkeypatch,
         lambda cmd, **kw: _http_response(
             200, '"v1"', _check_runs_body([*listing, OTHER_LEG_PASS])
         ),
@@ -738,9 +816,8 @@ def test_wait_for_checks_does_not_let_a_stale_pass_mask_a_fresh_failure(
     stale_pass = {**STALE_FAIL, "conclusion": "success"}
     fresh_fail = {**FRESH_PASS, "conclusion": "failure"}
     listing = [fresh_fail, stale_pass] if newest_first else [stale_pass, fresh_fail]
-    monkeypatch.setattr(
-        mod,
-        "run",
+    _stub(
+        monkeypatch,
         lambda cmd, **kw: _http_response(
             200, '"v1"', _check_runs_body([*listing, OTHER_LEG_PASS])
         ),
@@ -767,9 +844,8 @@ def test_wait_for_checks_waits_when_the_newest_attempt_is_still_running(monkeypa
         "started_at": "2026-08-21T01:41:00Z",
         "id": 200,
     }
-    monkeypatch.setattr(
-        mod,
-        "run",
+    _stub(
+        monkeypatch,
         lambda cmd, **kw: _http_response(
             200, '"v1"', _check_runs_body([running_retry, stale_pass, OTHER_LEG_PASS])
         ),
