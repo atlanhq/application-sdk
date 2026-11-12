@@ -1,6 +1,8 @@
 """Unit tests for env-var loaders in :mod:`application_sdk.constants`."""
 
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -432,3 +434,73 @@ class TestEveryEnvReadIsTolerant:
             if calls and words & {"true", "false"}:
                 offenders.append(ast.unparse(node))
         assert offenders == []
+
+
+class TestDeprecatedApplicationMode:
+    """``APPLICATION_MODE`` and friends: served lazily, never fail the import."""
+
+    @pytest.mark.parametrize("value", ["combined", "handler", "bogus", "", "  "])
+    def test_any_value_imports_the_module(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ):
+        """Before FND-4890 any value outside LOCAL/WORKER/SERVER raised at import.
+
+        A fresh interpreter, because reloading the module in-process would
+        rebind every constant other tests already hold.
+        """
+        monkeypatch.setenv("APPLICATION_MODE", value)
+        result = subprocess.run(
+            [sys.executable, "-c", "import application_sdk.constants"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("LOCAL", "LOCAL"),
+            ("worker", "WORKER"),
+            (" Server ", "SERVER"),
+            ("combined", "LOCAL"),
+            ("handler", "SERVER"),
+            ("bogus", "LOCAL"),
+        ],
+    )
+    def test_value_is_parsed_tolerantly_on_access(
+        self, monkeypatch: pytest.MonkeyPatch, value: str, expected: str
+    ):
+        monkeypatch.setenv("APPLICATION_MODE", value)
+        with pytest.warns(DeprecationWarning, match="APPLICATION_MODE is deprecated"):
+            mode = constants.APPLICATION_MODE
+        assert mode == expected
+
+    def test_unset_defaults_to_local(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("APPLICATION_MODE", raising=False)
+        with pytest.warns(DeprecationWarning):
+            assert constants.APPLICATION_MODE == "LOCAL"
+
+    def test_enum_is_still_importable(self):
+        with pytest.warns(DeprecationWarning, match="ApplicationMode is deprecated"):
+            from application_sdk.constants import ApplicationMode
+        assert [m.value for m in ApplicationMode] == ["LOCAL", "WORKER", "SERVER"]
+
+    def test_dapr_binding_operation_create_still_importable(self):
+        with pytest.warns(
+            DeprecationWarning, match="DAPR_BINDING_OPERATION_CREATE is deprecated"
+        ):
+            from application_sdk.constants import DAPR_BINDING_OPERATION_CREATE
+        assert DAPR_BINDING_OPERATION_CREATE == "create"
+
+    @pytest.mark.parametrize(
+        "name", ["APPLICATION_MODE", "ApplicationMode", "DAPR_BINDING_OPERATION_CREATE"]
+    )
+    def test_not_bound_at_module_scope(self, name: str):
+        """A real binding would shadow ``__getattr__`` and skip the warning."""
+        assert name not in vars(constants)
+        assert name in constants._DEPRECATED_CONSTANTS
+
+    def test_unknown_name_still_raises_attribute_error(self):
+        with pytest.raises(AttributeError):
+            constants.NOT_A_CONSTANT  # noqa: B018 — the access is the test
