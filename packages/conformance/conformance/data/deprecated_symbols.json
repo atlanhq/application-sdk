@@ -1065,6 +1065,60 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "APPLICATION_NAME is deprecated; use application_sdk.constants.APPLICATION_NAME \u2014 this module no longer uses it (FND-4895). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability._objectstore_metric_exporter",
+      "removal_version": "4.0.0",
+      "symbol": "APPLICATION_NAME"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DEPLOYMENT_NAME is deprecated; use application_sdk.constants.DEPLOYMENT_NAME \u2014 this module no longer uses it (FND-4895). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability._objectstore_metric_exporter",
+      "removal_version": "4.0.0",
+      "symbol": "DEPLOYMENT_NAME"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DEPLOYMENT_OBJECT_STORE_NAME is deprecated; use application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME \u2014 this module no longer uses it (FND-4895). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability._objectstore_metric_exporter",
+      "removal_version": "4.0.0",
+      "symbol": "DEPLOYMENT_OBJECT_STORE_NAME"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ENABLE_ATLAN_UPLOAD is deprecated; use application_sdk.constants.ENABLE_ATLAN_UPLOAD \u2014 this module no longer uses it (FND-4895). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability._objectstore_metric_exporter",
+      "removal_version": "4.0.0",
+      "symbol": "ENABLE_ATLAN_UPLOAD"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "OBSERVABILITY_S3_PREFIX_MAP is deprecated; use application_sdk.observability.observability.OBSERVABILITY_S3_PREFIX_MAP \u2014 this module no longer uses it (FND-4895). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability._objectstore_metric_exporter",
+      "removal_version": "4.0.0",
+      "symbol": "OBSERVABILITY_S3_PREFIX_MAP"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "UPSTREAM_OBJECT_STORE_NAME is deprecated; use application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME \u2014 this module no longer uses it (FND-4895). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability._objectstore_metric_exporter",
+      "removal_version": "4.0.0",
+      "symbol": "UPSTREAM_OBJECT_STORE_NAME"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "LOG_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported log files. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.observability.logger_adaptor",
