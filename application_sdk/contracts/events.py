@@ -237,16 +237,24 @@ class WorkerStartEventData(BaseModel):
 class WorkerTokenRefreshEventData(BaseModel):
     """Model for token refresh event data.
 
-    This model represents the data structure used when publishing token refresh events.
-    It contains information about the token refresh operation and agent status.
+    The payload of every ``token_refresh`` event: the worker builds the event
+    from this model (``execution/_temporal/auth.py``), so it is the wire shape.
+
+    The flag and the three timing fields are strings on the wire, not ``bool``
+    and ``float``: that is what the event has always carried, and consumers
+    parse them. ``force_refresh`` is ``"true"`` (every refresh fetches a new
+    token, so the worker always sends ``"true"``); the timing
+    fields are ``str(float)`` renderings of Unix seconds (e.g.
+    ``"1781519400.0"``), and ``token_expiry_time`` is ``"0.0"`` when the expiry
+    is unknown.
 
     Attributes:
         application_name: Name of the application the token belongs to.
         deployment_name: Name of the deployment (e.g., dev, staging, prod).
-        force_refresh: Whether this was a forced refresh or automatic.
-        token_expiry_time: Unix timestamp when the new token expires.
-        time_until_expiry: Seconds until token expires.
-        refresh_timestamp: Unix timestamp when the refresh occurred.
+        force_refresh: ``"true"``: the refresh fetched a new token.
+        token_expiry_time: Unix timestamp when the new token expires, as a string.
+        time_until_expiry: Seconds until the token expires, as a string.
+        refresh_timestamp: Unix timestamp when the refresh occurred, as a string.
         app_version: Version of the running app image (see WorkerStartEventData).
             Repeated here so a fleet registry can heal a missed worker_start.
         commit_sha: Git commit of the running app image (see WorkerStartEventData).
@@ -254,9 +262,9 @@ class WorkerTokenRefreshEventData(BaseModel):
 
     application_name: str
     deployment_name: str
-    force_refresh: bool
-    token_expiry_time: float
-    time_until_expiry: float
-    refresh_timestamp: float
+    force_refresh: str
+    token_expiry_time: str
+    time_until_expiry: str
+    refresh_timestamp: str
     app_version: str = ""
     commit_sha: str = ""

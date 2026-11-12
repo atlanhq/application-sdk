@@ -315,6 +315,7 @@ class TemporalAuthManager:
                 ApplicationEventNames,
                 Event,
                 EventTypes,
+                WorkerTokenRefreshEventData,
             )
             from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
                 _publish_event_via_binding,
@@ -326,21 +327,22 @@ class TemporalAuthManager:
             expires_at_ts = expires_at.timestamp() if expires_at else 0.0
             remaining = max(0.0, expires_at_ts - now)
 
+            event_data = WorkerTokenRefreshEventData(
+                application_name=app_name,
+                deployment_name=deployment_name,
+                force_refresh="true",
+                token_expiry_time=str(expires_at_ts),
+                time_until_expiry=str(remaining),
+                refresh_timestamp=str(now),
+                # Image identity, repeated on every refresh so the fleet
+                # registry converges even if worker_start was missed.
+                app_version=APPLICATION_VERSION,
+                commit_sha=COMMIT_SHA,
+            )
             event = Event(
                 event_type=EventTypes.APPLICATION_EVENT.value,
                 event_name=ApplicationEventNames.TOKEN_REFRESH.value,
-                data={
-                    "force_refresh": "true",
-                    "token_expiry_time": str(expires_at_ts),
-                    "time_until_expiry": str(remaining),
-                    "refresh_timestamp": str(now),
-                    "application_name": app_name,
-                    "deployment_name": deployment_name,
-                    # Image identity, repeated on every refresh so the fleet
-                    # registry converges even if worker_start was missed.
-                    "app_version": APPLICATION_VERSION,
-                    "commit_sha": COMMIT_SHA,
-                },
+                data=event_data.model_dump(),
             )
             await _publish_event_via_binding(event)
         except Exception:
