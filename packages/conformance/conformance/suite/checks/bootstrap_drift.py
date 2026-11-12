@@ -76,6 +76,7 @@ from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
     REQUIRED_PASSTHROUGH_SECRETS,
     extract_apt_packages,
+    extract_build_publish_apt_packages,
     extract_build_publish_lfs,
     extract_build_publish_private_git_auth,
     extract_checks_private_git_deps,
@@ -366,6 +367,13 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
         # without the read-back its only "fix" (re-run bootstrap) deletes it.
         kwargs["build_publish_private_git_auth"] = (
             extract_build_publish_private_git_auth(on_disk)
+        )
+        # The certify gate's apt packages: a per-repo value (the native build
+        # headers this app's dependencies need), not drift. Without the
+        # read-back the only "fix" (re-run bootstrap) would delete it and
+        # block the next release in "Certify app".
+        kwargs["build_publish_apt_packages"] = extract_build_publish_apt_packages(
+            on_disk
         )
     elif name == "vulnerability-scan.yml":
         # The LFS checkout on the scan's image build is a per-repo value like

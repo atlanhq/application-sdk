@@ -309,6 +309,7 @@ def render(
     conformance_private_git_deps: str = "",
     release_private_git_auth: str = "",
     build_publish_private_git_auth: str = "",
+    build_publish_apt_packages: str = "",
     checks_private_git_deps: str = "",
     force_external_runtime: str = "",
     secrets_block: str = "",
@@ -342,7 +343,9 @@ def render(
     - ``build-and-publish.yaml``: ``unit_tests_workflow`` (default ``"tests.yaml"``)
       and ``use_ghcr_base`` (default ``""`` — no line, so the SDK's own default
       applies; ``"true"`` renders the opt-in as a bare
-      ``use_ghcr_base: true``). Same same-line ``<% if %>`` hugging as
+      ``use_ghcr_base: true``), plus ``build_publish_apt_packages`` (default
+      ``""`` — no line; a package list renders the certify gate's
+      ``apt_packages: "<packages>"``). Same same-line ``<% if %>`` hugging as
       ``checks.yml`` below, for the same reason: an un-taken block on its own
       lines would leave a blank line and read as C002 drift in every repo that
       hasn't opted in.
@@ -455,6 +458,7 @@ def render(
         conformance_private_git_deps=conformance_private_git_deps,
         release_private_git_auth=release_private_git_auth,
         build_publish_private_git_auth=build_publish_private_git_auth,
+        build_publish_apt_packages=build_publish_apt_packages,
         checks_private_git_deps=checks_private_git_deps,
         force_external_runtime=force_external_runtime,
         secrets_block=secrets_block,

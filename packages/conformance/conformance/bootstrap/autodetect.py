@@ -14,6 +14,7 @@ import pathlib
 from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
     extract_apt_packages,
+    extract_build_publish_apt_packages,
     extract_build_publish_lfs,
     extract_build_publish_private_git_auth,
     extract_checks_private_git_deps,
@@ -120,6 +121,22 @@ def _read_vuln_scan_lfs(path: pathlib.Path) -> str:
         return ""
     try:
         return extract_vulnerability_scan_lfs(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _read_build_publish_apt_packages(path: pathlib.Path) -> str:
+    """Return the certify gate's apt packages declared by *path* (a
+    ``build-and-publish.yaml``), else ``""``.
+
+    Delegates to ``extract_build_publish_apt_packages`` — the same extractor
+    the C002 drift checker uses — so a detected value is re-rendered
+    byte-identically and can't read as drift.
+    """
+    if not path.exists():
+        return ""
+    try:
+        return extract_build_publish_apt_packages(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError):
         return ""
 
@@ -394,6 +411,20 @@ def apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) ->
         kwargs["system_deps"] = _read_apt_packages(
             root / ".github" / "workflows" / "checks.yml"
         ) or _read_ci_system_deps(root / ".github" / "ci-system-deps.txt")
+    # build-publish apt packages: the certify gate's `uv sync` builds the same
+    # native extensions checks.yml and tests.yaml install headers for, so an
+    # existing build-and-publish.yaml's `apt_packages` is kept, and a repo that
+    # declares none there inherits its system-deps (read just above). Without
+    # the fallback, a repo whose tests are green still cannot publish
+    # ("Certify app": "Failed to build `pykerberos`"); without the read-back,
+    # every bootstrap run deleted a hand-added line.
+    if not kwargs["build_publish_apt_packages"]:
+        kwargs["build_publish_apt_packages"] = (
+            _read_build_publish_apt_packages(
+                root / ".github" / "workflows" / "build-and-publish.yaml"
+            )
+            or kwargs["system_deps"]
+        )
     # services-script: existing .github/test/setup-services.sh, else unset.
     if not kwargs["services_script"]:
         candidate = root / ".github" / "test" / "setup-services.sh"

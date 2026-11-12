@@ -142,6 +142,10 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         "release_private_git_auth": "",
         "build_publish_private_git_auth": "",
         "checks_private_git_deps": "",
+        # Read off an existing build-and-publish.yaml, else inherited from
+        # system-deps (see apply_bootstrap_autodetection). No flag of its own:
+        # it is the same package list the repo already declares.
+        "build_publish_apt_packages": "",
         "enforce": "",
         "conformance_blocking": "",
         "renovate_automerge": "",
