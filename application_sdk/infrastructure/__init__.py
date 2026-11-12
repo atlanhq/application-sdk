@@ -8,6 +8,8 @@ Usage:
     from application_sdk.infrastructure.secrets import EnvironmentSecretStore
 """
 
+import warnings
+
 from application_sdk.infrastructure._dapr import (
     DaprBinding,
     DaprCredentialVault,
@@ -46,10 +48,10 @@ from application_sdk.infrastructure.credential_vault import (
 )
 from application_sdk.infrastructure.pubsub import (
     Message,
-    MessageHandler,
     PubSub,
     PubSubError,
     Subscription,
+    _MessageHandler,
 )
 from application_sdk.infrastructure.secrets import (
     AgentSecretReadError,
@@ -85,7 +87,6 @@ __all__ = [
     "InputBinding",
     "LocalCapacityPool",
     "Message",
-    "MessageHandler",
     "OutputBinding",
     "PubSub",
     "PubSubError",
@@ -106,3 +107,28 @@ __all__ = [
     "retry_past_dapr_cold_start",
     "set_infrastructure",
 ]
+
+#: name -> (replacement, why). Served by ``__getattr__`` below with a warning
+#: on every access (FND-4892). Not re-exported at module scope: a real binding
+#: would resolve before ``__getattr__`` and the alias would never warn.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "MessageHandler": (
+        "SubscriptionConfig.handler in application_sdk.handler.contracts",
+        "it typed PubSub.subscribe handlers, which DaprPubSub never called",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the deprecated ``MessageHandler`` alias with a warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _MessageHandler

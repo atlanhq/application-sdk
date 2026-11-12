@@ -55,6 +55,7 @@ if _importlib_util.find_spec("application_sdk.handler.base") is None:
 from application_sdk.app.base import _pascal_to_kebab
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.common import restart_marker
+from application_sdk.common._env import env_bool as _env_bool
 from application_sdk.common._env import env_int as _env_int
 from application_sdk.common.backoff import Backoff
 from application_sdk.common.task_queue import task_queue_from_env
@@ -242,14 +243,6 @@ class AppConfig:
     Not externally reachable — only the combined-mode FastAPI ``/metrics``
     proxy and the worker's ``TemporalCoreCollector`` consume it."""
 
-    enable_mcp: bool = False
-    """Enable Model Context Protocol (MCP) server.
-    Reads same env var as constants.ENABLE_MCP (ENABLE_MCP)."""
-
-    max_concurrent_storage_transfers: int = 4
-    """Maximum concurrent object-store uploads/downloads.
-    Reads same env var as constants.MAX_CONCURRENT_STORAGE_TRANSFERS."""
-
     workflow_max_timeout_hours: int | None = None
     """Maximum workflow execution timeout in hours. When set, passed as
     execution_timeout to Temporal on every /workflows/v1/start call.
@@ -268,24 +261,27 @@ class AppConfig:
         CLI arguments take precedence over environment variables.
         """
 
+        from application_sdk.constants import (  # noqa: PLC0415 — cold path: lazy access to env-var-derived constants
+            _legacy_app_mode,
+            _read_auth_enabled,
+        )
+
         def _env(key: str, default: str = "") -> str:
             return os.environ.get(key, default)
 
-        def _env_bool(key: str, default: bool = False) -> bool:
-            val = os.environ.get(key, "").lower()
-            return val in ("true", "1", "yes") if val else default
-
-        _legacy_mode_map = {
-            "WORKER": "worker",
-            "SERVER": "handler",
-            "LOCAL": "combined",
-        }
-        mode = (
-            args.mode
-            or _env("ATLAN_APP_MODE")
-            or _legacy_mode_map.get(_env("APPLICATION_MODE"), "")
-            or "combined"
-        )
+        mode = args.mode or _env("ATLAN_APP_MODE")
+        if not mode:
+            # v2-compat: APPLICATION_MODE is the deprecated fallback.
+            legacy_raw = _env("APPLICATION_MODE")
+            legacy_mode = _legacy_app_mode(legacy_raw)
+            if legacy_raw.strip() and legacy_mode is None:
+                logger.warning(
+                    "APPLICATION_MODE=%r is not a recognised mode; running in "
+                    "combined mode. Set ATLAN_APP_MODE to worker, handler or "
+                    "combined instead",
+                    legacy_raw,
+                )
+            mode = legacy_mode or "combined"
 
         app_module_raw = args.app or _env("ATLAN_APP_MODULE")
         if not app_module_raw:
@@ -366,7 +362,8 @@ class AppConfig:
             tls_client_private_key_path=_env("ATLAN_TEMPORAL_TLS_CLIENT_KEY_PATH"),
             tls_domain=_env("ATLAN_TEMPORAL_TLS_DOMAIN"),
             # Auth
-            auth_enabled=_env_bool("ATLAN_AUTH_ENABLED"),
+            # One reader for both this and constants.AUTH_ENABLED (event auth).
+            auth_enabled=_read_auth_enabled(),
             auth_client_id=_env("ATLAN_AUTH_CLIENT_ID"),
             auth_client_secret=_env("ATLAN_AUTH_CLIENT_SECRET"),
             # v2 compat: ATLAN_AUTH_URL is the legacy env var set by older Helm charts.
@@ -383,10 +380,6 @@ class AppConfig:
             ),
             prometheus_bind_address=_env(
                 "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "127.0.0.1:9464"
-            ),
-            enable_mcp=_env_bool("ENABLE_MCP"),
-            max_concurrent_storage_transfers=_env_int(
-                "ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", 4
             ),
             workflow_max_timeout_hours=_parse_workflow_max_timeout_hours(),
         )

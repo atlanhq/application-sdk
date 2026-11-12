@@ -1,14 +1,16 @@
 """Dapr client implementations."""
 
 import re
+import warnings
 from typing import Any
 
 import httpx
 import orjson
+from typing_extensions import deprecated
 
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 from application_sdk.infrastructure.bindings import BindingError, BindingResponse
-from application_sdk.infrastructure.pubsub import MessageHandler, PubSubError
+from application_sdk.infrastructure.pubsub import PubSubError, _MessageHandler
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreError,
@@ -19,6 +21,31 @@ from application_sdk.infrastructure.state import StateStoreError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+#: name -> (replacement, why). ``MessageHandler`` was importable from this
+#: module through its own import; served by ``__getattr__`` below with a
+#: warning on every access (FND-4892).
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "MessageHandler": (
+        "SubscriptionConfig.handler in application_sdk.handler.contracts",
+        "it typed PubSub.subscribe handlers, which DaprPubSub never called",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the deprecated ``MessageHandler`` alias with a warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _MessageHandler
 
 
 def create_dapr_secret_store(
@@ -569,29 +596,49 @@ class DaprPubSub:
                 cause=e,
             ) from e
 
+    @deprecated(
+        "DaprPubSub.subscribe is deprecated and will be removed in v4.0.0. It never "
+        "delivered a message: the handler is stored and nothing calls it. Declare a "
+        "SubscriptionConfig (application_sdk.handler.contracts) and pass it to "
+        "create_app_handler_service(subscriptions=...) instead."
+    )
     async def subscribe(
         self,
         topic: str,
-        handler: MessageHandler,
+        handler: _MessageHandler,
     ) -> "DaprSubscription":
-        """Subscribe to a topic via Dapr.
+        """Deprecated: never delivers a message — removed in v4.0.0.
 
-        Note: Dapr subscriptions are typically configured declaratively
-        or via the Dapr app callback. This method registers the handler
-        but actual subscription setup depends on Dapr configuration.
+        The returned handle stores *handler* and nothing ever calls it. Dapr
+        delivers pub/sub messages to HTTP routes the app serves, which the SDK
+        builds from ``SubscriptionConfig`` entries passed to
+        ``create_app_handler_service(subscriptions=...)``. Use that instead.
         """
-        # In a real implementation, this would integrate with Dapr's
-        # subscription mechanism (either programmatic or declarative)
-        return DaprSubscription(topic, handler, self)
+        # The caller already got this method's warning; constructing the
+        # (equally deprecated) handle would add a second one pointing at this
+        # line rather than at the caller's.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return DaprSubscription(topic, handler, self)
 
 
+@deprecated(
+    "DaprSubscription is deprecated and will be removed in v4.0.0. It never "
+    "received a message; declare a SubscriptionConfig "
+    "(application_sdk.handler.contracts) and pass it to "
+    "create_app_handler_service(subscriptions=...) instead."
+)
 class DaprSubscription:
-    """Dapr subscription handle."""
+    """Deprecated: never receives a message — removed in v4.0.0.
+
+    Returned by the deprecated ``DaprPubSub.subscribe``. It stores the handler
+    and nothing ever calls it.
+    """
 
     def __init__(
         self,
         topic: str,
-        handler: MessageHandler,
+        handler: _MessageHandler,
         pubsub: DaprPubSub,
     ) -> None:
         self._topic = topic

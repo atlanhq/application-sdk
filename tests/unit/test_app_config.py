@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 
 import pytest
 
@@ -41,13 +42,13 @@ class TestAppConfigDefaults:
         # worker's TemporalCoreCollector consume the Temporal Runtime endpoint.
         assert config.prometheus_bind_address == "127.0.0.1:9464"
 
-    def test_enable_mcp_default_false(self):
-        config = AppConfig(mode="worker", app_module="app:MyApp")
-        assert config.enable_mcp is False
-
-    def test_max_concurrent_storage_transfers_default(self):
-        config = AppConfig(mode="worker", app_module="app:MyApp")
-        assert config.max_concurrent_storage_transfers == 4
+    def test_dead_fields_are_gone(self):
+        """``ENABLE_MCP`` and ``ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS`` are read
+        only through their ``constants`` values; AppConfig copies nobody read
+        could disagree with them silently."""
+        names = {f.name for f in dataclasses.fields(AppConfig)}
+        assert "enable_mcp" not in names
+        assert "max_concurrent_storage_transfers" not in names
 
 
 class TestAppConfigFromEnv:
@@ -65,17 +66,22 @@ class TestAppConfigFromEnv:
         config = AppConfig.from_args_and_env(_minimal_args())
         assert config.prometheus_bind_address == "0.0.0.0:9999"
 
-    def test_mcp_from_env(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("ENABLE_MCP", "true")
-        monkeypatch.setenv("ATLAN_APP_MODULE", "app:MyApp")
-        config = AppConfig.from_args_and_env(_minimal_args())
-        assert config.enable_mcp is True
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [("true", True), ("1", True), ("YES", True), ("false", False), ("", False)],
+    )
+    def test_auth_enabled_agrees_with_the_event_auth_reader(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str, expected: bool
+    ):
+        """Temporal client auth and event auth read ATLAN_AUTH_ENABLED through
+        one function, so ``1`` can no longer enable one and not the other."""
+        from application_sdk.constants import _read_auth_enabled
 
-    def test_storage_transfers_from_env(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", "8")
+        monkeypatch.setenv("ATLAN_AUTH_ENABLED", raw)
         monkeypatch.setenv("ATLAN_APP_MODULE", "app:MyApp")
         config = AppConfig.from_args_and_env(_minimal_args())
-        assert config.max_concurrent_storage_transfers == 8
+        assert config.auth_enabled is expected
+        assert _read_auth_enabled() is expected
 
     def test_prometheus_default_true_when_env_unset(
         self, monkeypatch: pytest.MonkeyPatch
@@ -329,20 +335,6 @@ class TestRealWorldDevScenarios:
         config = AppConfig.from_args_and_env(_minimal_args())
         assert config.enable_temporal_core_metrics is True
         assert config.prometheus_bind_address == "127.0.0.1:9999"
-
-    def test_dev_enables_mcp_server(self, monkeypatch: pytest.MonkeyPatch):
-        """Dev enables MCP server for AI-assisted development."""
-        monkeypatch.setenv("ENABLE_MCP", "true")
-        monkeypatch.setenv("ATLAN_APP_MODULE", "app.my_app:MyApp")
-        config = AppConfig.from_args_and_env(_minimal_args())
-        assert config.enable_mcp is True
-
-    def test_prod_custom_storage_concurrency(self, monkeypatch: pytest.MonkeyPatch):
-        """Prod tunes storage concurrency for high-throughput connector."""
-        monkeypatch.setenv("ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", "16")
-        monkeypatch.setenv("ATLAN_APP_MODULE", "app.my_app:MyApp")
-        config = AppConfig.from_args_and_env(_minimal_args())
-        assert config.max_concurrent_storage_transfers == 16
 
     def test_full_prod_env(self, monkeypatch: pytest.MonkeyPatch):
         """Simulate a full production environment with all env vars set."""

@@ -111,9 +111,9 @@ empty; an explicit value in the environment wins, and one that leaves cleanup
 *enabled* is logged as a warning so a CI job that exports it does not fail every
 artifact assertion with "output file missing" and nothing pointing at the cause.
 "Enabled" is decided by the same denylist the SDK itself reads
-(:func:`_cleanup_enabled`) rather than by a second, re-derived predicate — an
-allowlist here diverged for ``"off"``, ``"disabled"``, ``"  false  "`` and
-``""``, staying silent in exactly the cases that delete the artifacts. The
+(:func:`_cleanup_enabled`, built on the SDK's own false words) rather than by a
+second, re-derived predicate — an allowlist here diverged for unrecognised words
+and ``""``, staying silent in exactly the cases that delete the artifacts. The
 default is scoped to the ``worker`` fixture's lifetime and the prior value
 restored on teardown — but ``worker`` is session-scoped, so that lifetime runs
 to the end of the pytest session. Under a mixed-tier ``pytest tests/``, unit
@@ -160,6 +160,7 @@ import pytest
 import pytest_asyncio
 from typing_extensions import deprecated
 
+from application_sdk.common._env import FALSE_VALUES
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.fake_source import HttpFakeSourceFactory
 from application_sdk.testing.integration._errors import (
@@ -194,23 +195,22 @@ CLEANUP_INTERCEPTOR_ENV = "APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR"
 APPLICATION_NAME_ENV = "ATLAN_APPLICATION_NAME"
 DEPLOYMENT_NAME_ENV = "ATLAN_DEPLOYMENT_NAME"
 
-#: The values that *disable* cleanup, mirroring the SDK's own reader rather than
-#: re-deriving one. ``App.on_complete`` gates on
-#: ``os.environ.get(ENV, "true").lower() not in ("0", "false", "no")`` and
-#: ``execution.settings._bool(..., default=True)`` agrees, so the flag is a
-#: denylist defaulting to on: every value outside this set enables cleanup.
+#: The values that *disable* cleanup: the SDK's own false words, imported rather
+#: than re-derived. ``App.on_complete`` gates on ``env_bool(ENV, True)``, which
+#: returns False only for these words (stripped, case-insensitive) and keeps its
+#: default of True for every other value, so the flag is a denylist defaulting
+#: to on.
 #:
 #: An allowlist here instead (``{"1", "true", "yes", "on"}``) diverged for
-#: ``"off"``, ``"disabled"``, ``"  false  "`` and ``""`` — the SDK deleted the
-#: run's artifacts while this module stayed silent, which is exactly the
-#: "output file missing" failure ``KitOptions(preserve_artifacts=True)`` exists
-#: to prevent. Note the SDK does *not* strip, so ``"  false  "`` enables cleanup.
-_CLEANUP_DISABLED = frozenset({"0", "false", "no"})
+#: ``"off"``, ``"disabled"`` and ``""`` — the SDK deleted the run's artifacts
+#: while this module stayed silent, which is exactly the "output file missing"
+#: failure ``KitOptions(preserve_artifacts=True)`` exists to prevent.
+_CLEANUP_DISABLED = FALSE_VALUES
 
 
 def _cleanup_enabled(value: str) -> bool:
     """Whether *value* leaves ``App.on_complete()``'s cleanup switched on."""
-    return value.lower() not in _CLEANUP_DISABLED
+    return value.strip().lower() not in _CLEANUP_DISABLED
 
 
 _SETDEFAULT_FIX = (

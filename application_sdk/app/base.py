@@ -63,6 +63,7 @@ from application_sdk.app.entrypoint import (
 )
 from application_sdk.app.registry import AppMetadata, resolve_pool_queue
 from application_sdk.app.task import get_task_metadata, is_task, task
+from application_sdk.common._env import env_bool
 from application_sdk.constants import (
     APPLICATION_VERSION,
     ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
@@ -2746,9 +2747,7 @@ class App(ABC):
                 await self.send_notification()
                 await super().on_complete()
         """
-        cleanup_enabled = os.environ.get(
-            "APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "true"
-        ).lower() not in ("0", "false", "no")
+        cleanup_enabled = env_bool("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", True)
         if cleanup_enabled:
 
             async def _local_cleanup() -> None:

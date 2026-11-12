@@ -1,9 +1,19 @@
 """Unit tests for MockPubSub."""
 
+import pytest
+
 from application_sdk.infrastructure.pubsub import Message, PubSubError
 from application_sdk.testing.mocks import MockPubSub
 
+# MockPubSub.subscribe is deprecated (FND-4892); its delivery behaviour is
+# still pinned here until v4.0.0 removes it. The warning itself is asserted
+# below and in tests/unit/testing/test_mocks.py.
+_IGNORE_SUBSCRIBE_DEPRECATION = pytest.mark.filterwarnings(
+    "ignore:MockPubSub.subscribe is deprecated:DeprecationWarning"
+)
 
+
+@_IGNORE_SUBSCRIBE_DEPRECATION
 class TestMockPubSub:
     """Tests for MockPubSub."""
 
@@ -217,3 +227,44 @@ class TestPubSubError:
         cause = ConnectionError("broker unavailable")
         err = PubSubError("failed", cause=cause)
         assert "ConnectionError" in str(err)
+
+
+class TestDeprecatedSubscribeSurface:
+    """The subscribe half of the PubSub surface is deprecated (FND-4892)."""
+
+    @pytest.mark.parametrize(
+        "module",
+        [
+            "application_sdk.infrastructure.pubsub",
+            "application_sdk.infrastructure",
+            "application_sdk.infrastructure._dapr.client",
+        ],
+    )
+    def test_message_handler_alias_warns_and_resolves(self, module: str) -> None:
+        import importlib
+
+        from application_sdk.infrastructure.pubsub import _MessageHandler
+
+        mod = importlib.import_module(module)
+        with pytest.warns(
+            DeprecationWarning,
+            match=r"MessageHandler is deprecated; use SubscriptionConfig\.handler.*v4\.0\.0",
+        ):
+            served = mod.MessageHandler
+        assert served is _MessageHandler
+
+    def test_subscription_protocol_is_marked(self) -> None:
+        from application_sdk.infrastructure.pubsub import Subscription
+
+        assert "v4.0.0" in Subscription.__deprecated__
+
+    def test_protocol_subscribe_is_marked(self) -> None:
+        from application_sdk.infrastructure.pubsub import PubSub
+
+        assert "v4.0.0" in PubSub.subscribe.__deprecated__
+
+    def test_unknown_attribute_still_raises(self) -> None:
+        import application_sdk.infrastructure.pubsub as pubsub
+
+        with pytest.raises(AttributeError):
+            pubsub.NoSuchName  # noqa: B018

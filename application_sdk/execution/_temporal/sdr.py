@@ -15,7 +15,6 @@ without a Handler (see ``create_worker(handler=...)``).
 
 from __future__ import annotations
 
-import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -26,6 +25,7 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from application_sdk.common._env import env_int
     from application_sdk.credentials.agent import (
         SecretStoreCheckResult,
         check_secret_store_access,
@@ -227,32 +227,7 @@ def _env_seconds(name: str, default: int) -> int:
     activity-schedule time (a failure the inverted-pair warning below would not
     catch). Fallbacks on a *set* value are logged so the misconfig is visible.
     """
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        value = None
-    # Log the fallback outside the except so a routine bad-config value doesn't
-    # attach a stack trace (the parse error carries no useful traceback here).
-    if value is None:
-        logger.warning(
-            "SDR timeout env var %s=%r is not an integer; using default %ds.",
-            name,
-            raw,
-            default,
-        )
-        return default
-    if value < 1:
-        logger.warning(
-            "SDR timeout env var %s=%d is non-positive; using default %ds.",
-            name,
-            value,
-            default,
-        )
-        return default
-    return value
+    return env_int(name, default, minimum=1)
 
 
 # UI-facing wall-clock caps. schedule_to_close is the only timeout that ticks

@@ -471,6 +471,33 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "APPLICATION_MODE is deprecated; use the ATLAN_APP_MODE env var (application_sdk.main.AppConfig.mode) \u2014 the SDK no longer reads this constant; the run mode is resolved at startup. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "APPLICATION_MODE"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ApplicationMode is deprecated; use the v3 run modes 'worker', 'handler' and 'combined' (application_sdk.main.AppConfig.mode) \u2014 the v2 mode enum has no reader in the SDK. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "ApplicationMode"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DAPR_BINDING_OPERATION_CREATE is deprecated; use the literal \"create\" \u2014 the SDK never read this constant. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.constants",
+      "removal_version": "4.0.0",
+      "symbol": "DAPR_BINDING_OPERATION_CREATE"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "IS_LOCKING_DISABLED is deprecated: it only guards the deprecated RedisClient / RedisClientAsync connection. Read the IS_LOCKING_DISABLED environment variable instead; it will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.constants",
@@ -804,6 +831,42 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "MessageHandler is deprecated; use SubscriptionConfig.handler in application_sdk.handler.contracts \u2014 it typed PubSub.subscribe handlers, which DaprPubSub never called. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure",
+      "removal_version": "4.0.0",
+      "symbol": "MessageHandler"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "DaprSubscription is deprecated and will be removed in v4.0.0. It never received a message; declare a SubscriptionConfig (application_sdk.handler.contracts) and pass it to create_app_handler_service(subscriptions=...) instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure._dapr.client",
+      "removal_version": "4.0.0",
+      "symbol": "DaprSubscription"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "MessageHandler is deprecated; use SubscriptionConfig.handler in application_sdk.handler.contracts \u2014 it typed PubSub.subscribe handlers, which DaprPubSub never called. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure._dapr.client",
+      "removal_version": "4.0.0",
+      "symbol": "MessageHandler"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "DaprPubSub.subscribe is deprecated and will be removed in v4.0.0. It never delivered a message: the handler is stored and nothing calls it. Declare a SubscriptionConfig (application_sdk.handler.contracts) and pass it to create_app_handler_service(subscriptions=...) instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure._dapr.client",
+      "removal_version": "4.0.0",
+      "symbol": "subscribe"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "DAPR_SECRET_STORE_COMPONENT is deprecated; use application_sdk.infrastructure.DAPR_SECRET_STORE_COMPONENT \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.infrastructure._dapr.credential_vault",
@@ -827,6 +890,33 @@
       "module": "application_sdk.infrastructure.bindings",
       "removal_version": "4.0",
       "symbol": "BindingError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "BindingRequest is deprecated and will be removed in v4.0.0. Nothing in the SDK accepts one; pass operation, data and metadata to Binding.invoke() instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.bindings",
+      "removal_version": "4.0.0",
+      "symbol": "BindingRequest"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "InputBinding is deprecated and will be removed in v4.0.0. The SDK ships no implementation and has no input-binding replacement; to receive messages, use SubscriptionConfig with create_app_handler_service(subscriptions=...).",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.bindings",
+      "removal_version": "4.0.0",
+      "symbol": "InputBinding"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "OutputBinding is deprecated and will be removed in v4.0.0. The SDK ships no implementation; use Binding (DaprBinding.invoke) instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.bindings",
+      "removal_version": "4.0.0",
+      "symbol": "OutputBinding"
     },
     {
       "kind": "class",
@@ -874,6 +964,15 @@
       "symbol": "CredentialVaultError"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "MessageHandler is deprecated; use SubscriptionConfig.handler in application_sdk.handler.contracts \u2014 it typed PubSub.subscribe handlers, which DaprPubSub never called. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.pubsub",
+      "removal_version": "4.0.0",
+      "symbol": "MessageHandler"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "PubSubError is deprecated; use application_sdk.errors.DependencyUnavailableError \u2014 will be removed in v4.0",
@@ -881,6 +980,24 @@
       "module": "application_sdk.infrastructure.pubsub",
       "removal_version": "4.0",
       "symbol": "PubSubError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "Subscription is deprecated and will be removed in v4.0.0. DaprPubSub.subscribe never delivered a message to its handler; declare a SubscriptionConfig (application_sdk.handler.contracts) and pass it to create_app_handler_service(subscriptions=...) instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.pubsub",
+      "removal_version": "4.0.0",
+      "symbol": "Subscription"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "PubSub.subscribe is deprecated and will be removed in v4.0.0. DaprPubSub.subscribe never delivered a message to its handler; declare a SubscriptionConfig (application_sdk.handler.contracts) and pass it to create_app_handler_service(subscriptions=...) instead.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.pubsub",
+      "removal_version": "4.0.0",
+      "symbol": "subscribe"
     },
     {
       "kind": "class",
@@ -1628,6 +1745,15 @@
       "module": "application_sdk.testing.integration.runner",
       "removal_version": "4.0.0",
       "symbol": "_auto_discover_credentials"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "MockPubSub.subscribe is deprecated and will be removed in v4.0.0. It delivers published messages, but DaprPubSub.subscribe never did, so a test that passed here received nothing in production. Declare a SubscriptionConfig (application_sdk.handler.contracts) and call its handler directly in the test instead.",
+      "migration_target": true,
+      "module": "application_sdk.testing.mocks",
+      "removal_version": "4.0.0",
+      "symbol": "subscribe"
     },
     {
       "kind": "constant",

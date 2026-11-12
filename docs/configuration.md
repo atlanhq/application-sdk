@@ -4,6 +4,17 @@ The Application SDK reads configuration from environment variables at startup. V
 
 Set variables in your shell environment, a `.env` file at the project root, or Docker `ENV` / Kubernetes `ConfigMap` / `Secret` resources. See `.env.example` at the repo root for a ready-to-copy template.
 
+### How values are read
+
+Every typed variable follows the same rules:
+
+- **Unset or empty means the default.** An unset Helm value renders as `""`, so an empty value is treated as not configured.
+- **A malformed value means the default, with a warning.** `OTEL_BATCH_SIZE=abc` or an `inf` timeout does not stop the process. It logs a warning naming the variable and the value, and uses the default. Values read at import time (most of this page) warn on stderr, because logging is not set up yet. Values read later warn through the SDK logger.
+- **Booleans:** `true`, `1`, `yes` and `on` enable. `false`, `0`, `no` and `off` disable. Matching is case-insensitive and ignores surrounding whitespace. Any other word warns and keeps the default.
+- **Choices** (for example `ATLAN_OOM_RESTART_CHECK`, `ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE`): an unrecognised word warns and keeps the default.
+
+`ATLAN_SQL_USE_SERVER_SIDE_CURSOR` is the one exception: an explicitly empty value disables server-side cursors, as it always has.
+
 This page covers **runtime** variables only. Variables starting `E2E_` configure the test harness under `application_sdk/testing/`. CI sets them, and a deployed app never reads them. See [Runtime vs test-harness variables](standards/env-vars.md#runtime-vs-test-harness-variables).
 
 ---
@@ -13,7 +24,7 @@ This page covers **runtime** variables only. Variables starting `E2E_` configure
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAN_APP_MODULE` | _(required)_ | App class to load: `module.path:ClassName` (e.g. `app.app:MyExtractor`). Startup fails without it. Set in your `Dockerfile` as `ENV ATLAN_APP_MODULE=…` or pass via `--app` CLI flag. |
-| `ATLAN_APP_MODE` | `combined` | Run mode: `worker`, `handler`, or `combined`. Determines which subsystems start; override via `--mode` CLI flag. **v2-compat fallback:** `APPLICATION_MODE` (deprecated; mapped at startup to the equivalent v3 mode). |
+| `ATLAN_APP_MODE` | `combined` | Run mode: `worker`, `handler`, or `combined`. Determines which subsystems start; override via `--mode` CLI flag. **v2-compat fallback:** `APPLICATION_MODE` (deprecated; case-insensitive; `LOCAL`/`WORKER`/`SERVER` map to `combined`/`worker`/`handler`, and the v3 names are accepted as-is. An unrecognised value logs a warning and runs `combined`). |
 | `ATLAN_APPLICATION_NAME` | `default` | Application name. Used in object-store paths, logging, and workflow identification. The `default` fallback applies to those *identity* uses only — task-queue derivation treats the variable as genuinely unset (see [Task-queue naming](#task-queue-naming)). Set it as the **bare** name, with no `atlan-` prefix; the SDK adds the prefix. |
 | `ATLAN_DEPLOYMENT_NAME` | `local` | Deployment name. Distinguishes dev / staging / prod deployments of the same app. As with `ATLAN_APPLICATION_NAME`, the `local` fallback is an identity default and does not apply to task-queue derivation. |
 | `ATLAN_TENANT_ID` | `default` | Tenant identifier for multi-tenant deployments. |
@@ -164,7 +175,7 @@ Set these when `ATLAN_AUTH_ENABLED=true` to authenticate the worker and handler 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAN_AUTH_ENABLED` | `false` | Enable OAuth2 authentication for Temporal. |
+| `ATLAN_AUTH_ENABLED` | `false` | Enable OAuth2 authentication for Temporal and for lifecycle events. One reader decides both, so a value such as `1` enables both or neither. |
 | `ATLAN_AUTH_TOKEN_URL` | _(empty)_ | OAuth2 token endpoint. **v2-compat fallback:** `ATLAN_AUTH_URL`. |
 | `ATLAN_AUTH_BASE_URL` | _(empty)_ | OAuth2 authorization base URL. **v2-compat fallback:** `ATLAN_AUTH_URL`. |
 | `ATLAN_AUTH_CLIENT_ID` | _(empty)_ | OAuth2 client ID (direct env var). |
@@ -274,7 +285,7 @@ These configure only the deprecated `RedisClient` / `RedisClientAsync`, which ke
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAN_SQL_USE_SERVER_SIDE_CURSOR` | `true` | Use server-side cursors for SQL queries. Reduces memory for large result sets by streaming data row-by-row. Default: enabled. To disable, set the variable to any value other than `true` (e.g. `ATLAN_SQL_USE_SERVER_SIDE_CURSOR=false`). Matching is case-insensitive and surrounding whitespace is ignored. |
+| `ATLAN_SQL_USE_SERVER_SIDE_CURSOR` | `true` | Use server-side cursors for SQL queries. Reduces memory for large result sets by streaming data row-by-row. Default: enabled. To disable, set the variable to a false word (e.g. `ATLAN_SQL_USE_SERVER_SIDE_CURSOR=false`) or to an empty value. An unrecognised word warns and keeps cursors enabled. |
 
 ---
 
@@ -336,7 +347,7 @@ These configure only the deprecated `RedisClient` / `RedisClientAsync`, which ke
 | `ATLAN_METRICS_BATCH_SIZE` | `100` | Records buffered before flushing to the object-store sink. |
 | `ATLAN_METRICS_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between object-store sink flushes. |
 | `ATLAN_METRICS_RETENTION_DAYS` | `30` | Days to retain metric files in the object store before cleanup. |
-| `ATLAN_METRICS_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old metric files. Uses `.lower() == "true"` — safe to set to `"false"` to disable. |
+| `ATLAN_METRICS_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old metric files. Set to `false` to disable. |
 | `ATLAN_ENABLE_TEMPORAL_CORE_METRICS` | `true` | Bind the Temporal Rust-core Prometheus endpoint at `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` (loopback) in worker/combined mode so its metric set (`temporal_workflow_*`, `temporal_activity_*`, etc.) is reachable for the combined-mode FastAPI `/metrics` proxy and the worker's `TemporalCoreCollector`. The FastAPI `/metrics` route is always exposed regardless of this flag — when this flag is `false`, or in handler-only mode, the response simply omits the proxied Temporal Rust-core families. `run_dev_combined()` defaults to `false` to avoid hot-reload port collisions. See [Monitoring](concepts/monitoring.md). |
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` | _(empty)_ | Pushgateway URL workers push to (split deployment). Empty disables push — combined-mode pods leave it unset and rely on direct `/metrics` scrape. |
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS` | `30` | Periodic push interval. A final push always happens on shutdown. |
