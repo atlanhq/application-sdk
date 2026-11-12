@@ -72,6 +72,21 @@ def test_extract_stops_at_anything_that_is_not_a_package_name() -> None:
     assert extract_build_publish_apt_packages(text) == "libkrb5-dev"
 
 
+@pytest.mark.parametrize(
+    "token",
+    ["libkrb5-dev=1.2.3", "libkrb5-dev/bookworm", "libkrb5-dev:amd64", "LibFoo"],
+)
+def test_extract_drops_tokens_the_certify_validation_rejects(token: str) -> None:
+    """The reusable validates apt_packages as ``[a-z0-9][a-z0-9+.-]*`` per
+    token and fails certify over one outlier, so the extractor never hands
+    one to the render."""
+    text = render("build-and-publish.yaml").replace(
+        "    secrets: inherit",
+        f'      apt_packages: "gcc {token} python3-dev"\n    secrets: inherit',
+    )
+    assert extract_build_publish_apt_packages(text) == "gcc python3-dev"
+
+
 # ── C002 ─────────────────────────────────────────────────────────────────────
 
 
@@ -157,3 +172,18 @@ def test_a_repo_with_no_system_packages_renders_no_line(
         "build-and-publish.yaml",
         build_publish_apt_packages=kwargs["build_publish_apt_packages"],
     )
+
+
+def test_inherited_system_deps_are_narrowed_to_the_certify_grammar(
+    tmp_path: pathlib.Path,
+) -> None:
+    """system_deps may pin (apt-get accepts it); certify's validation does not."""
+    _write(
+        tmp_path,
+        "checks.yml",
+        render("checks.yml", system_deps="libkrb5-dev=1.2.3 gcc python3-dev/bookworm"),
+    )
+    _write(tmp_path, "build-and-publish.yaml", render("build-and-publish.yaml"))
+    kwargs = _detected(tmp_path)
+    assert kwargs["system_deps"] == "libkrb5-dev=1.2.3 gcc python3-dev/bookworm"
+    assert kwargs["build_publish_apt_packages"] == "gcc"

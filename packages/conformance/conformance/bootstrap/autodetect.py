@@ -13,6 +13,7 @@ import pathlib
 
 from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
+    certify_apt_packages,
     extract_apt_packages,
     extract_build_publish_apt_packages,
     extract_build_publish_lfs,
@@ -423,7 +424,9 @@ def apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) ->
             _read_build_publish_apt_packages(
                 root / ".github" / "workflows" / "build-and-publish.yaml"
             )
-            or kwargs["system_deps"]
+            # system_deps' grammar is wider (apt-get takes pins, releases);
+            # narrow it to what the reusable's certify validation accepts.
+            or certify_apt_packages(kwargs["system_deps"])
         )
     # services-script: existing .github/test/setup-services.sh, else unset.
     if not kwargs["services_script"]:
