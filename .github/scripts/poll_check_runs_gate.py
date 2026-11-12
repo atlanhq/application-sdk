@@ -41,10 +41,17 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+# Sibling .github/scripts module — imported, not copied (FND-2674, FND-4899).
+# Run as `python3 <path>/poll_check_runs_gate.py` the script's own dir is on
+# sys.path already; the insert makes `-m`/cwd invocations work too.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _gh_refs import gh_request  # noqa: E402
 
 PASSING_CONCLUSIONS = {"success", "neutral", "skipped"}
 
@@ -78,17 +85,17 @@ def pr_head_sha(repo: str, number: int) -> str | None:
     wait for checks that were genuinely on their way.
 
     Hence the SystemExit catch, which is the whole reason this is not a two-line
-    function. ``gh_api_conditional`` raises on any >=400 — correct for the poll
-    it was written for, where an unreadable check listing is a real failure, and
-    exactly wrong here: this read is an optimisation, so a missing
-    ``pull-requests: read`` grant would otherwise turn "stop waiting sooner" into
-    "kill the gate the first time it looks". A 200 whose body is not JSON raises
-    ``json.JSONDecodeError`` from the same parser; swallow that too, matching the
-    dispatch-side fail-open, so a proxy HTML page cannot fail the required gate.
+    function. ``gh_api_conditional`` raises on any >=400, on a 200 whose body is
+    not a JSON object (a proxy HTML page), and on a transport failure that
+    outlasts its retries — correct for the poll it was written for, where an
+    unreadable check listing is a real failure, and exactly wrong here: this read
+    is an optimisation, so a missing ``pull-requests: read`` grant would
+    otherwise turn "stop waiting sooner" into "kill the gate the first time it
+    looks". Swallowing it matches the dispatch-side fail-open.
     """
     try:
         status_code, _etag, body = gh_api_conditional(f"repos/{repo}/pulls/{number}")
-    except (SystemExit, json.JSONDecodeError) as unreadable:
+    except SystemExit as unreadable:
         print(
             f"::warning::could not read pull request #{number} ({unreadable}); "
             "continuing to wait."
@@ -107,77 +114,59 @@ def pr_head_sha(repo: str, number: int) -> str | None:
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-    """Single seam so tests can stub the HTTP client."""
+    """Single seam so tests can stub the ``gh api --paginate`` fallback. HTTP
+    requests go through ``_gh_refs.run`` instead."""
     return subprocess.run(cmd, **kwargs)
 
 
 def gh_api_conditional(path: str, *, etag: str | None = None):
     """GET https://api.github.com/{path}, returning (status_code, new_etag, body_json_or_None).
 
-    Uses curl, not `gh api`: `gh api` treats ANY non-2xx response — including
-    a 304 Not Modified, which is the entire point of this conditional-request
-    pattern — as a command failure, printing its own short diagnostic instead
-    of the actual response, so a 304 can't be distinguished from a real error.
-    Confirmed in production (run 28949755456): the very first poll that hit an
-    unchanged state failed with "gh: HTTP 304" instead of being treated as
-    "nothing changed yet" — and since a dispatched e2e run can easily run for
-    20+ minutes without its check run changing, an unchanged poll is the
-    *common* case here, not an edge case.
+    Goes through ``_gh_refs.gh_request``, the shared curl transport, rather than
+    ``gh api``: ``gh api`` treats ANY non-2xx response — including a 304 Not
+    Modified, which is the entire point of this conditional-request pattern — as
+    a command failure, printing its own short diagnostic instead of the actual
+    response, so a 304 can't be distinguished from a real error. Confirmed in
+    production (run 28949755456): the very first poll that hit an unchanged state
+    failed with "gh: HTTP 304" instead of being treated as "nothing changed yet"
+    — and since a dispatched e2e run can easily run for 20+ minutes without its
+    check run changing, an unchanged poll is the *common* case here, not an edge
+    case.
 
-    curl without --fail prints the full response (headers + body, via -i) for
-    any status code and only exits non-zero on a genuine transport failure
-    (timeout, DNS, connection refused) — exactly the raw-HTTP-semantics
-    reference used elsewhere in these scripts (see wait_for_pages_publish.py).
+    The shared transport is what keeps the job token off argv (it is fed to curl
+    on stdin, FND-4899) and what retries a transient curl failure or 5xx before
+    giving up — this used to carry its own curl call that put the token in a
+    ``-H`` argument and exited on the first transport blip of a 130-minute poll.
+
+    A >=400 still raises ``SystemExit``, as does a 200 whose body is not a JSON
+    object: for the check-run listing an unreadable answer is a real failure, and
+    ``pr_head_sha`` — the one caller that must not fail on one — catches it.
     """
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    if not token:
-        raise SystemExit("::error::GH_TOKEN (or GITHUB_TOKEN) must be set")
+    headers = {"If-None-Match": etag} if etag else None
+    response = gh_request("GET", path, headers=headers)
 
-    cmd = [
-        "curl",
-        "-sS",
-        "-i",
-        "--max-time",
-        "30",
-        "-H",
-        "Accept: application/vnd.github+json",
-        "-H",
-        "X-GitHub-Api-Version: 2022-11-28",
-        "-H",
-        f"Authorization: Bearer {token}",
-    ]
-    if etag:
-        cmd += ["-H", f"If-None-Match: {etag}"]
-    cmd.append(f"https://api.github.com/{path}")
+    # A 304 normally echoes the ETag; if a response carries none, the one we sent
+    # is still the current one.
+    new_etag = response.headers.get("etag", etag)
 
-    result = run(cmd, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise SystemExit(f"::error::curl failed for {path}: {result.stderr}")
-
-    raw = result.stdout.replace("\r\n", "\n")
-    if "\n\n" not in raw:
-        raise SystemExit(f"::error::unexpected response for {path}: {raw[:300]!r}")
-    header_block, _, body = raw.partition("\n\n")
-    lines = header_block.splitlines()
-    try:
-        status_code = int(lines[0].split()[1])
-    except (IndexError, ValueError):
+    if response.status >= 400:
+        detail = response.message or (
+            json.dumps(response.body)[:500] if response.body is not None else ""
+        )
         raise SystemExit(
-            f"::error::could not parse HTTP status line: {lines[0] if lines else ''!r}"
+            f"::error::GitHub API returned {response.status} for {path}: {detail}"
+        )
+    if response.status == 200 and not isinstance(response.body, dict):
+        raise SystemExit(
+            f"::error::GitHub API returned 200 for {path} without a JSON object body"
         )
 
-    new_etag = etag
-    for line in lines[1:]:
-        if line.lower().startswith("etag:"):
-            new_etag = line.split(":", 1)[1].strip()
-
-    if status_code >= 400:
-        raise SystemExit(
-            f"::error::GitHub API returned {status_code} for {path}: {body[:500]}"
-        )
-
-    body_json = json.loads(body) if status_code == 200 and body.strip() else None
-    return status_code, new_etag, body_json
+    body_json = (
+        response.body
+        if response.status == 200 and isinstance(response.body, dict)
+        else None
+    )
+    return response.status, new_etag, body_json
 
 
 def check_run_age_key(check_run: dict) -> tuple[str, int]:

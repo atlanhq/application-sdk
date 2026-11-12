@@ -160,14 +160,32 @@ def gh_request(
     path: str,
     payload: dict | None = None,
     *,
-    sleep=time.sleep,
+    headers: dict[str, str] | None = None,
+    sleep=None,
 ) -> Response:
     """Call the GitHub API, returning the status rather than raising on 4xx.
 
     Retries transport failures and 5xx (transient); a 4xx is an answer the caller
     interprets. The token is read from stdin (``-K -``) so it never appears in
     argv, where anything on the same runner could read it while the request runs.
+
+    ``headers`` are extra request headers, e.g. ``If-None-Match`` for a
+    conditional poll (a 304 is an answer, returned like any other status). They
+    go on argv, so they must never carry a credential: an ``Authorization``
+    header is refused rather than silently put back where the token is not
+    allowed to be.
+
+    ``sleep`` resolves from ``time`` at call time, not as a default argument: a
+    default is bound once at import, so a test that stubs ``time.sleep`` would
+    still back off for real.
     """
+    sleep = sleep or time.sleep
+    extra_headers = dict(headers or {})
+    if any(name.strip().lower() == "authorization" for name in extra_headers):
+        raise ValueError(
+            "gh_request sends the token itself, on stdin; an Authorization "
+            "header in `headers` would put a credential on argv"
+        )
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
         raise SystemExit("::error::GH_TOKEN (or GITHUB_TOKEN) must be set")
@@ -187,6 +205,8 @@ def gh_request(
         "-H",
         "X-GitHub-Api-Version: 2022-11-28",
     ]
+    for name, value in extra_headers.items():
+        cmd += ["-H", f"{name}: {value}"]
     config = f'header = "Authorization: Bearer {token}"\n'
     if payload is not None:
         cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(payload)]

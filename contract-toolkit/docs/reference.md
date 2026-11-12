@@ -1098,8 +1098,8 @@ For the single-pool case use key `"default"`. See `examples/deploy/` for the ful
 A system app runs only inside a tenant and is started by other apps' DAG nodes (popularity, publish, query intelligence, ...). It has no marketplace card. Set `type = "system"`:
 
 - `marketplaceCard` and `hasCredentialConfig` default to `false`.
-- `atlan.yaml` keeps `type: system` but carries **no `entrypoints` block**. Downstream reads an entrypoint with no `marketplace_card` key as a card, so no block is the only shape that cannot surface one. This matches the hand-written `atlan.yaml` of existing system apps.
-- `marketplaceCard = true`, or `packageId` on any `Entrypoint`, fails at `pkl eval`: with no `entrypoints` block they would be dropped silently.
+- `atlan.yaml` keeps `type: system` but carries **no `entrypoints` block**. Downstream reads an entrypoint with no `marketplace_card` key as a card, so no block is the only shape that cannot surface one. This matches the hand-written `atlan.yaml` of existing system apps. Exception: a system bundle whose entrypoint contracts declare `schedules` or `events` renders the block, listing only those entrypoints, each with `marketplace_card: false`; see "System app triggers" under [Multi-Entrypoint Bundle](#multi-entrypoint-bundle).
+- `marketplaceCard = true`, or `packageId` on any `Entrypoint`, fails at `pkl eval`: a system app never renders a card, so they would be dropped silently.
 
 What does **not** change:
 
@@ -1273,6 +1273,17 @@ Credential files are hoisted by matching `connectorConfigName`. If two entrypoin
 - Any system entrypoint's `_e2e_base.py` (with or without a `uiConfig`) extends `SystemAppE2ETest` and names no `argo_*`, `app_service_url` or `connector_config_name`: `type` decides the base class, as for a single-entrypoint system app. A UI-less one also has no `manifest_path`, `required_dag_nodes` or `expect_*` lines (it has no manifest or extract/publish DAG), a comment telling the suite to set `manifest_path` and `required_dag_nodes`, and `entrypoint = "<entrypoint>"`.
 
 See [`examples/system-bundle/`](examples/system-bundle/).
+
+**System app triggers:** a system bundle whose entrypoint contracts declare `schedules` or `events` renders an `entrypoints` block in `atlan.yaml`. Local Marketplace learns an app's entrypoints only from that block, and reconciles a trigger only for an entrypoint it knows, so without the block those triggers would never be created. The block lists only the trigger-bearing entrypoints: the others are started by callers' DAG nodes (`?entrypoint=`) and may have no manifest for the reconciler to fetch. Each listed entrypoint renders `marketplace_card: false` and no `package_id`, so no card appears. Every entrypoint's `manifest.json` is rendered against the bundle's `taskQueuePrefix`, replacing the sub-contract's own: one worker on the bundle's queue serves every entrypoint, and the served-manifest stamp rewrites only the app's own `atlan-<name>-{deployment_name}` queue. A system app with no trigger-bearing entrypoint still renders no block, so existing system apps are unchanged. Overriding `entrypoints` away through `atlanYamlOverrides` drops the triggers from Local Marketplace's view; nothing refuses that. Refused at `pkl eval`:
+
+- `schedules` / `events` on the system app's own root contract (single-entrypoint or bundle root): its `atlan.yaml` carries no root entrypoint, so they would never be reconciled. Declare them on an entrypoint's `contract`. Checked when `atlan.yaml` renders (or from `output` when `emitAtlanYaml = false`), so the same system sub-contract is accepted inside a bundle. A sub-contract that itself sets `emitAtlanYaml = false` and declares triggers is refused too.
+- Triggers on an entrypoint whose contract renders no `manifest.json` (no `uiConfig`): triggers render only into the manifest, so they would be dropped.
+- A trigger-bearing entrypoint whose `type` is `system` (GM and CI publish reject it) or `connector` (the default): set `type = "utility"` or another allowed non-connector type (`miner`, `orchestrator`, `custom`).
+- `emitAtlanYaml = false` or `emitEntrypoints = false` with trigger-bearing entrypoints: the block that carries them would be suppressed.
+- `emitGeneratedArtifacts = false` with trigger-bearing entrypoints: their `manifest.json` files would not be emitted, so Local Marketplace could not fetch them.
+- An `Entrypoint.metadata` `marketplace_card` other than `false`: a system app never renders a card.
+
+See [`examples/system-triggers/`](examples/system-triggers/).
 
 ### Other App.pkl Properties
 

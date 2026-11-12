@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import gzip
 import logging
 import os
@@ -9,7 +10,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from time import time
+from time import monotonic, time
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 if TYPE_CHECKING:
@@ -41,11 +42,15 @@ from application_sdk.observability.utils import in_temporal_workflow
 
 def _has_running_loop() -> bool:
     """Whether the calling thread is running an asyncio event loop."""
+    return _running_loop_or_none() is not None
+
+
+def _running_loop_or_none() -> asyncio.AbstractEventLoop | None:
+    """The event loop the calling thread is running, or ``None``."""
     try:
-        asyncio.get_running_loop()
+        return asyncio.get_running_loop()
     except RuntimeError:
-        return False
-    return True
+        return None
 
 
 # --- Path configuration ---
@@ -88,6 +93,46 @@ T = TypeVar("T")
 # would start another. At the cap, records stay in the buffer and the next
 # flush (a freed slot, the periodic flush, or ``flush_all``) takes them.
 _MAX_INFLIGHT_FLUSHES = 4
+
+# Test-only: total time ``AtlanObservability._reset_for_testing`` waits for the
+# flush work of the sinks it drops to stop. The work runs on another thread.
+_RESET_STOP_TIMEOUT_SECONDS = 30.0
+
+
+def _cancel_flush_task_for_testing(task: "asyncio.Task[None]", deadline: float) -> None:
+    """Cancel a dropped sink's batch flush, waiting for it until *deadline*.
+
+    Waits only when the task's loop is running on another thread. On the
+    caller's own loop the task can only end once the caller yields, and on a
+    loop that is not running, once that loop next runs; either way it is
+    cancelled before it can finish its upload, so it is not waited for.
+    """
+    if task.done():
+        return
+    loop = task.get_loop()
+    if loop.is_closed():
+        return  # Never runs again.
+    if loop is _running_loop_or_none() or not loop.is_running():
+        task.cancel()
+        return
+
+    async def _cancel_and_wait() -> None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    try:
+        stopped = asyncio.run_coroutine_threadsafe(_cancel_and_wait(), loop)
+    except RuntimeError:
+        return  # The loop closed meanwhile.
+    try:
+        stopped.result(timeout=max(0.0, deadline - monotonic()))
+    except concurrent.futures.TimeoutError:
+        stopped.cancel()
+        logging.warning(
+            "A dropped observability sink's batch flush did not stop within %ss",
+            _RESET_STOP_TIMEOUT_SECONDS,
+            exc_info=True,
+        )
 
 
 @dataclass
@@ -588,13 +633,85 @@ class AtlanObservability(Generic[T], ABC):
 
         This method should only be used in tests to allow fresh initialization
         for each test case.
+
+        Every instance it drops is stopped too (see
+        :meth:`_stop_flushes_for_testing`), waiting up to
+        ``_RESET_STOP_TIMEOUT_SECONDS`` in all. Dropping only the reference
+        left a sink's periodic flush running on the shared observability loop,
+        where it delivered its batches into whatever ``upload_file`` a later
+        test on the same worker had patched.
         """
+        dropped = list(AtlanObservability._instances)
         AtlanObservability._instances.clear()
+        deadline = monotonic() + _RESET_STOP_TIMEOUT_SECONDS
+        for instance in dropped:
+            instance._stop_flushes_for_testing(deadline)
         AtlanObservability._deployment_store = None
         AtlanObservability._upstream_store = None
         with _store_state_lock:
             _deferred_stores.clear()
             _disabled_stores.clear()
+
+    def _stop_flushes_for_testing(self, deadline: float) -> None:
+        """Discard this sink's records and stop its flushes, until *deadline*.
+
+        Test-only. The buffer is discarded first, so the final flush that
+        cancelling the periodic flush triggers has nothing to write. Then the
+        periodic flush is cancelled and waited for, and every batch flush
+        ``add_record`` started is cancelled (see
+        :func:`_cancel_flush_task_for_testing`), including one started while
+        the earlier ones were being stopped. The class-level handle that logs,
+        metrics, traces and sizing keep is cleared with it, so the next sink
+        of that class starts a fresh flush.
+        """
+        with self._buffer_lock:
+            self._buffer = []
+        handle = self._periodic_flush_task
+        self._periodic_flush_task = None
+        if handle is not None:
+            handle.cancel()
+            # ``wait`` must not run on the handle's own loop thread, and a
+            # loop that is not running would never finish the task.
+            can_wait = (
+                handle.loop.is_running() and handle.loop is not _running_loop_or_none()
+            )
+            if can_wait and not handle.wait(max(0.0, deadline - monotonic())):
+                logging.warning(
+                    "A dropped observability sink's periodic flush did not stop "
+                    "within %ss",
+                    _RESET_STOP_TIMEOUT_SECONDS,
+                )
+        # Matched by identity, ``None`` included: a sink built after the loop
+        # shut down got no handle, yet its constructor still set the guard.
+        for owner in type(self).__mro__:
+            if "_flush_task" not in vars(owner):
+                continue
+            if owner._flush_task is handle:  # type: ignore[attr-defined]  # — declared on this class, checked above
+                owner._flush_task = None  # type: ignore[attr-defined]
+                owner._flush_task_started = False  # type: ignore[attr-defined]
+            break
+        # ``add_record`` on another thread can start a batch flush while the
+        # ones already seen are being stopped, so look again until a pass
+        # finds none new. Tasks that are cancelled but not yet done (on the
+        # caller's own loop, or a stopped one) are not looked at twice.
+        seen: set[asyncio.Task[None]] = set()
+        while True:
+            with self._buffer_lock:
+                self._buffer = []
+                new_tasks = [t for t in self._flush_tasks if t not in seen]
+            if not new_tasks:
+                return
+            if monotonic() >= deadline:
+                logging.warning(
+                    "A dropped observability sink kept starting batch flushes "
+                    "for %ss; leaving %d running",
+                    _RESET_STOP_TIMEOUT_SECONDS,
+                    len(new_tasks),
+                )
+                return
+            seen.update(new_tasks)
+            for task in new_tasks:
+                _cancel_flush_task_for_testing(task, deadline)
 
     def _get_signal_type(self) -> str:
         """Map file_name to signal type (logs, metrics, traces, sizing).

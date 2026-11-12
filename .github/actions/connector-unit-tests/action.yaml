@@ -50,6 +50,14 @@ inputs:
       review too — parity with connector-integration-tests.
     default: ""
 
+  lfs:
+    required: false
+    description: |
+      "true" to check out the caller repo's git-LFS objects, passed to
+      setup-deps. For apps whose tests load LFS-tracked files (e.g. a vendored
+      parser jar). Default "false" checks out as before, with no LFS fetch.
+    default: "false"
+
   git-auth-token:
     required: false
     description: |
@@ -67,6 +75,7 @@ runs:
       with:
         python-version: ${{ inputs.python-version }}
         git-auth-token: ${{ inputs.git-auth-token }}
+        lfs: ${{ inputs.lfs }}
 
     - name: Pin application-sdk to dispatched ref
       if: inputs.application-sdk-ref != ''

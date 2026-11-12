@@ -477,6 +477,32 @@ on:
           LFS further: that one governs the TEST jobs' clones, this one the
           image build. A connector can need both (skip the smudge during
           `uv sync`, fetch the objects for the Docker context).
+      test-lfs:
+        required: false
+        type: boolean
+        default: false
+        description: |
+          Check out git-LFS objects in the Unit and Integration jobs (default
+          false). Set true for apps whose tests load LFS-tracked files, e.g. a
+          vendored parser jar — without it the tests read the LFS pointer, not
+          the real file. Distinct from `lfs` above, which governs only the e2e
+          image-build checkout.
+
+          Applies to the app repo's own checkout only, and wins over
+          `git-lfs-skip-smudge` there: that checkout fetches and smudges the
+          app's LFS objects even when the smudge skip is on. The skip still
+          governs every other clone in the job (the git dependencies `uv sync`
+          fetches), so a connector can set both.
+      java-version:
+        required: false
+        type: string
+        default: ""
+        description: |
+          JDK major version (e.g. "21") set up via actions/setup-java (Temurin)
+          in the Unit and Integration jobs, for apps whose tests start a JVM.
+          Empty (the default) runs no setup step and leaves the runner's
+          default Java. The value reaches setup-java's `java-version` only,
+          never a shell; a version setup-java cannot resolve fails the job.
       apt-packages:
         required: false
         type: string
@@ -840,10 +866,20 @@ jobs:
           echo "::error title=No token for private git dependencies::private-git-deps is true but the fleet App token did not mint. Pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (secrets: inherit, or name both in an explicit secrets: mapping)."
           exit 1
 
+      # Opt-in (java-version). Sets JAVA_HOME and PATH for the steps after it,
+      # so the composite below runs the tests on this JDK.
+      - name: Set up Java (java-version)
+        if: inputs.java-version != ''
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
       - name: Run unit tests
         id: unit
         uses: atlanhq/application-sdk/.github/actions/connector-unit-tests@main
         with:
+          lfs: ${{ inputs.test-lfs }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           # "0" by default (no coverage gate); apps opt up via the input.
           fail-under: ${{ inputs.unit-coverage-fail-under }}
@@ -1473,11 +1509,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # See the unit job.
+      - name: Set up Java (java-version)
+        if: inputs.java-version != ''
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
       - name: Run integration tests
         id: integration
         uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@main
         with:
           app-name: ${{ inputs.app-name }}
+          lfs: ${{ inputs.test-lfs }}
           git-auth-token: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
           test-paths: ${{ inputs.test-paths != '' && inputs.test-paths || 'tests/integration/' }}
           pytest-args: ${{ inputs.pytest-args }}

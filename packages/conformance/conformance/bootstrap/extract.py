@@ -250,6 +250,8 @@ _TESTS_YAML_VALUE_INPUTS: tuple[tuple[str, str, str], ...] = (
     ("private_git_deps", "private-git-deps", "bool"),
     ("git_lfs_skip_smudge", "git-lfs-skip-smudge", "bool"),
     ("lfs", "lfs", "bool"),
+    ("test_lfs", "test-lfs", "bool"),
+    ("java_version", "java-version", "int"),
     ("health_check_timeout_seconds", "health-check-timeout-seconds", "int"),
     ("container_health_timeout_seconds", "container-health-timeout-seconds", "int"),
     ("runtime_sdk_ref", "runtime-sdk-ref", "plain"),
