@@ -79,6 +79,11 @@ facts {
       .contains("emitAtlanYaml = false, but entrypoint(s) List(\"rollup\", \"feed\") declare schedules or events")
   }
 
+  ["Refuses emitGeneratedArtifacts = false with trigger-bearing entrypoints"] {
+    module.catch(() -> (systemTriggers) { emitGeneratedArtifacts = false }.output.files)
+      .contains("emitGeneratedArtifacts = false, but entrypoint(s) List(\"rollup\", \"feed\") declare schedules or events")
+  }
+
   ["Refuses emitEntrypoints = false with trigger-bearing entrypoints"] {
     module.catch(() -> (systemTriggers) { emitEntrypoints = false }.output.files)
       .contains("emitEntrypoints = false, but entrypoint(s) List(\"rollup\", \"feed\") declare schedules or events")

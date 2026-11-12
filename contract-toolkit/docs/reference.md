@@ -1280,6 +1280,7 @@ See [`examples/system-bundle/`](examples/system-bundle/).
 - Triggers on an entrypoint whose contract renders no `manifest.json` (no `uiConfig`): triggers render only into the manifest, so they would be dropped.
 - A trigger-bearing entrypoint whose `type` is `system` (GM and CI publish reject it) or `connector` (the default): set `type = "utility"` or another allowed non-connector type (`miner`, `orchestrator`, `custom`).
 - `emitAtlanYaml = false` or `emitEntrypoints = false` with trigger-bearing entrypoints: the block that carries them would be suppressed.
+- `emitGeneratedArtifacts = false` with trigger-bearing entrypoints: their `manifest.json` files would not be emitted, so Local Marketplace could not fetch them.
 - An `Entrypoint.metadata` `marketplace_card` other than `false`: a system app never renders a card.
 
 See [`examples/system-triggers/`](examples/system-triggers/).

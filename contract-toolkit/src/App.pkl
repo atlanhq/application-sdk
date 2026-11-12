@@ -5156,7 +5156,8 @@ local emitsEntrypointsBlock: Boolean =
 ///     app never renders a card;
 ///   - trigger-bearing entrypoints with `emitAtlanYaml = false` or
 ///     `emitEntrypoints = false`: the block that carries them to Local
-///     Marketplace would be suppressed;
+///     Marketplace would be suppressed; or with `emitGeneratedArtifacts =
+///     false`: the listed entrypoints' manifests would not be emitted;
 ///   - a trigger-bearing entrypoint with `type` `system` (GM and CI publish
 ///     reject it) or `connector` (the default; a system app's entrypoint is not
 ///     a connector): set `type = "utility"` or another non-connector type.
@@ -5181,6 +5182,8 @@ local _systemAppCheck: Any =
       throw("App.pkl: type = \"system\" entrypoint(s) \(_cardMeta.map((ep) -> ep.name)) set metadata marketplace_card to a value other than false. A system app never renders a marketplace card. Remove the key, or use a non-system type if the entrypoint needs a card.")
     else if (!emitAtlanYaml && !systemTriggerEntrypoints.isEmpty)
       throw("App.pkl: type = \"system\" with emitAtlanYaml = false, but entrypoint(s) \(systemTriggerEntrypoints.map((ep) -> ep.name)) declare schedules or events. Local Marketplace learns entrypoints only from atlan.yaml, so their triggers would never be reconciled. Remove emitAtlanYaml = false.")
+    else if (!emitGeneratedArtifacts && !systemTriggerEntrypoints.isEmpty)
+      throw("App.pkl: type = \"system\" with emitGeneratedArtifacts = false, but entrypoint(s) \(systemTriggerEntrypoints.map((ep) -> ep.name)) declare schedules or events. atlan.yaml lists them, but their app/generated/<entrypoint>/manifest.json, which carries the triggers and the bundle's task queue, would not be emitted, so Local Marketplace could not reconcile them. Remove emitGeneratedArtifacts = false.")
     else if (!emitEntrypoints && !systemTriggerEntrypoints.isEmpty)
       throw("App.pkl: type = \"system\" with emitEntrypoints = false, but entrypoint(s) \(systemTriggerEntrypoints.map((ep) -> ep.name)) declare schedules or events. Local Marketplace learns entrypoints only from atlan.yaml's `entrypoints` block, so their triggers would never be reconciled. Remove emitEntrypoints = false.")
     else if (!_noManifest.isEmpty)
