@@ -44,9 +44,11 @@ inputs:
     required: false
     description: |
       "true" to check out the repo's git-LFS objects (actions/checkout
-      `lfs: true`), even when the job sets GIT_LFS_SKIP_SMUDGE=1. Any other
-      value (the default "false") checks out exactly as before, with no LFS
-      fetch.
+      `lfs: true`), even when the job sets GIT_LFS_SKIP_SMUDGE=1, then run
+      `git lfs checkout` so the files are real even when an earlier step
+      already checked out the same commit with pointers; fails if an LFS
+      object of HEAD is missing. Any other value (the
+      default "false") checks out exactly as before, with no LFS fetch.
     default: "false"
 
 runs:
@@ -68,6 +70,25 @@ runs:
       with:
         fetch-depth: 1
         lfs: true
+
+    # Write the fetched LFS objects over any pointers in the tree. A job that
+    # checked out the same commit before this action, with the smudge
+    # skipped (tests-reusable's "Checkout app" for private-git-deps), leaves
+    # pointers that the checkout above does not rewrite: git skips files whose
+    # index entry is unchanged, and actions/checkout never runs
+    # `git lfs checkout`. Without this the LFS jar stayed a pointer and the
+    # Java tests skipped (FND-4970). A no-op when the files are already real.
+    # `git lfs checkout` exits 0 and leaves the pointer when an object is not
+    # local, so fsck then fails the step on any missing or corrupt object of
+    # HEAD instead of letting the tests skip on a pointer.
+    - name: Materialise LFS files
+      if: inputs.lfs == 'true'
+      shell: bash
+      env:
+        GIT_LFS_SKIP_SMUDGE: "0"
+      run: |
+        git lfs checkout
+        git lfs fsck --objects HEAD
 
     # Test on the Python the app image ships (FND-4611). A literal default here
     # ("3.11" until FND-4611) let every connector's unit and integration tiers
