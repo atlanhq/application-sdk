@@ -3141,14 +3141,19 @@ def test_derive_hello_world(tmp_path: pathlib.Path) -> None:
 # drift apart, the SDK's own CI would keep exercising the fixed version while
 # every bootstrapped consumer repo silently gets a stale one.
 #
-# A missing canonical file FAILS rather than skips (FND-4907): this suite
-# only runs from the monorepo checkout, so a missing file means the canonical
-# side was renamed or deleted, and a skip would turn the guard off unnoticed.
+# Skipped only when this is not an application-sdk checkout at all (an
+# isolated sdist, which has no canonical side to compare). Inside a checkout a
+# missing canonical file FAILS rather than skips (FND-4907): it means the
+# canonical side was renamed or deleted, and a skip would turn the guard off
+# unnoticed.
 # Templates with no canonical copy in this repo are named below, and the
 # test also fails if one of them gains one, so the set cannot hide drift.
 # ---------------------------------------------------------------------------
 
 _MONOREPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+# The SDK package marks a monorepo checkout; .github/ is deliberately not the
+# marker, since a moved canonical file there is exactly what must fail.
+_IN_MONOREPO = (_MONOREPO_ROOT / "application_sdk").is_dir()
 
 # MANAGED_ACTION_FILES entries whose template IS the only source: this repo
 # does not run them itself, so there is nothing to drift from.
@@ -3172,6 +3177,8 @@ def test_template_only_action_files_are_managed_entries() -> None:
 def test_managed_action_template_matches_canonical_source(
     dest_rel: str, template_name: str
 ) -> None:
+    if not _IN_MONOREPO:
+        pytest.skip(f"not an application-sdk checkout: {_MONOREPO_ROOT}")
     canonical = _MONOREPO_ROOT / dest_rel
     if dest_rel in _TEMPLATE_ONLY_ACTION_FILES:
         assert not canonical.exists(), (
