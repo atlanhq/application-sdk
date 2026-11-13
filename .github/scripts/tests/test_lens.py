@@ -15,7 +15,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -6832,3 +6832,172 @@ def test_a_stream_cut_mid_chunk_is_retried_as_transport_weather():
     )
     c.complete("x", [{"role": "user", "content": "hi"}], max_tokens=5)
     assert len(calls) == 2
+
+
+# ---- a request the model provider refuses (provider_rejected) -----------------------------------
+
+
+def _refused(pad: int = 400):
+    """The gateway's refusal, longer than any old truncation limit, so a test can
+    prove the run report keeps it whole."""
+    body = {
+        "error": {
+            "code": "invalid_request",
+            "fault": "gateway",
+            "message": "The request is not valid." + " detail" * (pad // 7),
+            "param": None,
+            "reason": "provider_rejected",
+            "retryable": False,
+        }
+    }
+    return 400, {}, json.dumps(body)
+
+
+def test_a_refused_request_is_not_retried_names_its_size_and_keeps_the_error_whole():
+    from lens.llm import ContentRejected  # noqa: PLC0415 - class under test
+
+    status, _, text = _refused()
+    sent = Script(_refused(), response())
+    c = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=sent)
+    with pytest.raises(ContentRejected) as exc:
+        c.complete("review:a", [{"role": "user", "content": "hi"}], max_tokens=5)
+    e = exc.value
+    assert e.stage == "review:a"
+    assert e.error == " ".join(text.split()) and len(e.error) > 300  # never cut
+    assert e.request_chars > 0 and e.input_tokens_est > 0
+    (call,) = c.calls
+    assert call["error"] == e.error and call["request_chars"] == e.request_chars
+    # Content-driven, not lens's request shape: the other bundles still review.
+    c.complete("review:b", [{"role": "user", "content": "hi"}], max_tokens=5)
+    assert len(sent.requests) == 2
+
+
+def test_consecutive_refusals_never_open_the_breaker_but_are_counted_as_failed():
+    """Every part of a PR can be refused (one did: all four). Each refusal is a
+    failed request, but none may stop a later bundle's call from being sent."""
+    from lens.llm import ContentRejected  # noqa: PLC0415 - class under test
+
+    sent = Script(*[_refused()] * 5, response())
+    led = Ledger(cap_usd=1)
+    c = Client(
+        model="m",
+        price=PRICE,
+        ledger=led,
+        transport=sent,
+        max_consecutive_failures=3,
+    )
+    for i in range(5):
+        with pytest.raises(ContentRejected):
+            c.complete(f"review:{i}", [{"role": "user", "content": "hi"}], max_tokens=5)
+    c.complete("review:last", [{"role": "user", "content": "hi"}], max_tokens=5)
+    assert len(sent.requests) == 6  # every call was sent
+    assert led.failed_requests == 5
+
+
+def test_every_failed_call_keeps_its_whole_redacted_error_in_the_run_report():
+    long = '{"error": "' + "x" * 500 + ' key sk-abc123def"}'
+    c = Client(
+        model="m",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=Script((401, {}, long)),
+    )
+    with pytest.raises(FatalRequestError) as exc:
+        c.complete("review:a", [{"role": "user", "content": "hi"}], max_tokens=5)
+    err = c.calls[0]["error"]
+    assert len(err) > 500 and err.endswith('sk-…"}') and "sk-abc" not in err
+    assert "sk-abc" not in str(exc.value)
+
+
+def test_a_turn_zero_refusal_names_the_first_prompts_files_and_hunks(repo: Path):
+    ws, bundle = _ws(repo)
+    script = Script(_refused())
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    res = agent_mod.review_bundle(
+        client,
+        ws,
+        bundle,
+        RuleSet([], {}),
+        {"title": "t", "body": "b"},
+        [],
+        agent_mod.AgentLimits(),
+    )
+    assert res.stop == "refused"
+    r = res.refusal
+    assert r["turn"] == 0 and r["stage"] == f"review:{bundle.label}"
+    assert r["request_chars"] > 0 and "provider_rejected" in r["error"]
+    kinds = [s["kind"] for s in r["suspects"]]
+    assert kinds[:2] == ["pr_description", "context"] and "diff" in kinds
+    diff = next(s for s in r["suspects"] if s["kind"] == "diff")
+    assert diff["files"] == {"application_sdk/storage/fetch.py": ["1-4"]}
+    assert agent_mod.suspect_paths(r)[-1] == "application_sdk/storage/fetch.py"
+    # Counts and locations only: no line of the PR's code is in the record.
+    assert "data.decode()" not in json.dumps(r)
+
+
+def test_a_later_refusal_suspects_only_what_the_last_tool_call_pulled_in(repo: Path):
+    ws, bundle = _ws(repo)
+    script = Script(
+        response(
+            [
+                tool_call(
+                    "read_file",
+                    {
+                        "file_path": "tests/unit/test_fetch.py",
+                        "start_line": 1,
+                        "end_line": 4,
+                    },
+                )
+            ]
+        ),
+        _refused(),
+    )
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    res = agent_mod.review_bundle(
+        client, ws, bundle, RuleSet([], {}), {}, [], agent_mod.AgentLimits()
+    )
+    assert res.stop == "refused" and res.refusal["turn"] == 1
+    (suspect,) = res.refusal["suspects"]
+    assert suspect["kind"] == "tool" and suspect["tool"] == "read_file"
+    assert suspect["files"] == {"tests/unit/test_fetch.py": ["1-4"]}
+    assert len(res.refusal["sent"]) > 1  # the whole prompt is still listed
+
+
+def test_a_refused_review_does_not_tell_the_author_to_retry_and_reports_the_suspects(
+    repo: Path,
+):
+    from lens import report  # noqa: PLC0415 - module under test
+
+    gh = FakeGitHub()
+    res = run(
+        gh=cast(GitHub, gh),
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=_factory(Script(_refused())),
+    )
+    assert res.failed and res.incomplete
+    body = next(c["body"] for c in gh.comments if SUMMARY_MARKER in c["body"])
+    assert "Review incomplete" in body
+    assert "Comment `/lens` to retry" not in body
+    assert "refused again" in body and "`application_sdk/storage/fetch.py`" in body
+
+    rep = report.build(res)
+    (b,) = [b for b in rep["bundles"] if b.get("refusal")]
+    assert "provider_rejected" in b["error"] and len(b["error"]) > 300
+    assert len(b["refusal"]["error"]) > 300
+    md = report.markdown(rep, 1)
+    assert "Refused by the model provider" in md and "provider_rejected" in md
+    assert "application_sdk/storage/fetch.py" in md
+
+
+def test_a_refusal_beside_a_transport_failure_still_offers_a_retry_for_the_other_part():
+    res = RunResult(action="reviewed")
+    res.bundles = [
+        BundleResult(label="a", stop="refused", refusal={"suspects": []}),
+        BundleResult(label="b", stop="llm_error", error="HTTP 503"),
+    ]
+    res.incomplete = ["a: refused", "b: llm_error"]
+    hint = review_mod._retry_hint(res)
+    assert "refused again" in hint and "other parts that failed" in hint

@@ -41,6 +41,42 @@ class FatalRequestError(LLMError):
     request shape or size). The whole run stops; nothing is retried."""
 
 
+class ContentRejected(FatalRequestError):
+    """The model provider refused THIS request's content (gateway reason
+    `provider_rejected`). Deterministic: the same prompt is refused again, so it
+    is never retried. But it is about this prompt, not lens's request shape, so
+    unlike its parent it does not stop the run: the other bundles still review.
+
+    Carries what is safe to report about the refused request (its size and the
+    gateway's full error body, key-redacted), never the prompt itself."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str,
+        error: str,
+        request_chars: int,
+        input_tokens_est: int,
+    ) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.error = error
+        self.request_chars = request_chars
+        self.input_tokens_est = input_tokens_est
+
+
+# The gateway's `error.reason` when the upstream provider refused the request.
+PROVIDER_REJECTED = "provider_rejected"
+
+
+def redact(text: str) -> str:
+    """An error body as it may be recorded: whitespace collapsed and any
+    key-shaped token masked. Never truncated: a cut-off error body is what made a
+    refused request undiagnosable (the run report is the place to read it whole)."""
+    return re.sub(r"sk-[A-Za-z0-9._-]+", "sk-…", " ".join(text.split()))
+
+
 # Cloudflare in front of the gateway bans known script signatures, Python's
 # default "Python-urllib/3.x" among them (error 1010, seen on the first live
 # runs: every call 403'd while curl from a laptop worked). Every request lens
@@ -529,7 +565,7 @@ class Client:
             who = "an HTML page (an edge or proxy, not the gateway)"
         else:
             who = "the gateway's JSON"
-        snippet = re.sub(r"sk-[A-Za-z0-9._-]+", "sk-…", " ".join(text.split()))[:160]
+        snippet = redact(text)[:160]
         self.diagnostics.append(
             f"preflight {path}: HTTP {status} from {who}: {snippet}"
         )
@@ -576,9 +612,15 @@ class Client:
         return None
 
     # ---- breaker -------------------------------------------------------
-    def _record(self, ok: bool) -> None:
+    def _record(self, ok: bool, *, streak: bool = True) -> None:
+        """Book a request's outcome. `streak=False` counts a failure without
+        advancing the run-wide breaker: for a failure that is about one prompt's
+        content, which says nothing about whether the next bundle's call works."""
         with self._breaker_lock:
-            self._fail_streak = 0 if ok else self._fail_streak + 1
+            if ok:
+                self._fail_streak = 0
+            elif streak:
+                self._fail_streak += 1
             if not ok:
                 self.ledger.failed_requests += 1
 
@@ -933,17 +975,28 @@ class Client:
                     finish_reason=choice.get("finish_reason") or "",
                     message=msg,
                 )
-            self._record(False)
-            last = f"HTTP {status}: {text[:300]}"
+            # A content refusal is bundle-local: it is a failed request, but it must not
+            # open the breaker on bundles whose prompts were never refused. Each bundle
+            # stops at its first refusal, so this costs at most one request per bundle.
+            refused = status == 400 and _error_reason(text) == PROVIDER_REJECTED
+            self._record(False, streak=not refused)
+            error = redact(text)
+            last = f"HTTP {status}: {error}"
+            # The size of what was sent, so a refused or oversized request can be
+            # told apart from a bad one without recording the prompt itself.
+            request_chars = len(json.dumps(body))
+            input_tokens_est = estimate_tokens(
+                json.dumps(prompt_view(messages)) + (json.dumps(tools) if tools else "")
+            )
             self._note_call(
                 stage=stage,
                 api=self.api,
                 status=status,
                 attempt=attempt,
                 latency_ms=latency_ms,
-                error=re.sub(r"sk-[A-Za-z0-9._-]+", "sk-…", " ".join(text.split()))[
-                    :160
-                ],
+                request_chars=request_chars,
+                input_tokens_est=input_tokens_est,
+                error=error,
             )
             if self.api == "responses" and status in (404, 405, 501):
                 # The gateway has no /v1/responses: switch once, for the whole run, to chat —
@@ -966,6 +1019,18 @@ class Client:
             ):
                 learnt += 1
                 continue  # a rejected optional parameter is not transport weather: no attempt consumed
+            if status == 400 and _error_reason(text) == PROVIDER_REJECTED:
+                # The provider refused this prompt's content. Retrying the same prompt is
+                # refused again, so never retry; but it says nothing about the other
+                # bundles' prompts, so the breaker is neither tripped nor advanced.
+                raise ContentRejected(
+                    f"{stage}: {last} — the model provider refused this request's content; "
+                    "the same content is refused again on retry",
+                    stage=stage,
+                    error=error,
+                    request_chars=request_chars,
+                    input_tokens_est=input_tokens_est,
+                )
             if status in self.FATAL:
                 # Our side is wrong (key, alias, request shape, context size). Every other
                 # bundle would send the same thing and fail the same way: open the breaker

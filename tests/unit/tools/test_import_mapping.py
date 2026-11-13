@@ -24,8 +24,14 @@ _MANIFEST = (
 #: connectors on it until SqlApp has an opt-in query-log capability; the
 #: upgrade guide (Step 2) and MIGRATION_PROMPT.md §2b teach it until then.
 #: When that capability lands, retarget the three entries and drop this.
+#: TaskResult (FND-4914): v2's ActivityResult has no non-deprecated equivalent;
+#: the entry is structural, so its TODO tells the app to replace it. Retarget
+#: or drop the entry when TaskResult is removed in v4.0.
 _KNOWN_DEPRECATED_TARGETS = frozenset(
-    {("application_sdk.templates", "SqlQueryExtractor")}
+    {
+        ("application_sdk.templates", "SqlQueryExtractor"),
+        ("application_sdk.common.models", "TaskResult"),
+    }
 )
 
 

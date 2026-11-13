@@ -27,9 +27,14 @@ def call_line(event: dict[str, Any]) -> str:
             f"in={event['input']} cached={event['cached']} out={event['output']} "
             f"reasoning={event['reasoning']} tools={event['tool_calls']} ${event['cost']:.5f}"
         )
+    size = (
+        f"sent={event['request_chars']}chars(~{event['input_tokens_est']}tok) "
+        if "request_chars" in event
+        else ""
+    )
     return (
         f"lens: call {event['n']:>3} {event['stage']:<28} {event['status']} {event['latency_ms']:>6}ms "
-        f"attempt={event['attempt']} {event.get('error', '')}"
+        f"attempt={event['attempt']} {size}{event.get('error', '')}"
     )
 
 
@@ -73,10 +78,11 @@ def build(res: RunResult) -> dict[str, Any]:
                 "planned": b.planned,
                 "tools": b.tool_calls,
                 "stop": b.stop,
-                "error": b.error[:200],
+                "error": b.error,  # whole: the run report is where an error is read in full
                 "findings": len(b.findings),
                 "unplaced": len(b.unplaced),
                 "fact_check_removed": len(b.removed_by_reflector),
+                **({"refusal": b.refusal} if b.refusal else {}),
             }
             for b in res.bundles
         ],
@@ -104,6 +110,39 @@ def build(res: RunResult) -> dict[str, Any]:
         "approach": (st.approach if st else {}) or {},
         "calls": calls,
     }
+
+
+def _where(files: dict[str, list[str]]) -> str:
+    return "; ".join(
+        f"`{p}`" + (f" {', '.join(r)}" if r else "") for p, r in files.items()
+    )
+
+
+def _refusal_lines(bundles: list[dict[str, Any]]) -> list[str]:
+    """Each request the model provider refused: its size, the full gateway error,
+    and what it held, suspects (new since the last successful turn) first."""
+    out: list[str] = []
+    for b in bundles:
+        r = b.get("refusal")
+        if not r:
+            continue
+        out += [
+            f"### Refused by the model provider: {r['stage']}",
+            f"Turn {r['turn']} · request {r['request_chars']} chars (~{r['input_tokens_est']} tokens)",
+            "",
+            f"Gateway error: `{r['error']}`",
+            "",
+            "| new since last successful turn | source | chars | files and lines |",
+            "|---|---|---|---|",
+        ]
+        for s in r["sent"]:
+            what = s["kind"] + (f" {s['tool']}({s['args']})" if s.get("tool") else "")
+            new = "**yes**" if s["after_turn"] == r["turn"] else ""
+            out.append(
+                f"| {new} | {what} | {s['chars']} | {_where(s.get('files') or {})} |"
+            )
+        out.append("")
+    return out
 
 
 def markdown(report: dict[str, Any], pr: int) -> str:
@@ -150,6 +189,7 @@ def markdown(report: dict[str, Any], pr: int) -> str:
                 f"| {b['stop']}{(' — ' + b['error'][:80]) if b['error'] else ''} | {b['findings']} | {b['fact_check_removed']} |"
             )
         lines.append("")
+    lines.extend(_refusal_lines(report["bundles"]))
     tri = report["triage"]
     if tri["mechanical"] or tri["duplicates"]:
         lines.append(

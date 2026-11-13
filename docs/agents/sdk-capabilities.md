@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.57.0
-source-sha:    8981af9ac0e6a42554cd9dcc76683f16ac23511f
-source-date:   2026-11-13T20:22:42Z
+source-sha:    7624e746ac9409c96b005b948f242deb68e85929
+source-date:   2026-11-13T20:32:35Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 44 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 19 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 58 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 65 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 47 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
@@ -523,6 +523,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** What :func:`get_tables_needing_column_extraction` found.
 - **Defined in:** `application_sdk/common/incremental/column_extraction/analysis.py`
 
+#### `ConvertFile`
+
+- **Import:** `from application_sdk.common.file_converter import ConvertFile`
+- **Signature:** `class ConvertFile`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/file_converter.py`
+
 #### `DataframeType`
 
 - **Import:** `from application_sdk.common import DataframeType`
@@ -550,6 +557,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `class EnvelopeShape`
 - **Summary:** Where relationship references live in the serialised entity.
 - **Defined in:** `application_sdk/common/entity_envelope.py`
+
+#### `FileType`
+
+- **Import:** `from application_sdk.common.file_converter import FileType`
+- **Signature:** `class FileType`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/file_converter.py`
 
 #### `FilterPattern`
 
@@ -612,7 +626,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 
 - **Import:** `from application_sdk.common import TaskResult`
 - **Signature:** `class TaskResult`
-- **Summary:** _(no docstring)_
+- **Summary:** A ``{status, message, metadata}`` dict.
 - **Defined in:** `application_sdk/common/models.py`
 
 #### `TaskStatistics`
@@ -673,6 +687,27 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Return a typed error for a read-only / permission-denied local-write ``OSError``.
 - **Defined in:** `application_sdk/common/atomic.py`
 
+#### `convert_data_files`
+
+- **Import:** `from application_sdk.common.file_converter import convert_data_files`
+- **Signature:** `convert_data_files(input_file_paths: list[str], output_file_type: FileType) -> list[str]`
+- **Summary:** Convert the input files to the specified file type
+- **Defined in:** `application_sdk/common/file_converter.py`
+
+#### `convert_json_to_parquet`
+
+- **Import:** `from application_sdk.common.file_converter import convert_json_to_parquet`
+- **Signature:** `convert_json_to_parquet(file_path: str) -> str | None`
+- **Summary:** Convert the downloaded files from json to parquet
+- **Defined in:** `application_sdk/common/file_converter.py`
+
+#### `convert_parquet_to_json`
+
+- **Import:** `from application_sdk.common.file_converter import convert_parquet_to_json`
+- **Signature:** `convert_parquet_to_json(file_path: str) -> str | None`
+- **Summary:** Convert the downloaded files from parquet to json
+- **Defined in:** `application_sdk/common/file_converter.py`
+
 #### `create_next_marker`
 
 - **Import:** `from application_sdk.common.incremental import create_next_marker`
@@ -701,6 +736,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Serialise a mapper's return value to one Atlas wire-shape JSON line.
 - **Defined in:** `application_sdk/common/asset_serialization.py`
 
+#### `enum_register`
+
+- **Import:** `from application_sdk.common.file_converter import enum_register`
+- **Signature:** `enum_register()`
+- **Summary:** Helps us register custom function for enum values
+- **Defined in:** `application_sdk/common/file_converter.py`
+
 #### `extract_epoch_id_from_qualified_name`
 
 - **Import:** `from application_sdk.common.incremental import extract_epoch_id_from_qualified_name`
@@ -721,6 +763,12 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `fetch_marker_from_storage(connection_qualified_name: str, ...)`
 - **Summary:** Fetch the marker as a ``(marker, next_marker)`` tuple.
 - **Defined in:** `application_sdk/common/incremental/marker.py`
+
+#### `file_converter_registry`
+
+- **Import:** `from application_sdk.common.file_converter import file_converter_registry`
+- **Signature:** `file_converter_registry(...)`
+- **Summary:** _(no docstring)_
 
 #### `filter_matches`
 
@@ -748,7 +796,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 
 - **Import:** `from application_sdk.common import get_actual_cpu_count`
 - **Signature:** `get_actual_cpu_count()`
-- **Summary:** Get the actual number of CPUs available to the current process.
+- **Summary:** Whole CPUs this process may use: the tighter of affinity and the CPU limit.
 - **Defined in:** `application_sdk/common/concurrency.py`
 
 #### `get_backfill_tables`
@@ -760,10 +808,11 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 
 #### `get_logger`
 
-- **Import:** `from application_sdk.common.logger import get_logger`
+- **Import:** `from application_sdk.common.file_converter import get_logger`
+- **Also importable from:** `application_sdk.common.logger`
 - **Signature:** `get_logger(name: str | None = None)`
-- **Summary:** The SDK logger for ``name``, or a stdlib logger on an api-only install.
-- **Defined in:** `application_sdk/_logging.py`
+- **Summary:** Get or create an instance of AtlanLoggerAdapter.
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
 
 #### `get_persistent_artifacts_path`
 

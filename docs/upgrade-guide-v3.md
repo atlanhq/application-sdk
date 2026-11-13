@@ -768,7 +768,7 @@ The v2 activity return types are renamed in v3:
 | v2 (`application_sdk.activities.common.models`) | v3 (`application_sdk.common.models`) |
 |----|-----|
 | `ActivityStatistics` | `TaskStatistics` |
-| `ActivityResult` | `TaskResult` |
+| `ActivityResult` | `TaskResult` (deprecated in 3.58.0, removed in v4.0: nothing reads it; use `TaskStatistics` or your own `TypedDict`) |
 
 In v3 templates these are returned inside typed `Output` models, so you generally won't
 import them directly unless you are building a custom `App` from scratch.
@@ -1453,7 +1453,7 @@ All of the following were removed in v3.0.0. They no longer exist — importing 
 |---|---|
 | `application_sdk.activities.ActivitiesInterface` | `application_sdk.app.App` with `@task` |
 | `application_sdk.activities.common.models.ActivityStatistics` | `application_sdk.common.models.TaskStatistics` |
-| `application_sdk.activities.common.models.ActivityResult` | `application_sdk.common.models.TaskResult` |
+| `application_sdk.activities.common.models.ActivityResult` | `application_sdk.common.models.TaskResult` (itself deprecated, removed in v4.0) |
 | `application_sdk.activities.common.utils` | `application_sdk.execution` (`build_output_path`, `get_object_store_prefix` are re-exported; direct activity internals should be accessed via `Input.workflow_id` instead) |
 | `application_sdk.activities.metadata_extraction.base` | `application_sdk.app.App` (non-SQL source); `application_sdk.templates.SqlApp` (SQL source) |
 | `application_sdk.activities.metadata_extraction.sql` | `application_sdk.templates.SqlApp` |
