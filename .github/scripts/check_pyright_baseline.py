@@ -296,6 +296,17 @@ def load_baseline(path: Path) -> Baseline:
     return parse_baseline(path.read_text(encoding="utf-8"))
 
 
+def _fetch_depth(git: Runner) -> list[str]:
+    """``--depth=1`` in a shallow checkout (CI), nothing in a full clone.
+
+    ``fetch --depth=1 <sha>`` in a full clone records ``<sha>`` in
+    ``.git/shallow`` as a history cut-off, which every worktree of the clone
+    shares (FND-4987). Only a clone that is already shallow may be kept so.
+    """
+    shallow = git(["rev-parse", "--is-shallow-repository"])
+    return ["--depth=1"] if shallow.stdout.strip() == "true" else []
+
+
 def read_base_baseline(
     base_sha: str, baseline_rel: str, git: Runner = _git
 ) -> Baseline | None:
@@ -306,11 +317,12 @@ def read_base_baseline(
     """
     if not base_sha:
         raise BaseRevisionError("--base-sha was given but is empty")
-    fetch = git(["fetch", "--no-tags", "--depth=1", "origin", base_sha])
-    if fetch.returncode != 0:
-        raise BaseRevisionError(
-            f"could not fetch base {base_sha}: {fetch.stderr.strip()}"
-        )
+    if git(["cat-file", "-e", f"{base_sha}^{{commit}}"]).returncode != 0:
+        fetch = git(["fetch", "--no-tags", *_fetch_depth(git), "origin", base_sha])
+        if fetch.returncode != 0:
+            raise BaseRevisionError(
+                f"could not fetch base {base_sha}: {fetch.stderr.strip()}"
+            )
     if git(["cat-file", "-e", f"{base_sha}^{{commit}}"]).returncode != 0:
         raise BaseRevisionError(f"base {base_sha} is not a commit in this checkout")
     # ``cat-file -e <sha>:<path>`` cannot tell "no such path" from "tree
