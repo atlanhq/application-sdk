@@ -156,8 +156,9 @@ runs:
     # dependency to this path.
     #
     # No token: atlanhq/application-sdk is public, so the clone works on every
-    # path — including the pre-setup-deps invocation in sdr-e2e (where no
-    # actions/checkout http.extraheader is configured) and the merge-queue gate.
+    # path, the merge-queue gate included. None of them has a checkout
+    # credential in git config to lean on: callers and setup-deps check out
+    # with persist-credentials: false (FND-4900).
     - name: Fetch SDK contract-toolkit at dispatched ref
       id: sdk
       if: steps.guard.outputs.present == 'true' && inputs.application-sdk-ref != ''

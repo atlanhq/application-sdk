@@ -107,16 +107,26 @@ def test_setup_deps_checks_out_lfs_only_on_opt_in() -> None:
         if str(s.get("uses", "")).startswith("actions/checkout@")
     ]
     by_if = {s["if"]: s for s in checkouts}
-    assert set(by_if) == {"inputs.lfs != 'true'", "inputs.lfs == 'true'"}, (
+    # `checkout: "false"` (FND-4900) skips only the plain checkout; the LFS one
+    # always runs on opt-in, so it is still exactly one checkout per lfs value
+    # whenever setup-deps checks out at all.
+    plain_if = "inputs.checkout != 'false' && inputs.lfs != 'true'"
+    assert set(by_if) == {plain_if, "inputs.lfs == 'true'"}, (
         "exactly one checkout must run for any lfs value"
     )
 
-    default = by_if["inputs.lfs != 'true'"]
-    assert default["with"] == {"fetch-depth": 1}, "default checkout must not change"
+    default = by_if[plain_if]
+    assert default["with"] == {"fetch-depth": 1, "persist-credentials": False}, (
+        "default checkout must not change beyond not persisting the token"
+    )
     assert "env" not in default, "default checkout must keep the job's smudge skip"
 
     opt_in = by_if["inputs.lfs == 'true'"]
-    assert opt_in["with"] == {"fetch-depth": 1, "lfs": True}
+    assert opt_in["with"] == {
+        "fetch-depth": 1,
+        "lfs": True,
+        "persist-credentials": False,
+    }
     # Without this, a job-level GIT_LFS_SKIP_SMUDGE=1 (git-lfs-skip-smudge)
     # leaves pointers in the tree even though checkout fetched the objects.
     assert opt_in["env"] == {"GIT_LFS_SKIP_SMUDGE": "0"}

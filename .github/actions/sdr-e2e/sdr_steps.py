@@ -5,20 +5,16 @@ docs/standards/ci.md keeps conditional logic out of inlined shell, so the
 decisions live here and the steps call them straight-line. Tests:
 ``.github/scripts/tests/test_sdr_e2e_steps.py``.
 
-Lives beside the action, not under ``.github/scripts/``, for the same reason as
-``select_dapr_components.py``: the action stashes its own directory to
-``/tmp/sdr-e2e`` before setup-deps wipes the workspace, and the steps after that
-run from the stash.
+Lives beside the action, not under ``.github/scripts/``, like
+``select_dapr_components.py``: the steps run it from the action's own path.
 
 Subcommands:
 
 * ``image-ref``      the prebuilt image reference, else the one just built.
-* ``action-root``    where the action's assets live after setup-deps.
 * ``test-config``    render the app's test-config template, else the SDK's.
 * ``secrets-bundle`` run the caller's secrets script and check its output.
 * ``resolve-hosts``  pin the tenant's auth + Temporal hostnames to IPv4.
 * ``wait-ready``     poll the SDR container's health endpoint.
-* ``restore-assets`` put the action back in place for post-hooks.
 """
 
 from __future__ import annotations
@@ -26,14 +22,11 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-#: Where the "Stash action assets" step copies the action directory.
-DEFAULT_STASH = "/tmp/sdr-e2e"
 HEALTH_URL = "http://localhost:8000/server/health"
 
 
@@ -63,20 +56,6 @@ def image_ref(prebuilt: str, built: str) -> int:
         )
     print(f"Using image: {ref}")
     _append("GITHUB_OUTPUT", [f"ref={ref}"])
-    return 0
-
-
-def action_root(action_path: str, stash: str) -> int:
-    # A LOCAL action's path sits in the workspace, which setup-deps' checkout
-    # wiped; the stash made before that is the fallback.
-    path = Path(action_path)
-    root = (
-        action_path
-        if action_path and path.is_dir() and (path / "test-config.yaml.tmpl").is_file()
-        else stash
-    )
-    print(f"Using SDR action assets from: {root}")
-    _append("GITHUB_OUTPUT", [f"path={root}"])
     return 0
 
 
@@ -175,15 +154,6 @@ def wait_ready(timeout: int, compose_files: str) -> int:
     return 0
 
 
-def restore_assets(action_path: str, stash: str) -> int:
-    # Post-hooks re-read <action_path>/action.yaml; a LOCAL action's copy was
-    # wiped by setup-deps' checkout, so put the stash back.
-    if not Path(action_path, "action.yaml").is_file() and Path(stash).is_dir():
-        Path(action_path).mkdir(parents=True, exist_ok=True)
-        shutil.copytree(stash, action_path, symlinks=True, dirs_exist_ok=True)
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -191,11 +161,6 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("image-ref")
     p.add_argument("--prebuilt", default="")
     p.add_argument("--built", default="")
-
-    for name in ("action-root", "restore-assets"):
-        p = sub.add_parser(name)
-        p.add_argument("--action-path", required=True)
-        p.add_argument("--stash", default=DEFAULT_STASH)
 
     p = sub.add_parser("test-config")
     p.add_argument("--sdr-config-dir", default="")
@@ -216,10 +181,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "image-ref":
         return image_ref(args.prebuilt, args.built)
-    if args.command == "action-root":
-        return action_root(args.action_path, args.stash)
-    if args.command == "restore-assets":
-        return restore_assets(args.action_path, args.stash)
     if args.command == "test-config":
         return render_test_config(args.sdr_config_dir, args.sdk_template, args.output)
     if args.command == "secrets-bundle":

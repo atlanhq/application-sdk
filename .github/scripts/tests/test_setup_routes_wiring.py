@@ -66,7 +66,7 @@ def test_the_step_exists(steps: list[dict]) -> None:  # type: ignore[type-arg]
 def test_the_shell_it_invokes_is_committed(steps: list[dict]) -> None:  # type: ignore[type-arg]
     """The step's script must actually be in the action directory.
 
-    ``$SDR_E2E_ROOT`` resolves to a copy of this directory, so a step naming a
+    ``$SDR_E2E_ROOT`` resolves to this action's directory, so a step naming a
     file that is not committed here fails at runtime with a bare "No such file",
     several minutes into an e2e leg.
     """
@@ -210,26 +210,6 @@ def test_the_shell_holds_no_check_logic() -> None:
             "application_sdk.common._generated_tree, which the configmap endpoint "
             "also reads — a second copy here can drift from the server."
         )
-
-
-def test_the_action_stash_copies_the_whole_directory(steps: list[dict]) -> None:  # type: ignore[type-arg]
-    """The shell reaches the runner via the action's own directory stash.
-
-    When this action is invoked as a LOCAL action, ``github.action_path`` sits
-    inside the workspace and ``setup-deps``' checkout wipes it, so every
-    post-setup step reads from a ``/tmp`` stash taken beforehand. That stash is
-    a whole-directory ``cp -R``, which is why adding a script needed no change
-    to it. Narrowing it to an explicit file list would silently strip this one
-    — the step would then fail minutes into an e2e leg with a bare "No such
-    file or directory".
-    """
-    stash = steps[_index(steps, "Stash action assets")]
-
-    assert "cp -R" in stash["run"]
-    assert "verify_setup_routes" not in stash["run"], (
-        "the stash names individual files now; add verify_setup_routes.py to it "
-        "or restore the whole-directory copy"
-    )
 
 
 # ── Version skew: the action is @main, the SDK is per-app-pinned ─────────────

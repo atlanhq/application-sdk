@@ -1,7 +1,7 @@
 """Tests for .github/actions/sdr-e2e/sdr_steps.py.
 
-The module lives beside the sdr-e2e composite action (it runs from the action's
-/tmp stash after setup-deps wipes the workspace); the test stays here so
+The module lives beside the sdr-e2e composite action (the steps run it from the
+action's own path); the test stays here so
 ``scripts-tests.yaml`` picks it up, importing by explicit path like
 test_select_dapr_components.py. External commands go through ``_run``, which
 each test stubs.
@@ -83,30 +83,6 @@ def test_image_ref_fails_when_both_are_empty(
     assert sdr_steps.main(["image-ref"]) == 1
     assert "::error::No image reference resolved" in capsys.readouterr().out
     assert gh_files["GITHUB_OUTPUT"].read_text() == ""
-
-
-# --- action-root -------------------------------------------------------------
-
-
-def test_action_root_uses_an_intact_action_path(
-    tmp_path: Path, gh_files: dict[str, Path]
-) -> None:
-    action = tmp_path / "action"
-    action.mkdir()
-    (action / "test-config.yaml.tmpl").write_text("x")
-    sdr_steps.main(["action-root", "--action-path", str(action), "--stash", "/stash"])
-    assert gh_files["GITHUB_OUTPUT"].read_text() == f"path={action}\n"
-
-
-@pytest.mark.parametrize("make_dir", [False, True], ids=["wiped", "no-template"])
-def test_action_root_falls_back_to_the_stash(
-    tmp_path: Path, gh_files: dict[str, Path], make_dir: bool
-) -> None:
-    action = tmp_path / "action"
-    if make_dir:
-        action.mkdir()
-    sdr_steps.main(["action-root", "--action-path", str(action), "--stash", "/stash"])
-    assert gh_files["GITHUB_OUTPUT"].read_text() == "path=/stash\n"
 
 
 # --- test-config -------------------------------------------------------------
@@ -339,51 +315,6 @@ def test_wait_ready_with_zero_timeout_never_probes(
     assert calls.argv == []
 
 
-# --- restore-assets ----------------------------------------------------------
-
-
-def test_restore_assets_copies_the_stash_into_a_wiped_path(tmp_path: Path) -> None:
-    stash = tmp_path / "stash"
-    (stash / "components").mkdir(parents=True)
-    (stash / "action.yaml").write_text("name: x")
-    (stash / "components/a.yaml").write_text("a")
-    action = tmp_path / "ws/action"
-    rc = sdr_steps.main(
-        ["restore-assets", "--action-path", str(action), "--stash", str(stash)]
-    )
-    assert rc == 0
-    assert (action / "action.yaml").read_text() == "name: x"
-    assert (action / "components/a.yaml").read_text() == "a"
-
-
-def test_restore_assets_leaves_an_intact_path_alone(tmp_path: Path) -> None:
-    stash = tmp_path / "stash"
-    stash.mkdir()
-    (stash / "action.yaml").write_text("stash")
-    action = tmp_path / "action"
-    action.mkdir()
-    (action / "action.yaml").write_text("live")
-    sdr_steps.main(
-        ["restore-assets", "--action-path", str(action), "--stash", str(stash)]
-    )
-    assert (action / "action.yaml").read_text() == "live"
-
-
-def test_restore_assets_without_a_stash_is_a_no_op(tmp_path: Path) -> None:
-    action = tmp_path / "action"
-    rc = sdr_steps.main(
-        [
-            "restore-assets",
-            "--action-path",
-            str(action),
-            "--stash",
-            str(tmp_path / "none"),
-        ]
-    )
-    assert rc == 0
-    assert not action.exists()
-
-
 # --- wiring ------------------------------------------------------------------
 
 
@@ -393,12 +324,10 @@ def test_every_subcommand_is_invoked_by_the_action() -> None:
     ).read_text(encoding="utf-8")
     for command in (
         "image-ref",
-        "action-root",
         "test-config",
         "secrets-bundle",
         "resolve-hosts",
         "wait-ready",
-        "restore-assets",
     ):
         assert (
             f'sdr_steps.py" {command}' in action or f"sdr_steps.py {command}" in action

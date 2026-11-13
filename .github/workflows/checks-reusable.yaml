@@ -222,6 +222,7 @@ jobs:
 
       - uses: atlanhq/application-sdk/.github/actions/setup-deps@main
         with:
+          checkout: "false"
           git-auth-token: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
 
       # A refused Renovate lock bump is withheld by writing a lock no

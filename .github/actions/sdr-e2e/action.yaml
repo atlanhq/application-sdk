@@ -105,8 +105,8 @@ inputs:
       (container runtime AND host pytest harness) unless a side-specific
       ref below overrides it. When supplied, the action re-pins
       atlan-application-sdk in the caller's pyproject.toml to this ref
-      before building the Docker image and again after setup-deps (which
-      re-checks-out the workspace). Used by cross-repo dispatches from
+      before building the Docker image and again after the tree is restored
+      ahead of setup-deps. Used by cross-repo dispatches from
       apps-sdk PRs so an SDK change is exercised end-to-end on both sides.
       Prefer `runtime-sdk-ref` / `harness-sdk-ref` when you need the two
       sides pinned independently; this stays as the shared fallback for
@@ -369,28 +369,6 @@ runs:
         # for callers that don't pass ghcr-token).
         password: ${{ inputs.ghcr-token != '' && inputs.ghcr-token || github.token }}
 
-    # Stash the entire action directory to /tmp before setup-deps'
-    # actions/checkout wipes the workspace. When this action is invoked
-    # as a LOCAL action (uses: ./.application-sdk/.github/actions/sdr-e2e),
-    # ${{ github.action_path }} sits inside the workspace and is wiped
-    # along with everything else. Post-setup steps that reference the
-    # repin script, test-config template, Dapr component overlays, or
-    # the compose overlay must fall back to /tmp/sdr-e2e/ — those
-    # references are guarded by env vars (SDR_E2E_ROOT_*) resolved
-    # immediately after setup-deps.
-    #
-    # The repin script has one copy, in connector-integration-tests (FND-4244);
-    # it is stashed alongside this action's own assets.
-    - name: Stash action assets
-      id: stash
-      shell: bash
-      run: |
-        rm -rf /tmp/sdr-e2e
-        cp -R "${{ github.action_path }}" /tmp/sdr-e2e
-        cp "${{ github.action_path }}/../connector-integration-tests/repin-application-sdk.sh" /tmp/sdr-e2e/
-        chmod +x /tmp/sdr-e2e/repin-application-sdk.sh
-        cp "${{ github.action_path }}/../../scripts/git_auth.py" /tmp/sdr-e2e/
-
     # Resolve the effective SDK ref for each side ONCE, so the
     # (runtime||shared) / (harness||shared) fallback isn't repeated as a GHA
     # `(a && a || b)` ternary at every call site. Plain `${VAR:-$SHARED}`
@@ -453,7 +431,6 @@ runs:
     - name: Resolve effective image reference
       id: image
       shell: bash
-      # Runs before setup-deps, so the action's own path is still intact.
       env:
         PREBUILT: ${{ inputs.prebuilt-image }}
         BUILT: ${{ steps.build.outputs.image }}
@@ -462,46 +439,39 @@ runs:
         python3 "$SDR_E2E_ACTION_PATH/sdr_steps.py" image-ref \
           --prebuilt "$PREBUILT" --built "$BUILT"
 
-    # Must run before atlan-configurator generates ci-deploy/ — setup-deps
-    # uses actions/checkout internally which would wipe generated files.
-    #
+    # Put the caller's checkout back to HEAD for the host side. The build
+    # above edits tracked files in the workspace (the runtime repin of
+    # pyproject.toml + uv.lock, the regenerated app/generated/**, the stamped
+    # Dockerfile). setup-deps' own checkout used to undo them by re-checking
+    # the repo out, which also wiped this action's path in local-action mode
+    # and persisted the job token (FND-4900). Now setup-deps skips its
+    # checkout, so this step does the undo: the host harness and the venv
+    # cache key (uv.lock's hash) see the connector's committed tree, and the
+    # harness repin below applies its own ref. Tracked files only: untracked
+    # paths (the build's new files, a local action's own directory) stay.
+    # A no-op on the prebuilt-image path, which changes nothing.
+    - name: Restore the checked-out tree
+      shell: bash
+      run: git restore --source=HEAD --worktree -- .
+
     # Pin the host pytest harness to the same Python the worker image ships
     # (expected-python-version) so the boundary the SDR test drives — agent
     # contracts, BaseSDRIntegrationTest — is import-compatible with the code
     # under test, and the whole E2E job runs one interpreter end to end.
+    #
+    # checkout "false": the caller checked the repo out (the build needs it),
+    # and a second checkout would persist the job token for the tests.
     - name: Setup Python and dependencies
       uses: atlanhq/application-sdk/.github/actions/setup-deps@main
       with:
+        checkout: "false"
         python-version: ${{ inputs.expected-python-version }}
         git-auth-token: ${{ inputs.git-auth-token }}
 
-    # setup-deps' actions/checkout wipes the pre-build re-pin above. Do
-    # it again so the host pytest runtime resolves the dispatched SDK
-    # (the BaseSDRIntegrationTest, agent contracts, etc.). Followed by
-    # an explicit uv sync so the lockfile reflects the new pin.
-    #
-    # Important: when this action is invoked as a LOCAL action (uses:
-    # ./.application-sdk/.github/actions/sdr-e2e), setup-deps' inner
-    # actions/checkout wipes the entire workspace, so the repin step below
-    # runs the copy that "Stash action assets" put in /tmp/sdr-e2e before
-    # setup-deps ran.
-    # Resolve the action-asset root after setup-deps. When invoked as a
-    # local action the workspace (and ${{ github.action_path }}) has been
-    # wiped — fall back to the /tmp stash that the "Stash action assets"
-    # step populated before setup-deps ran. Exported as a step output so
-    # downstream steps can reference it as ${{ steps.action_root.outputs.path }}.
-    #
-    # Runs the script from the stash, not from the action path: if that path
-    # was wiped, the script went with it.
-    - name: Resolve action-asset root
-      id: action_root
-      shell: bash
-      env:
-        SDR_E2E_ACTION_PATH: ${{ github.action_path }}
-      run: |
-        python3 /tmp/sdr-e2e/sdr_steps.py action-root \
-          --action-path "$SDR_E2E_ACTION_PATH" --stash /tmp/sdr-e2e
-
+    # The restore above reverted the pre-build re-pin. Do it again so the
+    # host pytest runtime resolves the dispatched SDK (the
+    # BaseSDRIntegrationTest, agent contracts, etc.). Followed by an explicit
+    # uv sync so the lockfile reflects the new pin.
     - name: Pin application-sdk to dispatched ref (post-setup)
       # Harness side (host pytest runtime that provides testing.e2e):
       # harness-sdk-ref wins, else the shared application-sdk-ref, else empty
@@ -513,9 +483,9 @@ runs:
       env:
         SDK_REF: ${{ steps.sdk_refs.outputs.harness_ref }}
       run: |
-        /tmp/sdr-e2e/repin-application-sdk.sh
-        python3 /tmp/sdr-e2e/git_auth.py run -- uv lock
-        python3 /tmp/sdr-e2e/git_auth.py run -- uv sync --all-extras --all-groups
+        "${{ github.action_path }}/../connector-integration-tests/repin-application-sdk.sh"
+        python3 "${{ github.action_path }}/../../scripts/git_auth.py" run -- uv lock
+        python3 "${{ github.action_path }}/../../scripts/git_auth.py" run -- uv sync --all-extras --all-groups
 
     - name: Download atlan-configurator
       shell: bash
@@ -535,7 +505,7 @@ runs:
     - name: Resolve SDR config paths
       shell: bash
       env:
-        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        SDR_E2E_ROOT: ${{ github.action_path }}
         CONFIG_DIR_INPUT: ${{ inputs.config-dir }}
       run: |
         python3 "$SDR_E2E_ROOT/resolve_config_paths.py" \
@@ -554,7 +524,7 @@ runs:
     - name: Derive per-leg deployment name
       shell: bash
       env:
-        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        SDR_E2E_ROOT: ${{ github.action_path }}
         ARTIFACT_SUFFIX: ${{ inputs.artifact-suffix }}
       run: |
         python3 "$SDR_E2E_ROOT/derive_deployment_name.py" \
@@ -573,8 +543,8 @@ runs:
       shell: bash
       env:
         CI_RUN_SUFFIX: ${{ github.run_id }}
-        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
-        SDK_TMPL: ${{ steps.action_root.outputs.path }}/test-config.yaml.tmpl
+        SDR_E2E_ROOT: ${{ github.action_path }}
+        SDK_TMPL: ${{ github.action_path }}/test-config.yaml.tmpl
       run: |
         python3 "$SDR_E2E_ROOT/sdr_steps.py" test-config \
           --sdr-config-dir "$SDR_CONFIG_DIR" \
@@ -624,7 +594,7 @@ runs:
     - name: Generate secrets bundle
       shell: bash
       env:
-        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        SDR_E2E_ROOT: ${{ github.action_path }}
         SECRETS_SCRIPT: ${{ inputs.secrets-script }}
       run: |
         python3 "$SDR_E2E_ROOT/sdr_steps.py" secrets-bundle \
@@ -639,7 +609,7 @@ runs:
     - name: Select CI Dapr components
       shell: bash
       env:
-        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        SDR_E2E_ROOT: ${{ github.action_path }}
         APP_COMPONENTS: ${{ inputs.components-dir }}
         TWO_STORE: ${{ inputs.enable-two-store }}
       run: |
@@ -658,7 +628,7 @@ runs:
       id: compose_files
       shell: bash
       env:
-        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        SDR_E2E_ROOT: ${{ github.action_path }}
         APP_COMPOSE: ${{ inputs.compose-overlay }}
         TWO_STORE: ${{ inputs.enable-two-store }}
         FULL_DAG: ${{ inputs.full-dag }}
@@ -688,7 +658,7 @@ runs:
     - name: Resolve Temporal + auth hostnames to IPv4
       shell: bash
       env:
-        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        SDR_E2E_ROOT: ${{ github.action_path }}
       run: |
         python3 "$SDR_E2E_ROOT/sdr_steps.py" resolve-hosts \
           --tenant "${SDR_TEST_TENANT:-}"
@@ -700,7 +670,7 @@ runs:
     - name: Wait for app to be ready
       shell: bash
       env:
-        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        SDR_E2E_ROOT: ${{ github.action_path }}
         TIMEOUT: ${{ inputs.container-health-timeout-seconds }}
         COMPOSE_FILES: ${{ steps.compose_files.outputs.files }}
       run: |
@@ -721,7 +691,7 @@ runs:
       shell: bash
       env:
         EXPECTED: ${{ inputs.expected-app-version }}
-        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        SDR_E2E_ROOT: ${{ github.action_path }}
       run: |
         set -euo pipefail
         python3 "$SDR_E2E_ROOT/../../scripts/e2e_tenant_app.py" verify \
@@ -768,7 +738,7 @@ runs:
       if: inputs.expected-app-version != ''
       shell: bash
       env:
-        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        SDR_E2E_ROOT: ${{ github.action_path }}
       run: |
         set -euo pipefail
         uv run python "$SDR_E2E_ROOT/verify_setup_routes.py" \
@@ -822,7 +792,7 @@ runs:
       if: always()
       shell: bash
       env:
-        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        SDR_E2E_ROOT: ${{ github.action_path }}
       run: uv run python3 "$SDR_E2E_ROOT/sdr_report.py" workflow-links
 
     - name: Write GitHub Step Summary
@@ -833,7 +803,7 @@ runs:
         APP_NAME: ${{ inputs.app-name }}
         REPORT_TITLE_OVERRIDE: ${{ inputs.report-title }}
         TEST_PATH: ${{ inputs.test-path }}
-        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        SDR_E2E_ROOT: ${{ github.action_path }}
       run: uv run python3 "$SDR_E2E_ROOT/sdr_report.py" step-summary
 
     - name: Dump SDR container logs
@@ -869,7 +839,7 @@ runs:
       env:
         SDR_TEST_TENANT: ${{ env.SDR_TEST_TENANT }}
         TWO_STORE: ${{ inputs.enable-two-store }}
-        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        SDR_E2E_ROOT: ${{ github.action_path }}
       run: uv run python3 "$SDR_E2E_ROOT/sdr_report.py" asset-summary
 
     # Delete any prior SDR comment (matched by sticky marker) and post a
@@ -1097,21 +1067,3 @@ runs:
     # additional commit status duplicates that signal under a separate
     # `sdr-e2e-tests` row and, when two callers share this composite,
     # they overwrite each other on the same head SHA.
-
-    # GH Actions re-reads ${{ github.action_path }}/action.yaml when
-    # running each step's `post:` hook. When this composite is invoked
-    # as a LOCAL action (`uses: ./.application-sdk/.github/actions/sdr-e2e`),
-    # setup-deps' inner actions/checkout earlier in the run wiped that
-    # path. Restore it from the /tmp/sdr-e2e stash so post-hooks find
-    # the action manifest (otherwise the job fails after a green
-    # test run with "Can't find 'action.yml' under ...").
-    #
-    # Gated on the stash: a job that failed before it has nothing to restore.
-    - name: Restore action assets for post-hooks
-      if: always() && steps.stash.outcome == 'success'
-      shell: bash
-      env:
-        SDR_E2E_ACTION_PATH: ${{ github.action_path }}
-      run: |
-        python3 /tmp/sdr-e2e/sdr_steps.py restore-assets \
-          --action-path "$SDR_E2E_ACTION_PATH" --stash /tmp/sdr-e2e

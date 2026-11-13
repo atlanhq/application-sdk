@@ -922,6 +922,27 @@ Used by `tests-reusable.yaml` (unit, integration, e2e), `checks-reusable.yaml`,
 in `build-and-publish-app.yaml` (see `docs/standards/app-certification.md`).
 `test_private_git_deps_wiring.py` pins the shape (FND-4740).
 
+## A job's one checkout is the one that counts
+
+**Rule:** a job that checks its repo out before `setup-deps`, or before a
+composite that wraps it (`connector-unit-tests`, `connector-integration-tests`),
+passes `checkout: "false"`. A job that passes it has an unconditional checkout
+at the workspace root before that step. `unit-tests` and `sdr-e2e` always pass
+`"false"`: their callers have to check out first anyway.
+
+`setup-deps` used to check the repo out again on every call, without
+`persist-credentials: false`. The second checkout wrote the job token back into
+`.git/config` for the PR code that the tests run next, even where the job's own
+checkout had declined to, and its `git clean` wiped whatever the job had put in
+the workspace. Both of `setup-deps`' checkouts now set
+`persist-credentials: false`. The input still defaults to `"true"`, so a fleet
+caller that relies on `setup-deps` to check out is unchanged. `lfs: "true"`
+checks out regardless: that checkout is how the LFS objects arrive, and a later
+`git lfs pull` would have no credential to fetch a private repo's objects with.
+
+`.github/scripts/tests/test_setup_deps_checkout_wiring.py` checks every
+workflow job's call site against the rule (FND-4900).
+
 ## A fleet App token that fails to mint fails the job
 
 **Rule:** a `Mint fleet App token` step has no `continue-on-error`, and its

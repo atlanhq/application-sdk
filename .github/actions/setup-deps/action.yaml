@@ -7,6 +7,20 @@ description: |
   the virtual environment.
 
 inputs:
+  checkout:
+    required: false
+    description: |
+      "false" when the job already checked the caller repo out before this
+      action. Any other value (the default "true") checks it out here, as
+      fleet callers that call this action first expect. Either way the
+      checkout here never persists the job token to `.git/config`: the
+      tests run PR code after this action, and nothing later in it pushes.
+      Skipping the checkout also keeps what the job did to the tree before
+      this action, where a checkout here would `git clean` it away.
+      `lfs: "true"` checks out regardless: it has to fetch the LFS objects,
+      and with no persisted credential there is nothing for a later
+      `git lfs pull` to authenticate a private repo with.
+    default: "true"
   cache:
     description: "Enable dependency caching"
     required: false
@@ -54,10 +68,14 @@ inputs:
 runs:
   using: "composite"
   steps:
+    # persist-credentials: false on both checkouts (FND-4900). The default
+    # writes the job token into .git/config, where the PR code the tests run
+    # next can read it, even when the caller's own checkout declined to.
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      if: inputs.lfs != 'true'
+      if: inputs.checkout != 'false' && inputs.lfs != 'true'
       with:
         fetch-depth: 1
+        persist-credentials: false
 
     # Opt-in LFS checkout. The step-level GIT_LFS_SKIP_SMUDGE overrides a
     # job-level "1" (tests-reusable's git-lfs-skip-smudge) for this checkout
@@ -70,6 +88,7 @@ runs:
       with:
         fetch-depth: 1
         lfs: true
+        persist-credentials: false
 
     # Write the fetched LFS objects over any pointers in the tree. A job that
     # checked out the same commit before this action, with the smudge

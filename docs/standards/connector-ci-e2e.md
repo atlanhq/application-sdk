@@ -392,7 +392,7 @@ required check.
     pytest-extra-args:  # OPTIONAL. Appended to the pytest invocation.
     application-sdk-ref:               # OPTIONAL. Cross-repo dispatch: re-pin
                         # atlan-application-sdk in pyproject.toml to this ref
-                        # before the docker build AND after setup-deps (so both
+                        # before the docker build AND for the host harness (so both
                         # the image and the host pytest runtime use the dispatched
                         # SDK).
     prebuilt-image:     # OPTIONAL. Full image reference to use INSTEAD of
@@ -1460,15 +1460,11 @@ One insertion covers the e2e caller (`tests-reusable`'s `e2e`), and no app repo 
 
 The endpoint paths are `atlan-frontend`'s, not ours — `BASE_PATH = 'service'` plus `getAPIPath`, confirmed live. If the frontend changes how it derives the setup route, this check goes stale. The mitigation is that it is in one place rather than in every connector repo.
 
-## Workspace-wipe defences (local-action mode)
+## The workspace is never re-checked out (FND-4900)
 
-When the SDR composite is invoked via local path (`./.application-sdk/.github/actions/sdr-e2e`) during cross-repo dispatch, `setup-deps`' inner `actions/checkout` wipes the entire workspace — including `${{ github.action_path }}` itself. The composite:
+`sdr-e2e` needs the caller's checkout (the image build reads the tree), so it calls `setup-deps` with `checkout: "false"`. Until FND-4900, `setup-deps`' own `actions/checkout` ran here anyway. It persisted the job token in `.git/config` for the host tests, and its `git clean` wiped the workspace, `${{ github.action_path }}` included in local-action mode. The composite carried a `/tmp/sdr-e2e` stash, an action-root fallback and a post-hook restore to survive that.
 
-1. Stashes its full asset tree to `/tmp/sdr-e2e/` before `setup-deps` runs.
-2. After setup-deps, resolves a `steps.action_root.outputs.path` that falls back to the `/tmp` stash if `${{ github.action_path }}` is now empty.
-3. Restores the stash back to `${{ github.action_path }}` at the end of the action body so GH Actions can find `action.yml` for post-hook execution.
-
-Single-pipeline apps invoking the action remotely (`@main`) never hit this code path.
+That wipe was also what undid the build's edits to tracked files before the host harness ran: the runtime repin of `pyproject.toml` and `uv.lock`, the regenerated `app/generated/**` and the stamped `Dockerfile`. A `Restore the checked-out tree` step between the build and `setup-deps` now does that job with `git restore --source=HEAD --worktree -- .`. It touches tracked files only, so untracked paths stay, a local action's own directory among them. The harness repin then applies `harness-sdk-ref`, and the venv cache key hashes the connector's committed `uv.lock`, as before. `.github/scripts/tests/test_setup_deps_checkout_wiring.py` runs the restore in a scratch repo and pins its place in the step order.
 
 ## Multi-entrypoint (bundle) apps: one suite per entrypoint
 
