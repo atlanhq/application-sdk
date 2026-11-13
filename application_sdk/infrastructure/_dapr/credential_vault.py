@@ -8,6 +8,7 @@ import asyncio
 import copy
 import re
 import warnings
+from collections.abc import Sequence
 from enum import Enum
 from typing import Any
 
@@ -158,7 +159,12 @@ class DaprCredentialVault:
         self._upstream = DaprBinding(client, credential_binding)
         self._secret_store_name: str = secret_store_name or SECRET_STORE_NAME
 
-    async def get_credentials(self, credential_guid: str) -> dict[str, Any]:
+    async def get_credentials(
+        self,
+        credential_guid: str,
+        *,
+        missing_config_retry_delays: Sequence[float] | None = None,
+    ) -> dict[str, Any]:
         """Resolve the full credential dict for *credential_guid*.
 
         1. Fetches the credential config JSON from the upstream S3 store
@@ -166,6 +172,16 @@ class DaprCredentialVault:
         2. Determines the secret resolution mode (multi-key or single-key).
         3. Fetches secrets from the Dapr secret store.
         4. Returns the merged credential dict.
+
+        Args:
+            credential_guid: Unique identifier of the credential record.
+            missing_config_retry_delays: Backoff, in seconds, before each
+                re-read of a config the object store reports missing.
+                ``None`` (the default) uses
+                :data:`_MISSING_CONFIG_RETRY_DELAYS_SECONDS` (~17s). A
+                best-effort caller that handles a missing credential itself,
+                such as a manifest hook reading an optional credential on a
+                request path, can pass ``()`` to read once and fail at once.
 
         Raises:
             CredentialVaultError: If any step fails.
@@ -176,7 +192,10 @@ class DaprCredentialVault:
         )
 
         try:
-            credential_config = await self._fetch_credential_config(credential_guid)
+            credential_config = await self._fetch_credential_config(
+                credential_guid,
+                missing_config_retry_delays=missing_config_retry_delays,
+            )
 
             credential_source_str = credential_config.get(
                 "credentialSource", _CredentialSource.DIRECT.value
@@ -233,7 +252,12 @@ class DaprCredentialVault:
                 cause=e,
             ) from e
 
-    async def _fetch_credential_config(self, credential_guid: str) -> dict[str, Any]:
+    async def _fetch_credential_config(
+        self,
+        credential_guid: str,
+        *,
+        missing_config_retry_delays: Sequence[float] | None = None,
+    ) -> dict[str, Any]:
         """Fetch the credential config JSON from the upstream object store.
 
         Retries a cold-start race via :func:`retry_past_dapr_cold_start`,
@@ -254,7 +278,8 @@ class DaprCredentialVault:
         response, is re-read on the short
         :data:`_MISSING_CONFIG_RETRY_DELAYS_SECONDS` ladder and then fails
         with "No credential config found" and the attempt count, instead of
-        being retried for the cold-start budget.
+        being retried for the cold-start budget. *missing_config_retry_delays*
+        replaces that ladder for one call; ``()`` reads once.
 
         Raises:
             CredentialVaultError: If the GUID contains unsafe characters or no
@@ -326,12 +351,17 @@ class DaprCredentialVault:
                     ) from exc
                 raise
 
+        delays: tuple[float, ...] = (
+            _MISSING_CONFIG_RETRY_DELAYS_SECONDS
+            if missing_config_retry_delays is None
+            else tuple(missing_config_retry_delays)
+        )
         attempts = 0
         # An empty successful reply also arrives as data=None (DaprBinding
         # maps b"" to None) but is not the store confirming absence, so it
         # keeps the generic, fail-open vault error.
         saw_empty_reply = False
-        for delay in (*_MISSING_CONFIG_RETRY_DELAYS_SECONDS, None):
+        for delay in (*delays, None):
             # A transport error or any other 5xx raises out of this loop on
             # the cold-start path; only the not-found answer is re-read here.
             response = await retry_past_dapr_cold_start(
@@ -354,14 +384,14 @@ class DaprCredentialVault:
                 % (
                     credential_guid,
                     attempts,
-                    sum(_MISSING_CONFIG_RETRY_DELAYS_SECONDS),
+                    sum(delays),
                 ),
                 credential_guid=credential_guid,
             )
         raise CredentialConfigNotFoundError(
             "No credential config found for GUID %s in upstream store "
             "(object store answered not-found on %d attempts over %.0fs)"
-            % (credential_guid, attempts, sum(_MISSING_CONFIG_RETRY_DELAYS_SECONDS)),
+            % (credential_guid, attempts, sum(delays)),
             credential_guid=credential_guid,
         )
 
