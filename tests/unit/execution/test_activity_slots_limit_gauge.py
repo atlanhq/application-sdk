@@ -1,22 +1,18 @@
-"""The activity-slot limit gauge, as a scraper of the worker's metrics endpoint sees it.
+"""The activity-slot limit gauge KEDA's temporal scaler reads from each worker.
 
-KEDA's temporal scaler reads this series from each worker pod and counts busy
-slots as the limit minus ``temporal_worker_task_slots_available``. These tests
-pin the series name and labels by scraping a real Prometheus endpoint, because
-the rendered name is what the scaler matches on (see
-``docs/standards/cross-repo-contracts.md``).
+These tests record through a real ``Runtime`` into an in-memory
+``MetricBuffer``, so they need no socket (the unit tier runs with
+``--disable-socket``). The rendered Prometheus line is pinned by scraping a real
+endpoint in ``tests/integration/test_activity_slots_limit_scrape.py``. See
+``docs/standards/cross-repo-contracts.md`` before renaming the series or a label.
 """
 
 from __future__ import annotations
 
-import re
-import socket
-import time
-import urllib.request
 from unittest import mock
 
 import pytest
-from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
+from temporalio.runtime import MetricBuffer, Runtime, TelemetryConfig
 
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
@@ -25,10 +21,6 @@ from application_sdk.execution._temporal.worker import (
     ACTIVITY_SLOTS_LIMIT_METRIC,
     _publish_activity_slots_limit,
     create_worker,
-)
-
-_SERIES = re.compile(
-    r"^temporal_worker_activity_slots_limit\{(?P<labels>[^}]*)\} (?P<value>\S+)$"
 )
 
 
@@ -40,21 +32,16 @@ class _GaugeOutput(Output, allow_unbounded_fields=True):
     pass
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+def _buffered_runtime(metric_prefix: str | None = None) -> tuple[Runtime, MetricBuffer]:
+    buffer = MetricBuffer(10_000)
+    if metric_prefix is None:
+        telemetry = TelemetryConfig(metrics=buffer)
+    else:
+        telemetry = TelemetryConfig(metrics=buffer, metric_prefix=metric_prefix)
+    return Runtime(telemetry=telemetry), buffer
 
 
-def _prometheus_runtime(metric_prefix: str | None = None) -> tuple[Runtime, int]:
-    port = _free_port()
-    telemetry = {"metrics": PrometheusConfig(bind_address=f"127.0.0.1:{port}")}
-    if metric_prefix is not None:
-        telemetry["metric_prefix"] = metric_prefix
-    return Runtime(telemetry=TelemetryConfig(**telemetry)), port
-
-
-def _client_on(runtime: Runtime) -> mock.MagicMock:
+def _client_on(runtime: Runtime | None) -> mock.MagicMock:
     client = mock.MagicMock()
     client.namespace = "default"
     client.service_client.config.target_host = "localhost:7233"
@@ -62,33 +49,28 @@ def _client_on(runtime: Runtime) -> mock.MagicMock:
     return client
 
 
-def _limit_series(port: int) -> list[tuple[dict[str, str], float]]:
-    """Every ``temporal_worker_activity_slots_limit`` sample on the endpoint."""
-    deadline = time.monotonic() + 5
-    while True:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics") as resp:
-            body = resp.read().decode()
-        samples = []
-        for line in body.splitlines():
-            match = _SERIES.match(line)
-            if match:
-                labels = dict(re.findall(r'(\w+)="([^"]*)"', match["labels"]))
-                samples.append((labels, float(match["value"])))
-        if samples or time.monotonic() > deadline:
-            return samples
-        time.sleep(0.05)
+def _limit_samples(buffer: MetricBuffer) -> list[tuple[dict[str, str], int]]:
+    """Every update recorded under the contract name, as (labels, value)."""
+    return [
+        (
+            {str(k): str(v) for k, v in update.attributes.items()},
+            int(update.value),
+        )
+        for update in buffer.retrieve_updates()
+        if update.metric.name == ACTIVITY_SLOTS_LIMIT_METRIC
+    ]
 
 
 def test_metric_name_is_the_contract_name() -> None:
     assert ACTIVITY_SLOTS_LIMIT_METRIC == "temporal_worker_activity_slots_limit"
 
 
-def test_gauge_renders_with_task_queue_and_activity_worker_labels() -> None:
-    runtime, port = _prometheus_runtime()
+def test_gauge_carries_task_queue_and_activity_worker_labels() -> None:
+    runtime, buffer = _buffered_runtime()
 
     _publish_activity_slots_limit(_client_on(runtime), "atlan-example-production", 16)
 
-    [(labels, value)] = _limit_series(port)
+    [(labels, value)] = _limit_samples(buffer)
     assert value == 16
     assert labels["task_queue"] == "atlan-example-production"
     assert labels["worker_type"] == "ActivityWorker"
@@ -96,13 +78,27 @@ def test_gauge_renders_with_task_queue_and_activity_worker_labels() -> None:
 
 def test_metric_prefix_does_not_rename_the_gauge() -> None:
     """``TelemetryConfig.metric_prefix`` renames core metrics only."""
-    runtime, port = _prometheus_runtime(metric_prefix="custom_")
+    runtime, buffer = _buffered_runtime(metric_prefix="custom_")
 
     _publish_activity_slots_limit(_client_on(runtime), "q", 32)
 
-    [(labels, value)] = _limit_series(port)
+    [(labels, value)] = _limit_samples(buffer)
     assert value == 32
     assert labels["task_queue"] == "q"
+
+
+def test_a_client_without_a_runtime_publishes_on_the_default_runtime() -> None:
+    """temporalio connects such a client on ``Runtime.default()``."""
+    default = mock.MagicMock()
+    with mock.patch(
+        "application_sdk.execution._temporal.worker.Runtime.default",
+        return_value=default,
+    ):
+        _publish_activity_slots_limit(_client_on(None), "q", 16)
+
+    default.metric_meter.with_additional_attributes.return_value.create_gauge.return_value.set.assert_called_once_with(
+        16
+    )
 
 
 def test_a_failing_meter_does_not_stop_the_worker() -> None:
@@ -130,11 +126,11 @@ class TestCreateWorkerPublishesTheLimit:
         AppRegistry.reset()
         TaskRegistry.reset()
 
-    def _published_and_configured(self, **kwargs: int) -> tuple[float, int]:
-        runtime, port = _prometheus_runtime()
-        captured: dict = {}
+    def _published_and_configured(self, **kwargs: int) -> tuple[int, int]:
+        runtime, buffer = _buffered_runtime()
+        captured: dict[str, object] = {}
 
-        def capture_worker(*args, **worker_kwargs):
+        def capture_worker(*args: object, **worker_kwargs: object) -> mock.MagicMock:
             captured.update(worker_kwargs)
             return mock.MagicMock()
 
@@ -144,10 +140,12 @@ class TestCreateWorkerPublishesTheLimit:
         ):
             create_worker(_client_on(runtime), task_queue="q", **kwargs)
 
-        [(labels, value)] = _limit_series(port)
+        [(labels, value)] = _limit_samples(buffer)
         assert labels["task_queue"] == "q"
         assert labels["worker_type"] == "ActivityWorker"
-        return value, captured["max_concurrent_activities"]
+        configured = captured["max_concurrent_activities"]
+        assert isinstance(configured, int)
+        return value, configured
 
     def test_value_passed_to_create_worker(
         self, monkeypatch: pytest.MonkeyPatch

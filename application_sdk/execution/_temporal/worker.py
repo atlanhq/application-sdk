@@ -602,9 +602,10 @@ def _publish_activity_slots_limit(client: Client, task_queue: str, slots: int) -
     scraper can pair it with them. A failure is logged and does not stop the
     worker: the scaler falls back to its configured limit without the gauge.
     """
-    config = getattr(getattr(client, "service_client", None), "config", None)
-    runtime: Runtime = getattr(config, "runtime", None) or Runtime.default()
     try:
+        # A client connected without an explicit runtime uses the default one,
+        # so that is where its slot gauges, and this one, report.
+        runtime = client.service_client.config.runtime or Runtime.default()
         runtime.metric_meter.with_additional_attributes(
             {"task_queue": task_queue, "worker_type": "ActivityWorker"}
         ).create_gauge(

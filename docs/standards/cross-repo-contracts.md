@@ -574,10 +574,10 @@ separately:
 | | |
 |---|---|
 | **Produced by** | `_publish_activity_slots_limit()` in `application_sdk/execution/_temporal/worker.py`, called by `create_worker()` once the slot count is resolved |
-| **Served at** | The worker's Temporal Prometheus endpoint (`ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS`, port 9464), beside the Rust core's `temporal_worker_task_slots_*` gauges |
+| **Served at** | Wherever the Rust core's `temporal_worker_task_slots_*` gauges are, since it is recorded on the same Runtime: the Temporal Prometheus endpoint (`ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS`, default `127.0.0.1:9464`, loopback only), and the handler's `/metrics` route (default port 8000), which proxies that endpoint's series |
 | **Key** | Series `temporal_worker_activity_slots_limit`; labels `task_queue` (the worker's task queue) and `worker_type="ActivityWorker"`; value = the activity slots the worker runs with |
 | **Read by** | The KEDA temporal scaler in atlanhq/keda (`workerActivitySlotsLimitMetric` in `pkg/scalers/temporal_scaler.go`), which scrapes each worker pod |
-| **Pinned by** | `tests/unit/execution/test_activity_slots_limit_gauge.py`, which scrapes a real Prometheus endpoint |
+| **Pinned by** | `tests/unit/execution/test_activity_slots_limit_gauge.py` (name, labels and value through a real Runtime's metric buffer) and `tests/integration/test_activity_slots_limit_scrape.py` (the rendered line, scraped from a real Prometheus endpoint) |
 
 The scaler counts a pod's busy activity slots as this limit minus
 `temporal_worker_task_slots_available`, because `available` is accurate where
