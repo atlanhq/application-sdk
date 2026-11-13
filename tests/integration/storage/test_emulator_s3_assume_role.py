@@ -151,7 +151,7 @@ async def test_assume_role_from_credentials_roundtrips_via_sdk(
     # SDK's explicit client options outrank obstore's ``AWS_ALLOW_HTTP`` env
     # var, so add ``allow_http`` to them. Only transport is touched: the
     # credential wiring and the STS exchange under test stay real.
-    from application_sdk.storage import _obstore_config
+    from application_sdk import _obstore_config
 
     monkeypatch.setenv("AWS_ENDPOINT_URL", _ENDPOINT)
     sdk_client_options = _obstore_config.obstore_client_options

@@ -883,6 +883,24 @@
       "symbol": "PreflightStatus.PARTIAL"
     },
     {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.handler.object_routes.S3Client is deprecated and will be removed in v4.0.0 with S3ObjectStore. Use HostObjectStore, over obstore, instead.",
+      "migration_target": true,
+      "module": "application_sdk.handler.object_routes",
+      "removal_version": "4.0.0",
+      "symbol": "S3Client"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.handler.object_routes.S3ObjectStore is deprecated and will be removed in v4.0.0. Use HostObjectStore.from_env() instead: it builds the store over obstore, on S3, GCS and Azure Blob; pass it to build_asgi_app(object_store=...).",
+      "migration_target": true,
+      "module": "application_sdk.handler.object_routes",
+      "removal_version": "4.0.0",
+      "symbol": "S3ObjectStore"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "MessageHandler is deprecated; use SubscriptionConfig.handler in application_sdk.handler.contracts \u2014 it typed PubSub.subscribe handlers, which DaprPubSub never called. Will be removed in v4.0.0.",

@@ -42,7 +42,7 @@ Site                                                  Owner
                                                       ``Retry`` (jittered
                                                       ``2**n`` ladder)
 ``common/aws_utils.py`` STS / boto calls              botocore retry config
-``storage/_obstore_config.py`` object-store client    object_store's Rust retry
+``_obstore_config.py`` object-store client            object_store's Rust retry
                                                       (5xx / 429 / 408)
 Temporal activity and workflow retries                ``RetryPolicy`` (server
                                                       side)
