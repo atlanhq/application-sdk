@@ -86,10 +86,11 @@ entry.
 
 ## Every job sets `timeout-minutes`
 
-**Rule:** every workflow job that runs `steps:` declares `timeout-minutes`, as
-a positive integer or a single `${{ … }}` expression. A job that calls a
-reusable workflow (`uses:`) cannot take one; the called workflow's jobs carry
-it.
+**Rule:** every workflow job that runs `steps:` declares `timeout-minutes`
+below 360: a literal, or `${{ inputs.<name> }}` naming a `workflow_call` input
+whose default is a literal below 360. In-repo callers may not pass that input
+360 or more. A job that calls a reusable workflow (`uses:`) cannot take a
+`timeout-minutes` of its own; the called workflow's jobs carry it.
 
 **Why:** GitHub's default is 360 minutes. A job that waits on a run in another
 repo, or on a callback that never arrives, otherwise holds a runner and, on the
