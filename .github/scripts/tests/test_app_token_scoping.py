@@ -190,10 +190,21 @@ def is_owner_wide(step: Step) -> bool:
     return bool(w.get("owner")) and not str(w.get("repositories") or "").strip()
 
 
+def file_key(path: Path) -> str:
+    """A workflow by its file name (they share one directory); a composite
+    action by its path under ``.github``, since every one is ``action.yml``."""
+    rel = path.relative_to(GITHUB)
+    return rel.name if rel.parts[0] == "workflows" else rel.as_posix()
+
+
 def _all_mints() -> dict[Key, Step]:
     found: dict[Key, Step] = {}
     for path in FILES:
-        found.update(mints(path.name, yaml.safe_load(path.read_text())))
+        for key, step in mints(
+            file_key(path), yaml.safe_load(path.read_text())
+        ).items():
+            assert key not in found, f"two mints share the key {key}"
+            found[key] = step
     return found
 
 
@@ -249,6 +260,16 @@ def test_read_only_fleet_dashboard_is_read_scoped(key: Key) -> None:
     granted = permissions(ALL[key])
     assert set(granted) == READ_ONLY_FLEET[key]
     assert set(granted.values()) == {"read"}, f"{key}: {granted}"
+
+
+def test_composite_actions_get_distinct_keys() -> None:
+    """Every composite action file is ``action.yml``; a bare file name would
+    let one action's mint overwrite another's and escape the checks."""
+    foo = GITHUB / "actions" / "foo" / "action.yml"
+    bar = GITHUB / "actions" / "bar" / "action.yml"
+    assert file_key(foo) == "actions/foo/action.yml"
+    assert file_key(foo) != file_key(bar)
+    assert file_key(GITHUB / "workflows" / "renovate.yaml") == "renovate.yaml"
 
 
 def test_detects_unscoped_and_owner_wide_mints() -> None:
