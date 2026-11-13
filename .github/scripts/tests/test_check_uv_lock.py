@@ -221,10 +221,12 @@ def test_conformance_gate_runs_the_lock_check_on_every_pr() -> None:
     names = [s.get("name") for s in steps]
 
     fetch = steps[names.index("Fetch check_uv_lock.py from SDK")]
-    # git_auth.py too: the check runs through it (FND-4740).
+    # git_auth.py too: the check runs through it (FND-4740). And the D
+    # series' apt install script, kept past the cleanup (FND-4908).
     assert fetch["with"]["sparse-checkout"].split() == [
         ".github/scripts/check_uv_lock.py",
         ".github/scripts/git_auth.py",
+        ".github/scripts/install_apt_packages.py",
     ]
     assert fetch["with"]["ref"] == "${{ job.workflow_sha }}"
     assert fetch["with"]["path"] == ".sdk-lock-check"

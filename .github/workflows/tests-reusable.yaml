@@ -777,32 +777,32 @@ jobs:
       # Must precede the deps action's `uv sync`: a native sdist build (hive's
       # pykerberos → gssapi/gssapi.h) fails during sync, not at test time.
       #
-      # Routed through env, never interpolated into the script
-      # (docs/standards/ci.md). That routing is the control that matters: a
-      # `${{ }}` in the script text would splice a caller-supplied value into
-      # the shell, which is why a test pins the env form.
-      #
-      # The value is then matched WHOLE against a strict Debian package-name
-      # allowlist before it is used. It has to reach apt-get unquoted — that is
-      # how a list of packages is passed — and while word splitting does not
-      # re-parse `;`/`|`/`$(…)` as operators (they arrive as literal argv
-      # words), it does still glob-expand, and a leading `-o …` or `./x.deb`
-      # would reach apt-get as a flag or a local package path instead of a name.
-      # The allowlist closes both, and fails closed: a straight-line `grep`
-      # rather than an `if`, so the check stays inside the
-      # no-inline-conditionals rule, with `set -e` explicit so a later
-      # `defaults: run: shell:` cannot silently turn it into a fail-open.
+      # The value is routed through env, never interpolated into the script
+      # (docs/standards/ci.md), and install_apt_packages.py checks every token
+      # is a plain Debian package name before anything is installed, failing
+      # the step otherwise. It is the one path a caller's package list takes
+      # to apt-get (docs/standards/ci.md, "System packages go through one
+      # script"). Fetched at this workflow's own SHA into its own path, and
+      # removed before the app checkout lands.
+      - name: Fetch install_apt_packages.py from SDK
+        if: inputs.apt-packages != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/install_apt_packages.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-apt
+          persist-credentials: false
+
       - name: Install system packages (apt-packages)
         if: inputs.apt-packages != ''
         env:
           APT_PACKAGES: ${{ inputs.apt-packages }}
         run: |
           set -euo pipefail
-          echo "Validating and installing apt packages: $APT_PACKAGES"
-          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
-            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
+          python3 .sdk-apt/.github/scripts/install_apt_packages.py --env APT_PACKAGES
+          rm -rf .sdk-apt
 
       # The app checkout the tests run on. setup-deps skips its own
       # (`checkout: "false"` below), which would otherwise persist the job
@@ -1262,17 +1262,25 @@ jobs:
         run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
 
       # See the unit job: must precede the deps action's `uv sync`.
+      - name: Fetch install_apt_packages.py from SDK
+        if: inputs.apt-packages != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/install_apt_packages.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-apt
+          persist-credentials: false
+
       - name: Install system packages (apt-packages)
         if: inputs.apt-packages != ''
         env:
           APT_PACKAGES: ${{ inputs.apt-packages }}
         run: |
           set -euo pipefail
-          echo "Validating and installing apt packages: $APT_PACKAGES"
-          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
-            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
+          python3 .sdk-apt/.github/scripts/install_apt_packages.py --env APT_PACKAGES
+          rm -rf .sdk-apt
 
       # The app checkout the tests run on. setup-deps skips its own
       # (`checkout: "false"` below), which would otherwise persist the job
@@ -2934,17 +2942,25 @@ jobs:
       # well as in the image, so a native sdist build needs its headers here
       # too. The IMAGE build is not covered — the Dockerfile owns its own
       # system deps.
+      - name: Fetch install_apt_packages.py from SDK
+        if: inputs.apt-packages != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/install_apt_packages.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-apt
+          persist-credentials: false
+
       - name: Install system packages (apt-packages)
         if: inputs.apt-packages != ''
         env:
           APT_PACKAGES: ${{ inputs.apt-packages }}
         run: |
           set -euo pipefail
-          echo "Validating and installing apt packages: $APT_PACKAGES"
-          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
-            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
+          python3 .sdk-apt/.github/scripts/install_apt_packages.py --env APT_PACKAGES
+          rm -rf .sdk-apt
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

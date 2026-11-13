@@ -562,6 +562,7 @@ jobs:
           sparse-checkout: |
             .github/scripts/check_uv_lock.py
             .github/scripts/git_auth.py
+            .github/scripts/install_apt_packages.py
           sparse-checkout-cone-mode: false
           path: .sdk-lock-check
           persist-credentials: false
@@ -592,6 +593,11 @@ jobs:
       - name: "Keep git_auth.py for the D pre-sync"
         if: inputs.private-git-deps
         run: cp .sdk-lock-check/.github/scripts/git_auth.py "$RUNNER_TEMP/git_auth.py"
+
+      # Kept outside the tree for the D series' system packages, installed
+      # after the fetched scripts are removed.
+      - name: "Keep install_apt_packages.py for the D series"
+        run: cp .sdk-lock-check/.github/scripts/install_apt_packages.py "$RUNNER_TEMP/install_apt_packages.py"
 
       - name: "Remove the fetched SDK script"
         if: "!cancelled()"
@@ -861,10 +867,11 @@ jobs:
       # caller's environment, and a native sdist (e.g. pykerberos needs
       # libkrb5-dev) fails there without its headers.  Follows D's relevance
       # gate, so it installs nothing on a PR that then skips D.  The value is
-      # routed through env, never interpolated into the script, and matched
-      # WHOLE against the same strict Debian package-name allowlist as
-      # tests-reusable.yaml before it is used.  D detect does not run after a
-      # failed install — it would only fail again, further from the cause.
+      # routed through env, never interpolated into the script, and goes
+      # through install_apt_packages.py, which checks every token is a plain
+      # Debian package name before anything is installed (docs/standards/ci.md,
+      # "System packages go through one script").  D detect does not run after
+      # a failed install — it would only fail again, further from the cause.
       - name: Install system packages (apt-packages)
         id: apt-packages
         if: >-
@@ -872,37 +879,32 @@ jobs:
           && (steps.changes.outputs.dependency == 'true' || inputs.event_name == 'push' || inputs.force-all)
         env:
           APT_PACKAGES: ${{ inputs.apt-packages }}
-        run: |
-          set -euo pipefail
-          echo "Validating and installing apt packages: $APT_PACKAGES"
-          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
-            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
+        run: python3 "$RUNNER_TEMP/install_apt_packages.py" --env APT_PACKAGES
+
+      # The packages a repo declares in .github/ci-system-deps.txt (written by
+      # bootstrap's --system-deps) for the D series' `uv sync`.  Installed here,
+      # through the same script as the input above, rather than in the vendored
+      # detect action: a vendored copy cannot be fixed until its repo re-runs
+      # bootstrap, and this step runs first even in a repo whose copy still
+      # installs the file itself.  Same relevance gate as D.
+      - name: "D · system dependencies (.github/ci-system-deps.txt)"
+        id: system-deps-file
+        if: >-
+          !cancelled() && steps.apt-packages.outcome != 'failure'
+          && hashFiles('.github/ci-system-deps.txt') != ''
+          && (steps.changes.outputs.dependency == 'true' || inputs.event_name == 'push' || inputs.force-all)
+        run: python3 "$RUNNER_TEMP/install_apt_packages.py" --file .github/ci-system-deps.txt
 
       # The detect action's needs-env `uv sync` is the one that clones a private
       # atlanhq dependency, and the action is vendored into each caller, so the
       # token cannot be handed to it.  Run the same plain `uv sync` here first,
       # through git_auth.py: the action's own sync then finds the env complete
-      # and fetches nothing, and the token never reaches the detect step.  The
-      # caller's system deps are installed first, as the action itself does,
-      # so a native build in the sync does not fail here.
-      - name: "D · system dependencies (private git deps)"
-        id: git-deps-system
-        if: >-
-          !cancelled() && inputs.private-git-deps && steps.apt-packages.outcome != 'failure'
-          && hashFiles('.github/ci-system-deps.txt') != ''
-          && (steps.changes.outputs.dependency == 'true' || inputs.event_name == 'push' || inputs.force-all)
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          xargs -r sudo apt-get install -y < .github/ci-system-deps.txt
-
+      # and fetches nothing, and the token never reaches the detect step.
       - name: "D · sync private git dependencies"
         id: git-deps-presync
         if: >-
           !cancelled() && inputs.private-git-deps && steps.apt-packages.outcome != 'failure'
-          && steps.git-deps-system.outcome != 'failure'
+          && steps.system-deps-file.outcome != 'failure'
           && (steps.changes.outputs.dependency == 'true' || inputs.event_name == 'push' || inputs.force-all)
         run: python3 "$RUNNER_TEMP/git_auth.py" run -- uv sync
 
@@ -910,6 +912,7 @@ jobs:
         id: detect-dependency
         if: >-
           !cancelled() && steps.apt-packages.outcome != 'failure'
+          && steps.system-deps-file.outcome != 'failure'
           && steps.git-deps-presync.outcome != 'failure'
           && (steps.changes.outputs.dependency == 'true' || inputs.event_name == 'push' || inputs.force-all)
         uses: ./.github/actions/run-conformance-detect

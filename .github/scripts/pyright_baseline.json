@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 144,
-    "warning": 5945
+    "warning": 5936
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -348,7 +348,7 @@
       "warning:reportUnknownMemberType": 89
     },
     ".github/scripts/tests/test_apt_packages_and_summary_parse.py": {
-      "warning:reportUnknownMemberType": 18
+      "warning:reportUnknownMemberType": 16
     },
     ".github/scripts/tests/test_artifact_download_retry.py": {
       "warning:reportUnknownMemberType": 35
@@ -413,7 +413,7 @@
       "warning:reportUnknownMemberType": 1
     },
     ".github/scripts/tests/test_conformance_apt_packages.py": {
-      "warning:reportUnknownMemberType": 16
+      "warning:reportUnknownMemberType": 9
     },
     ".github/scripts/tests/test_conformance_release.py": {
       "warning:reportUnknownMemberType": 97
