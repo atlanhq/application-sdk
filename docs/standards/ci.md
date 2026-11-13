@@ -951,6 +951,45 @@ The scoped `git-deps-token` / `image-git-token` mints stay `continue-on-error`:
 they have no PAT fallback, and the install or build that needs the token fails
 when it is empty. `test_app_token_fails_closed.py` pins all of this.
 
+## A fleet App token asks for what it uses
+
+**Rule:** every `create-github-app-token` step sets at least one
+`permission-*` input, and a step that sets `owner` also sets `repositories`.
+
+```yaml
+# WRONG — every permission the App holds, on every repo in the installation
+- uses: actions/create-github-app-token@<sha> # v3
+  with:
+    app-id: ${{ secrets.FLEET_APP_ID }}
+    private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+    owner: atlanhq
+
+# RIGHT — the repos and permissions the job's API calls need
+- uses: actions/create-github-app-token@<sha> # v3
+  with:
+    app-id: ${{ secrets.FLEET_APP_ID }}
+    private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+    owner: atlanhq
+    repositories: application-sdk
+    permission-contents: read
+```
+
+Without `permission-*`, the token carries every permission the App holds.
+With `owner` and no `repositories`, it reaches every repo in the installation.
+Leaving out both `owner` and `repositories` scopes the token to the current
+repo, which is already narrow.
+
+Metadata read is always granted, so do not list it. List only what the job's
+calls need: an under-scoped token fails at the first API call it lacks.
+Name the endpoint behind each permission in a comment on the mint.
+
+A job that only learns its repos at run time, such as a fleet dashboard, may
+omit `repositories`. It then needs an `OWNER_WIDE` entry that says why. A
+read-only one also gets an entry in `READ_ONLY_FLEET`, which pins its exact
+read-only permission set. Mints that predated this rule are listed in
+`UNSCOPED_PERMISSIONS`. That list only shrinks: scope the mint, then delete its
+entry. `test_app_token_scoping.py` enforces all of this (FND-4902).
+
 ## Renovate release freeze
 
 Renovate PRs do not merge into application-sdk `main` while a release train is in

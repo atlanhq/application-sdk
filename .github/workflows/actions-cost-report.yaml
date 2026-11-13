@@ -54,7 +54,11 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
-      # Org-wide: the report reads Actions runs and check runs on fleet repos.
+      # Org-wide (no `repositories:`): the report samples fleet repos it only
+      # learns at run time. Read-only, and only what it reads (FND-4902):
+      # discovery lists repos and reads each renovate.json (contents), the scan
+      # reads Actions runs and jobs (actions) and the jobs' check runs over
+      # GraphQL (checks). Metadata read is always granted.
       - name: Mint fleet App token
         id: app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
@@ -62,6 +66,9 @@ jobs:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
+          permission-actions: read
+          permission-checks: read
+          permission-contents: read
 
       # Exits 1 when there is a regression and the Slack alert could not be
       # sent, so a regression nobody heard about turns the run red. The
