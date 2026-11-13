@@ -49,6 +49,8 @@ jobs:
         os: [ubuntu-22.04, macOS-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: "./.github/actions/setup-deps"
         with:
           checkout: "false"
@@ -63,6 +65,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Resolve container Python version
         id: pyver
         run: echo "version=$(python3 .github/scripts/container_python_version.py print-version)" >> "$GITHUB_OUTPUT"

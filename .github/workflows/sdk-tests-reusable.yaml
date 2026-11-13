@@ -51,6 +51,8 @@ jobs:
       UNIT_COVERAGE_LEG: ${{ matrix.os == 'ubuntu-22.04' && matrix.python-version == '3.12' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # Fails the job when it cannot mint: no continue-on-error and no
       # ORG_PAT_GITHUB fallback (FND-4652). Skipped on a fork PR and on a
       # Dependabot PR, neither of which gets Actions secrets; the token only
@@ -116,6 +118,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: "./.github/actions/unit-tests"
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -134,6 +138,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # The container's Python, for the same reason as the integration job:
       # the concurrent-decode regression in this set (CNCT-85) is most
       # meaningful on the interpreter the image ships.
@@ -171,6 +177,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: "./.github/actions/setup-deps"
         with:
           checkout: "false"
@@ -227,6 +235,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # Integration exercises real worker/decode code paths, so it must run on
       # the SAME interpreter the runtime container ships — the golden base tag
       # in the Dockerfile — not the setup-deps default (3.11). A concurrent-
@@ -291,6 +301,8 @@ jobs:
       NGINX_IMAGE: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: "./.github/actions/setup-deps"
         with:
           checkout: "false"
