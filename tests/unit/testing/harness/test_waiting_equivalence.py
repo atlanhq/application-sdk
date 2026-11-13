@@ -50,14 +50,14 @@ from application_sdk.testing.e2e._errors import (
     DAGProgressStalledError,
     NoWorkerOnTaskQueueError,
 )
-from application_sdk.testing.e2e.client import (
-    AEWorkflowClient,
+from application_sdk.testing.e2e.client import AEWorkflowClient
+from application_sdk.testing.harness._poll import fake_clock
+from application_sdk.testing.harness.automation_engine import (
     DAGNodeResult,
     DAGNodeStatus,
     DAGRunResult,
     DAGRunStatus,
 )
-from application_sdk.testing.harness._poll import fake_clock
 from application_sdk.testing.harness.automation_engine.wire import (
     node_glyph as _node_glyph,
 )

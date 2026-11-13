@@ -1668,7 +1668,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "DAGRunResult is deprecated; use application_sdk.testing.e2e.client.DAGRunResult \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "message": "DAGRunResult is deprecated; use application_sdk.testing.harness.automation_engine.DAGRunResult \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.base",
       "removal_version": "4.0.0",
@@ -1686,7 +1686,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "cold_start_submit_kwargs is deprecated; use application_sdk.testing.e2e.client.cold_start_submit_kwargs \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "message": "cold_start_submit_kwargs is deprecated; use application_sdk.testing.harness.automation_engine.cold_start_submit_kwargs \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.base",
       "removal_version": "4.0.0",
@@ -1713,7 +1713,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "AEWorkflowClient is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "message": "AEWorkflowClient is deprecated; use application_sdk.testing.harness.automation_engine.AEClient and application_sdk.testing.harness.atlas \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.client",
       "removal_version": "4.0.0",
@@ -1722,7 +1722,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "DAGNodeResult is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "message": "DAGNodeResult is deprecated; use application_sdk.testing.harness.automation_engine.DAGNodeResult \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.client",
       "removal_version": "4.0.0",
@@ -1731,7 +1731,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "DAGNodeStatus is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "message": "DAGNodeStatus is deprecated; use application_sdk.testing.harness.automation_engine.DAGNodeStatus \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.client",
       "removal_version": "4.0.0",
@@ -1740,7 +1740,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "DAGRunResult is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "message": "DAGRunResult is deprecated; use application_sdk.testing.harness.automation_engine.DAGRunResult \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.client",
       "removal_version": "4.0.0",
@@ -1749,7 +1749,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "DAGRunStatus is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "message": "DAGRunStatus is deprecated; use application_sdk.testing.harness.automation_engine.DAGRunStatus \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.client",
       "removal_version": "4.0.0",
@@ -1758,7 +1758,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "cold_start_submit_kwargs is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "message": "cold_start_submit_kwargs is deprecated; use application_sdk.testing.harness.automation_engine.cold_start_submit_kwargs \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.client",
       "removal_version": "4.0.0",

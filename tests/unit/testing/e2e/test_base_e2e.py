@@ -40,17 +40,17 @@ from application_sdk.testing.e2e.base import (
     QueuePollerReading,
     _derive_progress_stall_seconds,
 )
-from application_sdk.testing.e2e.client import (
-    DAGNodeResult,
-    DAGNodeStatus,
-    DAGRunResult,
-    DAGRunStatus,
-)
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import AgentSpec, DatabaseSpec, RunMode
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 from application_sdk.testing.harness import identity as identity_mod
 from application_sdk.testing.harness._poll import fake_clock
+from application_sdk.testing.harness.automation_engine import (
+    DAGNodeResult,
+    DAGNodeStatus,
+    DAGRunResult,
+    DAGRunStatus,
+)
 from application_sdk.testing.harness.temporal import PollerInfo, TaskQueueType
 from tests.unit.private_stdlib import private_stdlib
 

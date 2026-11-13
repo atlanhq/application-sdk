@@ -50,16 +50,16 @@ from application_sdk.testing.e2e.base import (
     FullDAGOutcome,
     ResolvedDAG,
 )
-from application_sdk.testing.e2e.client import (
+from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
+from application_sdk.testing.harness import atlas as atlas_api
+from application_sdk.testing.harness.automation_engine import (
+    AEClient,
     DAGNodeResult,
     DAGNodeStatus,
     DAGRunResult,
     DAGRunStatus,
     PublishedVersion,
 )
-from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
-from application_sdk.testing.harness import atlas as atlas_api
-from application_sdk.testing.harness.automation_engine import AEClient
 from application_sdk.testing.harness.identity import Minter
 from application_sdk.testing.harness.outcome import Settled
 from application_sdk.testing.harness.teardown import CONNECTION_DELETE_NODE_ID

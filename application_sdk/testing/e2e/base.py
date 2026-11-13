@@ -122,14 +122,7 @@ from application_sdk.testing.e2e._manifest_identity import (
     compare_node_identities,
     node_identities,
 )
-from application_sdk.testing.e2e.client import (
-    AEWorkflowClient,
-    DAGNodeResult,
-    DAGNodeStatus,
-    DAGRunResult,
-    PublishedVersion,
-    cold_start_submit_kwargs,
-)
+from application_sdk.testing.e2e.client import AEWorkflowClient
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import (
     AgentSpec,
@@ -142,7 +135,14 @@ from application_sdk.testing.e2e.tenant_pool import TenantPool, check_tenant_poo
 from application_sdk.testing.harness import atlas
 from application_sdk.testing.harness import seed as harness_seed
 from application_sdk.testing.harness._errors import MissingTenantEnvError
-from application_sdk.testing.harness.automation_engine import AEClient
+from application_sdk.testing.harness.automation_engine import (
+    AEClient,
+    DAGNodeResult,
+    DAGNodeStatus,
+    DAGRunResult,
+    PublishedVersion,
+    cold_start_submit_kwargs,
+)
 from application_sdk.testing.harness.bridge import run_sync
 from application_sdk.testing.harness.budgets import Budget
 from application_sdk.testing.harness.evidence import (
@@ -4002,7 +4002,7 @@ class BaseE2ETest:
         * AE reports it not started (``Pending`` / ``Scheduled``) — which does
           not say whether anything picked it up, so the line names the queue and
           the child workflow to read, and asserts no cause (see
-          :attr:`~application_sdk.testing.e2e.client.DAGNodeStatus.is_not_started`);
+          :attr:`~application_sdk.testing.harness.automation_engine.DAGNodeStatus.is_not_started`);
         * dispatched but never finished (``Running`` where the poll stopped) —
           which does not say whether a worker ever claimed it, so the line names
           the queue and hands off to :meth:`_claim_clause` for the cause;

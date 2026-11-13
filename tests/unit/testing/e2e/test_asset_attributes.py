@@ -24,7 +24,7 @@ import pytest
 
 from application_sdk.testing.e2e._errors import AtlasReadIndeterminateError
 from application_sdk.testing.e2e.base import BaseE2ETest, DAGSpec, FullDAGOutcome
-from application_sdk.testing.e2e.client import (
+from application_sdk.testing.harness.automation_engine import (
     DAGNodeResult,
     DAGNodeStatus,
     DAGRunResult,

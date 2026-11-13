@@ -7,12 +7,6 @@ from collections.abc import Iterator
 import pytest
 
 from application_sdk.testing.e2e.base import FullDAGOutcome
-from application_sdk.testing.e2e.client import (
-    DAGNodeResult,
-    DAGNodeStatus,
-    DAGRunResult,
-    DAGRunStatus,
-)
 from application_sdk.testing.e2e.payload import (
     AgentSpec,
     ConnectionSpec,
@@ -22,6 +16,12 @@ from application_sdk.testing.e2e.payload import (
     build_seed_dag,
 )
 from application_sdk.testing.e2e.sql_app import SQLAppE2ETest
+from application_sdk.testing.harness.automation_engine import (
+    DAGNodeResult,
+    DAGNodeStatus,
+    DAGRunResult,
+    DAGRunStatus,
+)
 
 _CONNECTION = ConnectionSpec(
     name="e2e-ci-mysql-1",
