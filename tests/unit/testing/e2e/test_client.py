@@ -36,15 +36,15 @@ from application_sdk.testing.e2e._errors import (
     NoWorkerOnTaskQueueError,
     RequestDelivery,
 )
-from application_sdk.testing.e2e.client import (
-    AEWorkflowClient,
+from application_sdk.testing.e2e.client import AEWorkflowClient
+from application_sdk.testing.harness._poll import fake_clock
+from application_sdk.testing.harness.automation_engine import (
     DAGNodeResult,
     DAGNodeStatus,
     DAGRunResult,
     DAGRunStatus,
     RunLookup,
 )
-from application_sdk.testing.harness._poll import fake_clock
 from application_sdk.testing.harness.automation_engine.client import (
     _RECONCILE_CLOCK_SKEW_SECONDS,
     _REQUEST_MAX_ATTEMPTS,

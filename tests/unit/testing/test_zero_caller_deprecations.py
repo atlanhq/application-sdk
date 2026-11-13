@@ -23,7 +23,7 @@ import pytest
 _ALIAS_MODULES = {
     "application_sdk.testing.full_dag.client": "application_sdk.testing.e2e.client",
     "application_sdk.testing.full_dag._errors": "application_sdk.testing.e2e._errors",
-    "application_sdk.testing.full_dag.base": "application_sdk.testing.e2e.client",
+    "application_sdk.testing.full_dag.base": "application_sdk.testing.harness.automation_engine",
     "application_sdk.testing.integration": "application_sdk.testing.integration.runner",
 }
 

@@ -33,13 +33,13 @@ from application_sdk.testing.e2e._errors import (
     NoWorkerOnTaskQueueError,
 )
 from application_sdk.testing.e2e.base import BaseE2ETest, FullDAGOutcome, NodeDispatch
-from application_sdk.testing.e2e.client import (
+from application_sdk.testing.harness import atlas as atlas_api
+from application_sdk.testing.harness.automation_engine import (
     DAGNodeResult,
     DAGNodeStatus,
     DAGRunResult,
     DAGRunStatus,
 )
-from application_sdk.testing.harness import atlas as atlas_api
 from application_sdk.testing.harness.expectations import Unreadable
 from application_sdk.testing.harness.outcome import (
     Expired,

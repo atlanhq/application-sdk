@@ -29,7 +29,7 @@ from application_sdk.testing.e2e.base import (
     FullDAGOutcome,
     ResolvedDAG,
 )
-from application_sdk.testing.e2e.client import (
+from application_sdk.testing.harness.automation_engine import (
     DAGNodeResult,
     DAGNodeStatus,
     DAGRunResult,

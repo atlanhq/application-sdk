@@ -8,7 +8,7 @@ while staying strict (== all_nodes_succeeded) when it is.
 from __future__ import annotations
 
 from application_sdk.testing.e2e import BaseE2ETest
-from application_sdk.testing.e2e.client import (
+from application_sdk.testing.harness.automation_engine import (
     DAGNodeResult,
     DAGNodeStatus,
     DAGRunResult,
