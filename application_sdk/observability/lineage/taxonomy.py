@@ -88,7 +88,9 @@ class LineageReason:
 
     Reasons are classes and are never instantiated: everything about a reason
     is fixed per class (a ClassVar), as ADR-0013 does for error codes. Every
-    class declares its own ``code``, so two classes can never share one.
+    class declares its own ``code``. Two classes share a code only when one
+    restates the other: an app subclassing an SDK reason under the same code to
+    change its wording (see :class:`ReasonRegistry`).
 
     Attributes:
         code: Unique, UPPER_SNAKE. Recorded per asset; never a metric label.
@@ -346,10 +348,17 @@ class ReasonRegistry:
                 raise TypeError(f"{reason!r} is not a LineageReason subclass")
             existing = self._by_code.get(reason.code)
             if existing is not None and existing is not reason:
-                raise ValueError(
-                    f"Reason code {reason.code!r} is declared by both "
-                    f"{existing.__name__} and {reason.__name__}"
-                )
+                # An app may restate a reason it inherits (its own customer
+                # wording, say) by subclassing it under the same code. The
+                # category must stay, so counts by category don't move.
+                if not (
+                    issubclass(reason, existing)
+                    and reason.category is existing.category
+                ):
+                    raise ValueError(
+                        f"Reason code {reason.code!r} is declared by both "
+                        f"{existing.__name__} and {reason.__name__}"
+                    )
             self._by_code[reason.code] = reason
 
     def get(self, code: str) -> type[LineageReason] | None:
