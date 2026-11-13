@@ -1,5 +1,39 @@
 # Changelog
 
+## v3.57.0 (November 13, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.56.0...v3.57.0
+
+### Features
+
+- RecordSkipped lets a sync mapper hand a skipped record to skip_record [FND-4963] (#4876) (by @cmgrote in [d26e571](https://github.com/atlanhq/application-sdk/commit/d26e571))
+- serve the API host's config and file routes through obstore on S3, GCS and Azure Blob [FND-4964] (#4877) (by @cmgrote in [6fbed63](https://github.com/atlanhq/application-sdk/commit/6fbed63))
+- publish the worker's activity-slot limit as a gauge [FND-4988] (#4893) (by @TechyMT in [3badf1d](https://github.com/atlanhq/application-sdk/commit/3badf1d))
+
+### Bug Fixes
+
+- log and flag a failing app exit instead of dying on errexit [FND-4893] (#4860) (by @cmgrote in [db3a5ec](https://github.com/atlanhq/application-sdk/commit/db3a5ec))
+- read every typed env var through one tolerant parser so an empty or malformed value no longer crashes import [FND-4891] (#4862) (by @cmgrote in [60580e6](https://github.com/atlanhq/application-sdk/commit/60580e6))
+- serve APPLICATION_MODE lazily so an unrecognised value no longer stops the SDK importing [FND-4890] (#4867) (by @cmgrote in [3db2729](https://github.com/atlanhq/application-sdk/commit/3db2729))
+- deprecate DaprPubSub.subscribe, which never delivers, and the unimplemented binding shapes [FND-4892] (#4861) (by @cmgrote in [ec21c48](https://github.com/atlanhq/application-sdk/commit/ec21c48))
+- remove the retention sweep that never deleted from the object store [FND-4889] (#4868) (by @cmgrote in [dde70f8](https://github.com/atlanhq/application-sdk/commit/dde70f8))
+- confirm a bodiless HEAD 404 with a listing at every site where a miss is exceptional [FND-4896] (#4869) (by @cmgrote in [e5d5bc8](https://github.com/atlanhq/application-sdk/commit/e5d5bc8))
+- deprecate needs_lock, which has no effect in v3, and the Redis clients [FND-4888] (#4863) (by @cmgrote in [8261491](https://github.com/atlanhq/application-sdk/commit/8261491))
+- route ObjectStoreMetricExporter through the shared observability writer [FND-4895] (#4871) (by @cmgrote in [fa5a9d1](https://github.com/atlanhq/application-sdk/commit/fa5a9d1))
+- redact and cap the Temporal failure message at the activity boundary [FND-4894] (#4872) (by @cmgrote in [a4b4c66](https://github.com/atlanhq/application-sdk/commit/a4b4c66))
+- exit with a stack dump when the event loop stalls (#4847) (by @TechyMT in [cf7c78f](https://github.com/atlanhq/application-sdk/commit/cf7c78f))
+- type WorkerTokenRefreshEventData as the strings token_refresh sends, and build the event from it [FND-4897] (#4873) (by @cmgrote in [597a53b](https://github.com/atlanhq/application-sdk/commit/597a53b))
+
+### Chores
+
+- hold pymdown-extensions below 13 until requires-python reaches 3.11.5 (#4875) (by @cmgrote in [c20c5aa](https://github.com/atlanhq/application-sdk/commit/c20c5aa))
+- update dependency pandera to >=0.36.0,<0.37.0 (#4890) (by @renovate[bot] in [b5964bb](https://github.com/atlanhq/application-sdk/commit/b5964bb))
+
+### Other Changes
+
+- test(observability): stop dropped sinks' flushes in AtlanObservability._reset_for_testing [FND-4966] (#4878) (by @cmgrote in [72bf39f](https://github.com/atlanhq/application-sdk/commit/72bf39f))
+
+
 ## v3.56.0 (November 11, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.55.3...v3.56.0
