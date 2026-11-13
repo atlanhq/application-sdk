@@ -10,6 +10,7 @@ threads, no real loops beyond pytest-asyncio's default.
 
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -86,6 +87,33 @@ class TestSyncWrapper:
             "outcome": "failure",
             "error_type": "ValueError",
         }
+
+    def test_failure_is_logged_once(self) -> None:
+        """FND-4913: the error path logged the same failure twice, before and
+        after recording it."""
+        logger, metrics, traces = _mock_components()
+
+        @observability(logger=logger, metrics=metrics, traces=traces)
+        def boom() -> None:
+            raise ValueError("kaput")
+
+        with pytest.raises(ValueError):
+            boom()
+
+        assert [c.args for c in logger.error.call_args_list] == [
+            ("Error in function: %s", "boom")
+        ]
+
+    def test_duration_covers_the_call(self) -> None:
+        logger, metrics, traces = _mock_components()
+
+        @observability(logger=logger, metrics=metrics, traces=traces)
+        def work() -> None:
+            time.sleep(0.02)
+
+        work()
+
+        assert traces.record_trace.call_args.kwargs["duration_ms"] >= 20.0
 
     def test_one_metric_name_and_label_keys_across_functions_and_outcomes(
         self,

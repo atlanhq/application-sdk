@@ -55,8 +55,10 @@ def _running_loop_or_none() -> asyncio.AbstractEventLoop | None:
 
 # --- Path configuration ---
 # Structure: observability/<mode>/<signal>/year=.../hour=.../file.json.gz
-# SDR (ENABLE_ATLAN_UPLOAD=true):     sdr/logs/, sdr/metrics/, sdr/traces/
-# Non-SDR (ENABLE_ATLAN_UPLOAD=false): non-sdr/logs/, non-sdr/metrics/, non-sdr/traces/
+# SDR (ENABLE_ATLAN_UPLOAD=true):     sdr/logs/, sdr/metrics/, sdr/sizing/
+# Non-SDR (ENABLE_ATLAN_UPLOAD=false): non-sdr/logs/, non-sdr/metrics/, non-sdr/sizing/
+# Traces are not written here: the traces adapter keeps its store sink off and
+# emits spans over OTLP only.
 _OBS_MODE = "sdr" if ENABLE_ATLAN_UPLOAD else "non-sdr"
 
 # Map of signal type → local subdirectory (e.g., sdr/logs)

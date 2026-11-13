@@ -1165,6 +1165,8 @@ METRICS_FILE_NAME = os.environ.get("ATLAN_METRICS_FILE_NAME", "metrics.parquet")
 SIZING_BATCH_SIZE = env_int("ATLAN_SIZING_BATCH_SIZE", 500)
 SIZING_FLUSH_INTERVAL_SECONDS = env_int("ATLAN_SIZING_FLUSH_INTERVAL_SECONDS", 60)
 SIZING_FILE_NAME = os.environ.get("ATLAN_SIZING_FILE_NAME", "sizing.parquet")
+#: Signal discriminator for the traces adapter. No traces file is written:
+#: the adapter emits spans over OTLP and keeps its object-store sink off.
 TRACES_FILE_NAME = os.environ.get("ATLAN_TRACES_FILE_NAME", "traces.parquet")
 
 #: Upper bound, in seconds, on stopping the shared observability background

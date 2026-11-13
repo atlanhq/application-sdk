@@ -1,7 +1,7 @@
 import logging
 import threading
 import time
-from typing import Any, ClassVar, Dict, Optional
+from typing import Any, Dict, Optional
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -21,7 +21,6 @@ from application_sdk.constants import (
     OTEL_EXPORTER_TIMEOUT_SECONDS,
     SERVICE_NAME,
 )
-from application_sdk.observability.background_loop import BackgroundTask
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.models import TraceRecord
 from application_sdk.observability.observability import (
@@ -33,8 +32,8 @@ from application_sdk.observability.utils import (
     get_observability_dir,
 )
 
-# Local traces object-store sink tuning. Hardcoded — production does not yet
-# support traces; the local sink is dormant until the trace pipeline lands.
+# Passed to the AtlanObservability base, which this adapter still extends.
+# Unused: the adapter neither buffers nor flushes (see AtlanTracesAdapter).
 _TRACES_BATCH_SIZE = 100
 _TRACES_FLUSH_INTERVAL_SECONDS = 5
 
@@ -149,63 +148,39 @@ def _build_tracer_provider() -> TracerProvider:
 
 
 class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
-    """A traces adapter for Atlan that extends AtlanObservability.
+    """Emit the spans ``@observability`` and app code record, through OpenTelemetry.
 
-    This adapter provides functionality for recording, processing, and exporting
-    distributed traces to various backends including OpenTelemetry and gzip-compressed NDJSON files.
+    A thin span emitter. :meth:`record_trace` turns one finished operation into
+    one OTel span on the process-wide tracer provider (see
+    :func:`setup_tracer_provider`), timed from its real start to its end and
+    parented to whatever span is current at the call site (for example the
+    Temporal activity span from ``TraceInterceptor``). Each record is also
+    written as a ``tracing``-level log line.
 
-    Features:
-    - Distributed tracing with spans and events
-    - OpenTelemetry integration
-    - Periodic trace flushing
-    - Console logging
-    - Gzip-compressed NDJSON file storage
+    Nothing is buffered, written to disk or uploaded. Earlier versions also
+    batched records into gzip NDJSON files under the object store's
+    ``observability/.../traces/`` prefix on a periodic flush task. Nothing read
+    those files, and the flush task started on whatever event loop built the
+    adapter, including a workflow's. The class still extends
+    :class:`AtlanObservability` so existing ``isinstance`` checks and inherited
+    methods keep working, but :meth:`add_record` no longer buffers and the
+    store sink is off for this signal.
+
+    With ``ATLAN_ENABLE_OTLP_TRACES`` off (the default) no span is created.
     """
 
-    _flush_task_started: ClassVar[bool] = False
-    # Kept so ``_reset_for_testing`` can stop the flush: otherwise the next
-    # construction starts a second one beside it on the shared loop.
-    _flush_task: ClassVar[BackgroundTask | None] = None
-
-    @classmethod
-    def _reset_for_testing(cls) -> None:
-        """Reset initialization state for test isolation."""
-        task = cls._flush_task
-        cls._flush_task = None
-        cls._flush_task_started = False
-        if task is not None:
-            task.cancel()
-            task.wait(timeout=5)
-
     def __init__(self):
-        """Initialize the traces adapter with configuration and setup.
-
-        This initialization:
-        - Sets up base observability configuration
-        - Initializes OpenTelemetry traces if enabled
-        - Starts periodic flush task for trace buffering
-        """
+        """Bind to the process-wide tracer provider when OTLP traces are enabled."""
         super().__init__(
             batch_size=_TRACES_BATCH_SIZE,
             flush_interval=_TRACES_FLUSH_INTERVAL_SECONDS,
             data_dir=get_observability_dir(),
             file_name=TRACES_FILE_NAME,
         )
-
-        # Initialize OpenTelemetry traces if enabled
+        self.tracer_provider: Optional[trace.TracerProvider] = None
+        self.tracer: Optional[trace.Tracer] = None
         if ENABLE_OTLP_TRACES:
             self._setup_otel_traces()
-
-        # Start periodic flush task if not already started
-        if not AtlanTracesAdapter._flush_task_started:
-            try:
-                AtlanTracesAdapter._flush_task = self._start_periodic_flush()
-                AtlanTracesAdapter._flush_task_started = True
-            except Exception:
-                # BLDX-1189: switched from root `logging.error` to the SDK
-                # logger here. Three other `logging.*` call sites in this file
-                # still use the root logger; tracked for a follow-up sweep.
-                _module_logger.error("Failed to start traces flush task", exc_info=True)
 
     def _setup_otel_traces(self):
         """Bind the adapter to the process-wide tracer provider.
@@ -223,23 +198,29 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             else None
         )
 
+    def _store_sink_enabled(self) -> bool:
+        """Traces never go to the object store; spans leave through OTLP only."""
+        return False
+
+    def add_record(self, record: TraceRecord) -> None:
+        """Export *record* at once. Nothing is buffered for a later flush."""
+        try:
+            self.export_record(record)
+        except Exception:
+            logging.error("Error adding record", exc_info=True)
+
     def process_record(self, record: Any) -> Dict[str, Any]:
-        """Process a trace record into a standardized dictionary format.
+        """Convert a trace record into a plain dictionary.
 
         Args:
             record (Any): Input trace record, can be TraceRecord or dict
 
         Returns:
-            Dict[str, Any]: Standardized dictionary representation of the trace
-
-        This method ensures traces are properly formatted for storage in gzip-compressed NDJSON
-        (the traces.parquet env-var name is a signal-type discriminator, not an on-disk format — see
-        constants.py TRACES_FILE_NAME).
-        It converts the TraceRecord into a dictionary with all necessary fields.
+            Dict[str, Any]: The record's fields, or *record* unchanged when it
+            is not a ``TraceRecord``.
         """
         if isinstance(record, TraceRecord):
-            # Convert the record to a dictionary with all fields
-            trace_dict = {
+            return {
                 "timestamp": record.timestamp,
                 "trace_id": record.trace_id,
                 "span_id": record.span_id,
@@ -252,28 +233,21 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                 "events": record.events,
                 "duration_ms": record.duration_ms,
             }
-            return trace_dict
         return record
 
     def export_record(self, record: Any) -> None:
-        """Export a trace record to external systems.
+        """Send a trace record to OpenTelemetry (when enabled) and the log.
 
         Args:
-            record (Any): Trace record to export
-
-        This method:
-        - Validates the record is a TraceRecord
-        - Sends to OpenTelemetry if enabled
-        - Logs to console
+            record (Any): Trace record to export; anything that is not a
+                ``TraceRecord`` is ignored.
         """
         if not isinstance(record, TraceRecord):
             return
 
-        # Send to OpenTelemetry if enabled
         if ENABLE_OTLP_TRACES:
             self._send_to_otel(record)
 
-        # Log to console
         self._log_to_console(record)
 
     def _str_to_span_kind(self, kind: str) -> SpanKind:
@@ -308,35 +282,31 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         return int(timestamp * 1_000_000_000)  # Convert seconds to nanoseconds
 
     def _send_to_otel(self, trace_record: TraceRecord):
-        """Send trace to OpenTelemetry.
+        """Emit *trace_record* as one finished OpenTelemetry span.
+
+        The record describes an operation that has already finished: it ended
+        at ``timestamp`` and took ``duration_ms``. The span is given exactly
+        that start and end, and its parent is the span current at the call
+        site. Errors are logged and swallowed, so tracing never breaks the
+        traced code.
 
         Args:
             trace_record (TraceRecord): Trace record to send
-
-        This method:
-        - Creates a span with trace data
-        - Sets span status and attributes
-        - Adds events if present
-        - Handles errors gracefully
-
-        Raises:
-            Exception: If sending fails, logs error and continues
         """
         if self.tracer is None:
             # Setup failed and left the adapter without a tracer; skip silently
             # rather than AttributeError on every emit.
             return
         try:
-            # Convert string kind to SpanKind enum
-            span_kind = self._str_to_span_kind(trace_record.kind)
-
-            # Create a span with the trace record data
-            with self.tracer.start_as_current_span(
+            end_ns = self._timestamp_to_nanos(trace_record.timestamp)
+            start_ns = end_ns - int(trace_record.duration_ms * 1_000_000)
+            span = self.tracer.start_span(
                 name=trace_record.name,
-                kind=span_kind,  # Use converted SpanKind enum
+                kind=self._str_to_span_kind(trace_record.kind),
                 attributes=trace_record.attributes,
-            ) as span:
-                # Set span status
+                start_time=start_ns,
+            )
+            try:
                 if trace_record.status_code == "ERROR":
                     span.set_status(
                         trace.Status(
@@ -346,35 +316,28 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                 else:
                     span.set_status(trace.Status(trace.StatusCode.OK))
 
-                # Add events if any
-                if trace_record.events:
-                    for event in trace_record.events:
-                        # Convert timestamp to nanoseconds
-                        timestamp = event.get("timestamp", time.time())
-                        timestamp_nanos = self._timestamp_to_nanos(timestamp)
-
-                        span.add_event(
-                            name=event.get("name", ""),
-                            attributes=event.get("attributes", {}),
-                            timestamp=timestamp_nanos,
-                        )
+                for event in trace_record.events or []:
+                    span.add_event(
+                        name=event.get("name", ""),
+                        attributes=event.get("attributes", {}),
+                        timestamp=self._timestamp_to_nanos(
+                            event.get("timestamp", trace_record.timestamp)
+                        ),
+                    )
+            finally:
+                span.end(end_time=end_ns)
 
         except Exception:
             logging.error("Error sending trace to OpenTelemetry", exc_info=True)
 
     def _log_to_console(self, trace_record: TraceRecord):
-        """Log trace to console using the logger.
+        """Write *trace_record* as one ``tracing``-level log line.
+
+        Includes the trace and span IDs, status, attributes and duration.
+        Errors are logged and swallowed.
 
         Args:
             trace_record (TraceRecord): Trace record to log
-
-        This method:
-        - Formats trace information into a readable string
-        - Includes trace ID, span ID, status, and duration
-        - Uses the tracing-specific logger level
-
-        Raises:
-            Exception: If logging fails, logs error and continues
         """
         try:
             log_message = (
@@ -407,25 +370,26 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         events: Optional[list[Dict[str, Any]]] = None,
         duration_ms: Optional[float] = None,
     ) -> None:
-        """Record a trace directly without context manager.
+        """Record one operation that has just finished.
+
+        Call it as the operation ends: the span ends now and starts
+        ``duration_ms`` earlier. ``trace_id``, ``span_id`` and
+        ``parent_span_id`` are caller labels carried on the record and the log
+        line; the OTel span gets its IDs and parent from the active context.
 
         Args:
             name (str): Name of the trace
-            trace_id (str): Unique identifier for the trace
-            span_id (str): Unique identifier for this span
+            trace_id (str): Caller-chosen trace label
+            span_id (str): Caller-chosen span label
             kind (str): Type of span
-            status_code (str): Status code
+            status_code (str): ``"OK"`` or ``"ERROR"``
             attributes (Dict[str, Any]): Trace attributes
-            parent_span_id (Optional[str]): Parent span ID
+            parent_span_id (Optional[str]): Caller-chosen parent label
             status_message (Optional[str]): Status message
             events (Optional[list[Dict[str, Any]]]): Trace events
-            duration_ms (Optional[float]): Duration in milliseconds
-
-        This method directly records a trace without using a context manager.
-        It's a simpler alternative to the context manager pattern.
+            duration_ms (Optional[float]): How long the operation took
         """
         try:
-            # Create trace record
             trace_record = TraceRecord(
                 timestamp=time.time(),
                 trace_id=trace_id,
@@ -439,8 +403,6 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                 events=events,
                 duration_ms=duration_ms or 0.0,
             )
-
-            # Add record using base class method
             self.add_record(trace_record)
 
         except Exception:

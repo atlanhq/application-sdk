@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.56.0
-source-sha:    25b9b4e82ddf78f9fbb3a9555bd4e900c9d01170
-source-date:   2026-11-12T13:07:25Z
+sdk-version:   3.57.0
+source-sha:    07c412493372ebe888d357d7d5469d45fefd5d83
+source-date:   2026-11-13T12:05:43Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -3107,7 +3107,7 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 
 - **Import:** `from application_sdk.observability.traces_adaptor import AtlanTracesAdapter`
 - **Signature:** `class AtlanTracesAdapter()`
-- **Summary:** A traces adapter for Atlan that extends AtlanObservability.
+- **Summary:** Emit the spans ``@observability`` and app code record, through OpenTelemetry.
 - **Defined in:** `application_sdk/observability/traces_adaptor.py`
 
 #### `CorrelationContext`
