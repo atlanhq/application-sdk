@@ -10,6 +10,7 @@ threads, no real loops beyond pytest-asyncio's default.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from unittest.mock import MagicMock, patch
 
@@ -112,6 +113,17 @@ class TestSyncWrapper:
             time.sleep(0.02)
 
         work()
+
+        assert traces.record_trace.call_args.kwargs["duration_ms"] >= 20.0
+
+    async def test_async_duration_covers_the_awaited_body(self) -> None:
+        logger, metrics, traces = _mock_components()
+
+        @observability(logger=logger, metrics=metrics, traces=traces)
+        async def work() -> None:
+            await asyncio.sleep(0.02)
+
+        await work()
 
         assert traces.record_trace.call_args.kwargs["duration_ms"] >= 20.0
 

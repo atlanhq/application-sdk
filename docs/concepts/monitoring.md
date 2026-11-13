@@ -790,7 +790,7 @@ cid = ctx.correlation_id if ctx else None  # str (empty when unset) or None when
 
 ## Observability Store Sink
 
-By default, logs and metrics are also written to gzip-compressed NDJSON files (`.json.gz`) in the object store under `artifacts/apps/observability/{sdr|non-sdr}/{logs|metrics|sizing}/year=YYYY/month=MM/day=DD/hour=HH/`. Traces are not: they go over OTLP only. `sdr` is used when `ENABLE_ATLAN_UPLOAD` is true, `non-sdr` otherwise. Each file name carries the deployment and app names. This enables historical querying even when the live pipelines (OTLP for logs/traces, Prometheus scrape / Pushgateway push for metrics) are unavailable.
+By default, logs and metrics are also written to gzip-compressed NDJSON files (`.json.gz`) in the object store under `artifacts/apps/observability/{sdr|non-sdr}/{logs|metrics|sizing}/year=YYYY/month=MM/day=DD/hour=HH/`. Traces are never written to the object store; they leave as spans through the tracer provider (OTLP, plus stdout when the development-only `ATLAN_ENABLE_TRACES_CONSOLE` is on). `sdr` is used when `ENABLE_ATLAN_UPLOAD` is true, `non-sdr` otherwise. Each file name carries the deployment and app names. This enables historical querying even when the live pipelines (OTLP for logs/traces, Prometheus scrape / Pushgateway push for metrics) are unavailable.
 
 Control with:
 
