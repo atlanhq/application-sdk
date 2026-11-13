@@ -171,3 +171,81 @@ def test_shallow_clone_still_fetches_one_commit_deep(
     assert "--depth=1" in fetches[0]
     assert fetches[0][-1] == base
     assert _is_shallow(clone)
+
+
+@pytest.mark.parametrize(
+    "probe",
+    [
+        subprocess.CompletedProcess([], 124, "", "timed out"),
+        subprocess.CompletedProcess([], 128, "", "fatal: not a git repository"),
+        subprocess.CompletedProcess([], 0, "", ""),
+    ],
+    ids=["timeout", "error", "no-answer"],
+)
+def test_pyright_unknown_depth_fetches_nothing_and_fails_closed(
+    tmp_path: Path, probe: subprocess.CompletedProcess[str]
+) -> None:
+    """Neither fetch is safe when git cannot say how deep the checkout is: a
+    plain fetch pulls a shallow CI checkout's whole history, a shallow one
+    re-shallows a full clone. So no fetch, and the ratchet fails closed."""
+    origin, _ = _origin(tmp_path)
+    clone = _clone(origin, tmp_path / "clone", "--depth=1")
+    base = _later_base(origin)
+    ran: list[list[str]] = []
+
+    def git(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        ran.append(["git", *cmd])
+        if list(cmd) == ["rev-parse", "--is-shallow-repository"]:
+            return probe
+        return subprocess.run(
+            ["git", *cmd], cwd=clone, capture_output=True, text=True, check=False
+        )
+
+    with pytest.raises(cpb.BaseRevisionError, match="shallow"):
+        cpb.read_base_baseline(base, BASELINE_REL, git)
+    assert _fetches(ran) == []
+
+
+def test_uv_lock_unknown_depth_fetches_nothing_and_checks_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin, _ = _origin(tmp_path)
+    clone = _clone(origin, tmp_path / "clone", "--depth=1")
+    base = _later_base(origin)
+    monkeypatch.chdir(clone)
+    ran: list[list[str]] = []
+
+    def quiet(cmd: Sequence[str]) -> int:
+        ran.append(list(cmd))
+        return subprocess.run(list(cmd), check=False, capture_output=True).returncode
+
+    assert check_uv_lock.lock_changed(base, quiet, lambda: None) is True
+    assert _fetches(ran) == []
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        (subprocess.CompletedProcess([], 0, "true\n", ""), True),
+        (subprocess.CompletedProcess([], 0, "false\n", ""), False),
+        (subprocess.CompletedProcess([], 128, "", "fatal"), None),
+        (subprocess.CompletedProcess([], 0, "", ""), None),
+    ],
+)
+def test_uv_lock_shallow_probe_answers_only_what_git_said(
+    monkeypatch: pytest.MonkeyPatch,
+    result: subprocess.CompletedProcess[str],
+    expected: bool | None,
+) -> None:
+    monkeypatch.setattr(check_uv_lock.subprocess, "run", lambda *_a, **_k: result)
+    assert check_uv_lock._is_shallow() is expected
+
+
+def test_uv_lock_stalled_shallow_probe_is_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def stall(*_a: object, **_k: object) -> None:
+        raise subprocess.TimeoutExpired(["git"], check_uv_lock.FETCH_TIMEOUT_S)
+
+    monkeypatch.setattr(check_uv_lock.subprocess, "run", stall)
+    assert check_uv_lock._is_shallow() is None

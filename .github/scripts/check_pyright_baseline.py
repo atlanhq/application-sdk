@@ -302,9 +302,20 @@ def _fetch_depth(git: Runner) -> list[str]:
     ``fetch --depth=1 <sha>`` in a full clone records ``<sha>`` in
     ``.git/shallow`` as a history cut-off, which every worktree of the clone
     shares (FND-4987). Only a clone that is already shallow may be kept so.
+
+    Fails closed: when git cannot say, neither fetch is safe (one may
+    re-shallow a full clone, the other may pull a shallow CI checkout's whole
+    history), so this raises instead of guessing.
     """
-    shallow = git(["rev-parse", "--is-shallow-repository"])
-    return ["--depth=1"] if shallow.stdout.strip() == "true" else []
+    probe = git(["rev-parse", "--is-shallow-repository"])
+    state = probe.stdout.strip() if probe.returncode == 0 else ""
+    if state == "true":
+        return ["--depth=1"]
+    if state == "false":
+        return []
+    raise BaseRevisionError(
+        f"could not tell whether this checkout is shallow: {probe.stderr.strip()}"
+    )
 
 
 def read_base_baseline(
