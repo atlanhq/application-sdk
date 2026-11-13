@@ -28,6 +28,7 @@ git's own; git_auth.py itself is executed in test_git_auth.py.
 
 from __future__ import annotations
 
+import copy
 import re
 import sys
 from pathlib import Path
@@ -233,6 +234,24 @@ def test_action_without_its_guard_is_caught() -> None:
     )
     with pytest.raises(AssertionError):
         assert_action_shape(spec)
+    # Mentions `exit 1` and the secrets, but exits 0 (lens F-23fb19).
+    spec = load_action()
+    spec["runs"]["steps"][2]["run"] = (
+        'echo "::error::exit 1: pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY"\n'
+    )
+    with pytest.raises(AssertionError, match="exits 0"):
+        assert_action_shape(spec)
+
+
+def test_inline_guard_that_succeeds_is_caught() -> None:
+    """Red-green: an inline guard that echoes but exits 0 fails the pin."""
+    steps = copy.deepcopy(_steps("conformance-reusable.yaml", "suite"))
+    at = [s.get("id") for s in steps].index(MINT_ID)
+    steps[at + 1]["run"] = steps[at + 1]["run"].replace("exit 1", "echo exit 1")
+    with pytest.raises(AssertionError, match="exits 0"):
+        assert_inline_scoped_mint(
+            steps, mint_id=MINT_ID, repos_id=REPOS_ID, cond="inputs.private-git-deps"
+        )
 
 
 # ── Who reads the token ───────────────────────────────────────────────────────

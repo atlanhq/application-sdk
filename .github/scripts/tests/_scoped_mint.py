@@ -23,6 +23,8 @@ on ``main`` yet. ``assert_inline_scoped_mint`` pins that copy until it moves.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +73,27 @@ def _app_checked_out_before(before: list[Step], project_dir: str) -> None:
         and _with(s).get("path", ".") == project_dir
     ]
     assert app, f"no checkout of the app at {project_dir!r} before the mint"
+
+
+def assert_guard_fails(guard: Step) -> None:
+    """Run the guard's shell as the runner would (``bash -e``): it must exit
+    nonzero and name both secrets. Text that merely mentions ``exit 1`` and
+    succeeds would let an unminted token through."""
+    bash = shutil.which("bash")
+    assert bash, "bash is needed to execute the guard"
+    shell = guard.get("shell", "bash")
+    assert shell == "bash", f"guard runs under {shell!r}, not bash"
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-eo", "pipefail", "-c", guard["run"]],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode != 0, "the guard exits 0: a failed mint passes"
+    output = result.stdout + result.stderr
+    assert "::error" in output
+    assert "FLEET_APP_ID" in output and "FLEET_APP_PRIVATE_KEY" in output
 
 
 def calls(steps: list[Step]) -> list[Step]:
@@ -147,8 +170,7 @@ def assert_action_shape(spec: dict[str, Any]) -> None:
         "steps.git-deps-repos.outputs.repositories != '' && "
         "steps.git-deps-token.outputs.token == ''"
     )
-    assert "exit 1" in guard["run"]
-    assert "FLEET_APP_ID" in guard["run"] and "FLEET_APP_PRIVATE_KEY" in guard["run"]
+    assert_guard_fails(guard)
 
     outputs = spec["outputs"]
     assert outputs["token"]["value"] == "${{ steps.git-deps-token.outputs.token }}"
@@ -211,6 +233,5 @@ def assert_inline_scoped_mint(
     assert guard.get("if") == (
         f"{cond} && {repos_ref} != '' && steps.{mint_id}.outputs.token == ''"
     ), "the inline mint is not followed by its fail-closed guard"
-    assert "exit 1" in guard["run"]
-    assert "FLEET_APP_ID" in guard["run"] and "FLEET_APP_PRIVATE_KEY" in guard["run"]
+    assert_guard_fails(guard)
     return mint
