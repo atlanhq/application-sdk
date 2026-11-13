@@ -397,9 +397,8 @@ def main():
     # check reads the version on the target branch rather than testing for a
     # tag. Must run before pyproject.toml is touched.
     #
-    # Callers gate their changelog and commit steps on this output. A caller
-    # pinned to an older sdk_scripts_ref never sets it, and an unset output
-    # reads as empty, so those steps simply run as they always did.
+    # Callers gate their changelog and commit steps on this output; an unset
+    # output reads as empty, so those steps run.
     skip, remote_version = release_guard.already_released(
         PYPROJECT, new_version, branch=current_branch
     )

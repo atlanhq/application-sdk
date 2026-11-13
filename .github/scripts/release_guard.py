@@ -98,9 +98,9 @@ TRIPLE_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 # Environment variable through which the workflows hand the opener scripts the
 # commit the closed PR produced (``github.event.pull_request.merge_commit_sha``).
-# An env var rather than a CLI flag so that an app repo pinned to an older
-# ``sdk_scripts_ref`` — whose release.py does not know about it — keeps working
-# unchanged when it calls the current reusable workflow.
+# An env var rather than a CLI flag: it was added while callers could still pin
+# an older ``sdk_scripts_ref`` whose release.py did not know about it. That input
+# is ignored since FND-4905 (scripts come from ``main``).
 MERGE_COMMIT_ENV = "PR_MERGE_COMMIT_SHA"
 
 

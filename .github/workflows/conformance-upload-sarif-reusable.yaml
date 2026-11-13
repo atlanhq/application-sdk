@@ -52,10 +52,9 @@ on:
            {"slug": "optimizations", "name": "Upload Optimizations SARIF"}]
       sdk_ref:
         description: >-
-          Ref of atlanhq/application-sdk to read the availability probe from.
-          An explicit input because `github.job_workflow_sha` renders empty for
-          a reusable called from another repository — there is no context that
-          reports "the ref this reusable was called at", so it is passed.
+          Deprecated and ignored (FND-4905). The availability probe is read
+          from main, like the @main this reusable is called at. Still
+          declared so callers that pass it keep validating.
         type: string
         required: false
         default: "main"
@@ -116,7 +115,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: ${{ inputs.sdk_ref }}
+          ref: main
           persist-credentials: false
           sparse-checkout: .github/scripts/probe_code_scanning.py
           sparse-checkout-cone-mode: false

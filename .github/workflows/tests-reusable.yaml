@@ -3520,6 +3520,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
+          # sdk-checkout-ref-exempt: set by this repo's own cross-repo dispatch so an SDK PR tests its own callback scripts
           ref: ${{ inputs.application-sdk-ref }}
           token: ${{ steps.app-token.outputs.token }}
           sparse-checkout: .github/scripts

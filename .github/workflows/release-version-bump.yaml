@@ -37,7 +37,7 @@ on:
         type: string
         default: "release"
       sdk_scripts_ref:
-        description: "Ref of atlanhq/application-sdk to pull helper scripts from (default: main)"
+        description: "Deprecated and ignored (FND-4905): the SDK helper scripts are always checked out from main, like the @main this reusable is called at, so a caller cannot pin them to another ref. Still declared so callers that pass it keep validating."
         required: false
         type: string
         default: "main"
@@ -127,7 +127,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: ${{ inputs.sdk_scripts_ref }}
+          ref: main
           path: .sdk-scripts
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
@@ -210,8 +210,7 @@ jobs:
           # skip=true when it is not on origin/<target_branch>: GitHub fires the
           # caller for a stacked PR merging into its *parent feature branch*
           # exactly as if it had merged into the target, and only ancestry tells
-          # the two apart (application-sdk#3794). A release.py pinned to an older
-          # sdk_scripts_ref ignores the variable and behaves as before.
+          # the two apart (application-sdk#3794).
           PR_MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
           python3 -m venv /tmp/bump-venv
@@ -228,8 +227,7 @@ jobs:
 
       # The re-lock is a no-op when the version did not change. Two steps, so
       # an app without private git deps runs plain `uv lock` exactly as before
-      # and never needs git_auth.py: a caller pinning `sdk_scripts_ref` to a
-      # revision older than that script keeps working.
+      # and never needs git_auth.py.
       - name: Re-lock after the version bump
         if: ${{ !inputs.private_git_auth }}
         run: uv lock
@@ -256,8 +254,7 @@ jobs:
       # again would open a duplicate release PR (application-sdk#3570).
       # Guarding the two mutating steps is enough: the re-lock above is a no-op
       # when the version did not change, and the job then ends green having
-      # done nothing. A caller pinned to an older sdk_scripts_ref never sets
-      # this output, and an unset output is empty, so it behaves as before.
+      # done nothing.
       - name: Generate changelog
         if: steps.bump.outputs.skip != 'true'
         env:
@@ -276,8 +273,8 @@ jobs:
       # The script sets push=false only when the open branch already carries
       # this version and these notes and still merges cleanly; anything it
       # cannot establish resolves to push=true. Skipped when the script is
-      # absent (a caller pinning an older sdk_scripts_ref): the output is then
-      # empty and the push step below runs exactly as before.
+      # absent, so the output is empty and the push step below runs. Scripts
+      # come from main since FND-4905, which always carries it.
       - name: Decide whether the bump branch needs a push
         id: debounce
         if: steps.bump.outputs.skip != 'true' && hashFiles('.sdk-scripts/.github/scripts/release_bump_debounce.py') != ''
@@ -377,7 +374,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: ${{ inputs.sdk_scripts_ref }}
+          ref: main
           path: .sdk-scripts
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false

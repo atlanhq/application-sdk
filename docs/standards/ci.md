@@ -1503,9 +1503,7 @@ because the job name is a required context, and `renovate-auto-approve.yml`,
 
 A `uses:` reusable workflow does **not** bring its own repo's files into the
 caller's checkout. To run an SDK script from a reusable that other repos call,
-sparse-checkout it into a side path and invoke from there — the
-`.sdk-scripts` pattern used by `release-version-bump.yaml` and
-`generated-freshness.yaml`:
+sparse-checkout it into a side path and invoke from there:
 
 ```yaml
 - uses: actions/checkout@<sha>   # consumer repo (the working tree the script acts on)
@@ -1522,38 +1520,66 @@ sparse-checkout it into a side path and invoke from there — the
 The driver runs from the consumer's working directory, so it acts on the
 consumer's files; `.sdk-scripts` only holds SDK code and must never be staged.
 
-### Do not try to derive the ref from `github.job_workflow_sha`
+### The ref is `main` or `job.workflow_sha`, nothing else
 
-`ref: main` above is deliberate and is the default answer. Every consumer pins
-these reusables at `@main`, and several checkouts of this repo pin `main` for a
-stronger reason — they fetch *content* that must reflect `main` whatever ref the
-caller is on (`trivy-container.yaml`'s base allowlist,
-`vuln-reconcile-on-release.yml`'s scan baseline,
-`contract-toolkit-publish.yml`'s published content). Those carry their reasoning
-inline; leave them as they are.
+**Rule:** every `actions/checkout` of `repository: atlanhq/application-sdk` in
+`.github/workflows/` uses one of two refs.
 
-The tempting "improvement" is to derive the ref so the script always matches the
-workflow that resolved it. `${{ github.job_workflow_sha }}` is documented in the
-`github` context as exactly that — the commit of the reusable workflow file the
-caller resolved. **It renders empty.** It is an OIDC token claim, not a usable
-expression value.
+- **`ref: main` is the default.** Every consumer calls these reusables `@main`,
+  so `main` is the SDK version the fleet runs. It has two properties worth
+  keeping:
+  - A re-run picks up a script fix. GitHub re-runs a reusable at the commit it
+    first resolved, so a `job.workflow_sha` checkout re-runs the old script
+    even after the fix merges. That matters most for the release bump and
+    tag-and-release, which run on a PR closing and have no other trigger.
+  - A caller pinned to some other ref of the reusable still gets main's
+    scripts, so a stale pin drifts towards main rather than becoming a
+    self-consistent fork of the SDK's CI.
+- **`ref: ${{ job.workflow_sha }}`** (the commit of the workflow file that
+  defines the job) is for checkouts that must match their own YAML exactly.
+  That means a reusable this repo's own PR CI runs, where a PR has to test its
+  own copy of a driver rather than main's. It
+  also covers the scoped private-dependency token mint's `git_auth.py`. Both
+  were already pinned. actionlint (≤1.7.12) does not model `job.workflow_sha`,
+  so each file that uses it carries the `property "workflow_sha" is not
+  defined` ignore in `.github/actionlint.yaml`.
+
+Ruled out:
+
+- **A caller-supplied ref.** An input that picks the SDK ref is a pinning knob,
+  and pinning is what the fleet is moving away from. `sdk_scripts_ref` (on
+  `commits.yaml`, `release-version-bump.yaml` and `tag-and-release.yaml`) and
+  `sdk_ref` (on `conformance-upload-sarif-reusable.yaml`) are still declared so
+  callers that pass them keep validating, and are ignored (FND-4905). No caller
+  in the fleet passed either.
+- **An omitted ref.** It resolves to `main` today, but the reader cannot tell
+  that was meant.
+- **Any other expression**, above all `github.job_workflow_sha` (below).
+
+A deliberate exception carries `# sdk-checkout-ref-exempt: <why>` inside the
+step and is listed in the guard. The only one is `tests-reusable.yaml`'s
+`report-to-sdk` callback checkout, whose `application-sdk-ref` is set by this
+repo's own cross-repo dispatch so an SDK PR tests its own callback scripts.
+
+`.github/scripts/tests/test_sdk_checkout_ref_pinning.py` enforces all of this.
+
+### Not `github.job_workflow_sha`
+
+`${{ github.job_workflow_sha }}` is documented in the `github` context as the
+commit of the reusable workflow file the caller resolved. **It renders empty.**
+It is an OIDC token claim, not a usable expression value. The property that
+works lives on `job`, not `github`.
 
 The failure is silent and the wrong way round: `actions/checkout` treats an
 empty `ref` as *not supplied* and takes the default branch, so the step goes
 **green having fetched a different commit's script than the workflow the caller
-pinned** — the wrong version of every code path, with nothing red to show for
-it. FND-372 hit this; it only surfaced because the script did not exist on
+pinned**. FND-372 hit this; it only surfaced because the script did not exist on
 `main` yet, so the *next* step died on a missing file.
 
 Generalising: never let a `with:` value that must not be blank come from an
-expression that can evaluate to empty. Prefer a shape where "unset" cannot be
-expressed over a guard that checks for it after the fact — a declared input with
-a default, or a literal.
-
-**When verifying any change to a workflow like this, read the checkout step's
-logged `ref:` rather than concluding from a green tick.** A step that fetched the
-wrong ref still passes; it is the next step that fails, and only if what it
-wanted happens to be absent from the fallback.
+expression that can evaluate to empty. **When verifying a change to a workflow
+like this, read the checkout step's logged `ref:` rather than concluding from a
+green tick.**
 
 ## Self-references are `@main`
 
