@@ -19,6 +19,21 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
+# Explicit so ``from ... import *`` still yields ``file_converter_registry``,
+# which is now served by ``__getattr__`` rather than bound as a module global.
+__all__ = [
+    "ConvertFile",
+    "FileType",
+    "convert_data_files",
+    "convert_json_to_parquet",
+    "convert_parquet_to_json",
+    "enum_register",
+    "file_converter_registry",  # noqa: F822 — served by __getattr__ (PEP 562)
+    # Listed only because the Symbol Removal Check reads __all__ as the
+    # module's surface and this SDK function was importable from here before.
+    "get_logger",
+]
+
 
 def _enum_register():
     registry = {}
@@ -126,9 +141,14 @@ async def convert_data_files(
             FileConverterNotFoundError,
         )
 
-        raise FileConverterNotFoundError(
-            message=f"No converter found for file type: {convert_file}"
-        )
+        # The caller was already warned that this function is deprecated; do
+        # not warn a second time for the (equally deprecated) error it raises.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            error = FileConverterNotFoundError(
+                message=f"No converter found for file type: {convert_file}"
+            )
+        raise error
     converted_files = []
     for file in input_file_paths:
         converted_file = converter_func(file)

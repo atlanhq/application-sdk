@@ -458,3 +458,26 @@ class TestDeprecations:
     def test_converter_not_found_error_warns(self):
         with pytest.warns(DeprecationWarning, match="UnimplementedError"):
             FileConverterNotFoundError()
+
+    async def test_converter_not_found_warns_once(self):
+        """The failure path warns for the function only, not also for the error it raises."""
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with patch(
+                "application_sdk.common.file_converter._file_converter_registry"
+            ) as reg:
+                reg.registry.get.return_value = None
+                with pytest.raises(FileConverterNotFoundError):
+                    await convert_data_files(["/p/in.json"], FileType.PARQUET)
+        messages = [str(w.message) for w in caught if w.category is DeprecationWarning]
+        assert len(messages) == 1, messages
+        assert messages[0].startswith("convert_data_files is deprecated")
+
+    def test_star_import_still_yields_the_registry(self):
+        namespace: dict[str, object] = {}
+        with pytest.warns(DeprecationWarning, match="file_converter_registry"):
+            exec("from application_sdk.common.file_converter import *", namespace)
+        assert namespace["file_converter_registry"] is _file_converter_registry
+        assert "convert_data_files" in namespace
