@@ -1,0 +1,172 @@
+# Composite: the one Trivy image-scan recipe (FND-4904).
+#
+# Installs the pinned Trivy CLI with the install-only aquasecurity/setup-trivy
+# action, restores the vuln DB, scans one image to JSON, prints it as a table,
+# and optionally writes SARIF and fails on fixable findings.
+#
+# Why setup-trivy and never aquasecurity/trivy-action: the pinned trivy-action
+# release bundles an older Trivy that logs
+#   WARN [applier] Some OS packages were skipped due to mismatched PURL
+#   namespace pkg_count=159 detected_os="chainguard"
+# and then reports 0 OS findings on Chainguard/Wolfi images, which is what
+# application-sdk's own Dockerfile builds from. The repo used both engines, so
+# the SDK's own PR gate and release scan ran the one that misses OS findings.
+# test_trivy_image_scan.py now fails on any trivy-action reference.
+#
+# Callers:
+#   - sdk-trivy-scan            (hourly scan + release reconcile)
+#   - secure-build-push-apps    (PR base image + release build)
+# Both are only ever called from this repo's own workflows, after a checkout of
+# this repo, so they reach this composite by its `./` path and run the PR's
+# copy of it.
+#
+# Not callers, because they run in OTHER repos: the trivy-container composite
+# (called by the deprecated trivy-container.yaml from connector repos) and the
+# build-and-scan.yaml reusable. Inside a consumer's job `./.github/actions/...`
+# names the consumer's tree, and `atlanhq/application-sdk/...@main` cannot
+# resolve a composite that only exists on this PR's branch. They therefore
+# carry the same recipe inline, and test_trivy_image_scan.py holds their
+# setup-trivy SHA and CLI version to this file's.
+#
+# Every `run:` block below is straight-line. Optional behaviour is gated by a
+# step-level `if:` (docs/standards/ci.md).
+
+name: Trivy image scan
+description: >-
+  Scan a container image with the pinned Trivy CLI. Writes a JSON report,
+  prints it as a table, optionally writes SARIF, and optionally fails on
+  findings that have a fix.
+
+inputs:
+  image-ref:
+    description: Image to scan (a tag in the local Docker daemon, or a registry reference).
+    required: true
+  trivy-version:
+    # THE Trivy CLI pin for this repo. trivy-container and build-and-scan.yaml
+    # repeat it and test_trivy_image_scan.py fails when they differ. Bump it
+    # deliberately: results drift with Trivy's DB schema and detection logic,
+    # which is why Renovate's aquasecurity/trivy rule is disabled.
+    description: Trivy CLI version.
+    required: false
+    default: v0.70.0
+  severity:
+    description: Comma-separated severities included in the JSON report.
+    required: false
+    default: CRITICAL,HIGH
+  ignore-unfixed:
+    description: "'true' to leave findings without a fixed version out of the JSON report."
+    required: false
+    default: 'false'
+  skip-files:
+    description: Comma-separated files or directories to skip, in the report and the gate.
+    required: false
+    default: ''
+  output:
+    description: Path of the JSON report.
+    required: false
+    default: trivy-image-results.json
+  sarif-output:
+    description: Path of a SARIF copy of the JSON report. Empty skips it.
+    required: false
+    default: ''
+  fail-severity:
+    description: >-
+      Comma-separated severities that fail the step when a finding at one of
+      them has a fix available. Empty (the default) never fails on findings.
+    required: false
+    default: ''
+
+outputs:
+  results-file:
+    description: Path of the JSON report.
+    value: ${{ inputs.output }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Trivy CLI
+      uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+      with:
+        version: ${{ inputs.trivy-version }}
+        cache: true
+
+    # setup-trivy's `cache` covers the binary only, so without this every scan
+    # pulls the vuln DB, and the anonymous registries answer a burst of pulls
+    # with TOOMANYREQUESTS. A stale restored DB is safe: Trivy checks its
+    # NextUpdate and downloads a fresh one. Same day-keyed scheme as
+    # build-and-scan.yaml.
+    - name: Get date for the Trivy DB cache key
+      id: trivy-db-date
+      shell: bash
+      run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Trivy DB cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cache/trivy/db
+          ~/.cache/trivy/java-db
+        key: trivy-db-${{ runner.os }}-${{ steps.trivy-db-date.outputs.date }}
+        restore-keys: trivy-db-${{ runner.os }}-
+
+    # Inputs travel through `env:`, never `${{ }}` in the script body. The DB
+    # repositories are an ordered fallback list: Trivy moves to the next on a
+    # temporary error, a 429 included. TRIVY_SKIP_FILES is read by Trivy itself
+    # and split on commas; empty means none.
+    - name: Trivy image scan (JSON)
+      shell: bash
+      env:
+        TRIVY_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2
+        TRIVY_JAVA_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-java-db:1,ghcr.io/aquasecurity/trivy-java-db:1,public.ecr.aws/aquasecurity/trivy-java-db:1
+        TRIVY_SKIP_FILES: ${{ inputs.skip-files }}
+        IMAGE: ${{ inputs.image-ref }}
+        SEVERITY: ${{ inputs.severity }}
+        IGNORE_UNFIXED: ${{ inputs.ignore-unfixed }}
+        OUTPUT: ${{ inputs.output }}
+      run: |
+        trivy image \
+          --scanners vuln \
+          --severity "$SEVERITY" \
+          --ignore-unfixed="$IGNORE_UNFIXED" \
+          --format json \
+          --output "$OUTPUT" \
+          "$IMAGE"
+
+    # The same findings, readable in the job log. `convert` re-renders the
+    # JSON report; it does not scan again. `--scanners vuln` is needed only to
+    # build the summary table's columns, since convert enables no scanners.
+    - name: Show Trivy findings
+      shell: bash
+      env:
+        OUTPUT: ${{ inputs.output }}
+      run: trivy convert --scanners vuln --format table "$OUTPUT"
+
+    - name: Write SARIF
+      if: inputs.sarif-output != ''
+      shell: bash
+      env:
+        OUTPUT: ${{ inputs.output }}
+        SARIF: ${{ inputs.sarif-output }}
+      run: trivy convert --format sarif --output "$SARIF" "$OUTPUT"
+
+    # A second scan rather than a `convert` of the report: `trivy convert` has
+    # no --ignore-unfixed, and the report may include unfixed findings on
+    # purpose (callers that ticket them). The image layers are cached by the
+    # first scan, so this costs the vulnerability match only.
+    - name: Fail on fixable findings
+      if: inputs.fail-severity != ''
+      shell: bash
+      env:
+        TRIVY_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2
+        TRIVY_JAVA_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-java-db:1,ghcr.io/aquasecurity/trivy-java-db:1,public.ecr.aws/aquasecurity/trivy-java-db:1
+        TRIVY_SKIP_FILES: ${{ inputs.skip-files }}
+        IMAGE: ${{ inputs.image-ref }}
+        FAIL_SEVERITY: ${{ inputs.fail-severity }}
+      run: |
+        trivy image \
+          --scanners vuln \
+          --severity "$FAIL_SEVERITY" \
+          --ignore-unfixed \
+          --exit-code 1 \
+          --format table \
+          "$IMAGE"
