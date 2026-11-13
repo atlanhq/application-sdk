@@ -696,3 +696,45 @@ class MyHandler(Handler):
         results = check_file(path)
         format_warnings = [r for r in results if r.rule == "response-format-change"]
         assert len(format_warnings) == 2  # one for each method
+
+
+# ---------------------------------------------------------------------------
+# Runs on the stdlib alone
+# ---------------------------------------------------------------------------
+
+_BLOCK_NON_STDLIB = """
+import sys
+
+class _Block:
+    def find_spec(self, name, path=None, target=None):
+        if name.split(".")[0] in {"application_sdk", "libcst", "orjson", "conformance"}:
+            raise ImportError(f"blocked: {name}")
+        return None
+
+sys.meta_path.insert(0, _Block())
+from tools.migrate_v3.check_migration import main
+sys.exit(main(["--no-color", sys.argv[1]]))
+"""
+
+
+def test_runs_without_the_sdk_installed(tmp_path: Path) -> None:
+    """certify runs the checker against an app; it must not need the SDK
+    (or the tool's libcst half) importable to do so (FND-4675). A v2 import
+    still fails, so the run below checked something."""
+    import subprocess
+    import sys
+
+    _write(
+        tmp_path, "app.py", "from application_sdk.workflows import WorkflowInterface\n"
+    )
+    repo_root = Path(__file__).resolve().parents[3]
+    proc = subprocess.run(
+        [sys.executable, "-c", _BLOCK_NON_STDLIB, str(tmp_path)],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert "blocked" not in proc.stderr, proc.stderr
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "no-deprecated-imports" in proc.stdout

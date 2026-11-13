@@ -31,6 +31,7 @@ import libcst as cst
 import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
+from tools.migrate_v3 import HANDLER_BASE_NAMES, SDK_APP_BASE_NAMES
 from tools.migrate_v3.check_migration import _is_test_path
 from tools.migrate_v3.contract_mapping import _CONTRACT_TABLE
 from tools.migrate_v3.fingerprint import fingerprint_connector
@@ -44,20 +45,6 @@ logger = get_logger(__name__)
 # All template method names from the contract table (A3/A4/A5 know these)
 _TEMPLATE_METHODS: frozenset[str] = frozenset(m for (_, m) in _CONTRACT_TABLE)
 
-# Handler base class names (exact match)
-_HANDLER_BASES: frozenset[str] = frozenset(
-    {"BaseHandler", "Handler", "DefaultHandler", "BaseSQLHandler", "HandlerInterface"}
-)
-
-# v3 App base classes — connector may already be migrated
-_V3_APP_BASES: frozenset[str] = frozenset(
-    {
-        "App",
-        "SqlMetadataExtractor",
-        "IncrementalSqlMetadataExtractor",
-        "SqlQueryExtractor",
-    }
-)
 
 # Infrastructure usage regex patterns (text-based scan)
 _INFRA_PATTERNS: dict[str, re.Pattern[str]] = {
@@ -147,9 +134,9 @@ def _extract_base_name(expr: cst.BaseExpression) -> str | None:
 
 def _determine_role(bases: list[str]) -> str:
     for base in bases:
-        if base in _HANDLER_BASES or base.endswith("Handler"):
+        if base in HANDLER_BASE_NAMES or base.endswith("Handler"):
             return "handler"
-        if base in _V3_APP_BASES or base.endswith(("Extractor", "App")):
+        if base in SDK_APP_BASE_NAMES or base.endswith(("Extractor", "App")):
             return "app"
         if "Workflow" in base:
             return "workflow"
