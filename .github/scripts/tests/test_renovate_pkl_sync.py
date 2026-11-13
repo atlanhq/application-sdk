@@ -999,6 +999,8 @@ def test_file_filters_match_the_renovate_preset() -> None:
         r
         for r in preset["packageRules"]
         if r.get("matchDepNames") == ["app-contract-toolkit"]
+        # The major-disable rule shares the depName (FND-4903) and sets no tasks.
+        and "postUpgradeTasks" in r
     ]
     assert len(rules) == 1
     assert rules[0]["postUpgradeTasks"]["fileFilters"] == mod.renovate_file_filters()

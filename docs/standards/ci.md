@@ -1325,7 +1325,12 @@ action runs inside a workflow that holds the org token, so a compromised release
 reaches a credential on its first run. A library reaches a test environment
 first. Action majors are also not auto-merged: a human reviews and merges the
 `renovate/major-github-actions` PR. Minor, patch and digest bumps still
-auto-merge once they are 7 days old.
+auto-merge once they are 7 days old. The uv cache-key literal follows the same
+rule for a uv major, so both halves of the bump land in that PR together.
+
+Regex-managed majors (pkl, the uv cache key, an app's own `customManagers`) are
+proposed like any other major. Only the app-contract-toolkit and SDK majors are
+disabled in the fleet preset, as opt-in migrations (FND-4903).
 
 **What this record is not.** It is not a change to the org baseline. Security
 owns the baseline, and they need to amend it or acknowledge this exception
