@@ -145,7 +145,8 @@ class TestV3Detection:
         result = fingerprint_connector(tmp_path)
         assert result.connector_type == "sql_metadata"
         assert result.already_migrated is True
-        assert result.evidence == ["app/connector.py: already uses SqlApp (v3)"]
+        rel = Path("app/connector.py")
+        assert result.evidence == [f"{rel}: already uses SqlApp (v3)"]
 
     def test_v3_bases_are_sdk_app_bases(self) -> None:
         assert {base for base, _ in _V3_BASE_CONNECTOR_TYPES} <= SDK_APP_BASE_NAMES
