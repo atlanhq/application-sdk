@@ -1,0 +1,105 @@
+schema_type: dataframe
+version: 0.22.1
+columns:
+  typeName:
+    dtype: str
+    nullable: false
+    required: true
+    checks:
+      str_matches:
+        value: Schema
+  status:
+    dtype: str
+    nullable: false
+    required: true
+    checks:
+      str_matches:
+        value: ACTIVE
+  attributes.name:
+    dtype: str
+    nullable: false
+    required: true
+    checks:
+      str_matches:
+        value: .+
+  attributes.qualifiedName:
+    dtype: str
+    nullable: false
+    required: true
+    checks:
+      str_matches:
+        value: ^.+/.+/.+
+  attributes.connectionQualifiedName:
+    dtype: str
+    nullable: false
+    required: true
+    checks:
+      str_matches:
+        value: ^.+/.+
+  attributes.connectionName:
+    dtype: str
+    nullable: false
+    required: true
+    checks:
+      str_matches:
+        value: .+
+  attributes.connectorName:
+    dtype: str
+    nullable: false
+    required: true
+    checks:
+      str_matches:
+        value: postgres
+  attributes.databaseName:
+    dtype: str
+    nullable: false
+    required: true
+    checks:
+      str_matches:
+        value: .+
+  attributes.databaseQualifiedName:
+    dtype: str
+    nullable: false
+    required: true
+    checks:
+      str_matches:
+        value: ^.+/.+
+  attributes.database.typeName:
+    dtype: str
+    nullable: false
+    required: true
+    checks:
+      str_matches:
+        value: Database
+  attributes.database.uniqueAttributes.qualifiedName:
+    dtype: str
+    nullable: false
+    required: true
+    checks:
+      str_matches:
+        value: ^.+/.+
+  attributes.tenantId:
+    dtype: str
+    nullable: false
+    required: true
+  attributes.tableCount:
+    dtype: int64
+    nullable: false
+    required: true
+  attributes.viewsCount:
+    dtype: int64
+    nullable: false
+    required: true
+  attributes.lastSyncRunAt:
+    dtype: int64
+    nullable: false
+    required: true
+checks:
+  check_record_count_ge:
+    value: 1
+strict: false
+coerce: false
+unique_column_names: false
+add_missing_columns: false
+title: Transformed Schema Contract
+description: Required transformed Schema attributes for active crawler output.
