@@ -191,6 +191,88 @@ def test_channel_passes_through_unlowered() -> None:
     assert publish.build_body({**BASE, "CHANNEL": "beta"})["target_channel"] == "beta"
 
 
+# ── publish: golden bodies ────────────────────────────────────────────────────
+#
+# The exact bytes `publish` hands curl, pinned from the release builder as it was
+# before it was routed through marketplace_publish_body.build (FND-4909). Key
+# ORDER is part of the pin: json.dumps preserves insertion order, so a reordered
+# builder changes the request even when the dict compares equal. Captured from
+# the pre-refactor code and asserted unchanged after it — do not regenerate these
+# from the current builder; a mismatch is a change to every app release.
+
+_FULL = {
+    "COMMIT_SHA": "0123456789abcdef0123456789abcdef01234567",
+    "DEPLOY_CONFIG": "resources:\n  cpu: 1\n",
+    "ENABLE_SDR": "true",
+    "SDK_VERSION": "3.57.0",
+    "ENTRYPOINTS": '[{"name": "extract", "package": "pkg-a"}]',
+    "CREATED_BY": "someone",
+    "APP_CONFIGS": "e30=",
+}
+
+_GOLDEN = {
+    "minimal": (
+        dict(BASE),
+        '{"app_id": "app-uuid", "image": "ghcr.io/atlanhq/demo-app:main-abc1234", '
+        '"version": "abc1234", "branch": "main", '
+        '"repo": "https://github.com/atlanhq/demo-app", "source": "ci_publish", '
+        '"target_channel": "all"}',
+    ),
+    "cd-full-to-tenants": (
+        {**BASE, **_FULL, "TENANTS": " t1, ,t2 "},
+        '{"app_id": "app-uuid", "image": "ghcr.io/atlanhq/demo-app:main-abc1234", '
+        '"version": "abc1234", "branch": "main", '
+        '"repo": "https://github.com/atlanhq/demo-app", "source": "ci_publish", '
+        '"commit_sha": "0123456789abcdef0123456789abcdef01234567", '
+        '"config": "self_deployed_runtime: true\\nresources:\\n  cpu: 1", '
+        '"sdk_version": "3.57.0", '
+        '"entrypoints": [{"name": "extract", "package": "pkg-a"}], '
+        '"allowed_tenants": ["t1", "t2"], "created_by": "someone", '
+        '"app_configs": "e30="}',
+    ),
+    "cd-full-to-channel": (
+        {**BASE, **_FULL, "CHANNEL": "beta", "ENABLE_SDR": "false"},
+        '{"app_id": "app-uuid", "image": "ghcr.io/atlanhq/demo-app:main-abc1234", '
+        '"version": "abc1234", "branch": "main", '
+        '"repo": "https://github.com/atlanhq/demo-app", "source": "ci_publish", '
+        '"commit_sha": "0123456789abcdef0123456789abcdef01234567", '
+        '"config": "resources:\\n  cpu: 1", "sdk_version": "3.57.0", '
+        '"entrypoints": [{"name": "extract", "package": "pkg-a"}], '
+        '"target_channel": "beta", "created_by": "someone", "app_configs": "e30="}',
+    ),
+    "semver-release": (
+        {
+            **BASE,
+            **_FULL,
+            "RELEASE_TAG": "v0.3.0",
+            "RELEASE_MODEL": "semver",
+            "GM_VERSION": "v0.3.0",
+            "ENTRYPOINTS": "",
+        },
+        '{"app_id": "app-uuid", "image": "ghcr.io/atlanhq/demo-app:0.3.0", '
+        '"version": "v0.3.0", "branch": "main", '
+        '"repo": "https://github.com/atlanhq/demo-app", "source": "ci_publish", '
+        '"commit_sha": "0123456789abcdef0123456789abcdef01234567", '
+        '"config": "self_deployed_runtime: true\\nresources:\\n  cpu: 1", '
+        '"sdk_version": "3.57.0", "target_channel": "all", "created_by": "someone", '
+        '"release_model": "semver", "app_configs": "e30="}',
+    ),
+    "sdr-alone": (
+        {**BASE, "ENABLE_SDR": "true", "DEPLOY_CONFIG": "  "},
+        '{"app_id": "app-uuid", "image": "ghcr.io/atlanhq/demo-app:main-abc1234", '
+        '"version": "abc1234", "branch": "main", '
+        '"repo": "https://github.com/atlanhq/demo-app", "source": "ci_publish", '
+        '"config": "self_deployed_runtime: true", "target_channel": "all"}',
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_GOLDEN))
+def test_release_body_bytes_are_unchanged(case: str) -> None:
+    environ, expected = _GOLDEN[case]
+    assert json.dumps(publish.build_body(environ)) == expected
+
+
 # ── publish: flow ─────────────────────────────────────────────────────────────
 
 
@@ -254,6 +336,30 @@ def test_publish_posts_the_body_and_summarises(
     assert "Version: v1\nRelease: r1\nApp ID:  a1\n" in out
     assert "Channel 'all' creates a draft release — admin approval required" in out
     assert "Published `demo` version `abc1234` to `all`" in gh["summary"].read_text()
+
+
+def test_release_and_e2e_share_one_body_builder() -> None:
+    """FND-4909: one builder, so the e2e registers the shape a release ships.
+
+    Two builders were kept in step by a test that compared field NAMES read out
+    of this file's source — which could not see that the e2e path never filled
+    three of them. Sharing the function makes that class of drift impossible.
+    """
+    shared = sys.modules["marketplace_publish_body"]
+    assert publish.build is shared.build
+    assert publish.PublishRequest is shared.PublishRequest
+
+
+def test_an_unbuildable_body_fails_the_step_before_any_request(
+    gh: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    curl = FakeCurl(stdout=OK)
+    assert _publish(monkeypatch, curl, ENTRYPOINTS="{not json") == 1
+    assert curl.calls == []
+    out = capsys.readouterr().out
+    assert "::error title=Publish blocked::entrypoints is not valid JSON" in out
 
 
 def test_publish_to_tenants_reports_them(

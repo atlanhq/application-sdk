@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import re
 import sys
+from dataclasses import fields
 from pathlib import Path
+from typing import cast
 
 import pytest
 import yaml
@@ -29,6 +31,7 @@ from _gha_expr import evaluate, evaluate_operand  # noqa: E402
 # defaults are the single source now that the action is gone (FND-2674), so the
 # sizing assertions below read them from there.
 from e2e_tenant_lease import DEFAULT_TTL_SECONDS, DEFAULT_WAIT_SECONDS  # noqa: E402
+from marketplace_publish_body import PublishRequest  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW = _REPO_ROOT / ".github/workflows/tests-reusable.yaml"
@@ -1039,3 +1042,70 @@ def test_verify_step_self_skips_when_no_version_expected() -> None:
     assert names.index(str(verify[0]["name"])) < names.index(
         "Run SDR integration tests"
     ), "the version check must run before pytest, not after"
+
+
+# ── The e2e registers every field a release does (FND-4909) ─────────────────
+#
+# e2e_tenant_app.py accepted --self-deployed-runtime, --app-configs and
+# --commit-sha that no workflow passed, so every e2e version was registered
+# without three fields a release sends. The builder's own tests could not see
+# it: the gap was between the script's flags and this step's argv. So the guard
+# lives here, keyed off the request type itself, so a field added to it later
+# fails this test until the step passes it or the exemption says why not.
+
+#: PublishRequest fields prepare-tenant deliberately does not pass, and why.
+_NOT_PASSED: dict[str, str] = {
+    "app_id": "the script reads it from atlan.yaml (one source)",
+    "target_channel": "an e2e version is always tenant-scoped via --tenant",
+    "commit_sha": "would collide with the release's commit_sha; see install()",
+}
+#: Fields whose flag is not the field name dashed.
+_FLAG_FOR = {"allowed_tenants": "--tenant"}
+
+
+_Step = dict[str, object]
+_Jobs = dict[str, dict[str, list[_Step]]]
+
+
+def _prepare_steps(jobs: _Jobs) -> list[_Step]:
+    return jobs["prepare-tenant"]["steps"]
+
+
+def _install_step(jobs: _Jobs) -> _Step:
+    (step,) = [
+        s
+        for s in _prepare_steps(jobs)
+        if str(s.get("name", "")) == "Install the app under test"
+    ]
+    return step
+
+
+def test_install_step_passes_every_release_field(jobs: _Jobs) -> None:
+    names = {f.name for f in fields(PublishRequest)}
+    assert set(_NOT_PASSED) <= names, "an exemption names a field that is gone"
+    run = str(_install_step(jobs)["run"])
+    unpassed = sorted(
+        name
+        for name in names - set(_NOT_PASSED)
+        if _FLAG_FOR.get(name, "--" + name.replace("_", "-")) not in run
+    )
+    assert not unpassed, (
+        f"prepare-tenant registers the e2e version without {unpassed}, which a "
+        "release sends — the e2e would validate a shape that does not ship. Pass "
+        "it, or add it to _NOT_PASSED with the reason."
+    )
+
+
+def test_sdr_and_app_configs_come_from_the_release_paths_producers(
+    jobs: _Jobs,
+) -> None:
+    steps = _prepare_steps(jobs)
+    install = _install_step(jobs)
+    env = cast("dict[str, str]", install["env"])
+    assert env["ENABLE_SDR"] == "${{ steps.atlan_yaml.outputs.enable_sdr }}"
+    assert '--self-deployed-runtime "$ENABLE_SDR"' in str(install["run"])
+    assert env["APP_CONFIGS"] == "${{ steps.app_configs.outputs.app_configs }}"
+    (producer,) = [s for s in steps if s.get("id") == "app_configs"]
+    assert str(producer["run"]).endswith("build_and_publish/prepare.py app-configs")
+    ids = [s.get("id") for s in steps]
+    assert ids.index("app_configs") < ids.index("install")

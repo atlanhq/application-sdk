@@ -496,6 +496,31 @@ use the install path, and neither can the single-tenant fallback (which has no
 entry to add the field to); the `E2E Tenant Install` workflow's `tenant_id` input
 covers one-off runs in both cases.
 
+### What the e2e registration sends
+
+`prepare-tenant` registers the version under test through the same body builder
+the release path uses (`.github/scripts/marketplace_publish_body.py`; the
+release's `build_and_publish/publish.py` maps its env onto the same
+`PublishRequest`), so the e2e validates the registration shape that ships. Its
+inputs come from the same producers as a release's: `parse_atlan_yaml.py` for
+`deploy_config`, `self_deployed_runtime` (`enable_sdr`), `sdk_version`,
+`entrypoints` and `release_model`, and `build_and_publish/prepare.py app-configs`
+for the connector forms under `app/generated/`.
+
+Three fields differ from a release, each on purpose:
+
+| Field | Release | e2e | Why |
+|---|---|---|---|
+| `allowed_tenants` / `target_channel` | channel, or the dispatch's tenants | always `allowed_tenants: [<this tenant>]` | A per-PR version must never reach a real tenant. |
+| `commit_sha` | sent | never sent | An application-sdk PR dispatches e2e runs that build a connector at its unchanged HEAD — the commit its release came from. Sending it would register e2e versions GM cannot tell apart from that release when it resolves a worker's `commit_sha`. The e2e image does not bake `app/atlan_build.json` either, so nothing on that path would read it. |
+| `config` | `deploy:` block | `deploy:` block plus the tenant's store-assertion override | FND-3571; scoped to the e2e tenant's own key. |
+
+`test_prepare_tenant_wiring.py::test_install_step_passes_every_release_field`
+fails when a `PublishRequest` field is neither passed by the install step nor
+listed there with its reason, so a new release field cannot silently go missing
+from the e2e registration. The manual `E2E Tenant Install` workflow is a one-off
+operator tool that takes its fields as dispatch inputs, and is not held to it.
+
 ### When the FAILED verdict is about somebody else's pod
 
 LM's deployment health check is **namespace-scoped**: it reports `Pods failed in

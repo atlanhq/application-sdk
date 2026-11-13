@@ -1,22 +1,17 @@
 #!/usr/bin/env python3
 """Build the ``POST /marketplace/publish`` request body.
 
-Why this is its own module
---------------------------
-Two call sites register a GM version: the release path
-(``build-and-publish-app.yaml``, which builds the body in an inline Python
-heredoc) and the e2e path added for FND-31 (``e2e_tenant_app.py``). The whole
-point of FND-31 is that the tenant runs *the version under test* — so if the
-e2e path registered a differently-shaped version than the release path does,
-the e2e would be validating a registration shape that never ships. One builder,
-one shape.
+The one builder for the body. Two call sites register a GM version, and both
+come here: the release path (``build_and_publish/publish.py``, which maps the
+publish job's env onto :class:`PublishRequest`) and the e2e path added for
+FND-31 (``e2e_tenant_app.py``). The whole point of FND-31 is that the tenant runs
+*the version under test* — so if the e2e path registered a differently-shaped
+version than the release path does, the e2e would be validating a registration
+shape that never ships. One builder, one shape.
 
-The release workflow is deliberately **not** switched over in the same change
-that introduces this: it is the path every app release goes through, and
-rewiring it to share code with a new e2e flow is the tail wagging the dog.
-Instead ``test_marketplace_publish_body.py`` asserts that the field set here
-matches the field set that workflow emits, so the two cannot drift unnoticed,
-and a follow-up can collapse the duplication safely.
+The release path's bytes are pinned by the golden bodies in
+``tests/test_build_and_publish_publish.py``, including key order, which is why
+the fields below are added in the order the release workflow always sent them.
 
 Fields that are conditional rather than always-present are conditional for a
 reason — GM distinguishes "absent" from "empty" on several of them (see the
@@ -75,7 +70,8 @@ class PublishRequest:
         commit_sha: Full git SHA the image was built from. GM stores it on the
             version so a worker's baked ``commit_sha`` resolves to a release
             even for semver apps, whose ``version``/``image`` carry no SHA.
-            Omitted when empty, matching the release workflow.
+            Omitted when empty. The e2e path never sets it — see
+            ``e2e_tenant_app.install`` for why.
     """
 
     app_id: str
@@ -113,17 +109,23 @@ def build(request: PublishRequest) -> dict[str, object]:
             "build."
         )
 
+    # Insertion order is wire order (json.dumps keeps it); it matches what the
+    # release workflow has always sent, which the golden-body tests pin.
     body: dict[str, object] = {
         "app_id": request.app_id,
         "image": request.image,
         "version": request.version,
         "branch": request.branch,
-        "source": SOURCE_CI_PUBLISH,
     }
 
     # Absence is meaningful — see the attribute docs.
     if request.repo_url:
         body["repo"] = request.repo_url
+
+    body["source"] = SOURCE_CI_PUBLISH
+
+    if request.commit_sha.strip():
+        body["commit_sha"] = request.commit_sha.strip()
 
     config = request.deploy_config.strip()
     if request.self_deployed_runtime:
@@ -144,9 +146,9 @@ def build(request: PublishRequest) -> dict[str, object]:
             ) from exc
 
     # Mutually exclusive: tenant-targeting takes precedence over the channel,
-    # matching the release workflow and the atlan CLI. Sending both would let GM
-    # pick, and which one it picks decides whether a per-PR e2e build becomes
-    # visible to every tenant — not a coin worth flipping.
+    # matching the atlan CLI. Sending both would let GM pick, and which one it
+    # picks decides whether a per-PR e2e build becomes visible to every tenant —
+    # not a coin worth flipping.
     if request.allowed_tenants:
         body["allowed_tenants"] = list(request.allowed_tenants)
     elif request.target_channel.strip():
@@ -157,17 +159,14 @@ def build(request: PublishRequest) -> dict[str, object]:
             "the version cannot reach a real tenant) or target_channel."
         )
 
-    if request.app_configs.strip():
-        body["app_configs"] = request.app_configs.strip()
+    if request.created_by.strip():
+        body["created_by"] = request.created_by.strip()
 
     if request.release_model.strip():
         body["release_model"] = request.release_model.strip()
 
-    if request.created_by.strip():
-        body["created_by"] = request.created_by.strip()
-
-    if request.commit_sha.strip():
-        body["commit_sha"] = request.commit_sha.strip()
+    if request.app_configs.strip():
+        body["app_configs"] = request.app_configs.strip()
 
     return body
 
