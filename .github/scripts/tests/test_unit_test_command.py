@@ -64,10 +64,27 @@ def test_windows_has_no_socket_guard_and_no_sigalrm() -> None:
 
 
 @pytest.mark.parametrize("python_version", ["3.14", "3.15"])
-def test_314_and_later_drop_the_dev_group_and_its_tests(python_version: str) -> None:
+def test_314_and_later_drop_the_migrate_v3_group_and_its_tests(
+    python_version: str,
+) -> None:
     argv = _build(python_version=python_version)
-    assert argv[:5] == ["uv", "run", "--frozen", "--no-group", "dev"]
+    assert argv[:5] == ["uv", "run", "--frozen", "--no-group", "migrate-v3"]
     assert "--ignore=tests/unit/tools" in argv
+
+
+def test_the_skipped_group_is_a_uv_group_holding_only_libcst() -> None:
+    """The 3.14 legs skip one group; it must exist and hold libcst alone, or
+    the skip either errors (no such group) or drops dev tools with it."""
+    pyproject = tomllib.loads(
+        (Path(__file__).resolve().parents[3] / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+    )
+    group = pyproject["dependency-groups"][utc.PY314_SKIPPED_GROUP]
+    assert [spec.split(">")[0] for spec in group] == ["libcst"]
+    assert not any(
+        spec.startswith("libcst") for spec in pyproject["dependency-groups"]["dev"]
+    )
 
 
 @pytest.mark.parametrize("python_version", ["3.11", "3.13"])
@@ -144,6 +161,17 @@ def _script_call(action_text: str) -> str:
     steps = yaml.safe_load(action_text)["runs"]["steps"]
     (run,) = [s["run"] for s in steps if "unit_test_command.py" in s.get("run", "")]
     return run
+
+
+_SETUP_DEPS = Path(__file__).parents[2] / "actions" / "setup-deps" / "action.yaml"
+
+
+def test_setup_deps_skips_the_same_group_on_314() -> None:
+    """setup-deps installs what the 3.14 legs then run with; a different group
+    there would leave libcst in, or dev tools out, of the leg's venv."""
+    text = _SETUP_DEPS.read_text(encoding="utf-8")
+    assert f"uv sync --all-extras --no-group {utc.PY314_SKIPPED_GROUP}" in text
+    assert "--no-group dev" not in text
 
 
 def test_the_action_passes_inputs_to_the_script_through_env_not_run() -> None:

@@ -55,8 +55,9 @@ Every connector also has a **Handler** (§4) and an **entry point** (§5).
 Apply those sections regardless of which workflow path you chose.
 
 `SqlMetadataExtractor` and `IncrementalSqlMetadataExtractor` are deprecated
-(removal in v4.0.0, conformance `B001`). Do not land on them: the import
-rewriter writes them as placeholders, and §2a and §2c replace them.
+(removal in v4.0.0, conformance `B001`). Do not land on them. The import
+rewriter already writes `SqlApp` for the v2 SQL metadata and incremental
+imports; §2a and §2c say what goes in the class.
 
 ---
 

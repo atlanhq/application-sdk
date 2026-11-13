@@ -74,9 +74,9 @@ SYMBOL_MAP: dict[tuple[str, str], RewriteTarget] = {
         "Handler",
         structural=True,
         note=(
-            "BaseSQLHandler removed — SQL logic absorbed into SqlMetadataExtractor. "
+            "BaseSQLHandler removed — SQL logic absorbed into SqlApp. "
             "Change handler base class to Handler and move SQL class attributes to the "
-            "SqlMetadataExtractor subclass. See migration guide Step 4."
+            "SqlApp subclass. See migration guide Step 4."
         ),
     ),
     # ── Worker ─────────────────────────────────────────────────────────────
@@ -105,11 +105,11 @@ SYMBOL_MAP: dict[tuple[str, str], RewriteTarget] = {
         "BaseSQLMetadataExtractionApplication",
     ): RewriteTarget(
         "application_sdk.templates",
-        "SqlMetadataExtractor",
+        "SqlApp",
         structural=True,
         note=(
             "Merge Application + Workflow + Activities into a single "
-            "SqlMetadataExtractor subclass. See migration guide Step 1."
+            "SqlApp subclass. See migration guide Step 1."
         ),
     ),
     # ── SQL template workflows ─────────────────────────────────────────────
@@ -118,10 +118,10 @@ SYMBOL_MAP: dict[tuple[str, str], RewriteTarget] = {
         "BaseSQLMetadataExtractionWorkflow",
     ): RewriteTarget(
         "application_sdk.templates",
-        "SqlMetadataExtractor",
+        "SqlApp",
         structural=True,
         note=(
-            "Merge workflow + activities into a single SqlMetadataExtractor subclass "
+            "Merge workflow + activities into a single SqlApp subclass "
             "with @task methods. See migration guide Step 1."
         ),
     ),
@@ -130,20 +130,20 @@ SYMBOL_MAP: dict[tuple[str, str], RewriteTarget] = {
         "MetadataExtractionWorkflow",
     ): RewriteTarget(
         "application_sdk.templates",
-        "SqlMetadataExtractor",
+        "SqlApp",
         structural=True,
-        note="Merge workflow + activities into SqlMetadataExtractor. See migration guide Step 1.",
+        note="Merge workflow + activities into SqlApp. See migration guide Step 1.",
     ),
     (
         "application_sdk.workflows.metadata_extraction.incremental_sql",
         "IncrementalSQLMetadataExtractionWorkflow",
     ): RewriteTarget(
         "application_sdk.templates",
-        "IncrementalSqlMetadataExtractor",
+        "SqlApp",
         structural=True,
         note=(
-            "Merge workflow + activities into a single IncrementalSqlMetadataExtractor subclass. "
-            "See migration guide Step 3."
+            "Merge workflow + activities into a single SqlApp subclass and override "
+            "run() with the incremental phases as @task methods. See migration guide Step 3."
         ),
     ),
     (
@@ -173,10 +173,10 @@ SYMBOL_MAP: dict[tuple[str, str], RewriteTarget] = {
         "BaseSQLMetadataExtractionActivities",
     ): RewriteTarget(
         "application_sdk.templates",
-        "SqlMetadataExtractor",
+        "SqlApp",
         structural=True,
         note=(
-            "Merge workflow + activities into a single SqlMetadataExtractor subclass. "
+            "Merge workflow + activities into a single SqlApp subclass. "
             "See migration guide Step 1."
         ),
     ),
@@ -194,11 +194,11 @@ SYMBOL_MAP: dict[tuple[str, str], RewriteTarget] = {
         "BaseSQLIncrementalMetadataExtractionActivities",
     ): RewriteTarget(
         "application_sdk.templates",
-        "IncrementalSqlMetadataExtractor",
+        "SqlApp",
         structural=True,
         note=(
-            "Merge workflow + activities into a single IncrementalSqlMetadataExtractor subclass. "
-            "See migration guide Step 3."
+            "Merge workflow + activities into a single SqlApp subclass and override "
+            "run() with the incremental phases as @task methods. See migration guide Step 3."
         ),
     ),
     (
@@ -316,17 +316,17 @@ MODULE_MAP: dict[str, tuple[str, bool, str]] = {
     "application_sdk.workflows.metadata_extraction": (
         "application_sdk.templates",
         True,
-        "Use SqlMetadataExtractor from application_sdk.templates.",
+        "Use SqlApp from application_sdk.templates.",
     ),
     "application_sdk.workflows.metadata_extraction.sql": (
         "application_sdk.templates",
         True,
-        "Use SqlMetadataExtractor from application_sdk.templates.",
+        "Use SqlApp from application_sdk.templates.",
     ),
     "application_sdk.workflows.metadata_extraction.incremental_sql": (
         "application_sdk.templates",
         True,
-        "Use IncrementalSqlMetadataExtractor from application_sdk.templates.",
+        "Use SqlApp from application_sdk.templates, with a custom run().",
     ),
     "application_sdk.workflows.query_extraction": (
         "application_sdk.templates",
@@ -352,12 +352,12 @@ MODULE_MAP: dict[str, tuple[str, bool, str]] = {
     "application_sdk.activities.metadata_extraction.sql": (
         "application_sdk.templates",
         True,
-        "Use SqlMetadataExtractor from application_sdk.templates.",
+        "Use SqlApp from application_sdk.templates.",
     ),
     "application_sdk.activities.metadata_extraction.incremental": (
         "application_sdk.templates",
         True,
-        "Use IncrementalSqlMetadataExtractor from application_sdk.templates.",
+        "Use SqlApp from application_sdk.templates, with a custom run().",
     ),
     "application_sdk.activities.query_extraction.sql": (
         "application_sdk.templates",
@@ -393,7 +393,7 @@ MODULE_MAP: dict[str, tuple[str, bool, str]] = {
     "application_sdk.handlers.sql": (
         "application_sdk.templates",
         True,
-        "SQL handler logic absorbed into SqlMetadataExtractor. See migration guide Step 4.",
+        "SQL handler logic absorbed into SqlApp. See migration guide Step 4.",
     ),
     # Application / worker
     "application_sdk.application": (
@@ -404,7 +404,7 @@ MODULE_MAP: dict[str, tuple[str, bool, str]] = {
     "application_sdk.application.metadata_extraction.sql": (
         "application_sdk.templates",
         True,
-        "Merge Application + Workflow + Activities into SqlMetadataExtractor.",
+        "Merge Application + Workflow + Activities into SqlApp.",
     ),
     "application_sdk.worker": (
         "application_sdk.execution",
@@ -509,3 +509,22 @@ MODULE_MAP: dict[str, tuple[str, bool, str]] = {
 
 # Convenience set — used by the rewriter to quickly skip non-deprecated modules.
 DEPRECATED_MODULES: frozenset[str] = frozenset(MODULE_MAP)
+
+# v2 module roots that do not exist in v3. An import from a root, or from any
+# module under it, is v2 code. check_migration fails on these (wider than
+# MODULE_MAP: a v2 submodule the rewriter has no entry for still fails);
+# every MODULE_MAP / SYMBOL_MAP source module sits under one of them.
+DEPRECATED_MODULE_ROOTS: tuple[str, ...] = (
+    "application_sdk.application",
+    "application_sdk.worker",
+    "application_sdk.workflows",
+    "application_sdk.activities",
+    "application_sdk.handlers",
+    "application_sdk.services",
+    "application_sdk.clients.atlan",
+    "application_sdk.clients.atlan_auth",
+    "application_sdk.clients.temporal",
+    "application_sdk.clients.workflow",
+    "application_sdk.interceptors",
+    "application_sdk.test_utils",
+)

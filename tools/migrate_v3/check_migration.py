@@ -22,14 +22,18 @@ Usage
 from __future__ import annotations
 
 import argparse
+import logging
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from application_sdk.observability.logger_adaptor import get_logger
+from tools.migrate_v3 import SDK_APP_BASE_NAMES
+from tools.migrate_v3.import_mapping import DEPRECATED_MODULE_ROOTS
 
-logger = get_logger(__name__)
+# Stdlib logging, not the SDK logger: this checker runs without the SDK
+# installed (certify runs it against an app checkout; FND-4675).
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Check definitions
@@ -50,36 +54,14 @@ class CheckResult:
     excerpt: str = ""
 
 
-# Deprecated top-level module prefixes.  Each entry matches the prefix itself
-# AND any sub-module path (e.g. ``application_sdk.activities.metadata_extraction.sql``).
-# The final regex appends ``(?:\.\w+)*`` to allow sub-module paths, then requires
-# ``\s+import`` so it only fires on actual import statements.
-_DEPRECATED_MODULE_PREFIXES = [
-    # Application / entry-point
-    r"application_sdk\.application",
-    # Worker
-    r"application_sdk\.worker",
-    # Workflows
-    r"application_sdk\.workflows",
-    # Activities
-    r"application_sdk\.activities",
-    # Handlers (old)
-    r"application_sdk\.handlers",
-    # Services
-    r"application_sdk\.services",
-    # Clients — match .atlan and .atlan_auth but NOT .atlan_client (v3 path)
-    r"application_sdk\.clients\.atlan(?!_client)",
-    r"application_sdk\.clients\.temporal",
-    r"application_sdk\.clients\.workflow",
-    # Interceptors
-    r"application_sdk\.interceptors",
-    # Test utilities (old)
-    r"application_sdk\.test_utils",
-]
-
+# Each deprecated root matches itself AND any sub-module path (e.g.
+# ``application_sdk.activities.metadata_extraction.sql``): the regex appends
+# ``(?:\.\w+)*``, then requires ``\s+import`` so it only fires on actual import
+# statements. That also keeps ``application_sdk.clients.atlan`` from matching
+# the v3 ``application_sdk.clients.atlan_client``.
 _RE_DEPRECATED_IMPORT = re.compile(
     r"(?:^|(?<=\n))[ \t]*from\s+(?:"
-    + "|".join(f"(?:{p})" for p in _DEPRECATED_MODULE_PREFIXES)
+    + "|".join(re.escape(root) for root in DEPRECATED_MODULE_ROOTS)
     + r")(?:\.\w+)*\s+import\b",
     re.MULTILINE,
 )
@@ -102,9 +84,8 @@ _RE_SYNC_GET_CLIENT = re.compile(r"(?<!\bget_async_)(?<!\basync\s)\bget_client\s
 # re.DOTALL ensures \s* matches newlines in multiline class signatures.
 _RE_APP_SUBCLASS = re.compile(
     r"class\s+\w+\s*\([^)]*?(?<!\w)(?:"
-    r"App|SqlApp|SqlMetadataExtractor|IncrementalSqlMetadataExtractor|"
-    r"SqlQueryExtractor|BaseMetadataExtractor"
-    r")\s*[,)]",
+    + "|".join(sorted(SDK_APP_BASE_NAMES))
+    + r")\s*[,)]",
     re.DOTALL,
 )
 

@@ -157,12 +157,25 @@ def _has_real_reference(
     return bool(subclass_re.search(text) or import_re.search(text))
 
 
-_RE_V3_INCREMENTAL_SUBCLASS = _subclass_pattern("IncrementalSqlMetadataExtractor")
-_RE_V3_INCREMENTAL_IMPORT = _import_pattern("IncrementalSqlMetadataExtractor")
-_RE_V3_SQL_METADATA_SUBCLASS = _subclass_pattern("SqlMetadataExtractor")
-_RE_V3_SQL_METADATA_IMPORT = _import_pattern("SqlMetadataExtractor")
-_RE_V3_SQL_QUERY_SUBCLASS = _subclass_pattern("SqlQueryExtractor")
-_RE_V3_SQL_QUERY_IMPORT = _import_pattern("SqlQueryExtractor")
+# v3 base → the connector type a connector extending it already is, checked
+# in this order (the first hit wins). Every base is one of the SDK App-family
+# bases (``tools.migrate_v3.SDK_APP_BASE_NAMES``, held by a test). ``SqlApp``
+# is where §2a and §2c of MIGRATION_PROMPT.md land, so it reads as SQL
+# metadata; the deprecated templates still count, for apps migrated before
+# SqlApp existed. ``App`` and ``BaseMetadataExtractor`` carry no connector
+# type, so they stay "custom".
+_V3_BASE_CONNECTOR_TYPES: tuple[tuple[str, str], ...] = (
+    ("IncrementalSqlMetadataExtractor", "incremental_sql"),
+    ("SqlMetadataExtractor", "sql_metadata"),
+    ("SqlQueryExtractor", "sql_query"),
+    ("SqlApp", "sql_metadata"),
+)
+_V3_BASE_PATTERNS: tuple[tuple[str, str, re.Pattern[str], re.Pattern[str]], ...] = (
+    tuple(
+        (base, kind, _subclass_pattern(base), _import_pattern(base))
+        for base, kind in _V3_BASE_CONNECTOR_TYPES
+    )
+)
 
 
 # ---------------------------------------------------------------------------
@@ -268,38 +281,13 @@ def fingerprint_connector(root: Path) -> FingerprintResult:
 
         # Priority 5 — already migrated. Skipped entirely for a file that
         # could not be safely blanked (see stripped5_ok note above).
-        if not stripped5_ok:
+        if not stripped5_ok or already_migrated_type is not None:
             continue
-        if (
-            _has_real_reference(
-                text5, _RE_V3_INCREMENTAL_SUBCLASS, _RE_V3_INCREMENTAL_IMPORT
-            )
-            and already_migrated_type is None
-        ):
-            already_migrated_type = "incremental_sql"
-            already_migrated_evidence.append(
-                f"{rel}: already uses IncrementalSqlMetadataExtractor (v3)"
-            )
-        elif (
-            _has_real_reference(
-                text5, _RE_V3_SQL_METADATA_SUBCLASS, _RE_V3_SQL_METADATA_IMPORT
-            )
-            and already_migrated_type is None
-        ):
-            already_migrated_type = "sql_metadata"
-            already_migrated_evidence.append(
-                f"{rel}: already uses SqlMetadataExtractor (v3)"
-            )
-        elif (
-            _has_real_reference(
-                text5, _RE_V3_SQL_QUERY_SUBCLASS, _RE_V3_SQL_QUERY_IMPORT
-            )
-            and already_migrated_type is None
-        ):
-            already_migrated_type = "sql_query"
-            already_migrated_evidence.append(
-                f"{rel}: already uses SqlQueryExtractor (v3)"
-            )
+        for base, kind, subclass_re, import_re in _V3_BASE_PATTERNS:
+            if _has_real_reference(text5, subclass_re, import_re):
+                already_migrated_type = kind
+                already_migrated_evidence.append(f"{rel}: already uses {base} (v3)")
+                break
 
     # Apply priority rules (highest-confidence first).
     if has_incremental:
