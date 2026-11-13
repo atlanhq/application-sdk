@@ -55,7 +55,12 @@ def _limit_series(port: int) -> list[tuple[dict[str, str], float]]:
     """Every ``temporal_worker_activity_slots_limit`` sample on the endpoint."""
     deadline = time.monotonic() + 5
     while True:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics") as resp:
+        # Bound each request too: a server that accepts and then stalls would
+        # otherwise block here and never reach the deadline check below.
+        remaining = max(deadline - time.monotonic(), 0.5)
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/metrics", timeout=remaining
+        ) as resp:
             body = resp.read().decode()
         samples = []
         for line in body.splitlines():
