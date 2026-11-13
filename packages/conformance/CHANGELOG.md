@@ -2,6 +2,24 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.58.0] - 2026-11-13
+
+### Features
+
+- serve the API host's config and file routes through obstore on S3, GCS and Azure Blob [FND-4964] (#4877) ([6fbed63](https://github.com/atlanhq/application-sdk/commit/6fbed63))
+- opt-in LFS checkout and Java setup for the Unit and Integration jobs [FND-4970] (#4884) ([a3bc6a3](https://github.com/atlanhq/application-sdk/commit/a3bc6a3))
+
+### Bug fixes
+
+- route every caller apt package list through one validating script [FND-4908] (#4889) ([b0685b7](https://github.com/atlanhq/application-sdk/commit/b0685b7))
+- keep build-and-publish.yaml's certify apt_packages across a resync [FND-4968] (#4883) ([43807f1](https://github.com/atlanhq/application-sdk/commit/43807f1))
+- migrate-asset-modeling built on principles; P052 envelope and P028 input rules [FND-4859] (#4811) ([512dc78](https://github.com/atlanhq/application-sdk/commit/512dc78))
+- route ObjectStoreMetricExporter through the shared observability writer [FND-4895] (#4871) ([fa5a9d1](https://github.com/atlanhq/application-sdk/commit/fa5a9d1))
+- deprecate needs_lock, which has no effect in v3, and the Redis clients [FND-4888] (#4863) ([8261491](https://github.com/atlanhq/application-sdk/commit/8261491))
+- remove the retention sweep that never deleted from the object store [FND-4889] (#4868) ([dde70f8](https://github.com/atlanhq/application-sdk/commit/dde70f8))
+- deprecate DaprPubSub.subscribe, which never delivers, and the unimplemented binding shapes [FND-4892] (#4861) ([ec21c48](https://github.com/atlanhq/application-sdk/commit/ec21c48))
+- serve APPLICATION_MODE lazily so an unrecognised value no longer stops the SDK importing [FND-4890] (#4867) ([3db2729](https://github.com/atlanhq/application-sdk/commit/3db2729))
+
 ## [0.57.0] - 2026-11-11
 
 ### Features
