@@ -125,8 +125,8 @@ jobs:
           owner: atlanhq
           repositories: ${{ github.event.repository.name }}
 
-      # The Trivy report from this action is advisory (feedback mode, not a
-      # gate). It used to describe amd64 only, because the action scans a
+      # The Trivy report from this action is advisory, not a gate: fail-on-vulns
+      # is left at its 'false' default. It used to describe amd64 only, because the action scans a
       # separate native single-platform build and every caller ran on x64 — so
       # the arm64 half of a released base image was never scanned at all. With
       # one native job per arch it now scans each arch on its own runner.
@@ -134,7 +134,6 @@ jobs:
         id: harbor_docker_build
         uses: ./.github/actions/secure-build-push-apps
         with:
-          branch: ${{ needs.prepare.outputs.tag_prefix }}
           context: .
           file: ./Dockerfile
           push: true
