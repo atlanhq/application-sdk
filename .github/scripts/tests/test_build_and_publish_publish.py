@@ -362,6 +362,43 @@ def test_an_unbuildable_body_fails_the_step_before_any_request(
     assert "::error title=Publish blocked::entrypoints is not valid JSON" in out
 
 
+_NO_IDS = [",", " , ", ",,", " ,\t, "]
+
+
+@pytest.mark.parametrize("tenants", _NO_IDS)
+def test_tenants_naming_no_tenant_blocks_the_channel_gate(
+    gh: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tenants: str,
+) -> None:
+    """A set-but-empty tenants input is not targeting: it must not skip the gate
+    and then publish to channel 'all' from a feature branch."""
+    assert _gate(monkeypatch, REF="refs/heads/feat", TENANTS=tenants) == 1
+    assert "tenants is set but names no tenant" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("tenants", _NO_IDS)
+def test_tenants_naming_no_tenant_blocks_the_publish(
+    gh: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tenants: str,
+) -> None:
+    curl = FakeCurl(stdout=OK)
+    # Semver without a release tag: the case the semver gate exists to stop.
+    rc = _publish(monkeypatch, curl, TENANTS=tenants, RELEASE_MODEL="semver")
+    assert rc == 1
+    assert curl.calls == []
+    assert "tenants is set but names no tenant" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("tenants", _NO_IDS)
+def test_build_body_refuses_tenants_naming_no_tenant(tenants: str) -> None:
+    with pytest.raises(publish.PublishBodyError, match="names no tenant"):
+        publish.build_body({**BASE, "TENANTS": tenants})
+
+
 def test_publish_to_tenants_reports_them(
     gh: dict[str, Path],
     monkeypatch: pytest.MonkeyPatch,

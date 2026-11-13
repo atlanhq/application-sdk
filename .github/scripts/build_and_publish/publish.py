@@ -49,6 +49,29 @@ def _effective_channel(channel: str) -> str:
     return (channel or "all").lower()
 
 
+def tenant_ids(tenants: str) -> tuple[str, ...]:
+    """The tenant IDs in a comma-separated ``tenants`` input, blanks dropped."""
+    return tuple(t.strip() for t in tenants.split(",") if t.strip())
+
+
+def _refuse_tenants_without_ids(tenants: str) -> bool:
+    """Fail a ``tenants`` input that is set but names no tenant (``","``).
+
+    Every decision here keys off the parsed IDs, and with none the body falls
+    back to ``target_channel`` — ``all`` when no channel is given. So an input
+    like ``","`` would read as "targeted" to a human and publish to every tenant.
+    Refusing it is the only reading that cannot widen a publish.
+    """
+    if tenants.strip() and not tenant_ids(tenants):
+        print(
+            "::error title=Publish blocked::tenants is set but names no tenant "
+            f"({tenants!r}). Pass comma-separated tenant IDs, or leave it empty "
+            "to publish by channel."
+        )
+        return True
+    return False
+
+
 # ── channel-gate ──────────────────────────────────────────────────────────────
 
 
@@ -56,6 +79,9 @@ def channel_gate() -> int:
     ref = _bap.env("REF")
     tenants = _bap.env("TENANTS")
     release_tag = _bap.strip_crlf(_bap.env("RELEASE_TAG"))
+
+    if _refuse_tenants_without_ids(tenants):
+        return 1
 
     # Bypass only when the ref really is the matching tag ref: a non-empty
     # release_tag alone could be passed from any feature branch.
@@ -65,7 +91,7 @@ def channel_gate() -> int:
 
     # Mirrors the channel resolution at publish time:
     #   tenants -> specific (skip), ''/'all' -> all (enforce), other -> skip.
-    if tenants:
+    if tenant_ids(tenants):
         print(f"Tenants targeting ({tenants}) — main-branch gate skipped.")
         return 0
     channel = _effective_channel(_bap.env("CHANNEL"))
@@ -132,6 +158,12 @@ def build_body(environ: dict[str, str]) -> dict[str, object]:
     # channel names, and the gate above is the only place case is folded.
     channel = environ.get("CHANNEL", "all") or "all"
     tenants = environ.get("TENANTS", "")
+    allowed_tenants = tenant_ids(tenants)
+    # Set-but-empty must never fall through to the channel (see
+    # _refuse_tenants_without_ids); publish() refuses it first, and this keeps
+    # the builder from accepting it when called on its own.
+    if tenants.strip() and not allowed_tenants:
+        raise PublishBodyError(f"tenants is set but names no tenant ({tenants!r}).")
     request = PublishRequest(
         app_id=environ["APP_ID"],
         image=image,
@@ -139,7 +171,7 @@ def build_body(environ: dict[str, str]) -> dict[str, object]:
         branch=environ["BRANCH"],
         # Always set by the workflow (server_url/repository), so always sent.
         repo_url=environ["REPO_URL"],
-        allowed_tenants=tuple(t.strip() for t in tenants.split(",") if t.strip()),
+        allowed_tenants=allowed_tenants,
         target_channel=channel,
         deploy_config=environ.get("DEPLOY_CONFIG", ""),
         # SDR capability rides inside the opaque config YAML — GM stores
@@ -174,6 +206,8 @@ def publish() -> int:
     environ["RELEASE_MODEL"] = release_model
     tenants = environ.get("TENANTS", "")
     channel = environ.get("CHANNEL", "")
+    if _refuse_tenants_without_ids(tenants):
+        return 1
 
     # Semver-release gate: a release_model=semver app needs an explicit
     # release_tag for any channel='all' publish. Merge-to-main builds the image
@@ -182,7 +216,7 @@ def publish() -> int:
     if (
         release_model == "semver"
         and not release_tag
-        and not tenants
+        and not tenant_ids(tenants)
         and effective == "all"
     ):
         print(
