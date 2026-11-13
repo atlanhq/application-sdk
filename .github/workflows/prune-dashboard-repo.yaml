@@ -183,7 +183,9 @@ jobs:
       # repo is archived, and so the unlisted sweep can build its roster. No
       # `repositories:` list — the manifest spans the whole fleet, and a token
       # scoped to one repo would report every other repo as unreadable, which
-      # the script correctly refuses to act on.
+      # the script correctly refuses to act on. Read-only (FND-4902): the
+      # archived check is repo metadata (always granted) and discovery reads
+      # each candidate's renovate.json (contents). Deleting is S3, not GitHub.
       - name: Mint fleet App token
         id: app-token
         if: inputs.sweep_archived || inputs.sweep_unlisted
@@ -192,6 +194,7 @@ jobs:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
+          permission-contents: read
 
       - name: Sweep archived repos
         if: inputs.sweep_archived

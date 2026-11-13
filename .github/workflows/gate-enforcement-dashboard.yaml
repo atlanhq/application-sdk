@@ -66,6 +66,13 @@ jobs:
       - name: Checkout application-sdk
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Org-wide (no `repositories:`): the sweep enumerates the fleet at run
+      # time. Read-only, and only what the scanner reads (FND-4902): the repo
+      # list and rulesets are metadata (always granted); the tests workflow
+      # file and its commits (contents); the PRs a commit landed in (pull
+      # requests); each sampled PR head's statusCheckRollup, i.e. check runs
+      # (checks), commit statuses (statuses) and the check suite's
+      # workflowRun.event (actions).
       - name: Mint fleet App token
         id: app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
@@ -73,6 +80,11 @@ jobs:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
+          permission-actions: read
+          permission-checks: read
+          permission-contents: read
+          permission-pull-requests: read
+          permission-statuses: read
 
       # The full-fleet / single-repo branch lives in two mutually-exclusive
       # steps with `if:` conditions rather than an if/else inside one `run:`,
