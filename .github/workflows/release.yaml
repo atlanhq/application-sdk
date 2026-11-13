@@ -15,6 +15,7 @@ jobs:
     if: github.event.pull_request.merged == true && !startsWith(github.event.pull_request.head.ref, 'bump-version')
     name: Update version and changelog
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Serialise bumps; a burst of merges coalesces into the newest pending run.
     # See release-version-bump.yaml for why this queues instead of cancelling.
     concurrency:

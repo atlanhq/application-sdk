@@ -390,6 +390,10 @@ jobs:
       ${{ !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
       (!cancelled() && needs.queue-diff.outputs.identical != 'true') }}
     runs-on: ubuntu-latest
+    # Runs in every app repo. Observed up to ~11 min (median 1-3) across the
+    # SDK and the larger connectors in 2026-11; 30 leaves room for a cold
+    # cache without a stuck run holding a runner for the 6-hour default.
+    timeout-minutes: 30
     steps:
       # Full history only where the ledger guard runs (it diffs against
       # origin/main); push-to-main skips the guard, so it keeps the shallow
