@@ -14,6 +14,9 @@ description: |
   Tests marked `perf` are excluded by `addopts`; the SDK workflow runs them in
   a separate single-process job.
 
+  The job must check the repo out before this action: setup-deps runs with
+  `checkout: "false"`.
+
 inputs:
   github-token:
     required: true
@@ -46,6 +49,7 @@ runs:
   steps:
     - uses: "./.github/actions/setup-deps"
       with:
+        checkout: "false"
         python-version: ${{ inputs.python-version }}
 
     - name: Get branch name

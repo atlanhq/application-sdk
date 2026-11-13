@@ -142,6 +142,7 @@ jobs:
         run: echo "version=$(python3 .github/scripts/container_python_version.py print-version)" >> "$GITHUB_OUTPUT"
       - uses: "./.github/actions/setup-deps"
         with:
+          checkout: "false"
           python-version: ${{ steps.pyver.outputs.version }}
       - name: Run perf tests
         env:
@@ -171,9 +172,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: "./.github/actions/setup-deps"
+        with:
+          checkout: "false"
       # A pinned bats-core checkout instead of `apt-get update && apt-get
-      # install` on every run. After setup-deps, whose checkout would clean an
-      # untracked directory away.
+      # install` on every run.
       - name: Check out bats-core
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -236,6 +238,7 @@ jobs:
         run: echo "version=$(python3 .github/scripts/container_python_version.py print-version)" >> "$GITHUB_OUTPUT"
       - uses: "./.github/actions/setup-deps"
         with:
+          checkout: "false"
           python-version: ${{ steps.pyver.outputs.version }}
 
       # Temporal and Dapr are provisioned in-process by the SDK's own embedded
@@ -289,6 +292,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: "./.github/actions/setup-deps"
+        with:
+          checkout: "false"
 
       - name: Log in to GHCR (private MinIO mirror)
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4

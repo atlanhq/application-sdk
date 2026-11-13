@@ -804,17 +804,19 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
+      # The app checkout the tests run on. setup-deps skips its own
+      # (`checkout: "false"` below), which would otherwise persist the job
+      # token in .git/config for the PR code the tests run (FND-4900).
+      - name: Checkout app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       # Private atlanhq git deps: a read-only fleet App token scoped to the
       # private repos the app names (none named: no mint). It only reaches
       # git_auth.py's mirror clones: uv, and every build backend it runs,
       # install from local mirrors with no token in their env (FND-4740,
       # lens round 5). A failed mint gets the named error below.
-      - name: Checkout app (to list its private git dependencies)
-        if: inputs.private-git-deps
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
       # Scoped to the private atlanhq repos the app names (git_auth.py
       # repos: its pyproject.toml / uv.lock files, public repos dropped).
       # No mint when it names none: create-github-app-token with no
@@ -879,6 +881,8 @@ jobs:
         id: unit
         uses: atlanhq/application-sdk/.github/actions/connector-unit-tests@main
         with:
+          # The job checked the app out above.
+          checkout: "false"
           lfs: ${{ inputs.test-lfs }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           # "0" by default (no coverage gate); apps opt up via the input.
@@ -1270,17 +1274,19 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
+      # The app checkout the tests run on. setup-deps skips its own
+      # (`checkout: "false"` below), which would otherwise persist the job
+      # token in .git/config for the PR code the tests run (FND-4900).
+      - name: Checkout app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       # Private atlanhq git deps: a read-only fleet App token scoped to the
       # private repos the app names (none named: no mint). It only reaches
       # git_auth.py's mirror clones: uv, and every build backend it runs,
       # install from local mirrors with no token in their env (FND-4740,
       # lens round 5). A failed mint gets the named error below.
-      - name: Checkout app (to list its private git dependencies)
-        if: inputs.private-git-deps
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
       # Scoped to the private atlanhq repos the app names (git_auth.py
       # repos: its pyproject.toml / uv.lock files, public repos dropped).
       # No mint when it names none: create-github-app-token with no
@@ -1521,6 +1527,8 @@ jobs:
         id: integration
         uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@main
         with:
+          # The job checked the app out above.
+          checkout: "false"
           app-name: ${{ inputs.app-name }}
           lfs: ${{ inputs.test-lfs }}
           git-auth-token: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}

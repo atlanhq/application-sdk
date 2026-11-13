@@ -8,7 +8,8 @@ description: |
   to the `python-version` and `fail-under` inputs.
 
   Steps:
-  - Sets up Python + uv via `setup-deps` (which also checks out the caller repo).
+  - Sets up Python + uv via `setup-deps`, which also checks out the caller repo
+    unless `checkout` is "false".
   - Runs `pytest tests/unit/` with coverage.
   - Enforces a minimum coverage threshold (`fail-under`) via `coverage report`.
   - Comments the coverage delta on the PR.
@@ -67,6 +68,14 @@ inputs:
       Empty (the default) installs without one.
     default: ""
 
+  checkout:
+    required: false
+    description: |
+      "false" when the job already checked the caller repo out, passed to
+      setup-deps so it skips its own checkout. The default "true" keeps
+      setup-deps checking it out, for callers that rely on that.
+    default: "true"
+
 runs:
   using: "composite"
   steps:
@@ -76,6 +85,7 @@ runs:
         python-version: ${{ inputs.python-version }}
         git-auth-token: ${{ inputs.git-auth-token }}
         lfs: ${{ inputs.lfs }}
+        checkout: ${{ inputs.checkout }}
 
     - name: Pin application-sdk to dispatched ref
       if: inputs.application-sdk-ref != ''
