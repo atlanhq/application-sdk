@@ -42,8 +42,9 @@ with `--platform linux/amd64,linux/arm64` emulates the non-native half under QEM
 
 Each architecture is Trivy-scanned on its own runner. Previously the action scanned a
 separate native single-platform build on an x64 runner, so the **arm64 half of a released
-base image was never scanned at all**. The report remains advisory (feedback mode), not a
-gate.
+base image was never scanned at all**. The report remains advisory, not a gate:
+`secure-build-push-apps` blocks the push only when a caller sets `fail-on-vulns: 'true'`,
+and the release does not.
 
 ### If a release publish fails partway
 
@@ -141,6 +142,29 @@ shutil.copytree(src, 'components', dirs_exist_ok=True)
 This requires `atlan-application-sdk` to already be installed into the venv before the task runs (true for both local dev and the Docker build, where `uv sync` happens before `poe download-components`).
 
 This is enforced fleet-wide by the conformance suite's **D009 `RemoteDaprComponentFetch`** rule (BLOCK-tier, autofixable) — see `packages/conformance/conformance/docs/rules/dependency.md#d009`. Run the `remediate` skill/loop with `--series D` against an app repo to detect and fix this pattern automatically.
+
+## Trivy in CI: one engine, one pin
+
+Every Trivy scan in this repo installs the CLI with the install-only
+`aquasecurity/setup-trivy` action at one pinned version. None uses
+`aquasecurity/trivy-action`: its bundled Trivy logs `Some OS packages were skipped due
+to mismatched PURL namespace` and reports **no OS findings** on Chainguard/Wolfi images,
+which is what this repo's `Dockerfile` builds from.
+
+| Where | How it scans |
+|---|---|
+| `.github/actions/trivy-image-scan` | The recipe, and the owner of the pin (`trivy-version`). |
+| `sdk-trivy-scan` (hourly scan, release reconcile) | Calls `trivy-image-scan`. |
+| `secure-build-push-apps` (PR base image, release build) | Calls `trivy-image-scan`. |
+| `trivy-container` (SDK PR gate, deprecated `trivy-container.yaml`) | Inline copy. |
+| `build-and-scan.yaml` (fleet gate) | Inline copy. |
+
+The last two run in connector repos, where `./.github/actions/...` names the connector's
+tree, so they carry the recipe inline. `.github/scripts/tests/test_trivy_image_scan.py`
+fails when any `setup-trivy` differs from the composite's SHA or version, when
+`trivy-action` comes back, or when a new file starts running `trivy image`. To bump
+Trivy, change the composite's `trivy-version` default and the inline copies together;
+Renovate's `aquasecurity/trivy` rule is disabled so the bump is always deliberate.
 
 ## Build & Scan Commands
 

@@ -168,6 +168,12 @@ jobs:
               # gate would stay green because the area it governs never ran.
               - '.github/workflows/sdk-tests-reusable.yaml'
               - '.github/workflows/sdk-gate.yaml'
+              # Inputs an SDK test reads from another area (FND-4907). A test is
+              # only as good as the filter that decides whether it runs: list
+              # what it READS, not just where it lives.
+              # tests/unit/validation/test_artifact_sources.py byte-compares its
+              # fixture against this toolkit example.
+              - 'contract-toolkit/examples/artifact-schemas/app/generated/artifact_schemas.json'
               # NOTE: do NOT add '!**/*.md' here. dorny/paths-filter passes '!'
               # patterns straight to picomatch, which interprets '!**/*.md' as
               # "match any file that is not a .md file" — a near-catch-all that
@@ -192,6 +198,14 @@ jobs:
               - 'application_sdk/credentials/**'
               - 'application_sdk/handler/**'
               - 'application_sdk/templates/contracts/**'
+              # SDK modules the generated examples import (FND-4907).
+              # contract-toolkit/scripts/test-sdk-import.py imports every
+              # generated _input.py / _e2e_*.py against this checkout's SDK, so
+              # a change to one of these can break the examples without
+              # touching contract-toolkit/. Enforced by
+              # .github/scripts/tests/test_sdk_gate_filter_coverage.py.
+              - 'application_sdk/testing/e2e/**'
+              - 'application_sdk/observability/logger_adaptor.py'
               - '.github/workflows/contract-toolkit-*.yml'
               - '.github/workflows/contract-toolkit-*.yaml'
             # Conformance RULE detection (C/E/P/O). Deliberately NOT triggered by
@@ -211,6 +225,18 @@ jobs:
               # Self-test the suite-test harness: editing the reusable that runs
               # the package's pytest must re-run it (same reasoning as `sdk`).
               - '.github/workflows/conformance-suite-tests-reusable.yaml'
+              # Inputs the package's tests read from other areas (FND-4907).
+              # The canonical sources of the bootstrap templates vendored by
+              # MANAGED_ACTION_FILES: test_bootstrap.py byte-compares each
+              # template against its canonical file, so editing only the
+              # canonical side must run that guard.
+              - '.github/actions/run-conformance-detect/action.yaml'
+              - '.github/scripts/build_conformance_args.py'
+              - '.github/scripts/probe_code_scanning.py'
+              # Toolkit examples the K-series tests read in place
+              # (test_generated_freshness.py, test_manifest_contract_legacy_aliases.py).
+              - 'contract-toolkit/examples/bundle/**'
+              - 'contract-toolkit/examples/system-app/**'
             # The api DISTRIBUTION (packages/api: its file list, build hook and
             # pyproject.toml) and its checks. A change to a listed application_sdk/
             # file also runs them: api-suite-tests triggers on `sdk` too.

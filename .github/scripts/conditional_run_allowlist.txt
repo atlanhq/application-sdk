@@ -18,7 +18,6 @@
 .github/actions/e2e-apps/action.yaml::runs.Fail job if dispatched run did not succeed
 .github/actions/e2e-apps/action.yaml::runs.Validate callback-mode inputs
 .github/actions/e2e-apps/action.yaml::runs.dispatched_summary
-.github/actions/secure-build-push-apps/action.yaml::runs.decision
 .github/actions/setup-deps/action.yaml::runs.Install dependencies
 .github/actions/twingate-connect/action.yml::runs.connect
 .github/workflows/build-and-scan.yaml::jobs.build.meta

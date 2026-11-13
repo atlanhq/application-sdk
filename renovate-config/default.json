@@ -249,7 +249,7 @@
       "minimumReleaseAge": "7 days"
     },
     {
-      "description": "Trivy CLI version (version: in with: blocks): disable auto-updates. The scanner version is pinned deliberately — scan results drift when Trivy's vuln DB schema or detection logic changes, so bumps must be a conscious decision.",
+      "description": "Trivy CLI version (version: in with: blocks): disable auto-updates. The scanner version is pinned deliberately — scan results drift when Trivy's vuln DB schema or detection logic changes, so bumps must be a conscious decision. In application-sdk the pin is the trivy-image-scan composite's trivy-version default; the inline copies in trivy-container and build-and-scan.yaml are held to it by test_trivy_image_scan.py.",
       "matchPackageNames": [
         "aquasecurity/trivy"
       ],

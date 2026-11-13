@@ -92,6 +92,9 @@ jobs:
               # build-sdk-base-image and the fix to this action's hardcoded scan
               # platform both landed on a PR where these jobs skipped.
               - '.github/actions/secure-build-push-apps/**'
+              # The two scan actions those jobs reach, for the same reason.
+              - '.github/actions/trivy-container/**'
+              - '.github/actions/trivy-image-scan/**'
             sdk:
               - 'application_sdk/**'
               - 'tests/**'
@@ -345,7 +348,6 @@ jobs:
       - name: Build, scan, and push PR base image
         uses: ./.github/actions/secure-build-push-apps
         with:
-          branch: ${{ github.ref_name }}
           context: .
           file: ./Dockerfile
           push: true
