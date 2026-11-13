@@ -296,9 +296,11 @@ def test_deps_token_is_the_scoped_mint(workflow: Workflow, job: str) -> None:
     assert_scoped_mint(
         _steps(workflow, job),
         mint_id="git-deps-token",
-        repos_id="git-deps-repos",
         cond="inputs.private_git_auth",
         project_dir="app",
+        # Certify reports rather than stops: a failed mint fails the mirror
+        # and install, and the verdict blocks publish on that.
+        require="false",
     )
 
 

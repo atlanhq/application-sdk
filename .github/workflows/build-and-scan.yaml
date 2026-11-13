@@ -337,52 +337,20 @@ jobs:
       # a read-only fleet App token, not ORG_PAT_GITHUB, because every build
       # backend the Dockerfile's `uv sync` runs can read it. No opt-in gate
       # (this workflow has no flag for it, and a Dockerfile without the secret
-      # mount ignores it), only "is there a build". `continue-on-error` and no
+      # mount ignores it), only "is there a build". `require: "false"` and no
       # PAT fallback: an empty secret is skipped with a warning by
       # build-push-action, so only a build that needs it fails, at its clone.
-      # Scoped to the private atlanhq repos the app names (git_auth.py
-      # repos: its pyproject.toml / uv.lock files, public repos dropped).
-      # No mint when it names none: create-github-app-token with no
-      # `repositories` would grant the whole installation. The script comes
-      # from this workflow's own commit (job.workflow_sha), so it is the
-      # version that matches the workflow running it.
-      - name: Checkout SDK git_auth.py (image build)
-        if: inputs.image == ''
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts/git_auth.py
-          sparse-checkout-cone-mode: false
-          path: .sdk-git-auth
-          persist-credentials: false
-
-      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
-        id: image-git-repos
-        if: inputs.image == ''
-        run: |
-          set -euo pipefail
-          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
-          # Out of the workspace: it is the image build context and the tree
-          # conformance and pre-commit look at.
-          rm -rf .sdk-git-auth
-
+      # The scoped mint (.github/actions/scoped-private-deps-token): the
+      # private atlanhq repos the app names, capped by ALLOWED_PRIVATE_DEPS;
+      # no mint when it names none.
       - name: Mint read-only token for the image build
         id: image-git-token
-        if: inputs.image == '' && steps.image-git-repos.outputs.repositories != ''
-        # A failed mint leaves the token empty; see the guard below.
-        continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        if: inputs.image == ''
+        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
-          # workflow's own commit, never the PR's tree: the repos step above
-          # fails the job for any private repo not on it, so a PR's
-          # pyproject.toml / uv.lock cannot widen this scope.
-          repositories: ${{ steps.image-git-repos.outputs.repositories }}
-          permission-contents: read
+          require: "false"
 
       # buildx resolves the Dockerfile's `# syntax=docker/dockerfile:1`
       # frontend from Docker Hub ANONYMOUSLY on every build, before it looks at

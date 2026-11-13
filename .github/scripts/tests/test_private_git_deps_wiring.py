@@ -7,7 +7,8 @@ env, so every later step, including the tests, pre-commit hooks and
 conformance series that import app code, could read it.
 
 They now mint a read-only fleet App token scoped to the app's private repos
-(the inline shape pinned by ``_scoped_mint.py``) and hand it to
+(``.github/actions/scoped-private-deps-token``, pinned by ``_scoped_mint.py``)
+and hand it to
 ``.github/scripts/git_auth.py`` alone, which uses it only to mirror-clone those
 repos: uv, and every build backend it runs, install from the local mirrors
 with no token in their env (lens round 5). These tests pin that shape, so a
@@ -27,6 +28,7 @@ git's own; git_auth.py itself is executed in test_git_auth.py.
 
 from __future__ import annotations
 
+import copy
 import re
 import sys
 from pathlib import Path
@@ -36,7 +38,14 @@ import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _scoped_mint import assert_scoped_mint  # noqa: E402
+from _scoped_mint import (  # noqa: E402
+    NOT_REQUIRED,
+    assert_action_shape,
+    assert_inline_scoped_mint,
+    assert_scoped_mint,
+    calls,
+    load_action,
+)
 
 Workflow = dict[Any, Any]
 Step = dict[str, Any]
@@ -45,7 +54,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 ACTIONS = REPO_ROOT / ".github" / "actions"
 
-#: (workflow file, job id, the boolean input that opts a caller in)
+#: (workflow file, job id, the boolean input that opts a caller in). Each
+#: mints on that input; e2e mints on every run (the image build needs it too)
+#: and requires the token only with the input (``E2E_UNGATED``).
 JOBS = [
     ("tests-reusable.yaml", "unit", "private-git-deps"),
     ("tests-reusable.yaml", "integration", "private-git-deps"),
@@ -56,6 +67,11 @@ JOBS = [
     ("release-version-bump.yaml", "bump-version", "private_git_auth"),
 ]
 JOB_IDS = [f"{wf}:{job}" for wf, job, _ in JOBS]
+E2E_UNGATED = {("tests-reusable.yaml", "e2e")}
+#: Still inline: the SDK's own PRs run it (sdk-gate.yaml, conformance.yaml), so
+#: it cannot call an action that is not on main yet. Moves to the action in a
+#: follow-up once this one has merged.
+INLINE = {("conformance-reusable.yaml", "suite")}
 
 #: Composites that receive the token as ``git-auth-token``.
 COMPOSITES = [
@@ -92,10 +108,9 @@ def _steps(workflow_file: str, job: str) -> list[Step]:
     return _job(workflow_file, job)["steps"]
 
 
-def _mint(steps: list[Step]) -> Step:
-    mints = [s for s in steps if s.get("id") == MINT_ID]
-    assert len(mints) == 1, f"expected one step with id {MINT_ID!r}"
-    return mints[0]
+def _with(step: Step) -> dict[str, Any]:
+    value = step.get("with")
+    return value if isinstance(value, dict) else {}
 
 
 def _runs_git_auth(step: Step) -> bool:
@@ -140,30 +155,103 @@ def test_no_job_level_token(workflow_file: str, job: str, flag: str) -> None:
 def test_token_is_minted_scoped_to_the_apps_private_repos(
     workflow_file: str, job: str, flag: str
 ) -> None:
-    assert_scoped_mint(
-        _steps(workflow_file, job),
-        mint_id=MINT_ID,
-        repos_id=REPOS_ID,
-        cond=f"inputs.{flag}",
-    )
-
-
-@pytest.mark.parametrize(("workflow_file", "job", "flag"), JOBS, ids=JOB_IDS)
-def test_missing_token_fails_naming_the_secrets(
-    workflow_file: str, job: str, flag: str
-) -> None:
     steps = _steps(workflow_file, job)
-    mint = steps.index(_mint(steps))
-    guards = [
-        (i, s)
-        for i, s in enumerate(steps)
-        if s.get("if") == f"inputs.{flag} && {REPOS_REF} != '' && {TOKEN_REF} == ''"
-    ]
-    assert len(guards) == 1
-    i, guard = guards[0]
-    assert i == mint + 1
-    assert "exit 1" in guard["run"]
-    assert "FLEET_APP_ID" in guard["run"] and "FLEET_APP_PRIVATE_KEY" in guard["run"]
+    if (workflow_file, job) in INLINE:
+        # Includes the fail-closed guard straight after the soft mint.
+        assert_inline_scoped_mint(
+            steps, mint_id=MINT_ID, repos_id=REPOS_ID, cond=f"inputs.{flag}"
+        )
+    elif (workflow_file, job) in E2E_UNGATED:
+        assert_scoped_mint(
+            steps, mint_id=MINT_ID, cond=None, require=f"${{{{ inputs.{flag} }}}}"
+        )
+    else:
+        # `require` omitted: the action's default, so a failed mint fails here.
+        assert_scoped_mint(steps, mint_id=MINT_ID, cond=f"inputs.{flag}")
+
+
+def test_the_action_fails_closed() -> None:
+    assert_action_shape(load_action())
+
+
+def _workflow_calls() -> list[tuple[tuple[str, str, str], Step]]:
+    found: list[tuple[tuple[str, str, str], Step]] = []
+    for path in sorted(WORKFLOWS.glob("*.y*ml")):
+        jobs: dict[str, dict[str, Any]] = _load(path).get("jobs") or {}
+        for job_id, job in jobs.items():
+            for step in calls(job.get("steps") or []):
+                found.append(((path.name, job_id, str(step.get("id"))), step))
+    return found
+
+
+def test_every_call_requires_the_token_or_says_why_not() -> None:
+    """``require: "false"`` only where an empty token fails visibly later on."""
+    found = _workflow_calls()
+    assert len(found) == 11
+    opted_out = {site for site, step in found if _with(step).get("require") == "false"}
+    assert opted_out == set(NOT_REQUIRED)
+    for site, step in found:
+        require = _with(step).get("require")
+        assert require in (None, "false", "${{ inputs.private-git-deps }}"), site
+
+
+def test_no_inline_mint_outside_the_action() -> None:
+    """``git_auth.py repos`` runs in the action, and inline only in ``INLINE``."""
+    inline: set[tuple[str, str]] = set()
+    for path in sorted(WORKFLOWS.glob("*.y*ml")):
+        jobs: dict[str, dict[str, Any]] = _load(path).get("jobs") or {}
+        for job_id, job in jobs.items():
+            steps: list[Step] = job.get("steps") or []
+            if any("git_auth.py repos" in s.get("run", "") for s in steps):
+                inline.add((path.name, job_id))
+    assert inline == INLINE
+
+
+def test_inline_mint_without_its_guard_is_caught() -> None:
+    """Red-green: dropping the guard after the inline soft mint fails the pin."""
+    steps = _steps("conformance-reusable.yaml", "suite")
+    at = [s.get("id") for s in steps].index(MINT_ID)
+    unguarded = steps[: at + 1] + steps[at + 2 :]
+    with pytest.raises(AssertionError, match="fail-closed guard"):
+        assert_inline_scoped_mint(
+            unguarded,
+            mint_id=MINT_ID,
+            repos_id=REPOS_ID,
+            cond="inputs.private-git-deps",
+        )
+
+
+def test_action_without_its_guard_is_caught() -> None:
+    """Red-green: an action whose guard is gone, or fails open, fails the pin."""
+    spec = load_action()
+    spec["runs"]["steps"] = spec["runs"]["steps"][:2]
+    with pytest.raises((AssertionError, ValueError)):
+        assert_action_shape(spec)
+    spec = load_action()
+    guard = spec["runs"]["steps"][2]
+    guard["if"] = guard["if"].replace(
+        "inputs.require != 'false'", "inputs.require == 'true'"
+    )
+    with pytest.raises(AssertionError):
+        assert_action_shape(spec)
+    # Mentions `exit 1` and the secrets, but exits 0 (lens F-23fb19).
+    spec = load_action()
+    spec["runs"]["steps"][2]["run"] = (
+        'echo "::error::exit 1: pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY"\n'
+    )
+    with pytest.raises(AssertionError, match="exits 0"):
+        assert_action_shape(spec)
+
+
+def test_inline_guard_that_succeeds_is_caught() -> None:
+    """Red-green: an inline guard that echoes but exits 0 fails the pin."""
+    steps = copy.deepcopy(_steps("conformance-reusable.yaml", "suite"))
+    at = [s.get("id") for s in steps].index(MINT_ID)
+    steps[at + 1]["run"] = steps[at + 1]["run"].replace("exit 1", "echo exit 1")
+    with pytest.raises(AssertionError, match="exits 0"):
+        assert_inline_scoped_mint(
+            steps, mint_id=MINT_ID, repos_id=REPOS_ID, cond="inputs.private-git-deps"
+        )
 
 
 # ── Who reads the token ───────────────────────────────────────────────────────
@@ -194,6 +282,9 @@ def test_token_reaches_only_git_auth(workflow_file: str, job: str, flag: str) ->
             assert _mirrors(step), (
                 f"{name}: GIT_TOKEN on a step other than `git_auth.py mirror`"
             )
+        elif where == "with.git-token" and "/actions/sdr-e2e@" in step["uses"]:
+            # The image build's BuildKit secret (test_image_build_git_token.py).
+            continue
         elif where == "with.git-auth-token":
             assert step["uses"].startswith(
                 "atlanhq/application-sdk/.github/actions/"

@@ -883,26 +883,42 @@ backends and build hooks, and they inherit uv's environment.
 
 Instead:
 
-1. Mint the token in four inline steps, gated on the caller's opt-in input:
-   check out the app; sparse-check-out `.github/scripts/git_auth.py` from
-   `ref: ${{ job.workflow_sha }}` at `.sdk-git-auth`; run
-   `git_auth.py repos` to list the private atlanhq repositories the app names
-   as git dependencies (every `pyproject.toml` and `uv.lock` in the checkout),
-   then `rm -rf .sdk-git-auth`; and mint a read-only fleet App token
-   (`continue-on-error: true`) scoped to exactly that list. When the list is
-   empty, skip the mint: `create-github-app-token` with no `repositories`
-   grants the whole installation. The list is also capped by
-   `ALLOWED_PRIVATE_DEPS` in `git_auth.py`: a PR controls its own
-   `pyproject.toml` and `uv.lock`, so an app naming any other private repo
-   fails closed (`repos` and `mirror` both refuse it). Only aggregator repos in
-   `AGGREGATOR_REPOS` (common-app-server), matched on `GITHUB_REPOSITORY`, may
-   name any. Never fall back to `ORG_PAT_GITHUB`. Inline,
-   not a composite: callers pin composites `@main`, so a new one cannot run
-   before it merges, and composite steps cannot `continue-on-error`.
-   `.github/scripts/tests/_scoped_mint.py` pins the shape.
-2. Follow it with a guard step that fails, naming `FLEET_APP_ID` and
-   `FLEET_APP_PRIVATE_KEY`, when the opt-in is set, the app names a private
-   repository (`outputs.repositories != ''`) and the token is empty.
+1. Check out the app, then mint the token with the
+   `scoped-private-deps-token` composite, gated on the caller's opt-in input:
+
+   ```yaml
+   - name: Mint read-only token for private git dependencies
+     id: git-deps-token
+     if: inputs.private-git-deps
+     uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
+     with:
+       app-id: ${{ secrets.FLEET_APP_ID }}
+       private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+   ```
+
+   The action runs its own copy of `git_auth.py repos` to list the private
+   atlanhq repositories the app names as git dependencies (every
+   `pyproject.toml` and `uv.lock` under `project-dir`), and mints a read-only
+   fleet App token scoped to exactly that list. When the list is empty it
+   mints nothing: `create-github-app-token` with no `repositories` grants the
+   whole installation. The list is also capped by `ALLOWED_PRIVATE_DEPS` in
+   `git_auth.py`: a PR controls its own `pyproject.toml` and `uv.lock`, so an
+   app naming any other private repo fails closed (`repos` and `mirror` both
+   refuse it). Only aggregator repos in `AGGREGATOR_REPOS` (common-app-server),
+   matched on `GITHUB_REPOSITORY`, may name any. Never fall back to
+   `ORG_PAT_GITHUB`, and do not inline these steps again: thirteen inline
+   copies drifted until six had lost their guard (FND-4901).
+   `.github/scripts/tests/_scoped_mint.py` pins the action and every call.
+2. The action fails, naming `FLEET_APP_ID` and `FLEET_APP_PRIVATE_KEY`, when
+   the app names a private repository and the token did not mint. Pass
+   `require: "false"` only where an empty token already fails visibly further
+   on, and say why at the call: an image build (only a Dockerfile that mounts
+   the `git_token` secret needs it, and that build fails at its clone) or
+   certify (the failed install feeds the verdict, which blocks publish).
+   `_scoped_mint.py`'s `NOT_REQUIRED` lists every such call.
+   `conformance-reusable.yaml` still inlines the steps, with the guard: the
+   SDK's own PRs run it, so it can only call the action once the action is on
+   `main`.
 3. Hand the token to a step of its own that runs `git_auth.py mirror`, and
    run the fetching command through `git_auth.py run` in a later step with no
    token:

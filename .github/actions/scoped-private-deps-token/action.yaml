@@ -1,0 +1,86 @@
+name: Scoped private-dependency token
+description: |
+  Mints a read-only fleet App token that can read exactly the private atlanhq
+  git repositories the checked-out app names as dependencies, and nothing else
+  (FND-4740, FND-4744, FND-4901). The one place this mint is defined: every
+  reusable workflow that needs it calls this action instead of inlining it.
+
+  1. `git_auth.py repos` lists the private atlanhq repos the app's
+     `pyproject.toml` / `uv.lock` files name (public repos dropped). It fails
+     the step for any private repo not on `ALLOWED_PRIVATE_DEPS`, so a PR's
+     own lock file cannot widen the scope. The script is this action's own
+     copy (`github.action_path`), never the app's tree, and it is never
+     written into the workspace (the image build context, and the tree
+     conformance and pre-commit look at).
+  2. `create-github-app-token` mints `contents: read` scoped to that list, and
+     only when the list is non-empty: no `repositories` would grant the whole
+     installation. `continue-on-error`: a failed mint leaves `token` empty.
+  3. Unless `require` is "false", an empty token for a non-empty list fails
+     here with an error naming the two secrets. Never falls back to
+     ORG_PAT_GITHUB.
+
+  The caller checks the app out first and gates this step on its own opt-in.
+  `.github/scripts/tests/_scoped_mint.py` pins this file and every call.
+
+inputs:
+  app-id:
+    description: "The fleet App's id: pass `secrets.FLEET_APP_ID`."
+    required: true
+  private-key:
+    description: "The fleet App's private key: pass `secrets.FLEET_APP_PRIVATE_KEY`."
+    required: true
+  project-dir:
+    description: The app checkout, relative to the workspace.
+    required: false
+    default: "."
+  require:
+    description: |
+      Fail when the app names a private repo and the token does not mint.
+      Anything but "false" requires it (pass the caller's opt-in input). Pass
+      "false" only where an empty token already fails visibly further on:
+      an image build (only a Dockerfile that mounts the `git_token` secret
+      needs it, and that build fails at its clone) or certify (the install
+      failure feeds the verdict, which blocks publish). Say which at the call.
+    required: false
+    default: "true"
+
+outputs:
+  token:
+    description: The scoped token; empty when the app names no private repo or the mint failed.
+    value: ${{ steps.git-deps-token.outputs.token }}
+  repositories:
+    description: Comma-separated private atlanhq repos the app names; empty when none.
+    value: ${{ steps.git-deps-repos.outputs.repositories }}
+
+runs:
+  using: composite
+  steps:
+    - name: List the private atlanhq repos the app names (refuses any not allowlisted)
+      id: git-deps-repos
+      shell: bash
+      env:
+        PROJECT_DIR: ${{ inputs.project-dir }}
+      run: python3 "${{ github.action_path }}/../../scripts/git_auth.py" repos --project-dir "$PROJECT_DIR"
+
+    - name: Mint read-only token for private git dependencies
+      id: git-deps-token
+      if: steps.git-deps-repos.outputs.repositories != ''
+      # A failed mint leaves the token empty; the guard below decides.
+      continue-on-error: true
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: atlanhq
+        # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py: the repos step above
+        # fails for any private repo not on it.
+        repositories: ${{ steps.git-deps-repos.outputs.repositories }}
+        permission-contents: read
+
+    # Condition stays in `if:`, never in the shell (docs/standards/ci.md).
+    - name: Require the token
+      if: inputs.require != 'false' && steps.git-deps-repos.outputs.repositories != '' && steps.git-deps-token.outputs.token == ''
+      shell: bash
+      run: |
+        echo "::error title=No token for private git dependencies::The app names private atlanhq git dependencies but the fleet App token did not mint. Pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (secrets: inherit, or name both in an explicit secrets: mapping)."
+        exit 1
