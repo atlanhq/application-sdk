@@ -32,8 +32,9 @@ _REMOVED_ENV_VARS: frozenset[str] = frozenset(
         # implied control over all Prometheus metrics, but the flag now only
         # gates the Temporal Rust-core endpoint bind / proxy.
         "ATLAN_ENABLE_PROMETHEUS_METRICS",
-        # The dedicated TraceAdapter and its parquet pipeline were removed
-        # in favour of standard OTLP trace export.
+        # The traces adapter no longer batches, flushes, uploads or sweeps
+        # trace records; it emits each one as an OTLP span when it is
+        # recorded (FND-4913).
         "ATLAN_TRACES_BATCH_SIZE",
         "ATLAN_TRACES_CLEANUP_ENABLED",
         "ATLAN_TRACES_FLUSH_INTERVAL_SECONDS",

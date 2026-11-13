@@ -57,9 +57,13 @@ SLOW_TEST_SECONDS = 5.0
 #: first few annotations of a step, and a wall of them is noise.
 MAX_SLOW_TEST_ANNOTATIONS = 10
 
-#: Python 3.14+ legs skip the dev group (libcst has no 3.14 support) and
-#: the tests that need it, or pyatlan's pydantic-v1 compat (upstream fix:
-#: atlan-python PR #893).
+#: The uv group Python 3.14+ legs skip: libcst, for tools/migrate_v3 (once
+#: without 3.14 support). Only this group, so the rest of the dev group
+#: still installs there.
+PY314_SKIPPED_GROUP = "migrate-v3"
+
+#: Python 3.14+ legs skip the tests that need :data:`PY314_SKIPPED_GROUP`,
+#: or pyatlan's pydantic-v1 compat (upstream fix: atlan-python PR #893).
 _PY314_IGNORES = (
     "--ignore=tests/unit/tools",
     "--ignore=tests/unit/clients/test_atlan_client.py",
@@ -158,7 +162,7 @@ def build_command(
 
     argv = ["uv", "run", "--frozen"]
     if py314:
-        argv += ["--no-group", "dev"]
+        argv += ["--no-group", PY314_SKIPPED_GROUP]
     for pin in floor_pins:
         argv += ["--with", pin]
     # With --with, uv runs an overlay interpreter on top of the project venv.

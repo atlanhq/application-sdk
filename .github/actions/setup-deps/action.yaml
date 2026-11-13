@@ -209,8 +209,9 @@ runs:
       run: |
         PYTHON_MINOR=$(echo "${{ steps.python-version.outputs.version }}" | cut -d. -f2)
         if [ "${PYTHON_MINOR}" -ge 14 ] 2>/dev/null; then
-          # Python 3.14+: skip dev group (libcst's pyo3 doesn't support 3.14 yet)
-          "${{ github.action_path }}/../../scripts/with-retry.sh" uv sync --all-extras --no-group dev
+          # Python 3.14+: skip the migrate-v3 group (libcst, for tools/migrate_v3),
+          # the same group unit_test_command.py's PY314_SKIPPED_GROUP skips.
+          "${{ github.action_path }}/../../scripts/with-retry.sh" uv sync --all-extras --no-group migrate-v3
         else
           "${{ github.action_path }}/../../scripts/with-retry.sh" uv sync --all-extras --all-groups
         fi

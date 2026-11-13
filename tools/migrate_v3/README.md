@@ -33,7 +33,8 @@ A toolkit that automates most of the work of migrating a connector from applicat
 ## Prerequisites
 
 ```bash
-# libcst must be installed (it is in the [dev] dependency group)
+# libcst must be installed (it is in the migrate-v3 dependency group, a
+# default group, so a plain `uv sync` installs it too)
 uv sync --all-extras --all-groups
 ```
 
@@ -177,7 +178,7 @@ tools/migrate_v3/
   contract_mapping.py   method → typed Input/Output model lookup table
   rewrite_imports.py    libcst import rewriter (deterministic)
   run_codemods.py       composable codemod pipeline CLI (runs A1–A7 in order)
-  check_migration.py    grep-based validation script (stdlib only)
+  check_migration.py    grep-based validation script (stdlib only; runs without the SDK)
   fingerprint.py        connector type classifier (sql_metadata / sql_query / etc.)
   extract_context.py    structured context extraction & difficulty scoring
   MIGRATION_PROMPT.md   AI agent instructions for structural refactoring
@@ -195,6 +196,34 @@ If a connector uses a deprecated symbol that is not in the mapping table yet:
 2. Add an entry to `SYMBOL_MAP` (for a specific symbol rename) or `MODULE_MAP`
    (for a module-path-only change where the symbol name is unchanged).
 3. Re-run the rewriter and checker to confirm the new entry behaves correctly.
+
+A target must not be a deprecated SDK name: `tests/unit/tools/test_import_mapping.py`
+fails if one is in `packages/conformance/conformance/data/deprecated_symbols.json`.
+The one exception is `SqlQueryExtractor`, which the query-log entries keep
+until `SqlApp` has a query-log capability (owner review of #4552); the test
+names it and why. The App and handler base-class names the tool matches live
+once, in `tools/migrate_v3/__init__.py`; add a new SDK base there.
+
+---
+
+## Retirement
+
+This tool exists for v2 apps. Delete `tools/migrate_v3/`, `tests/unit/tools/`,
+the `migrate-v3` dependency group and its Python 3.14 carve-out (in
+`.github/scripts/unit_test_command.py` and `.github/actions/setup-deps`)
+in one PR once both hold:
+
+1. No consumer imports v2 code: `/audit-consumers`, checking for an import
+   from any module under `DEPRECATED_MODULE_ROOTS` in `import_mapping.py`
+   (the same match as check_migration's `no-deprecated-imports` rule), finds
+   no repo.
+2. Certify no longer runs `check_migration` (the "v3 shape" check in
+   `docs/standards/app-certification.md`), or a conformance rule has taken
+   over what it checks.
+
+v4.0.0 is the deadline either way: it removes `SqlQueryExtractor`, which the
+rewriter still targets. Before v4.0.0, either the tool is gone or those
+entries point at the replacement.
 
 ---
 

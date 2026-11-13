@@ -295,6 +295,21 @@ OTel auto-instrumentation does), the SDK uses that provider and attaches none of
 go wherever your provider sends them. To supply your own, install it with
 `opentelemetry.trace.set_tracer_provider(...)` before calling `run_main`.
 
+**Function spans with `@observability`.** Decorating a sync or async function with
+`@observability()` (from `application_sdk.observability.decorators.observability_decorator`) records,
+per call:
+
+- one `function_calls` counter increment, labelled `function`, `outcome` and `error_type`;
+- one span named after the function, from the call's start to its end, as a child of the span current
+  at the call site (for example the Temporal activity span). The span is only created when
+  `ATLAN_ENABLE_OTLP_TRACES` is on;
+- one `tracing`-level log line, plus an ERROR line with the traceback when the call raises. The
+  exception is re-raised unchanged.
+
+The span is emitted when the call returns. It is not current while the function runs, so spans the
+function itself opens are siblings of it, not children. Trace records are not buffered or written to
+the object store.
+
 In Kubernetes, set `OTEL_EXPORTER_OTLP_ENDPOINT` using the Downward API:
 
 ```yaml
@@ -775,7 +790,7 @@ cid = ctx.correlation_id if ctx else None  # str (empty when unset) or None when
 
 ## Observability Store Sink
 
-By default, logs, metrics, and traces are also written to gzip-compressed NDJSON files (`.json.gz`) in the object store under `artifacts/apps/observability/{sdr|non-sdr}/{logs|metrics|traces|sizing}/year=YYYY/month=MM/day=DD/hour=HH/`. `sdr` is used when `ENABLE_ATLAN_UPLOAD` is true, `non-sdr` otherwise. Each file name carries the deployment and app names. This enables historical querying even when the live pipelines (OTLP for logs/traces, Prometheus scrape / Pushgateway push for metrics) are unavailable.
+By default, logs and metrics are also written to gzip-compressed NDJSON files (`.json.gz`) in the object store under `artifacts/apps/observability/{sdr|non-sdr}/{logs|metrics|sizing}/year=YYYY/month=MM/day=DD/hour=HH/`. Traces are never written to the object store; they leave as spans through the tracer provider (OTLP, plus stdout when the development-only `ATLAN_ENABLE_TRACES_CONSOLE` is on). `sdr` is used when `ENABLE_ATLAN_UPLOAD` is true, `non-sdr` otherwise. Each file name carries the deployment and app names. This enables historical querying even when the live pipelines (OTLP for logs/traces, Prometheus scrape / Pushgateway push for metrics) are unavailable.
 
 Control with:
 
@@ -796,7 +811,7 @@ See [Configuration](../configuration.md#logging) for all observability variables
 
 ### The background flush loop
 
-Every periodic flush (logs, metrics, traces, sizing) and the Segment sender run on one daemon thread, `atlan-observability-loop`, with one event loop. It starts on first use, not at import. At interpreter exit it stops everything within one bound, `ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS` (default 10): each periodic flush makes its final flush, then the Segment sender sends its last batch, and a batch flush already writing is waited for, not cancelled. A process forked after the loop started gets its own loop, with every sink's periodic flush restarted on it. Past the bound the rest is abandoned and the process exits.
+Every periodic flush (logs, metrics, sizing) and the Segment sender run on one daemon thread, `atlan-observability-loop`, with one event loop. It starts on first use, not at import. At interpreter exit it stops everything within one bound, `ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS` (default 10): each periodic flush makes its final flush, then the Segment sender sends its last batch, and a batch flush already writing is waited for, not cancelled. A process forked after the loop started gets its own loop, with every sink's periodic flush restarted on it. Past the bound the rest is abandoned and the process exits.
 
 The console writer stays a separate thread on purpose. It does blocking writes to stdout and stderr, and on the shared loop a stalled pipe would stall every flush.
 

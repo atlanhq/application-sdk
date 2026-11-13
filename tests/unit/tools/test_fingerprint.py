@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.migrate_v3.fingerprint import fingerprint_connector
+from tools.migrate_v3 import SDK_APP_BASE_NAMES
+from tools.migrate_v3.fingerprint import (
+    _V3_BASE_CONNECTOR_TYPES,
+    fingerprint_connector,
+)
 
 
 def _write(tmp_path: Path, filename: str, source: str) -> Path:
@@ -128,6 +132,24 @@ class TestV3Detection:
         result = fingerprint_connector(tmp_path)
         assert result.connector_type == "sql_query"
         assert result.already_migrated is True
+
+    def test_sql_app_already_migrated(self, tmp_path: Path) -> None:
+        """§2a and §2c of MIGRATION_PROMPT.md land on SqlApp; a connector there
+        is migrated, not "custom"."""
+        _write(
+            tmp_path,
+            "app/connector.py",
+            "from application_sdk.templates import SqlApp\n"
+            "class MyConnector(SqlApp): pass\n",
+        )
+        result = fingerprint_connector(tmp_path)
+        assert result.connector_type == "sql_metadata"
+        assert result.already_migrated is True
+        rel = Path("app/connector.py")
+        assert result.evidence == [f"{rel}: already uses SqlApp (v3)"]
+
+    def test_v3_bases_are_sdk_app_bases(self) -> None:
+        assert {base for base, _ in _V3_BASE_CONNECTOR_TYPES} <= SDK_APP_BASE_NAMES
 
 
 # ---------------------------------------------------------------------------
