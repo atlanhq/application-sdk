@@ -307,10 +307,10 @@ application_sdk/
 │
 ├── common/                 # Shared utilities (not SDK-specific)
 │   ├── aws_utils.py        # AWS credential and session helpers
-│   ├── concurrency.py      # get_safe_num_threads()
+│   ├── concurrency.py      # get_actual_cpu_count(), run_in_thread
 │   ├── error_codes.py      # Component-specific error code constants
 │   ├── exc_utils.py        # Exception handling utilities
-│   ├── file_converter.py   # Format conversion helpers
+│   ├── file_converter.py   # JSON <-> Parquet helpers (deprecated, removed in v4.0)
 │   ├── file_ops.py         # File-system utilities
 │   ├── models.py           # Shared Pydantic models
 │   ├── path.py             # Path normalisation helpers

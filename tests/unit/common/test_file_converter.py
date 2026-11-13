@@ -35,10 +35,12 @@ from application_sdk.common.errors import FileConverterNotFoundError
 from application_sdk.common.file_converter import (
     ConvertFile,
     FileType,
+    _convert_json_to_parquet,
+    _convert_parquet_to_json,
+    _file_converter_registry,
     convert_data_files,
     convert_json_to_parquet,
     convert_parquet_to_json,
-    file_converter_registry,
 )
 
 # Only mark async tests individually
@@ -52,7 +54,7 @@ class TestConvertDataFiles:
         result = await convert_data_files([], FileType.PARQUET)
         assert result == []
 
-    @patch("application_sdk.common.file_converter.file_converter_registry")
+    @patch("application_sdk.common.file_converter._file_converter_registry")
     async def test_successful_conversion_single_file(self, mock_registry):
         """Test successful conversion of a single file."""
         # Arrange
@@ -69,7 +71,7 @@ class TestConvertDataFiles:
         mock_registry.registry.get.assert_called_once_with(ConvertFile.JSON_TO_PARQUET)
         mock_converter.assert_called_once_with("/path/input.json")
 
-    @patch("application_sdk.common.file_converter.file_converter_registry")
+    @patch("application_sdk.common.file_converter._file_converter_registry")
     async def test_successful_conversion_multiple_files(self, mock_registry):
         """Test successful conversion of multiple files."""
         # Arrange
@@ -95,7 +97,7 @@ class TestConvertDataFiles:
         ]
         assert mock_converter.call_count == 3
 
-    @patch("application_sdk.common.file_converter.file_converter_registry")
+    @patch("application_sdk.common.file_converter._file_converter_registry")
     async def test_conversion_with_failed_files_skipped(self, mock_registry):
         """Test that files returning None are skipped from results."""
         # Arrange
@@ -125,7 +127,7 @@ class TestConvertDataFiles:
         with pytest.raises(ValueError):
             await convert_data_files(input_files, FileType.PARQUET)
 
-    @patch("application_sdk.common.file_converter.file_converter_registry")
+    @patch("application_sdk.common.file_converter._file_converter_registry")
     async def test_converter_not_found_error(self, mock_registry):
         """Test that when converter function is None, ValueError is raised."""
         # Arrange - registry returns None for unknown converter
@@ -137,7 +139,7 @@ class TestConvertDataFiles:
         with pytest.raises(FileConverterNotFoundError):
             await convert_data_files(input_files, FileType.PARQUET)
 
-    @patch("application_sdk.common.file_converter.file_converter_registry")
+    @patch("application_sdk.common.file_converter._file_converter_registry")
     async def test_file_extension_detection_from_first_file(self, mock_registry):
         """Test that file extension is detected from the first file in the list."""
         # Arrange
@@ -312,15 +314,13 @@ class TestRegistryIntegration:
 
     def test_json_to_parquet_registered_in_registry(self):
         """Test that JSON to Parquet converter is properly registered."""
-        converter = file_converter_registry.registry.get(ConvertFile.JSON_TO_PARQUET)
-        assert converter is not None
-        assert converter == convert_json_to_parquet
+        converter = _file_converter_registry.registry.get(ConvertFile.JSON_TO_PARQUET)
+        assert converter is _convert_json_to_parquet
 
     def test_parquet_to_json_registered_in_registry(self):
         """Test that Parquet to JSON converter is properly registered."""
-        converter = file_converter_registry.registry.get(ConvertFile.PARQUET_TO_JSON)
-        assert converter is not None
-        assert converter == convert_parquet_to_json
+        converter = _file_converter_registry.registry.get(ConvertFile.PARQUET_TO_JSON)
+        assert converter is _convert_parquet_to_json
 
 
 class TestEdgeCasesAndErrorHandling:
@@ -408,3 +408,53 @@ class TestFileConverterIntegration:
         assert "id" in df_result.columns
         assert "product" in df_result.columns
         assert set(df_result["product"].values) == {"Laptop", "Mouse", "Keyboard"}
+
+
+class TestDeprecations:
+    """Every public name in the module warns, so B001 has something to fan out."""
+
+    def test_registry_alias_warns_and_serves_the_registry(self):
+        from application_sdk.common import file_converter
+
+        with pytest.warns(DeprecationWarning, match="file_converter_registry"):
+            registry = file_converter.file_converter_registry
+        assert registry is _file_converter_registry
+
+    def test_unknown_attribute_still_raises(self):
+        from application_sdk.common import file_converter
+
+        with pytest.raises(AttributeError):
+            file_converter.no_such_name  # noqa: B018
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda: convert_json_to_parquet("/nonexistent.json"),
+            lambda: convert_parquet_to_json("/nonexistent.parquet"),
+            lambda: ConvertFile("json_to_parquet"),
+            lambda: FileType("json"),
+        ],
+        ids=["json_to_parquet", "parquet_to_json", "ConvertFile", "FileType"],
+    )
+    def test_public_names_warn(self, call):
+        with pytest.warns(DeprecationWarning, match="removed in v4.0"):
+            call()
+
+    async def test_convert_data_files_warns_once(self):
+        """The function's own warning only: it must not trip ConvertFile's too."""
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with patch(
+                "application_sdk.common.file_converter._file_converter_registry"
+            ) as reg:
+                reg.registry.get.return_value = Mock(return_value="/p/out.parquet")
+                await convert_data_files(["/p/in.json"], FileType.PARQUET)
+        messages = [str(w.message) for w in caught if w.category is DeprecationWarning]
+        assert len(messages) == 1
+        assert messages[0].startswith("convert_data_files is deprecated")
+
+    def test_converter_not_found_error_warns(self):
+        with pytest.warns(DeprecationWarning, match="UnimplementedError"):
+            FileConverterNotFoundError()

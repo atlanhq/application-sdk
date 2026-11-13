@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.57.0
-source-sha:    c5e55cc06c70fdfd3f43a11b735bb1b182975e35
-source-date:   2026-11-13T16:18:06Z
+source-sha:    6a117d049fa05e1586b22a59b83fb46844b9424c
+source-date:   2026-11-13T20:02:06Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -612,7 +612,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 
 - **Import:** `from application_sdk.common import TaskResult`
 - **Signature:** `class TaskResult`
-- **Summary:** _(no docstring)_
+- **Summary:** A ``{status, message, metadata}`` dict.
 - **Defined in:** `application_sdk/common/models.py`
 
 #### `TaskStatistics`
@@ -748,7 +748,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 
 - **Import:** `from application_sdk.common import get_actual_cpu_count`
 - **Signature:** `get_actual_cpu_count()`
-- **Summary:** Get the actual number of CPUs available to the current process.
+- **Summary:** Whole CPUs this process may use: the tighter of affinity and the CPU limit.
 - **Defined in:** `application_sdk/common/concurrency.py`
 
 #### `get_backfill_tables`

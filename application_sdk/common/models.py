@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, TypedDict
 
+from typing_extensions import deprecated
+
 
 @dataclass
 class TaskStatistics:
@@ -25,7 +27,21 @@ class TaskStatistics:
             self.partitions = []
 
 
+@deprecated(
+    "application_sdk.common.models.TaskResult is deprecated; use "
+    "application_sdk.common.models.TaskStatistics for a task's output, or a "
+    "TypedDict of your own — will be removed in v4.0."
+)
 class TaskResult(TypedDict):
+    """A ``{status, message, metadata}`` dict.
+
+    .. deprecated:: 3.58.0
+        Nothing in the SDK produces or reads it. Use :class:`TaskStatistics`
+        or define your own ``TypedDict``. Will be removed in v4.0. Calling a
+        ``TypedDict`` builds a plain dict, so this warns only in type checkers
+        and conformance (B001), not at runtime.
+    """
+
     status: str
     message: str
     metadata: Dict[str, Any]

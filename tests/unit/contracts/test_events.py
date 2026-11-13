@@ -50,3 +50,33 @@ class TestWorkerTokenRefreshEventData:
         model = WorkerTokenRefreshEventData.model_validate(data)
         assert model.app_version == ""
         assert model.commit_sha == ""
+
+
+class TestV2EventRegistrationDeprecations:
+    """The v2 event-registration models warn; nothing in the SDK reads them."""
+
+    def test_event_filter_warns(self) -> None:
+        from application_sdk.contracts.events import EventFilter
+
+        with pytest.warns(DeprecationWarning, match="EventFilterRule"):
+            EventFilter(path="event.data.type", operator="==", value="x")
+
+    def test_consumes_warns(self) -> None:
+        from application_sdk.contracts.events import Consumes
+
+        with pytest.warns(DeprecationWarning, match="EventTriggerConfig"):
+            Consumes(eventId="i", eventType="t", eventName="n", version="1")
+
+    def test_event_registration_warns(self) -> None:
+        from application_sdk.contracts.events import EventRegistration
+
+        with pytest.warns(DeprecationWarning, match="removed in v4.0"):
+            EventRegistration()
+
+    def test_importing_the_module_does_not_warn(self, recwarn) -> None:
+        import importlib
+
+        import application_sdk.contracts.events as events
+
+        importlib.reload(events)
+        assert not [w for w in recwarn if w.category is DeprecationWarning]
