@@ -481,6 +481,28 @@ is an expression that renders differently on the skipping event. When a
 downstream gate reads the skipped job's `needs.<job>.result`, make it accept
 `skipped` explicitly.
 
+## A path filter lists what a test reads, not only where it lives
+
+**Rule:** when a test reads a file from another area of the repo, put that
+file in the `sdk-gate.yaml` path filter that runs the test's job.
+
+**Why:** a drift guard runs only when its job's filter matches. If the filter
+lists the guard's own directory but not the file it reads, a PR that edits
+only that file merges without the guard. The drift then shows up on a later,
+unrelated PR. FND-4907 found three cases:
+
+- the canonical `.github/` sources of the bootstrap templates, checked by
+  `packages/conformance/tests/test_bootstrap.py` (now in `conformance_pkg`);
+- toolkit examples read by SDK and conformance tests (now in `sdk` and
+  `conformance_pkg`);
+- `application_sdk` modules the generated toolkit examples import, checked by
+  `contract-toolkit/scripts/test-sdk-import.py` (now in `toolkit`).
+
+**Enforced by** `.github/scripts/tests/test_sdk_gate_filter_coverage.py`. It
+finds these reads in the source, so a new one fails until its filter covers it.
+A drift guard whose input is missing fails; it does not skip. A skip turns the
+guard off without anyone noticing.
+
 ## What a merge-queue entry re-runs
 
 **Rule:** on `merge_group`, a check runs only if its result can change when the

@@ -3139,11 +3139,33 @@ def test_derive_hello_world(tmp_path: pathlib.Path) -> None:
 # monorepo (used directly by application-sdk's own conformance-reusable.yaml
 # run, and vendored into every consumer repo by `bootstrap`). If the two
 # drift apart, the SDK's own CI would keep exercising the fixed version while
-# every bootstrapped consumer repo silently gets a stale one. Skipped when
-# the monorepo tree isn't checked out (e.g. an isolated sdist build).
+# every bootstrapped consumer repo silently gets a stale one.
+#
+# A missing canonical file FAILS rather than skips (FND-4907): this suite
+# only runs from the monorepo checkout, so a missing file means the canonical
+# side was renamed or deleted, and a skip would turn the guard off unnoticed.
+# Templates with no canonical copy in this repo are named below, and the
+# test also fails if one of them gains one, so the set cannot hide drift.
 # ---------------------------------------------------------------------------
 
 _MONOREPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+
+# MANAGED_ACTION_FILES entries whose template IS the only source: this repo
+# does not run them itself, so there is nothing to drift from.
+_TEMPLATE_ONLY_ACTION_FILES: frozenset[str] = frozenset(
+    {
+        ".github/scripts/connector_review_gate.py",
+        ".github/scripts/release_gate.py",
+    }
+)
+
+
+def test_template_only_action_files_are_managed_entries() -> None:
+    """A stale name in the template-only set would exempt nothing and mislead."""
+    managed = {dest_rel for dest_rel, _ in MANAGED_ACTION_FILES}
+    assert _TEMPLATE_ONLY_ACTION_FILES <= managed, (
+        f"not in MANAGED_ACTION_FILES: {sorted(_TEMPLATE_ONLY_ACTION_FILES - managed)}"
+    )
 
 
 @pytest.mark.parametrize("dest_rel,template_name", MANAGED_ACTION_FILES)
@@ -3151,8 +3173,20 @@ def test_managed_action_template_matches_canonical_source(
     dest_rel: str, template_name: str
 ) -> None:
     canonical = _MONOREPO_ROOT / dest_rel
-    if not canonical.exists():
-        pytest.skip(f"monorepo source not checked out: {canonical}")
+    if dest_rel in _TEMPLATE_ONLY_ACTION_FILES:
+        assert not canonical.exists(), (
+            f"{dest_rel} now exists in this repo, so the template has a canonical "
+            "source to drift from. Remove it from _TEMPLATE_ONLY_ACTION_FILES so "
+            "this guard compares the two, and add it to sdk-gate.yaml's "
+            "`conformance_pkg` filter."
+        )
+        return
+    assert canonical.is_file(), (
+        f"canonical source {dest_rel} for template {template_name} is missing. "
+        "If it moved, update MANAGED_ACTION_FILES and sdk-gate.yaml's "
+        "`conformance_pkg` filter; if it is gone on purpose, list it in "
+        "_TEMPLATE_ONLY_ACTION_FILES."
+    )
     assert render(template_name) == canonical.read_text(encoding="utf-8"), (
         f"packages/conformance/conformance/bootstrap/templates/{template_name} has "
         f"drifted from the canonical {dest_rel} — copy the canonical file's content "
