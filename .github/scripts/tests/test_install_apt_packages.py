@@ -12,6 +12,7 @@ value unchecked. The check now lives in one script, executed here, and
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -20,6 +21,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import install_apt_packages  # noqa: E402
 from install_apt_packages import (  # noqa: E402
     InvalidPackages,
     commands,
@@ -162,6 +164,34 @@ def test_failed_install_fails_the_step(monkeypatch: pytest.MonkeyPatch) -> None:
     assert main(["--env", "APT_PACKAGES"], run=Recorder(codes=[0, 100])) == 100
 
 
+def test_every_apt_call_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[float | None] = []
+
+    def fake_run(argv: list[str], *, check: bool, timeout: float | None):
+        seen.append(timeout)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(install_apt_packages.subprocess, "run", fake_run)
+    assert install_apt_packages._run(["sudo", "apt-get", "update"]) == 0
+    assert seen == [install_apt_packages.TIMEOUT_S]
+
+
+def test_a_stalled_apt_call_fails_the_step(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A hung mirror or proxy must fail the install, not hold the job until
+    the runner's own timeout."""
+
+    def stall(argv: list[str], **_kwargs: object):
+        raise subprocess.TimeoutExpired(argv, install_apt_packages.TIMEOUT_S)
+
+    monkeypatch.setattr(install_apt_packages.subprocess, "run", stall)
+    monkeypatch.setenv("APT_PACKAGES", "gcc")
+    code = main(["--env", "APT_PACKAGES"])
+    assert code == install_apt_packages.TIMED_OUT
+    assert "did not finish" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     "argv", [[], ["--env", "A", "--file", "f"]], ids=["no-source", "both"]
 )
@@ -225,6 +255,68 @@ def _code(line: str) -> str:
     return line.split(" #", 1)[0] if not line.lstrip().startswith("#") else ""
 
 
+def _commands(text: str) -> list[str]:
+    """Shell commands in *text*, comments dropped and every backslash-continued
+    line joined onto the one it continues, so `sudo apt-get \\` followed by
+    `install -y "$X"` is scanned as the one command it is."""
+    out: list[str] = []
+    pending = ""
+    for line in text.splitlines():
+        code = _code(line).rstrip()
+        if code.endswith("\\"):
+            pending += code[:-1] + " "
+            continue
+        out.append(pending + code)
+        pending = ""
+    if pending:
+        out.append(pending)
+    return out
+
+
+def _installs(text: str) -> tuple[list[str], set[str]]:
+    """(installs of a variable list, fixed package names installed) in *text*."""
+    variable: list[str] = []
+    fixed: set[str] = set()
+    for command in _commands(text):
+        if not _APT_INSTALL.search(command):
+            continue
+        if "$" in command or "xargs" in command:
+            variable.append(command.strip())
+            continue
+        fixed.update(
+            word
+            for word in _APT_INSTALL.split(command, 1)[1].split()
+            if not word.startswith("-") and re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", word)
+        )
+    return variable, fixed
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'sudo apt-get install -y "$APT_PACKAGES"',
+        "sudo apt-get install -y \\\n  $APT_PACKAGES",
+        'sudo apt-get \\\n  install -y "$APT_PACKAGES"',
+        "sudo apt-get -qq \\\n  install \\\n  -y \\\n  ${{ inputs.apt-packages }}",
+        "xargs -a .github/ci-system-deps.txt sudo apt-get install -y",
+        "sudo apt install -y $SYSTEM_DEPS",
+    ],
+    ids=["one-line", "list-continued", "verb-continued", "every-word", "xargs", "apt"],
+)
+def test_the_guard_sees_a_variable_install_in_any_shape(text: str) -> None:
+    """The guard reads commands, not physical lines: a continuation must not
+    hide a caller's list from it."""
+    variable, _ = _installs(text)
+    assert variable, text
+
+
+def test_the_guard_reads_a_continued_fixed_install() -> None:
+    variable, fixed = _installs(
+        "sudo apt-get install -y \\\n  --no-install-recommends \\\n  twingate"
+    )
+    assert variable == [] and fixed == {"twingate"}
+
+
 def test_every_apt_get_install_goes_through_the_script() -> None:
     """A caller's package list reaches apt-get only through
     install_apt_packages.py. Any other `apt-get install` in CI must be one of
@@ -232,21 +324,12 @@ def test_every_apt_get_install_goes_through_the_script() -> None:
     found: set[tuple[str, str]] = set()
     for path in _ci_files():
         rel = str(path.relative_to(REPO_ROOT))
-        for line in path.read_text(encoding="utf-8").splitlines():
-            code = _code(line)
-            if not _APT_INSTALL.search(code):
-                continue
-            packages = [
-                word
-                for word in code.split("install", 1)[1].split()
-                if not word.startswith("-")
-                and re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", word)
-            ]
-            assert "$" not in code and "xargs" not in code, (
-                f"{rel}: `{code.strip()}` installs a variable list without "
-                "install_apt_packages.py"
-            )
-            found.update((rel, package) for package in packages)
+        variable, fixed = _installs(path.read_text(encoding="utf-8"))
+        assert not variable, (
+            f"{rel}: {variable} installs a variable list without "
+            "install_apt_packages.py"
+        )
+        found.update((rel, package) for package in fixed)
     assert found == FIXED_INSTALLS, (
         "an `apt-get install` outside install_apt_packages.py: route it "
         "through the script, or, for a fixed package this repo names, add it "

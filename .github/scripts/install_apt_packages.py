@@ -23,7 +23,9 @@ rejected list installs nothing and the step fails. An empty list fails too:
 the calling step's ``if:`` already skips when nothing is declared, so an empty
 value here means the gate and the value disagree.
 
-Packages are passed to ``apt-get`` as argv, never through a shell.
+Packages are passed to ``apt-get`` as argv, never through a shell. Each
+``apt-get`` call is bounded by ``TIMEOUT_S``: a stalled mirror or proxy fails
+the step instead of holding the job until the runner's own timeout.
 
 Usage:
     python3 install_apt_packages.py --env APT_PACKAGES
@@ -44,6 +46,12 @@ PACKAGE_RE = re.compile(r"[a-z0-9][a-z0-9+.-]*")
 
 UPDATE = ["sudo", "apt-get", "update", "-qq"]
 INSTALL = ["sudo", "apt-get", "install", "-y", "--no-install-recommends"]
+
+# Generous for a cold `apt-get update` plus a large -dev install on a hosted
+# runner; far below the 6 h job ceiling a hung mirror would otherwise burn.
+TIMEOUT_S = 600
+# What coreutils `timeout` exits with, so the log reads as a timeout.
+TIMED_OUT = 124
 
 Runner = Callable[[Sequence[str]], int]
 
@@ -74,7 +82,14 @@ def commands(packages: Sequence[str]) -> list[list[str]]:
 
 
 def _run(argv: Sequence[str]) -> int:
-    return subprocess.run(list(argv), check=False).returncode
+    try:
+        return subprocess.run(list(argv), check=False, timeout=TIMEOUT_S).returncode
+    except subprocess.TimeoutExpired:
+        print(
+            f"::error::{' '.join(argv[:3])} did not finish in {TIMEOUT_S}s",
+            file=sys.stderr,
+        )
+        return TIMED_OUT
 
 
 def _read(args: argparse.Namespace) -> tuple[str, str]:
