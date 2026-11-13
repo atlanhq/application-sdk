@@ -12,6 +12,7 @@ jobs:
     if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')
     name: Create release and publish to PyPI
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
       # PyPI trusted publishing (OIDC) for atlan-application-sdk-api; see the
@@ -206,6 +207,7 @@ jobs:
     name: Sync Linear release
     needs: [release]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
 

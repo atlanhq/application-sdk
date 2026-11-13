@@ -66,6 +66,7 @@ jobs:
       always() && github.event_name != 'merge_group' &&
       (!startsWith(github.head_ref, 'bump-version') || needs.opt-in.outputs.opted_in == 'true')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: read
@@ -203,6 +204,7 @@ jobs:
       always() &&
       (!startsWith(github.head_ref, 'bump-version') || needs.opt-in.outputs.opted_in == 'true')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Least privilege (FND-4247): pre-commit only reads the tree. Without this
     # block the job ran with the repository's default token. The job stays in
     # this workflow on purpose: `Pre-commit Checks` is a required context, and
