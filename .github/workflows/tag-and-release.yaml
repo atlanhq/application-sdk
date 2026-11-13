@@ -26,7 +26,7 @@ on:
   workflow_call:
     inputs:
       sdk_scripts_ref:
-        description: "Ref of atlanhq/application-sdk to pull helper scripts from (default: main)"
+        description: "Deprecated and ignored (FND-4905): the SDK helper scripts are always checked out from main, like the @main this reusable is called at, so a caller cannot pin them to another ref. Still declared so callers that pass it keep validating."
         required: false
         type: string
         default: "main"
@@ -74,7 +74,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
-          ref: ${{ inputs.sdk_scripts_ref }}
+          ref: main
           path: .sdk-scripts
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false

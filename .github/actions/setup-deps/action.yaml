@@ -7,6 +7,20 @@ description: |
   the virtual environment.
 
 inputs:
+  checkout:
+    required: false
+    description: |
+      "false" when the job already checked the caller repo out before this
+      action. Any other value (the default "true") checks it out here, as
+      fleet callers that call this action first expect. Either way the
+      checkout here never persists the job token to `.git/config`: the
+      tests run PR code after this action, and nothing later in it pushes.
+      Skipping the checkout also keeps what the job did to the tree before
+      this action, where a checkout here would `git clean` it away.
+      `lfs: "true"` checks out regardless: it has to fetch the LFS objects,
+      and with no persisted credential there is nothing for a later
+      `git lfs pull` to authenticate a private repo with.
+    default: "true"
   cache:
     description: "Enable dependency caching"
     required: false
@@ -40,13 +54,60 @@ inputs:
       ORG_PAT_GITHUB here; the reusables mint a read-only fleet App token
       scoped to the app's private deps.
     default: ""
+  lfs:
+    required: false
+    description: |
+      "true" to check out the repo's git-LFS objects (actions/checkout
+      `lfs: true`), even when the job sets GIT_LFS_SKIP_SMUDGE=1, then run
+      `git lfs checkout` so the files are real even when an earlier step
+      already checked out the same commit with pointers; fails if an LFS
+      object of HEAD is missing. Any other value (the
+      default "false") checks out exactly as before, with no LFS fetch.
+    default: "false"
 
 runs:
   using: "composite"
   steps:
+    # persist-credentials: false on both checkouts (FND-4900). The default
+    # writes the job token into .git/config, where the PR code the tests run
+    # next can read it, even when the caller's own checkout declined to.
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      if: inputs.checkout != 'false' && inputs.lfs != 'true'
       with:
         fetch-depth: 1
+        persist-credentials: false
+
+    # Opt-in LFS checkout. The step-level GIT_LFS_SKIP_SMUDGE overrides a
+    # job-level "1" (tests-reusable's git-lfs-skip-smudge) for this checkout
+    # only: with the skip on, checkout would fetch the objects yet leave the
+    # pointers in the tree. Later clones (`uv sync`'s git deps) still skip.
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      if: inputs.lfs == 'true'
+      env:
+        GIT_LFS_SKIP_SMUDGE: "0"
+      with:
+        fetch-depth: 1
+        lfs: true
+        persist-credentials: false
+
+    # Write the fetched LFS objects over any pointers in the tree. A job that
+    # checked out the same commit before this action, with the smudge
+    # skipped (tests-reusable's "Checkout app" for private-git-deps), leaves
+    # pointers that the checkout above does not rewrite: git skips files whose
+    # index entry is unchanged, and actions/checkout never runs
+    # `git lfs checkout`. Without this the LFS jar stayed a pointer and the
+    # Java tests skipped (FND-4970). A no-op when the files are already real.
+    # `git lfs checkout` exits 0 and leaves the pointer when an object is not
+    # local, so fsck then fails the step on any missing or corrupt object of
+    # HEAD instead of letting the tests skip on a pointer.
+    - name: Materialise LFS files
+      if: inputs.lfs == 'true'
+      shell: bash
+      env:
+        GIT_LFS_SKIP_SMUDGE: "0"
+      run: |
+        git lfs checkout
+        git lfs fsck --objects HEAD
 
     # Test on the Python the app image ships (FND-4611). A literal default here
     # ("3.11" until FND-4611) let every connector's unit and integration tiers

@@ -37,6 +37,21 @@ are stubbed, `git` runs against a throwaway repo in `tmp_path`, and every
 branch (opt-in gate, missing input, eval-failure fallback, no-change
 short-circuit) has a case.
 
+### Never aggregate over `gh api --paginate --jq`
+
+With `--paginate`, gh runs the `--jq` filter once per page. A filter that
+aggregates (`length`, `add`, `first`, `any`) therefore prints one result per
+page: a review count over two pages is `"1\n0"`, not `1`. Fetch the listing
+with `--paginate --slurp`, flatten it with `_flatten_pages`, and do the
+counting in Python. `renovate_approval_conditions.fetch_reviews` and
+`count_signature_approvals` do this for review counts, and
+`vuln_auto_merge_gate` imports them rather than keeping its own copy (FND-4898).
+A per-item filter such as `.[].filename` is fine, since its output does not
+depend on where the page boundaries fall.
+
+When two gate scripts do the same step, import one from the other. A fix to a
+private copy does not reach the other script.
+
 ### Enforced by a test (FND-4244)
 
 `.github/scripts/tests/test_no_conditional_run_blocks.py` walks every workflow
@@ -907,6 +922,27 @@ Used by `tests-reusable.yaml` (unit, integration, e2e), `checks-reusable.yaml`,
 in `build-and-publish-app.yaml` (see `docs/standards/app-certification.md`).
 `test_private_git_deps_wiring.py` pins the shape (FND-4740).
 
+## A job's one checkout is the one that counts
+
+**Rule:** a job that checks its repo out before `setup-deps`, or before a
+composite that wraps it (`connector-unit-tests`, `connector-integration-tests`),
+passes `checkout: "false"`. A job that passes it has an unconditional checkout
+at the workspace root before that step. `unit-tests` and `sdr-e2e` always pass
+`"false"`: their callers have to check out first anyway.
+
+`setup-deps` used to check the repo out again on every call, without
+`persist-credentials: false`. The second checkout wrote the job token back into
+`.git/config` for the PR code that the tests run next, even where the job's own
+checkout had declined to, and its `git clean` wiped whatever the job had put in
+the workspace. Both of `setup-deps`' checkouts now set
+`persist-credentials: false`. The input still defaults to `"true"`, so a fleet
+caller that relies on `setup-deps` to check out is unchanged. `lfs: "true"`
+checks out regardless: that checkout is how the LFS objects arrive, and a later
+`git lfs pull` would have no credential to fetch a private repo's objects with.
+
+`.github/scripts/tests/test_setup_deps_checkout_wiring.py` checks every
+workflow job's call site against the rule (FND-4900).
+
 ## A fleet App token that fails to mint fails the job
 
 **Rule:** a `Mint fleet App token` step has no `continue-on-error`, and its
@@ -950,6 +986,45 @@ packages are org-level and the App only has repo-level Packages permission.
 The scoped `git-deps-token` / `image-git-token` mints stay `continue-on-error`:
 they have no PAT fallback, and the install or build that needs the token fails
 when it is empty. `test_app_token_fails_closed.py` pins all of this.
+
+## A fleet App token asks for what it uses
+
+**Rule:** every `create-github-app-token` step sets at least one
+`permission-*` input, and a step that sets `owner` also sets `repositories`.
+
+```yaml
+# WRONG — every permission the App holds, on every repo in the installation
+- uses: actions/create-github-app-token@<sha> # v3
+  with:
+    app-id: ${{ secrets.FLEET_APP_ID }}
+    private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+    owner: atlanhq
+
+# RIGHT — the repos and permissions the job's API calls need
+- uses: actions/create-github-app-token@<sha> # v3
+  with:
+    app-id: ${{ secrets.FLEET_APP_ID }}
+    private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+    owner: atlanhq
+    repositories: application-sdk
+    permission-contents: read
+```
+
+Without `permission-*`, the token carries every permission the App holds.
+With `owner` and no `repositories`, it reaches every repo in the installation.
+Leaving out both `owner` and `repositories` scopes the token to the current
+repo, which is already narrow.
+
+Metadata read is always granted, so do not list it. List only what the job's
+calls need: an under-scoped token fails at the first API call it lacks.
+Name the endpoint behind each permission in a comment on the mint.
+
+A job that only learns its repos at run time, such as a fleet dashboard, may
+omit `repositories`. It then needs an `OWNER_WIDE` entry that says why. A
+read-only one also gets an entry in `READ_ONLY_FLEET`, which pins its exact
+read-only permission set. Mints that predated this rule are listed in
+`UNSCOPED_PERMISSIONS`. That list only shrinks: scope the mint, then delete its
+entry. `test_app_token_scoping.py` enforces all of this (FND-4902).
 
 ## Renovate release freeze
 
@@ -1503,9 +1578,7 @@ because the job name is a required context, and `renovate-auto-approve.yml`,
 
 A `uses:` reusable workflow does **not** bring its own repo's files into the
 caller's checkout. To run an SDK script from a reusable that other repos call,
-sparse-checkout it into a side path and invoke from there — the
-`.sdk-scripts` pattern used by `release-version-bump.yaml` and
-`generated-freshness.yaml`:
+sparse-checkout it into a side path and invoke from there:
 
 ```yaml
 - uses: actions/checkout@<sha>   # consumer repo (the working tree the script acts on)
@@ -1522,38 +1595,119 @@ sparse-checkout it into a side path and invoke from there — the
 The driver runs from the consumer's working directory, so it acts on the
 consumer's files; `.sdk-scripts` only holds SDK code and must never be staged.
 
-### Do not try to derive the ref from `github.job_workflow_sha`
+### The ref is `main` or `job.workflow_sha`, nothing else
 
-`ref: main` above is deliberate and is the default answer. Every consumer pins
-these reusables at `@main`, and several checkouts of this repo pin `main` for a
-stronger reason — they fetch *content* that must reflect `main` whatever ref the
-caller is on (`trivy-container.yaml`'s base allowlist,
-`vuln-reconcile-on-release.yml`'s scan baseline,
-`contract-toolkit-publish.yml`'s published content). Those carry their reasoning
-inline; leave them as they are.
+**Rule:** every `actions/checkout` of `repository: atlanhq/application-sdk` in
+`.github/workflows/` uses one of two refs.
 
-The tempting "improvement" is to derive the ref so the script always matches the
-workflow that resolved it. `${{ github.job_workflow_sha }}` is documented in the
-`github` context as exactly that — the commit of the reusable workflow file the
-caller resolved. **It renders empty.** It is an OIDC token claim, not a usable
-expression value.
+- **`ref: main` is the default.** Every consumer calls these reusables `@main`,
+  so `main` is the SDK version the fleet runs. It has two properties worth
+  keeping:
+  - A re-run picks up a script fix. GitHub re-runs a reusable at the commit it
+    first resolved, so a `job.workflow_sha` checkout re-runs the old script
+    even after the fix merges. That matters most for the release bump and
+    tag-and-release, which run on a PR closing and have no other trigger.
+  - A caller pinned to some other ref of the reusable still gets main's
+    scripts, so a stale pin drifts towards main rather than becoming a
+    self-consistent fork of the SDK's CI.
+- **`ref: ${{ job.workflow_sha }}`** (the commit of the workflow file that
+  defines the job) is for checkouts that must match their own YAML exactly.
+  That means a reusable this repo's own PR CI runs, where a PR has to test its
+  own copy of a driver rather than main's. It
+  also covers the scoped private-dependency token mint's `git_auth.py`. Both
+  were already pinned. actionlint (≤1.7.12) does not model `job.workflow_sha`,
+  so each file that uses it carries the `property "workflow_sha" is not
+  defined` ignore in `.github/actionlint.yaml`.
+
+Ruled out:
+
+- **A caller-supplied ref.** An input that picks the SDK ref is a pinning knob,
+  and pinning is what the fleet is moving away from. `sdk_scripts_ref` (on
+  `commits.yaml`, `release-version-bump.yaml` and `tag-and-release.yaml`) and
+  `sdk_ref` (on `conformance-upload-sarif-reusable.yaml`) are still declared so
+  callers that pass them keep validating, and are ignored (FND-4905). No caller
+  in the fleet passed either.
+- **An omitted ref.** It resolves to `main` today, but the reader cannot tell
+  that was meant.
+- **Any other expression**, above all `github.job_workflow_sha` (below).
+
+A deliberate exception carries `# sdk-checkout-ref-exempt: <why>` inside the
+step and is listed in the guard. The only one is `tests-reusable.yaml`'s
+`report-to-sdk` callback checkout, whose `application-sdk-ref` is set by this
+repo's own cross-repo dispatch so an SDK PR tests its own callback scripts.
+
+`.github/scripts/tests/test_sdk_checkout_ref_pinning.py` enforces all of this.
+
+### Not `github.job_workflow_sha`
+
+`${{ github.job_workflow_sha }}` is documented in the `github` context as the
+commit of the reusable workflow file the caller resolved. **It renders empty.**
+It is an OIDC token claim, not a usable expression value. The property that
+works lives on `job`, not `github`.
 
 The failure is silent and the wrong way round: `actions/checkout` treats an
 empty `ref` as *not supplied* and takes the default branch, so the step goes
 **green having fetched a different commit's script than the workflow the caller
-pinned** — the wrong version of every code path, with nothing red to show for
-it. FND-372 hit this; it only surfaced because the script did not exist on
+pinned**. FND-372 hit this; it only surfaced because the script did not exist on
 `main` yet, so the *next* step died on a missing file.
 
 Generalising: never let a `with:` value that must not be blank come from an
-expression that can evaluate to empty. Prefer a shape where "unset" cannot be
-expressed over a guard that checks for it after the fact — a declared input with
-a default, or a literal.
+expression that can evaluate to empty. **When verifying a change to a workflow
+like this, read the checkout step's logged `ref:` rather than concluding from a
+green tick.**
 
-**When verifying any change to a workflow like this, read the checkout step's
-logged `ref:` rather than concluding from a green tick.** A step that fetched the
-wrong ref still passes; it is the next step that fails, and only if what it
-wanted happens to be absent from the fallback.
+## System packages go through one script
+
+**Rule:** a package list a caller supplies reaches `apt-get install` only
+through `.github/scripts/install_apt_packages.py`. The script takes the list
+from an environment variable (`--env APT_PACKAGES`) or a file
+(`--file .github/ci-system-deps.txt`), checks every whitespace-separated token
+is a plain Debian package name (`[a-z0-9][a-z0-9+.-]*`), and only then runs
+`apt-get update` and `apt-get install -y --no-install-recommends` with the
+packages as argv. A rejected or empty list installs nothing and fails the
+step.
+
+The same list has three input names and a file, and all of them go through it:
+
+| Where it is declared | Installed by |
+| --- | --- |
+| `apt-packages` (`tests-reusable.yaml`, three jobs; `conformance-reusable.yaml`) | `--env APT_PACKAGES` |
+| `apt_packages` (`build-and-publish-app.yaml`, `certify` and `certify-unit`) | `--env APT_PACKAGES` |
+| `system_deps` (`checks-reusable.yaml`) | `--env SYSTEM_DEPS` |
+| `.github/ci-system-deps.txt` (bootstrap `--system-deps`) | `conformance-reusable.yaml`, `--file`, before the D series |
+
+The input names stay as they are; renaming one breaks every caller that
+passes it.
+
+**Why:** before FND-4908 the check was a `grep` copied into six steps, pinned
+together by byte-identity tests, and three sites (`system_deps` and both
+readers of `ci-system-deps.txt`) installed the value unchecked. One app could
+declare the same list three ways and get a different answer from each.
+
+**How the script reaches the step:** from this workflow's own commit, like any
+other driver (see [Reusing scripts from a reusable
+workflow](#reusing-scripts-from-a-reusable-workflow)). `tests-reusable.yaml`
+and `checks-reusable.yaml` sparse-check it out into `.sdk-apt` and remove it
+after the install; `build-and-publish-app.yaml` reads it from its existing
+`sdk/` checkout; `conformance-reusable.yaml` fetches it with the lock-check
+scripts and copies it to `$RUNNER_TEMP`.
+
+**Not in the vendored detect action.** `run-conformance-detect` is copied into
+every consumer by bootstrap and only changes when that repo re-runs it, so it
+installs nothing; `conformance-reusable.yaml` installs `ci-system-deps.txt`
+before calling it. A consumer whose vendored copy still has the old `xargs`
+step re-installs a list the reusable has already checked, or never reaches it
+because D is skipped after a rejected one.
+
+`.github/scripts/tests/test_install_apt_packages.py` tests the script and
+fails on any `apt-get install` in `.github/workflows`, `.github/actions`,
+`.github/workflow-templates` or the bootstrap templates that bypasses it. It
+reads whole shell commands, joining backslash-continued lines, so splitting
+`apt-get \` from `install "$LIST"` does not hide an install. The only
+exceptions are fixed packages this repo names itself (`twingate`,
+`openconnect`), listed in that test. Each `apt-get` call the script makes is
+bounded (`TIMEOUT_S`), so a stalled mirror fails the step instead of holding
+the job.
 
 ## Self-references are `@main`
 

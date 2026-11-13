@@ -73,7 +73,9 @@ jobs:
 
       # Org-wide, no `repositories:` list. The job reads every fleet repo's
       # Actions artifacts, which the per-repo shim did with each repo's own
-      # GITHUB_TOKEN.
+      # GITHUB_TOKEN. Read-only (FND-4902): discovery lists repos and reads each
+      # renovate.json (contents); the collector lists and downloads Actions
+      # artifacts (actions). Metadata read is always granted.
       - name: Mint fleet App token
         id: app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
@@ -81,6 +83,8 @@ jobs:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
+          permission-actions: read
+          permission-contents: read
 
       # The same deterministic discovery the Renovate runner and the minutes
       # report use: atlan-*-app repos extending the shared preset, which is

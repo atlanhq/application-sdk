@@ -481,22 +481,15 @@ jobs:
 
       # Before `uv sync`: a dependency that builds a native extension (hive's
       # pykerberos needs libkrb5-dev) cannot install without its headers, and
-      # an app whose deps do not install fails certification. The guard is
-      # byte-identical to tests-reusable.yaml's (pinned by
-      # test_build_and_publish_certify_wiring.py): the value is unquoted for
-      # word-splitting, so it is matched whole against a Debian package-name
-      # allowlist first, failing closed.
+      # an app whose deps do not install fails certification. Through the
+      # same install_apt_packages.py as every other reusable (from the SDK
+      # checkout above): it checks every token is a plain Debian package name
+      # before installing anything, and fails the job otherwise.
       - name: Install system packages (apt_packages)
         if: inputs.apt_packages != ''
         env:
           APT_PACKAGES: ${{ inputs.apt_packages }}
-        run: |
-          set -euo pipefail
-          echo "Validating and installing apt packages: $APT_PACKAGES"
-          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
-            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
+        run: python3 sdk/.github/scripts/install_apt_packages.py --env APT_PACKAGES
 
       # The only step that holds the token: it mirror-clones the app's private
       # atlanhq deps into $RUNNER_TEMP/git-mirrors and exits, so neither uv nor
@@ -697,22 +690,15 @@ jobs:
       # ── 2. App dependencies ───────────────────────────────────────────────────
       # Before `uv sync`: a dependency that builds a native extension (hive's
       # pykerberos needs libkrb5-dev) cannot install without its headers, and
-      # an app whose deps do not install fails certification. The guard is
-      # byte-identical to tests-reusable.yaml's (pinned by
-      # test_build_and_publish_certify_wiring.py): the value is unquoted for
-      # word-splitting, so it is matched whole against a Debian package-name
-      # allowlist first, failing closed.
+      # an app whose deps do not install fails certification. Through the
+      # same install_apt_packages.py as every other reusable (from the SDK
+      # checkout above): it checks every token is a plain Debian package name
+      # before installing anything, and fails the job otherwise.
       - name: Install system packages (apt_packages)
         if: inputs.apt_packages != ''
         env:
           APT_PACKAGES: ${{ inputs.apt_packages }}
-        run: |
-          set -euo pipefail
-          echo "Validating and installing apt packages: $APT_PACKAGES"
-          printf '%s' "$APT_PACKAGES" | tr '\n' ' ' \
-            | grep -xE '[a-z0-9][a-z0-9+.-]*([[:space:]]+[a-z0-9][a-z0-9+.-]*)*' >/dev/null
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
+        run: python3 sdk/.github/scripts/install_apt_packages.py --env APT_PACKAGES
 
       # The only step that holds the token: it mirror-clones the app's private
       # atlanhq deps into $RUNNER_TEMP/git-mirrors and exits, so neither uv nor

@@ -153,6 +153,9 @@ def test_parse_bootstrap_args_defaults() -> None:
         "release_private_git_auth": "",
         "build_publish_private_git_auth": "",
         "checks_private_git_deps": "",
+        # The certify gate's apt packages: read off build-and-publish.yaml,
+        # else inherited from system-deps. No flag of its own.
+        "build_publish_apt_packages": "",
         "enforce": "",
         "conformance_blocking": "",
         "renovate_automerge": "",
@@ -2288,14 +2291,16 @@ def test_cmd_bootstrap_ci_deps_file_ignores_junk_tokens(
     assert declaration.strip() == 'system_deps: "libkrb5-dev"'
 
 
-def test_conformance_detect_action_installs_declared_system_deps() -> None:
-    """The vendored action's install step is guarded by hashFiles so it no-ops in
-    every repo without the declaration file."""
+def test_conformance_detect_action_installs_no_system_packages() -> None:
+    """The vendored action never installs packages itself (FND-4908).
+
+    A vendored copy only changes when its repo re-runs bootstrap, so a check
+    in it would lag the fleet. conformance-reusable.yaml installs
+    .github/ci-system-deps.txt through install_apt_packages.py before the
+    D series instead (pinned by test_conformance_apt_packages.py)."""
     action = render("run-conformance-detect-action.yaml")
-    assert "hashFiles('.github/ci-system-deps.txt') != ''" in action
-    assert "xargs -r sudo apt-get install -y < .github/ci-system-deps.txt" in action
-    # Must run before the resolved-env sync it exists to unblock.
-    assert action.index("ci-system-deps.txt") < action.index("Sync resolved env")
+    assert "apt-get" not in action
+    assert "xargs" not in action
 
 
 def test_cmd_bootstrap_rerun_after_manual_step_removal_leaves_it_out(

@@ -49,8 +49,11 @@ jobs:
         os: [ubuntu-22.04, macOS-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: "./.github/actions/setup-deps"
         with:
+          checkout: "false"
           python-version: ${{ matrix.python-version }}
           lookup-only: "true"
 
@@ -62,11 +65,14 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Resolve container Python version
         id: pyver
         run: echo "version=$(python3 .github/scripts/container_python_version.py print-version)" >> "$GITHUB_OUTPUT"
       - uses: "./.github/actions/setup-deps"
         with:
+          checkout: "false"
           python-version: ${{ steps.pyver.outputs.version }}
       - uses: "./.github/actions/embedded-runtimes-cache"
       - name: Fetch and boot embedded Temporal + daprd

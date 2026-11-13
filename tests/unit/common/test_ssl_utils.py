@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 import trustme
 
-from application_sdk.clients.ssl_utils import (
+from application_sdk.common.ssl_utils import (
     create_ssl_context_with_custom_certs,
     get_ssl_cert_dir,
     get_ssl_context,
@@ -27,14 +27,14 @@ class TestGetSslCertDir:
 
     def test_returns_none_when_not_set(self):
         """Test that None is returned when SSL_CERT_DIR is not set."""
-        with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", ""):
+        with patch("application_sdk.common.ssl_utils.SSL_CERT_DIR", ""):
             result = get_ssl_cert_dir()
             assert result is None
 
     def test_returns_none_when_dir_not_exists(self):
         """Test that None is returned when SSL_CERT_DIR points to non-existent directory."""
         with patch(
-            "application_sdk.clients.ssl_utils.SSL_CERT_DIR",
+            "application_sdk.common.ssl_utils.SSL_CERT_DIR",
             "/nonexistent/path/to/certs",
         ):
             result = get_ssl_cert_dir()
@@ -43,7 +43,7 @@ class TestGetSslCertDir:
     def test_returns_path_when_dir_exists(self):
         """Test that path is returned when SSL_CERT_DIR points to existing directory."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+            with patch("application_sdk.common.ssl_utils.SSL_CERT_DIR", tmpdir):
                 result = get_ssl_cert_dir()
                 assert result == tmpdir
 
@@ -76,7 +76,7 @@ class TestGetSslContext:
     def test_returns_true_when_no_cert_dir(self):
         """Test that True is returned when no SSL_CERT_DIR is set."""
         with patch(
-            "application_sdk.clients.ssl_utils.get_ssl_cert_dir", return_value=None
+            "application_sdk.common.ssl_utils.get_ssl_cert_dir", return_value=None
         ):
             result = get_ssl_context()
             assert result is True
@@ -86,7 +86,7 @@ class TestGetSslContext:
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             patch(
-                "application_sdk.clients.ssl_utils.get_ssl_cert_dir",
+                "application_sdk.common.ssl_utils.get_ssl_cert_dir",
                 return_value=tmpdir,
             ),
         ):
@@ -96,7 +96,7 @@ class TestGetSslContext:
     def test_integration_with_real_directory(self):
         """Integration test with real temporary directory."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+            with patch("application_sdk.common.ssl_utils.SSL_CERT_DIR", tmpdir):
                 result = get_ssl_context()
                 assert isinstance(result, ssl.SSLContext)
 
@@ -111,7 +111,7 @@ class TestSslContextPrivateCertificates:
             with open(cert_file, "w") as f:
                 f.write("# Placeholder for custom CA certificate\n")
 
-            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+            with patch("application_sdk.common.ssl_utils.SSL_CERT_DIR", tmpdir):
                 ssl_context = get_ssl_context()
                 assert isinstance(ssl_context, ssl.SSLContext)
 
@@ -130,8 +130,8 @@ class TestGetCustomCaCertBytes:
 
     def test_returns_none_when_no_cert_dir(self):
         """Test that None is returned when SSL_CERT_DIR is not set."""
-        with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", ""):
-            from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes
+        with patch("application_sdk.common.ssl_utils.SSL_CERT_DIR", ""):
+            from application_sdk.common.ssl_utils import get_custom_ca_cert_bytes
 
             result = get_custom_ca_cert_bytes()
             assert result is None
@@ -139,10 +139,10 @@ class TestGetCustomCaCertBytes:
     def test_returns_none_when_cert_dir_not_exists(self):
         """Test that None is returned when SSL_CERT_DIR points to non-existent directory."""
         with patch(
-            "application_sdk.clients.ssl_utils.SSL_CERT_DIR",
+            "application_sdk.common.ssl_utils.SSL_CERT_DIR",
             "/nonexistent/path/to/certs",
         ):
-            from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes
+            from application_sdk.common.ssl_utils import get_custom_ca_cert_bytes
 
             result = get_custom_ca_cert_bytes()
             assert result is None
@@ -150,8 +150,8 @@ class TestGetCustomCaCertBytes:
     def test_returns_none_when_cert_dir_empty(self):
         """Test that None is returned when SSL_CERT_DIR contains no certificate files."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
-                from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes
+            with patch("application_sdk.common.ssl_utils.SSL_CERT_DIR", tmpdir):
+                from application_sdk.common.ssl_utils import get_custom_ca_cert_bytes
 
                 result = get_custom_ca_cert_bytes()
                 assert result is None
@@ -164,8 +164,8 @@ class TestGetCustomCaCertBytes:
             with open(cert_file, "wb") as f:
                 f.write(cert_content)
 
-            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
-                from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes
+            with patch("application_sdk.common.ssl_utils.SSL_CERT_DIR", tmpdir):
+                from application_sdk.common.ssl_utils import get_custom_ca_cert_bytes
 
                 result = get_custom_ca_cert_bytes()
                 assert result is not None
@@ -181,8 +181,8 @@ class TestGetCustomCaCertBytes:
             with open(cert_file, "wb") as f:
                 f.write(custom_cert)
 
-            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
-                from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes
+            with patch("application_sdk.common.ssl_utils.SSL_CERT_DIR", tmpdir):
+                from application_sdk.common.ssl_utils import get_custom_ca_cert_bytes
 
                 result = get_custom_ca_cert_bytes()
                 assert result is not None
@@ -201,8 +201,8 @@ class TestGetCustomCaCertBytes:
             with open(f"{tmpdir}/ca2.crt", "wb") as f:
                 f.write(cert2_content)
 
-            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
-                from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes
+            with patch("application_sdk.common.ssl_utils.SSL_CERT_DIR", tmpdir):
+                from application_sdk.common.ssl_utils import get_custom_ca_cert_bytes
 
                 result = get_custom_ca_cert_bytes()
                 assert result is not None
@@ -217,8 +217,8 @@ class TestGetCustomCaCertBytes:
             ca_cert_path = f"{tmpdir}/ca.pem"
             ca.cert_pem.write_to_path(ca_cert_path)  # type: ignore[no-untyped-call]
 
-            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
-                from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes
+            with patch("application_sdk.common.ssl_utils.SSL_CERT_DIR", tmpdir):
+                from application_sdk.common.ssl_utils import get_custom_ca_cert_bytes
 
                 result = get_custom_ca_cert_bytes()
                 assert result is not None

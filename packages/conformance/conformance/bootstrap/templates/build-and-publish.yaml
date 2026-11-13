@@ -42,4 +42,5 @@ jobs:
 <% endif %><% if build_publish_lfs %>      lfs: << build_publish_lfs >>
 <% endif %><% if build_publish_private_git_auth %>      # certify's `uv sync` re-resolves this repo's private atlanhq dep.
       private_git_auth: << build_publish_private_git_auth >>
+<% endif %><% if build_publish_apt_packages %>      apt_packages: "<< build_publish_apt_packages >>"
 <% endif %>    secrets: inherit

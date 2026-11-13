@@ -15,7 +15,8 @@ description: |
   just runs pytest against the installed package.
 
   Steps:
-  - Sets up Python + uv via `setup-deps` (which also checks out the caller repo).
+  - Sets up Python + uv via `setup-deps`, which also checks out the caller repo
+    unless `checkout` is "false".
   - Starts the connector app server (`python main.py`) and waits for health. On
     SDK >= 3.13 this boots an embedded daprd + in-process Temporal itself
     (`application_sdk.dev`), so no external runtime install is needed — that is
@@ -192,8 +193,9 @@ inputs:
 
       ## Cross-repo safety
 
-      This action checks out the caller's repo via setup-deps, so
-      services-script paths resolve against the caller's tree — identical to
+      The caller's repo is checked out (by setup-deps, or by the job when
+      `checkout` is "false"), so services-script paths resolve against the
+      caller's tree — identical to
       how tests-reusable.yaml forwards secrets-script and compose-overlay
       to the sdr-e2e composite.  Never use ``uses: ./…`` references from
       inside a reusable/composite workflow: they resolve against the
@@ -214,6 +216,14 @@ inputs:
     required: false
     default: ""
 
+  lfs:
+    required: false
+    description: |
+      "true" to check out the caller repo's git-LFS objects, passed to
+      setup-deps. For apps whose tests load LFS-tracked files (e.g. a vendored
+      parser jar). Default "false" checks out as before, with no LFS fetch.
+    default: "false"
+
   git-auth-token:
     required: false
     description: |
@@ -223,6 +233,14 @@ inputs:
       Empty (the default) installs without one.
     default: ""
 
+  checkout:
+    required: false
+    description: |
+      "false" when the job already checked the caller repo out, passed to
+      setup-deps so it skips its own checkout. The default "true" keeps
+      setup-deps checking it out, for callers that rely on that.
+    default: "true"
+
 runs:
   using: "composite"
   steps:
@@ -231,6 +249,8 @@ runs:
       with:
         python-version: ${{ inputs.python-version }}
         git-auth-token: ${{ inputs.git-auth-token }}
+        lfs: ${{ inputs.lfs }}
+        checkout: ${{ inputs.checkout }}
 
     - name: Pin application-sdk to dispatched ref
       if: inputs.application-sdk-ref != ''

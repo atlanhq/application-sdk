@@ -6,6 +6,9 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -144,23 +147,82 @@ def test_evaluate_non_matching_files_rejected():
 # ---------------------------------------------------------------------------
 
 
-class _FakeRunner:
-    """Minimal gh stub: returns canned JSON per api call, records actions."""
+Review = dict[str, Any]
 
-    def __init__(self, meta, files, approved_count=0):
+APPROVAL: Review = {
+    "user": {"login": "atlan-ci"},
+    "state": "APPROVED",
+    "body": f"{gate.APPROVAL_SIGNATURE} allowlist PR from the vuln triage.",
+}
+COMMENT: Review = {"user": {"login": "someone"}, "state": "COMMENTED", "body": "lgtm"}
+
+
+class _FakeRunner:
+    """Minimal gh stub: returns canned JSON per api call, records actions.
+
+    ``review_pages`` is the reviews listing as the API pages it (30 per page).
+    The stub answers the two ways gh can read it: ``--paginate --slurp`` gets one
+    JSON array of page arrays, while ``--paginate --jq`` runs the filter per page
+    — the per-page behaviour that made ``| length`` print ``"1\n0"``.
+    """
+
+    def __init__(
+        self,
+        meta: dict[str, Any],
+        files: list[str],
+        approved_count: int = 0,
+        *,
+        review_pages: list[list[Review]] | None = None,
+        reviews_fail: bool = False,
+        commit_prs: list[dict[str, Any]] | None = None,
+        commit_prs_fail: bool = False,
+    ) -> None:
         self.meta = meta
         self.files = files
-        self.approved_count = approved_count
-        self.reviews = []
-        self.merges = []
+        self.review_pages: list[list[Review]] = (
+            review_pages if review_pages is not None else [[APPROVAL] * approved_count]
+        )
+        self.reviews_fail = reviews_fail
+        self.commit_prs: list[dict[str, Any]] = commit_prs or []
+        self.commit_prs_fail = commit_prs_fail
+        self.reviews: list[list[str]] = []
+        self.merges: list[list[str]] = []
 
-    def __call__(self, cmd, check=False, capture_output=False, text=False):
+    def __call__(
+        self,
+        cmd: list[str],
+        check: bool = False,
+        capture_output: bool = False,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
         joined = " ".join(cmd)
         out = ""
+        rc = 0
         if "/files" in joined:
             out = "\n".join(self.files)
         elif "/reviews" in joined:
-            out = str(self.approved_count)
+            if self.reviews_fail:
+                rc, out = 1, '{"message": "Server Error"}'
+            elif "--slurp" in cmd:
+                out = json.dumps(self.review_pages)
+            else:  # --jq '[… select …] | length', applied page by page
+                out = "\n".join(
+                    str(
+                        sum(
+                            1
+                            for r in page
+                            if r["user"]["login"] == "atlan-ci"
+                            and r["state"] == "APPROVED"
+                            and str(r["body"]).startswith(gate.APPROVAL_SIGNATURE)
+                        )
+                    )
+                    for page in self.review_pages
+                )
+        elif "/commits/" in joined:
+            if self.commit_prs_fail:
+                rc, out = 1, '{"message": "Server Error"}'
+            else:
+                out = json.dumps(self.commit_prs)
         elif "/pulls/" in joined and "--jq" in joined:
             out = json.dumps(self.meta)
         elif cmd[:3] == ["gh", "pr", "review"]:
@@ -168,7 +230,7 @@ class _FakeRunner:
         elif cmd[:3] == ["gh", "pr", "merge"]:
             self.merges.append(cmd)
         return subprocess.CompletedProcess(
-            args=cmd, returncode=0, stdout=out, stderr=""
+            args=cmd, returncode=rc, stdout=out, stderr=""
         )
 
 
@@ -258,3 +320,99 @@ def test_process_pr_idempotent_when_already_approved():
     # No new approval, but auto-merge is (re-)ensured.
     assert r.reviews == []
     assert len(r.merges) == 1
+
+
+def test_process_pr_idempotent_when_approval_is_on_an_earlier_review_page():
+    # Regression (FND-4898): with --paginate, --jq ran per page, so a PR whose
+    # signature approval sat on page 1 of 2 printed "1\n0"; int() raised, the
+    # gate read "not approved" and posted a duplicate approval.
+    pages = [[APPROVAL] + [COMMENT] * 29, [COMMENT] * 3]
+    r = _FakeRunner(_meta(), [".security/base-allowlist.json"], review_pages=pages)
+    acted = gate.process_pr("o/r", "5", "abc", LABEL, TRUSTED, APPROVER, r)
+    assert acted is False
+    assert r.reviews == []
+    assert len(r.merges) == 1
+
+
+def test_process_pr_approves_when_no_page_holds_a_live_approval():
+    dismissed = {**APPROVAL, "state": "DISMISSED"}
+    pages = [[COMMENT] * 30, [dismissed]]
+    r = _FakeRunner(_meta(), [".security/base-allowlist.json"], review_pages=pages)
+    assert gate.process_pr("o/r", "5", "abc", LABEL, TRUSTED, APPROVER, r) is True
+    assert len(r.reviews) == 1
+
+
+def test_already_approved_honours_the_configured_approver():
+    # VULN_AUTOMERGE_APPROVER is configurable; the idempotency check must look
+    # for that identity's approval, not a hard-coded atlan-ci.
+    r = _FakeRunner(_meta(), [], approved_count=1)
+    assert gate.already_approved("o/r", "5", "atlan-ci", r) is True
+    assert gate.already_approved("o/r", "5", "other-ci", r) is False
+
+
+def test_unreadable_reviews_raise_instead_of_approving():
+    # Previously a failed listing read as "not approved" and posted an approval.
+    r = _FakeRunner(_meta(), [".security/base-allowlist.json"], reviews_fail=True)
+    with pytest.raises(gate.GhError):
+        gate.process_pr("o/r", "5", "abc", LABEL, TRUSTED, APPROVER, r)
+    assert r.reviews == []
+    assert r.merges == []
+
+
+def _env(monkeypatch: pytest.MonkeyPatch, **env: str) -> None:
+    for key in ("EVENT_NAME", "RUN_SHA", "DISPATCH_PR"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("REPO", "o/r")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+
+def test_main_evaluates_open_prs_for_the_run_sha(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _env(monkeypatch, EVENT_NAME="workflow_run", RUN_SHA="abc")
+    r = _FakeRunner(
+        _meta(),
+        [".security/base-allowlist.json"],
+        commit_prs=[
+            {"number": 5, "state": "open"},
+            {"number": 6, "state": "closed"},
+        ],
+    )
+    assert gate.main(r) == 0
+    assert [c[3] for c in r.reviews] == ["5"]
+
+
+def test_main_fails_the_step_when_a_pr_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _env(monkeypatch, EVENT_NAME="workflow_run", RUN_SHA="abc")
+    r = _FakeRunner(
+        _meta(),
+        [".security/base-allowlist.json"],
+        reviews_fail=True,
+        commit_prs=[{"number": 5, "state": "open"}],
+    )
+    assert gate.main(r) == 1
+    assert r.reviews == []
+
+
+def test_main_fails_the_step_when_the_pr_listing_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An unread commit->PRs listing is not "no open PRs": the step must go red
+    # rather than exit 0 having evaluated nothing.
+    _env(monkeypatch, EVENT_NAME="workflow_run", RUN_SHA="abc")
+    r = _FakeRunner(_meta(), [".security/base-allowlist.json"], commit_prs_fail=True)
+    assert gate.main(r) == 1
+    assert r.reviews == []
+    assert r.merges == []
+
+
+def test_main_exits_clean_when_no_open_pr_heads_the_sha(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _env(monkeypatch, EVENT_NAME="workflow_run", RUN_SHA="abc")
+    r = _FakeRunner(_meta(), [".security/base-allowlist.json"], commit_prs=[])
+    assert gate.main(r) == 0
+    assert r.reviews == []

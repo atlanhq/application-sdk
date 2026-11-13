@@ -392,7 +392,7 @@ required check.
     pytest-extra-args:  # OPTIONAL. Appended to the pytest invocation.
     application-sdk-ref:               # OPTIONAL. Cross-repo dispatch: re-pin
                         # atlan-application-sdk in pyproject.toml to this ref
-                        # before the docker build AND after setup-deps (so both
+                        # before the docker build AND for the host harness (so both
                         # the image and the host pytest runtime use the dispatched
                         # SDK).
     prebuilt-image:     # OPTIONAL. Full image reference to use INSTEAD of
@@ -783,6 +783,10 @@ Since v4 the action reads the dispatched run's id straight out of the `workflow_
 > **This paragraph is the single source of truth for the receiver's grouping expression.** It is the one place the expression is written down: `e2e-apps/action.yaml` and the `pull_request.yaml` call site state the invariant and point here instead of restating it. The receiver lives in another repo and moves independently, so every in-repo copy of the expression goes stale silently — which is exactly what happened when the middle `inputs.application_sdk_ref` term landed there after #2939. When updating this, check the receiver rather than trusting a copy.
 >
 > The middle term is the receiver's own second line of defence, added after #2939: because both SDK call sites always pass `application_sdk_ref`, a dispatcher that drops `distinct_id` today degrades to per-SDK-SHA grouping rather than one global group. That narrows the blast radius; it does not remove the caller's obligation, and it only helps receivers that have adopted the fallback. On the SDK side the obligation is enforced, not just documented — `e2e-apps`'s `Require a distinct_id in workflow-inputs` step ([`validate_dispatch_inputs.py`](../../.github/scripts/validate_dispatch_inputs.py)) fails the job before dispatching if the key is missing or empty.
+
+### The SDK-side pollers and their tokens
+
+Two SDK-side scripts poll GitHub for a long time: `poll_check_runs_gate.py` (the `Connector Tests Gate`, on the job token, default budget 7,800 s = 130 min) and `poll_dispatched_run.py` (poll mode in `e2e-apps`, on the fleet App installation token, default budget 7,200 s = 120 min). Every request they make with curl goes through `_gh_refs.gh_request`, which feeds the token to curl on stdin (`-K -`), never argv — an argv token is readable from the process table by anything else on the runner for the life of each request. The same transport retries a transient curl failure or 5xx, so one network blip no longer ends the gate's conditional poll. One path does not use it: once a SHA carries more than one page (100) of check runs, the gate switches to `gh api --paginate` (`list_all_check_runs`). `gh` reads the token from `GH_TOKEN` in its environment, so it stays off argv there too, but that fallback has no shared retry: a failed listing still fails the gate. `gh_request` takes extra request headers (the gate's `If-None-Match`, so an unchanged poll is a free 304) but refuses an `Authorization` header there, because those go on argv. `test_gh_refs.py` fails if any script in `.github/scripts/` builds an `Authorization: Bearer …` string for a curl `-H` argument (FND-4899).
 
 ### Sticky-comment behaviour
 
@@ -1456,15 +1460,11 @@ One insertion covers the e2e caller (`tests-reusable`'s `e2e`), and no app repo 
 
 The endpoint paths are `atlan-frontend`'s, not ours — `BASE_PATH = 'service'` plus `getAPIPath`, confirmed live. If the frontend changes how it derives the setup route, this check goes stale. The mitigation is that it is in one place rather than in every connector repo.
 
-## Workspace-wipe defences (local-action mode)
+## The workspace is never re-checked out (FND-4900)
 
-When the SDR composite is invoked via local path (`./.application-sdk/.github/actions/sdr-e2e`) during cross-repo dispatch, `setup-deps`' inner `actions/checkout` wipes the entire workspace — including `${{ github.action_path }}` itself. The composite:
+`sdr-e2e` needs the caller's checkout (the image build reads the tree), so it calls `setup-deps` with `checkout: "false"`. Until FND-4900, `setup-deps`' own `actions/checkout` ran here anyway. It persisted the job token in `.git/config` for the host tests, and its `git clean` wiped the workspace, `${{ github.action_path }}` included in local-action mode. The composite carried a `/tmp/sdr-e2e` stash, an action-root fallback and a post-hook restore to survive that.
 
-1. Stashes its full asset tree to `/tmp/sdr-e2e/` before `setup-deps` runs.
-2. After setup-deps, resolves a `steps.action_root.outputs.path` that falls back to the `/tmp` stash if `${{ github.action_path }}` is now empty.
-3. Restores the stash back to `${{ github.action_path }}` at the end of the action body so GH Actions can find `action.yml` for post-hook execution.
-
-Single-pipeline apps invoking the action remotely (`@main`) never hit this code path.
+That wipe was also what undid the build's edits to tracked files before the host harness ran: the runtime repin of `pyproject.toml` and `uv.lock`, the regenerated `app/generated/**` and the stamped `Dockerfile`. A `Restore the checked-out tree` step between the build and `setup-deps` now does that job with `git restore --source=HEAD --worktree -- .`. It touches tracked files only, so untracked paths stay, a local action's own directory among them. The harness repin then applies `harness-sdk-ref`, and the venv cache key hashes the connector's committed `uv.lock`, as before. `.github/scripts/tests/test_setup_deps_checkout_wiring.py` runs the restore in a scratch repo and pins its place in the step order.
 
 ## Multi-entrypoint (bundle) apps: one suite per entrypoint
 

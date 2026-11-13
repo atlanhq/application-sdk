@@ -24,6 +24,12 @@ clean venvs, because an editable or path install exposes the whole
    ``/health`` is 200, a non-object body on ``/workflows/v1/auth`` is a 422,
    auth / check / metadata answer, and an ``AuthError`` carrying a DSN answers
    with the password redacted from the body.
+   The object store, in both api venvs: with ``[obstore]``, the config and
+   file routes round-trip through a ``HostObjectStore`` over obstore's
+   ``MemoryStore``, with a missing config answering 404, and
+   ``HostObjectStore.from_env()`` builds the S3, GCS and Azure store from the
+   chart aliases. In the core install, without obstore, a configured bucket
+   gives no store and the config route answers 503, so it never crashes.
 4. **Each module alone.** Step 3 imports the modules in one process, in sorted
    order, so a module that only imports because an earlier one already loaded
    its dependency would pass. In both api venvs, ``python -I`` imports each
@@ -112,6 +118,62 @@ extra = sorted(
 if extra:
     sys.exit(f"serving requests loaded unlisted modules: {extra[:10]}")
 print(f"{sys.argv[4]}: {len(to_import)} modules, {rss_mb:.0f} MB, auth/check/metadata + AppError path OK")
+"""
+
+_STORE = r"""
+import base64, os, sys
+leg, listed = sys.argv[1], sys.argv[2].split(",")
+from fastapi.testclient import TestClient
+from application_sdk.handler import DefaultHandler
+from application_sdk.handler.asgi import build_asgi_app, default_object_store
+from application_sdk.handler.object_routes import HostObjectStore
+
+def _env(**values):
+    for name in [n for n in os.environ if n.startswith(("ATLAN_S3_", "ATLAN_GCP_", "ATLAN_AZURE_"))]:
+        del os.environ[name]
+    os.environ.update(values)
+
+if sys.argv[3] == "core":
+    # No obstore: a configured bucket must degrade to 503, never crash.
+    _env(ATLAN_S3_BUCKET="probe-bucket", ATLAN_S3_REGION="us-east-1")
+    assert default_object_store() is None, "core install built a store without obstore"
+    client = TestClient(build_asgi_app(DefaultHandler(), app_name="probe"), raise_server_exceptions=False)
+    r = client.get("/workflows/v1/config/guid-1?type=credentials")
+    assert r.status_code == 503, f"core install, configured bucket: config answered {r.status_code}"
+    summary = "no obstore -> 503"
+else:
+    from obstore.store import MemoryStore
+    store = HostObjectStore(MemoryStore(), kind="memory")
+    client = TestClient(build_asgi_app(DefaultHandler(), app_name="probe", object_store=store), raise_server_exceptions=False)
+    body = {"host": "db.example", "port": 5432}
+    r = client.post("/workflows/v1/config/guid-1?type=credentials", json=body)
+    assert r.status_code == 200, f"config write: {r.status_code} {r.text[:200]}"
+    r = client.get("/workflows/v1/config/guid-1?type=credentials")
+    assert r.status_code == 200 and r.json()["data"] == body, f"config read: {r.status_code} {r.text[:200]}"
+    r = client.get("/workflows/v1/config/missing?type=credentials")
+    assert r.status_code == 404, f"missing config answered {r.status_code}"
+    r = client.post("/workflows/v1/file", files={"file": ("rows.csv", b"a,b\n1,2\n", "text/csv")})
+    assert r.status_code == 200 and r.json()["data"]["fileSize"] == 8, f"upload: {r.status_code} {r.text[:200]}"
+    # Dummy, non-secret values: building a store makes no request.
+    key = base64.b64encode(b"probe-key-not-real-0000000000000").decode()
+    for kind, values in (
+        ("s3", {"ATLAN_S3_BUCKET": "probe-bucket", "ATLAN_S3_REGION": "us-east-1"}),
+        ("gcs", {"ATLAN_GCP_BUCKET": "probe-bucket", "ATLAN_GCP_HMAC_ACCESS_KEY": "probe-id", "ATLAN_GCP_HMAC_SECRET": "probe-secret"}),
+        ("azure", {"ATLAN_AZURE_STORAGE_ACCOUNT": "probeaccount", "ATLAN_AZURE_STORAGE_CONTAINER": "objectstore", "ATLAN_AZURE_STORAGE_ACCESS_KEY": key}),
+    ):
+        _env(**values)
+        built = HostObjectStore.from_env()
+        assert repr(built) == f"HostObjectStore({kind})", f"from_env for {kind} built {built!r}"
+    summary = "config/file round trip + 404 + S3/GCS/Azure from_env"
+extra = sorted(
+    m for m in sys.modules
+    if (m == "application_sdk" or m.startswith("application_sdk."))
+    and m not in listed
+    and getattr(sys.modules[m], "__file__", None)
+)
+if extra:
+    sys.exit(f"object-store routes loaded unlisted modules: {extra[:10]}")
+print(f"{leg}: object store OK ({summary})")
 """
 
 _PRESENT = r"""
@@ -314,15 +376,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         # cwd outside the repo: ``python -c`` puts the cwd on sys.path, and the
         # source tree there would hide what the wheel is missing.
-        for leg, requirement, modules, budget in (
+        for leg, requirement, modules, budget, store_mode in (
             # The core install is what every hosted app pays: held to the budget.
-            ("api core", str(api), core, args.max_rss_mb),
+            ("api core", str(api), core, args.max_rss_mb, "core"),
             # Every extra installed: every listed module must import and serve.
             (
                 f"api [{extras}]",
                 f"atlan-application-sdk-api[{extras}] @ {api.resolve().as_uri()}",
                 every,
                 10_000,
+                "full",
             ),
         ):
             py = _venv(Path(tmp) / leg.replace(" ", "-").strip("[]"))
@@ -332,6 +395,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             if done.returncode:
                 failures.append(f"{leg} install failed")
+            done = subprocess.run(
+                [str(py), "-c", _STORE, leg, every, store_mode], cwd=tmp
+            )
+            if done.returncode:
+                failures.append(f"{leg}: object-store routes failed")
             names = modules.split(",")
             alone = import_each_alone(py, names, jobs=min(16, os.cpu_count() or 4))
             failures += [f"{leg}: does not import alone: {a}" for a in alone]

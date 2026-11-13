@@ -309,6 +309,7 @@ def render(
     conformance_private_git_deps: str = "",
     release_private_git_auth: str = "",
     build_publish_private_git_auth: str = "",
+    build_publish_apt_packages: str = "",
     checks_private_git_deps: str = "",
     force_external_runtime: str = "",
     secrets_block: str = "",
@@ -319,6 +320,8 @@ def render(
     private_git_deps: str = "",
     git_lfs_skip_smudge: str = "",
     lfs: str = "",
+    test_lfs: str = "",
+    java_version: str = "",
     health_check_timeout_seconds: str = "",
     container_health_timeout_seconds: str = "",
     runtime_sdk_ref: str = "",
@@ -342,7 +345,9 @@ def render(
     - ``build-and-publish.yaml``: ``unit_tests_workflow`` (default ``"tests.yaml"``)
       and ``use_ghcr_base`` (default ``""`` — no line, so the SDK's own default
       applies; ``"true"`` renders the opt-in as a bare
-      ``use_ghcr_base: true``). Same same-line ``<% if %>`` hugging as
+      ``use_ghcr_base: true``), plus ``build_publish_apt_packages`` (default
+      ``""`` — no line; a package list renders the certify gate's
+      ``apt_packages: "<packages>"``). Same same-line ``<% if %>`` hugging as
       ``checks.yml`` below, for the same reason: an un-taken block on its own
       lines would leave a blank line and read as C002 drift in every repo that
       hasn't opted in.
@@ -351,8 +356,11 @@ def render(
       merges — flip to ``"false"`` when the app is ready for hard gating).
     - ``checks.yml``: ``system_deps`` (default ``""`` — no
       system-dependency step; supply a space-separated apt package list to
-      render an ``apt-get install`` step before ``setup-deps``, for a repo whose
-      dependencies build from sdist and need C headers on the runner). Its
+      render the reusable's ``system_deps`` input, which installs it before
+      ``setup-deps``, for a repo whose dependencies build from sdist and need C
+      headers on the runner). The reusable installs it through
+      ``.github/scripts/install_apt_packages.py``, which fails the job on any
+      token that is not a plain Debian package name (no version pins). Its
       ``<% if %>``/``<% endif %>`` tags deliberately hug the content on the same
       line: on their own lines an un-taken block would still leave its trailing
       newline, and that one blank line would read as C002 drift in every
@@ -390,6 +398,8 @@ def render(
       ``pytest_args_block``, ``timeout_minutes``, ``apt_packages``,
       ``private_git_deps``, ``git_lfs_skip_smudge``, ``lfs`` (the e2e
       image-build checkout's LFS fetch, distinct from the smudge skip),
+      ``test_lfs`` and ``java_version`` (the Unit and Integration jobs'
+      LFS checkout and JDK),
       ``health_check_timeout_seconds``,
       ``container_health_timeout_seconds``, ``runtime_sdk_ref``,
       ``harness_sdk_ref``, ``e2e_test_path``, ``source_available``,
@@ -455,6 +465,7 @@ def render(
         conformance_private_git_deps=conformance_private_git_deps,
         release_private_git_auth=release_private_git_auth,
         build_publish_private_git_auth=build_publish_private_git_auth,
+        build_publish_apt_packages=build_publish_apt_packages,
         checks_private_git_deps=checks_private_git_deps,
         force_external_runtime=force_external_runtime,
         secrets_block=secrets_block,
@@ -465,6 +476,8 @@ def render(
         private_git_deps=private_git_deps,
         git_lfs_skip_smudge=git_lfs_skip_smudge,
         lfs=lfs,
+        test_lfs=test_lfs,
+        java_version=java_version,
         health_check_timeout_seconds=health_check_timeout_seconds,
         container_health_timeout_seconds=container_health_timeout_seconds,
         runtime_sdk_ref=runtime_sdk_ref,

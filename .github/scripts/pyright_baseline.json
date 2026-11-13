@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 144,
-    "warning": 6050
+    "warning": 5936
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -204,10 +204,10 @@
     },
     ".github/scripts/poll_check_runs_gate.py": {
       "warning:reportAttributeAccessIssue": 1,
-      "warning:reportUnknownMemberType": 29
+      "warning:reportUnknownMemberType": 22
     },
     ".github/scripts/poll_dispatched_run.py": {
-      "warning:reportUnknownMemberType": 6
+      "warning:reportUnknownMemberType": 2
     },
     ".github/scripts/pr_test_command.py": {
       "error:reportOptionalMemberAccess": 1,
@@ -258,7 +258,7 @@
       "warning:reportUnknownMemberType": 1
     },
     ".github/scripts/renovate_approval_conditions.py": {
-      "warning:reportUnknownMemberType": 41
+      "warning:reportUnknownMemberType": 32
     },
     ".github/scripts/renovate_contract_ledger.py": {
       "warning:reportUnknownMemberType": 2
@@ -287,7 +287,7 @@
       "warning:reportUnknownMemberType": 7
     },
     ".github/scripts/renovate_release_thaw.py": {
-      "warning:reportUnknownMemberType": 15
+      "warning:reportUnknownMemberType": 8
     },
     ".github/scripts/renovate_uv_lock_bounded.py": {
       "warning:reportInvalidTypeForm": 1,
@@ -315,7 +315,7 @@
       "warning:reportUnknownMemberType": 55
     },
     ".github/scripts/review_approval_reconcile.py": {
-      "warning:reportUnknownMemberType": 55
+      "warning:reportUnknownMemberType": 53
     },
     ".github/scripts/scorecard_history_entry.py": {
       "warning:reportUnknownMemberType": 4
@@ -348,7 +348,7 @@
       "warning:reportUnknownMemberType": 89
     },
     ".github/scripts/tests/test_apt_packages_and_summary_parse.py": {
-      "warning:reportUnknownMemberType": 18
+      "warning:reportUnknownMemberType": 16
     },
     ".github/scripts/tests/test_artifact_download_retry.py": {
       "warning:reportUnknownMemberType": 35
@@ -413,7 +413,7 @@
       "warning:reportUnknownMemberType": 1
     },
     ".github/scripts/tests/test_conformance_apt_packages.py": {
-      "warning:reportUnknownMemberType": 16
+      "warning:reportUnknownMemberType": 9
     },
     ".github/scripts/tests/test_conformance_release.py": {
       "warning:reportUnknownMemberType": 97
@@ -583,11 +583,11 @@
       "warning:reportUnknownMemberType": 1
     },
     ".github/scripts/tests/test_poll_check_runs_gate.py": {
-      "warning:reportUnknownMemberType": 61
+      "warning:reportUnknownMemberType": 40
     },
     ".github/scripts/tests/test_poll_dispatched_run.py": {
       "warning:reportFunctionMemberAccess": 4,
-      "warning:reportUnknownMemberType": 21
+      "warning:reportUnknownMemberType": 2
     },
     ".github/scripts/tests/test_pr_test_command.py": {
       "warning:reportAttributeAccessIssue": 1,
@@ -643,7 +643,7 @@
     ".github/scripts/tests/test_renovate_approval_conditions.py": {
       "error:reportIncompatibleMethodOverride": 1,
       "warning:reportArgumentType": 18,
-      "warning:reportUnknownMemberType": 59
+      "warning:reportUnknownMemberType": 50
     },
     ".github/scripts/tests/test_renovate_auto_approve_fanin.py": {
       "warning:reportUnknownMemberType": 4
@@ -694,7 +694,7 @@
       "warning:reportUnknownMemberType": 31
     },
     ".github/scripts/tests/test_renovate_release_thaw.py": {
-      "warning:reportUnknownMemberType": 21
+      "warning:reportUnknownMemberType": 20
     },
     ".github/scripts/tests/test_renovate_uv_lock_bounded.py": {
       "warning:reportUnknownMemberType": 61
@@ -735,7 +735,7 @@
       "error:reportOptionalSubscript": 1,
       "warning:reportArgumentType": 3,
       "warning:reportFunctionMemberAccess": 14,
-      "warning:reportUnknownMemberType": 146
+      "warning:reportUnknownMemberType": 143
     },
     ".github/scripts/tests/test_review_approval_reconcile.py": {
       "error:reportOptionalMemberAccess": 2,
@@ -815,7 +815,7 @@
     },
     ".github/scripts/tests/test_vuln_auto_merge_gate.py": {
       "warning:reportArgumentType": 9,
-      "warning:reportUnknownMemberType": 23
+      "warning:reportUnknownMemberType": 2
     },
     ".github/scripts/tests/test_vuln_triage.py": {
       "error:reportOptionalMemberAccess": 2,
@@ -867,9 +867,6 @@
     },
     ".github/scripts/verify_sdr_e2e_gate.py": {
       "error:reportOptionalMemberAccess": 1
-    },
-    ".github/scripts/vuln_auto_merge_gate.py": {
-      "warning:reportUnknownMemberType": 2
     },
     ".github/scripts/vuln_triage/allowlist.py": {
       "warning:reportUnknownMemberType": 2

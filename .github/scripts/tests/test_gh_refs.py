@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -28,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from _gh_refs import (  # noqa: E402
     Holder,
     _timestamp,
+    gh_request,
     holder_is_live,
     read_ref_target,
     slug,
@@ -217,3 +219,133 @@ def test_read_ref_target_reads_an_unreadable_ref_as_unheld(http) -> None:
     stays out of it; the branch under test is the same either way."""
     http({"/git/ref/": (403, {"message": "Resource not accessible by integration"})})
     assert read_ref_target(REPO, "refs/thing/holder") is None
+
+
+# --- The token never goes on argv (FND-4899) ---------------------------------
+#
+# Every curl-based GitHub client in this tree feeds the bearer token on stdin
+# (`-K -`), because an argv token is readable from the process table by anything
+# else on the runner for the life of the request. Two pollers did not, and the
+# fix routed both through `gh_request`. These pin the transport's half of that.
+
+
+def _ok(cmd, **kwargs) -> subprocess.CompletedProcess:
+    _ok.calls.append((cmd, kwargs))  # type: ignore[attr-defined]
+    return subprocess.CompletedProcess(cmd, 0, 'HTTP/2 304 x\nETag: "v2"\n\n', "")
+
+
+def test_extra_headers_are_sent_and_the_status_comes_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "ghs_token-value")
+    _ok.calls = []  # type: ignore[attr-defined]
+    monkeypatch.setattr("_gh_refs.run", _ok)
+
+    response = gh_request("GET", "some/path", headers={"If-None-Match": '"v1"'})
+
+    assert response.status == 304
+    assert response.headers["etag"] == '"v2"'
+    cmd, kwargs = _ok.calls[0]  # type: ignore[attr-defined]
+    assert 'If-None-Match: "v1"' in cmd
+    assert not any("ghs_token-value" in part for part in cmd)
+    assert "ghs_token-value" in kwargs["input"]
+
+
+@pytest.mark.parametrize("name", ["Authorization", "authorization", " AUTHORIZATION "])
+def test_an_authorization_header_is_refused_not_put_on_argv(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """``headers`` go on argv. Accepting a credential there would undo the one
+    property the transport exists to keep, so it is refused before curl runs."""
+    monkeypatch.setenv("GH_TOKEN", "ghs_token-value")
+    _ok.calls = []  # type: ignore[attr-defined]
+    monkeypatch.setattr("_gh_refs.run", _ok)
+
+    with pytest.raises(ValueError, match="argv"):
+        gh_request("GET", "some/path", headers={name: "Bearer other-token"})
+    assert _ok.calls == []  # type: ignore[attr-defined]
+
+
+def _argv_bearer_literals(path: Path) -> list[int]:
+    """Lines of string literals that START with an ``Authorization:`` header line
+    — the shape of a curl ``-H`` argument, whatever the scheme and however the
+    rest is concatenated on (``"Authorization: " + f"Bearer {token}"`` starts a
+    literal with it too). The stdin form is a curl config line
+    (``header = "Authorization: ..."``), which does not start that way, and an
+    in-process client passes a dict key ``"Authorization"`` with no colon and the
+    value separately, which does not match either."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    lines: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.JoinedStr) and node.values:
+            first = node.values[0]
+            text = first.value if isinstance(first, ast.Constant) else ""
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            text = node.value
+        else:
+            continue
+        if isinstance(text, str) and text.lstrip().lower().startswith("authorization:"):
+            lines.append(node.lineno)
+    # An f-string and the literal that opens it both match; report the line once.
+    return sorted(set(lines))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'cmd = ["-H", f"Authorization: Bearer {token}"]',
+        'cmd = ["-H", "Authorization: " + f"Bearer {token}"]',
+        'cmd = ["-H", "Authorization: Bearer " + token]',
+        'cmd = ["-H", "Authorization: token %s" % token]',
+    ],
+)
+def test_the_guard_catches_an_argv_header_however_it_is_built(
+    tmp_path: Path, source: str
+) -> None:
+    script = tmp_path / "offender.py"
+    script.write_text(f"token = 'x'\n{source}\n", encoding="utf-8")
+    assert _argv_bearer_literals(script) == [2]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        """config = f'header = "Authorization: Bearer {token}"\\n'""",
+        'headers = {"Authorization": f"Bearer {token}"}',
+        'request.add_header("Authorization", f"Bearer {token}")',
+    ],
+)
+def test_the_guard_leaves_stdin_and_in_process_headers_alone(
+    tmp_path: Path, source: str
+) -> None:
+    script = tmp_path / "fine.py"
+    script.write_text(f"token = 'x'\n{source}\n", encoding="utf-8")
+    assert _argv_bearer_literals(script) == []
+
+
+#: Scripts whose header line is built for somewhere other than argv, each with
+#: where it goes. Add one only with that reason: the guard cannot see where a
+#: string ends up, only how it is shaped.
+_HEADER_LINES_NOT_ON_ARGV = {
+    # git's http.extraheader, passed as GIT_CONFIG_VALUE_0 in the environment.
+    "resync_approval_conditions.py",
+}
+
+
+def test_no_script_builds_a_bearer_header_for_argv() -> None:
+    """A rule the tree states five times was applied in three places. This makes
+    the fourth and fifth the same as the first three: send it through
+    ``gh_request``, or feed the header on stdin."""
+    offenders = {
+        path.name: lines
+        for path in sorted(_SCRIPTS.glob("*.py"))
+        if path.name not in _HEADER_LINES_NOT_ON_ARGV
+        and (lines := _argv_bearer_literals(path))
+    }
+    assert not offenders, (
+        f"{offenders} build an 'Authorization: ...' header line, the shape of a "
+        "curl -H argument, which puts the token on argv. Call "
+        "_gh_refs.gh_request instead (it feeds the token with -K -). If the line "
+        "genuinely goes somewhere else, add the script to "
+        "_HEADER_LINES_NOT_ON_ARGV with where."
+    )
