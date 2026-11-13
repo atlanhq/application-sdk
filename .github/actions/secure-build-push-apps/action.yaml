@@ -1,166 +1,60 @@
-name: 'Composite Build, Trivy Scan, and Push'
-description: 'A drop-in replacement for docker/build-push-action that adds a mandatory Trivy scan before pushing.'
+name: 'Build, Trivy Scan, and Push'
+description: >-
+  Builds an image for the runner's own architecture, Trivy-scans it, then
+  builds and pushes the requested platforms. The scan reports fixable
+  CRITICAL/HIGH findings and blocks the push only when fail-on-vulns is 'true';
+  by default it is advisory.
 
-#==================================================================
-# == INPUTS                                                      ==
-#==================================================================
+# Called only from this repo's own workflows (pull_request.yaml's
+# build-sdk-base-image and harbor-release.yaml's build), after a checkout of
+# this repo, which is what lets it reach trivy-image-scan by its `./` path.
+# The fleet's `secure-build-push-apps` is a different action, in atlanhq/.github.
+#
+# Inputs are the ones those callers set. It used to restate all of
+# docker/build-push-action's inputs, 23 of which no caller set, plus a
+# `secret-files` pass-through that was never declared and so was always empty
+# (FND-4904).
+
 inputs:
-  # == Custom inputs for this action's logic ==
-  branch:
-    description: "The current branch name (e.g., from github.ref_name)."
+  tags:
+    description: 'Tags for the image, one per line. The first is the one scanned.'
     required: true
   push:
-    description: "Set to 'true' to attempt a push after a successful scan."
+    description: "'true' to push after the scan."
     required: false
     default: 'false'
-
-  # == Complete list of inputs from docker/build-push-action ==
-  add-hosts:
-    description: 'List of custom host-to-IP mappings (host:ip).'
+  fail-on-vulns:
+    description: >-
+      'true' fails the action, before anything is pushed, when the scan finds a
+      CRITICAL or HIGH vulnerability that has a fix. 'false' reports and pushes.
     required: false
-  allow:
-    description: 'List of extra privileged entitlement (e.g., network.host,security.insecure).'
-    required: false
-  annotations:
-    description: 'List of OCI annotations to set on the image.'
-    required: false
-  attests:
-    description: 'List of attestations to generate (e.g., type=sbom,generator=image).'
-    required: false
-  build-args:
-    description: 'List of build-time variables.'
-    required: false
-  build-contexts:
-    description: 'List of additional build contexts (e.g., name=path).'
-    required: false
-  builder:
-    description: 'Builder instance to use.'
-    required: false
-  cache-from:
-    description: 'List of external cache sources.'
-    required: false
-    default: 'type=gha'
-  cache-to:
-    description: 'List of cache export destinations.'
-    required: false
-    # `ignore-error=true`: see build-and-scan.yaml — a cache-service hiccup must not fail a build.
-    default: 'type=gha,mode=min,ignore-error=true'
-  cgroup-parent:
-    description: 'Optional parent cgroup for the container.'
-    required: false
+    default: 'false'
   context:
-    description: 'Path to the build context.'
+    description: 'Build context.'
     required: false
     default: '.'
   file:
     description: 'Path to the Dockerfile.'
     required: false
-  github-token:
-    description: 'GitHub token for authentication.'
-    required: false
-  labels:
-    description: 'List of metadata labels to apply to the image.'
-    required: false
-  load:
-    description: 'Load is a shorthand for --output=type=docker.'
-    required: false
-    default: 'false'
-  network:
-    description: 'Set the networking mode for the RUN instructions during build.'
-    required: false
-  no-cache:
-    description: 'Do not use cache when building the image.'
-    required: false
-    default: 'false'
-  no-cache-filters:
-    description: 'Do not cache specified stages.'
-    required: false
-  outputs:
-    description: 'List of output destinations (format: type=local,dest=path).'
-    required: false
   platforms:
-    description: 'List of target platforms for build.'
+    description: 'Platforms to build and push. The scan always builds the runner''s own.'
     required: false
-  provenance:
-    description: 'Generate provenance attestation for the build.'
+  cache-from:
+    description: 'External cache sources.'
     required: false
-  pull:
-    description: 'Always attempt to pull all referenced images.'
+    default: 'type=gha'
+  cache-to:
+    description: 'Cache export destinations.'
     required: false
-    default: 'false'
-  sbom:
-    description: 'Generate SBOM attestation for the build (shorthand for --attest=type=sbom).'
-    required: false
-  secrets:
-    description: 'List of secrets to expose to the build.'
-    required: false
-  secret-envs:
-    description: 'List of secret environment variables to expose to the build (e.g., MY_SECRET=MY_SECRET_VAR).'
-    required: false
-  shm-size:
-    description: 'Size of /dev/shm (e.g., 2g).'
-    required: false
-  ssh:
-    description: 'List of SSH agent sockets or keys to expose to the build.'
-    required: false
-  tags:
-    description: 'List of tags for the Docker image.'
-    required: true
-  target:
-    description: 'Sets the target stage to build.'
-    required: false
-  ulimit:
-    description: 'Ulimit options (e.g., nofile=1024:1024).'
+    # `ignore-error=true`: see build-and-scan.yaml — a cache-service hiccup must not fail a build.
+    default: 'type=gha,mode=min,ignore-error=true'
+  github-token:
+    description: 'GitHub token for docker/build-push-action.'
     required: false
 
-#==================================================================
-# == OUTPUTS                                                     ==
-#==================================================================
-outputs:
-  scan-passed:
-    description: "'true' if the scan found zero critical/high vulnerabilities, otherwise 'false'."
-    value: ${{ steps.decision.outputs.result }}
-  trivy-critical-count:
-    description: "Number of critical vulnerabilities found by Trivy."
-    value: ${{ steps.parse_trivy.outputs.critical-count }}
-  trivy-high-count:
-    description: "Number of high vulnerabilities found by Trivy."
-    value: ${{ steps.parse_trivy.outputs.high-count }}
-
-#==================================================================
-# == EXECUTION LOGIC                                             ==
-#==================================================================
 runs:
   using: "composite"
   steps:
-    - name: Configure Scan Policies
-      id: config
-      shell: bash
-      run: |
-        # =================================================================
-        # == 🛡️ ADMIN CONFIGURATION SECTION                             ==
-        # =================================================================
-        #
-        # ENFORCEMENT_MODE:
-        #   'true':  Fail the build if vulnerabilities are found at the
-        #            specified severity. The image will NOT be pushed.
-        #   'false': Act in "Feedback Mode". Always allow the push and
-        #            never fail the build, but still report vulnerabilities.
-        #
-        ENFORCEMENT_MODE='false'
-
-        # SEVERITY_THRESHOLD:
-        #   Comma-separated list of severities to scan for and fail on
-        #   when in enforcement mode.
-        #   Examples: 'CRITICAL', 'CRITICAL,HIGH', 'CRITICAL,HIGH,MEDIUM'
-        #
-        SEVERITY_THRESHOLD='CRITICAL,HIGH'
-        #
-        # =================================================================
-
-        echo "ENFORCEMENT_MODE=$ENFORCEMENT_MODE" >> $GITHUB_OUTPUT
-        echo "SEVERITY_THRESHOLD=$SEVERITY_THRESHOLD" >> $GITHUB_OUTPUT
-
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
@@ -168,26 +62,12 @@ runs:
       id: build_for_scan
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
       with:
-        # Pass all inputs from the caller to the build action
-        add-hosts: ${{ inputs.add-hosts }}
-        allow: ${{ inputs.allow }}
-        annotations: ${{ inputs.annotations }}
-        attests: ${{ inputs.attests }}
-        build-args: ${{ inputs.build-args }}
-        build-contexts: ${{ inputs.build-contexts }}
-        builder: ${{ inputs.builder }}
         cache-from: ${{ inputs.cache-from }}
         # Cache is exported here
         cache-to: ${{ inputs.cache-to }}
-        cgroup-parent: ${{ inputs.cgroup-parent }}
         context: ${{ inputs.context }}
         file: ${{ inputs.file }}
         github-token: ${{ inputs.github-token }}
-        labels: ${{ inputs.labels }}
-        network: ${{ inputs.network }}
-        no-cache: ${{ inputs.no-cache }}
-        no-cache-filters: ${{ inputs.no-cache-filters }}
-        outputs: ${{ inputs.outputs }}
         # Build only for the runner's native platform for scanning.
         #
         # Derived from `runner.arch` rather than hardcoded to linux/amd64, which
@@ -198,142 +78,50 @@ runs:
         # not the one being pushed. A step-level expression, not conditional
         # shell, so it stays within docs/standards/ci.md.
         platforms: ${{ runner.arch == 'ARM64' && 'linux/arm64' || 'linux/amd64' }}
-        provenance: ${{ inputs.provenance }}
-        pull: ${{ inputs.pull }}
-        sbom: ${{ inputs.sbom }}
-        secrets: ${{ inputs.secrets }}
-        secret-envs: ${{ inputs.secret-envs }}
-        secret-files: ${{ inputs.secret-files }}
-        shm-size: ${{ inputs.shm-size }}
-        ssh: ${{ inputs.ssh }}
         tags: ${{ inputs.tags }}
-        target: ${{ inputs.target }}
-        ulimit: ${{ inputs.ulimit }}
         # Load the image for the scanner to use
         load: true
         push: false
 
-    - name: Extract Primary Image Tag for Scans
+    - name: Extract primary image tag for the scan
       id: extract_tag
       shell: bash
-      run: |
-        # Read the first line of the multi-line tags input
-        PRIMARY_TAG=$(echo "${{ inputs.tags }}" | head -n 1)
-        echo "primary_tag=$PRIMARY_TAG" >> $GITHUB_OUTPUT
+      env:
+        TAGS: ${{ inputs.tags }}
+      run: echo "primary_tag=$(printf '%s\n' "$TAGS" | head -n 1)" >> "$GITHUB_OUTPUT"
 
-    - name: Run Trivy Scan
-      id: trivy_scan
-      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+    # The pinned Trivy CLI, not aquasecurity/trivy-action: that action's bundled
+    # Trivy reports no OS findings on the Chainguard base this builds from (see
+    # trivy-image-scan). A gate failure ends the action here, so the push below
+    # never runs.
+    - name: Trivy scan
+      uses: ./.github/actions/trivy-image-scan
       with:
         image-ref: ${{ steps.extract_tag.outputs.primary_tag }}
-        format: 'json'
-        output: 'trivy-results.json'
-        severity: ${{ steps.config.outputs.SEVERITY_THRESHOLD }}
-        ignore-unfixed: true
-        exit-code: '0'
-
-    - name: Display Trivy Scan Results
-      if: always()
-      shell: bash
-      run: |
-        echo "Displaying full vulnerability report from trivy-results.json:"
-        jq '.' trivy-results.json
-
-    - name: Parse Trivy Results
-      id: parse_trivy
-      shell: bash
-      run: |
-        CRITICAL_COUNT=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' trivy-results.json)
-        HIGH_COUNT=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity == "HIGH")] | length' trivy-results.json)
-        MEDIUM_COUNT=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity == "MEDIUM")] | length' trivy-results.json)
-        echo "Trivy Found: $CRITICAL_COUNT critical, $HIGH_COUNT high, $MEDIUM_COUNT medium vulnerabilities."
-        echo "critical-count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
-        echo "high-count=$HIGH_COUNT" >> $GITHUB_OUTPUT
-        echo "medium-count=$MEDIUM_COUNT" >> $GITHUB_OUTPUT
-
-    - name: Make Final Decision
-      id: decision
-      shell: bash
-      env:
-        ENFORCEMENT_MODE: ${{ steps.config.outputs.ENFORCEMENT_MODE }}
-        SEVERITY_THRESHOLD: ${{ steps.config.outputs.SEVERITY_THRESHOLD }}
-        TRIVY_CRITICAL: ${{ steps.parse_trivy.outputs.critical-count }}
-        TRIVY_HIGH: ${{ steps.parse_trivy.outputs.high-count }}
-        TRIVY_MEDIUM: ${{ steps.parse_trivy.outputs.medium-count }}
-      run: |
-        echo "Enforcement Mode: $ENFORCEMENT_MODE"
-        echo "Failing on severities: $SEVERITY_THRESHOLD"
-
-        VULNS_FOUND=0
-        if [[ "$SEVERITY_THRESHOLD" == *"CRITICAL"* && $TRIVY_CRITICAL -gt 0 ]]; then
-          echo "CRITICAL vulnerabilities found."
-          VULNS_FOUND=1
-        fi
-        if [[ "$SEVERITY_THRESHOLD" == *"HIGH"* && $TRIVY_HIGH -gt 0 ]]; then
-          echo "HIGH vulnerabilities found."
-          VULNS_FOUND=1
-        fi
-        if [[ "$SEVERITY_THRESHOLD" == *"MEDIUM"* && $TRIVY_MEDIUM -gt 0 ]]; then
-          echo "MEDIUM vulnerabilities found."
-          VULNS_FOUND=1
-        fi
-
-        if [[ "$ENFORCEMENT_MODE" == "true" && $VULNS_FOUND -eq 1 ]]; then
-          echo "❌ Scan failed in ENFORCEMENT mode. Vulnerabilities found at or above threshold."
-          echo "result=false" >> $GITHUB_OUTPUT
-          exit 1
-        else
-          if [[ $VULNS_FOUND -eq 1 ]]; then
-            echo "⚠️ Vulnerabilities found, but continuing in FEEDBACK mode."
-          else
-            echo "✅ Scan passed."
-          fi
-          echo "result=true" >> $GITHUB_OUTPUT
-        fi
+        severity: CRITICAL,HIGH
+        ignore-unfixed: 'true'
+        output: trivy-results.json
+        fail-severity: ${{ inputs.fail-on-vulns == 'true' && 'CRITICAL,HIGH' || '' }}
 
     - name: Cleanup loaded scanning image
       shell: bash
-      run: |
-        PRIMARY_TAG=$(echo "${{ inputs.tags }}" | head -n 1)
-        docker rmi "$PRIMARY_TAG" || true
+      env:
+        PRIMARY_TAG: ${{ steps.extract_tag.outputs.primary_tag }}
+      run: docker rmi "$PRIMARY_TAG" || true
 
+    # A second build, for the requested platforms. Layers come from the cache
+    # the scan build exported.
     - name: Build and Push multi-platform image
       id: docker_push
-      if: ${{ steps.decision.outputs.result == 'true' }}
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
       with:
-        # Pass all relevant inputs again for the final push
-        add-hosts: ${{ inputs.add-hosts }}
-        allow: ${{ inputs.allow }}
-        annotations: ${{ inputs.annotations }}
-        attests: ${{ inputs.attests }}
-        build-args: ${{ inputs.build-args }}
-        build-contexts: ${{ inputs.build-contexts }}
-        builder: ${{ inputs.builder }}
         # Cache is imported here
         cache-from: ${{ inputs.cache-from }}
         cache-to: ${{ inputs.cache-to }}
-        cgroup-parent: ${{ inputs.cgroup-parent }}
         context: ${{ inputs.context }}
         file: ${{ inputs.file }}
         github-token: ${{ inputs.github-token }}
-        labels: ${{ inputs.labels }}
-        network: ${{ inputs.network }}
-        no-cache: ${{ inputs.no-cache }}
-        no-cache-filters: ${{ inputs.no-cache-filters }}
-        outputs: ${{ inputs.outputs }}
         # Use the platforms the developer originally requested
         platforms: ${{ inputs.platforms }}
-        provenance: ${{ inputs.provenance }}
-        pull: ${{ inputs.pull }}
-        sbom: ${{ inputs.sbom }}
-        secrets: ${{ inputs.secrets }}
-        secret-envs: ${{ inputs.secret-envs }}
-        secret-files: ${{ inputs.secret-files }}
-        shm-size: ${{ inputs.shm-size }}
-        ssh: ${{ inputs.ssh }}
         tags: ${{ inputs.tags }}
-        target: ${{ inputs.target }}
-        ulimit: ${{ inputs.ulimit }}
         push: ${{ inputs.push }}
-        load: ${{ inputs.load }}

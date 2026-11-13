@@ -478,8 +478,11 @@ jobs:
       # ── Trivy scan ────────────────────────────────────────────────────────────
       - name: Install Trivy
         # Install via the official setup-trivy action with a PINNED version —
-        # the same recipe already used by the sdk-trivy-scan composite (same
-        # action SHA, same v0.70.0 pin). This
+        # the recipe of the trivy-image-scan composite, which owns the pin.
+        # Inline, not `uses:` of that composite: this reusable runs in
+        # connector repos, where `./.github/actions/...` names the connector's
+        # tree. test_trivy_image_scan.py fails when the setup-trivy SHA or the
+        # version here differs from the composite's. This
         # replaces a hand-rolled install that resolved the version from
         # api.github.com/.../trivy/releases/latest at scan time: when that call
         # returned anything but the expected JSON (a transient GitHub API 5xx,
@@ -496,7 +499,7 @@ jobs:
         # an older Trivy that under-reports on Chainguard/Wolfi base images.
         #
         # The version is pinned deliberately (scan results drift with Trivy's
-        # vuln-DB schema) and kept in lockstep with the fleet's other scans;
+        # vuln-DB schema) and held in lockstep with the repo's other scans;
         # the aquasecurity/trivy packageRule in renovate-config/default.json
         # disables auto-bumps so a change here is always a conscious decision.
         uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1

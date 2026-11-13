@@ -67,35 +67,64 @@ runs:
         secrets: |
           "PRIVATE_REPO_ACCESS_TOKEN=${{ inputs.github-token }}"
 
+    # ── Trivy ─────────────────────────────────────────────────────────────
+    # The same recipe as the trivy-image-scan composite: install-only
+    # setup-trivy at the repo's one CLI pin, never aquasecurity/trivy-action,
+    # whose bundled Trivy reports no OS findings on the Chainguard base that
+    # application-sdk's own Dockerfile builds from (FND-4904).
+    #
+    # Inline rather than `uses:` that composite because this action also runs
+    # in connector repos (trivy-container.yaml), where `./.github/actions/...`
+    # names the connector's tree. test_trivy_image_scan.py holds the
+    # setup-trivy SHA and the version below to trivy-image-scan's.
+    - name: Install Trivy CLI
+      uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+      with:
+        version: v0.70.0
+        cache: true
+
+    # setup-trivy caches the binary only; see trivy-image-scan for why the DB
+    # is cached too.
+    - name: Get date for the Trivy DB cache key
+      id: trivy-db-date
+      shell: bash
+      run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Trivy DB cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cache/trivy/db
+          ~/.cache/trivy/java-db
+        key: trivy-db-${{ runner.os }}-${{ steps.trivy-db-date.outputs.date }}
+        restore-keys: trivy-db-${{ runner.os }}-
+
+    # skip-files applies to the JSON report too, not only to the SARIF copy as
+    # it used to: trivy-container.yaml gates on this report, so a skipped path
+    # that still gated was the opposite of what the input says.
     - name: Run Trivy scan (JSON)
       id: scan
-      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-      with:
-        image-ref: 'trivy-scan-target:latest'
-        format: 'json'
-        output: 'trivy-container-results.json'
-        severity: 'CRITICAL,HIGH'
-        scanners: 'vuln'
-      env:
-        TRIVY_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2
-        TRIVY_JAVA_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-java-db:1,ghcr.io/aquasecurity/trivy-java-db:1,public.ecr.aws/aquasecurity/trivy-java-db:1
-
-    - name: Set results file output
       shell: bash
-      run: echo "results-file=trivy-container-results.json" >> $GITHUB_OUTPUT
-
-    - name: Run Trivy scan (SARIF)
-      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-      with:
-        image-ref: 'trivy-scan-target:latest'
-        format: 'sarif'
-        output: 'trivy-container-results.sarif'
-        severity: 'CRITICAL,HIGH'
-        scanners: 'vuln'
-        skip-files: ${{ inputs.skip-files }}
       env:
         TRIVY_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2
         TRIVY_JAVA_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-java-db:1,ghcr.io/aquasecurity/trivy-java-db:1,public.ecr.aws/aquasecurity/trivy-java-db:1
+        TRIVY_SKIP_FILES: ${{ inputs.skip-files }}
+      run: |
+        trivy image \
+          --scanners vuln \
+          --severity CRITICAL,HIGH \
+          --format json \
+          --output trivy-container-results.json \
+          trivy-scan-target:latest
+        echo "results-file=trivy-container-results.json" >> "$GITHUB_OUTPUT"
+
+    - name: Show Trivy findings
+      shell: bash
+      run: trivy convert --scanners vuln --format table trivy-container-results.json
+
+    - name: Write SARIF
+      shell: bash
+      run: trivy convert --format sarif --output trivy-container-results.sarif trivy-container-results.json
 
     - name: Upload scan results to GitHub Security tab
       uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
@@ -107,14 +136,16 @@ runs:
 
     - name: Fail on HIGH/CRITICAL vulnerabilities (with fix available)
       if: inputs.fail-on-vulns == 'true'
-      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-      with:
-        image-ref: 'trivy-scan-target:latest'
-        format: 'table'
-        severity: 'CRITICAL,HIGH'
-        exit-code: '1'
-        scanners: 'vuln'
-        ignore-unfixed: true
+      shell: bash
       env:
         TRIVY_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2
         TRIVY_JAVA_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-java-db:1,ghcr.io/aquasecurity/trivy-java-db:1,public.ecr.aws/aquasecurity/trivy-java-db:1
+        TRIVY_SKIP_FILES: ${{ inputs.skip-files }}
+      run: |
+        trivy image \
+          --scanners vuln \
+          --severity CRITICAL,HIGH \
+          --ignore-unfixed \
+          --exit-code 1 \
+          --format table \
+          trivy-scan-target:latest
