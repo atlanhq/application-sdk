@@ -29,7 +29,10 @@ from application_sdk.infrastructure._dapr.http import (
 )
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.infrastructure._single_key_probe import probe_single_keys
-from application_sdk.infrastructure.bindings import BindingUnavailableError
+from application_sdk.infrastructure.bindings import (
+    BindingError,  # noqa: F401 — deprecated name kept importable from this module (shipped surface); removed with the class in v4.0
+    BindingUnavailableError,
+)
 from application_sdk.infrastructure.secrets import (  # noqa: F401 — the two outage types are re-exports kept for importers of this module (shipped surface)
     SecretNotFoundError,
     SecretStoreUnavailableError,

@@ -10,10 +10,12 @@ from typing_extensions import deprecated
 
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 from application_sdk.infrastructure.bindings import (
+    BindingError,  # noqa: F401 — deprecated names kept importable from this module (shipped surface); removed with the class in v4.0
     BindingResponse,
     BindingUnavailableError,
 )
 from application_sdk.infrastructure.pubsub import (
+    PubSubError,  # noqa: F401 — deprecated name kept importable from this module (shipped surface); removed with the class in v4.0
     PubSubUnavailableError,
     _MessageHandler,
 )
@@ -23,7 +25,10 @@ from application_sdk.infrastructure.secrets import (
     SecretStoreTransientError,
     SecretStoreUnavailableError,
 )
-from application_sdk.infrastructure.state import StateStoreUnavailableError
+from application_sdk.infrastructure.state import (
+    StateStoreError,  # noqa: F401 — deprecated name kept importable from this module (shipped surface); removed with the class in v4.0
+    StateStoreUnavailableError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, get_type_hints
 
 from application_sdk.app._artifact_schema_guard import warn_undeclared_artifact_schemas
 from application_sdk.app.entrypoint import (
+    EntryPointContractError,  # noqa: F401 — deprecated name kept importable from this module (shipped surface); removed with the class in v4.0
     EntryPointDeclarationError,
     EntryPointMetadata,
     get_entrypoint_metadata,

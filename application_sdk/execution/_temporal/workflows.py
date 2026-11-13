@@ -7,6 +7,7 @@ with workflow.unsafe.imports_passed_through():
 
     from application_sdk.app.base import generate_workflow_class
     from application_sdk.app.entrypoint import (
+        EntryPointContractError,  # noqa: F401 — deprecated name kept importable from this module (shipped surface); removed with the class in v4.0
         EntryPointDeclarationError,
         workflow_type_class_segment,
     )
