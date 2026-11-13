@@ -2579,6 +2579,15 @@ jobs:
         id: atlan_yaml
         run: python3 application-sdk-scripts/.github/scripts/parse_atlan_yaml.py
 
+      # The connector form files, read by the release path's own producer so the
+      # e2e registration carries the app_configs a release ships (FND-4909).
+      # Without them LM has no forms to materialise for the version under test.
+      # Empty output when the app ships no app/generated/; the script then omits
+      # the field, as the release path does.
+      - name: Read app/generated/ for app_configs
+        id: app_configs
+        run: python3 application-sdk-scripts/.github/scripts/build_and_publish/prepare.py app-configs
+
       # Everything reaches the shell through env:, nothing through `${{ }}` inside
       # run:. Three reasons, in descending order of severity:
       #
@@ -2608,6 +2617,8 @@ jobs:
           SDK_VERSION: ${{ steps.atlan_yaml.outputs.sdk_version }}
           ENTRYPOINTS: ${{ steps.atlan_yaml.outputs.entrypoints }}
           RELEASE_MODEL: ${{ steps.atlan_yaml.outputs.release_model }}
+          ENABLE_SDR: ${{ steps.atlan_yaml.outputs.enable_sdr }}
+          APP_CONFIGS: ${{ steps.app_configs.outputs.app_configs }}
           CREATED_BY: ${{ github.triggering_actor }}
         run: |
           set -euo pipefail
@@ -2622,6 +2633,8 @@ jobs:
             --sdk-version "$SDK_VERSION" \
             --entrypoints "$ENTRYPOINTS" \
             --release-model "$RELEASE_MODEL" \
+            --self-deployed-runtime "$ENABLE_SDR" \
+            --app-configs "$APP_CONFIGS" \
             --created-by "$CREATED_BY"
         # --install-retry-seconds is left at its default (600). A freshly
         # published release is not immediately installable: LM resolves the

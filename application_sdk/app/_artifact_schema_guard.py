@@ -48,7 +48,7 @@ reads — one reader, so a field this guard stops asking about cannot be one the
 interceptor stops checking.
 
 **Warns in 3.x, raises in 4.0.**  A missing declaration is the same class of
-defect as the ``EntryPointContractError`` family this runs alongside — a public
+defect as the ``EntryPointDeclarationError`` family this runs alongside — a public
 interface that is not fully described — but making it fatal immediately would
 break every app in the fleet at once, so 3.x gets a deprecation window and the
 warning names the removal version.  Conformance ``K016`` reports the same defect
@@ -93,7 +93,7 @@ __all__ = [
 _logger = get_logger(__name__)
 
 #: SDK version in which a missing boundary declaration stops being a warning and
-#: starts being an ``EntryPointContractError``.  Named in the warning text so a
+#: starts being an ``EntryPointDeclarationError``.  Named in the warning text so a
 #: reader never has to go looking for the deadline.
 ARTIFACT_SCHEMA_REMOVAL_VERSION = "4.0"
 

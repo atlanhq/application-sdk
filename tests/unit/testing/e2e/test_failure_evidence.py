@@ -31,7 +31,7 @@ import pytest
 
 from application_sdk.testing.e2e import BaseE2ETest
 from application_sdk.testing.e2e.base import FullDAGOutcome
-from application_sdk.testing.e2e.client import (
+from application_sdk.testing.harness.automation_engine import (
     DAGNodeResult,
     DAGNodeStatus,
     DAGRunResult,

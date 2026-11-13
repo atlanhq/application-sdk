@@ -334,13 +334,13 @@ def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
         return None
 
     from application_sdk.app.registry import (  # noqa: PLC0415
-        AppNotFoundError,
+        AppNotRegisteredError,
         AppRegistry,
     )
 
     try:
         app_meta = AppRegistry.get_instance().get(app_cls_name)
-    except AppNotFoundError:
+    except AppNotRegisteredError:
         logger.warning(
             "App %r not found in registry; returning None", app_cls_name, exc_info=True
         )
@@ -746,13 +746,13 @@ def _resolve_app_entrypoint(
         _resolve_default_entrypoint,
     )
     from application_sdk.app.registry import (  # noqa: PLC0415
-        AppNotFoundError,
+        AppNotRegisteredError,
         AppRegistry,
     )
 
     try:
         app_meta = AppRegistry.get_instance().get(app_name)
-    except AppNotFoundError:
+    except AppNotRegisteredError:
         raise HTTPException(
             status_code=404, detail=f"App {app_name!r} not registered"
         ) from None
@@ -1764,13 +1764,13 @@ def _register_workflow_routes(
         # gets run() forced as its default, but run() has no generated manifest
         # dir — so the explicit ones, alphabetically, are the fallback.
         from application_sdk.app.registry import (  # noqa: PLC0415
-            AppNotFoundError,
+            AppNotRegisteredError,
             AppRegistry,
         )
 
         try:
             app_meta = AppRegistry.get_instance().get(workflow_config.app_name)
-        except AppNotFoundError:
+        except AppNotRegisteredError:
             return []
         return [
             ep.name

@@ -8,7 +8,7 @@ import pytest
 
 from application_sdk.app.base import App
 from application_sdk.app.entrypoint import (
-    EntryPointContractError,
+    EntryPointDeclarationError,
     EntryPointMetadata,
     _resolve_default_entrypoint,
     entrypoint,
@@ -128,19 +128,19 @@ class TestEntrypointDecorator:
 
 
 class TestEntrypointContractErrors:
-    """Tests for EntryPointContractError raised on invalid signatures."""
+    """Tests for EntryPointDeclarationError raised on invalid signatures."""
 
     def test_no_params_raises_contract_error(self) -> None:
-        """Method with no params (besides self) raises EntryPointContractError."""
-        with pytest.raises(EntryPointContractError):
+        """Method with no params (besides self) raises EntryPointDeclarationError."""
+        with pytest.raises(EntryPointDeclarationError):
 
             @entrypoint
             async def bad(self: object) -> _EpOutput:  # type: ignore[misc]
                 return _EpOutput()
 
     def test_two_params_raises_contract_error(self) -> None:
-        """Method with two params raises EntryPointContractError."""
-        with pytest.raises(EntryPointContractError):
+        """Method with two params raises EntryPointDeclarationError."""
+        with pytest.raises(EntryPointDeclarationError):
 
             @entrypoint
             async def bad2(  # type: ignore[misc]
@@ -149,16 +149,16 @@ class TestEntrypointContractErrors:
                 return _EpOutput()
 
     def test_wrong_input_type_raises_contract_error(self) -> None:
-        """Parameter not extending Input raises EntryPointContractError."""
-        with pytest.raises(EntryPointContractError):
+        """Parameter not extending Input raises EntryPointDeclarationError."""
+        with pytest.raises(EntryPointDeclarationError):
 
             @entrypoint
             async def bad3(self: object, input: str) -> _EpOutput:  # type: ignore[misc]
                 return _EpOutput()
 
     def test_wrong_return_type_raises_contract_error(self) -> None:
-        """Return type not extending Output raises EntryPointContractError."""
-        with pytest.raises(EntryPointContractError):
+        """Return type not extending Output raises EntryPointDeclarationError."""
+        with pytest.raises(EntryPointDeclarationError):
 
             @entrypoint
             async def bad4(self: object, input: _EpInput) -> str:  # type: ignore[misc]
@@ -298,7 +298,7 @@ class TestEntrypointAppRegistration:
         assert defn_mine.name == "colon-wf-app:mine-queries"
 
     def test_entrypoint_with_non_input_type_raises_contract_error(self) -> None:
-        """Defining an App whose @entrypoint has a non-Input input_type raises EntryPointContractError.
+        """Defining an App whose @entrypoint has a non-Input input_type raises EntryPointDeclarationError.
 
         The @entrypoint decorator validates at decoration time, but __init_subclass__
         re-validates as defense-in-depth (e.g. manually crafted _entrypoint_metadata).
@@ -307,7 +307,7 @@ class TestEntrypointAppRegistration:
         """
         import types
 
-        from application_sdk.app.entrypoint import EntryPointContractError
+        from application_sdk.app.entrypoint import EntryPointDeclarationError
 
         async def bad_ep(self: object, input: object) -> _EpOutput:
             return _EpOutput()
@@ -321,7 +321,7 @@ class TestEntrypointAppRegistration:
             method_name="bad_ep",
         )
 
-        with pytest.raises(EntryPointContractError, match="input type"):
+        with pytest.raises(EntryPointDeclarationError, match="input type"):
             types.new_class(
                 "BadInputEntrypointApp",
                 (App,),
@@ -330,10 +330,10 @@ class TestEntrypointAppRegistration:
             )
 
     def test_entrypoint_with_non_output_type_raises_contract_error(self) -> None:
-        """Defining an App whose @entrypoint has a non-Output output_type raises EntryPointContractError."""
+        """Defining an App whose @entrypoint has a non-Output output_type raises EntryPointDeclarationError."""
         import types
 
-        from application_sdk.app.entrypoint import EntryPointContractError
+        from application_sdk.app.entrypoint import EntryPointDeclarationError
 
         async def bad_out_ep(self: object, input: _EpInput) -> object:
             return object()
@@ -345,7 +345,7 @@ class TestEntrypointAppRegistration:
             method_name="bad_out_ep",
         )
 
-        with pytest.raises(EntryPointContractError, match="output type"):
+        with pytest.raises(EntryPointDeclarationError, match="output type"):
             types.new_class(
                 "BadOutputEntrypointApp",
                 (App,),
@@ -354,8 +354,8 @@ class TestEntrypointAppRegistration:
             )
 
     def test_entrypoint_missing_return_annotation_raises_contract_error(self) -> None:
-        """@entrypoint without a return type annotation raises EntryPointContractError."""
-        with pytest.raises(EntryPointContractError, match="return type"):
+        """@entrypoint without a return type annotation raises EntryPointDeclarationError."""
+        with pytest.raises(EntryPointDeclarationError, match="return type"):
 
             @entrypoint
             async def no_return(self: object, input: _EpInput):  # type: ignore[return]
@@ -364,8 +364,8 @@ class TestEntrypointAppRegistration:
     def test_entrypoint_custom_name_invalid_identifier_raises_contract_error(
         self,
     ) -> None:
-        """@entrypoint(name=...) with an invalid identifier raises EntryPointContractError."""
-        with pytest.raises(EntryPointContractError, match="valid identifier"):
+        """@entrypoint(name=...) with an invalid identifier raises EntryPointDeclarationError."""
+        with pytest.raises(EntryPointDeclarationError, match="valid identifier"):
 
             @entrypoint(name="bad name with spaces!")
             async def bad_named(self: object, input: _EpInput) -> _EpOutput:  # type: ignore[misc]
@@ -550,14 +550,14 @@ class TestMixedEntrypointRegistration:
     # ── Scenario 5: run() + @entrypoint(default=True) — must fail ────────
 
     def test_run_and_entrypoint_with_explicit_default_raises(self) -> None:
-        """@entrypoint(default=True) alongside run() raises EntryPointContractError.
+        """@entrypoint(default=True) alongside run() raises EntryPointDeclarationError.
 
         run() has permanent default-precedence in mixed apps; explicitly marking
         another entry point as default is prohibited.
         """
         import types
 
-        with pytest.raises(EntryPointContractError, match="default-precedence"):
+        with pytest.raises(EntryPointDeclarationError, match="default-precedence"):
 
             async def _run(self: object, input: _RunInput) -> _RunOutput:
                 return _RunOutput()
@@ -654,10 +654,10 @@ class TestMixedEntrypointRegistration:
     # ── Scenario 8: multiple @entrypoints, multiple explicit defaults ─────
 
     def test_multiple_entrypoints_multiple_explicit_defaults_raises(self) -> None:
-        """Two @entrypoint(default=True) decorations raise EntryPointContractError."""
+        """Two @entrypoint(default=True) decorations raise EntryPointDeclarationError."""
         import types
 
-        with pytest.raises(EntryPointContractError, match="more than one default"):
+        with pytest.raises(EntryPointDeclarationError, match="more than one default"):
 
             @entrypoint(default=True)
             async def _alpha(self: object, input: _AlphaInput) -> _AlphaOutput:

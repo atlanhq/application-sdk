@@ -30,6 +30,7 @@ jobs:
   open-release-pr:
     name: Open or update contract toolkit release PR
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # A manual run releases only from main: release_guard fails open on a
     # dispatch, and this job loads the commit-signing key after running the
     # checked-out ref's release scripts, `uv` and build tooling.

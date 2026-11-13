@@ -33,6 +33,7 @@ jobs:
   changes:
     name: Detect Changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       container: ${{ steps.filter.outputs.container }}
       # 'sdk'  — changes that can alter SDK behaviour, so the unit + integration
@@ -153,6 +154,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.opted_in != 'false' && needs.changes.outputs.sdk == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: "./.github/actions/docstring-coverage"
@@ -167,6 +169,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.opted_in != 'false' && needs.changes.outputs.container == 'true' && github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Mint fleet App token
@@ -193,6 +196,7 @@ jobs:
     name: Build Test Matrix
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -493,6 +497,9 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
+    # Dispatch only (wait-mode: callback): observed under 4 min. The wait for
+    # the connector's verdict is connector-gate's, not this job's.
+    timeout-minutes: 20
     # The check run is created + updated with the atlan-app-fleet App token
     # (scoped to application-sdk below), NOT github.token. A check run can only
     # be updated by the App that created it, and the connector's own callback
@@ -614,6 +621,10 @@ jobs:
       )
       )
     runs-on: ubuntu-latest
+    # Above poll_dispatched_run.py's own 120-min budget, so a slow run still
+    # reports `timeout` from the poller rather than a bare job kill. The
+    # one retry after an early failure (observed runs take ~10-12 min) fits too.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Mint fleet App token
@@ -721,6 +732,9 @@ jobs:
         needs.e2e-request.outputs.requested == 'true'
       )
     runs-on: ubuntu-latest
+    # Above poll_check_runs_gate.py's 130-min budget, so the poller's own
+    # timeout verdict is what a missing check produces.
+    timeout-minutes: 150
     permissions:
       contents: read
       checks: read

@@ -27,6 +27,7 @@ jobs:
   generated-output:
     name: Verify generated output
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -70,6 +71,7 @@ jobs:
   pkl-tests:
     name: PKL tests and invariants
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -88,6 +90,7 @@ jobs:
   generated-python:
     name: Generated Python lint and SDK imports
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -115,6 +118,7 @@ jobs:
   changelog-guard:
     name: Toolkit changelog guard
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: >-
       github.event_name == 'pull_request' &&
       !startsWith(github.head_ref, 'release/contract-toolkit-v') &&
@@ -142,6 +146,7 @@ jobs:
   docs-check:
     name: Toolkit docs update check
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: >-
       github.event_name == 'pull_request' &&
       !startsWith(github.head_ref, 'release/contract-toolkit-v') &&

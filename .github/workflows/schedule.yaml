@@ -11,6 +11,7 @@ permissions:
 jobs:
   stale:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Mint fleet App token
         id: app-token

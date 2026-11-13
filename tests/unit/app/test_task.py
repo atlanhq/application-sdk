@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pytest
 
 from application_sdk.app.task import (
-    TaskContractError,
+    TaskDeclarationError,
     TaskMetadata,
     get_task_metadata,
     is_task,
@@ -200,8 +200,10 @@ class TestTaskContractValidation:
     """Tests for task contract enforcement."""
 
     def test_task_contract_error_no_params(self) -> None:
-        """TaskContractError raised when task has no params."""
-        with pytest.raises(TaskContractError, match="must have exactly one parameter"):
+        """TaskDeclarationError raised when task has no params."""
+        with pytest.raises(
+            TaskDeclarationError, match="must have exactly one parameter"
+        ):
 
             class MyApp:
                 @task
@@ -209,8 +211,10 @@ class TestTaskContractValidation:
                     return SimpleOutput()
 
     def test_task_contract_error_too_many_params(self) -> None:
-        """TaskContractError raised when task has more than one param."""
-        with pytest.raises(TaskContractError, match="must have exactly one parameter"):
+        """TaskDeclarationError raised when task has more than one param."""
+        with pytest.raises(
+            TaskDeclarationError, match="must have exactly one parameter"
+        ):
 
             class MyApp:
                 @task
@@ -220,8 +224,8 @@ class TestTaskContractValidation:
                     return SimpleOutput()
 
     def test_task_contract_error_wrong_input_type(self) -> None:
-        """TaskContractError raised when input does not extend Input."""
-        with pytest.raises(TaskContractError, match="must extend Input base class"):
+        """TaskDeclarationError raised when input does not extend Input."""
+        with pytest.raises(TaskDeclarationError, match="must extend Input base class"):
 
             class MyApp:
                 @task
@@ -229,9 +233,9 @@ class TestTaskContractValidation:
                     return SimpleOutput()
 
     def test_task_contract_error_no_return_annotation(self) -> None:
-        """TaskContractError raised when return type is missing."""
+        """TaskDeclarationError raised when return type is missing."""
         with pytest.raises(
-            TaskContractError, match="must have a return type annotation"
+            TaskDeclarationError, match="must have a return type annotation"
         ):
 
             class MyApp:
@@ -240,8 +244,8 @@ class TestTaskContractValidation:
                     return SimpleOutput()
 
     def test_task_contract_error_wrong_return_type(self) -> None:
-        """TaskContractError raised when return type does not extend Output."""
-        with pytest.raises(TaskContractError, match="must extend Output base class"):
+        """TaskDeclarationError raised when return type does not extend Output."""
+        with pytest.raises(TaskDeclarationError, match="must extend Output base class"):
 
             class MyApp:
                 @task
@@ -508,7 +512,7 @@ class TestTaskProgressWatchdog:
         A typo in a deployment manifest must not stop a worker booting; a typo in
         an app's own source is a bug its author should see immediately.
         """
-        with pytest.raises(TaskContractError, match="not a valid mode"):
+        with pytest.raises(TaskDeclarationError, match="not a valid mode"):
 
             class MyApp:
                 @task(progress_watchdog="enfroce")
@@ -532,7 +536,7 @@ class TestTaskProgressWatchdog:
         In an enforcing task either one is a kill switch wearing a config knob's
         clothes, so neither is allowed to reach a decoration.
         """
-        with pytest.raises(TaskContractError, match="finite positive"):
+        with pytest.raises(TaskDeclarationError, match="finite positive"):
 
             class MyApp:
                 @task(max_no_progress_seconds=bad)
@@ -681,8 +685,8 @@ class TestTaskPool:
         assert "task_queue" not in mock_exec.call_args.kwargs
 
     def test_pool_uppercase_raises_error(self) -> None:
-        """@task(pool='HotPool') raises TaskContractError — pool must be lowercase kebab-case."""
-        with pytest.raises(TaskContractError, match="lowercase kebab-case"):
+        """@task(pool='HotPool') raises TaskDeclarationError — pool must be lowercase kebab-case."""
+        with pytest.raises(TaskDeclarationError, match="lowercase kebab-case"):
 
             class MyApp:
                 @task(pool="HotPool")
@@ -690,8 +694,8 @@ class TestTaskPool:
                     return SimpleOutput()
 
     def test_pool_empty_string_raises_error(self) -> None:
-        """@task(pool='') raises TaskContractError."""
-        with pytest.raises(TaskContractError, match="empty or whitespace"):
+        """@task(pool='') raises TaskDeclarationError."""
+        with pytest.raises(TaskDeclarationError, match="empty or whitespace"):
 
             class MyApp:
                 @task(pool="")
@@ -699,8 +703,8 @@ class TestTaskPool:
                     return SimpleOutput()
 
     def test_pool_whitespace_only_raises_error(self) -> None:
-        """@task(pool='  ') raises TaskContractError."""
-        with pytest.raises(TaskContractError, match="empty or whitespace"):
+        """@task(pool='  ') raises TaskDeclarationError."""
+        with pytest.raises(TaskDeclarationError, match="empty or whitespace"):
 
             class MyApp:
                 @task(pool="  ")
@@ -708,8 +712,8 @@ class TestTaskPool:
                     return SimpleOutput()
 
     def test_pool_trailing_dash_raises_error(self) -> None:
-        """@task(pool='pool-') raises TaskContractError — trailing dash is not kebab-case."""
-        with pytest.raises(TaskContractError, match="lowercase kebab-case"):
+        """@task(pool='pool-') raises TaskDeclarationError — trailing dash is not kebab-case."""
+        with pytest.raises(TaskDeclarationError, match="lowercase kebab-case"):
 
             class MyApp:
                 @task(pool="pool-")
@@ -717,8 +721,8 @@ class TestTaskPool:
                     return SimpleOutput()
 
     def test_pool_consecutive_dashes_raises_error(self) -> None:
-        """@task(pool='pool--name') raises TaskContractError — consecutive dashes rejected."""
-        with pytest.raises(TaskContractError, match="lowercase kebab-case"):
+        """@task(pool='pool--name') raises TaskDeclarationError — consecutive dashes rejected."""
+        with pytest.raises(TaskDeclarationError, match="lowercase kebab-case"):
 
             class MyApp:
                 @task(pool="pool--name")

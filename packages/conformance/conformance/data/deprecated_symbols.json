@@ -156,7 +156,7 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "EntryPointContractError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
+      "message": "EntryPointContractError is deprecated; use application_sdk.app.entrypoint.EntryPointDeclarationError \u2014 will be removed in v4.0",
       "migration_target": true,
       "module": "application_sdk.app.entrypoint",
       "removal_version": "4.0",
@@ -165,7 +165,7 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "AppAlreadyRegisteredError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
+      "message": "AppAlreadyRegisteredError is deprecated; use application_sdk.app.registry.AppVersionAlreadyRegisteredError \u2014 will be removed in v4.0",
       "migration_target": true,
       "module": "application_sdk.app.registry",
       "removal_version": "4.0",
@@ -174,7 +174,7 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "AppNotFoundError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
+      "message": "AppNotFoundError is deprecated; use application_sdk.app.registry.AppNotRegisteredError \u2014 will be removed in v4.0",
       "migration_target": true,
       "module": "application_sdk.app.registry",
       "removal_version": "4.0",
@@ -183,7 +183,7 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "TaskNotFoundError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
+      "message": "TaskNotFoundError is deprecated; use application_sdk.app.registry.TaskNotRegisteredError \u2014 will be removed in v4.0",
       "migration_target": true,
       "module": "application_sdk.app.registry",
       "removal_version": "4.0",
@@ -192,7 +192,7 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "TaskContractError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
+      "message": "TaskContractError is deprecated; use application_sdk.app.task.TaskDeclarationError \u2014 will be removed in v4.0",
       "migration_target": true,
       "module": "application_sdk.app.task",
       "removal_version": "4.0",
@@ -624,7 +624,7 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "ContractValidationError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
+      "message": "ContractValidationError is deprecated; use application_sdk.contracts.ContractDeclarationError \u2014 will be removed in v4.0",
       "migration_target": true,
       "module": "application_sdk.contracts.base",
       "removal_version": "4.0",
@@ -957,7 +957,7 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "BindingError is deprecated; use application_sdk.errors.DependencyUnavailableError \u2014 will be removed in v4.0",
+      "message": "BindingError is deprecated; use application_sdk.infrastructure.BindingUnavailableError \u2014 will be removed in v4.0",
       "migration_target": true,
       "module": "application_sdk.infrastructure.bindings",
       "removal_version": "4.0",
@@ -1029,7 +1029,7 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "CredentialVaultError is deprecated; use application_sdk.errors.DependencyUnavailableError \u2014 will be removed in v4.0",
+      "message": "CredentialVaultError is deprecated; use application_sdk.infrastructure.CredentialVaultUnavailableError \u2014 will be removed in v4.0",
       "migration_target": true,
       "module": "application_sdk.infrastructure.credential_vault",
       "removal_version": "4.0",
@@ -1047,7 +1047,7 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "PubSubError is deprecated; use application_sdk.errors.DependencyUnavailableError \u2014 will be removed in v4.0",
+      "message": "PubSubError is deprecated; use application_sdk.infrastructure.PubSubUnavailableError \u2014 will be removed in v4.0",
       "migration_target": true,
       "module": "application_sdk.infrastructure.pubsub",
       "removal_version": "4.0",
@@ -1074,7 +1074,7 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "StateStoreError is deprecated; use application_sdk.errors.DependencyUnavailableError \u2014 will be removed in v4.0",
+      "message": "StateStoreError is deprecated; use application_sdk.infrastructure.StateStoreUnavailableError \u2014 will be removed in v4.0",
       "migration_target": true,
       "module": "application_sdk.infrastructure.state",
       "removal_version": "4.0",
@@ -1668,7 +1668,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "DAGRunResult is deprecated; use application_sdk.testing.e2e.client.DAGRunResult \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "message": "DAGRunResult is deprecated; use application_sdk.testing.harness.automation_engine.DAGRunResult \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.base",
       "removal_version": "4.0.0",
@@ -1686,7 +1686,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "cold_start_submit_kwargs is deprecated; use application_sdk.testing.e2e.client.cold_start_submit_kwargs \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "message": "cold_start_submit_kwargs is deprecated; use application_sdk.testing.harness.automation_engine.cold_start_submit_kwargs \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.base",
       "removal_version": "4.0.0",
@@ -1713,7 +1713,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "AEWorkflowClient is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "message": "AEWorkflowClient is deprecated; use application_sdk.testing.harness.automation_engine.AEClient and application_sdk.testing.harness.atlas \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.client",
       "removal_version": "4.0.0",
@@ -1722,7 +1722,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "DAGNodeResult is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "message": "DAGNodeResult is deprecated; use application_sdk.testing.harness.automation_engine.DAGNodeResult \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.client",
       "removal_version": "4.0.0",
@@ -1731,7 +1731,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "DAGNodeStatus is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "message": "DAGNodeStatus is deprecated; use application_sdk.testing.harness.automation_engine.DAGNodeStatus \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.client",
       "removal_version": "4.0.0",
@@ -1740,7 +1740,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "DAGRunResult is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "message": "DAGRunResult is deprecated; use application_sdk.testing.harness.automation_engine.DAGRunResult \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.client",
       "removal_version": "4.0.0",
@@ -1749,7 +1749,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "DAGRunStatus is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "message": "DAGRunStatus is deprecated; use application_sdk.testing.harness.automation_engine.DAGRunStatus \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.client",
       "removal_version": "4.0.0",
@@ -1758,7 +1758,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "cold_start_submit_kwargs is deprecated; use application_sdk.testing.e2e.client \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
+      "message": "cold_start_submit_kwargs is deprecated; use application_sdk.testing.harness.automation_engine.cold_start_submit_kwargs \u2014 application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.full_dag.client",
       "removal_version": "4.0.0",

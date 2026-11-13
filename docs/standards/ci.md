@@ -84,6 +84,29 @@ refuse it.
 A new step that needs to decide something gets a script, not an allowlist
 entry.
 
+## Every job sets `timeout-minutes`
+
+**Rule:** every workflow job that runs `steps:` declares `timeout-minutes`
+below 360: a literal, or `${{ inputs.<name> }}` naming a `workflow_call` input
+whose default is a literal below 360. In-repo callers may not pass that input
+360 or more. A job that calls a reusable workflow (`uses:`) cannot take a
+`timeout-minutes` of its own; the called workflow's jobs carry it.
+
+**Why:** GitHub's default is 360 minutes. A job that waits on a run in another
+repo, or on a callback that never arrives, otherwise holds a runner and, on the
+merge queue, a queue slot for six hours.
+
+**Choosing the value:** a few times the observed duration (check recent runs),
+not the 360-minute default. When a step runs its own poll with a budget
+(`poll_dispatched_run.py`, `poll_check_runs_gate.py`), set the job cap above
+that budget, so the poller reports its own timeout instead of the job being
+killed without a verdict. `flag_job_timeouts.py` warns when a job finishes
+close to its cap, which is the signal a value is too low.
+
+`.github/scripts/tests/test_job_timeouts.py` enforces the rule over every
+workflow under `.github/workflows/`, and fails if a conformance bootstrap
+template grows a job with its own steps that it cannot parse.
+
 ## Running the script tests
 
 The `CI script tests` workflow (`.github/workflows/scripts-tests.yaml`) runs

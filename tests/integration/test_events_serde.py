@@ -315,7 +315,7 @@ def _failing_event_binding(workflow_start_error: str) -> tuple[mock.MagicMock, l
     """
     import orjson
 
-    from application_sdk.infrastructure.bindings import BindingError
+    from application_sdk.infrastructure.bindings import BindingUnavailableError
 
     sent: list[dict] = []
 
@@ -323,8 +323,10 @@ def _failing_event_binding(workflow_start_error: str) -> tuple[mock.MagicMock, l
         payload = orjson.loads(data)
         sent.append(payload)
         if payload["event_name"] == ApplicationEventNames.WORKFLOW_START.value:
-            raise BindingError(
-                workflow_start_error, binding_name="eventstore", operation=operation
+            raise BindingUnavailableError(
+                message=workflow_start_error,
+                binding_name="eventstore",
+                operation=operation,
             )
 
     binding = mock.MagicMock()

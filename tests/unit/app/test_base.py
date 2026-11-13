@@ -38,11 +38,11 @@ from application_sdk.app.base import (
     generate_workflow_class,
 )
 from application_sdk.app.entrypoint import (
-    EntryPointContractError,
+    EntryPointDeclarationError,
     EntryPointMetadata,
     entrypoint,
 )
-from application_sdk.app.registry import AppNotFoundError, AppRegistry
+from application_sdk.app.registry import AppNotRegisteredError, AppRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference, StoreTarget
@@ -220,32 +220,36 @@ class TestAppRegistration:
             pass
 
         registry = AppRegistry.get_instance()
-        with pytest.raises(AppNotFoundError):
+        with pytest.raises(AppNotRegisteredError):
             registry.get("abstract-sub-app")
 
     def test_app_with_run_but_no_type_hints_raises_contract_error(self) -> None:
-        """An App subclass that overrides run() without type hints raises EntryPointContractError."""
+        """An App subclass that overrides run() without type hints raises EntryPointDeclarationError."""
 
-        with pytest.raises(EntryPointContractError, match="must have type annotations"):
+        with pytest.raises(
+            EntryPointDeclarationError, match="must have type annotations"
+        ):
 
             class NoHintsApp(App):
                 async def run(self, input):  # type: ignore[override]
                     return SimpleOutput()
 
     def test_app_with_run_using_base_input_raises_contract_error(self) -> None:
-        """Overriding run() with the base Input type (not narrowed) raises EntryPointContractError."""
+        """Overriding run() with the base Input type (not narrowed) raises EntryPointDeclarationError."""
 
-        with pytest.raises(EntryPointContractError, match="concrete subclass of Input"):
+        with pytest.raises(
+            EntryPointDeclarationError, match="concrete subclass of Input"
+        ):
 
             class BaseInputApp(App):
                 async def run(self, input: Input) -> SimpleOutput:  # type: ignore[override]
                     return SimpleOutput()
 
     def test_app_with_run_using_base_output_raises_contract_error(self) -> None:
-        """Overriding run() with the base Output type (not narrowed) raises EntryPointContractError."""
+        """Overriding run() with the base Output type (not narrowed) raises EntryPointDeclarationError."""
 
         with pytest.raises(
-            EntryPointContractError, match="concrete subclass of Output"
+            EntryPointDeclarationError, match="concrete subclass of Output"
         ):
 
             class BaseOutputApp(App):
@@ -291,18 +295,18 @@ class TestAppRegistration:
         assert VersionApp._app_version == "3.0.0"
 
     def test_app_with_wrong_input_type_raises_contract_error(self) -> None:
-        """App that overrides run() with a non-Input parameter raises EntryPointContractError."""
+        """App that overrides run() with a non-Input parameter raises EntryPointDeclarationError."""
 
-        with pytest.raises(EntryPointContractError, match="input type"):
+        with pytest.raises(EntryPointDeclarationError, match="input type"):
 
             class BadInputApp(App):
                 async def run(self, input: str) -> SimpleOutput:  # type: ignore[override]
                     return SimpleOutput()
 
     def test_app_with_wrong_output_type_raises_contract_error(self) -> None:
-        """App that overrides run() with a non-Output return type raises EntryPointContractError."""
+        """App that overrides run() with a non-Output return type raises EntryPointDeclarationError."""
 
-        with pytest.raises(EntryPointContractError, match="output type"):
+        with pytest.raises(EntryPointDeclarationError, match="output type"):
 
             class BadOutputApp(App):
                 async def run(self, input: SimpleInput) -> str:  # type: ignore[override]
@@ -340,7 +344,7 @@ class TestAppRegistration:
             pass
 
         registry = AppRegistry.get_instance()
-        with pytest.raises(AppNotFoundError):
+        with pytest.raises(AppNotRegisteredError):
             registry.get("no-run-app")
 
 

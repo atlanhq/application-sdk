@@ -17,15 +17,18 @@ from application_sdk.infrastructure._dapr.client import (
     DaprStateStore,
 )
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient, BindingResult
-from application_sdk.infrastructure.bindings import BindingError, BindingResponse
-from application_sdk.infrastructure.pubsub import PubSubError
+from application_sdk.infrastructure.bindings import (
+    BindingResponse,
+    BindingUnavailableError,
+)
+from application_sdk.infrastructure.pubsub import PubSubUnavailableError
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreError,
     SecretStoreTransientError,
     SecretStoreUnavailableError,
 )
-from application_sdk.infrastructure.state import StateStoreError
+from application_sdk.infrastructure.state import StateStoreUnavailableError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -63,8 +66,25 @@ class TestDaprStateStore:
 
     async def test_save_error(self):
         self.client.save_state.side_effect = RuntimeError("boom")
-        with pytest.raises(StateStoreError):
+        with pytest.raises(StateStoreUnavailableError):
             await self.store.save("k1", {"x": 1})
+
+    async def test_save_error_is_catchable_by_deprecated_name_without_warning(self):
+        """The SDK's own raise emits no DeprecationWarning, yet an app's
+        ``except StateStoreError:`` still catches it (FND-4910)."""
+        import warnings
+
+        from application_sdk.infrastructure.state import StateStoreError
+
+        self.client.save_state.side_effect = RuntimeError("boom")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            with pytest.raises(StateStoreError) as exc:
+                await self.store.save("k1", {"x": 1})
+        assert type(exc.value) is StateStoreUnavailableError
+        assert exc.value.key == "k1"
+        assert exc.value.operation == "save"
+        assert exc.value.code == "DEPENDENCY_UNAVAILABLE_STATE_STORE"
 
     async def test_load_returns_data(self):
         self.client.get_state.return_value = json.dumps({"a": 1})
@@ -82,7 +102,7 @@ class TestDaprStateStore:
 
     async def test_load_error(self):
         self.client.get_state.side_effect = RuntimeError("boom")
-        with pytest.raises(StateStoreError):
+        with pytest.raises(StateStoreUnavailableError):
             await self.store.load("k1")
 
     async def test_delete(self):
@@ -94,7 +114,7 @@ class TestDaprStateStore:
 
     async def test_delete_error(self):
         self.client.delete_state.side_effect = RuntimeError("boom")
-        with pytest.raises(StateStoreError):
+        with pytest.raises(StateStoreUnavailableError):
             await self.store.delete("k1")
 
     async def test_list_keys_raises_not_implemented(self):
@@ -613,7 +633,7 @@ class TestDaprPubSub:
 
     async def test_publish_error(self):
         self.client.publish_event.side_effect = RuntimeError("boom")
-        with pytest.raises(PubSubError):
+        with pytest.raises(PubSubUnavailableError):
             await self.pubsub.publish("t", {"x": 1})
 
 
@@ -666,12 +686,12 @@ class TestDaprBinding:
 
     async def test_invoke_error(self):
         self.client.invoke_binding.side_effect = RuntimeError("boom")
-        with pytest.raises(BindingError):
+        with pytest.raises(BindingUnavailableError):
             await self.binding.invoke("get")
 
     async def test_invoke_error_surfaces_dapr_error_body(self):
         """A Dapr 500 carries the real cause only in its JSON body; the
-        BindingError message must carry it too, since the sidecar logs it
+        BindingUnavailableError message must carry it too, since the sidecar logs it
         only at debug level."""
         req = httpx.Request("POST", "http://localhost:3500/v1.0/bindings/eventstore")
         resp = httpx.Response(
@@ -686,7 +706,7 @@ class TestDaprBinding:
         self.client.invoke_binding.side_effect = httpx.HTTPStatusError(
             "internal error", request=req, response=resp
         )
-        with pytest.raises(BindingError) as exc:
+        with pytest.raises(BindingUnavailableError) as exc:
             await self.binding.invoke("create")
         text = str(exc.value)
         assert "ERR_INVOKE_OUTPUT_BINDING" in text
@@ -703,7 +723,7 @@ class TestDaprBinding:
         self.client.invoke_binding.side_effect = httpx.HTTPStatusError(
             "bad gateway", request=req, response=resp
         )
-        with pytest.raises(BindingError) as exc:
+        with pytest.raises(BindingUnavailableError) as exc:
             await self.binding.invoke("create")
         text = str(exc.value)
         assert "<html>" in text
@@ -715,7 +735,7 @@ class TestDaprBinding:
         self.client.invoke_binding.side_effect = httpx.HTTPStatusError(
             "internal error", request=req, response=resp
         )
-        with pytest.raises(BindingError) as exc:
+        with pytest.raises(BindingUnavailableError) as exc:
             await self.binding.invoke("create")
         assert str(exc.value).count("Failed to invoke binding") == 1
         assert "dapr errorCode" not in str(exc.value)

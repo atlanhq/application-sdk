@@ -579,9 +579,12 @@ class TestStartWorkflowRouting:
         needed — this pins that refusal.
         """
         from application_sdk.app.base import App
-        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+        from application_sdk.app.entrypoint import (
+            EntryPointDeclarationError,
+            entrypoint,
+        )
 
-        with pytest.raises(EntryPointContractError, match="entry point name"):
+        with pytest.raises(EntryPointDeclarationError, match="entry point name"):
 
             class _CollisionApp(App):
                 name = "selector-collision"
