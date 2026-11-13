@@ -115,7 +115,10 @@ class TestGetAllAppWorkflows:
         assert "multi-app:mine-queries" in names
 
     def test_rejects_duplicate_workflow_types_across_apps(self) -> None:
-        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+        from application_sdk.app.entrypoint import (
+            EntryPointDeclarationError,
+            entrypoint,
+        )
 
         class FirstApp(App):
             legacy_workflow_types = {"SharedWorkflow": "extract"}
@@ -131,11 +134,14 @@ class TestGetAllAppWorkflows:
             async def extract(self, input: _WfInput) -> _WfOutput:
                 return _WfOutput()
 
-        with pytest.raises(EntryPointContractError, match="SharedWorkflow"):
+        with pytest.raises(EntryPointDeclarationError, match="SharedWorkflow"):
             get_all_app_workflows()
 
     def test_rejects_generated_class_collision_across_apps_in_same_module(self) -> None:
-        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+        from application_sdk.app.entrypoint import (
+            EntryPointDeclarationError,
+            entrypoint,
+        )
 
         class ColonApp(App):
             legacy_workflow_types = {"shared:type": "extract"}
@@ -151,11 +157,14 @@ class TestGetAllAppWorkflows:
             async def extract(self, input: _WfInput) -> _WfOutput:
                 return _WfOutput()
 
-        with pytest.raises(EntryPointContractError, match="_Workflow_shared_type"):
+        with pytest.raises(EntryPointDeclarationError, match="_Workflow_shared_type"):
             get_all_app_workflows()
 
     def test_rejects_sdk_reserved_sdr_workflow_type(self) -> None:
-        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+        from application_sdk.app.entrypoint import (
+            EntryPointDeclarationError,
+            entrypoint,
+        )
 
         class ReservedApp(App):
             legacy_workflow_types = {"sdr:test_auth": "extract"}
@@ -164,11 +173,14 @@ class TestGetAllAppWorkflows:
             async def extract(self, input: _WfInput) -> _WfOutput:
                 return _WfOutput()
 
-        with pytest.raises(EntryPointContractError, match="reserved"):
+        with pytest.raises(EntryPointDeclarationError, match="reserved"):
             get_all_app_workflows()
 
     def test_rejects_sdk_reserved_store_assert_workflow_type(self) -> None:
-        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+        from application_sdk.app.entrypoint import (
+            EntryPointDeclarationError,
+            entrypoint,
+        )
 
         class ReservedApp(App):
             legacy_workflow_types = {"sdk:store-assert": "extract"}
@@ -177,14 +189,17 @@ class TestGetAllAppWorkflows:
             async def extract(self, input: _WfInput) -> _WfOutput:
                 return _WfOutput()
 
-        with pytest.raises(EntryPointContractError, match="SDK built-in"):
+        with pytest.raises(EntryPointDeclarationError, match="SDK built-in"):
             get_all_app_workflows()
 
     def test_post_definition_alias_assignment_fails_at_worker_startup(self) -> None:
         """A declaration written after class definition never registered — the
         worker must refuse to start rather than boot without the alias (the
         caller would otherwise get the exact CNCT-199 open-until-timeout run)."""
-        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+        from application_sdk.app.entrypoint import (
+            EntryPointDeclarationError,
+            entrypoint,
+        )
 
         class LateDeclarationApp(App):
             @entrypoint
@@ -193,13 +208,16 @@ class TestGetAllAppWorkflows:
 
         LateDeclarationApp.legacy_workflow_types = {"LateWorkflow": "extract"}
 
-        with pytest.raises(EntryPointContractError, match="class body"):
+        with pytest.raises(EntryPointDeclarationError, match="class body"):
             get_all_app_workflows()
 
     def test_in_place_alias_mutation_fails_at_worker_startup(self) -> None:
         """Mutating the declared dict after registration diverges from the
         recorded snapshot; the worker refuses to start on the stale index."""
-        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+        from application_sdk.app.entrypoint import (
+            EntryPointDeclarationError,
+            entrypoint,
+        )
 
         class MutatedDeclarationApp(App):
             legacy_workflow_types = {"MutatedWorkflow": "extract"}
@@ -210,7 +228,7 @@ class TestGetAllAppWorkflows:
 
         MutatedDeclarationApp.legacy_workflow_types["SneakedIn"] = "extract"
 
-        with pytest.raises(EntryPointContractError, match="class body"):
+        with pytest.raises(EntryPointDeclarationError, match="class body"):
             get_all_app_workflows()
 
 

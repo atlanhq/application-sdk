@@ -997,8 +997,8 @@ class TestAppWorker:
     async def test_emit_worker_start_event_suppresses_binding_error(
         self,
     ) -> None:
-        """BindingError from missing eventstore binding is suppressed; worker starts normally."""
-        from application_sdk.infrastructure.bindings import BindingError
+        """BindingUnavailableError from missing eventstore binding is suppressed; worker starts normally."""
+        from application_sdk.infrastructure.bindings import BindingUnavailableError
 
         mock_inner = mock.AsyncMock()
         mock_inner.run = mock.AsyncMock(return_value=None)
@@ -1018,9 +1018,11 @@ class TestAppWorker:
 
         with mock.patch(
             "application_sdk.execution._temporal.interceptors.events._publish_event_via_binding",
-            new=mock.AsyncMock(side_effect=BindingError("binding not found")),
+            new=mock.AsyncMock(
+                side_effect=BindingUnavailableError(message="binding not found")
+            ),
         ):
-            # Should NOT raise — BindingError is caught inside _emit_worker_start_event
+            # Should NOT raise — BindingUnavailableError is caught inside _emit_worker_start_event
             await app_worker.run()
 
         mock_inner.run.assert_called_once()

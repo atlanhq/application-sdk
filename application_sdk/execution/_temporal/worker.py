@@ -501,7 +501,7 @@ async def _emit_worker_start_event(
         get_dapr_component_types,
     )
     from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
-        BindingError,
+        BindingUnavailableError,
     )
 
     deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", app_name)
@@ -549,7 +549,7 @@ async def _emit_worker_start_event(
             event,
             direct_publish_timeout=WORKER_START_DIRECT_PUBLISH_TIMEOUT_SECONDS,
         )
-    except BindingError:
+    except BindingUnavailableError:
         logger.warning(
             "eventstore binding unavailable — worker_start event not emitted",
             exc_info=True,

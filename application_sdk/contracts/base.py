@@ -592,7 +592,11 @@ class Record(BaseModel):
 
 
 class ContractValidationError(_InvalidInputError):
-    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
+    """Deprecated: use ``application_sdk.contracts.ContractDeclarationError`` — removed in v4.0."""
+
+    #: Leaf instances never run this ``__init__``; the class default keeps the
+    #: inherited ``error_code`` and ``__str__`` working on them.
+    _error_code: ErrorCode | None = None
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CONTRACT_VALIDATION
     code: ClassVar[str] = "INVALID_INPUT_CONTRACT_VALIDATION"
@@ -608,7 +612,7 @@ class ContractValidationError(_InvalidInputError):
         error_code: ErrorCode | None = None,
     ) -> None:
         warnings.warn(
-            "ContractValidationError is deprecated; use application_sdk.errors.InvalidInputError "
+            "ContractValidationError is deprecated; use application_sdk.contracts.ContractDeclarationError "
             "— will be removed in v4.0",
             DeprecationWarning,
             stacklevel=2,
@@ -641,7 +645,26 @@ class ContractValidationError(_InvalidInputError):
         return " | ".join(parts)
 
 
-class PayloadSafetyError(ContractValidationError):
+@dataclass(kw_only=True)
+class ContractDeclarationError(ContractValidationError):
+    """A class used as a contract is not one, or declares a field it may not.
+
+    Raised at decoration or class-definition time. It subclasses the deprecated
+    ``ContractValidationError`` only until v4.0, so
+    ``except ContractValidationError:`` clauses keep matching what the SDK
+    raises; constructing it does not warn. v4.0 deletes
+    ``ContractValidationError`` and re-bases this class onto
+    ``InvalidInputError``.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_CONTRACT_VALIDATION"
+    contract_type: str | None = None
+    field_name: str | None = None
+    expected_type: str | None = None
+    actual_type: str | None = None
+
+
+class PayloadSafetyError(ContractDeclarationError):
     """Raised when a contract field uses a type that risks exceeding payload limits.
 
     Temporal has a 2MB payload limit for workflow/activity inputs and outputs.
@@ -681,8 +704,8 @@ class PayloadSafetyError(ContractValidationError):
             f"  - Use Annotated[set[T], MaxItems(N)] (and likewise) for any other collection\n"
             f"  - Use allow_unbounded_fields=True class keyword to opt out (use with caution)"
         )
-        # Skip ContractValidationError's __init__ to avoid double DeprecationWarning;
-        # call the new leaf directly.
+        # Skip ContractValidationError's warning __init__; call the categorical
+        # leaf directly.
         _InvalidInputError.__init__(self, message=message)
         self.contract_type = cls_name
         self.field_name = field_name
@@ -1084,14 +1107,14 @@ def validate_is_contract(cls: type, context: str = "contract") -> None:
         context: Description for error messages.
 
     Raises:
-        ContractValidationError: If cls is not a contract base class subclass.
+        ContractDeclarationError: If cls is not a contract base class subclass.
     """
     if not (
         isinstance(cls, type)
         and issubclass(cls, (Input, Output, HeartbeatDetails, Record))
     ):
-        raise ContractValidationError(
-            f"{context} must be a contract class (Input/Output/HeartbeatDetails/Record), "
+        raise ContractDeclarationError(
+            message=f"{context} must be a contract class (Input/Output/HeartbeatDetails/Record), "
             f"got {cls.__name__}",
             contract_type=context,
         )
@@ -1107,7 +1130,7 @@ def get_contract_fields(cls: type) -> dict[str, type]:
         Dictionary mapping field names to their types.
 
     Raises:
-        ContractValidationError: If cls is not a contract class.
+        ContractDeclarationError: If cls is not a contract class.
     """
     validate_is_contract(cls)
     hints = get_type_hints(cls)

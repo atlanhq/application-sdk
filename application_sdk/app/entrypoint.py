@@ -72,13 +72,17 @@ class UnresolvableEntrypointAnnotationsError(InvalidInputError):
 
 
 class EntryPointContractError(InvalidInputError):
-    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
+    """Deprecated: use ``application_sdk.app.entrypoint.EntryPointDeclarationError`` — removed in v4.0."""
+
+    #: Leaf instances never run this ``__init__``; the class default keeps the
+    #: inherited ``error_code`` and ``__str__`` working on them.
+    _legacy_error_code: ErrorCode = CONTRACT_VALIDATION
 
     code: ClassVar[str] = "INVALID_INPUT_ENTRYPOINT_CONTRACT"
 
     def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
         warnings.warn(
-            "EntryPointContractError is deprecated; use application_sdk.errors.InvalidInputError "
+            "EntryPointContractError is deprecated; use application_sdk.app.entrypoint.EntryPointDeclarationError "
             "— will be removed in v4.0",
             DeprecationWarning,
             stacklevel=2,
@@ -92,6 +96,20 @@ class EntryPointContractError(InvalidInputError):
 
     def __str__(self) -> str:
         return f"[{self._legacy_error_code}] {self.message}"
+
+
+@dataclass(kw_only=True)
+class EntryPointDeclarationError(EntryPointContractError):
+    """An ``@entrypoint`` method or an app's entry-point declaration breaks the contract.
+
+    Raised at decoration or class-definition time.
+    It subclasses the deprecated ``EntryPointContractError`` only until v4.0, so
+    ``except EntryPointContractError:`` clauses keep matching what the SDK raises;
+    constructing it does not warn. v4.0 deletes ``EntryPointContractError`` and
+    re-bases this class onto ``InvalidInputError``.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_ENTRYPOINT_CONTRACT"
 
 
 @dataclass(frozen=True)
@@ -217,7 +235,7 @@ def build_workflow_type_index(
             ``App.legacy_workflow_types``.
 
     Raises:
-        EntryPointContractError: If the declaration is not a mapping of
+        EntryPointDeclarationError: If the declaration is not a mapping of
             strings, an alias restates a canonical type, targets an unknown
             entry point, shadows an entry-point name, is not a usable Temporal
             type string, an entry-point name equals a sibling's canonical
@@ -226,8 +244,8 @@ def build_workflow_type_index(
     if legacy_workflow_types is None:
         legacy_workflow_types = {}
     if not isinstance(legacy_workflow_types, Mapping):
-        raise EntryPointContractError(
-            f"App '{app_name}': legacy_workflow_types must be a mapping of "
+        raise EntryPointDeclarationError(
+            message=f"App '{app_name}': legacy_workflow_types must be a mapping of "
             f"alias strings to entry-point name strings, got "
             f"{type(legacy_workflow_types).__name__}."
         )
@@ -239,8 +257,8 @@ def build_workflow_type_index(
         segment = workflow_type_class_segment(workflow_type)
         twin = by_class_segment.get(segment)
         if twin is not None and twin != workflow_type:
-            raise EntryPointContractError(
-                f"App '{app_name}': Temporal workflow types '{twin}' and "
+            raise EntryPointDeclarationError(
+                message=f"App '{app_name}': Temporal workflow types '{twin}' and "
                 f"'{workflow_type}' both generate the workflow class "
                 f"'_Workflow_{segment}', so one would silently dispatch to "
                 f"the other. Hyphens and colons both become underscores — "
@@ -256,8 +274,8 @@ def build_workflow_type_index(
     for ep_name, ep in entry_points.items():
         claimed = index.get(ep_name)
         if claimed is not None and claimed is not ep:
-            raise EntryPointContractError(
-                f"App '{app_name}': entry point name '{ep_name}' equals the "
+            raise EntryPointDeclarationError(
+                message=f"App '{app_name}': entry point name '{ep_name}' equals the "
                 f"canonical Temporal workflow type of entry point "
                 f"'{claimed.name}', so a caller selecting '{ep_name}' would be "
                 f"ambiguous. Rename the '{ep_name}' entry point."
@@ -284,29 +302,29 @@ def _validate_alias_entry(
     failure names its owner.
     """
     if not isinstance(alias, str) or not isinstance(target, str):
-        raise EntryPointContractError(
-            f"App '{app_name}': legacy_workflow_types must map alias strings "
+        raise EntryPointDeclarationError(
+            message=f"App '{app_name}': legacy_workflow_types must map alias strings "
             f"to entry-point name strings, got {alias!r}: {target!r}."
         )
     _validate_legacy_workflow_type(app_name, alias)
     claimed = index.get(alias)
     if claimed is not None:
-        raise EntryPointContractError(
-            f"App '{app_name}': legacy workflow type '{alias}' restates the "
+        raise EntryPointDeclarationError(
+            message=f"App '{app_name}': legacy workflow type '{alias}' restates the "
             f"canonical type of entry point '{claimed.name}'. Canonical types "
             f"are always registered — declare only the legacy names that "
             f"differ from them."
         )
     if alias in entry_points:
-        raise EntryPointContractError(
-            f"App '{app_name}': legacy workflow type '{alias}' equals the "
+        raise EntryPointDeclarationError(
+            message=f"App '{app_name}': legacy workflow type '{alias}' equals the "
             f"entry point name '{alias}'. Aliases and entry point names must "
             f"stay disjoint so a selector is never ambiguous."
         )
     target_ep = entry_points.get(target)
     if target_ep is None:
-        raise EntryPointContractError(
-            f"App '{app_name}': legacy workflow type '{alias}' targets "
+        raise EntryPointDeclarationError(
+            message=f"App '{app_name}': legacy workflow type '{alias}' targets "
             f"unknown entry point '{target}'. Available entry points: "
             f"{sorted(entry_points)}."
         )
@@ -329,7 +347,7 @@ def _validate_entrypoint_signature(
         Tuple of (input_type, output_type).
 
     Raises:
-        EntryPointContractError: If the signature is invalid.
+        EntryPointDeclarationError: If the signature is invalid.
     """
     fn_name = getattr(fn, "__name__", repr(fn))
 
@@ -340,8 +358,8 @@ def _validate_entrypoint_signature(
         params = params[1:]
 
     if len(params) != 1:
-        raise EntryPointContractError(
-            f"Entry point '{fn_name}' must have exactly one parameter (extending Input), "
+        raise EntryPointDeclarationError(
+            message=f"Entry point '{fn_name}' must have exactly one parameter (extending Input), "
             f"got {len(params)} parameters. "
             f"Wrap multiple values in a single Input dataclass."
         )
@@ -364,26 +382,26 @@ def _validate_entrypoint_signature(
     param = params[0]
     input_type = hints.get(param.name)
     if input_type is None:
-        raise EntryPointContractError(
-            f"Entry point '{fn_name}' parameter '{param.name}' must have a type "
+        raise EntryPointDeclarationError(
+            message=f"Entry point '{fn_name}' parameter '{param.name}' must have a type "
             f"annotation extending Input."
         )
 
     if not (isinstance(input_type, type) and issubclass(input_type, Input)):
-        raise EntryPointContractError(
-            f"Entry point '{fn_name}' parameter '{param.name}' must extend Input "
+        raise EntryPointDeclarationError(
+            message=f"Entry point '{fn_name}' parameter '{param.name}' must extend Input "
             f"base class, got {input_type}."
         )
 
     output_type = hints.get("return")
     if output_type is None:
-        raise EntryPointContractError(
-            f"Entry point '{fn_name}' must have a return type annotation extending Output."
+        raise EntryPointDeclarationError(
+            message=f"Entry point '{fn_name}' must have a return type annotation extending Output."
         )
 
     if not (isinstance(output_type, type) and issubclass(output_type, Output)):
-        raise EntryPointContractError(
-            f"Entry point '{fn_name}' return type must extend Output base class, "
+        raise EntryPointDeclarationError(
+            message=f"Entry point '{fn_name}' return type must extend Output base class, "
             f"got {output_type}."
         )
 
@@ -418,18 +436,18 @@ def _validate_legacy_workflow_type(app_name: str, alias: str) -> None:
     concern, not something a per-app validator can or should police.
     """
     if not alias:
-        raise EntryPointContractError(
-            f"App '{app_name}': legacy_workflow_types aliases must be "
+        raise EntryPointDeclarationError(
+            message=f"App '{app_name}': legacy_workflow_types aliases must be "
             f"non-empty strings."
         )
     if any(char.isspace() or not char.isprintable() for char in alias):
-        raise EntryPointContractError(
-            f"App '{app_name}': legacy_workflow_types alias must not contain "
+        raise EntryPointDeclarationError(
+            message=f"App '{app_name}': legacy_workflow_types alias must not contain "
             f"whitespace or control characters, got {alias!r}."
         )
     if not any(char.isalnum() for char in alias):
-        raise EntryPointContractError(
-            f"App '{app_name}': legacy_workflow_types alias {alias!r} is not "
+        raise EntryPointDeclarationError(
+            message=f"App '{app_name}': legacy_workflow_types alias {alias!r} is not "
             f"a usable Temporal workflow type — it carries no letters or "
             f"digits."
         )
@@ -486,7 +504,7 @@ def entrypoint(
             need it; its only entry point is the default implicitly.
 
     Raises:
-        EntryPointContractError: If the method doesn't follow the contract pattern.
+        EntryPointDeclarationError: If the method doesn't follow the contract pattern.
     """
 
     def decorator(fn: F) -> F:
@@ -495,8 +513,8 @@ def entrypoint(
         # Validate custom name is a safe identifier (defense-in-depth: it becomes
         # part of a dynamically generated class name and a Temporal workflow name).
         if name is not None and not entrypoint_module_segment(ep_name).isidentifier():
-            raise EntryPointContractError(
-                f"Entry point name '{ep_name}' is not a valid identifier. "
+            raise EntryPointDeclarationError(
+                message=f"Entry point name '{ep_name}' is not a valid identifier. "
                 "Use only letters, digits, hyphens, and underscores."
             )
         input_type, output_type = _validate_entrypoint_signature(fn)

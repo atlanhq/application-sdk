@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.56.0
-source-sha:    25b9b4e82ddf78f9fbb3a9555bd4e900c9d01170
-source-date:   2026-11-12T13:07:25Z
+sdk-version:   3.57.0
+source-sha:    07c412493372ebe888d357d7d5469d45fefd5d83
+source-date:   2026-11-13T12:05:43Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -21,13 +21,13 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 44 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 19 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 58 |
-| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 46 |
+| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 47 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 76 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 51 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 28 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 39 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 43 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 30 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 13 |
@@ -955,6 +955,13 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Summary:** Typed replacement for ``connection: dict[str, Any]`` in Temporal contracts.
 - **Defined in:** `application_sdk/contracts/types.py`
 
+#### `ContractDeclarationError`
+
+- **Import:** `from application_sdk.contracts import ContractDeclarationError`
+- **Signature:** `class ContractDeclarationError(*, ...)`
+- **Summary:** A class used as a contract is not one, or declares a field it may not.
+- **Defined in:** `application_sdk/contracts/base.py`
+
 #### `ContractMetadata`
 
 - **Import:** `from application_sdk.contracts import ContractMetadata`
@@ -966,7 +973,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 
 - **Import:** `from application_sdk.contracts import ContractValidationError`
 - **Signature:** `class ContractValidationError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
+- **Summary:** Deprecated: use ``application_sdk.contracts.ContractDeclarationError`` — removed in v4.0.
 - **Defined in:** `application_sdk/contracts/base.py`
 
 #### `DeclaredFile`
@@ -2816,7 +2823,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import BindingError`
 - **Signature:** `class BindingError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0.
+- **Summary:** Deprecated: use ``application_sdk.infrastructure.BindingUnavailableError`` — removed in v4.0.
 - **Defined in:** `application_sdk/infrastructure/bindings.py`
 
 #### `BindingRequest`
@@ -2831,6 +2838,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Import:** `from application_sdk.infrastructure import BindingResponse`
 - **Signature:** `class BindingResponse(data: bytes | None = None, metadata: dict[str, str] = dict())`
 - **Summary:** Response from a binding invocation.
+- **Defined in:** `application_sdk/infrastructure/bindings.py`
+
+#### `BindingUnavailableError`
+
+- **Import:** `from application_sdk.infrastructure import BindingUnavailableError`
+- **Signature:** `class BindingUnavailableError(*, ...)`
+- **Summary:** A binding invocation failed: the sidecar or the bound resource did not answer.
 - **Defined in:** `application_sdk/infrastructure/bindings.py`
 
 #### `CapacityPool`
@@ -2851,7 +2865,14 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import CredentialVaultError`
 - **Signature:** `class CredentialVaultError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0.
+- **Summary:** Deprecated: use ``application_sdk.infrastructure.CredentialVaultUnavailableError`` — removed in v4.0.
+- **Defined in:** `application_sdk/infrastructure/credential_vault.py`
+
+#### `CredentialVaultUnavailableError`
+
+- **Import:** `from application_sdk.infrastructure import CredentialVaultUnavailableError`
+- **Signature:** `class CredentialVaultUnavailableError(*, ...)`
+- **Summary:** Resolving a credential by GUID failed.
 - **Defined in:** `application_sdk/infrastructure/credential_vault.py`
 
 #### `DaprBinding`
@@ -2942,7 +2963,14 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import PubSubError`
 - **Signature:** `class PubSubError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0.
+- **Summary:** Deprecated: use ``application_sdk.infrastructure.PubSubUnavailableError`` — removed in v4.0.
+- **Defined in:** `application_sdk/infrastructure/pubsub.py`
+
+#### `PubSubUnavailableError`
+
+- **Import:** `from application_sdk.infrastructure import PubSubUnavailableError`
+- **Signature:** `class PubSubUnavailableError(*, ...)`
+- **Summary:** Publishing to a pub/sub topic failed.
 - **Defined in:** `application_sdk/infrastructure/pubsub.py`
 
 #### `SecretNotFoundError`
@@ -2998,7 +3026,14 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import StateStoreError`
 - **Signature:** `class StateStoreError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0.
+- **Summary:** Deprecated: use ``application_sdk.infrastructure.StateStoreUnavailableError`` — removed in v4.0.
+- **Defined in:** `application_sdk/infrastructure/state.py`
+
+#### `StateStoreUnavailableError`
+
+- **Import:** `from application_sdk.infrastructure import StateStoreUnavailableError`
+- **Signature:** `class StateStoreUnavailableError(*, ...)`
+- **Summary:** A state-store read, write or delete failed.
 - **Defined in:** `application_sdk/infrastructure/state.py`
 
 #### `Subscription`
@@ -7847,7 +7882,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 #### `ContractValidationError`
 
 - **Import:** `from application_sdk.contracts import ContractValidationError`
-- **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
+- **Summary:** Deprecated: use ``application_sdk.contracts.ContractDeclarationError`` — removed in v4.0.
 - **Fields:**
   - `message: str`
   - `retryable: bool | None`

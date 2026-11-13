@@ -56,7 +56,7 @@ from application_sdk.app.context import (
     _is_atlan_logger,
 )
 from application_sdk.app.entrypoint import (
-    EntryPointContractError,
+    EntryPointDeclarationError,
     EntryPointMetadata,
     canonical_workflow_type,
     workflow_type_class_segment,
@@ -913,8 +913,8 @@ def _require_aliases_not_expired(cls: type, app_name: str) -> None:
     )
 
     if not all(part.isdigit() for part in removal.split(".")):
-        raise EntryPointContractError(
-            f"App '{app_name}': legacy_workflow_types_removal_version must "
+        raise EntryPointDeclarationError(
+            message=f"App '{app_name}': legacy_workflow_types_removal_version must "
             f"be a dotted numeric version, got {removal!r}."
         )
     from packaging.version import (  # noqa: PLC0415 — cheap, lazy like __version__
@@ -922,8 +922,8 @@ def _require_aliases_not_expired(cls: type, app_name: str) -> None:
     )
 
     if Version(__version__) >= Version(removal):
-        raise EntryPointContractError(
-            f"App '{app_name}': legacy_workflow_types declared with removal "
+        raise EntryPointDeclarationError(
+            message=f"App '{app_name}': legacy_workflow_types declared with removal "
             f"version {removal}, and the installed SDK is {__version__}. The "
             f"aliases have expired — delete the drained "
             f"legacy_workflow_types entries, or push "

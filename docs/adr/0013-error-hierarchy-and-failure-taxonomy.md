@@ -244,6 +244,16 @@ v4.0. The `application_sdk/common/error_codes.py` `Atlan-{Component}-{HTTP}-{ID}
 taxonomy emits `DeprecationWarning` on every `AtlanError.__init__` call and is
 also removed in v4.0.
 
+**Retiring an error class the SDK itself raises.** Add a non-deprecated
+leaf with the same `code`, category and evidence, and make it a subclass of
+the deprecated class for the deprecation window — not the other way round.
+`except` matches by MRO and ignores `__subclasscheck__`, so only this
+direction keeps an app's `except <DeprecatedName>:` matching once the SDK
+raises the leaf. The SDK's raise and `except` sites then name the leaf, and
+the removal release deletes the deprecated class and re-bases the leaf onto
+its categorical parent. `BindingUnavailableError(BindingError)` and the other
+nine pairs pinned in `tests/unit/errors/test_back_compat.py` follow this.
+
 ---
 
 ## Industry precedents

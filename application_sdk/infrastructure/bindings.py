@@ -11,8 +11,11 @@ from application_sdk.errors.leaves import DependencyUnavailableError
 
 
 class BindingError(DependencyUnavailableError):
-    """Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0."""
+    """Deprecated: use ``application_sdk.infrastructure.BindingUnavailableError`` — removed in v4.0."""
 
+    #: Leaf instances never run this ``__init__``; the class default keeps the
+    #: inherited ``error_code`` and ``__str__`` working on them.
+    _error_code: ErrorCode | None = None
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = BINDING_ERROR
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_BINDING"
 
@@ -26,7 +29,7 @@ class BindingError(DependencyUnavailableError):
         error_code: ErrorCode | None = None,
     ) -> None:
         warnings.warn(
-            "BindingError is deprecated; use application_sdk.errors.DependencyUnavailableError "
+            "BindingError is deprecated; use application_sdk.infrastructure.BindingUnavailableError "
             "— will be removed in v4.0",
             DeprecationWarning,
             stacklevel=2,
@@ -53,6 +56,21 @@ class BindingError(DependencyUnavailableError):
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
+
+
+@dataclass(kw_only=True)
+class BindingUnavailableError(BindingError):
+    """A binding invocation failed: the sidecar or the bound resource did not answer.
+
+    Raised by the SDK's own ``Binding`` implementations. It subclasses the deprecated
+    ``BindingError`` only until v4.0, so ``except BindingError:`` clauses keep matching
+    what the SDK raises; constructing it does not warn. v4.0 deletes
+    ``BindingError`` and re-bases this class onto ``DependencyUnavailableError``.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_BINDING"
+    binding_name: str | None = None
+    operation: str | None = None
 
 
 @deprecated(
@@ -109,7 +127,7 @@ class Binding(Protocol):
             Binding response.
 
         Raises:
-            BindingError: If invocation fails.
+            BindingUnavailableError: If invocation fails.
         """
         ...
 

@@ -27,6 +27,7 @@ from application_sdk.infrastructure.bindings import (
     BindingError,
     BindingRequest,
     BindingResponse,
+    BindingUnavailableError,
     InputBinding,
     OutputBinding,
 )
@@ -45,11 +46,13 @@ from application_sdk.infrastructure.context import (
 from application_sdk.infrastructure.credential_vault import (
     CredentialVault,
     CredentialVaultError,
+    CredentialVaultUnavailableError,
 )
 from application_sdk.infrastructure.pubsub import (
     Message,
     PubSub,
     PubSubError,
+    PubSubUnavailableError,
     Subscription,
     _MessageHandler,
 )
@@ -64,7 +67,11 @@ from application_sdk.infrastructure.secrets import (
     SecretStoreUnreachableError,
     get_deployment_secret,
 )
-from application_sdk.infrastructure.state import StateStore, StateStoreError
+from application_sdk.infrastructure.state import (
+    StateStore,
+    StateStoreError,
+    StateStoreUnavailableError,
+)
 
 __all__ = [
     "AgentSecretReadError",
@@ -73,9 +80,11 @@ __all__ = [
     "BindingError",
     "BindingRequest",
     "BindingResponse",
+    "BindingUnavailableError",
     "CapacityPool",
     "CredentialVault",
     "CredentialVaultError",
+    "CredentialVaultUnavailableError",
     "DAPR_SECRET_STORE_COMPONENT",
     "DaprBinding",
     "DaprCredentialVault",
@@ -90,6 +99,7 @@ __all__ = [
     "OutputBinding",
     "PubSub",
     "PubSubError",
+    "PubSubUnavailableError",
     "SecretNotFoundError",
     "SecretStore",
     "SecretStoreError",
@@ -98,6 +108,7 @@ __all__ = [
     "SecretStoreUnreachableError",
     "StateStore",
     "StateStoreError",
+    "StateStoreUnavailableError",
     "Subscription",
     "clear_infrastructure",
     "configure_capacity_pool",

@@ -489,17 +489,17 @@ async def _publish_event_via_binding(
     binding_metadata.update(await _get_event_auth_headers())
 
     from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
-        BindingError,
+        BindingUnavailableError,
     )
 
-    binding_error: BindingError | None = None
+    binding_error: BindingUnavailableError | None = None
     try:
         await infra.event_binding.invoke(
             operation="create",
             data=payload,
             metadata=binding_metadata,
         )
-    except BindingError as e:
+    except BindingUnavailableError as e:
         binding_error = e
 
     if binding_error is None:
@@ -577,7 +577,7 @@ async def _publish_event_via_binding(
             binding_metadata,
             timeout=direct_publish_timeout or _DIRECT_PUBLISH_TIMEOUT_SECONDS,
         )
-    # conformance: ignore[E004] both channels failed; the original BindingError is re-raised unchanged so callers' handling and its Dapr cause chain are preserved, and the direct failure is logged with its own traceback here
+    # conformance: ignore[E004] both channels failed; the original BindingUnavailableError is re-raised unchanged so callers' handling and its Dapr cause chain are preserved, and the direct failure is logged with its own traceback here
     except Exception as direct_error:
         _suspend_direct_publish()
         logger.exception(

@@ -998,3 +998,147 @@ def test_errors_package_does_not_import_storage() -> None:
     )
 
     assert result.returncode == 0, result.stderr
+
+
+# =============================================================================
+# Non-deprecated leaves the SDK raises in place of its deprecated classes
+# =============================================================================
+#
+# Each leaf subclasses the deprecated class it replaces for the v3.x window, so
+# an app's ``except <DeprecatedName>:`` still catches what the SDK raises. The
+# reverse direction would not: ``except`` matches by MRO and ignores
+# ``__subclasscheck__``, so a deprecated subclass of the leaf would stop
+# catching the leaf the moment the SDK switched to raising it.
+
+
+def _leaf_pairs() -> list[tuple[type, type, dict[str, object]]]:
+    from application_sdk.app.entrypoint import (
+        EntryPointContractError,
+        EntryPointDeclarationError,
+    )
+    from application_sdk.app.registry import (
+        AppAlreadyRegisteredError,
+        AppNotFoundError,
+        AppNotRegisteredError,
+        AppVersionAlreadyRegisteredError,
+        TaskNotFoundError,
+        TaskNotRegisteredError,
+    )
+    from application_sdk.app.task import TaskContractError, TaskDeclarationError
+    from application_sdk.contracts import (
+        ContractDeclarationError,
+        ContractValidationError,
+    )
+    from application_sdk.infrastructure import (
+        BindingError,
+        BindingUnavailableError,
+        CredentialVaultError,
+        CredentialVaultUnavailableError,
+        PubSubError,
+        PubSubUnavailableError,
+        StateStoreError,
+        StateStoreUnavailableError,
+    )
+
+    return [
+        (BindingError, BindingUnavailableError, {"binding_name": "b"}),
+        (
+            CredentialVaultError,
+            CredentialVaultUnavailableError,
+            {"credential_guid": "g"},
+        ),
+        (StateStoreError, StateStoreUnavailableError, {"key": "k"}),
+        (PubSubError, PubSubUnavailableError, {"topic": "t"}),
+        (ContractValidationError, ContractDeclarationError, {"contract_type": "c"}),
+        (EntryPointContractError, EntryPointDeclarationError, {}),
+        (TaskContractError, TaskDeclarationError, {}),
+        (AppNotFoundError, AppNotRegisteredError, {"name": "a"}),
+        (TaskNotFoundError, TaskNotRegisteredError, {"task_name": "t"}),
+        (
+            AppAlreadyRegisteredError,
+            AppVersionAlreadyRegisteredError,
+            {"name": "a", "version": "1"},
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("deprecated_cls", "leaf_cls", "evidence"),
+    _leaf_pairs(),
+    ids=lambda v: v.__name__ if isinstance(v, type) else "",
+)
+def test_leaf_replaces_deprecated_class_without_warning(
+    deprecated_cls: type, leaf_cls: type, evidence: dict[str, object]
+) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        err = leaf_cls(message="boom", **evidence)
+
+    # Caught by the deprecated name an app may still use.
+    with pytest.raises(deprecated_cls):
+        raise err
+    # Same wire identity as the class it replaces.
+    assert leaf_cls.code == deprecated_cls.code
+    assert leaf_cls.category == deprecated_cls.category
+    assert leaf_cls.audience == deprecated_cls.audience
+    assert leaf_cls.default_retryable == deprecated_cls.default_retryable
+    # Its context reaches the wire envelope as evidence.
+    assert evidence.items() <= err.to_failure_details().evidence.items()
+    # The legacy rendering still works on an instance that skipped the
+    # deprecated __init__.
+    assert "boom" in str(err)
+
+
+@pytest.mark.parametrize(
+    ("deprecated_cls", "leaf_cls"),
+    [(d, leaf) for d, leaf, _ in _leaf_pairs()],
+    ids=lambda v: v.__name__,
+)
+def test_deprecated_class_warning_names_its_leaf(
+    deprecated_cls: type, leaf_cls: type
+) -> None:
+    assert leaf_cls.__name__ in (deprecated_cls.__doc__ or "")
+    with pytest.warns(DeprecationWarning, match=leaf_cls.__name__):
+        try:
+            deprecated_cls("boom", "v1")
+        except TypeError:
+            deprecated_cls("boom")
+
+
+def test_credential_config_not_found_is_vault_leaf_and_does_not_warn() -> None:
+    from application_sdk.infrastructure.credential_vault import (
+        CredentialConfigNotFoundError,
+        CredentialVaultError,
+        CredentialVaultUnavailableError,
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        err = CredentialConfigNotFoundError(message="missing", credential_guid="g")
+    assert isinstance(err, CredentialVaultUnavailableError)
+    assert isinstance(err, CredentialVaultError)
+    assert err.code == "DEPENDENCY_UNAVAILABLE_CREDENTIAL_VAULT"
+
+
+def test_registry_miss_raises_leaf_without_warning() -> None:
+    from application_sdk.app.registry import (
+        AppNotFoundError,
+        AppNotRegisteredError,
+        AppRegistry,
+        TaskNotRegisteredError,
+        TaskRegistry,
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        with pytest.raises(AppNotRegisteredError) as app_exc:
+            AppRegistry.get_instance().get("no-such-app-fnd4910", "9.9")
+        with pytest.raises(TaskNotRegisteredError) as task_exc:
+            TaskRegistry.get_instance().get("no-such-app-fnd4910", "no-task")
+
+    assert isinstance(app_exc.value, AppNotFoundError)
+    assert str(app_exc.value).endswith(
+        "App 'no-such-app-fnd4910' version '9.9' not found"
+    )
+    assert task_exc.value.app_name == "no-such-app-fnd4910"
+    assert task_exc.value.task_name == "no-task"

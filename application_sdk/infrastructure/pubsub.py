@@ -22,8 +22,11 @@ from application_sdk.errors.leaves import DependencyUnavailableError
 
 
 class PubSubError(DependencyUnavailableError):
-    """Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0."""
+    """Deprecated: use ``application_sdk.infrastructure.PubSubUnavailableError`` — removed in v4.0."""
 
+    #: Leaf instances never run this ``__init__``; the class default keeps the
+    #: inherited ``error_code`` and ``__str__`` working on them.
+    _error_code: ErrorCode | None = None
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = PUBSUB_ERROR
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_PUBSUB"
 
@@ -37,7 +40,7 @@ class PubSubError(DependencyUnavailableError):
         error_code: ErrorCode | None = None,
     ) -> None:
         warnings.warn(
-            "PubSubError is deprecated; use application_sdk.errors.DependencyUnavailableError "
+            "PubSubError is deprecated; use application_sdk.infrastructure.PubSubUnavailableError "
             "— will be removed in v4.0",
             DeprecationWarning,
             stacklevel=2,
@@ -64,6 +67,21 @@ class PubSubError(DependencyUnavailableError):
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
+
+
+@dataclass(kw_only=True)
+class PubSubUnavailableError(PubSubError):
+    """Publishing to a pub/sub topic failed.
+
+    Raised by the SDK's own ``PubSub`` implementations. It subclasses the deprecated
+    ``PubSubError`` only until v4.0, so ``except PubSubError:`` clauses keep matching
+    what the SDK raises; constructing it does not warn. v4.0 deletes
+    ``PubSubError`` and re-bases this class onto ``DependencyUnavailableError``.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_PUBSUB"
+    topic: str | None = None
+    operation: str | None = None
 
 
 @dataclass(frozen=True)
