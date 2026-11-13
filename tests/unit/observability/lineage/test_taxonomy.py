@@ -100,6 +100,36 @@ def test_registry_rejects_a_code_declared_twice():
         ReasonRegistry([Clash])
 
 
+def test_app_restates_an_sdk_reason_by_subclassing_it():
+    class OwnWording(CustomSqlParserFailure):
+        code = "CUSTOM_SQL_PARSER_FAILURE"
+        customer_message = "Atlan could not parse this datasource's custom SQL."
+
+    registry = ReasonRegistry([OwnWording])
+    assert registry.resolve("CUSTOM_SQL_PARSER_FAILURE") is OwnWording
+    assert len(registry) == len(SDK_REASONS)
+
+
+def test_a_restated_reason_keeps_its_category():
+    class Moved(CustomSqlParserFailure):
+        code = "CUSTOM_SQL_PARSER_FAILURE"
+        category = ReasonCategory.MISSING_METADATA
+
+    with pytest.raises(ValueError, match="declared by both"):
+        ReasonRegistry([Moved])
+
+
+def test_two_app_restatements_of_one_code_clash():
+    class First(CustomSqlParserFailure):
+        code = "CUSTOM_SQL_PARSER_FAILURE"
+
+    class Second(CustomSqlParserFailure):
+        code = "CUSTOM_SQL_PARSER_FAILURE"
+
+    with pytest.raises(ValueError, match="declared by both"):
+        ReasonRegistry([First, Second])
+
+
 def test_registry_rejects_non_reasons():
     with pytest.raises(TypeError):
         ReasonRegistry(["CUSTOM_SQL_PARSER_FAILURE"])  # type: ignore[list-item]

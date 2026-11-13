@@ -34,7 +34,9 @@ A reason is a class with ClassVars: `code`, `category`, `gap`, `expected`, `desc
 `customer_message`. It is never instantiated. A subclass inherits `category`, `gap` and `expected`,
 and may override them. For example, a null qualifiedName on a column edge is `MISSING_METADATA`
 but its gap is `PROCESSING`, because it's an app bug. Every class must declare its own `code`, and
-the check runs at class creation. `ReasonRegistry` maps a code string back to its class, for rows
+the check runs at class creation. An app can restate an SDK reason under the same code by
+subclassing it, to give it the app's own customer wording. Its category can't change. The Tableau
+port needed this for 5 codes. `ReasonRegistry` maps a code string back to its class, for rows
 read back and for call sites that still pass strings. An unknown code resolves to
 `UNINSTRUMENTED_PATH`, with one warning per code, so a typo is never counted as covered.
 
