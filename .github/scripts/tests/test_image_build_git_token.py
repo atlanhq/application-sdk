@@ -12,11 +12,15 @@ shape:
 
 * no ``git_token=`` secret or ``git-token:`` input under ``.github/`` reads
   ORG_PAT_GITHUB, and every one in a workflow reads the job's image mint;
-* the mint is read-only and scoped to the app's private repos (the inline
-  shape pinned by ``_scoped_mint.py``: never unscoped, nothing minted when the
-  app names no private repo), with no opt-in gate (a Dockerfile without the mount
-  ignores the secret, and several callers of these builds set no opt-in flag);
-* the minted token reaches nothing but the build secret;
+* the mint is read-only and scoped to the app's private repos
+  (``.github/actions/scoped-private-deps-token``, pinned by
+  ``_scoped_mint.py``: never unscoped, nothing minted when the app names no
+  private repo), with no opt-in gate (a Dockerfile without the mount ignores
+  the secret, and several callers of these builds set no opt-in flag), and an
+  empty token does not fail the job (``require: "false"``) except in e2e, where
+  the same mint serves the opted-in host-side ``uv sync``;
+* the minted token reaches nothing but the build secret (and, in e2e, the
+  sdr-e2e action's ``git-auth-token``, pinned in test_private_git_deps_wiring.py);
 * GHCR login and push stay on ORG_PAT_GITHUB, because fleet packages are
   org-level and the App only has repo-level Packages permission.
 
@@ -35,7 +39,7 @@ import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _scoped_mint import assert_scoped_mint  # noqa: E402
+from _scoped_mint import NOT_REQUIRED, assert_scoped_mint  # noqa: E402
 
 Step = dict[str, Any]
 
@@ -44,8 +48,17 @@ GITHUB = REPO_ROOT / ".github"
 WORKFLOWS = GITHUB / "workflows"
 
 MINT_ID = "image-git-token"
-TOKEN_REF = f"steps.{MINT_ID}.outputs.token"
-TOKEN_EXPR = f"${{{{ {TOKEN_REF} }}}}"
+#: e2e mints once for the image build and the host-side ``uv sync`` (FND-4901).
+SHARED_MINT = {("tests-reusable.yaml", "e2e"): "git-deps-token"}
+
+
+def _mint_id(workflow_file: str, job: str) -> str:
+    return SHARED_MINT.get((workflow_file, job), MINT_ID)
+
+
+def _token_ref(workflow_file: str, job: str) -> str:
+    return f"steps.{_mint_id(workflow_file, job)}.outputs.token"
+
 
 #: (workflow file, job id, step locator) for every step that hands a token to
 #: an image build. The locator is the step's id, else its name.
@@ -140,8 +153,9 @@ def test_every_workflow_site_is_pinned() -> None:
 def test_site_reads_the_app_mint(workflow_file: str, job: str, locator: str) -> None:
     steps = _steps(workflow_file, job)
     site = next(s for s in steps if _locator(s) == locator)
-    assert _token_values(site) == [TOKEN_EXPR]
-    mint = next(i for i, s in enumerate(steps) if s.get("id") == MINT_ID)
+    assert _token_values(site) == [f"${{{{ {_token_ref(workflow_file, job)} }}}}"]
+    mint_id = _mint_id(workflow_file, job)
+    mint = next(i for i, s in enumerate(steps) if s.get("id") == mint_id)
     assert mint < steps.index(site), "the mint must run before the build"
 
 
@@ -153,25 +167,34 @@ def test_mint_is_scoped_to_the_apps_private_deps(workflow_file: str, job: str) -
     others build private-dep images without setting it. Only "is there a
     build at all" may gate it."""
     steps = _steps(workflow_file, job)
-    repos = next(s for s in steps if s.get("id") == "image-git-repos")
-    cond = repos.get("if")
+    mint_id = _mint_id(workflow_file, job)
+    cond = next(s for s in steps if s.get("id") == mint_id).get("if")
     assert cond in (None, "inputs.image == ''")
-    assert_scoped_mint(steps, mint_id=MINT_ID, repos_id="image-git-repos", cond=cond)
+    if (workflow_file, job) in SHARED_MINT:
+        require = "${{ inputs.private-git-deps }}"
+    else:
+        assert (workflow_file, job, mint_id) in NOT_REQUIRED
+        require = "false"
+    assert_scoped_mint(steps, mint_id=mint_id, cond=cond, require=require)
 
 
 @pytest.mark.parametrize(("workflow_file", "job"), JOBS, ids=JOB_IDS)
 def test_token_reaches_only_the_build(workflow_file: str, job: str) -> None:
     sites = {loc for wf, j, loc in SITES if (wf, j) == (workflow_file, job)}
+    token_ref = _token_ref(workflow_file, job)
     for step in _steps(workflow_file, job):
-        if TOKEN_REF not in str({k: v for k, v in step.items() if k != "id"}):
+        if token_ref not in str({k: v for k, v in step.items() if k != "id"}):
             continue
         assert _locator(step) in sites, f"{_locator(step)} reads the image token"
         with_ = dict(_map(step.get("with")))
         with_.pop("git-token", None)
         with_.pop("secrets", None)
-        assert TOKEN_REF not in str(with_), _locator(step)
-        assert TOKEN_REF not in str(_map(step.get("env"))), _locator(step)
-        assert TOKEN_REF not in step.get("run", ""), _locator(step)
+        if (workflow_file, job) in SHARED_MINT:
+            # The host-side install (test_private_git_deps_wiring.py).
+            with_.pop("git-auth-token", None)
+        assert token_ref not in str(with_), _locator(step)
+        assert token_ref not in str(_map(step.get("env"))), _locator(step)
+        assert token_ref not in step.get("run", ""), _locator(step)
 
 
 # ── GHCR keeps the PAT; interface unchanged ───────────────────────────────────

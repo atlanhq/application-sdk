@@ -39,11 +39,15 @@ INDEX = re.compile(r"""\s*\[\s*(['"])([^'"]+)\1\s*\]""")
 
 #: Soft mints that are allowed to stay continue-on-error. None of them falls
 #: back to ORG_PAT_GITHUB:
-#: * git-deps-token / image-git-token: a failed mint leaves the token empty and
-#:   the install or image build that needs it fails visibly (FND-4740/4744).
+#: * git-deps-token: the scoped private-dependency mint, in
+#:   scoped-private-deps-token (and inline in conformance-reusable.yaml). A
+#:   failed mint leaves the token empty and the guard after it fails the job,
+#:   unless the call passes ``require: "false"``, where the install or image
+#:   build that needs it fails visibly instead (FND-4740/4744/4901,
+#:   _scoped_mint.py).
 #: * stale.yml app-token: falls back to the repo's own GITHUB_TOKEN, a narrower
 #:   credential, for a housekeeping job.
-SOFT_MINT_IDS = {"git-deps-token", "image-git-token"}
+SOFT_MINT_IDS = {"git-deps-token"}
 SOFT_MINT_SITES = {("stale.yml", "app-token")}
 
 
