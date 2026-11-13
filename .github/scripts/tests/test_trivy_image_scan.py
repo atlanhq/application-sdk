@@ -166,16 +166,28 @@ def test_the_sdk_actions_scan_through_the_composite() -> None:
 
 
 def test_every_trivy_step_has_the_db_fallback_repositories() -> None:
-    """A single DB source 429s under a fleet-wide burst and fails the scan."""
+    """A single DB source 429s under a fleet-wide burst and fails the scan.
+
+    Every copy must carry the composite's exact ordered list, so the
+    fallback order cannot drift between copies either.
+    """
+    keys = ("TRIVY_DB_REPOSITORY", "TRIVY_JAVA_DB_REPOSITORY")
+    json_scan = next(
+        s for s in _composite_steps() if s.get("name") == "Trivy image scan (JSON)"
+    )
+    canonical_env = cast(Mapping, json_scan["env"])
+    expected = {key: str(canonical_env[key]).split(",") for key in keys}
+    assert all(len(repos) >= 2 for repos in expected.values()), expected
     for path in sorted(IMAGE_SCANNERS):
         for step in _steps(_load(REPO_ROOT / path)):
             run = str(step.get("run", ""))
             if "trivy image" not in run:
                 continue
             env = cast(Mapping, step.get("env") or {})
-            for key in ("TRIVY_DB_REPOSITORY", "TRIVY_JAVA_DB_REPOSITORY"):
-                assert "mirror.gcr.io" in str(env.get(key, "")), (
-                    f"{path}: step {step.get('name')!r} has no {key} fallback list"
+            for key in keys:
+                assert str(env.get(key, "")).split(",") == expected[key], (
+                    f"{path}: step {step.get('name')!r} does not carry the "
+                    f"composite's {key} fallback list"
                 )
 
 
