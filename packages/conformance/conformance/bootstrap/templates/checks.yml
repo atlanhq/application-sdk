@@ -43,8 +43,9 @@ jobs:
       skip-on-bump-pr: true
 <% if system_deps %>      # Extra apt packages this repo needs before setup-deps' `uv sync`: a
       # dependency with no manylinux wheel is built from sdist on the runner
-      # and needs its C headers present first. Managed by bootstrap's
-      # --system-deps and auto-detected off this file on re-run, so
+      # and needs its C headers present first. Plain Debian package names
+      # only (no version pins): the reusable fails the job on anything else.
+      # Managed by bootstrap's --system-deps and auto-detected off this file on re-run, so
       # the value survives an always-overwrite re-sync (and C002 doesn't read it
       # as drift).
       system_deps: "<< system_deps >>"

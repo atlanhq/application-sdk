@@ -1656,6 +1656,55 @@ expression that can evaluate to empty. **When verifying a change to a workflow
 like this, read the checkout step's logged `ref:` rather than concluding from a
 green tick.**
 
+## System packages go through one script
+
+**Rule:** a package list a caller supplies reaches `apt-get install` only
+through `.github/scripts/install_apt_packages.py`. The script takes the list
+from an environment variable (`--env APT_PACKAGES`) or a file
+(`--file .github/ci-system-deps.txt`), checks every whitespace-separated token
+is a plain Debian package name (`[a-z0-9][a-z0-9+.-]*`), and only then runs
+`apt-get update` and `apt-get install -y --no-install-recommends` with the
+packages as argv. A rejected or empty list installs nothing and fails the
+step.
+
+The same list has three input names and a file, and all of them go through it:
+
+| Where it is declared | Installed by |
+| --- | --- |
+| `apt-packages` (`tests-reusable.yaml`, three jobs; `conformance-reusable.yaml`) | `--env APT_PACKAGES` |
+| `apt_packages` (`build-and-publish-app.yaml`, `certify` and `certify-unit`) | `--env APT_PACKAGES` |
+| `system_deps` (`checks-reusable.yaml`) | `--env SYSTEM_DEPS` |
+| `.github/ci-system-deps.txt` (bootstrap `--system-deps`) | `conformance-reusable.yaml`, `--file`, before the D series |
+
+The input names stay as they are; renaming one breaks every caller that
+passes it.
+
+**Why:** before FND-4908 the check was a `grep` copied into six steps, pinned
+together by byte-identity tests, and three sites (`system_deps` and both
+readers of `ci-system-deps.txt`) installed the value unchecked. One app could
+declare the same list three ways and get a different answer from each.
+
+**How the script reaches the step:** from this workflow's own commit, like any
+other driver (see [Reusing scripts from a reusable
+workflow](#reusing-scripts-from-a-reusable-workflow)). `tests-reusable.yaml`
+and `checks-reusable.yaml` sparse-check it out into `.sdk-apt` and remove it
+after the install; `build-and-publish-app.yaml` reads it from its existing
+`sdk/` checkout; `conformance-reusable.yaml` fetches it with the lock-check
+scripts and copies it to `$RUNNER_TEMP`.
+
+**Not in the vendored detect action.** `run-conformance-detect` is copied into
+every consumer by bootstrap and only changes when that repo re-runs it, so it
+installs nothing; `conformance-reusable.yaml` installs `ci-system-deps.txt`
+before calling it. A consumer whose vendored copy still has the old `xargs`
+step re-installs a list the reusable has already checked, or never reaches it
+because D is skipped after a rejected one.
+
+`.github/scripts/tests/test_install_apt_packages.py` tests the script and
+fails on any `apt-get install` in `.github/workflows`, `.github/actions`,
+`.github/workflow-templates` or the bootstrap templates that bypasses it. The
+only exceptions are fixed packages this repo names itself (`twingate`,
+`openconnect`), listed in that test.
+
 ## Self-references are `@main`
 
 **Rule:** every `uses:` of this repo's own actions and reusable workflows —

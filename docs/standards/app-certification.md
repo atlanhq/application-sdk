@@ -95,8 +95,10 @@ committed, add it to `.gitignore`.
   extension the runner lacks headers for sets the `apt_packages` input to a
   space-separated list of Ubuntu packages. For example, hive's `pykerberos`
   needs `libkrb5-dev`. They install before `uv sync`, in `certify` and in
-  every `certify-unit` leg. Each name must be a plain Debian package name; any
-  other value fails the gate. Pass the same list as `tests-reusable.yaml`'s
+  every `certify-unit` leg, through `.github/scripts/install_apt_packages.py`
+  like every other reusable's package input. Each name must be a plain Debian
+  package name (no version pin, arch or release qualifier); any other value
+  fails the gate. Pass the same list as `tests-reusable.yaml`'s
   `apt-packages`.
 
 ## Sharded unit tests (opt-in)

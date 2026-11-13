@@ -356,8 +356,11 @@ def render(
       merges — flip to ``"false"`` when the app is ready for hard gating).
     - ``checks.yml``: ``system_deps`` (default ``""`` — no
       system-dependency step; supply a space-separated apt package list to
-      render an ``apt-get install`` step before ``setup-deps``, for a repo whose
-      dependencies build from sdist and need C headers on the runner). Its
+      render the reusable's ``system_deps`` input, which installs it before
+      ``setup-deps``, for a repo whose dependencies build from sdist and need C
+      headers on the runner). The reusable installs it through
+      ``.github/scripts/install_apt_packages.py``, which fails the job on any
+      token that is not a plain Debian package name (no version pins). Its
       ``<% if %>``/``<% endif %>`` tags deliberately hug the content on the same
       line: on their own lines an un-taken block would still leave its trailing
       newline, and that one blank line would read as C002 drift in every

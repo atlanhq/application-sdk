@@ -374,16 +374,15 @@ def _sync_ci_system_deps(
 ) -> list[tuple[pathlib.Path, str]]:
     """.github/ci-system-deps.txt — the apt packages CI installs before ``uv sync``.
 
-    checks.yml renders the packages inline, but the conformance suite's D-series
-    leg syncs the caller's resolved environment inside the *vendored*
-    ``run-conformance-detect`` action, where no rendered per-repo value can
-    reach it. That step reads this file instead, guarded by ``hashFiles`` so it
-    no-ops in every repo that doesn't need it. Same value, two surfaces, one
-    flag (``--system-deps``).
+    checks.yml renders the packages inline, but conformance.yaml's caller has
+    no per-repo value to render them into. ``conformance-reusable.yaml`` reads
+    this file instead, installing it through ``install_apt_packages.py`` before
+    the D series syncs the caller's resolved environment, guarded by
+    ``hashFiles`` so it no-ops in every repo that doesn't need it. Same value,
+    two surfaces, one flag (``--system-deps``), one install script.
 
     Only written when there are packages to declare: an empty file would make
-    ``hashFiles`` non-empty and turn the guarded step into a pointless
-    ``apt-get update`` on every D-leg run.
+    ``hashFiles`` non-empty, and the install script fails on an empty list.
     """
     dest = root / ".github" / "ci-system-deps.txt"
     if not system_deps:
