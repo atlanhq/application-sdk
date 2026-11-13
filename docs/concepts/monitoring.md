@@ -117,6 +117,7 @@ A non-exhaustive subset of what flows through the Rust-core path:
 | `temporal_long_request_total` | gRPC long-poll requests (counter) |
 | `temporal_worker_task_slots_available` | Available worker task slots (gauge) |
 | `temporal_worker_task_slots_used` | In-use worker task slots (gauge) |
+| `temporal_worker_activity_slots_limit` | Activity slots the worker runs with, labelled `task_queue` and `worker_type="ActivityWorker"` (gauge). Published by the SDK at worker start, not by the Rust core; read by KEDA (see [cross-repo contracts](../standards/cross-repo-contracts.md)) |
 | `temporal_sticky_cache_hit_total` | Sticky cache hits (counter) |
 | `temporal_sticky_cache_size` | Current sticky cache size (gauge) |
 

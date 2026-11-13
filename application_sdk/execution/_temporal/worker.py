@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Callable
 
 from pydantic import ValidationError
 from temporalio.client import Client
+from temporalio.runtime import Runtime
 from temporalio.worker import Interceptor as TemporalInterceptor
 from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
@@ -584,6 +585,40 @@ def _resolve_max_concurrent_activities(passed: int | None) -> int:
     return slots
 
 
+#: Gauge carrying the activity-slot count this worker runs with. KEDA's temporal
+#: scaler reads it from the worker's metrics endpoint to count a pod's busy
+#: slots as limit minus ``temporal_worker_task_slots_available``; see
+#: ``docs/standards/cross-repo-contracts.md`` before renaming it or its labels.
+#: ``TelemetryConfig.metric_prefix`` is not applied to meter-created metrics, so
+#: the full name is given here.
+ACTIVITY_SLOTS_LIMIT_METRIC = "temporal_worker_activity_slots_limit"
+
+
+def _publish_activity_slots_limit(client: Client, task_queue: str, slots: int) -> None:
+    """Publish *slots* as this worker's activity-slot limit.
+
+    Recorded on the client's Runtime, the one the worker's own slot gauges
+    report through, with the same ``task_queue`` and ``worker_type`` labels so a
+    scraper can pair it with them. A failure is logged and does not stop the
+    worker: the scaler falls back to its configured limit without the gauge.
+    """
+    config = getattr(getattr(client, "service_client", None), "config", None)
+    runtime: Runtime = getattr(config, "runtime", None) or Runtime.default()
+    try:
+        runtime.metric_meter.with_additional_attributes(
+            {"task_queue": task_queue, "worker_type": "ActivityWorker"}
+        ).create_gauge(
+            ACTIVITY_SLOTS_LIMIT_METRIC,
+            "Activity slots this worker runs with.",
+        ).set(slots)
+    except Exception:
+        logger.warning(
+            "Failed to publish %s; autoscalers fall back to their configured limit",
+            ACTIVITY_SLOTS_LIMIT_METRIC,
+            exc_info=True,
+        )
+
+
 def create_worker(
     client: Client,
     task_queue: str = "application-sdk",
@@ -1099,6 +1134,7 @@ def create_worker(
     max_concurrent_activities = _resolve_max_concurrent_activities(
         max_concurrent_activities
     )
+    _publish_activity_slots_limit(client, task_queue, max_concurrent_activities)
 
     if graceful_shutdown_timeout_seconds is None:
         graceful_shutdown_timeout_seconds = (
