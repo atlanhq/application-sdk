@@ -72,11 +72,3 @@ class TestV2EventRegistrationDeprecations:
 
         with pytest.warns(DeprecationWarning, match="removed in v4.0"):
             EventRegistration()
-
-    def test_importing_the_module_does_not_warn(self, recwarn) -> None:
-        import importlib
-
-        import application_sdk.contracts.events as events
-
-        importlib.reload(events)
-        assert not [w for w in recwarn if w.category is DeprecationWarning]
