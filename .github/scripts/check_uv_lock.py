@@ -76,12 +76,46 @@ def _quiet(cmd: Sequence[str]) -> int:
         return 124
 
 
-def lock_changed(base_sha: str, quiet: Runner = _quiet) -> bool:
-    """True unless git proves ``uv.lock`` and its manifests match the base's."""
+def _is_shallow() -> bool | None:
+    """Whether this checkout is shallow; None when git cannot say."""
+    try:
+        probe = subprocess.run(
+            ["git", "rev-parse", "--is-shallow-repository"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=FETCH_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    if probe.returncode != 0:
+        return None
+    return {"true": True, "false": False}.get(probe.stdout.strip())
+
+
+def lock_changed(
+    base_sha: str,
+    quiet: Runner = _quiet,
+    is_shallow: Callable[[], bool | None] = _is_shallow,
+) -> bool:
+    """True unless git proves ``uv.lock`` and its manifests match the base's.
+
+    The base is fetched only when it is missing, and one commit deep only in a
+    checkout that is already shallow (CI): ``fetch --depth=1 <sha>`` in a full
+    clone records ``<sha>`` in ``.git/shallow`` as a history cut-off, which
+    every worktree of that clone shares (FND-4987). When git cannot say which
+    the checkout is, neither fetch is safe, so nothing is fetched and the lock
+    is checked.
+    """
     if not base_sha:
         return True
-    if quiet(["git", "fetch", "--no-tags", "--depth=1", "origin", base_sha]) != 0:
-        return True
+    if quiet(["git", "cat-file", "-e", f"{base_sha}^{{commit}}"]) != 0:
+        shallow = is_shallow()
+        if shallow is None:
+            return True
+        depth = ["--depth=1"] if shallow else []
+        if quiet(["git", "fetch", "--no-tags", *depth, "origin", base_sha]) != 0:
+            return True
     # exit 0: no difference; 1: differs; anything else: unknown -> check.
     return quiet(["git", "diff", "--quiet", base_sha, "HEAD", "--", *LOCK_INPUTS]) != 0
 
