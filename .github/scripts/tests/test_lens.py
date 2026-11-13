@@ -6872,6 +6872,28 @@ def test_a_refused_request_is_not_retried_names_its_size_and_keeps_the_error_who
     assert len(sent.requests) == 2
 
 
+def test_consecutive_refusals_never_open_the_breaker_but_are_counted_as_failed():
+    """Every part of a PR can be refused (one did: all four). Each refusal is a
+    failed request, but none may stop a later bundle's call from being sent."""
+    from lens.llm import ContentRejected  # noqa: PLC0415 - class under test
+
+    sent = Script(*[_refused()] * 5, response())
+    led = Ledger(cap_usd=1)
+    c = Client(
+        model="m",
+        price=PRICE,
+        ledger=led,
+        transport=sent,
+        max_consecutive_failures=3,
+    )
+    for i in range(5):
+        with pytest.raises(ContentRejected):
+            c.complete(f"review:{i}", [{"role": "user", "content": "hi"}], max_tokens=5)
+    c.complete("review:last", [{"role": "user", "content": "hi"}], max_tokens=5)
+    assert len(sent.requests) == 6  # every call was sent
+    assert led.failed_requests == 5
+
+
 def test_every_failed_call_keeps_its_whole_redacted_error_in_the_run_report():
     long = '{"error": "' + "x" * 500 + ' key sk-abc123def"}'
     c = Client(

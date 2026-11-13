@@ -612,9 +612,15 @@ class Client:
         return None
 
     # ---- breaker -------------------------------------------------------
-    def _record(self, ok: bool) -> None:
+    def _record(self, ok: bool, *, streak: bool = True) -> None:
+        """Book a request's outcome. `streak=False` counts a failure without
+        advancing the run-wide breaker: for a failure that is about one prompt's
+        content, which says nothing about whether the next bundle's call works."""
         with self._breaker_lock:
-            self._fail_streak = 0 if ok else self._fail_streak + 1
+            if ok:
+                self._fail_streak = 0
+            elif streak:
+                self._fail_streak += 1
             if not ok:
                 self.ledger.failed_requests += 1
 
@@ -969,7 +975,11 @@ class Client:
                     finish_reason=choice.get("finish_reason") or "",
                     message=msg,
                 )
-            self._record(False)
+            # A content refusal is bundle-local: it is a failed request, but it must not
+            # open the breaker on bundles whose prompts were never refused. Each bundle
+            # stops at its first refusal, so this costs at most one request per bundle.
+            refused = status == 400 and _error_reason(text) == PROVIDER_REJECTED
+            self._record(False, streak=not refused)
             error = redact(text)
             last = f"HTTP {status}: {error}"
             # The size of what was sent, so a refused or oversized request can be
@@ -1012,8 +1022,7 @@ class Client:
             if status == 400 and _error_reason(text) == PROVIDER_REJECTED:
                 # The provider refused this prompt's content. Retrying the same prompt is
                 # refused again, so never retry; but it says nothing about the other
-                # bundles' prompts, so the breaker is not tripped (a request-shape bug that
-                # hits every bundle still opens it via the consecutive-failure count).
+                # bundles' prompts, so the breaker is neither tripped nor advanced.
                 raise ContentRejected(
                     f"{stage}: {last} — the model provider refused this request's content; "
                     "the same content is refused again on retry",
