@@ -569,6 +569,33 @@ separately:
   no key. Legacy probing, and the FND-4407 single-key fallback that keeps a
   value the store rejects, are removed only once no legacy payload remains.
 
+## The worker's activity-slot limit gauge (`temporal_worker_activity_slots_limit`)
+
+| | |
+|---|---|
+| **Produced by** | `_publish_activity_slots_limit()` in `application_sdk/execution/_temporal/worker.py`, called by `create_worker()` once the slot count is resolved |
+| **Served at** | Wherever the Rust core's `temporal_worker_task_slots_*` gauges are, since it is recorded on the same Runtime: the Temporal Prometheus endpoint (`ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS`, default `127.0.0.1:9464`, loopback only), and the handler's `/metrics` route (default port 8000), which proxies that endpoint's series |
+| **Key** | Series `temporal_worker_activity_slots_limit`; labels `task_queue` (the worker's task queue) and `worker_type="ActivityWorker"`; value = the activity slots the worker runs with |
+| **Read by** | The KEDA temporal scaler in atlanhq/keda (`workerActivitySlotsLimitMetric` in `pkg/scalers/temporal_scaler.go`), which scrapes each worker pod |
+| **Pinned by** | `tests/unit/execution/test_activity_slots_limit_gauge.py` (name, labels and value through a real Runtime's metric buffer) and `tests/integration/test_activity_slots_limit_scrape.py` (the rendered line, scraped from a real Prometheus endpoint) |
+
+The scaler counts a pod's busy activity slots as this limit minus
+`temporal_worker_task_slots_available`, because `available` is accurate where
+`temporal_worker_task_slots_used` can carry phantom slots. Workers size their
+slots from their own container limits, and a vertical pod autoscaler sets those
+per pod, so only the worker knows the number.
+
+- **Renaming the series or a label silently breaks autoscaling.** The scaler
+  finds no limit and falls back to the limit configured on its ScaledObject,
+  which can be far from what the pod runs with. Keep the old name published
+  until the scaler reads the new one everywhere.
+- **The value must be the count the worker actually runs with**, whatever its
+  source: a value passed to `create_worker`, `TEMPORAL_MAX_CONCURRENT_ACTIVITIES`,
+  or the derived default. A different number makes the scaler count idle slots
+  as busy, or busy ones as idle.
+- **`TelemetryConfig.metric_prefix` does not apply** to meter-created metrics,
+  so the full name, `temporal_` included, is the gauge's own name.
+
 ## The PR test-command statuses and dispatch inputs (`/e2e`, `/gate-check`)
 
 | | |
