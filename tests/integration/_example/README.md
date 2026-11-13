@@ -1,5 +1,7 @@
 # Example Integration Test
 
+> **Deprecated — removed in v4.0.0.** This example uses the `BaseIntegrationTest` HTTP scenario framework. It and every name it is built from (`Scenario`, the assertion predicates, `lazy`, ...) emit a `DeprecationWarning` (FND-4659, FND-4911). Do not copy it for a new suite: use the in-process fixture kit described in `docs/guides/integration-fixtures.md`.
+
 This is a complete, working example of integration tests using the Apps-SDK
 integration testing framework. Copy this directory as a starting point for
 your connector's integration tests.

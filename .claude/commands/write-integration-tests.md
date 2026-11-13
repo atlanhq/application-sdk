@@ -2,6 +2,8 @@
 
 You are helping a developer write integration tests for an Atlan connector using the `BaseIntegrationTest` framework from `application_sdk`.
 
+> **Deprecated — removed in v4.0.0.** `BaseIntegrationTest` and every name this command imports alongside it (`Scenario`, the assertion predicates such as `equals` and `contains`, `lazy`, `IntegrationTestClient`, `compare_metadata`, the pandera validators) emit a `DeprecationWarning` and are flagged by conformance B001 (FND-4659, FND-4911). For a new suite, use the in-process fixture kit instead: see `docs/guides/integration-fixtures.md` and the "recommended pattern" in `docs/guides/integration-testing.md`. Use this command only to maintain a suite still migrating off the scenario framework.
+
 ## Your Job
 
 Generate a complete `tests/integration/test_{connector}_integration.py` file, plus `tests/integration/__init__.py` if it doesn't exist.

@@ -1,5 +1,14 @@
 """Pandera-based data validation for integration testing.
 
+.. deprecated:: 3.58
+   This module exists only to serve the deprecated
+   :class:`~application_sdk.testing.integration.runner.BaseIntegrationTest` HTTP
+   scenario framework, and is removed with it in v4.0.0 (FND-4911). Importing
+   its names from ``application_sdk.testing.integration`` emits a
+   :class:`DeprecationWarning`. Test an App with the in-process fixture kit,
+   :mod:`application_sdk.testing.integration.fixtures`; see
+   ``docs/guides/integration-fixtures.md``.
+
 This module provides schema-based validation of extracted output files
 using pandera YAML schemas. It validates that the actual data produced
 by a workflow conforms to expected column types, value ranges, and

@@ -1027,9 +1027,9 @@ class MyApp(App):
 
 `App.asset_validation_rules` applies to both `upload()` and `upload_refs()`. The check stays
 warn-only. Rule messages use pyatlan's `"<field> is required for creation"` wording, so they land in
-`asset_validation_summary` under the same `required_for_creation:<field>` keys. Integration tests
-declare the same set on `BaseIntegrationTest.asset_validation_rules`, with a per-`Scenario`
-override. `validate_asset`, `validate_transformed_dir` and `validate_assets_as_artifact` take it
+`asset_validation_summary` under the same `required_for_creation:<field>` keys. Suites still on the
+deprecated HTTP scenario framework declare the same set on `BaseIntegrationTest.asset_validation_rules`,
+with a per-`Scenario` override; both leave in v4.0.0 (FND-4659, FND-4911). `validate_asset`, `validate_transformed_dir` and `validate_assets_as_artifact` take it
 as `creation_rules=`. The default is an empty set, which keeps the SDK aligned with pyatlan.
 
 ### Declaring artifact schemas
