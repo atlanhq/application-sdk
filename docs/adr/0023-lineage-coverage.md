@@ -64,8 +64,10 @@ That fallback mirrors publish's `COALESCE(name, columnName)` (`app/lib/partition
 v1 hashed `columnName` but not `name`, so every table ref in a schema got the same hash.
 
 Publish has the raw `components_json` at the point it resolves edges. It can compute the same hash
-there and join on `(processQualifiedName, ordinal)`. Keifu can compute the same function, but it
-resolves its own ETL refs, not the refs a BI app emits.
+there and join on `(processQualifiedName, componentsHash)`. Not on the input's position: on real
+runs the app's ref order and the Process's input order differ for multi-input Processes, so a
+positional join pairs the wrong refs. Keifu can compute the same function, but it resolves its own
+ETL refs, not the refs a BI app emits.
 
 ### Where the output goes
 
