@@ -178,7 +178,6 @@ def _install_args(**overrides: object) -> argparse.Namespace:
         "app_configs": "",
         "release_model": "",
         "created_by": "",
-        "commit_sha": "",
         "scan_wait_seconds": 0,
         # Both retry budgets default to 0 here, and every test that wants a retry
         # opts in. `time.sleep` is stubbed but `time.monotonic` is not, so a
@@ -379,28 +378,91 @@ def test_store_assert_override_refuses_a_malformed_deploy_config(
         app.with_store_assert_override(deploy_config, "t1")
 
 
-def test_install_forwards_commit_sha_when_present(
+def _publish_route_stub() -> StubTransport:
+    return StubTransport(
+        routes=[
+            StubRoute("GET", "/info", _ok({"version": "older"})),
+            StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+            StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+            StubRoute("GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})),
+            StubRoute("GET", "/info", _ok({"version": _VERSION})),
+        ],
+        sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
+    )
+
+
+def test_install_forwards_sdr_capability_and_app_configs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The release path always sends commit_sha; e2e must register the same shape."""
-    sha = "0123456789abcdef0123456789abcdef01234567"
-    transport = _wire(
-        monkeypatch,
-        StubTransport(
-            routes=[
-                StubRoute("GET", "/info", _ok({"version": "older"})),
-                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
-                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
-                StubRoute(
-                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
-                ),
-                StubRoute("GET", "/info", _ok({"version": _VERSION})),
-            ],
-            sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
-        ),
-    )
-    app.install(_install_args(commit_sha=sha))
-    assert transport.body_for("/marketplace/publish")["commit_sha"] == sha
+    """FND-4909: the release path sends both; e2e must register the same shape.
+
+    Both used to be accepted here and passed by no workflow, so every e2e
+    version was registered without connector forms and as not SDR-capable.
+    """
+    pytest.importorskip("yaml")
+    transport = _wire(monkeypatch, _publish_route_stub())
+    app.install(_install_args(self_deployed_runtime=True, app_configs="e30="))
+    body = transport.body_for("/marketplace/publish")
+    assert body["app_configs"] == "e30="
+    assert str(body["config"]).startswith("self_deployed_runtime: true\n")
+
+
+def test_install_never_sends_commit_sha(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The one release field e2e leaves out — see the comment in install().
+
+    An SDK-dispatched e2e builds a connector at the commit its release came from,
+    so sending commit_sha would register e2e versions GM cannot tell apart from
+    that release when it resolves a worker's commit_sha.
+    """
+    transport = _wire(monkeypatch, _publish_route_stub())
+    app.install(_install_args())
+    assert "commit_sha" not in transport.body_for("/marketplace/publish")
+
+
+_INSTALL_REQUIRED = [
+    *("--base-url", _TENANT, "--image", _IMAGE, "--version", _VERSION),
+    *("--branch", "b", "--tenant", "example-tenant"),
+]
+
+
+def test_install_has_no_commit_sha_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        app.main(["install", *_INSTALL_REQUIRED, "--commit-sha", "0" * 40])
+    assert "unrecognized arguments: --commit-sha" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        ([], False),
+        (["--self-deployed-runtime"], True),
+        (["--self-deployed-runtime", "true"], True),
+        (["--self-deployed-runtime", "false"], False),
+    ],
+)
+def test_self_deployed_runtime_takes_the_enable_sdr_output(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], expected: bool
+) -> None:
+    """The workflow passes parse_atlan_yaml's enable_sdr unconditionally, so the
+    flag takes its 'true'/'false' value; a bare flag still means true."""
+    seen: list[argparse.Namespace] = []
+
+    def _capture(args: argparse.Namespace) -> object:
+        seen.append(args)
+        raise app.TenantAppError("stop")
+
+    monkeypatch.setattr(app, "install", _capture)
+    assert app.main(["install", *_INSTALL_REQUIRED, *argv]) == 1
+    assert seen[0].self_deployed_runtime is expected
+
+
+@pytest.mark.parametrize("value", ["True", "yes", "1", ""])
+def test_self_deployed_runtime_refuses_anything_but_true_or_false(
+    capsys: pytest.CaptureFixture[str], value: str
+) -> None:
+    with pytest.raises(SystemExit):
+        app.main(["install", *_INSTALL_REQUIRED, "--self-deployed-runtime", value])
+    assert "expected 'true' or 'false'" in capsys.readouterr().err
 
 
 # ── The scan gate ────────────────────────────────────────────────────────────

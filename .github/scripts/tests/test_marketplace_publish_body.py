@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -16,8 +15,6 @@ from marketplace_publish_body import (  # noqa: E402
     PublishRequest,
     build,
 )
-
-_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _minimal(**overrides: object) -> PublishRequest:
@@ -125,65 +122,6 @@ def test_commit_sha_is_sent_when_present() -> None:
     sha = "0123456789abcdef0123456789abcdef01234567"
     body = build(_minimal(commit_sha=sha))
     assert body["commit_sha"] == sha
-
-
-# ── Drift guard against the release path ─────────────────────────────────────
-
-
-def test_field_set_matches_the_release_workflow() -> None:
-    """The e2e path must register the same SHAPE the release path does.
-
-    FND-31 exists so the tenant runs the version under test. If e2e registered a
-    differently-shaped version than releases do, e2e would be validating a
-    registration shape that never ships.
-
-    build-and-publish-app.yaml builds its body in its own builder,
-    build_and_publish/publish.py (moved verbatim out of the workflow's inline
-    heredoc) — it is the path every release goes through, so it is deliberately
-    not rewired onto this module. This guard is what makes that safe: the two
-    cannot drift unnoticed. When the release path is switched over to import
-    this module, delete this test.
-    """
-    workflow = (_REPO_ROOT / ".github/scripts/build_and_publish/publish.py").read_text(
-        encoding="utf-8"
-    )
-    # Keys the release builder assigns into its publish body, either as a literal
-    # in the dict or via body["key"] = ....
-    workflow_keys = set(re.findall(r'body\["(\w+)"\]', workflow))
-    literal_keys = {
-        key
-        for key in re.findall(r'^\s{8}"(\w+)":', workflow, re.M)
-        # The literal dict is indented 8 spaces inside build_body(); filter to the
-        # publish-body keys we know it declares there.
-        if key in {"app_id", "image", "version", "branch", "repo", "source"}
-    }
-    # A guard that finds nothing passes vacuously; fail loudly if the builder moves.
-    assert literal_keys == {"app_id", "image", "version", "branch", "repo", "source"}
-    assert len(workflow_keys) >= 5
-    workflow_keys |= literal_keys
-
-    ours = set(build(_minimal(allowed_tenants=(), target_channel="all")))
-    ours |= set(
-        build(
-            _minimal(
-                repo_url="https://github.com/atlanhq/atlan-openapi-app",
-                deploy_config="k: v",
-                sdk_version="3.26.1",
-                entrypoints="[]",
-                app_configs="e30=",
-                release_model="semver",
-                created_by="someone",
-                commit_sha="0123456789abcdef0123456789abcdef01234567",
-            )
-        )
-    )
-
-    missing = workflow_keys - ours
-    assert not missing, (
-        f"build-and-publish-app.yaml sends publish fields this builder does not: "
-        f"{sorted(missing)}. The e2e path would register a different shape than "
-        "releases do."
-    )
 
 
 def test_body_is_json_serialisable() -> None:

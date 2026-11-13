@@ -324,6 +324,15 @@ worker's self-report matches `versions.version` byte for byte. The publish job
 also sends `commit_sha`, which GM stores on the version — the only handle that
 resolves a semver image to its release, since `:0.3.0` carries no SHA.
 
+The publish body is built by `.github/scripts/marketplace_publish_body.py`, the
+same builder the e2e install path registers its per-PR versions with;
+`build_and_publish/publish.py` only resolves `version` and `image` and maps the
+job's env onto a `PublishRequest`. Golden bodies in
+`.github/scripts/tests/test_build_and_publish_publish.py` pin the exact bytes a
+release sends, key order included. The e2e path deliberately omits `commit_sha`
+so its versions cannot be mistaken for the release that shares the commit — see
+[`connector-ci-e2e.md`](connector-ci-e2e.md#what-the-e2e-registration-sends).
+
 The SDK reads the file at startup (`application_sdk.constants.load_build_info`)
 and reports `app_version` and `commit_sha` on `worker_start` and on every
 `token_refresh` (payload shapes: `WorkerStartEventData` and

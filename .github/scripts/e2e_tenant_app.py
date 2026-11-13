@@ -2667,7 +2667,15 @@ def install(args: argparse.Namespace) -> InstallOutcome:
         app_configs=args.app_configs,
         release_model=args.release_model,
         created_by=args.created_by,
-        commit_sha=args.commit_sha,
+        # commit_sha is the one release field left unset, deliberately. GM uses
+        # it to resolve a worker's baked commit_sha to a release, and an
+        # application-sdk PR dispatches e2e runs that build a connector at its
+        # unchanged HEAD — the very commit its release was published from — once
+        # per SDK commit. Sending it would register several tenant-scoped e2e
+        # versions under the release's commit_sha, making that lookup ambiguous.
+        # Nothing on the e2e side would read it either: the e2e image carries
+        # ATLAN_BUILD_ID, not app/atlan_build.json, so its worker reports no
+        # commit_sha to resolve.
     )
     version_id, release_id = _publish(
         publish_client, request, retry_seconds=args.publish_retry_seconds
@@ -2986,6 +2994,17 @@ def _write_outputs(outputs: dict[str, str]) -> None:
         handle.write(lines)
 
 
+def _true_false(value: str) -> bool:
+    """Parse a ``true``/``false`` step output, refusing anything else.
+
+    Strict on purpose: a ``True`` or ``yes`` read as false would register an SDR
+    app as not SDR-capable without a word.
+    """
+    if value not in ("true", "false"):
+        raise argparse.ArgumentTypeError(f"expected 'true' or 'false', got {value!r}")
+    return value == "true"
+
+
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base-url", required=True, help="https://<tenant>")
     parser.add_argument(
@@ -3017,22 +3036,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_install.add_argument("--repo-url", default="")
     p_install.add_argument("--deploy-config", default="")
-    p_install.add_argument("--self-deployed-runtime", action="store_true")
+    p_install.add_argument(
+        "--self-deployed-runtime",
+        type=_true_false,
+        nargs="?",
+        const=True,
+        default=False,
+        help=(
+            "atlan.yaml's enable_sdr as parse_atlan_yaml.py emits it ('true' or "
+            "'false'), so the workflow can pass it unconditionally. A bare flag "
+            "means true."
+        ),
+    )
     p_install.add_argument("--sdk-version", default="")
     p_install.add_argument("--entrypoints", default="")
     p_install.add_argument("--app-configs", default="")
     p_install.add_argument("--release-model", default="")
     p_install.add_argument("--created-by", default="")
-    p_install.add_argument(
-        "--commit-sha",
-        default="",
-        help=(
-            "Full git SHA the image was built from. Forwarded to GM so a "
-            "worker's baked commit_sha resolves to this version. Omit when "
-            "unknown — the field is absent rather than blank, matching the "
-            "release workflow."
-        ),
-    )
     p_install.add_argument(
         "--scan-wait-seconds",
         type=int,

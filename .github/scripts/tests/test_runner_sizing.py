@@ -36,6 +36,7 @@ WORKFLOW_DIRS = (
     REPO_ROOT / ".github" / "workflows",
     REPO_ROOT / "packages" / "conformance" / "conformance" / "bootstrap" / "templates",
 )
+_SCRIPTS_ROOT = REPO_ROOT / ".github" / "scripts"
 SCRIPT_DIRS = (
     REPO_ROOT / ".github" / "scripts",
     REPO_ROOT / ".github" / "actions",
@@ -143,9 +144,17 @@ def _third_party_imports(path: Path, seen: set[Path]) -> set[str]:
             top = name.split(".")[0]
             if top in sys.stdlib_module_names or top == "__future__":
                 continue
-            sibling = path.parent / f"{top}.py"
-            if sibling.exists():
-                out |= _third_party_imports(sibling, seen)
+            # A sibling, or for a script in a .github/scripts subpackage, a
+            # module at .github/scripts itself: those scripts put it on sys.path
+            # (build_and_publish/publish.py → marketplace_publish_body), and the
+            # jobs sparse-check out the whole tree. Either way it is followed, so
+            # its own imports still have to be stdlib.
+            candidates = [path.parent / f"{top}.py"]
+            if _SCRIPTS_ROOT in path.parents:
+                candidates.append(_SCRIPTS_ROOT / f"{top}.py")
+            first_party = next((c for c in candidates if c.exists()), None)
+            if first_party is not None:
+                out |= _third_party_imports(first_party, seen)
             else:
                 out.add(top)
     return out
