@@ -175,18 +175,29 @@ class TestActionsHoldSevenDays:
     def test_third_party_action_lanes_wait_seven_days(
         self, dep: Dep, update_type: str
     ) -> None:
-        if dep is UV_CACHE_KEY and update_type == "major":
-            pytest.skip("the preset disables custom.regex majors")
         assert resolve(dep, update_type).get("minimumReleaseAge") == ACTIONS_WINDOW
 
-    @pytest.mark.parametrize("update_type", ["minor", "patch"])
+    @pytest.mark.parametrize("update_type", ["major", "minor", "patch"])
     def test_uv_cache_key_moves_with_the_setup_uv_input(self, update_type: str) -> None:
-        """Both halves of one uv bump must age alike and share a group, or the
-        key lands alone and test_setup_deps_uv_cache_key.py fails on the PR."""
+        """Both halves of one uv bump must be proposed, age alike, share a group
+        and agree on auto-merge, or the key lands alone (or not at all) and
+        test_setup_deps_uv_cache_key.py fails on the PR. Majors included: the
+        preset once disabled every custom.regex major (FND-4903)."""
         key = resolve(UV_CACHE_KEY, update_type)
         install = resolve(SETUP_UV_INPUT, update_type)
+        assert key.get("enabled", True) and install.get("enabled", True)
         assert key.get("minimumReleaseAge") == install.get("minimumReleaseAge")
         assert key.get("groupName") == install.get("groupName") == "github-actions"
+        for option in ("automerge", "platformAutomerge"):
+            assert key.get(option) == install.get(option), option
+
+    def test_pkl_major_is_proposed_for_review(self) -> None:
+        """The preset's app-contract-toolkit major rule must not reach other
+        regex-managed deps: it once disabled pkl majors silently (FND-4903)."""
+        config = resolve(PKL, "major")
+        assert config.get("enabled", True) is True
+        assert config.get("automerge") is False
+        assert config.get("minimumReleaseAge") == EXCEPTION_WINDOW
 
     @pytest.mark.parametrize("update_type", ["major", "minor", "patch"])
     def test_first_party_actions_are_not_held(self, update_type: str) -> None:
