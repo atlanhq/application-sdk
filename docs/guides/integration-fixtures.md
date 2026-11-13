@@ -251,15 +251,47 @@ Keep the `subdirectory=` argument you passed before. `format_validation_report(r
 
 Each file maps to the typename directory it validates: `table.yaml` maps to `table`, `table/schema.yaml` to `table`, and `raw/table.yaml` to `raw/table`. The last case differs from `validate_with_pandera`, which validated the whole of `raw/` merged together against each file in it. If you called it with `subdirectory=""` and a `raw/` and `transformed/` layout, expect real per-typename failures the first time.
 
-The reader translates the subset the fleet uses:
+The reader translates everything the fleet's schema directories use:
 
-- column `dtype`, `nullable`, `required` and `unique`
+- column `dtype` (including pandas' nullable `Int32` / `Int64` and unsigned ints), `nullable`, `required`, `unique` and `coerce`
 - the checks `isin`, `equal_to`, `str_matches`, `str_startswith`, `str_length`, `greater_than[_or_equal_to]`, `less_than[_or_equal_to]` and `in_range`, under `checks:` or as column-level shorthand
 - the schema checks `check_record_count_ge`, `_le` and `_eq`
+- `regex: true` on a column whose name has no regex metacharacter besides `.`, such as `attributes.qualifiedName`
 
-Anything else raises `OutputSchemaDeclarationError`, naming the file and the key, rather than being dropped. That includes a check it does not translate, `coerce: true` and `strict: true`. Two cases come out **looser** than pandera, because presence here is checked per record, while pandera checks it per merged dataframe:
+It reads the YAML the way pandera's own reader does. A column key that names a pandera check is shorthand only when `checks` is unset. Any other unknown key, such as `type: string`, is ignored. `schema_type` is not read at all.
 
-- `required: true` with `nullable: true` no longer fails when no record has the key.
-- `required: false` with `nullable: false` no longer fails when only some records have the key.
+Anything else raises `OutputSchemaDeclarationError`, naming the file and the key, rather than being dropped. That includes:
+
+- a check it does not translate
+- `strict: true`
+- a `regex: true` name that is a real pattern
+- `coerce: true` on a column that also has value checks
+
+Some cases come out **looser** than pandera:
+
+- `required: true` with `nullable: true` no longer fails when no record has the key. Presence is checked per record here, and pandera checks it per merged dataframe.
+- `required: false` with `nullable: false` no longer fails when only some records have the key, for the same reason.
+- `coerce: true` drops the type check. A value pandera could not cast, such as `"abc"` for `float64`, passes.
+- `regex: true` checks only the path it names. It does not check a sibling column whose name extends it, which pandera's prefix match would also have caught.
+
+A schema that declares `dtype: object` works the same whatever pandas version is installed; it asserts presence only. Under pandas 3, pandera fails `object` on string columns.
+
+#### Output outside `<root>/<subdirectory>/<typename>`
+
+`validate_output` finds each typename's output at `<root>/<subdirectory>/<typename>/`. For other layouts, resolve the files yourself and pass them to `validate_paths`. It reads them as one artifact, so record counts and `unique` span them all:
+
+```python
+from application_sdk.testing.integration.output_schema import load_pandera_schemas, validate_paths
+
+for schema in load_pandera_schemas(SCHEMA_DIR / "transformed"):
+    # flat files sharing a directory: transformed/table-0.json, transformed/table-1.json
+    files = sorted((run_root / "transformed").glob(f"{schema.typename}-*.json"))
+    if not files and schema.typename in OPTIONAL:
+        continue  # an empty path list is an "absent" failure
+    report = validate_paths(schema, files)
+    assert report.ok, report.format_report()
+```
+
+The same call covers parts spread over several directories, such as `sorted(run_root.glob(f"raw/asset/*/{bucket}"))`. A tier fetched to a root of its own works with `validate_output(tier_root, schemas, subdirectory="")`.
 
 Once a suite is on the new path, the YAML files can be replaced by `OutputSchema` declarations in Python, which are typed and live next to the test that uses them.

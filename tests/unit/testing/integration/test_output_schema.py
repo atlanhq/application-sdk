@@ -25,6 +25,7 @@ from application_sdk.testing.integration.output_schema import (
     assert_output_matches,
     load_pandera_schemas,
     validate_output,
+    validate_paths,
 )
 
 POSTGRES_SCHEMAS = Path(__file__).parent / "data" / "pandera_postgres_transformed"
@@ -277,6 +278,70 @@ class TestArtifactOutcomes:
 # ---------------------------------------------------------------------------
 
 
+def _write_lines(path: Path, records: list[object]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"".join(orjson.dumps(r) + b"\n" for r in records))
+    return path
+
+
+class TestValidatePaths:
+    """Output that does not sit at ``<root>/<subdirectory>/<typename>``."""
+
+    QN = OutputSchema(
+        typename="table",
+        fields=(FieldRule(path="qualifiedName", pattern="t/.+", unique=True),),
+    )
+
+    def test_flat_prefix_files_in_a_shared_directory(self, tmp_path: Path) -> None:
+        _write_lines(tmp_path / "table-0.json", [{"qualifiedName": "t/a"}])
+        _write_lines(tmp_path / "table-1.json", [{"qualifiedName": "t/b"}])
+        _write_lines(tmp_path / "column-0.json", [{"qualifiedName": "c/x"}])
+        report = validate_paths(self.QN, sorted(tmp_path.glob("table-*.json")))
+        assert report.ok, report.format_report()
+        assert report.records == 2
+        assert report.path == f"2 paths under {tmp_path}"
+
+    def test_unique_and_record_count_span_every_path(self, tmp_path: Path) -> None:
+        first = _write_lines(
+            tmp_path / "a" / "table" / "p.json", [{"qualifiedName": "t/a"}]
+        )
+        second = _write_lines(
+            tmp_path / "b" / "table" / "p.json", [{"qualifiedName": "t/a"}]
+        )
+        report = validate_paths(
+            OutputSchema(typename="table", fields=self.QN.fields, min_records=2),
+            [first.parent, second.parent],
+        )
+        assert _rules(report) == {("qualifiedName", "unique")}
+        assert report.records == 2
+
+    def test_a_file_named_twice_is_read_once(self, tmp_path: Path) -> None:
+        part = _write_lines(tmp_path / "table" / "p.json", [{"qualifiedName": "t/a"}])
+        report = validate_paths(self.QN, [part, part.parent])
+        assert report.ok, report.format_report()
+        assert report.records == 1
+
+    def test_no_paths_is_absent(self) -> None:
+        report = validate_paths(self.QN, [])
+        assert _rules(report) == {("", "absent")}
+
+    def test_parquet_parts_across_directories(self, tmp_path: Path) -> None:
+        pa = pytest.importorskip("pyarrow")
+        pq = pytest.importorskip("pyarrow.parquet")
+        for bucket, names in (("x", ["t/a", "t/b"]), ("y", ["t/c"])):
+            (tmp_path / bucket / "table").mkdir(parents=True)
+            pq.write_table(
+                pa.table({"qualifiedName": names}),
+                tmp_path / bucket / "table" / "chunk-0.parquet",
+            )
+        report = validate_paths(
+            OutputSchema(typename="table", fields=self.QN.fields, max_records=2),
+            sorted(tmp_path.glob("*/table")),
+        )
+        assert report.records == 3
+        assert _rules(report) == {("", "record_count")}
+
+
 class TestParquet:
     @pytest.fixture
     def raw_root(self, tmp_path: Path) -> Path:
@@ -497,13 +562,16 @@ class TestPanderaReader:
         [
             ("columns:\n  a:\n    checks:\n      str_contains: x\n", "str_contains"),
             ("columns:\n  a:\n    dtype: category\n", "dtype"),
-            ("columns:\n  a:\n    coerce: true\n", "coerce"),
+            ("columns:\n  a:\n    str_endswith: x\n", "str_endswith"),
+            ("columns:\n  a.+:\n    regex: true\n", "regex"),
+            ("columns:\n  a:\n    default: x\n", "default"),
+            ("columns:\n  a:\n    coerce: true\n    ge: 0\n", "coerce"),
+            ("coerce: true\ncolumns:\n  a:\n    isin: [1]\n", "coerce"),
             ("strict: true\ncolumns: {}\n", "strict"),
             (
                 "checks:\n  my_custom_check: {value: 1}\ncolumns: {}\n",
                 "my_custom_check",
             ),
-            ("schema_type: series\ncolumns: {}\n", "schema_type"),
             ("surprise: 1\ncolumns: {}\n", "surprise"),
         ],
     )
@@ -513,6 +581,97 @@ class TestPanderaReader:
         _write_yaml(tmp_path / "t.yaml", body)
         with pytest.raises(OutputSchemaDeclarationError, match=key):
             load_pandera_schemas(tmp_path)
+
+
+# Shapes found in consumer schema directories across the fleet, each with output
+# that passes and output that fails under pandera itself.
+_FLEET_SHAPES = {
+    "schema_type_DataFrameSchema": (
+        # dtype str, not object: under pandas 3 pandera fails ``object`` on strings.
+        "schema_type: DataFrameSchema\ncolumns:\n  a:\n    dtype: str\n"
+        "    nullable: false\n",
+        [{"a": "x"}],
+        [{"a": None}],
+    ),
+    "unknown_column_key_ignored": (
+        "columns:\n  a:\n    type: string\n    nullable: false\n",
+        [{"a": 5}],
+        [{"a": None}],
+    ),
+    "flat_check_ignored_beside_checks": (
+        "columns:\n  a:\n    dtype: str\n    equal_to: x\n    checks:\n"
+        "      str_length: {min_value: 1}\n",
+        [{"a": "y"}],
+        [{"a": ""}],
+    ),
+    "flat_check_enforced_without_checks": (
+        "columns:\n  a:\n    dtype: str\n    equal_to: x\n    checks: null\n",
+        [{"a": "x"}],
+        [{"a": "y"}],
+    ),
+    "regex_literal_dotted_name": (
+        "columns:\n  attributes.qualifiedName:\n    dtype: str\n    regex: true\n"
+        "    nullable: false\n    checks:\n      str_matches: 'default/hive/[0-9]+'\n",
+        [{"attributes": {"qualifiedName": "default/hive/1/db"}}],
+        [{"attributes": {"qualifiedName": "other/1"}}],
+    ),
+    "regex_literal_absent": (
+        "columns:\n  attributes.qualifiedName:\n    dtype: str\n    regex: true\n",
+        [{"attributes": {"qualifiedName": "q"}}],
+        [{"attributes": {"name": "n"}}],
+    ),
+    "coerce_column": (
+        "columns:\n  p:\n    dtype: float64\n    nullable: false\n    coerce: true\n",
+        [{"p": 5}, {"p": "5"}, {"p": 2.5}],
+        [{"p": None}],
+    ),
+}
+
+
+class TestPanderaFleetShapes:
+    """The reader follows pandera's own YAML rules on every shape the fleet uses."""
+
+    @pytest.mark.parametrize("shape", sorted(_FLEET_SHAPES))
+    def test_verdicts_agree_with_validate_with_pandera(
+        self, tmp_path: Path, shape: str
+    ) -> None:
+        pytest.importorskip("pandera")
+        from application_sdk.testing.integration.validation import (  # noqa: PLC0415 — needs the optional pandera extra
+            validate_with_pandera,
+        )
+
+        body, good, bad = _FLEET_SHAPES[shape]
+        _write_yaml(tmp_path / "schema" / "t.yaml", body)
+        schemas = load_pandera_schemas(tmp_path / "schema")
+        for name, records, expected in (("good", good, True), ("bad", bad, False)):
+            _write_ndjson(tmp_path / name, "t", records)
+            ours = validate_output(tmp_path / name, schemas).ok
+            theirs = all(
+                r["success"]
+                for r in validate_with_pandera(
+                    str(tmp_path / "schema"), str(tmp_path / name)
+                )
+            )
+            assert (ours, theirs) == (expected, expected), name
+
+    @pytest.mark.parametrize("dtype", ["Int32", "Int64", "UInt8", "uint64"])
+    def test_nullable_and_unsigned_ints_map_to_int(
+        self, tmp_path: Path, dtype: str
+    ) -> None:
+        _write_yaml(tmp_path / "t.yaml", f"columns:\n  n:\n    dtype: {dtype}\n")
+        (schema,) = load_pandera_schemas(tmp_path)
+        assert schema.fields[0].type == "int"
+
+    def test_coerce_drops_the_type_check(self, tmp_path: Path) -> None:
+        """Documented looseness: pandera would fail an uncastable value."""
+        _write_yaml(
+            tmp_path / "schema" / "t.yaml",
+            "coerce: true\ncolumns:\n  p:\n    dtype: float64\n",
+        )
+        _write_ndjson(tmp_path / "out", "t", [{"p": "abc"}])
+        (schema,) = load_pandera_schemas(tmp_path / "schema")
+        assert schema.fields[0].type == "any"
+        assert validate_output(tmp_path / "out", (schema,)).ok
 
     def test_empty_or_missing_directory_is_refused(self, tmp_path: Path) -> None:
         with pytest.raises(OutputSchemaDeclarationError, match="not found"):

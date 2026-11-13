@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.57.0
-source-sha:    b7b01bdaae12c3a1e34ea0bd38497b40adf32a5c
-source-date:   2026-11-13T15:39:11Z
+source-sha:    e7d3463b9c0e05207cbfdb90b4017294b6d1f66f
+source-date:   2026-11-13T20:05:38Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 458 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 459 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 85 |
 
 ## Subpackage Details
@@ -6854,6 +6854,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.integration.output_schema import validate_output`
 - **Signature:** `validate_output(output_root: str | Path, *, ...)`
 - **Summary:** Check ``<output_root>/<subdirectory>/<typename>`` against each schema.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
+#### `validate_paths`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import validate_paths`
+- **Signature:** `validate_paths(schema: OutputSchema, paths: Iterable[str | Path]) -> TypenameReport`
+- **Summary:** Check an explicit set of files or directories against one schema.
 - **Defined in:** `application_sdk/testing/integration/output_schema.py`
 
 #### `validate_resolved_spec`

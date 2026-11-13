@@ -49,6 +49,7 @@ values of any field declared ``unique`` — that set is the rule.
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -89,6 +90,7 @@ __all__ = [
     "assert_output_matches",
     "load_pandera_schemas",
     "validate_output",
+    "validate_paths",
 ]
 
 Scalar = str | int | float | bool
@@ -384,8 +386,26 @@ def validate_output(
         )
     base = Path(output_root) / subdirectory if subdirectory else Path(output_root)
     return OutputValidationReport(
-        typenames=tuple(_validate_typename(base / s.typename, s) for s in declared)
+        typenames=tuple(_validate_typename((base / s.typename,), s) for s in declared)
     )
+
+
+def validate_paths(schema: OutputSchema, paths: Iterable[str | Path]) -> TypenameReport:
+    """Check an explicit set of files or directories against one schema.
+
+    For output that does not sit at ``<root>/<subdirectory>/<typename>``: parts
+    spread over several directories (``raw/asset/*/table/``), flat files sharing a
+    directory by name prefix (``transformed/table-*.json``), or a tier fetched to
+    its own root. The paths are read as **one** artifact — record counts and
+    ``unique`` span all of them — and an empty ``paths`` is an ``absent``
+    violation, so a caller with an optional typename skips the call instead.
+
+    Args:
+        schema: The declaration; its ``typename`` only labels the report.
+        paths: Files or directories, each walked as :func:`validate_output` walks
+            a typename directory.
+    """
+    return _validate_typename(tuple(Path(p) for p in paths), schema)
 
 
 def assert_output_matches(
@@ -409,58 +429,81 @@ def assert_output_matches(
 # ---------------------------------------------------------------------------
 
 
-def _validate_typename(path: Path, schema: OutputSchema) -> TypenameReport:
+def _validate_typename(paths: tuple[Path, ...], schema: OutputSchema) -> TypenameReport:
     collector = _Collector()
-    artifact_format = schema.artifact_format or _detect_format(path)
+    where = _describe(paths)
+    artifact_format = schema.artifact_format or _detect_formats(paths)
     if artifact_format is None:
         collector.add(
             OutputViolation(
                 rule="absent",
                 field="",
-                message=f"no NDJSON or parquet output at {path}",
+                message=f"no NDJSON or parquet output at {where}",
             )
         )
-        return _report(schema, path, "", 0, collector)
+        return _report(schema, where, "", 0, collector)
     if artifact_format == "mixed":
         collector.add(
             OutputViolation(
                 rule="unsupported",
                 field="",
                 message=(
-                    f"{path} holds both NDJSON and parquet parts; set "
+                    f"{where} holds both NDJSON and parquet parts; set "
                     f"OutputSchema.artifact_format to say which one is the artifact"
                 ),
             )
         )
-        return _report(schema, path, "", 0, collector)
+        return _report(schema, where, "", 0, collector)
 
     if schema.fields:
-        _type_pass(path, schema, artifact_format, collector)
+        for path in paths:
+            _type_pass(path, schema, artifact_format, collector)
 
     if artifact_format == FORMAT_NDJSON:
-        records = _ndjson_value_pass(path, schema.fields, collector)
+        records = _ndjson_value_pass(paths, where, schema.fields, collector)
     else:
-        records = _parquet_value_pass(path, schema.fields, collector)
+        records = _parquet_value_pass(paths, where, schema.fields, collector)
 
     if records is not None:
         _check_record_count(schema, records, collector)
-    return _report(schema, path, artifact_format, records or 0, collector)
+    return _report(schema, where, artifact_format, records or 0, collector)
+
+
+def _describe(paths: tuple[Path, ...]) -> str:
+    """One path as itself; several as their count and common parent."""
+    if len(paths) == 1:
+        return str(paths[0])
+    if not paths:
+        return "<no paths>"
+    try:
+        common = os.path.commonpath([str(p) for p in paths])
+    except ValueError:  # mixed absolute and relative paths
+        common = "."
+    return f"{len(paths)} paths under {common}"
 
 
 def _report(
     schema: OutputSchema,
-    path: Path,
+    where: str,
     artifact_format: str,
     records: int,
     collector: _Collector,
 ) -> TypenameReport:
     return TypenameReport(
         typename=schema.typename,
-        path=str(path),
+        path=where,
         artifact_format=artifact_format,
         records=records,
         failures=collector.freeze(),
     )
+
+
+def _detect_formats(paths: tuple[Path, ...]) -> str | None:
+    """The one format across all ``paths``; ``mixed`` when they disagree."""
+    found = {f for f in (_detect_format(p) for p in paths) if f is not None}
+    if not found:
+        return None
+    return found.pop() if len(found) == 1 else "mixed"
 
 
 def _detect_format(path: Path) -> str | None:
@@ -716,12 +759,15 @@ def _hashable(value: object) -> object:
 
 
 def _ndjson_value_pass(
-    path: Path, fields: Sequence[FieldRule], collector: _Collector
+    paths: tuple[Path, ...],
+    where: str,
+    fields: Sequence[FieldRule],
+    collector: _Collector,
 ) -> int | None:
     plans = _plan(fields)
     records = 0
     try:
-        for file, line, raw in iter_ndjson_lines(path):
+        for file, line, raw in iter_ndjson_lines(paths):
             records += 1
             if fields and not plans:
                 # Presence, type and decodability are the type pass's; nothing
@@ -749,7 +795,7 @@ def _ndjson_value_pass(
     except OSError as exc:
         collector.add(
             OutputViolation(
-                rule="absent", field="", message=f"could not read {path}: {exc}"
+                rule="absent", field="", message=f"could not read {where}: {exc}"
             )
         )
         return None
@@ -759,7 +805,7 @@ def _ndjson_value_pass(
         if not fields:
             collector.add(
                 OutputViolation(
-                    rule="absent", field="", message=f"no NDJSON records at {path}"
+                    rule="absent", field="", message=f"no NDJSON records at {where}"
                 )
             )
         return None
@@ -767,18 +813,22 @@ def _ndjson_value_pass(
 
 
 def _parquet_value_pass(
-    path: Path, fields: Sequence[FieldRule], collector: _Collector
+    paths: tuple[Path, ...],
+    where: str,
+    fields: Sequence[FieldRule],
+    collector: _Collector,
 ) -> int | None:
     from application_sdk.validation.parquet import (  # noqa: PLC0415 — private helper, same package
         _parquet_files,
     )
 
-    files = _parquet_files(path)
+    # De-duplicated by real path, as iter_ndjson_lines does for NDJSON parts.
+    files = tuple({f.resolve(): f for p in paths for f in _parquet_files(p)}.values())
     if not files:
         if not fields:
             collector.add(
                 OutputViolation(
-                    rule="absent", field="", message=f"no parquet file at {path}"
+                    rule="absent", field="", message=f"no parquet file at {where}"
                 )
             )
         return None
@@ -845,7 +895,19 @@ _PANDERA_DTYPES: Final[Mapping[str, ArtifactFieldTypeExtended]] = {
     "int16": "int",
     "int32": "int",
     "int64": "int",
+    # pandas' nullable integer dtypes — what a parquet int column reads back as.
+    "Int8": "int",
+    "Int16": "int",
+    "Int32": "int",
     "Int64": "int",
+    "uint8": "int",
+    "uint16": "int",
+    "uint32": "int",
+    "uint64": "int",
+    "UInt8": "int",
+    "UInt16": "int",
+    "UInt32": "int",
+    "UInt64": "int",
     "float": "float",
     "float32": "float",
     "float64": "float",
@@ -893,14 +955,61 @@ _COLUMN_KEYS: Final = frozenset(
         "title",
         "description",
         "metadata",
+        "default",
         "drop_invalid_rows",
         "report_duplicates",
+        # Reserved by pandera's YAML reader, never check shorthand, inert here.
+        "dims",
+        "alias",
+        "ordered_dims",
+        "sizes",
+        "shape",
+        "coords",
+        "schema_type",
+        "version",
     }
 )
+_PANDERA_CHECK_NAMES: Final = frozenset(
+    {
+        "between",
+        "eq",
+        "equal_to",
+        "ge",
+        "greater_than",
+        "greater_than_or_equal_to",
+        "gt",
+        "in_range",
+        "is_monotonic",
+        "isin",
+        "le",
+        "less_than",
+        "less_than_or_equal_to",
+        "lt",
+        "ne",
+        "not_equal_to",
+        "notin",
+        "one_sample_ttest",
+        "str_contains",
+        "str_endswith",
+        "str_length",
+        "str_matches",
+        "str_startswith",
+        "two_sample_ttest",
+        "unique_values_eq",
+        "check_record_count_ge",
+        "check_record_count_le",
+        "check_record_count_eq",
+    }
+)
+"""Names pandera resolves as ``Check.<name>`` — the only non-reserved column keys
+it reads as check shorthand. Any other column key (``type: string``) pandera
+ignores without a word, so this reader ignores it too."""
+_REGEX_METACHARACTERS: Final = frozenset("^$*+?{}[]\\|()")
+"""Everything that makes a pandera ``regex: true`` column name match more than
+itself — except ``.``, which every dotted path carries."""
 _MUST_BE_FALSY: Final = (
     "index",
     "dtype",
-    "coerce",
     "strict",
     "unique",
     "ordered",
@@ -928,8 +1037,12 @@ def load_pandera_schemas(schema_dir: str | Path) -> tuple[OutputSchema, ...]:
     ``greater_than_or_equal_to``, ``less_than``, ``less_than_or_equal_to``,
     ``in_range``; schema checks ``check_record_count_ge`` / ``_le`` / ``_eq``.
 
-    A column key pandera does not reserve (``equal_to: X`` beside ``dtype``) is
-    check shorthand, and pandera enforces it, so it is translated as a check too.
+    Column keys follow pandera's own reader: a non-reserved key that names a
+    pandera check (``equal_to: X`` beside ``dtype``) is check shorthand and is
+    enforced, but only when ``checks`` is unset; any other key (``type: string``)
+    pandera ignores, and so does this reader. ``schema_type`` is not read, as in
+    pandera. pandas' nullable and unsigned integer dtypes (``Int32``, ``UInt64``)
+    map to ``int``.
 
     Where the result is deliberately not identical to pandera:
 
@@ -941,6 +1054,15 @@ def load_pandera_schemas(schema_dir: str | Path) -> tuple[OutputSchema, ...]:
       becomes ``required=False`` — pandera only failed when *no* record carried
       the key. ``required: false`` with ``nullable: false`` lets a record omit the
       key — pandera failed when *some* records carried it and others did not.
+    * ``coerce: true`` (on a column, or schema-wide) drops the type check for that
+      column, as pandera casts first. A value pandera could not cast — ``"abc"``
+      for ``float64`` — passes here. A coerced column that also carries value
+      checks is refused: pandera checks the cast value, this reader cannot.
+    * ``regex: true`` is translated only when the column name has no regex
+      metacharacter but ``.`` (``attributes.qualifiedName``): it then names one
+      path. pandera's ``re.match`` would also have matched a column extending the
+      name (``attributes.qualifiedNameX``); that sibling is not checked here. A
+      wider pattern is refused.
 
     Anything else — a check it does not translate, an unknown top-level key, a
     schema option that changes pandera's behaviour — raises
@@ -1008,11 +1130,8 @@ def _load_pandera_file(file: Path, typename: str) -> OutputSchema:
         document = _mapping(yaml.safe_load(handle))
     if document is None:
         raise refuse("<root>", "not a YAML mapping")
-    schema_type = document.get("schema_type", "dataframe")
-    if schema_type != "dataframe":
-        raise refuse(
-            "schema_type", f"only 'dataframe' is supported, found {schema_type!r}"
-        )
+    # pandera's pandas reader never looks at ``schema_type`` (``dataframe`` and
+    # ``DataFrameSchema`` both load), so neither does this one.
     api = document.get("api", "pandas")
     if api != "pandas":
         raise refuse("api", f"only the pandas API is supported, found {api!r}")
@@ -1030,8 +1149,10 @@ def _load_pandera_file(file: Path, typename: str) -> OutputSchema:
     columns = _mapping(document.get("columns") or {})
     if columns is None:
         raise refuse("columns", "must be a mapping of column name to spec")
+    coerce_all = bool(document.get("coerce"))
     rules = tuple(
-        _column_rule(name, spec or {}, refuse) for name, spec in columns.items()
+        _column_rule(name, spec or {}, refuse, coerce_all=coerce_all)
+        for name, spec in columns.items()
     )
     return OutputSchema(
         typename=typename,
@@ -1078,16 +1199,27 @@ class _ColumnValues:
     exclusive_maximum: float | None = None
 
 
-def _column_rule(name: str, raw_spec: object, refuse: _Refuse) -> FieldRule:
+def _column_rule(
+    name: str, raw_spec: object, refuse: _Refuse, *, coerce_all: bool = False
+) -> FieldRule:
     where = f"columns.{name}"
     spec = _mapping(raw_spec)
     if spec is None:
         raise refuse(where, "column spec must be a mapping")
-    for key in ("coerce", "regex", "drop_invalid_rows"):
-        if spec.get(key):
+    for key in ("drop_invalid_rows", "default"):
+        if spec.get(key) not in (None, False):
             raise refuse(
-                f"{where}.{key}", "set to true, which this reader does not translate"
+                f"{where}.{key}",
+                f"set to {spec[key]!r}, which this reader does not translate",
             )
+    # ``regex: true`` matches column names by pattern. A name with no
+    # metacharacter but ``.`` names exactly one dotted path, which is the
+    # fleet's only use; anything wider is refused rather than narrowed.
+    if spec.get("regex") and _REGEX_METACHARACTERS.intersection(name):
+        raise refuse(
+            f"{where}.regex",
+            "a column-name pattern matching several columns is not translated",
+        )
 
     dtype = spec.get("dtype")
     if dtype is None:
@@ -1103,15 +1235,25 @@ def _column_rule(name: str, raw_spec: object, refuse: _Refuse) -> FieldRule:
 
     for check, args in _iter_checks(spec.get("checks"), refuse, f"{where}.checks"):
         _translate_check(check, args, f"{where}.checks.{check}", values, refuse)
-    # pandera reads any other column key as check shorthand — ``equal_to: X``
-    # beside ``dtype`` is enforced exactly as it would be under ``checks``.
-    for check, args in spec.items():
-        if check not in _COLUMN_KEYS:
-            _translate_check(check, args, f"{where}.{check}", values, refuse)
+    # pandera reads a non-reserved column key that names a Check as shorthand —
+    # ``equal_to: X`` beside ``dtype`` — but only when ``checks`` is unset, and
+    # ignores every other key. Mirror both, so verdicts match.
+    if spec.get("checks") is None:
+        for check, args in spec.items():
+            if check not in _COLUMN_KEYS and check in _PANDERA_CHECK_NAMES:
+                _translate_check(check, args, f"{where}.{check}", values, refuse)
 
+    coerce = coerce_all or bool(spec.get("coerce"))
+    if coerce and values != _ColumnValues():
+        # pandera checks the *cast* value ("5" >= 0); without casting, a value
+        # rule here would judge the stored one and disagree.
+        raise refuse(
+            f"{where}.coerce",
+            "coerce: true with value checks is not translated",
+        )
     return FieldRule(
         path=name,
-        type=logical,
+        type="any" if coerce else logical,
         required=required,
         nullable=nullable,
         unique=bool(spec.get("unique", False)),
@@ -1137,7 +1279,7 @@ def _translate_check(
         values.allowed = tuple(
             _scalar(o, at, refuse) for o in cast("list[object]", options)
         )
-    elif check == "equal_to":
+    elif check in ("equal_to", "eq"):
         values.allowed = (_scalar(_check_value_arg(args, ("value",)), at, refuse),)
     elif check in ("str_matches", "str_startswith"):
         text = _check_value_arg(args, ("value", "pattern", "string"))
