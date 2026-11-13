@@ -113,32 +113,31 @@ def test_process_record_with_dict():
 async def test_send_to_otel():
     """Test _send_to_otel() method."""
     with create_traces_adapter() as traces_adapter:
-        with mock.patch.object(
-            traces_adapter.tracer, "start_as_current_span"
-        ) as mock_span:
-            mock_span_context = mock.MagicMock()
-            mock_span.return_value.__enter__.return_value = mock_span_context
+        mock_span = traces_adapter.tracer.start_span.return_value
+        record = TraceRecord(
+            timestamp=datetime.now().timestamp(),
+            trace_id="1234567890abcdef",
+            span_id="abcdef1234567890",
+            name="test_span",
+            kind="SERVER",
+            status_code="OK",
+            attributes={"test": "attribute"},
+            events=[{"name": "test_event", "attributes": {"key": "value"}}],
+            duration_ms=150.5,
+        )
+        traces_adapter._send_to_otel(record)
 
-            record = TraceRecord(
-                timestamp=datetime.now().timestamp(),
-                trace_id="1234567890abcdef",
-                span_id="abcdef1234567890",
-                name="test_span",
-                kind="SERVER",
-                status_code="OK",
-                attributes={"test": "attribute"},
-                events=[{"name": "test_event", "attributes": {"key": "value"}}],
-                duration_ms=150.5,
-            )
-            traces_adapter._send_to_otel(record)
-
-            mock_span.assert_called_once_with(
-                name="test_span", kind=SpanKind.SERVER, attributes={"test": "attribute"}
-            )
-            mock_span_context.set_status.assert_called_once()
-            mock_span_context.add_event.assert_called_once_with(
-                name="test_event", attributes={"key": "value"}, timestamp=mock.ANY
-            )
+        traces_adapter.tracer.start_span.assert_called_once_with(
+            name="test_span",
+            kind=SpanKind.SERVER,
+            attributes={"test": "attribute"},
+            start_time=mock.ANY,
+        )
+        mock_span.set_status.assert_called_once()
+        mock_span.add_event.assert_called_once_with(
+            name="test_event", attributes={"key": "value"}, timestamp=mock.ANY
+        )
+        mock_span.end.assert_called_once_with(end_time=mock.ANY)
 
 
 async def test_log_to_console():
@@ -184,15 +183,19 @@ def test_get_traces():
     assert isinstance(traces1, AtlanTracesAdapter)
 
 
-class TestPeriodicFlushStartsOnSharedLoop:
-    """FND-4648: the traces flush starts on the one observability loop,
-    whether or not a loop is running where the adapter is built. It used to
-    be a task on the running loop, or else an ``asyncio.run`` thread."""
+class TestNoPeriodicFlush:
+    """FND-4913: building the adapter starts no flush, on the shared loop or
+    the running one. FND-4648 had moved the flush onto the shared loop; the
+    flush is gone because the adapter keeps nothing to flush."""
 
     @staticmethod
     def _construct() -> None:
-        AtlanTracesAdapter._flush_task_started = False
         with (
+            # The old flush's once-per-process guard, cleared so a flush
+            # would start here if construction still started one.
+            mock.patch.object(
+                AtlanTracesAdapter, "_flush_task_started", False, create=True
+            ),
             mock.patch.dict(
                 "os.environ",
                 {
@@ -205,9 +208,7 @@ class TestPeriodicFlushStartsOnSharedLoop:
             ) as shared_loop,
         ):
             _ = AtlanTracesAdapter()
-        shared_loop.start.assert_called_once()
-        shared_loop.start.call_args.args[0].close()
-        assert AtlanTracesAdapter._flush_task_started is True
+        shared_loop.start.assert_not_called()
 
     def test_without_a_running_loop(self):
         self._construct()

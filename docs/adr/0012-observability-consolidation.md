@@ -88,6 +88,13 @@ match the rest of the surface.
   `TracerProvider` (OTLP only; a console exporter only behind the
   dev-only `ATLAN_ENABLE_TRACES_CONSOLE`) the upstream interceptor emits
   through.
+- `@observability` and `AtlanTracesAdapter` stay, because about 20
+  connector apps decorate functions with them. Since FND-4913 the
+  adapter is a thin span emitter. Each `record_trace` becomes one span on
+  that same global provider, timed from the operation's start to its
+  end and parented to the current span. Nothing is buffered, flushed or
+  written to the object store: those trace files had no reader, and
+  building the adapter started a flush task on whatever loop built it.
 - Product-feature interceptors stay separate — `OutputInterceptor` (UI
   artifacts merged into workflow output) and `EventInterceptor` (v3
   audit / dashboard event bus) are not observability and remain their

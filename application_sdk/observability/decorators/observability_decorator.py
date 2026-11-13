@@ -1,8 +1,9 @@
+import contextlib
 import functools
 import inspect
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -111,7 +112,6 @@ def _record_error_observability(
     """Helper function to record error observability data."""
     duration_ms = (time.time() - start_time) * 1000
 
-    # Debug logging for error case
     logger.error("Error in function: %s", func_name, exc_info=True)
 
     try:
@@ -158,9 +158,6 @@ def _record_error_observability(
     except Exception:
         logger.error("Failed to record error metric: %s", func_name, exc_info=True)
 
-    # Log error
-    logger.error("Error in function: %s", func_name, exc_info=True)
-
 
 def observability(
     logger: "AtlanLoggerAdapter | None" = None,
@@ -169,8 +166,11 @@ def observability(
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Decorator for adding observability to functions.
 
-    This decorator records traces and metrics for both successful and failed function executions.
-    It handles both synchronous and asynchronous functions.
+    Per call, records one ``function_calls`` counter increment and one trace
+    (via ``traces.record_trace``, which emits an OTel span covering the call
+    when ``ATLAN_ENABLE_OTLP_TRACES`` is on), on success and on failure. A
+    failure is logged once with its traceback and re-raised unchanged. Sync and
+    async functions share one recording path.
 
     Args:
         logger: Logger instance for operation logging. If None, auto-initializes using get_logger()
@@ -211,38 +211,17 @@ def observability(
         # Debug logging for function decoration
         actual_logger.debug("Decorating function %s (is_async=%s)", func_name, is_async)
 
-        @functools.wraps(func)
-        async def async_wrapper(*args: Any, **kwargs: Any) -> T:
-            # Generate trace ID and span ID
+        @contextlib.contextmanager
+        def observed_call() -> Iterator[None]:
+            """Time the call and record its outcome; shared by both wrappers."""
             trace_id = str(uuid.uuid4())
             span_id = str(uuid.uuid4())
             start_time = time.time()
-
+            actual_logger.debug("Starting function: %s", func_name)
             try:
-                # Log start of operation
-                actual_logger.debug("Starting async function: %s", func_name)
-
-                # Execute the function
-                result = await func(*args, **kwargs)
-
-                # Record success observability
-                _record_success_observability(
-                    actual_logger,
-                    actual_metrics,
-                    actual_traces,
-                    func_name,
-                    func_doc,
-                    func_module,
-                    trace_id,
-                    span_id,
-                    start_time,
-                )
-
-                return result
-
+                yield
             # conformance: ignore[E004] decorator wrapper; exception is logged with exc_info inside _record_error_observability then re-raised
             except Exception as e:
-                # Record error observability
                 _record_error_observability(
                     actual_logger,
                     actual_metrics,
@@ -256,52 +235,27 @@ def observability(
                     e,
                 )
                 raise
+            _record_success_observability(
+                actual_logger,
+                actual_metrics,
+                actual_traces,
+                func_name,
+                func_doc,
+                func_module,
+                trace_id,
+                span_id,
+                start_time,
+            )
+
+        @functools.wraps(func)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> T:
+            with observed_call():
+                return await func(*args, **kwargs)
 
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> T:
-            # Generate trace ID and span ID
-            trace_id = str(uuid.uuid4())
-            span_id = str(uuid.uuid4())
-            start_time = time.time()
-
-            try:
-                # Log start of operation
-                actual_logger.debug("Starting sync function: %s", func_name)
-
-                # Execute the function
-                result = func(*args, **kwargs)
-
-                # Record success observability
-                _record_success_observability(
-                    actual_logger,
-                    actual_metrics,
-                    actual_traces,
-                    func_name,
-                    func_doc,
-                    func_module,
-                    trace_id,
-                    span_id,
-                    start_time,
-                )
-
-                return result
-
-            # conformance: ignore[E004] decorator wrapper; exception is logged with exc_info inside _record_error_observability then re-raised
-            except Exception as e:
-                # Record error observability
-                _record_error_observability(
-                    actual_logger,
-                    actual_metrics,
-                    actual_traces,
-                    func_name,
-                    func_doc,
-                    func_module,
-                    trace_id,
-                    span_id,
-                    start_time,
-                    e,
-                )
-                raise
+            with observed_call():
+                return func(*args, **kwargs)
 
         # Return appropriate wrapper based on function type
         return cast(Callable[..., T], async_wrapper if is_async else sync_wrapper)
