@@ -51,6 +51,8 @@ class TestSimpleSymbolRename:
         src = "from application_sdk.activities.common.models import ActivityResult"
         out, changes = rewrite(src)
         assert "from application_sdk.common.models import TaskResult" in out
+        # TaskResult is itself deprecated, so the rewrite carries a TODO to replace it.
+        assert "# TODO(upgrade-v3): TaskResult is deprecated" in out
 
     def test_handler_interface_renamed(self):
         src = "from application_sdk.handlers import HandlerInterface"

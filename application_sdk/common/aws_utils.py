@@ -7,6 +7,8 @@ import time
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
+from typing_extensions import deprecated
+
 from application_sdk.common.aws_utils_errors import (
     AwsAssumeRoleError,
     AwsClientCreationError,
@@ -274,7 +276,7 @@ def generate_aws_rds_token_with_iam_user(
         raise AwsRdsTokenError(cause=e) from e
 
 
-def get_cluster_identifier(aws_client) -> str | None:
+def _get_cluster_identifier(aws_client) -> str | None:
     """
     Retrieve the cluster identifier from AWS Redshift clusters.
 
@@ -298,9 +300,30 @@ def get_cluster_identifier(aws_client) -> str | None:
     return None
 
 
+@deprecated(
+    "get_cluster_identifier is deprecated; use the Redshift client's describe_clusters() directly instead — will be "
+    "removed in v4.0."
+)
+def get_cluster_identifier(aws_client) -> str | None:
+    """The first Redshift cluster's identifier, or ``None`` when there is none.
+
+    .. deprecated:: 3.58.0
+        Call ``describe_clusters()`` on the boto3 Redshift client. Will be
+        removed in v4.0.
+    """
+    return _get_cluster_identifier(aws_client)
+
+
+@deprecated(
+    "create_aws_session is deprecated; use boto3.Session(aws_access_key_id=..., aws_secret_access_key=...) instead — will be "
+    "removed in v4.0."
+)
 def create_aws_session(credentials: dict[str, Any]) -> boto3.Session:
     """
     Create a boto3 session with AWS credentials.
+
+    .. deprecated:: 3.58.0
+        Build ``boto3.Session`` directly. Will be removed in v4.0.
 
     Args:
         credentials: Dictionary containing AWS credentials
@@ -323,11 +346,18 @@ def create_aws_session(credentials: dict[str, Any]) -> boto3.Session:
     )
 
 
+@deprecated(
+    "get_cluster_credentials is deprecated; use the Redshift client's get_cluster_credentials_with_iam() directly instead — will be "
+    "removed in v4.0."
+)
 def get_cluster_credentials(
     aws_client, credentials: dict[str, Any], extra: dict[str, Any]
 ) -> dict[str, str]:
     """
     Retrieve cluster credentials using IAM authentication.
+
+    .. deprecated:: 3.58.0
+        Call ``get_cluster_credentials_with_iam()`` on the boto3 Redshift client. Will be removed in v4.0.
 
     Args:
         aws_client: Boto3 Redshift client instance
@@ -337,7 +367,7 @@ def get_cluster_credentials(
         Dict[str, str]: Dictionary containing DbUser and DbPassword
     """
     database = extra["database"]
-    cluster_identifier = credentials.get("cluster_id") or get_cluster_identifier(
+    cluster_identifier = credentials.get("cluster_id") or _get_cluster_identifier(
         aws_client
     )
     return aws_client.get_cluster_credentials_with_iam(
@@ -454,6 +484,10 @@ def create_aws_client(
         raise AwsClientCreationError(service=service, cause=e) from e
 
 
+@deprecated(
+    "create_engine_url is deprecated; use sqlalchemy.engine.URL.create() instead — will be "
+    "removed in v4.0."
+)
 def create_engine_url(
     drivername: str,
     credentials: dict[str, Any],
@@ -462,6 +496,9 @@ def create_engine_url(
 ) -> URL:
     """
     Create SQLAlchemy engine URL for Redshift connection.
+
+    .. deprecated:: 3.58.0
+        Call ``sqlalchemy.engine.URL.create()``. Will be removed in v4.0.
 
     Args:
         credentials: Dictionary containing connection credentials
@@ -486,9 +523,17 @@ def create_engine_url(
     )
 
 
+@deprecated(
+    "get_all_aws_regions is deprecated; use the EC2 client's describe_regions() directly instead — will be "
+    "removed in v4.0."
+)
 def get_all_aws_regions() -> list[str]:
     """
     Get all available AWS regions dynamically using EC2 describe_regions API.
+
+    .. deprecated:: 3.58.0
+        Call ``describe_regions()`` on a boto3 EC2 client. Will be removed in v4.0.
+
     Returns:
         list[str]: List of all AWS region names
     Raises:

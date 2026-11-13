@@ -221,6 +221,11 @@ SYMBOL_MAP: dict[tuple[str, str], RewriteTarget] = {
     ("application_sdk.activities.common.models", "ActivityResult"): RewriteTarget(
         "application_sdk.common.models",
         "TaskResult",
+        structural=True,
+        note=(
+            "TaskResult is deprecated and removed in v4.0, and nothing in the SDK "
+            "reads it. Return TaskStatistics, or define a TypedDict of your own."
+        ),
     ),
     # ── Auto-heartbeater (removed, built into @task) ───────────────────────
     (

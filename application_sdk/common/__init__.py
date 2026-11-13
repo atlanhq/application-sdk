@@ -15,6 +15,9 @@ Public API::
         DataframeType,
     )
 
+``get_safe_num_threads`` and ``TaskResult`` are deprecated and removed in v4.0;
+see each one's notice for its replacement.
+
 Note: ``application_sdk.common.error_codes`` is retained for back-compat with
 v2 connectors. Prefer ``application_sdk.errors`` for new code.
 """

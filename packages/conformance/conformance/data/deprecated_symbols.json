@@ -271,6 +271,60 @@
       "symbol": "RedisTimeoutError"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "create_aws_session is deprecated; use boto3.Session(aws_access_key_id=..., aws_secret_access_key=...) instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.aws_utils",
+      "removal_version": "4.0",
+      "symbol": "create_aws_session"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "create_engine_url is deprecated; use sqlalchemy.engine.URL.create() instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.aws_utils",
+      "removal_version": "4.0",
+      "symbol": "create_engine_url"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_all_aws_regions is deprecated; use the EC2 client's describe_regions() directly instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.aws_utils",
+      "removal_version": "4.0",
+      "symbol": "get_all_aws_regions"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_cluster_credentials is deprecated; use the Redshift client's get_cluster_credentials_with_iam() directly instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.aws_utils",
+      "removal_version": "4.0",
+      "symbol": "get_cluster_credentials"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_cluster_identifier is deprecated; use the Redshift client's describe_clusters() directly instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.aws_utils",
+      "removal_version": "4.0",
+      "symbol": "get_cluster_identifier"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_safe_num_threads is deprecated; use get_actual_cpu_count() and size the pool for your workload, or run_in_thread, whose pool the SDK already sizes from the CPU limit \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.concurrency",
+      "removal_version": "4.0",
+      "symbol": "get_safe_num_threads"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": " (AtlanError subclass) is deprecated; use application_sdk.errors.AppError \u2014 will be removed in v4.0",
@@ -278,6 +332,78 @@
       "module": "application_sdk.common.error_codes",
       "removal_version": "4.0",
       "symbol": "AtlanError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.common.errors.FileConverterNotFoundError is deprecated; catch application_sdk.errors.UnimplementedError (its base) instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.errors",
+      "removal_version": "4.0",
+      "symbol": "FileConverterNotFoundError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "ConvertFile is deprecated; use pyarrow.json.read_json and pyarrow.parquet.write_table instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.file_converter",
+      "removal_version": "4.0",
+      "symbol": "ConvertFile"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "FileType is deprecated; use pyarrow.json.read_json and pyarrow.parquet.write_table instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.file_converter",
+      "removal_version": "4.0",
+      "symbol": "FileType"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "convert_data_files is deprecated; use pyarrow.json.read_json and pyarrow.parquet.write_table instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.file_converter",
+      "removal_version": "4.0",
+      "symbol": "convert_data_files"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "convert_json_to_parquet is deprecated; use pyarrow.json.read_json and pyarrow.parquet.write_table instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.file_converter",
+      "removal_version": "4.0",
+      "symbol": "convert_json_to_parquet"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "convert_parquet_to_json is deprecated; use pyarrow.parquet.read_table instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.file_converter",
+      "removal_version": "4.0",
+      "symbol": "convert_parquet_to_json"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "enum_register is deprecated; use a plain dict keyed by the enum instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.file_converter",
+      "removal_version": "4.0",
+      "symbol": "enum_register"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "file_converter_registry is deprecated; use pyarrow.json.read_json and pyarrow.parquet.write_table \u2014 the file_converter module has no callers and hides conversion errors. Will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.file_converter",
+      "removal_version": "4.0",
+      "symbol": "file_converter_registry"
     },
     {
       "kind": "constant",
@@ -449,6 +575,15 @@
       "module": "application_sdk.common.incremental.state.state_writer",
       "removal_version": "4.0.0",
       "symbol": "upload_current_state"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.common.models.TaskResult is deprecated; use application_sdk.common.models.TaskStatistics for a task's output, or a TypedDict of your own \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.models",
+      "removal_version": "4.0",
+      "symbol": "TaskResult"
     },
     {
       "kind": "enum_member",
@@ -629,6 +764,33 @@
       "module": "application_sdk.contracts.base",
       "removal_version": "4.0",
       "symbol": "ContractValidationError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.contracts.events.Consumes is deprecated; use application_sdk.handler.contracts.EventTriggerConfig instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.contracts.events",
+      "removal_version": "4.0",
+      "symbol": "Consumes"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.contracts.events.EventFilter is deprecated; use application_sdk.handler.contracts.EventFilterRule instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.contracts.events",
+      "removal_version": "4.0",
+      "symbol": "EventFilter"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.contracts.events.EventRegistration is deprecated; use application_sdk.handler.contracts.EventTriggerConfig, one per consumed event, instead \u2014 will be removed in v4.0.",
+      "migration_target": true,
+      "module": "application_sdk.contracts.events",
+      "removal_version": "4.0",
+      "symbol": "EventRegistration"
     },
     {
       "kind": "method",
