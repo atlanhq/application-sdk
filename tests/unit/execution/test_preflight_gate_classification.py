@@ -81,7 +81,9 @@ from application_sdk.handler.contracts import (
     PreflightStatus,
 )
 from application_sdk.infrastructure._dapr.credential_vault import DaprCredentialVault
-from application_sdk.infrastructure.credential_vault import CredentialVaultError
+from application_sdk.infrastructure.credential_vault import (
+    CredentialVaultUnavailableError,
+)
 from application_sdk.observability.logger_adaptor import (
     _KNOWN_EXTRA_KEYS,
     GATE_ATTEMPTS_KEY,
@@ -555,8 +557,8 @@ class TestCollapsedPlumbingIsNotACredentialProblem:
         # The umbrella vault error still means "could not tell", so a not-found
         # collapsed from it stays plumbing; only the typed leaf is a config fact.
         collapsed = CredentialNotFoundError("example-guid")
-        collapsed.__cause__ = CredentialVaultError(
-            "store unavailable", cause=ConnectionResetError()
+        collapsed.__cause__ = CredentialVaultUnavailableError(
+            message="store unavailable", cause=ConnectionResetError()
         )
         assert _is_definitive_credential_absence(collapsed) is False
 

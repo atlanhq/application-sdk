@@ -29,7 +29,7 @@ from application_sdk.infrastructure._dapr.http import (
 )
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.infrastructure._single_key_probe import probe_single_keys
-from application_sdk.infrastructure.bindings import BindingError
+from application_sdk.infrastructure.bindings import BindingUnavailableError
 from application_sdk.infrastructure.secrets import (  # noqa: F401 — the two outage types are re-exports kept for importers of this module (shipped surface)
     SecretNotFoundError,
     SecretStoreUnavailableError,
@@ -168,11 +168,11 @@ class DaprCredentialVault:
         4. Returns the merged credential dict.
 
         Raises:
-            CredentialVaultError: If any step fails.
+            CredentialVaultUnavailableError: If any step fails.
         """
         # Deferred import: circular dependency
         from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
-            CredentialVaultError,
+            CredentialVaultUnavailableError,
         )
 
         try:
@@ -211,7 +211,7 @@ class DaprCredentialVault:
                 # absent bundle as {} (expected — not every credential has
                 # one); anything else (a cold-start race, a genuine store
                 # rejection) propagates to the except Exception below and
-                # becomes a typed CredentialVaultError, rather than being
+                # becomes a typed CredentialVaultUnavailableError, rather than being
                 # silently downgraded to "no secrets" the way it used to be.
                 secret_data = await self._get_secret(key_to_fetch)
             else:
@@ -223,12 +223,12 @@ class DaprCredentialVault:
             else:
                 return _resolve_credentials(credential_config, secret_data)
 
-        except CredentialVaultError:
+        except CredentialVaultUnavailableError:
             raise
-        # conformance: ignore[E004] outer re-raise wraps all failures into CredentialVaultError; no logging needed here
+        # conformance: ignore[E004] outer re-raise wraps all failures into CredentialVaultUnavailableError; no logging needed here
         except Exception as e:
-            raise CredentialVaultError(
-                f"Failed to resolve credentials for {credential_guid}: {e}",
+            raise CredentialVaultUnavailableError(
+                message=f"Failed to resolve credentials for {credential_guid}: {e}",
                 credential_guid=credential_guid,
                 cause=e,
             ) from e
@@ -257,7 +257,7 @@ class DaprCredentialVault:
         being retried for the cold-start budget.
 
         Raises:
-            CredentialVaultError: If the GUID contains unsafe characters or no
+            CredentialVaultUnavailableError: If the GUID contains unsafe characters or no
                 config is found in the upstream store.
         """
         import os  # noqa: PLC0415 — cold path: only on local dev path
@@ -273,7 +273,7 @@ class DaprCredentialVault:
         )
         from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
             CredentialConfigNotFoundError,
-            CredentialVaultError,
+            CredentialVaultUnavailableError,
         )
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related modules
             normalize_key,
@@ -281,8 +281,8 @@ class DaprCredentialVault:
 
         # Validate before interpolation to prevent path traversal.
         if not _SAFE_GUID_RE.match(credential_guid):
-            raise CredentialVaultError(
-                "Invalid credential GUID — must match [a-zA-Z0-9_-]+: %r"
+            raise CredentialVaultUnavailableError(
+                message="Invalid credential GUID — must match [a-zA-Z0-9_-]+: %r"
                 % credential_guid,
                 credential_guid=credential_guid,
             )
@@ -308,7 +308,7 @@ class DaprCredentialVault:
             """Return ``None`` only for the object store's explicit not-found."""
             try:
                 return await self._upstream.invoke("get", data=data, metadata=metadata)
-            except BindingError as exc:
+            except BindingUnavailableError as exc:
                 # The "no config" answer, re-read on the short ladder below
                 # rather than the cold-start budget, which would delay the
                 # failure and relabel it as an unreachable sidecar.
@@ -348,8 +348,8 @@ class DaprCredentialVault:
                 await asyncio.sleep(delay)
 
         if saw_empty_reply:
-            raise CredentialVaultError(
-                "No credential config read for GUID %s from upstream store "
+            raise CredentialVaultUnavailableError(
+                message="No credential config read for GUID %s from upstream store "
                 "(empty reply within %d attempts over %.0fs)"
                 % (
                     credential_guid,
@@ -359,7 +359,7 @@ class DaprCredentialVault:
                 credential_guid=credential_guid,
             )
         raise CredentialConfigNotFoundError(
-            "No credential config found for GUID %s in upstream store "
+            message="No credential config found for GUID %s in upstream store "
             "(object store answered not-found on %d attempts over %.0fs)"
             % (credential_guid, attempts, sum(_MISSING_CONFIG_RETRY_DELAYS_SECONDS)),
             credential_guid=credential_guid,

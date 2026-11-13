@@ -244,9 +244,12 @@ class TestDefaultEntrypoint:
 
     def test_multiple_defaults_raise_at_registration(self) -> None:
         from application_sdk.app.base import App
-        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+        from application_sdk.app.entrypoint import (
+            EntryPointDeclarationError,
+            entrypoint,
+        )
 
-        with pytest.raises(EntryPointContractError, match="default entry point"):
+        with pytest.raises(EntryPointDeclarationError, match="default entry point"):
 
             class _BadApp(App):
                 @entrypoint(default=True)

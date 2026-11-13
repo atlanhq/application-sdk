@@ -100,7 +100,7 @@ def _validate_watchdog_declaration(
         The pair, with the mode coerced to a :class:`ProgressWatchdogMode`.
 
     Raises:
-        TaskContractError: If either value is unusable. Raised at *decoration*
+        TaskDeclarationError: If either value is unusable. Raised at *decoration*
             time rather than swallowed, unlike the env-var readers next door: a
             typo in one deployment manifest must not stop a worker booting, but
             a typo in an app's own source is a bug its author should see at
@@ -115,8 +115,8 @@ def _validate_watchdog_declaration(
         try:
             mode = ProgressWatchdogMode(progress_watchdog)
         except ValueError:
-            raise TaskContractError(
-                f"progress_watchdog={progress_watchdog!r} is not a valid mode. "
+            raise TaskDeclarationError(
+                message=f"progress_watchdog={progress_watchdog!r} is not a valid mode. "
                 f"Use one of {', '.join(repr(m.value) for m in ProgressWatchdogMode)} "
                 "(or the ProgressWatchdogMode enum). Omit it to inherit the "
                 "fleet-wide default from ATLAN_PROGRESS_WATCHDOG."
@@ -128,13 +128,13 @@ def _validate_watchdog_declaration(
         def _reject_allowance() -> NoReturn:
             """Both ways an allowance can be unusable get the same message.
 
-            A closure rather than a pre-built exception because
-            ``TaskContractError.__init__`` warns on construction, and rather than
+            A closure rather than a pre-built exception so each raise carries
+            the traceback of the check that failed, and rather than
             a NaN sentinel threaded to a later branch because a non-numeric
             allowance should visibly raise where it is detected.
             """
-            raise TaskContractError(
-                f"max_no_progress_seconds={max_no_progress_seconds!r} must be a "
+            raise TaskDeclarationError(
+                message=f"max_no_progress_seconds={max_no_progress_seconds!r} must be a "
                 "finite positive number of seconds. A zero or negative allowance "
                 "makes every attempt stall on its first watchdog tick; pass "
                 "progress_watchdog='off' to disable the watchdog deliberately, or "
@@ -199,13 +199,17 @@ class UnresolvableTaskAnnotationsError(InvalidInputError):
 
 
 class TaskContractError(InvalidInputError):
-    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
+    """Deprecated: use ``application_sdk.app.task.TaskDeclarationError`` — removed in v4.0."""
+
+    #: Leaf instances never run this ``__init__``; the class default keeps the
+    #: inherited ``error_code`` and ``__str__`` working on them.
+    _legacy_error_code: ErrorCode = CONTRACT_VALIDATION
 
     code: ClassVar[str] = "INVALID_INPUT_TASK_CONTRACT"
 
     def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
         warnings.warn(
-            "TaskContractError is deprecated; use application_sdk.errors.InvalidInputError "
+            "TaskContractError is deprecated; use application_sdk.app.task.TaskDeclarationError "
             "— will be removed in v4.0",
             DeprecationWarning,
             stacklevel=2,
@@ -219,6 +223,20 @@ class TaskContractError(InvalidInputError):
 
     def __str__(self) -> str:
         return f"[{self._legacy_error_code}] {self.message}"
+
+
+@dataclass(kw_only=True)
+class TaskDeclarationError(TaskContractError):
+    """A ``@task`` method or its decorator arguments break the task contract.
+
+    Raised at decoration or class-definition time.
+    It subclasses the deprecated ``TaskContractError`` only until v4.0, so
+    ``except TaskContractError:`` clauses keep matching what the SDK raises;
+    constructing it does not warn. v4.0 deletes ``TaskContractError`` and
+    re-bases this class onto ``InvalidInputError``.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_TASK_CONTRACT"
 
 
 @dataclass
@@ -355,7 +373,7 @@ def _validate_task_signature(
         Tuple of (input_type, output_type).
 
     Raises:
-        TaskContractError: If the signature is invalid.
+        TaskDeclarationError: If the signature is invalid.
     """
     # Get function name safely (Callable doesn't guarantee __name__)
     fn_name = getattr(fn, "__name__", repr(fn))
@@ -370,8 +388,8 @@ def _validate_task_signature(
 
     # Must have exactly one parameter
     if len(params) != 1:
-        raise TaskContractError(
-            f"Task '{fn_name}' must have exactly one parameter (extending Input), "
+        raise TaskDeclarationError(
+            message=f"Task '{fn_name}' must have exactly one parameter (extending Input), "
             f"got {len(params)} parameters. "
             f"Wrap multiple values in a single Input dataclass."
         )
@@ -405,29 +423,29 @@ def _validate_task_signature(
     param = params[0]
     input_type = hints.get(param.name)
     if input_type is None:
-        raise TaskContractError(
-            f"Task '{fn_name}' parameter '{param.name}' must have a type annotation "
+        raise TaskDeclarationError(
+            message=f"Task '{fn_name}' parameter '{param.name}' must have a type annotation "
             f"extending Input."
         )
 
     # Check input extends Input base class
     if not (isinstance(input_type, type) and issubclass(input_type, Input)):
-        raise TaskContractError(
-            f"Task '{fn_name}' parameter '{param.name}' must extend Input base class, "
+        raise TaskDeclarationError(
+            message=f"Task '{fn_name}' parameter '{param.name}' must extend Input base class, "
             f"got {input_type}. Define a dataclass that extends Input."
         )
 
     # Validate return type
     output_type = hints.get("return")
     if output_type is None:
-        raise TaskContractError(
-            f"Task '{fn_name}' must have a return type annotation extending Output."
+        raise TaskDeclarationError(
+            message=f"Task '{fn_name}' must have a return type annotation extending Output."
         )
 
     # Check output extends Output base class
     if not (isinstance(output_type, type) and issubclass(output_type, Output)):
-        raise TaskContractError(
-            f"Task '{fn_name}' return type must extend Output base class, "
+        raise TaskDeclarationError(
+            message=f"Task '{fn_name}' return type must extend Output base class, "
             f"got {output_type}. Define a dataclass that extends Output."
         )
 
@@ -608,18 +626,18 @@ def task(
         The decorated function with task metadata attached.
 
     Raises:
-        TaskContractError: If the method doesn't follow the contract pattern.
+        TaskDeclarationError: If the method doesn't follow the contract pattern.
     """
     if pool is not None:
         if not pool or not pool.strip():
-            raise TaskContractError(
-                "pool must not be empty or whitespace-only. "
+            raise TaskDeclarationError(
+                message="pool must not be empty or whitespace-only. "
                 "Use a lowercase kebab-case string (e.g. 'heavy', 'cold-tier') "
                 "matching a key in pools { ... } in your app contract."
             )
         if not re.fullmatch(r"[a-z][a-z0-9]*(-[a-z0-9]+)*", pool):
-            raise TaskContractError(
-                f"pool={pool!r} must be lowercase kebab-case "
+            raise TaskDeclarationError(
+                message=f"pool={pool!r} must be lowercase kebab-case "
                 "(e.g. 'heavy', 'cold-tier'). "
                 "Pool keys must match entries in pools { ... } in App.pkl; "
                 "the ATLAN_POOL_<POOL>_QUEUE env-var key is derived by uppercasing "
@@ -650,8 +668,8 @@ def task(
         else cast("int | None", schedule_to_close_seconds)
     )
     if resolved_schedule_to_close is not None and resolved_schedule_to_close <= 0:
-        raise TaskContractError(
-            f"schedule_to_close_seconds={resolved_schedule_to_close!r} must be a "
+        raise TaskDeclarationError(
+            message=f"schedule_to_close_seconds={resolved_schedule_to_close!r} must be a "
             "positive number of seconds. Pass None to leave the retry product "
             "unbounded (the default); a ceiling of zero would fail every attempt "
             "before it started."

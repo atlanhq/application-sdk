@@ -21,7 +21,7 @@ import pytest
 from application_sdk.app import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import (
-    TaskContractError,
+    TaskDeclarationError,
     _load_default_schedule_to_close_seconds,
     get_task_metadata,
     task,
@@ -155,14 +155,14 @@ class TestTaskDeclaration:
     def test_zero_is_refused_rather_than_read_as_disabled(self) -> None:
         """``0`` would fail every attempt before it started. ``None`` is how a
         task opts out; the error has to say so."""
-        with pytest.raises(TaskContractError, match="Pass None"):
+        with pytest.raises(TaskDeclarationError, match="Pass None"):
 
             @task(schedule_to_close_seconds=0)
             async def extract(input: _In) -> _Out:
                 return _Out()
 
     def test_negative_is_refused(self) -> None:
-        with pytest.raises(TaskContractError, match="positive number of seconds"):
+        with pytest.raises(TaskDeclarationError, match="positive number of seconds"):
 
             @task(schedule_to_close_seconds=-1)
             async def extract(input: _In) -> _Out:

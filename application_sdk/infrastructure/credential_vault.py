@@ -7,6 +7,7 @@ secrets in a separate store.
 """
 
 import warnings
+from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from application_sdk.errors import CREDENTIAL_VAULT_ERROR, ErrorCode
@@ -17,8 +18,11 @@ logger = get_logger(__name__)
 
 
 class CredentialVaultError(DependencyUnavailableError):
-    """Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0."""
+    """Deprecated: use ``application_sdk.infrastructure.CredentialVaultUnavailableError`` — removed in v4.0."""
 
+    #: Leaf instances never run this ``__init__``; the class default keeps the
+    #: inherited ``error_code`` and ``__str__`` working on them.
+    _error_code: ErrorCode | None = None
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_VAULT_ERROR
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_CREDENTIAL_VAULT"
 
@@ -31,7 +35,7 @@ class CredentialVaultError(DependencyUnavailableError):
         error_code: ErrorCode | None = None,
     ) -> None:
         warnings.warn(
-            "CredentialVaultError is deprecated; use application_sdk.errors.DependencyUnavailableError "
+            "CredentialVaultError is deprecated; use application_sdk.infrastructure.CredentialVaultUnavailableError "
             "— will be removed in v4.0",
             DeprecationWarning,
             stacklevel=2,
@@ -57,7 +61,22 @@ class CredentialVaultError(DependencyUnavailableError):
         return " | ".join(parts)
 
 
-class CredentialConfigNotFoundError(CredentialVaultError):
+@dataclass(kw_only=True)
+class CredentialVaultUnavailableError(CredentialVaultError):
+    """Resolving a credential by GUID failed.
+
+    Raised by the SDK's own ``CredentialVault`` implementations. It subclasses the deprecated
+    ``CredentialVaultError`` only until v4.0, so ``except CredentialVaultError:`` clauses keep matching
+    what the SDK raises; constructing it does not warn. v4.0 deletes
+    ``CredentialVaultError`` and re-bases this class onto ``DependencyUnavailableError``.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_CREDENTIAL_VAULT"
+    credential_guid: str | None = None
+
+
+@dataclass(kw_only=True)
+class CredentialConfigNotFoundError(CredentialVaultUnavailableError):
     """The object store confirmed absence after the config re-read ladder.
 
     Keeps the vault's existing exception contract while distinguishing a missing
@@ -89,6 +108,6 @@ class CredentialVault(Protocol):
             Dict containing the fully-resolved credential fields.
 
         Raises:
-            CredentialVaultError: If resolution fails.
+            CredentialVaultUnavailableError: If resolution fails.
         """
         ...

@@ -219,7 +219,7 @@ class CredentialResolver:
             DaprCredentialVault,
         )
         from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — optional dep: dapr (DaprCredentialVault is Dapr-only)
-            CredentialVaultError,
+            CredentialVaultUnavailableError,
         )
 
         dapr_client = AsyncDaprClient()
@@ -229,17 +229,10 @@ class CredentialResolver:
             return result
         except CredentialNotFoundError:
             raise
-        except CredentialVaultError as exc:
-            # CredentialVaultError is the CredentialVault Protocol's
-            # documented raise contract (see
-            # infrastructure/credential_vault.py) — deprecated for v4.0
-            # removal, but still the only type any current implementation
-            # (DaprCredentialVault) raises, so this except clause can't be
-            # phrased in terms of a non-deprecated ancestor without losing
-            # the ability to disambiguate the two cases below. Migrating
-            # DaprCredentialVault off it is a separate, Protocol-wide change
-            # (it would alter the CredentialVault Protocol's own documented
-            # contract and the tests that pin it) — out of scope here.
+        except CredentialVaultUnavailableError as exc:
+            # The CredentialVault Protocol's documented raise contract (see
+            # infrastructure/credential_vault.py) and the type
+            # DaprCredentialVault raises.
             #
             # DaprCredentialVault raises it directly (with no `cause`) for a
             # definitively missing/invalid credential config, AND uses it to
@@ -252,12 +245,12 @@ class CredentialResolver:
             # found". A genuinely absent config IS a not-found and should
             # collapse like every other failure here, not be swept up by the
             # broader DependencyUnavailableError check just because this
-            # deprecated umbrella type happens to subclass it.
+            # type happens to subclass it.
             if isinstance(exc.cause, ColdStartRaceError):
                 raise
             raise CredentialNotFoundError(ref.credential_guid) from exc
         # A genuine dependency-unavailable failure that didn't come through
-        # CredentialVaultError (e.g. a future CredentialVault implementation
+        # CredentialVaultUnavailableError (e.g. a future CredentialVault implementation
         # raising DependencyUnavailableError directly) must not collapse
         # into "not found" either — same reasoning as above.
         except DependencyUnavailableError:

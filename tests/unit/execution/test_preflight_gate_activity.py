@@ -72,7 +72,9 @@ from application_sdk.handler.contracts import (
     SqlMetadataOutput,
     unverifiable_preflight_result,
 )
-from application_sdk.infrastructure.credential_vault import CredentialVaultError
+from application_sdk.infrastructure.credential_vault import (
+    CredentialVaultUnavailableError,
+)
 from application_sdk.observability.events import PREFLIGHT_OUTCOME_EVENT
 from application_sdk.observability.logger_adaptor import (
     CHECK_MATRIX_KEY,
@@ -1196,13 +1198,14 @@ class TestPreflightGateMultiCredential:
 
     async def test_credential_vault_outage_propagates(self) -> None:
         # The only outage shape that escapes _resolve_by_guid is a
-        # CredentialVaultError whose cause is a ColdStartRaceError (resolver.py):
+        # CredentialVaultUnavailableError whose cause is a ColdStartRaceError (resolver.py):
         # it must propagate out of the activity, not be swallowed to an empty
         # group and reach the handler as if the credential were merely absent.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
-            outage = CredentialVaultError(
-                "vault unreachable", cause=ColdStartRaceError(message="cold start")
+            outage = CredentialVaultUnavailableError(
+                message="vault unreachable",
+                cause=ColdStartRaceError(message="cold start"),
             )
         handler = _StubHandler()
         gate = _gate(handler)
@@ -1210,7 +1213,7 @@ class TestPreflightGateMultiCredential:
         with _infra_patches(resolver):
             with pytest.raises(ApplicationError) as excinfo:
                 await gate(self._input())
-        assert excinfo.value.type == "CredentialVaultError"
+        assert excinfo.value.type == "CredentialVaultUnavailableError"
         assert excinfo.value.__cause__ is outage
         assert handler.preflight_input is None
 

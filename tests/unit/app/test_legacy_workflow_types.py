@@ -16,7 +16,7 @@ import pytest
 
 from application_sdk.app.base import App
 from application_sdk.app.entrypoint import (
-    EntryPointContractError,
+    EntryPointDeclarationError,
     EntryPointMetadata,
     build_workflow_type_index,
     canonical_workflow_type,
@@ -113,14 +113,14 @@ class TestBuildWorkflowTypeIndex:
 
     def test_rejects_alias_equal_to_own_canonical_type(self) -> None:
         """A2: restating the canonical name is a mistake, not an alias."""
-        with pytest.raises(EntryPointContractError, match="canonical"):
+        with pytest.raises(EntryPointDeclarationError, match="canonical"):
             build_workflow_type_index(
                 "qi", {"keifu": _ep("keifu")}, {"qi:keifu": "keifu"}
             )
 
     def test_rejects_alias_equal_to_sibling_canonical_type(self) -> None:
         """A2: an alias may not shadow another entry point's canonical type."""
-        with pytest.raises(EntryPointContractError, match="canonical"):
+        with pytest.raises(EntryPointDeclarationError, match="canonical"):
             build_workflow_type_index(
                 "qi",
                 {"keifu": _ep("keifu"), "miner": _ep("miner")},
@@ -129,7 +129,7 @@ class TestBuildWorkflowTypeIndex:
 
     def test_rejects_alias_equal_to_implicit_bare_app_name(self) -> None:
         """A2: the bare app name is the implicit entry point's canonical type."""
-        with pytest.raises(EntryPointContractError, match="canonical"):
+        with pytest.raises(EntryPointDeclarationError, match="canonical"):
             build_workflow_type_index(
                 "qi",
                 {"run": _ep("run", implicit=True), "keifu": _ep("keifu")},
@@ -138,14 +138,14 @@ class TestBuildWorkflowTypeIndex:
 
     def test_rejects_alias_targeting_unknown_entry_point(self) -> None:
         """A4: the target must name a registered entry point."""
-        with pytest.raises(EntryPointContractError, match="keifu"):
+        with pytest.raises(EntryPointDeclarationError, match="keifu"):
             build_workflow_type_index(
                 "qi", {"keifu": _ep("keifu")}, {"KeifuWorkflow": "kiefu"}
             )
 
     def test_rejects_alias_equal_to_an_entry_point_name(self) -> None:
         """A11: names and types stay disjoint so selectors are never ambiguous."""
-        with pytest.raises(EntryPointContractError, match="entry point name"):
+        with pytest.raises(EntryPointDeclarationError, match="entry point name"):
             build_workflow_type_index(
                 "qi",
                 {"keifu": _ep("keifu"), "miner": _ep("miner")},
@@ -156,7 +156,7 @@ class TestBuildWorkflowTypeIndex:
         """A12: with an implicit run(), the bare app name is a canonical type,
         so an explicit entry point named exactly like the app would make one
         selector string mean two entry points. Rejected at registration."""
-        with pytest.raises(EntryPointContractError, match="canonical"):
+        with pytest.raises(EntryPointDeclarationError, match="canonical"):
             build_workflow_type_index(
                 "postgres",
                 {"run": _ep("run", implicit=True), "postgres": _ep("postgres")},
@@ -169,7 +169,7 @@ class TestBuildWorkflowTypeIndex:
     )
     def test_rejects_unusable_alias_strings(self, bad: str) -> None:
         """A5: whitespace, control characters, or no identifying content."""
-        with pytest.raises(EntryPointContractError):
+        with pytest.raises(EntryPointDeclarationError):
             build_workflow_type_index("qi", {"keifu": _ep("keifu")}, {bad: "keifu"})
 
     @pytest.mark.parametrize(
@@ -189,13 +189,13 @@ class TestBuildWorkflowTypeIndex:
 
     def test_rejects_alias_folding_to_a_canonical_class_name(self) -> None:
         """A6: ``qi:keifu`` and ``qi_keifu`` share one generated class name."""
-        with pytest.raises(EntryPointContractError, match="_Workflow_"):
+        with pytest.raises(EntryPointDeclarationError, match="_Workflow_"):
             build_workflow_type_index(
                 "qi", {"keifu": _ep("keifu")}, {"qi_keifu": "keifu"}
             )
 
     def test_rejects_two_aliases_folding_together(self) -> None:
-        with pytest.raises(EntryPointContractError, match="_Workflow_"):
+        with pytest.raises(EntryPointDeclarationError, match="_Workflow_"):
             build_workflow_type_index(
                 "qi",
                 {"keifu": _ep("keifu"), "miner": _ep("miner")},
@@ -212,7 +212,7 @@ class TestBuildWorkflowTypeIndex:
     )
     def test_rejects_non_string_entries(self, legacy: dict) -> None:
         """A9: keys and values must both be strings."""
-        with pytest.raises(EntryPointContractError):
+        with pytest.raises(EntryPointDeclarationError):
             build_workflow_type_index("qi", {"keifu": _ep("keifu")}, legacy)
 
 
@@ -280,7 +280,7 @@ class TestAppMetadataIndex:
     def test_rejects_non_mapping_declaration(self, bad: object) -> None:
         """A9: a string, list, or number is a declaration mistake, not an
         empty map — including falsy shapes."""
-        with pytest.raises(EntryPointContractError, match="legacy_workflow_types"):
+        with pytest.raises(EntryPointDeclarationError, match="legacy_workflow_types"):
             self._meta(bad)
 
 
@@ -340,7 +340,7 @@ class TestAppRegistration:
     def test_bad_alias_fails_at_class_definition(
         self, clean_app_registry: object, clean_task_registry: object
     ) -> None:
-        with pytest.raises(EntryPointContractError, match="canonical"):
+        with pytest.raises(EntryPointDeclarationError, match="canonical"):
 
             class CollidingApp(App):
                 name = "qi"
@@ -408,7 +408,7 @@ class TestAppRegistration:
     def test_falsy_non_mapping_declaration_fails_at_class_definition(
         self, clean_app_registry: object, clean_task_registry: object
     ) -> None:
-        with pytest.raises(EntryPointContractError, match="legacy_workflow_types"):
+        with pytest.raises(EntryPointDeclarationError, match="legacy_workflow_types"):
 
             class FalsyDeclarationApp(App):
                 name = "falsy-decl"
@@ -425,7 +425,7 @@ class TestAppRegistration:
     ) -> None:
         """An opt-in expiry with teeth: once the SDK passes the declared
         removal version, keeping the aliases is a loud decision, not drift."""
-        with pytest.raises(EntryPointContractError, match="removal"):
+        with pytest.raises(EntryPointDeclarationError, match="removal"):
 
             class ExpiredAliasApp(App):
                 name = "expired-alias"
@@ -486,7 +486,7 @@ class TestAppRegistration:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr("application_sdk.version.__version__", "4.2.1rc1")
-        with pytest.raises(EntryPointContractError, match="removal"):
+        with pytest.raises(EntryPointDeclarationError, match="removal"):
 
             class PastRcAliasApp(App):
                 name = "past-rc-alias"
@@ -530,7 +530,7 @@ class TestAppRegistration:
     ) -> None:
         """The removal declaration itself stays dotted-numeric: a final
         release is the only expiry the contract accepts."""
-        with pytest.raises(EntryPointContractError, match="dotted numeric"):
+        with pytest.raises(EntryPointDeclarationError, match="dotted numeric"):
 
             class BadRemovalApp(App):
                 name = "bad-removal"

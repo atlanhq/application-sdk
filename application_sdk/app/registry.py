@@ -78,7 +78,11 @@ class AppMetadata:
 
 
 class AppNotFoundError(InvalidInputError):
-    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
+    """Deprecated: use ``application_sdk.app.registry.AppNotRegisteredError`` — removed in v4.0."""
+
+    #: Leaf instances never run this ``__init__``; the class default keeps the
+    #: inherited ``__str__`` working on them.
+    _legacy_error_code: ErrorCode = APP_NOT_FOUND
 
     code: ClassVar[str] = "INVALID_INPUT_APP_NOT_FOUND"
 
@@ -90,7 +94,7 @@ class AppNotFoundError(InvalidInputError):
         error_code: ErrorCode | None = None,
     ) -> None:
         warnings.warn(
-            "AppNotFoundError is deprecated; use application_sdk.errors.InvalidInputError "
+            "AppNotFoundError is deprecated; use application_sdk.app.registry.AppNotRegisteredError "
             "— will be removed in v4.0",
             DeprecationWarning,
             stacklevel=2,
@@ -113,8 +117,37 @@ class AppNotFoundError(InvalidInputError):
         return f"[{self._legacy_error_code}] {self.message}"
 
 
+@dataclass(kw_only=True)
+class AppNotRegisteredError(AppNotFoundError):
+    """No app (or no such version of it) is registered under the requested name.
+
+    It subclasses the deprecated ``AppNotFoundError`` only until v4.0, so
+    ``except AppNotFoundError:`` clauses keep matching what the SDK raises;
+    constructing it does not warn. v4.0 deletes ``AppNotFoundError`` and
+    re-bases this class onto ``InvalidInputError``.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_APP_NOT_FOUND"
+    name: str | None = None
+    version: str | None = None
+
+
+def _app_not_registered(name: str, version: str | None = None) -> AppNotRegisteredError:
+    """Build the error for a registry miss, with the message the SDK has always used."""
+    message = (
+        f"App '{name}' version '{version}' not found"
+        if version
+        else f"App '{name}' not found"
+    )
+    return AppNotRegisteredError(message=message, name=name, version=version)
+
+
 class AppAlreadyRegisteredError(InvalidInputError):
-    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
+    """Deprecated: use ``application_sdk.app.registry.AppVersionAlreadyRegisteredError`` — removed in v4.0."""
+
+    #: Leaf instances never run this ``__init__``; the class default keeps the
+    #: inherited ``__str__`` working on them.
+    _legacy_error_code: ErrorCode = APP_ALREADY_REGISTERED
 
     code: ClassVar[str] = "INVALID_INPUT_APP_ALREADY_REGISTERED"
 
@@ -122,7 +155,7 @@ class AppAlreadyRegisteredError(InvalidInputError):
         self, name: str, version: str, *, error_code: ErrorCode | None = None
     ) -> None:
         warnings.warn(
-            "AppAlreadyRegisteredError is deprecated; use application_sdk.errors.InvalidInputError "
+            "AppAlreadyRegisteredError is deprecated; use application_sdk.app.registry.AppVersionAlreadyRegisteredError "
             "— will be removed in v4.0",
             DeprecationWarning,
             stacklevel=2,
@@ -140,6 +173,21 @@ class AppAlreadyRegisteredError(InvalidInputError):
 
     def __str__(self) -> str:
         return f"[{self._legacy_error_code}] {self.message}"
+
+
+@dataclass(kw_only=True)
+class AppVersionAlreadyRegisteredError(AppAlreadyRegisteredError):
+    """The app name and version are already registered and override was not requested.
+
+    It subclasses the deprecated ``AppAlreadyRegisteredError`` only until v4.0, so
+    ``except AppAlreadyRegisteredError:`` clauses keep matching what the SDK raises;
+    constructing it does not warn. v4.0 deletes ``AppAlreadyRegisteredError`` and
+    re-bases this class onto ``InvalidInputError``.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_APP_ALREADY_REGISTERED"
+    name: str | None = None
+    version: str | None = None
 
 
 class AppRegistry:
@@ -204,8 +252,8 @@ class AppRegistry:
             The registered AppMetadata.
 
         Raises:
-            AppAlreadyRegisteredError: If App already registered and not overriding.
-            ContractValidationError: If input/output types are not dataclasses.
+            AppVersionAlreadyRegisteredError: If App already registered and not overriding.
+            ContractDeclarationError: If input/output types are not dataclasses.
         """
         validate_is_contract(input_type, f"Input type for App '{name}'")
         validate_is_contract(output_type, f"Output type for App '{name}'")
@@ -214,7 +262,11 @@ class AppRegistry:
             self._apps[name] = {}
 
         if version in self._apps[name] and not allow_override:
-            raise AppAlreadyRegisteredError(name, version)
+            raise AppVersionAlreadyRegisteredError(
+                message=f"App '{name}' version '{version}' is already registered",
+                name=name,
+                version=version,
+            )
 
         metadata = AppMetadata(
             name=name,
@@ -247,18 +299,18 @@ class AppRegistry:
             The AppMetadata.
 
         Raises:
-            AppNotFoundError: If App not found.
+            AppNotRegisteredError: If App not found.
         """
         if name not in self._apps:
-            raise AppNotFoundError(name, version)
+            raise _app_not_registered(name, version)
 
         versions = self._apps[name]
         if not versions:
-            raise AppNotFoundError(name, version)
+            raise _app_not_registered(name, version)
 
         if version is not None:
             if version not in versions:
-                raise AppNotFoundError(name, version)
+                raise _app_not_registered(name, version)
             return versions[version]
 
         # Return latest version (simple string sort - semver would be better)
@@ -275,10 +327,10 @@ class AppRegistry:
             List of AppMetadata for all versions.
 
         Raises:
-            AppNotFoundError: If App not found.
+            AppNotRegisteredError: If App not found.
         """
         if name not in self._apps:
-            raise AppNotFoundError(name)
+            raise _app_not_registered(name)
 
         return list(self._apps[name].values())
 
@@ -382,7 +434,11 @@ class AppRegistry:
 
 
 class TaskNotFoundError(InvalidInputError):
-    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
+    """Deprecated: use ``application_sdk.app.registry.TaskNotRegisteredError`` — removed in v4.0."""
+
+    #: Leaf instances never run this ``__init__``; the class default keeps the
+    #: inherited ``__str__`` working on them.
+    _legacy_error_code: ErrorCode = TASK_NOT_FOUND
 
     code: ClassVar[str] = "INVALID_INPUT_TASK_NOT_FOUND"
 
@@ -390,7 +446,7 @@ class TaskNotFoundError(InvalidInputError):
         self, app_name: str, task_name: str, *, error_code: ErrorCode | None = None
     ) -> None:
         warnings.warn(
-            "TaskNotFoundError is deprecated; use application_sdk.errors.InvalidInputError "
+            "TaskNotFoundError is deprecated; use application_sdk.app.registry.TaskNotRegisteredError "
             "— will be removed in v4.0",
             DeprecationWarning,
             stacklevel=2,
@@ -404,6 +460,22 @@ class TaskNotFoundError(InvalidInputError):
 
     def __str__(self) -> str:
         return f"[{self._legacy_error_code}] {self.message}"
+
+
+@dataclass(kw_only=True)
+class TaskNotRegisteredError(TaskNotFoundError):
+    """No task of the requested name is registered for the app.
+
+    ``app_name`` (a base ``AppError`` field) names the app.
+
+    It subclasses the deprecated ``TaskNotFoundError`` only until v4.0, so
+    ``except TaskNotFoundError:`` clauses keep matching what the SDK raises;
+    constructing it does not warn. v4.0 deletes ``TaskNotFoundError`` and
+    re-bases this class onto ``InvalidInputError``.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_TASK_NOT_FOUND"
+    task_name: str | None = None
 
 
 class TaskRegistry:
@@ -462,13 +534,21 @@ class TaskRegistry:
             The TaskMetadata.
 
         Raises:
-            TaskNotFoundError: If task not found.
+            TaskNotRegisteredError: If task not found.
         """
         if app_name not in self._tasks:
-            raise TaskNotFoundError(app_name, task_name)
+            raise TaskNotRegisteredError(
+                message=f"Task '{task_name}' not found in app '{app_name}'",
+                app_name=app_name,
+                task_name=task_name,
+            )
 
         if task_name not in self._tasks[app_name]:
-            raise TaskNotFoundError(app_name, task_name)
+            raise TaskNotRegisteredError(
+                message=f"Task '{task_name}' not found in app '{app_name}'",
+                app_name=app_name,
+                task_name=task_name,
+            )
 
         return self._tasks[app_name][task_name]
 

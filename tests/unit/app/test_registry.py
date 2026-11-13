@@ -5,11 +5,11 @@ from dataclasses import dataclass
 import pytest
 
 from application_sdk.app.registry import (
-    AppAlreadyRegisteredError,
     AppMetadata,
-    AppNotFoundError,
+    AppNotRegisteredError,
     AppRegistry,
-    TaskNotFoundError,
+    AppVersionAlreadyRegisteredError,
+    TaskNotRegisteredError,
     TaskRegistry,
 )
 from application_sdk.app.task import task
@@ -89,9 +89,9 @@ class TestAppRegistry:
         assert metadata.name == "my-app"
 
     def test_get_raises_app_not_found_error(self) -> None:
-        """get() raises AppNotFoundError if not found."""
+        """get() raises AppNotRegisteredError if not found."""
         registry = AppRegistry.get_instance()
-        with pytest.raises(AppNotFoundError):
+        with pytest.raises(AppNotRegisteredError):
             registry.get("nonexistent-app")
 
     def test_list_apps_returns_all_names(self) -> None:
@@ -149,7 +149,7 @@ class TestAppRegistry:
         assert registry.list_apps() == []
 
     def test_duplicate_raises_app_already_registered_error(self) -> None:
-        """AppAlreadyRegisteredError raised on duplicate without allow_override."""
+        """AppVersionAlreadyRegisteredError raised on duplicate without allow_override."""
         registry = AppRegistry.get_instance()
         registry.register(
             name="my-app",
@@ -158,7 +158,7 @@ class TestAppRegistry:
             input_type=TestInput,
             output_type=TestOutput,
         )
-        with pytest.raises(AppAlreadyRegisteredError):
+        with pytest.raises(AppVersionAlreadyRegisteredError):
             registry.register(
                 name="my-app",
                 version="1.0.0",
@@ -242,11 +242,11 @@ class TestAppRegistry:
         assert metadata.qualified_name == "my-app@1.0.0"
 
     def test_non_dataclass_input_raises(self) -> None:
-        """Non-dataclass input type raises ContractValidationError."""
-        from application_sdk.contracts.base import ContractValidationError
+        """Non-dataclass input type raises ContractDeclarationError."""
+        from application_sdk.contracts.base import ContractDeclarationError
 
         registry = AppRegistry.get_instance()
-        with pytest.raises(ContractValidationError):
+        with pytest.raises(ContractDeclarationError):
             registry.register(
                 name="my-app",
                 version="1.0.0",
@@ -323,9 +323,9 @@ class TestTaskRegistry:
         assert tasks == []
 
     def test_get_raises_task_not_found(self) -> None:
-        """get() raises TaskNotFoundError if not found."""
+        """get() raises TaskNotRegisteredError if not found."""
         registry = TaskRegistry.get_instance()
-        with pytest.raises(TaskNotFoundError):
+        with pytest.raises(TaskNotRegisteredError):
             registry.get("my-app", "nonexistent-task")
 
     def test_get_activity_name_format(self) -> None:

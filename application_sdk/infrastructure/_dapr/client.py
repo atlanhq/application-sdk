@@ -9,15 +9,21 @@ import orjson
 from typing_extensions import deprecated
 
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient
-from application_sdk.infrastructure.bindings import BindingError, BindingResponse
-from application_sdk.infrastructure.pubsub import PubSubError, _MessageHandler
+from application_sdk.infrastructure.bindings import (
+    BindingResponse,
+    BindingUnavailableError,
+)
+from application_sdk.infrastructure.pubsub import (
+    PubSubUnavailableError,
+    _MessageHandler,
+)
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreError,
     SecretStoreTransientError,
     SecretStoreUnavailableError,
 )
-from application_sdk.infrastructure.state import StateStoreError
+from application_sdk.infrastructure.state import StateStoreUnavailableError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -89,10 +95,10 @@ class DaprStateStore:
                 key=key,
                 value=value,
             )
-        # conformance: ignore[E004] re-raises as typed StateStoreError with cause chain; traceback preserved
+        # conformance: ignore[E004] re-raises as typed StateStoreUnavailableError with cause chain; traceback preserved
         except Exception as e:
-            raise StateStoreError(
-                f"Failed to save state: {e}",
+            raise StateStoreUnavailableError(
+                message=f"Failed to save state: {e}",
                 key=key,
                 operation="save",
                 cause=e,
@@ -108,10 +114,10 @@ class DaprStateStore:
             if data:
                 return orjson.loads(data)
             return None
-        # conformance: ignore[E004] re-raises as typed StateStoreError with cause chain; traceback preserved
+        # conformance: ignore[E004] re-raises as typed StateStoreUnavailableError with cause chain; traceback preserved
         except Exception as e:
-            raise StateStoreError(
-                f"Failed to load state: {e}",
+            raise StateStoreUnavailableError(
+                message=f"Failed to load state: {e}",
                 key=key,
                 operation="load",
                 cause=e,
@@ -125,10 +131,10 @@ class DaprStateStore:
                 key=key,
             )
             return True
-        # conformance: ignore[E004] re-raises as typed StateStoreError with cause chain; traceback preserved
+        # conformance: ignore[E004] re-raises as typed StateStoreUnavailableError with cause chain; traceback preserved
         except Exception as e:
-            raise StateStoreError(
-                f"Failed to delete state: {e}",
+            raise StateStoreUnavailableError(
+                message=f"Failed to delete state: {e}",
                 key=key,
                 operation="delete",
                 cause=e,
@@ -169,7 +175,7 @@ def is_dapr_transport_unavailable(exc: BaseException) -> bool:
 
 
 #: Upper bound on how much of a non-JSON Dapr error body is copied into a
-#: :class:`BindingError` message. Dapr's own bodies are one short JSON object;
+#: :class:`BindingUnavailableError` message. Dapr's own bodies are one short JSON object;
 #: anything longer is an HTML error page from a proxy in front of the sidecar.
 _DAPR_ERROR_BODY_MAX_CHARS = 512
 
@@ -586,11 +592,11 @@ class DaprPubSub:
                 data=orjson.dumps(data).decode(),
                 metadata=metadata or {},
             )
-        # conformance: ignore[E007] re-raises as typed PubSubError with cause chain; no silent swallow
-        # conformance: ignore[E004] re-raises immediately as typed PubSubError; no information is discarded
+        # conformance: ignore[E007] re-raises as typed PubSubUnavailableError with cause chain; no silent swallow
+        # conformance: ignore[E004] re-raises immediately as typed PubSubUnavailableError; no information is discarded
         except Exception as e:
-            raise PubSubError(
-                f"Failed to publish message: {e}",
+            raise PubSubUnavailableError(
+                message=f"Failed to publish message: {e}",
                 topic=topic,
                 operation="publish",
                 cause=e,
@@ -706,7 +712,7 @@ class DaprBinding:
         # not a binding failure — wrapping it would bury the remedy.
         except DaprBinaryPayloadError:
             raise
-        # conformance: ignore[E004] re-raises as typed BindingError with cause chain; traceback preserved
+        # conformance: ignore[E004] re-raises as typed BindingUnavailableError with cause chain; traceback preserved
         except Exception as e:
             # The Dapr error body is the only place the real cause lives at
             # default sidecar log levels; without it a customer's log shows a
@@ -715,8 +721,8 @@ class DaprBinding:
             message = f"Failed to invoke binding: {type(e).__name__} {e}".rstrip()
             if detail:
                 message = f"{message} ({detail})"
-            raise BindingError(
-                message,
+            raise BindingUnavailableError(
+                message=message,
                 binding_name=self._binding_name,
                 operation=operation,
                 cause=e,
