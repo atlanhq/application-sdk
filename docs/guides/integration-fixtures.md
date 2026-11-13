@@ -171,3 +171,95 @@ result = await executor.execute_app(YourApp, YourInput(...), entry_point="extrac
 ```
 
 Omit it for an App with an implicit `run()` entry point. An App declaring only explicit `@entrypoint` methods registers no bare `{app}` workflow type, so it must pass one — and gets `EntryPointRequiredError` before submission rather than a run nothing claims.
+
+## Asserting a run's output
+
+After the kit runs the App, the next question is whether the run wrote output of the right shape. `application_sdk.testing.integration.output_schema` answers it with one function call. It is not a fixture, so it is not part of the star-import.
+
+```python
+from application_sdk.testing.integration.output_schema import (
+    FieldRule,
+    OutputSchema,
+    assert_output_matches,
+)
+
+TABLE = OutputSchema(
+    typename="table",  # <run_root>/transformed/table/
+    min_records=1,
+    fields=(
+        FieldRule("typeName", type="string", nullable=False, allowed=("Table", "View")),
+        FieldRule("status", type="string", nullable=False, allowed=("ACTIVE",)),
+        FieldRule("attributes.qualifiedName", type="string", nullable=False, pattern=r"[^/]+(/[^/]+){5}"),
+        FieldRule("attributes.columnCount", type="int", minimum=0),
+    ),
+)
+
+
+async def test_transformed_output(self, crawl) -> None:
+    _, run_root = crawl
+    assert_output_matches(run_root, [TABLE])
+```
+
+`assert_output_matches` raises `AssertionError` with one block per typename and one line per broken rule. Each line gives an exact count and up to five examples with `file:line`. `validate_output` returns the same report without raising. Pass `subdirectory="raw"` (or `""`) to check something other than `transformed/`.
+
+### What a `FieldRule` checks
+
+| Rule | Meaning |
+|---|---|
+| `path` | ADR-0020 path grammar: `attributes.qualifiedName` for a nested key, `attributes.columns[].name` for every element of an array. |
+| `type` | ADR-0020 logical type (`string`, `int`, `float`, `bool`, `timestamp`, `date`, `json`, `any`, …), checked by the same `NdjsonValidator` / `ParquetFooterValidator` the runtime uses. `any` asserts presence only. |
+| `required` | The key is present in **every** record. Default `True`. When `False`, the other rules apply only where the key is present. |
+| `nullable` | When `False`, a present `null` fails. Default `True`. |
+| `allowed` | The value is one of these. `True` does not satisfy `1`. |
+| `pattern` | The **whole** string matches (`re.fullmatch`). |
+| `min_length` / `max_length` | String or array length. |
+| `minimum` / `maximum` / `exclusive_minimum` / `exclusive_maximum` | Numeric bounds. |
+| `unique` | No non-null value repeats across the artifact. |
+
+Value rules skip `null`; `nullable` alone decides whether a `null` is allowed. On `OutputSchema`, `min_records` / `max_records` bound the record count. A typename with no output, or with zero records, fails. It never passes vacuously.
+
+### Formats and cost
+
+The format comes from the files in the directory. Set `artifact_format` when a directory holds both formats.
+
+- **NDJSON** is streamed one record at a time with `iter_ndjson_lines` and `orjson`.
+- **Parquet** gets types and the record count from the footer. Value rules read only the columns they name, one batch at a time, through pyarrow `iter_batches`. pyarrow is imported only when a parquet artifact is checked.
+
+Neither path loads pandas or pandera. Memory is bounded by one record or batch, plus the distinct values of any `unique` field.
+
+### Migrating from `validate_with_pandera`
+
+`load_pandera_schemas` reads an existing pandera YAML directory into `OutputSchema` values, so a suite can switch without rewriting its schemas or installing pandera:
+
+```python
+# before
+from application_sdk.testing.integration.validation import validate_with_pandera
+
+results = validate_with_pandera(schema_base_path=SCHEMA_DIR, extracted_output_path=str(run_root))
+assert not [r for r in results if not r["success"]], results
+
+# after
+from application_sdk.testing.integration.output_schema import (
+    assert_output_matches,
+    load_pandera_schemas,
+)
+
+assert_output_matches(run_root, load_pandera_schemas(SCHEMA_DIR))
+```
+
+Keep the `subdirectory=` argument you passed before. `format_validation_report(results)` becomes the `AssertionError` message, or `validate_output(...).format_report()`.
+
+Each file maps to the typename directory it validates: `table.yaml` maps to `table`, `table/schema.yaml` to `table`, and `raw/table.yaml` to `raw/table`. The last case differs from `validate_with_pandera`, which validated the whole of `raw/` merged together against each file in it. If you called it with `subdirectory=""` and a `raw/` and `transformed/` layout, expect real per-typename failures the first time.
+
+The reader translates the subset the fleet uses:
+
+- column `dtype`, `nullable`, `required` and `unique`
+- the checks `isin`, `equal_to`, `str_matches`, `str_startswith`, `str_length`, `greater_than[_or_equal_to]`, `less_than[_or_equal_to]` and `in_range`, under `checks:` or as column-level shorthand
+- the schema checks `check_record_count_ge`, `_le` and `_eq`
+
+Anything else raises `OutputSchemaDeclarationError`, naming the file and the key, rather than being dropped. That includes a check it does not translate, `coerce: true` and `strict: true`. Two cases come out **looser** than pandera, because presence here is checked per record, while pandera checks it per merged dataframe:
+
+- `required: true` with `nullable: true` no longer fails when no record has the key.
+- `required: false` with `nullable: false` no longer fails when only some records have the key.
+
+Once a suite is on the new path, the YAML files can be replaced by `OutputSchema` declarations in Python, which are typed and live next to the test that uses them.

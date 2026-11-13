@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.57.0
-source-sha:    07c412493372ebe888d357d7d5469d45fefd5d83
-source-date:   2026-11-13T12:05:43Z
+source-sha:    b7b01bdaae12c3a1e34ea0bd38497b40adf32a5c
+source-date:   2026-11-13T15:39:11Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 449 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 458 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 85 |
 
 ## Subpackage Details
@@ -4502,6 +4502,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** How a condition tests a field.
 - **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
 
+#### `FieldRule`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import FieldRule`
+- **Signature:** `class FieldRule(path: str, ...)`
+- **Summary:** What one field of every record must satisfy.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
 #### `Finding`
 
 - **Import:** `from application_sdk.testing.harness.expectations import Finding`
@@ -4869,6 +4876,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class OutputFormatHandler(output_dir: str)`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/base.py`
+
+#### `OutputSchema`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import OutputSchema`
+- **Signature:** `class OutputSchema(typename: str, ...)`
+- **Summary:** The declared shape of one typename's output directory.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
+#### `OutputValidationReport`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import OutputValidationReport`
+- **Signature:** `class OutputValidationReport(typenames: tuple[TypenameReport, ...]) -> None`
+- **Summary:** The verdict across every declared typename.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
+#### `OutputViolation`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import OutputViolation`
+- **Signature:** `class OutputViolation(rule: RuleKind, field: str, message: str, file: str = '', line: int = 0) -> None`
+- **Summary:** One example of a broken rule.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
 
 #### `ParquetFormatHandler`
 
@@ -5381,6 +5409,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The diff for a single typename, and whether it gates.
 - **Defined in:** `application_sdk/testing/golden.py`
 
+#### `TypenameReport`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import TypenameReport`
+- **Signature:** `class TypenameReport(typename: str, ...)`
+- **Summary:** The verdict for one :class:`OutputSchema`.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
 #### `TypenameRule`
 
 - **Import:** `from application_sdk.testing import TypenameRule`
@@ -5614,6 +5649,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `assert_matches_golden(produced: Iterable[Mapping[str, *, ...)`
 - **Summary:** Assert produced records match a golden fixture, per typename rules.
 - **Defined in:** `application_sdk/testing/golden.py`
+
+#### `assert_output_matches`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import assert_output_matches`
+- **Signature:** `assert_output_matches(output_root: str | Path, *, ...)`
+- **Summary:** :func:`validate_output`, raising ``AssertionError`` with the report on failure.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
 
 #### `assert_settled`
 
@@ -6380,6 +6422,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Load expected metadata from a JSON file.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
 
+#### `load_pandera_schemas`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import load_pandera_schemas`
+- **Signature:** `load_pandera_schemas(schema_dir: str | Path) -> tuple[OutputSchema, ...]`
+- **Summary:** Read a directory of pandera YAML schemas into :class:`OutputSchema` values.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
 #### `locate_cards`
 
 - **Import:** `from application_sdk.testing.setup_routes import locate_cards`
@@ -6800,6 +6849,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Run pyatlan_v9's ``.validate()`` and return its error messages.
 - **Defined in:** `application_sdk/validation/assets.py`
 
+#### `validate_output`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import validate_output`
+- **Signature:** `validate_output(output_root: str | Path, *, ...)`
+- **Summary:** Check ``<output_root>/<subdirectory>/<typename>`` against each schema.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
 #### `validate_resolved_spec`
 
 - **Import:** `from application_sdk.testing.harness.seed import validate_resolved_spec`
@@ -7107,6 +7163,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `Reading: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `RuleKind`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import RuleKind`
+- **Signature:** `RuleKind`
+- **Summary:** Which rule a violation broke. The first three are about the artifact as a whole:
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
 
 #### `RUN_VOLATILE_FIELDS`
 
