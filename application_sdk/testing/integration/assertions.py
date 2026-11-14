@@ -1,5 +1,14 @@
 """Assertion DSL for integration testing.
 
+.. deprecated:: 3.58
+   This module exists only to serve the deprecated
+   :class:`~application_sdk.testing.integration.runner.BaseIntegrationTest` HTTP
+   scenario framework, and is removed with it in v4.0.0 (FND-4911). Importing
+   its names from ``application_sdk.testing.integration`` emits a
+   :class:`DeprecationWarning`. Test an App with the in-process fixture kit,
+   :mod:`application_sdk.testing.integration.fixtures`; see
+   ``docs/guides/integration-fixtures.md``.
+
 This module provides higher-order functions that return predicates for use
 in scenario assertions. Each function returns a callable that takes an
 actual value and returns True/False.

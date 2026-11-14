@@ -1,5 +1,11 @@
 """Example integration test class.
 
+.. deprecated:: 3.58
+   This example uses the ``BaseIntegrationTest`` HTTP scenario framework. It,
+   and every name it is built from, are removed in v4.0.0 (FND-4659,
+   FND-4911). Do not copy it for a new suite: use the in-process fixture kit
+   described in ``docs/guides/integration-fixtures.md``.
+
 This file demonstrates how to create an integration test class
 using the Apps-SDK integration testing framework.
 

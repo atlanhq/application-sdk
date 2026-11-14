@@ -11,7 +11,13 @@ class and its source. See ``docs/guides/integration-fixtures.md``.
 :class:`BaseIntegrationTest` **HTTP scenario framework, deprecated in 3.56 and
 removed in v4.0.0** (FND-4659). Importing ``BaseIntegrationTest``,
 ``generate_test_methods`` or ``parametrize_scenarios`` from this package emits a
-:class:`DeprecationWarning`, and conformance B001 flags it fleet-wide. Its only
+:class:`DeprecationWarning`, and conformance B001 flags it fleet-wide. So does
+importing any of the 46 names from the six modules that exist only to serve it
+— ``Scenario`` and the other models, the assertion predicates (``equals``,
+``one_of``, ...), ``IntegrationTestClient``, ``compare_metadata`` and the rest
+of ``comparison``, the pandera validators, and ``lazy`` — which leave with it in
+v4.0.0 (FND-4911). The golden-corpus loader, ``DataForgeSource`` and the
+``application_sdk.validation`` re-exports are not part of it and stay. Its only
 SDK subclass, :class:`~application_sdk.testing.sdr.BaseSDRIntegrationTest`, is
 itself deprecated for v4.0. See the "recommended pattern" and "Legacy: HTTP
 scenario tests" sections of ``docs/guides/integration-testing.md``, which this
@@ -91,20 +97,25 @@ For detailed documentation, see:
 import warnings
 from typing import TYPE_CHECKING
 
-# Imported eagerly, unlike every other re-export below, because ``lazy`` is both
-# an exported function and the name of the submodule defining it. Python binds
-# a submodule onto its package the first time that submodule is loaded, so if
-# the first load happened anywhere other than here — a consumer importing
-# ``application_sdk.testing.integration.lazy`` directly, or ``__getattr__``
-# resolving ``Lazy`` / ``is_lazy`` first — ``integration.lazy`` would be the
-# module and ``from application_sdk.testing.integration import lazy`` would hand
-# back something that is not callable. Loading it here means the first load
-# always happens before anyone can observe it, and the ``from`` rebinds the
-# name to the function. The module is a few stdlib imports, none of the cost
-# the lazy conversion protects against. The names stay in ``_LAZY_EXPORTS``
-# and the ``TYPE_CHECKING`` block so the three parallel lists remain complete;
-# ``__getattr__`` simply never fires for them.
+# The ``lazy`` submodule is loaded eagerly, unlike every other submodule,
+# because ``lazy`` is both an exported function and the name of the submodule
+# defining it. Python binds a submodule onto its package the first time that
+# submodule is loaded, so if the first load happened anywhere other than here —
+# a consumer importing ``application_sdk.testing.integration.lazy`` directly,
+# say — ``integration.lazy`` would be the module, ``__getattr__`` would never
+# fire for it, and ``from application_sdk.testing.integration import lazy``
+# would hand back something that is not callable. Loading it here means the
+# first load always happens before anyone can observe it. Later loads find the
+# module in ``sys.modules`` and do not rebind it.
+#
+# The bindings are then deleted, so all four names (deprecated, FND-4911) fall
+# through to ``__getattr__`` like every other name and warn on each access. The
+# ``from`` form is kept rather than a bare submodule import because the Symbol
+# Removal Check reads it statically: it is how the gate sees ``Lazy``'s methods
+# at this path, and they remain reachable here until v4.0.0.
 from .lazy import Lazy, evaluate_if_lazy, is_lazy, lazy
+
+del Lazy, evaluate_if_lazy, is_lazy, lazy
 
 if TYPE_CHECKING:
     # The eager form, for static readers only. griffe builds
@@ -169,9 +180,6 @@ if TYPE_CHECKING:
         read_records,
         require_golden_corpus,
     )
-
-    # Deliberately repeats the eager import above: griffe and pyright read
-    # names from this block only (test_type_checking_block_matches_the_lazy_map).
     from .lazy import Lazy, evaluate_if_lazy, is_lazy, lazy  # noqa: F811
     from .models import APIType, Scenario, ScenarioResult
     from .runner import (
@@ -291,9 +299,18 @@ _LAZY_SUBMODULES = frozenset(
 #: name -> (replacement, why). The HTTP scenario framework's entry points,
 #: deprecated (FND-4659): the in-process fixture kit replaces it, and its one
 #: SDK subclass, ``BaseSDRIntegrationTest``, is itself deprecated for v4.0.
+#: Then the 46 names from the six modules that exist only to serve it —
+#: ``assertions``, ``client``, ``comparison``, ``lazy``, ``models`` and
+#: ``validation`` — deprecated with it (FND-4911): no live SDK code imports
+#: them, so they leave in v4.0.0 alongside the runner.
+#:
+#: Literal tuples per entry rather than a shared constant: the conformance
+#: extractor reads this dict statically and cannot resolve a name.
+#:
 #: Served by ``__getattr__`` below with a warning on every access and never
-#: cached, so each import still warns. ``application_sdk.testing.sdr`` imports
-#: from ``.runner`` directly, so the SDK's own SDR module stays quiet.
+#: cached, so each import still warns. ``application_sdk.testing.sdr`` and
+#: ``.runner`` import the submodules directly, so the SDK's own modules stay
+#: quiet.
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
     "BaseIntegrationTest": (
         "the in-process fixture kit, application_sdk.testing.integration.fixtures",
@@ -306,6 +323,190 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
     "parametrize_scenarios": (
         "the in-process fixture kit, application_sdk.testing.integration.fixtures",
         "the HTTP scenario framework re-tests SDK-owned routes; app behaviour belongs in the fixture kit and deployed behaviour in tests/e2e (FND-4659)",
+    ),
+    "all_of": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "any_of": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "between": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "contains": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "custom": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "ends_with": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "equals": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "exists": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "greater_than": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "greater_than_or_equal": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "has_length": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "is_dict": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "is_empty": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "is_false": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "is_list": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "is_none": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "is_not_empty": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "is_string": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "is_true": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "is_type": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "less_than": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "less_than_or_equal": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "matches": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "none_of": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "not_contains": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "not_equals": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "not_one_of": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "one_of": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "starts_with": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "IntegrationTestClient": (
+        "AppExecutor from application_sdk.testing.integration.fixtures to run the App in process, or BaseE2ETest from application_sdk.testing.e2e for a deployed App",
+        "it drives the SDK-owned HTTP routes of a running app server, which the HTTP scenario framework existed to test, and leaves with it (FND-4911)",
+    ),
+    "AssetDiff": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "GapReport": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "compare_metadata": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "load_actual_output": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "load_expected_data": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "Lazy": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "evaluate_if_lazy": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "is_lazy": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "lazy": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "APIType": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "Scenario": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "ScenarioResult": (
+        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
+        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+    ),
+    "format_validation_report": (
+        "application_sdk.testing.integration.output_schema — assert_output_matches, with load_pandera_schemas to read existing pandera YAML",
+        "it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911)",
+    ),
+    "get_normalised_dataframe": (
+        "application_sdk.testing.integration.output_schema — assert_output_matches, with load_pandera_schemas to read existing pandera YAML",
+        "it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911)",
+    ),
+    "get_schema_file_paths": (
+        "application_sdk.testing.integration.output_schema — assert_output_matches, with load_pandera_schemas to read existing pandera YAML",
+        "it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911)",
+    ),
+    "validate_with_pandera": (
+        "application_sdk.testing.integration.output_schema — assert_output_matches, with load_pandera_schemas to read existing pandera YAML",
+        "it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911)",
     ),
 }
 
@@ -323,7 +524,7 @@ def __getattr__(name: str) -> object:
             DeprecationWarning,
             stacklevel=2,
         )
-        return getattr(import_module(".runner", __name__), name)
+        return getattr(import_module(_LAZY_EXPORTS[name], __name__), name)
 
     # Exports are checked before the submodule shortcut so that a name shared
     # by a submodule and one of its functions resolves to the function — the

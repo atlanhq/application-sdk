@@ -229,6 +229,8 @@ Neither path loads pandas or pandera. Memory is bounded by one record or batch, 
 
 ### Migrating from `validate_with_pandera`
 
+`validate_with_pandera`, `format_validation_report`, `get_normalised_dataframe` and `get_schema_file_paths` are deprecated and removed in v4.0.0 (FND-4911). Calling them emits a `DeprecationWarning` however they were imported, and conformance B001 reports the import.
+
 `load_pandera_schemas` reads an existing pandera YAML directory into `OutputSchema` values, so a suite can switch without rewriting its schemas or installing pandera:
 
 ```python

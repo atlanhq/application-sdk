@@ -85,7 +85,7 @@ def test_b009_message_for_a_later_removal_names_its_version() -> None:
     [
         # Live modules, including ones that share a prefix with a removed one.
         "from application_sdk.testing.e2e import BaseE2ETest\n",
-        "from application_sdk.testing.integration import Scenario\n",
+        "from application_sdk.testing.integration import GoldenCorpus\n",
         "from application_sdk.outputs import get_outputs\n",
         "from application_sdk.handler import Handler\n",
         "import application_sdk.workflows_v2\n",

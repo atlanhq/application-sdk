@@ -1,8 +1,11 @@
 # Example Integration Test
 
-This is a complete, working example of integration tests using the Apps-SDK
-integration testing framework. Copy this directory as a starting point for
-your connector's integration tests.
+> **Deprecated — removed in v4.0.0.** This example uses the `BaseIntegrationTest` HTTP scenario framework. It and every name it is built from (`Scenario`, the assertion predicates, `lazy`, ...) emit a `DeprecationWarning` (FND-4659, FND-4911). Do not copy it for a new suite: use the in-process fixture kit described in `docs/guides/integration-fixtures.md`.
+
+This is a complete, working example of the deprecated HTTP scenario framework.
+It stays as a reference for maintaining a suite that still uses
+`BaseIntegrationTest` until that suite migrates. It is not a starting point
+for a new one.
 
 ## Quick Start
 
@@ -95,15 +98,13 @@ Pytest fixtures specific to this example:
 - `skip_if_no_server` - Skip if server unavailable
 - `skip_if_no_database` - Skip if database unavailable
 
-## Customizing for Your Connector
+## Maintaining an Existing Suite
 
-### Step 1: Copy the Directory
+These steps describe how a `BaseIntegrationTest` suite is laid out, for editing
+one that already exists. Do not copy this directory to start a new suite; use
+the in-process fixture kit in `docs/guides/integration-fixtures.md`.
 
-```bash
-cp -r tests/integration/_example tests/integration/my_connector
-```
-
-### Step 2: Update Credential Loading
+### Step 1: Update Credential Loading
 
 Edit `scenarios.py` to load your connector's credentials:
 
@@ -118,7 +119,7 @@ def load_credentials():
     }
 ```
 
-### Step 3: Define Your Scenarios
+### Step 2: Define Your Scenarios
 
 Add scenarios for your connector's specific behavior:
 
@@ -153,7 +154,7 @@ scenarios = [
 ]
 ```
 
-### Step 4: Update Test Class
+### Step 3: Update Test Class
 
 Edit `test_integration.py`:
 
@@ -174,7 +175,7 @@ class MyConnectorIntegrationTest(BaseIntegrationTest):
         pass
 ```
 
-### Step 5: Update Fixtures
+### Step 4: Update Fixtures
 
 Edit `conftest.py` with your connector-specific fixtures.
 

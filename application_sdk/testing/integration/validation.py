@@ -1,5 +1,18 @@
 """Pandera-based data validation for integration testing.
 
+.. deprecated:: 3.58
+   This module exists only to serve the deprecated
+   :class:`~application_sdk.testing.integration.runner.BaseIntegrationTest` HTTP
+   scenario framework, and is removed with it in v4.0.0 (FND-4911). Importing
+   its names from ``application_sdk.testing.integration`` emits a
+   :class:`DeprecationWarning`, and so does calling them however they were
+   imported. To check a kit run's output, use
+   :func:`~application_sdk.testing.integration.output_schema.assert_output_matches`,
+   which reads existing pandera YAML through
+   :func:`~application_sdk.testing.integration.output_schema.load_pandera_schemas`
+   without pandas or pandera (FND-5007). See "Migrating from
+   ``validate_with_pandera``" in ``docs/guides/integration-fixtures.md``.
+
 This module provides schema-based validation of extracted output files
 using pandera YAML schemas. It validates that the actual data produced
 by a workflow conforms to expected column types, value ranges, and
@@ -32,6 +45,7 @@ from glob import glob
 from typing import Any
 
 import orjson
+from typing_extensions import deprecated
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -99,7 +113,7 @@ def _ensure_pandera_check_methods_registered() -> None:
 # =============================================================================
 
 
-def get_normalised_dataframe(extracted_file_path: str) -> Any:
+def _get_normalised_dataframe(extracted_file_path: str) -> Any:
     """Read extracted output files and normalize into a DataFrame.
 
     Supports JSON (line-delimited) and Parquet files. All files in the
@@ -142,7 +156,7 @@ def get_normalised_dataframe(extracted_file_path: str) -> Any:
     return pd.json_normalize(data)
 
 
-def get_schema_file_paths(schema_base_path: str) -> list[str]:
+def _get_schema_file_paths(schema_base_path: str) -> list[str]:
     """Find all pandera YAML schema files in the given directory.
 
     Recursively searches for .yaml and .yml files.
@@ -167,11 +181,41 @@ def get_schema_file_paths(schema_base_path: str) -> list[str]:
     return sorted(yaml_files)
 
 
+@deprecated(
+    "get_normalised_dataframe is deprecated; use assert_output_matches from application_sdk.testing.integration.output_schema, with load_pandera_schemas to read existing pandera YAML; it checks a run's output without pandas or pandera (FND-5007). Will be removed in v4.0.0."
+)
+def get_normalised_dataframe(extracted_file_path: str) -> Any:
+    """Read extracted output files and normalize into a DataFrame.
+
+    .. deprecated:: 3.58
+        Use :func:`~application_sdk.testing.integration.output_schema.validate_output`,
+        which streams the output instead of loading it into pandas. Will be removed
+        in v4.0.0.
+    """
+    return _get_normalised_dataframe(extracted_file_path)
+
+
+@deprecated(
+    "get_schema_file_paths is deprecated; use assert_output_matches from application_sdk.testing.integration.output_schema, with load_pandera_schemas to read existing pandera YAML; it checks a run's output without pandas or pandera (FND-5007). Will be removed in v4.0.0."
+)
+def get_schema_file_paths(schema_base_path: str) -> list[str]:
+    """Find all pandera YAML schema files in the given directory.
+
+    .. deprecated:: 3.58
+        Use :func:`~application_sdk.testing.integration.output_schema.load_pandera_schemas`,
+        which finds and reads them. Will be removed in v4.0.0.
+    """
+    return _get_schema_file_paths(schema_base_path)
+
+
 # =============================================================================
 # Validation
 # =============================================================================
 
 
+@deprecated(
+    "validate_with_pandera is deprecated; use assert_output_matches from application_sdk.testing.integration.output_schema, with load_pandera_schemas to read existing pandera YAML; it checks a run's output without pandas or pandera (FND-5007). Will be removed in v4.0.0."
+)
 def validate_with_pandera(
     schema_base_path: str,
     extracted_output_path: str,
@@ -221,7 +265,7 @@ def validate_with_pandera(
 
     _ensure_pandera_check_methods_registered()
 
-    schema_files = get_schema_file_paths(schema_base_path)
+    schema_files = _get_schema_file_paths(schema_base_path)
     results: list[dict[str, Any]] = []
 
     output_base = (
@@ -269,7 +313,7 @@ def validate_with_pandera(
             schema = from_yaml(schema_file)
 
             # Load and normalize extracted data
-            dataframe = get_normalised_dataframe(extracted_file_path)
+            dataframe = _get_normalised_dataframe(extracted_file_path)
             result["record_count"] = len(dataframe)
 
             # Validate with lazy error reporting
@@ -303,6 +347,9 @@ def validate_with_pandera(
     return results
 
 
+@deprecated(
+    "format_validation_report is deprecated; use assert_output_matches from application_sdk.testing.integration.output_schema, with load_pandera_schemas to read existing pandera YAML; it checks a run's output without pandas or pandera (FND-5007). Will be removed in v4.0.0."
+)
 def format_validation_report(results: list[dict[str, Any]]) -> str:
     """Format pandera validation results into a human-readable report.
 

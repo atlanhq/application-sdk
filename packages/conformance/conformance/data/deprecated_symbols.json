@@ -2037,11 +2037,173 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "APIType is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "APIType"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "AssetDiff is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "AssetDiff"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "BaseIntegrationTest is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 the HTTP scenario framework re-tests SDK-owned routes; app behaviour belongs in the fixture kit and deployed behaviour in tests/e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.integration",
       "removal_version": "4.0.0",
       "symbol": "BaseIntegrationTest"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "GapReport is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "GapReport"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "IntegrationTestClient is deprecated; use AppExecutor from application_sdk.testing.integration.fixtures to run the App in process, or BaseE2ETest from application_sdk.testing.e2e for a deployed App \u2014 it drives the SDK-owned HTTP routes of a running app server, which the HTTP scenario framework existed to test, and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "IntegrationTestClient"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "Lazy is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "Lazy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "Scenario is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "Scenario"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ScenarioResult is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "ScenarioResult"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "all_of is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "all_of"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "any_of is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "any_of"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "between is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "between"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "compare_metadata is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "compare_metadata"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "contains is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "contains"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "custom is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "custom"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ends_with is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "ends_with"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "equals is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "equals"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "evaluate_if_lazy is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "evaluate_if_lazy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "exists is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "exists"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "format_validation_report is deprecated; use application_sdk.testing.integration.output_schema \u2014 assert_output_matches, with load_pandera_schemas to read existing pandera YAML \u2014 it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "format_validation_report"
     },
     {
       "kind": "constant",
@@ -2055,11 +2217,272 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "get_normalised_dataframe is deprecated; use application_sdk.testing.integration.output_schema \u2014 assert_output_matches, with load_pandera_schemas to read existing pandera YAML \u2014 it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "get_normalised_dataframe"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "get_schema_file_paths is deprecated; use application_sdk.testing.integration.output_schema \u2014 assert_output_matches, with load_pandera_schemas to read existing pandera YAML \u2014 it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "get_schema_file_paths"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "greater_than is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "greater_than"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "greater_than_or_equal is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "greater_than_or_equal"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "has_length is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "has_length"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "is_dict is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "is_dict"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "is_empty is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "is_empty"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "is_false is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "is_false"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "is_lazy is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "is_lazy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "is_list is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "is_list"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "is_none is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "is_none"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "is_not_empty is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "is_not_empty"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "is_string is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "is_string"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "is_true is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "is_true"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "is_type is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "is_type"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "lazy is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "lazy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "less_than is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "less_than"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "less_than_or_equal is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "less_than_or_equal"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "load_actual_output is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "load_actual_output"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "load_expected_data is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "load_expected_data"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "matches is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "matches"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "none_of is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "none_of"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "not_contains is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "not_contains"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "not_equals is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "not_equals"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "not_one_of is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "not_one_of"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "one_of is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "one_of"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "parametrize_scenarios is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 the HTTP scenario framework re-tests SDK-owned routes; app behaviour belongs in the fixture kit and deployed behaviour in tests/e2e (FND-4659). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.integration",
       "removal_version": "4.0.0",
       "symbol": "parametrize_scenarios"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "starts_with is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "starts_with"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "validate_with_pandera is deprecated; use application_sdk.testing.integration.output_schema \u2014 assert_output_matches, with load_pandera_schemas to read existing pandera YAML \u2014 it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration",
+      "removal_version": "4.0.0",
+      "symbol": "validate_with_pandera"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "IntegrationTestClient is deprecated; use AppExecutor from application_sdk.testing.integration.fixtures to run the App in process, or BaseE2ETest from application_sdk.testing.e2e for a deployed App \u2014 it drives the SDK-owned HTTP routes the deprecated HTTP scenario framework existed to test (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration.client",
+      "removal_version": "4.0.0",
+      "symbol": "IntegrationTestClient"
     },
     {
       "kind": "function",
@@ -2087,6 +2510,42 @@
       "module": "application_sdk.testing.integration.runner",
       "removal_version": "4.0.0",
       "symbol": "_auto_discover_credentials"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "format_validation_report is deprecated; use assert_output_matches from application_sdk.testing.integration.output_schema, with load_pandera_schemas to read existing pandera YAML; it checks a run's output without pandas or pandera (FND-5007). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration.validation",
+      "removal_version": "4.0.0",
+      "symbol": "format_validation_report"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_normalised_dataframe is deprecated; use assert_output_matches from application_sdk.testing.integration.output_schema, with load_pandera_schemas to read existing pandera YAML; it checks a run's output without pandas or pandera (FND-5007). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration.validation",
+      "removal_version": "4.0.0",
+      "symbol": "get_normalised_dataframe"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_schema_file_paths is deprecated; use assert_output_matches from application_sdk.testing.integration.output_schema, with load_pandera_schemas to read existing pandera YAML; it checks a run's output without pandas or pandera (FND-5007). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration.validation",
+      "removal_version": "4.0.0",
+      "symbol": "get_schema_file_paths"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "validate_with_pandera is deprecated; use assert_output_matches from application_sdk.testing.integration.output_schema, with load_pandera_schemas to read existing pandera YAML; it checks a run's output without pandas or pandera (FND-5007). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration.validation",
+      "removal_version": "4.0.0",
+      "symbol": "validate_with_pandera"
     },
     {
       "kind": "method",

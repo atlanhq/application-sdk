@@ -1,4 +1,4 @@
-"""The deprecated test surfaces keep serving their names, with a warning, until v4.0.0 (FND-4659).
+"""The deprecated test surfaces keep serving their names, with a warning, until v4.0.0 (FND-4659, FND-4911).
 
 ``testing.full_dag`` has no consumer, and the ``BaseIntegrationTest`` HTTP
 scenario framework is superseded by the in-process fixture kit. None of them can be deleted in the release that deprecates them:
@@ -12,10 +12,14 @@ signal.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
+import importlib.util
 import subprocess
 import sys
 import warnings
+from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -24,7 +28,10 @@ _ALIAS_MODULES = {
     "application_sdk.testing.full_dag.client": "application_sdk.testing.e2e.client",
     "application_sdk.testing.full_dag._errors": "application_sdk.testing.e2e._errors",
     "application_sdk.testing.full_dag.base": "application_sdk.testing.harness.automation_engine",
-    "application_sdk.testing.integration": "application_sdk.testing.integration.runner",
+    # Each name resolves to whichever submodule ``_LAZY_EXPORTS`` maps it to:
+    # the runner's three entry points (FND-4659), and the 46 names of the six
+    # modules that exist only to serve it (FND-4911).
+    "application_sdk.testing.integration": "",
 }
 
 
@@ -49,6 +56,11 @@ def test_each_old_name_warns_and_is_the_same_object(
     public: str, private: str, name: str
 ) -> None:
     module = _import_quietly(public)
+    if not private:
+        private = importlib.util.resolve_name(
+            module._LAZY_EXPORTS[name],  # type: ignore[attr-defined]
+            public,
+        )
     implementation = _import_quietly(private)
 
     with pytest.warns(DeprecationWarning, match=rf"{name} is deprecated.*v4\.0\.0"):
@@ -70,6 +82,13 @@ def test_each_old_name_warns_and_is_the_same_object(
         "application_sdk.testing.full_dag.payload:ConnectionSpec",
         "application_sdk.testing.full_dag.payload:build_seed_dag",
         "application_sdk.testing.e2e.logs:LogCollector",
+        # Imported from the submodule by apps already on the kit, so the package
+        # alias alone would never warn them (FND-4911).
+        "application_sdk.testing.integration.validation:validate_with_pandera",
+        "application_sdk.testing.integration.validation:format_validation_report",
+        "application_sdk.testing.integration.validation:get_normalised_dataframe",
+        "application_sdk.testing.integration.validation:get_schema_file_paths",
+        "application_sdk.testing.integration.client:IntegrationTestClient",
     ],
 )
 def test_definitions_carry_a_gate_visible_marker(decorated: str) -> None:
@@ -78,6 +97,51 @@ def test_definitions_carry_a_gate_visible_marker(decorated: str) -> None:
     obj = getattr(_import_quietly(module_name), attr)
 
     assert "v4.0.0" in obj.__deprecated__
+
+
+@pytest.mark.parametrize(
+    ("target", "call"),
+    [
+        (
+            "application_sdk.testing.integration.validation:validate_with_pandera",
+            lambda fn, tmp: fn(str(tmp / "absent"), str(tmp)),
+        ),
+        (
+            "application_sdk.testing.integration.validation:format_validation_report",
+            lambda fn, tmp: fn([]),
+        ),
+        (
+            "application_sdk.testing.integration.validation:get_normalised_dataframe",
+            lambda fn, tmp: fn(str(tmp)),
+        ),
+        (
+            "application_sdk.testing.integration.validation:get_schema_file_paths",
+            lambda fn, tmp: fn(str(tmp)),
+        ),
+        (
+            "application_sdk.testing.integration.client:IntegrationTestClient",
+            lambda cls, tmp: cls(host="http://app"),
+        ),
+    ],
+    ids=lambda v: v.rsplit(":", 1)[-1] if isinstance(v, str) else "",
+)
+def test_direct_submodule_use_warns(
+    target: str, call: Callable[[Callable[..., object], Path], object], tmp_path: Path
+) -> None:
+    """Apps on the kit import these from the submodule, past the package alias.
+
+    The marker test above proves the decorator is there; this proves the
+    decorator does what it was added for, on the path those apps take
+    (FND-4911). The warning fires before the body runs, so whatever the body
+    then does with these throwaway inputs — raise on a missing schema
+    directory, or on pandas being absent — is not under test.
+    """
+    module_name, attr = target.split(":")
+    obj = getattr(importlib.import_module(module_name), attr)
+
+    with pytest.warns(DeprecationWarning, match=rf"{attr} is deprecated.*v4\.0\.0"):
+        with contextlib.suppress(Exception):
+            call(obj, tmp_path)
 
 
 def test_importing_the_sdr_base_does_not_warn() -> None:
