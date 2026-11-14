@@ -2073,7 +2073,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "IntegrationTestClient is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "message": "IntegrationTestClient is deprecated; use AppExecutor from application_sdk.testing.integration.fixtures to run the App in process, or BaseE2ETest from application_sdk.testing.e2e for a deployed App \u2014 it drives the SDK-owned HTTP routes of a running app server, which the HTTP scenario framework existed to test, and leaves with it (FND-4911). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.integration",
       "removal_version": "4.0.0",
@@ -2199,7 +2199,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "format_validation_report is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "message": "format_validation_report is deprecated; use application_sdk.testing.integration.output_schema \u2014 assert_output_matches, with load_pandera_schemas to read existing pandera YAML \u2014 it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.integration",
       "removal_version": "4.0.0",
@@ -2217,7 +2217,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "get_normalised_dataframe is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "message": "get_normalised_dataframe is deprecated; use application_sdk.testing.integration.output_schema \u2014 assert_output_matches, with load_pandera_schemas to read existing pandera YAML \u2014 it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.integration",
       "removal_version": "4.0.0",
@@ -2226,7 +2226,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "get_schema_file_paths is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "message": "get_schema_file_paths is deprecated; use application_sdk.testing.integration.output_schema \u2014 assert_output_matches, with load_pandera_schemas to read existing pandera YAML \u2014 it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.integration",
       "removal_version": "4.0.0",
@@ -2469,11 +2469,20 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "validate_with_pandera is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures \u2014 it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0.",
+      "message": "validate_with_pandera is deprecated; use application_sdk.testing.integration.output_schema \u2014 assert_output_matches, with load_pandera_schemas to read existing pandera YAML \u2014 it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.integration",
       "removal_version": "4.0.0",
       "symbol": "validate_with_pandera"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "IntegrationTestClient is deprecated; use AppExecutor from application_sdk.testing.integration.fixtures to run the App in process, or BaseE2ETest from application_sdk.testing.e2e for a deployed App \u2014 it drives the SDK-owned HTTP routes the deprecated HTTP scenario framework existed to test (FND-4911). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration.client",
+      "removal_version": "4.0.0",
+      "symbol": "IntegrationTestClient"
     },
     {
       "kind": "function",
@@ -2501,6 +2510,42 @@
       "module": "application_sdk.testing.integration.runner",
       "removal_version": "4.0.0",
       "symbol": "_auto_discover_credentials"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "format_validation_report is deprecated; use assert_output_matches from application_sdk.testing.integration.output_schema, with load_pandera_schemas to read existing pandera YAML; it checks a run's output without pandas or pandera (FND-5007). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration.validation",
+      "removal_version": "4.0.0",
+      "symbol": "format_validation_report"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_normalised_dataframe is deprecated; use assert_output_matches from application_sdk.testing.integration.output_schema, with load_pandera_schemas to read existing pandera YAML; it checks a run's output without pandas or pandera (FND-5007). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration.validation",
+      "removal_version": "4.0.0",
+      "symbol": "get_normalised_dataframe"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_schema_file_paths is deprecated; use assert_output_matches from application_sdk.testing.integration.output_schema, with load_pandera_schemas to read existing pandera YAML; it checks a run's output without pandas or pandera (FND-5007). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration.validation",
+      "removal_version": "4.0.0",
+      "symbol": "get_schema_file_paths"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "validate_with_pandera is deprecated; use assert_output_matches from application_sdk.testing.integration.output_schema, with load_pandera_schemas to read existing pandera YAML; it checks a run's output without pandas or pandera (FND-5007). Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.integration.validation",
+      "removal_version": "4.0.0",
+      "symbol": "validate_with_pandera"
     },
     {
       "kind": "method",

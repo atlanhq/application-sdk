@@ -79,6 +79,13 @@ def test_each_old_name_warns_and_is_the_same_object(
         "application_sdk.testing.full_dag.payload:ConnectionSpec",
         "application_sdk.testing.full_dag.payload:build_seed_dag",
         "application_sdk.testing.e2e.logs:LogCollector",
+        # Imported from the submodule by apps already on the kit, so the package
+        # alias alone would never warn them (FND-4911).
+        "application_sdk.testing.integration.validation:validate_with_pandera",
+        "application_sdk.testing.integration.validation:format_validation_report",
+        "application_sdk.testing.integration.validation:get_normalised_dataframe",
+        "application_sdk.testing.integration.validation:get_schema_file_paths",
+        "application_sdk.testing.integration.client:IntegrationTestClient",
     ],
 )
 def test_definitions_carry_a_gate_visible_marker(decorated: str) -> None:

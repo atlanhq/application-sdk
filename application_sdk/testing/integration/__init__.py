@@ -105,14 +105,17 @@ from typing import TYPE_CHECKING
 # say — ``integration.lazy`` would be the module, ``__getattr__`` would never
 # fire for it, and ``from application_sdk.testing.integration import lazy``
 # would hand back something that is not callable. Loading it here means the
-# first load always happens before anyone can observe it; the binding it leaves
-# is then removed, so ``lazy`` (deprecated, FND-4911) falls through to
-# ``__getattr__`` like every other name and warns on each access. Later loads
-# find the module in ``sys.modules`` and do not rebind it. The module is a few
-# stdlib imports, none of the cost the lazy conversion protects against.
-from . import lazy as _lazy_submodule  # noqa: F401
+# first load always happens before anyone can observe it. Later loads find the
+# module in ``sys.modules`` and do not rebind it.
+#
+# The bindings are then deleted, so all four names (deprecated, FND-4911) fall
+# through to ``__getattr__`` like every other name and warn on each access. The
+# ``from`` form is kept rather than a bare submodule import because the Symbol
+# Removal Check reads it statically: it is how the gate sees ``Lazy``'s methods
+# at this path, and they remain reachable here until v4.0.0.
+from .lazy import Lazy, evaluate_if_lazy, is_lazy, lazy
 
-del globals()["lazy"]
+del Lazy, evaluate_if_lazy, is_lazy, lazy
 
 if TYPE_CHECKING:
     # The eager form, for static readers only. griffe builds
@@ -177,7 +180,7 @@ if TYPE_CHECKING:
         read_records,
         require_golden_corpus,
     )
-    from .lazy import Lazy, evaluate_if_lazy, is_lazy, lazy
+    from .lazy import Lazy, evaluate_if_lazy, is_lazy, lazy  # noqa: F811
     from .models import APIType, Scenario, ScenarioResult
     from .runner import (
         BaseIntegrationTest,
@@ -438,8 +441,8 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
         "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
     ),
     "IntegrationTestClient": (
-        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
-        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+        "AppExecutor from application_sdk.testing.integration.fixtures to run the App in process, or BaseE2ETest from application_sdk.testing.e2e for a deployed App",
+        "it drives the SDK-owned HTTP routes of a running app server, which the HTTP scenario framework existed to test, and leaves with it (FND-4911)",
     ),
     "AssetDiff": (
         "the in-process fixture kit, application_sdk.testing.integration.fixtures",
@@ -490,20 +493,20 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
         "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
     ),
     "format_validation_report": (
-        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
-        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+        "application_sdk.testing.integration.output_schema — assert_output_matches, with load_pandera_schemas to read existing pandera YAML",
+        "it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911)",
     ),
     "get_normalised_dataframe": (
-        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
-        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+        "application_sdk.testing.integration.output_schema — assert_output_matches, with load_pandera_schemas to read existing pandera YAML",
+        "it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911)",
     ),
     "get_schema_file_paths": (
-        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
-        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+        "application_sdk.testing.integration.output_schema — assert_output_matches, with load_pandera_schemas to read existing pandera YAML",
+        "it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911)",
     ),
     "validate_with_pandera": (
-        "the in-process fixture kit, application_sdk.testing.integration.fixtures",
-        "it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911)",
+        "application_sdk.testing.integration.output_schema — assert_output_matches, with load_pandera_schemas to read existing pandera YAML",
+        "it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911)",
     ),
 }
 

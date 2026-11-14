@@ -5,9 +5,11 @@
    :class:`~application_sdk.testing.integration.runner.BaseIntegrationTest` HTTP
    scenario framework, and is removed with it in v4.0.0 (FND-4911). Importing
    its names from ``application_sdk.testing.integration`` emits a
-   :class:`DeprecationWarning`. Test an App with the in-process fixture kit,
-   :mod:`application_sdk.testing.integration.fixtures`; see
-   ``docs/guides/integration-fixtures.md``.
+   :class:`DeprecationWarning`, and so does instantiating
+   :class:`IntegrationTestClient` however it was imported. To run an App, use
+   ``AppExecutor`` from :mod:`application_sdk.testing.integration.fixtures` in
+   process, or :class:`~application_sdk.testing.e2e.BaseE2ETest` against a
+   deployed App.
 
 This module provides a unified interface for calling the Core 3 APIs
 (auth, preflight, workflow) during integration tests.
@@ -23,6 +25,7 @@ from urllib.parse import urljoin
 
 import httpx
 import orjson
+from typing_extensions import deprecated
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.integration._errors import (
@@ -110,6 +113,13 @@ def _from_v3_credentials(
     return flat
 
 
+@deprecated(
+    "IntegrationTestClient is deprecated; use AppExecutor from "
+    "application_sdk.testing.integration.fixtures to run the App in process, or "
+    "BaseE2ETest from application_sdk.testing.e2e for a deployed App — it drives the "
+    "SDK-owned HTTP routes the deprecated HTTP scenario framework existed to test "
+    "(FND-4911). Will be removed in v4.0.0."
+)
 class IntegrationTestClient:
     """Client for integration testing of the Core 3 APIs.
 
