@@ -12,11 +12,14 @@ signal.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import importlib.util
 import subprocess
 import sys
 import warnings
+from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -94,6 +97,51 @@ def test_definitions_carry_a_gate_visible_marker(decorated: str) -> None:
     obj = getattr(_import_quietly(module_name), attr)
 
     assert "v4.0.0" in obj.__deprecated__
+
+
+@pytest.mark.parametrize(
+    ("target", "call"),
+    [
+        (
+            "application_sdk.testing.integration.validation:validate_with_pandera",
+            lambda fn, tmp: fn(str(tmp / "absent"), str(tmp)),
+        ),
+        (
+            "application_sdk.testing.integration.validation:format_validation_report",
+            lambda fn, tmp: fn([]),
+        ),
+        (
+            "application_sdk.testing.integration.validation:get_normalised_dataframe",
+            lambda fn, tmp: fn(str(tmp)),
+        ),
+        (
+            "application_sdk.testing.integration.validation:get_schema_file_paths",
+            lambda fn, tmp: fn(str(tmp)),
+        ),
+        (
+            "application_sdk.testing.integration.client:IntegrationTestClient",
+            lambda cls, tmp: cls(host="http://app"),
+        ),
+    ],
+    ids=lambda v: v.rsplit(":", 1)[-1] if isinstance(v, str) else "",
+)
+def test_direct_submodule_use_warns(
+    target: str, call: Callable[[Callable[..., object], Path], object], tmp_path: Path
+) -> None:
+    """Apps on the kit import these from the submodule, past the package alias.
+
+    The marker test above proves the decorator is there; this proves the
+    decorator does what it was added for, on the path those apps take
+    (FND-4911). The warning fires before the body runs, so whatever the body
+    then does with these throwaway inputs — raise on a missing schema
+    directory, or on pandas being absent — is not under test.
+    """
+    module_name, attr = target.split(":")
+    obj = getattr(importlib.import_module(module_name), attr)
+
+    with pytest.warns(DeprecationWarning, match=rf"{attr} is deprecated.*v4\.0\.0"):
+        with contextlib.suppress(Exception):
+            call(obj, tmp_path)
 
 
 def test_importing_the_sdr_base_does_not_warn() -> None:
