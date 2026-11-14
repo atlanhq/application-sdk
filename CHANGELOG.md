@@ -1,5 +1,29 @@
 # Changelog
 
+## v3.58.0 (November 14, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.57.0...v3.58.0
+
+### Features
+
+- assert a kit run's output against declared schemas with value rules, replacing validate_with_pandera [FND-5007] (#4905) (by @cmgrote in [5e0338d](https://github.com/atlanhq/application-sdk/commit/5e0338d))
+
+### Bug Fixes
+
+- raise non-deprecated leaves instead of the ten error classes due for v4.0 removal [FND-4910] (#4902) (by @cmgrote in [f461f45](https://github.com/atlanhq/application-sdk/commit/f461f45))
+- emit @observability spans with their real duration, and stop uploading trace files nothing reads [FND-4913] (#4904) (by @cmgrote in [6a117d0](https://github.com/atlanhq/application-sdk/commit/6a117d0))
+- read the CPU limit in get_actual_cpu_count, and deprecate file_converter, the Redshift helpers, get_safe_num_threads, TaskResult and the v2 event-registration models for v4.0 [FND-4914] (#4906) (by @cmgrote in [e643594](https://github.com/atlanhq/application-sdk/commit/e643594))
+
+### Refactoring
+
+- import the AE DAG types from harness.automation_engine, not the deprecated e2e.client, and point the full_dag notices there [FND-4912] (#4900) (by @cmgrote in [b7b01bd](https://github.com/atlanhq/application-sdk/commit/b7b01bd))
+- deprecate the 46 names that exist only to serve BaseIntegrationTest, pointing the pandera validators and IntegrationTestClient at their replacements [FND-4911] (#4909) (by @cmgrote in [a6a6a08](https://github.com/atlanhq/application-sdk/commit/a6a6a08))
+
+### Chores
+
+- rewrite v2 SQL metadata imports to SqlApp, keep one base-name table, and run check_migration on the stdlib alone [FND-4915] (#4903) (by @cmgrote in [25a7a13](https://github.com/atlanhq/application-sdk/commit/25a7a13))
+
+
 ## v3.57.0 (November 13, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.56.0...v3.57.0
