@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import baseline, holistic, prompts, surface, trace
+from . import advisory, baseline, holistic, prompts, surface, trace
 from .agent import AgentLimits, BundleResult, review_bundle, suspect_paths
 from .baseline import PRAdditions
 from .bundle import Bundle, group
@@ -421,6 +421,9 @@ def run(
         f"decision: REVIEW round {round_no} — {mode_label}; range={range_base[:9]}..{head[:9]}, "
         f"{len(all_files)} file(s) in range ({len(full_files)} in the whole PR), budget left ${ledger.remaining:.4f}"
     )
+
+    # Recomputed from the whole PR each round, so a reverted change drops its note.
+    state.advisories = advisory.notes(advisory.changed_paths(full_files))
 
     # ---- head text for changed files (data only; never executed) -----------
     head_text = head_side_text(gh, full_files, head, cfg.max_changed_files)
@@ -2201,6 +2204,8 @@ def render_summary(res: RunResult) -> str:
         lines.append("")
     elif ap.get("verdict") == "sound":
         lines.append("**Approach check** — sound.\n")
+    for note in st.advisories:
+        lines.append(f"**Advisory** (does not block) — {note}\n")
     for sev in SEVERITIES:
         items = by_level[sev]
         if not items:
