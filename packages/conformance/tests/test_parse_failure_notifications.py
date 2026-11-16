@@ -133,6 +133,109 @@ def test_github_annotation_is_anchored_to_the_file(
     assert "::error file=app/broken.py,line=7," in out
 
 
+def test_rule_scoped_run_reports_without_gating(app_repo: Path) -> None:
+    """--rule scopes the exit code to the requested rules (lens F-65f506).
+
+    The parsed paths span every check in the series, and the runner cannot tell
+    whether the requested rule would ever scan the file. So the failure is
+    still reported, as a warning, but it does not gate the run.
+    """
+    (app_repo / "app" / "good.py").write_text("X = 1\n", encoding="utf-8")
+    out = app_repo / "out.sarif"
+    code = runner.main(
+        ["--repo", str(app_repo), "--rule", "E010", "--output", str(out)]
+    )
+    invocation = json.loads(out.read_text(encoding="utf-8"))["runs"][0]["invocations"][
+        0
+    ]
+
+    assert code == 0
+    assert invocation["executionSuccessful"] is True
+    assert [n["level"] for n in invocation["toolExecutionNotifications"]] == ["warning"]
+
+
+def test_rule_scoped_run_logs_the_failure_as_a_warning(
+    app_repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    runner.main(
+        [
+            "--repo",
+            str(app_repo),
+            "--rule",
+            "E010",
+            "--output",
+            str(app_repo / "o.sarif"),
+        ]
+    )
+    out = capsys.readouterr().out
+    assert "[PARSE] [WARN] app/broken.py:7" in out
+    assert "::warning file=app/broken.py," in out
+    assert "::error file=" not in out
+
+
+def test_annotation_escapes_the_repo_controlled_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file name is repo-controlled; it must not break out of ``file=`` (lens F-292f47)."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "atlan-demo-app"\n', encoding="utf-8"
+    )
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "a,b:c%.py").write_text("def g(:\n", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    _run(tmp_path, "--exit-zero")
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if "file=" in ln]
+    assert len(lines) == 1  # one file-anchored annotation, on one line
+    assert "file=app/a%2Cb%3Ac%25.py,line=1," in lines[0]
+
+
+def test_pct_prop_neutralises_a_forged_workflow_command() -> None:
+    forged = "x.py\n::warning::forged"
+    escaped = runner._pct_prop(forged)
+    assert "\n" not in escaped
+    assert "::" not in escaped
+
+
+def test_many_parse_failures_stay_within_githubs_annotation_cap(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GitHub drops annotations past 10 per level silently (lens F-a2c24e).
+
+    The aggregate annotation carries the full count, so it must be emitted and
+    the per-file ones must leave room for it.
+    """
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "atlan-demo-app"\n', encoding="utf-8"
+    )
+    (tmp_path / "app").mkdir()
+    for i in range(12):
+        (tmp_path / "app" / f"bad{i:02}.py").write_text("def g(:\n", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    _run(tmp_path)
+    errors = [
+        ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("::error")
+    ]
+
+    assert len(errors) <= 10
+    per_file = [ln for ln in errors if ln.startswith("::error file=")]
+    assert len(per_file) == runner._MAX_PARSE_FILE_ANNOTATIONS
+    aggregate = [ln for ln in errors if "12 files not scanned" in ln]
+    assert len(aggregate) == 1
+    assert "Only the first 7 are annotated; the log lists all 12." in aggregate[0]
+
+
+def test_explicit_exit_code_override_is_not_blamed_on_parse_failures() -> None:
+    """``build(exit_code=1)`` with no notification must not cite one (lens F-d48d66)."""
+    from conformance.suite.schema import ReportBuilder
+
+    report = ReportBuilder("t", "1.0.0").build(exit_code=1)
+    invocation = report.runs[0].invocations[0]
+    assert invocation.exit_code == 1
+    assert invocation.execution_successful is True
+    assert "could not be analysed" not in (invocation.exit_code_description or "")
+
+
 class TestParseFailureReader:
     def test_valid_file_returns_none(self, tmp_path: Path) -> None:
         (tmp_path / "ok.py").write_text("X = 1\n", encoding="utf-8")

@@ -310,13 +310,15 @@ class ReportBuilder:
         effective_exit_code = exit_code if exit_code is not None else derived_exit_code
         if effective_exit_code == 0:
             exit_description = "Gate passed."
-        elif summary.failing > 0:
-            exit_description = "Gate failed: one or more blocking violations found."
-        else:
+        elif tool_errors and summary.failing == 0:
             exit_description = (
                 "Gate failed: one or more files could not be analysed "
                 "(see toolExecutionNotifications)."
             )
+        else:
+            # Blocking results, or a caller's explicit exit_code override: the
+            # wording predates parse-failure notifications and stays as it was.
+            exit_description = "Gate failed: one or more blocking violations found."
 
         # Version-control provenance
         provenance: list[VersionControlDetails] = []
