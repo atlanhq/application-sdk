@@ -347,6 +347,7 @@ incremental = [
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
 mcp = [
+    { name = "dnspython" },
     { name = "fastmcp" },
 ]
 pandas = [
@@ -428,6 +429,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.38.6,<2.0.0" },
     { name = "boto3", marker = "extra == 'iam-auth'", specifier = ">=1.38.6,<2.0.0" },
     { name = "certifi", specifier = ">=2026.10.19" },
+    { name = "dnspython", marker = "extra == 'mcp'", specifier = ">=2.9.2" },
     { name = "duckdb", marker = "extra == 'sql'", specifier = ">=1.1.3,<1.6.0" },
     { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=40.44.0,<41.0.0" },
     { name = "fastapi", specifier = ">=0.162.0,<0.163.0" },

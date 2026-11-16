@@ -164,6 +164,10 @@ distributed_lock = [
 ]
 mcp = [
     "fastmcp>=3.2.0,<4.0.0",
+    # Published CVE floor: arrives via fastmcp -> pydantic[email] ->
+    # email-validator. Not core: the SDK never imports it, and only this extra
+    # installs it.
+    "dnspython>=2.9.2",  # CVE-2026-128089
 ]
 tests = [
     "pandera[io]>=0.36.0,<0.37.0",
