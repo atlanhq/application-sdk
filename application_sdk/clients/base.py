@@ -1,4 +1,5 @@
 import asyncio
+import urllib.request
 import warnings
 from typing import Any, Literal, overload
 
@@ -54,6 +55,86 @@ class _SharedTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         return None
+
+
+class _EnvProxyHTTPTransport(httpx.AsyncHTTPTransport):
+    """``AsyncHTTPTransport`` that applies the environment's proxy settings.
+
+    httpx only honors ``HTTP(S)_PROXY`` / ``ALL_PROXY`` / ``NO_PROXY`` when the
+    client builds its own transport (``allow_env_proxies = trust_env and
+    transport is None``). ``BaseClient`` always passes ``transport=``, so
+    without this every request connects directly, and on hosts whose egress
+    is proxy-only it times out with no HTTP response.
+
+    The proxy is chosen per request URL: hosts matching ``NO_PROXY`` (and
+    every request when no proxy is configured) go through this transport's
+    own pool, others through a lazily created proxied transport built with
+    the same keyword arguments (TLS context, pool limits, connect retries).
+    Proxy settings are read once, at construction, as httpx does.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._transport_kwargs = kwargs
+        self._env_proxies = urllib.request.getproxies_environment()
+        self._proxied: dict[str, httpx.AsyncBaseTransport] = {}
+
+    def _proxy_for(self, url: httpx.URL) -> str | None:
+        proxy = self._env_proxies.get(url.scheme) or self._env_proxies.get("all")
+        if not proxy or not url.host:
+            return None
+        # Stdlib NO_PROXY matcher (suffix, exact host, "*"); missing from typeshed.
+        if urllib.request.proxy_bypass_environment(  # pyright: ignore[reportAttributeAccessIssue]
+            url.host, self._env_proxies
+        ):
+            return None
+        return proxy
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        proxy = self._proxy_for(request.url)
+        if proxy is None:
+            return await super().handle_async_request(request)
+        transport = self._proxied.get(proxy)
+        if transport is None:
+            transport = self._make_proxied_transport(proxy)
+            self._proxied[proxy] = transport
+        return await transport.handle_async_request(request)
+
+    def _make_proxied_transport(self, proxy: str) -> httpx.AsyncBaseTransport:
+        return httpx.AsyncHTTPTransport(**self._transport_kwargs, proxy=proxy)
+
+    async def _close_proxied(self) -> BaseException | None:
+        """Close every proxied pool, even when one close raises or is cancelled.
+
+        The owning ``BaseClient`` drops its reference before closing, so a pool
+        skipped here would never be closed. Returns the first failure for the
+        caller to raise once the direct pool is closed too.
+        """
+        proxied, self._proxied = list(self._proxied.values()), {}
+        first_error: BaseException | None = None
+        for transport in proxied:
+            try:
+                await transport.aclose()
+            except BaseException as exc:  # includes CancelledError; re-raised by caller
+                if first_error is None:
+                    first_error = exc
+        return first_error
+
+    async def __aexit__(self, *args: Any) -> None:
+        error = await self._close_proxied()
+        try:
+            await super().__aexit__(*args)
+        finally:
+            if error is not None:
+                raise error
+
+    async def aclose(self) -> None:
+        error = await self._close_proxied()
+        try:
+            await super().aclose()
+        finally:
+            if error is not None:
+                raise error
 
 
 class BaseClient(ClientInterface):
@@ -161,7 +242,9 @@ class BaseClient(ClientInterface):
         # TLS verification lives on the transport: httpx ignores
         # ``AsyncClient(verify=...)`` whenever ``transport=`` is also passed,
         # so the SDK context (default CAs plus SSL_CERT_DIR) must be set here.
-        self.http_retry_transport: httpx.AsyncBaseTransport = httpx.AsyncHTTPTransport(
+        # Passing ``transport=`` also disables httpx's env-proxy handling, so
+        # the default transport applies HTTP(S)_PROXY / NO_PROXY itself.
+        self.http_retry_transport: httpx.AsyncBaseTransport = _EnvProxyHTTPTransport(
             verify=get_ssl_context(),
             limits=_HTTP_POOL_LIMITS,
             retries=_HTTP_CONNECT_RETRIES,
