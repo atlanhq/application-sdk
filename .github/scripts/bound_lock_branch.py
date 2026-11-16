@@ -234,7 +234,7 @@ def apply_outputs(
     source: Path, root: Path, paths: tuple[str, ...] = OUTPUT_PATHS
 ) -> None:
     """Copy ``paths`` (default OUTPUT_PATHS) from an artifact directory into the
-    checkout. renovate_pyatlan_sync.py reuses this with its own output list.
+    checkout. renovate_conformance_lock_sync.py reuses this with its own output list.
 
     Only the declared paths are read, so nothing else in the artifact can reach
     a branch that auto-merges. Every one must be present: `bound` uploads all of

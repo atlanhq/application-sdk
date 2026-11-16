@@ -1,12 +1,13 @@
-name: Sync the conformance lock to a pyatlan floor bump
+name: Sync the conformance lock to a Renovate dependency bump
 
-# FND-4439. renovate.json's `pyatlan` rule raises the SDK's published
-# `pyatlan>=X` floor on every pyatlan release and Mend relocks the ROOT project.
-# The conformance package's own lock is out of Renovate's reach (it does not
-# declare pyatlan; it gets it through atlan-application-sdk, path-sourced from
-# this checkout since FND-4256), and that lock is what
-# relationship_directions.json is built from and pinned to. This
-# moves that lock's pyatlan up to the root's and regenerates the table, so the
+# FND-4439, FND-5018. packages/conformance/uv.lock path-sources the SDK and api
+# packages from this checkout (FND-4256), so it records the dependencies they
+# declare. Renovate bumps those declarations and Mend relocks the ROOT project
+# only: it cannot run postUpgradeTasks here, so the conformance lock is left
+# behind and check_conformance_lock.py fails the PR. This relocks it, pinning
+# every drifted package to the version Renovate locked at the root (so the
+# root's release-age cooldown carries over), and on a pyatlan move also
+# regenerates relationship_directions.json, which is built from that lock. The
 # bump lands as one self-contained PR.
 #
 # Same shape as renovate-lock-cooldown.yaml, for the same reasons:
@@ -19,17 +20,23 @@ name: Sync the conformance lock to a pyatlan floor bump
 #   - An App-token push, because a GITHUB_TOKEN push triggers no CI.
 #   - carry_artifact_status.py carries `renovate/artifacts` onto our commit.
 #
-# Majors (renovate/major-pyatlan) are deliberately not handled: the conformance
-# lock cannot take a pyatlan major until an SDK release raises its `<N+1` cap.
+# Scope: every Renovate branch, majors included: the conformance lock takes the
+# SDK's declarations from this checkout, so a major the SDK declares is a major
+# that lock must take in the same PR. Except renovate/lock-file-maintenance,
+# which renovate-lock-cooldown.yaml owns: it already rewrites this lock there,
+# and two lanes pushing to one branch would race. On a branch whose bump the
+# SDK does not declare the script finds no drift and commits nothing.
 #
-# All branching logic lives in the tested .github/scripts/renovate_pyatlan_sync.py.
+# All branching logic lives in the tested .github/scripts/renovate_conformance_lock_sync.py.
 
 on:
   push:
     branches:
-      - renovate/pyatlan
+      - "renovate/**"
+      - "!renovate/lock-file-maintenance"
     # The manifests too: a floor raised to the version the root lock already
     # pins changes no uv.lock, but the conformance lock and table may still lag.
+    # Our own push touches only packages/conformance/**, so it never matches.
     paths:
       - "uv.lock"
       - "pyproject.toml"
@@ -39,12 +46,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: pyatlan-sync-${{ github.ref }}
+  group: conformance-lock-sync-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   sync:
-    name: Sync the conformance lock and table to the locked pyatlan
+    name: Sync the conformance lock and table to the root lock
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # ACTOR: the same Renovate identities the approval gate accepts as PR
@@ -75,7 +82,7 @@ jobs:
         with:
           version: "0.13.7"
 
-      # `--with packaging`, pinned: the up-only comparison needs PEP 440
+      # `--with packaging`, pinned: the up-only comparisons need PEP 440
       # parsing. `--no-project` keeps this off the repo's own environment.
       - name: Sync the conformance lock
         env:
@@ -83,7 +90,7 @@ jobs:
         run: |
           set -euo pipefail
           uv run --no-project --with 'packaging==26.3' \
-            python .github/scripts/renovate_pyatlan_sync.py \
+            python .github/scripts/renovate_conformance_lock_sync.py \
             --baseline-ref "origin/$BASE_BRANCH" \
             --no-commit
 
@@ -92,15 +99,15 @@ jobs:
       # roots the artifact at their common parent and drops that prefix, and
       # publish then finds none of them (FND-5015). A test replays this handoff.
       - name: Stage the synced outputs
-        run: python3 .github/scripts/renovate_pyatlan_sync.py --stage-to "$RUNNER_TEMP/pyatlan-sync-out"
+        run: python3 .github/scripts/renovate_conformance_lock_sync.py --stage-to "$RUNNER_TEMP/conformance-lock-sync-out"
 
       - name: Upload the synced outputs
         id: upload-outputs
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: pyatlan-sync
-          path: ${{ runner.temp }}/pyatlan-sync-out
+          name: conformance-lock-sync
+          path: ${{ runner.temp }}/conformance-lock-sync-out
           if-no-files-found: error
           retention-days: 1
           overwrite: true
@@ -113,8 +120,8 @@ jobs:
         if: steps.upload-outputs.outcome == 'failure'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: pyatlan-sync-retry
-          path: ${{ runner.temp }}/pyatlan-sync-out
+          name: conformance-lock-sync-retry
+          path: ${{ runner.temp }}/conformance-lock-sync-out
           if-no-files-found: error
           retention-days: 1
           overwrite: true
@@ -150,9 +157,9 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
-          pattern: pyatlan-sync*
+          pattern: conformance-lock-sync*
           merge-multiple: true
-          path: ${{ runner.temp }}/pyatlan-sync
+          path: ${{ runner.temp }}/conformance-lock-sync
 
       - name: Wait before the download retry
         if: steps.download-outputs.outcome == 'failure'
@@ -162,9 +169,9 @@ jobs:
         if: steps.download-outputs.outcome == 'failure'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          pattern: pyatlan-sync*
+          pattern: conformance-lock-sync*
           merge-multiple: true
-          path: ${{ runner.temp }}/pyatlan-sync
+          path: ${{ runner.temp }}/conformance-lock-sync
 
       # Stdlib only: nothing from the new dependency set runs beside the token.
       - name: Sign bot commits
@@ -173,7 +180,7 @@ jobs:
           signing-key: ${{ secrets.BOT_SIGNING_KEY }}
 
       - name: Commit the synced outputs
-        run: python3 .github/scripts/renovate_pyatlan_sync.py --apply-from "$RUNNER_TEMP/pyatlan-sync"
+        run: python3 .github/scripts/renovate_conformance_lock_sync.py --apply-from "$RUNNER_TEMP/conformance-lock-sync"
 
       # Unchanged outputs commit nothing, so this is a no-op push.
       - name: Push
