@@ -423,7 +423,7 @@ def run(
     )
 
     # Recomputed from the whole PR each round, so a reverted change drops its note.
-    state.advisories = advisory.notes([fd.path for fd in full_files])
+    state.advisories = advisory.notes(advisory.changed_paths(full_files))
 
     # ---- head text for changed files (data only; never executed) -----------
     head_text = head_side_text(gh, full_files, head, cfg.max_changed_files)

@@ -21,10 +21,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from lens import (
+    advisory,  # noqa: E402
+    holistic,  # noqa: E402
+)
 from lens import agent as agent_mod  # noqa: E402
 from lens import context as lens_context  # noqa: E402
 from lens import findings as findings_mod  # noqa: E402
-from lens import holistic  # noqa: E402
 from lens import review as review_mod  # noqa: E402
 from lens.agent import BundleResult  # noqa: E402
 from lens.bundle import group  # noqa: E402
@@ -7080,7 +7083,10 @@ def test_a_code_only_change_gets_no_scan_advisory(repo: Path):
 def test_state_from_a_newer_lens_with_unknown_fields_still_decodes():
     """A field added by a later lens (or dropped by a revert) must not make every
     PR's stored state unreadable."""
-    st = PRState(round=2)
+    st = PRState(
+        round=2,
+        findings=[Finding("a.py", 1, "low", "bug", "t", "b", "x = 1")],
+    )
     body = st.encode()
     raw = json.loads(
         findings_mod.zlib.decompress(
@@ -7090,8 +7096,47 @@ def test_state_from_a_newer_lens_with_unknown_fields_still_decodes():
         )
     )
     raw["some_future_field"] = [1]
+    raw["findings"][0]["some_future_finding_field"] = "x"  # nested, too
     blob = findings_mod.base64.b64encode(
         findings_mod.zlib.compress(json.dumps(raw).encode())
     ).decode()
     back = PRState.decode(f"<!-- {findings_mod.STATE_MARKER}:{blob} -->")
     assert back is not None and back.round == 2
+    assert [f.title for f in back.findings] == ["t"]
+
+
+DOCKERFILE_RENAME_DIFF = """\
+diff --git a/Dockerfile b/container.build
+similarity index 100%
+rename from Dockerfile
+rename to container.build
+"""
+
+
+def test_renaming_a_dockerfile_away_still_gets_the_scan_advisory(repo: Path):
+    """A rename's diff entry carries its destination as the path; the Dockerfile it
+    renames away still changed, so its former name must count."""
+    gh = FakeGitHub(
+        diffs={("b0", "h1"): DOCKERFILE_RENAME_DIFF},
+        files={("container.build", "h1"): "FROM scratch\n"},
+    )
+    res = run(
+        gh=cast(GitHub, gh),
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=_factory(Script()),
+    )
+    assert res.state is not None
+    [note] = res.state.advisories
+    assert "`Dockerfile`" in note
+
+
+def test_a_path_holding_backticks_cannot_break_out_of_its_code_span():
+    """Paths come from the PR, so a backtick in one must not close the code span and
+    let the rest render as Markdown in lens's own summary."""
+    [note] = advisory.notes(["Dockerfile`**spoof**`x"])
+    assert "`` Dockerfile`**spoof**`x ``" in note
+    [note] = advisory.notes(["a/Dockerfile\n## heading"])
+    assert "\n" not in note

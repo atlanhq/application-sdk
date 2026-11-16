@@ -140,11 +140,18 @@ class PRState:
             raw = json.loads(zlib.decompress(base64.b64decode(m.group(1))))
         except (ValueError, zlib.error):
             return None
-        raw["findings"] = [Finding(**f) for f in raw.get("findings", [])]
         # A field a newer lens added (or a revert dropped) must not make every
-        # PR's stored state unreadable: keep only the fields this version knows.
-        known = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in raw.items() if k in known})
+        # PR's stored state unreadable: keep only the fields this version knows,
+        # on the state and on each finding.
+        raw["findings"] = [
+            Finding(**_known(Finding, f)) for f in raw.get("findings", [])
+        ]
+        return cls(**_known(cls, raw))
+
+
+def _known(cls: type, raw: dict[str, Any]) -> dict[str, Any]:
+    names = {f.name for f in fields(cls)}
+    return {k: v for k, v in raw.items() if k in names}
 
 
 def merge_new(state: PRState, fresh: list[Finding], *, round_no: int) -> list[Finding]:
