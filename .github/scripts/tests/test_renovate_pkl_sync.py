@@ -553,6 +553,31 @@ def test_restore_tree_restores_the_mode_of_a_file_dirty_before(repo: Path) -> No
     assert script.stat().st_mode & 0o777 == 0o755
 
 
+def test_dirty_tree_records_a_path_that_vanishes_after_listing_as_deleted(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file another process deletes after ``git status`` lists it — even after
+    the snapshot has seen it exist — is recorded as deleted (None), not a
+    FileNotFoundError. A stray writer in the working tree can create and remove
+    files at any time. The file is removed at the moment its bytes are read: the
+    window an existence check before the read cannot close."""
+    transient = repo / "transient.json.gz"
+    transient.write_bytes(b"metrics")
+    real_read_bytes = Path.read_bytes
+
+    def unlink_then_read(self: Path) -> bytes:
+        if self.name == transient.name:
+            transient.unlink(missing_ok=True)
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", unlink_then_read)
+
+    state = mod.dirty_tree()
+
+    assert "transient.json.gz" in state
+    assert state["transient.json.gz"] is None
+
+
 def test_git_queries_go_through_the_run_capture_seam(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
