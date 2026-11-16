@@ -188,8 +188,13 @@ temporal.db
 .claude/scheduled_tasks.lock
 
 # Remediation run artifacts
-remediation/node_modules/
 remediation/runs/
+
+# npm installs at any depth. The remediate skill's optional Reactor path has
+# readers `npm i` into their own checkout, and one left under
+# packages/conformance/conformance/ would otherwise ship in the next wheel:
+# hatch builds from the git-ignore-filtered tree.
+node_modules/
 
 # Renovate setup
 renovate-config/README.md

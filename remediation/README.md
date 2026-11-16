@@ -84,6 +84,7 @@ use the full reconciler:
 
 ```bash
 # Install (dev-only):
+# Into your own project: the SDK pins and ships no npm packages.
 npm i -D @openprose/reactor @openprose/reactor-cli @openprose/reactor-devtools
 
 # First-time scaffold:
