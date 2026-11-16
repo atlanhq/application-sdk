@@ -77,6 +77,16 @@ def _cmd_gen_sdk_type_aliases(argv: list[str]) -> int:
         return int(e.code) if e.code is not None else 0
 
 
+def _cmd_gen_sdk_contract_fields(argv: list[str]) -> int:
+    from conformance.tools.generate_sdk_contract_fields import main
+
+    try:
+        main(argv)
+        return 0
+    except SystemExit as e:
+        return int(e.code) if e.code is not None else 0
+
+
 def _cmd_gen_relationship_directions(argv: list[str]) -> int:
     from conformance.tools.generate_relationship_directions import main
 
@@ -157,6 +167,7 @@ _COMMANDS = {
     "gen-toolkit-baseline": _cmd_gen_toolkit_baseline,
     "gen-public-errors": _cmd_gen_public_errors,
     "gen-sdk-type-aliases": _cmd_gen_sdk_type_aliases,
+    "gen-sdk-contract-fields": _cmd_gen_sdk_contract_fields,
     "gen-relationship-directions": _cmd_gen_relationship_directions,
     "ledger-guard": _cmd_ledger_guard,
     "remediate": _cmd_remediate,
@@ -187,6 +198,9 @@ commands:
                        --check       verify allowlist is current; exit 1 if stale
   gen-sdk-type-aliases Regenerate data/sdk_type_aliases.json from application_sdk/ type aliases
                        --sdk-root DIR  repo root to read (default: auto-detected)
+                       --check       verify table is current; exit 1 if stale
+  gen-sdk-contract-fields Regenerate data/sdk_contract_fields.json from the installed
+                       application_sdk's contract and template classes
                        --check       verify table is current; exit 1 if stale
   gen-relationship-directions Regenerate data/relationship_directions.json from pyatlan_v9
                        --check       verify table is current; exit 1 if stale
