@@ -133,7 +133,8 @@ can restate an SDK reason under its code to keep its own wording (5 Tableau code
 6. A field that inherits its parent's verdict gets the parent's gap but keeps its own code, so its
    category can point at a different stage than its gap. Count it under the parent's reason?
 7. Rolling fields up into their parent keeps field column refs only as counts, so stage 2 can't
-   settle them per field. Keep the refs (memory cost), or settle fields from the parent's outcome?
+   settle them per field. For now fields settle from their parent's outcome: the parent is the
+   unit people act on. Per-field settle (keeping the refs, at a memory cost) can come later.
 8. A whole phase failing (Power BI's report-definition step catches one exception for all of it)
    would surface as `UNINSTRUMENTED_PATH`. A reason for that, or a run-level flag?
 
