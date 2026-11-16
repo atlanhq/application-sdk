@@ -2593,29 +2593,41 @@ class SilentSwallowMixin:
         return self._is_typed_data_value(value)
 
     def _handler_returns_typed_data(self, node: ast.ExceptHandler) -> bool:
-        """E004: straight-line setup, then ``return`` of a typed result built from it.
+        """E004: setup and cause-preserving raise guards, then a typed result.
 
-        The handler's only exit is its last statement,
-        ``return helper(..., exc, ...)`` where the helper is proven by
-        :meth:`_is_typed_data_from_binding`; everything before it is a plain
-        assignment or expression statement.
+        The non-raising path ends with ``return helper(..., exc, ...)`` where the
+        helper is proven by :meth:`_is_typed_data_from_binding`. A preceding
+        ``if`` is accepted only when its sole body statement is a
+        cause-preserving raise and it has no ``else``; every path therefore
+        either re-raises the failure or reaches the typed return.
         """
         if node.name is None or _handler_rebinds_exception(node) or not node.body:
             return False
         last = node.body[-1]
         if not isinstance(last, ast.Return):
             return False
+        scope = self._with_converted_raises(
+            node, redaction_scope(node, sdk_errors=self._sdk_errors)
+        )
         for statement in node.body[:-1]:
+            if isinstance(statement, ast.If):
+                if (
+                    statement.orelse
+                    or len(statement.body) != 1
+                    or not isinstance(statement.body[0], ast.Raise)
+                    or not _raise_carries_cause(statement.body[0], scope)
+                ):
+                    return False
+                continue
             if not isinstance(
                 statement, (ast.Assign, ast.AnnAssign, ast.Expr, ast.Pass)
             ):
                 return False
-        if any(
-            isinstance(inner, (ast.Return, ast.Raise, ast.Break, ast.Continue))
-            for statement in node.body[:-1]
-            for inner in [statement, *_iter_shallow(statement)]
-        ):
-            return False
+            if any(
+                isinstance(inner, (ast.Return, ast.Raise, ast.Break, ast.Continue))
+                for inner in [statement, *_iter_shallow(statement)]
+            ):
+                return False
         return self._is_typed_data_from_binding(last.value, node.name)
 
     def _is_typed_data_value(self, value: ast.expr) -> bool:

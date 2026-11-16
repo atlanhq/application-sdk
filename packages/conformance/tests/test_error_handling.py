@@ -8457,6 +8457,54 @@ def test_e004_e007_still_fire_when_the_same_class_result_is_not_proven(
     assert "E007" in found
 
 
+_GUARDED_TYPED_VERDICT = """\
+class Probe:
+    @staticmethod
+    def unavailable(exc: BaseException, started: float) -> CheckResult:
+        return CheckResult(passed=False, error=RemoteFailure(cause=exc))
+
+    def check(self, started):
+        try:
+            load()
+        except Exception as exc:
+            {guard}
+            return {result}
+"""
+
+
+def test_e004_no_finding_when_cause_preserving_guard_precedes_typed_helper() -> None:
+    src = _GUARDED_TYPED_VERDICT.format(
+        guard="if readiness_is_unknown(exc):\n                raise",
+        result="self.unavailable(exc, started)",
+    )
+    assert "E004" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    ("guard", "result"),
+    [
+        (
+            "if readiness_is_unknown(exc):\n"
+            "                raise RuntimeError('unknown') from None",
+            "self.unavailable(exc, started)",
+        ),
+        (
+            "if readiness_is_unknown(exc):\n                raise",
+            "None",
+        ),
+        (
+            "if readiness_is_unknown(exc):\n                raise",
+            "self.unavailable(None, started)",
+        ),
+    ],
+)
+def test_e004_still_fires_when_guarded_result_does_not_preserve_every_path(
+    guard: str, result: str
+) -> None:
+    src = _GUARDED_TYPED_VERDICT.format(guard=guard, result=result)
+    assert "E004" in _findings(src)
+
+
 # ── E004/E007: a returned helper that logs through safe_exception_frames ──────
 
 _LOGGING_HELPER_RETURN = """\
