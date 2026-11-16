@@ -24,6 +24,7 @@ from ._imports import (
     register_alias_records,
 )
 from ._io import safe_read_json, safe_read_text
+from ._parse import ParseFailure, parse_failure, runtime_python
 from ._pytest_collection import (
     is_collectable_test_file,
     is_test_class,
@@ -51,6 +52,9 @@ __all__ = [
     "qualified_rebound_imports",
     "safe_read_json",
     "safe_read_text",
+    "ParseFailure",
+    "parse_failure",
+    "runtime_python",
     "EXCLUDE_DIRS",
     "SDK_APP_BASE_NAMES",
     "SDK_PACKAGE_PREFIX",

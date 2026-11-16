@@ -19,6 +19,7 @@ from conformance.suite.schema.extensions import (
 from conformance.suite.schema.findings import Finding, findings_to_report
 from conformance.suite.schema.sarif import (
     Location,
+    Notification,
     PhysicalLocation,
     Region,
     ReportingDescriptor,
@@ -65,6 +66,7 @@ __all__ = [
     "SafeSwap",
     "SafeSwapRequires",
     "Location",
+    "Notification",
     "PhysicalLocation",
     "Region",
     "ReportingDescriptor",

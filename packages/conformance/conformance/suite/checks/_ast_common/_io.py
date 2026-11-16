@@ -23,6 +23,8 @@ skip explicitly::
 
 ``read_bytes()`` needs no wrapper: there is no decode step, and ``ast.parse``
 surfaces a bad-encoding buffer as ``SyntaxError``, which callers already catch.
+Catching it is a skip, not a pass: the runner reports every discovered Python
+file that does not parse (see :mod:`._parse`).
 """
 
 from __future__ import annotations
