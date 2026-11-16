@@ -110,6 +110,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.38.6,<2.0.0" },
     { name = "boto3", marker = "extra == 'iam-auth'", specifier = ">=1.38.6,<2.0.0" },
     { name = "certifi", specifier = ">=2026.10.19" },
+    { name = "dnspython", marker = "extra == 'mcp'", specifier = ">=2.9.2" },
     { name = "duckdb", marker = "extra == 'sql'", specifier = ">=1.1.3,<1.6.0" },
     { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=40.44.0,<41.0.0" },
     { name = "fastapi", specifier = ">=0.162.0,<0.163.0" },
@@ -137,7 +138,7 @@ requires-dist = [
     { name = "protobuf", specifier = ">=6.33.5,<8" },
     { name = "pyarrow", marker = "extra == 'pandas'", specifier = ">=23.0.1,<27.0.0" },
     { name = "pyarrow", marker = "extra == 'sql'", specifier = ">=23.0.1,<27.0.0" },
-    { name = "pyatlan", specifier = ">=11.7.0,<12" },
+    { name = "pyatlan", specifier = ">=11.7.1,<12" },
     { name = "pydantic", specifier = ">=2.10.6,<3.0.0" },
     { name = "pyjwt", specifier = ">=2.12.0,<3" },
     { name = "pytest", marker = "extra == 'tests'", specifier = ">=8.3.3,<10.0.0" },
@@ -218,7 +219,7 @@ requires-dist = [
     { name = "obstore", marker = "extra == 'obstore'", specifier = ">=0.12.0,<0.13.0" },
     { name = "orjson", specifier = ">=3.11.6,<4.0.0" },
     { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2.3,<4.0.0" },
-    { name = "pyatlan", marker = "extra == 'pyatlan'", specifier = ">=11.7.0,<12" },
+    { name = "pyatlan", marker = "extra == 'pyatlan'", specifier = ">=11.7.1,<12" },
     { name = "pydantic", specifier = ">=2.10.6,<3.0.0" },
     { name = "python-dotenv", marker = "extra == 'aws'", specifier = ">=1.2.2,<2.0.0" },
     { name = "python-dotenv", marker = "extra == 'sql'", specifier = ">=1.2.2,<2.0.0" },
@@ -1989,7 +1990,7 @@ wheels = [
 
 [[package]]
 name = "pyatlan"
-version = "11.7.0"
+version = "11.7.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "authlib" },
@@ -2005,9 +2006,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8e/53/24383f0569e6409f94b3aed539b7cab9a264b86bd1b514de11d78087140e/pyatlan-11.7.0.tar.gz", hash = "sha256:fd4e1a3695dd4cafe90ee3284fe2f40a10755241d67c6b2dce14eb0eb0b89cf6", size = 4321105, upload-time = "2026-11-03T08:35:24.616Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/20/38/243254c100d71032e63d2188ed1eddf4bf79880ca9da04cc5e09de1cd148/pyatlan-11.7.1.tar.gz", hash = "sha256:9981d056a746e66389154dbc9751c42c92437a16abe3e0c7cc23c55ae72341d6", size = 4321574, upload-time = "2026-11-16T06:57:49.615Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3b/4d/496907e1f0eb3fec69a78442479425899ff684383fa925d408ab49c5ff6c/pyatlan-11.7.0-py3-none-any.whl", hash = "sha256:cf26c7918032f08b4f3eafed3aee95369ec2c2ebc84e2b90ec0167e89eeecd65", size = 6305800, upload-time = "2026-11-03T08:35:22.672Z" },
+    { url = "https://files.pythonhosted.org/packages/26/20/b30c217c1403886e696c2befa82e2486e3f51b5a483171cbcd144601166e/pyatlan-11.7.1-py3-none-any.whl", hash = "sha256:60670e2c8c8a72c3424d5b02f5cf83bbcc83f338293388bfda64fedbe840a7a5", size = 6306290, upload-time = "2026-11-16T06:57:47.523Z" },
 ]
 
 [[package]]
