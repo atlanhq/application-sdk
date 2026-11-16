@@ -66,9 +66,10 @@ no inherited fields, which is a fleet-wide B005/B006/K018 false positive.
 from __future__ import annotations
 
 import importlib.resources as _ir
-import json
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, TypedDict, cast
+
+from conformance.suite.checks._ast_common._io import safe_read_json
 
 DATA_PATH = Path(str(_ir.files("conformance"))).joinpath(
     "data", "sdk_contract_fields.json"
@@ -97,7 +98,27 @@ def _fields(raw: dict[str, list[list[str]]]) -> dict[str, tuple[SdkField, ...]]:
     }
 
 
-_TABLE = json.loads(DATA_PATH.read_text(encoding="utf-8"))
+class _Table(TypedDict):
+    """Shape of ``sdk_contract_fields.json`` as the generator writes it."""
+
+    contract_base_fields: dict[str, list[list[str]]]
+    template_contract_fields: dict[str, list[list[str]]]
+    template_contract_bases: dict[str, list[str]]
+    template_run_contracts: dict[str, dict[str, str]]
+
+
+def _load_table() -> _Table:
+    table = safe_read_json(DATA_PATH)
+    if not isinstance(table, dict):
+        # Fail loud: empty registries would be a fleet-wide false positive.
+        raise RuntimeError(
+            f"{DATA_PATH} is missing or unreadable — regenerate it with "
+            "`uv run atlan-application-sdk-conformance gen-sdk-contract-fields`."
+        )
+    return cast(_Table, table)
+
+
+_TABLE = _load_table()
 
 SDK_CONTRACT_BASE_FIELDS: dict[str, tuple[SdkField, ...]] = _fields(
     _TABLE["contract_base_fields"]
