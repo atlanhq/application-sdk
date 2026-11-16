@@ -72,6 +72,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -432,9 +433,24 @@ def dirty_tree() -> TreeState:
         code, path = entry[:2], entry[3:]
         if "R" in code or "C" in code:
             i += 1  # the rename source follows as its own field
-        p = Path(path)
-        state[path] = (p.read_bytes(), p.stat().st_mode) if p.is_file() else None
+        state[path] = _read_file_state(Path(path))
     return state
+
+
+def _read_file_state(p: Path) -> FileState | None:
+    """*p*'s content and mode, or None when it is gone or not a regular file.
+
+    Another process can delete a listed file at any moment between ``git status``
+    and here (a stray writer in the working tree), so a vanished path is read as
+    deleted rather than checked first: an existence check cannot close the gap
+    before the read. Any other OSError still propagates."""
+    try:
+        mode = p.stat().st_mode
+        if not stat.S_ISREG(mode):
+            return None
+        return (p.read_bytes(), mode)
+    except FileNotFoundError:
+        return None
 
 
 def changed_since(before: TreeState) -> list[str]:
