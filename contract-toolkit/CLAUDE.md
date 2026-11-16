@@ -1,6 +1,9 @@
 # CLAUDE.md - app-contract-toolkit
 
-Lean reference for Claude Code. See `AGENTS.md` for the full repo guide.
+The agent guide for the toolkit, for every agent. `AGENTS.md` points here;
+edit this file, not that one.
+
+NEVER add `Co-Authored-By` lines to commit messages.
 
 ## What This Repo Is
 
@@ -78,6 +81,39 @@ demonstrates distinct feature surface, verified by `tests/*.pkl`.
 - `ae-activities`: `FetchEntitiesNode`, `MergeNode` and generic `ActivityNode` in
   `extraNodes`; AE activity nodes mixed with a `DAGNode`, no `extract` step.
 - `artifact-schemas`: `artifactSchemas` data hand-off declarations — parquet + NDJSON, nested paths, arrays of structs (`[]` element step), an input artifact.
+- `card-split`: two entrypoints where only one is a marketplace UI card.
+- `behind-the-scenes`: single entrypoint with `marketplaceCard = false`; routable, no card.
+- `agent-e2e`: agent/SDR e2e codegen — direct and agent credential bodies, an
+  `extraction-method` ConditionalInput.
+- `scheduled`: cron background job via `schedules`.
+- `streaming`: streaming dispatch via `streaming.enabled`.
+
+## Generated Output Consumers
+
+```text
+{name}.json
+  -> SDK serves configmap at /workflows/v1/configmap/{name}
+  -> frontend/app-playground renders setup form
+
+atlan-connectors-{name}.json
+  -> SDK serves configmap at /workflows/v1/configmap/atlan-connectors-{name}
+  -> frontend/app-playground renders credential form
+
+manifest.json
+  -> SDK serves /workflows/v1/manifest
+  -> Heracles substitutes {{params}}
+  -> Automation Engine runs extract -> publish or custom DAG
+```
+
+Manifest value types:
+
+- `{{param}}`: substituted by Heracles from form values.
+- `$.node.outputs.*`: resolved by Automation Engine from upstream node output.
+- Static values: passed through.
+
+Default DAG is `extract -> publish`. Prefer typed nodes (`PublishNode`,
+`QueryIntelligenceNode`, `PopularityNode`, `LineageNode`, `LineagePublishNode`)
+over a raw `DAGNode` in `extraNodes`.
 
 ## Editing Rules
 
@@ -146,5 +182,24 @@ uv run python scripts/check-ruff-stable.py
 ```
 
 Use conventional PR titles: `feat:`, `fix:`, `docs:`, `ci:`, `chore:`, or breaking-change syntax. Do not hand-edit `CHANGELOG.md`; release automation owns it.
+
+## Releases
+
+Automated; no manual version input.
+
+1. Merging a PR that touches `contract-toolkit/**` to `main` fires
+   `Release Contract Toolkit` (`.github/workflows/contract-toolkit-release.yml`).
+   It runs `.github/scripts/contract_toolkit_release.py`, which reads the
+   conventional commits touching `contract-toolkit/**` since the last
+   `contract-toolkit-v*` tag: `!:` or a `BREAKING CHANGE:` trailer bumps major
+   (minor while on `0.x`), `feat:` bumps minor, anything else patch. It bumps
+   `src/PklProject` and prepends `CHANGELOG.md`; the workflow then regenerates
+   the conformance toolkit baseline, sanity-builds the package, and pushes the
+   `bump-version-contract-toolkit` branch with a PR labeled
+   `release:contract-toolkit`. Nothing to release: it exits quietly.
+2. Review and merge that release PR.
+3. `Publish Contract Toolkit` (`contract-toolkit-publish.yml`) builds the
+   package from merged `main`, publishes it under `contracts/` on `gh-pages`,
+   and tags `contract-toolkit-v<version>` at the merge commit.
 
 After opening a PR, post the self-review report before human review.
