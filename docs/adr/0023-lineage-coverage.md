@@ -90,6 +90,26 @@ Reason codes never go to logs or metrics, only to the per-asset rows.
 
 The tracker, the output writer and the interceptor/context from #2204 aren't in this spike yet.
 
+## What the spike tested
+
+The Tableau app was ported onto this module on a test branch. Its reasons became subclasses, its
+classifier calls `assess`, and it emits the outcome row. It was then compared with the in-app build
+on real runs: an internal tenant (replayed and live), a 1.02M-asset run and six more tenants' latest
+runs, all read-only.
+
+| Check | Result |
+| --- | --- |
+| Rows and lineage output, in-app vs SDK | Identical in all 11 comparisons: asset rows, ref rows and Process files |
+| Classifier branches reached by real data | 8 of 10; built-but-partial and inherited-at-row-level only in unit tests |
+| Ref hash | Equal to the stored hash on 377 of 377 refs |
+| `settle` vs a query-side settle | Same verdict on 51 of 51 pending assets, including 10 seeded cases with known answers |
+| Outcome row | Lands in ClickHouse once per run, with the allowlisted keys; 3 days of scheduled runs |
+| Time and memory at 1M assets | Within run-to-run noise of the in-app build |
+
+Two things the tests changed in this design. Lookup outcomes join on `componentsHash`, because ref
+positions differ from Process input order and even between two runs of the same build. And an app
+can restate an SDK reason under its code to keep its own wording (5 Tableau codes needed it).
+
 ## Options Considered
 
 * **A P003-style code prefix (`<CATEGORY>_<SPECIFIC>`)**. Rejected: every row already carries
@@ -108,9 +128,17 @@ The tracker, the output writer and the interceptor/context from #2204 aren't in 
    `VALID` with a flag instead?
 3. `CACHE_MISS` means "lookup miss" under ARS. Rename it now, while the set is unreleased?
 4. Fold this into #2204, or open a new PR?
+5. Restating an SDK reason by subclassing it under the same code: the right shape, or should
+   customer wording live outside the reason class?
+6. A field that inherits its parent's verdict gets the parent's gap but keeps its own code, so its
+   category can point at a different stage than its gap. Count it under the parent's reason?
+7. Rolling fields up into their parent keeps field column refs only as counts, so stage 2 can't
+   settle them per field. Keep the refs (memory cost), or settle fields from the parent's outcome?
+8. A whole phase failing (Power BI's report-definition step catches one exception for all of it)
+   would surface as `UNINSTRUMENTED_PATH`. A reason for that, or a run-level flag?
 
 ## Not in this spike
 
-The generic tracker, the artifact writer, moving the Tableau app onto this module (with a row-parity
-check against the in-app build), the publish-side outcome hook, and an `adopt-lineage-coverage`
-skill modelled on `typed-failures`.
+The generic tracker, the artifact writer, the publish-side outcome hook, and an
+`adopt-lineage-coverage` skill modelled on `typed-failures`. The Tableau port lives on an app test
+branch, not here.
