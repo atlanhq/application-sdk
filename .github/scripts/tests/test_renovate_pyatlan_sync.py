@@ -9,10 +9,15 @@ drift guards tying the workflow and renovate.json to the script.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import pytest
 import yaml
@@ -218,6 +223,153 @@ class TestApply:
             sync.main(["--apply-from", str(art)])
 
 
+@dataclass(frozen=True)
+class Step:
+    """The parts of a workflow step the handoff depends on."""
+
+    name: str
+    run: str
+    uses: str
+    path: str  # `with.path`, empty when the step has none
+    conditional: bool  # has an `if:`, i.e. the upload retry
+
+
+def _sync_steps() -> list[Step]:
+    workflow = cast(
+        dict[str, dict[str, dict[str, list[dict[str, object]]]]],
+        yaml.safe_load(WORKFLOW.read_text()),
+    )
+    steps: list[Step] = []
+    for raw in workflow["jobs"]["sync"]["steps"]:
+        with_ = cast(dict[str, object], raw.get("with", {}))
+        steps.append(
+            Step(
+                name=str(raw.get("name", "")),
+                run=str(raw.get("run", "")),
+                uses=str(raw.get("uses", "")),
+                path=str(with_.get("path", "")),
+                conditional="if" in raw,
+            )
+        )
+    return steps
+
+
+def _upload_root(search_paths: list[Path]) -> Path:
+    """The artifact root actions/upload-artifact picks for ``search_paths``.
+
+    Mirrors its search.ts: several paths -> their least common ancestor (the
+    rule that bit FND-5015: the root became packages/conformance and the
+    prefix was dropped); one directory -> that directory; one file -> its
+    parent.
+    """
+    if len(search_paths) > 1:
+        return Path(os.path.commonpath([str(p) for p in search_paths]))
+    only = search_paths[0]
+    return only if only.is_dir() else only.parent
+
+
+def _run_sync_job_handoff(repo: Path, runner_temp: Path) -> Path:
+    """Replay the sync job's steps after the sync itself, then the publish
+    job's download, the way the runner would: run any staging step's script
+    for real, upload each artifact with upload-artifact's root rule, and
+    merge them into one download directory. Returns that directory.
+
+    The retry upload (`if:` the first one failed) carries the same path, which
+    the wiring test pins, so replaying the first upload is enough.
+    """
+    download = runner_temp / "pyatlan-sync"
+    script = ".github/scripts/renovate_pyatlan_sync.py"
+    for step in _sync_steps():
+        if script in step.run and "--stage-to" in step.run:
+            argv = shlex.split(step.run.replace("$RUNNER_TEMP", str(runner_temp)))
+            assert sync.main(argv[argv.index(script) + 1 :]) == 0
+        if "upload-artifact" in step.uses and not step.conditional:
+            raw = step.path.replace("${{ runner.temp }}", str(runner_temp))
+            search = [repo / entry for entry in raw.split()]
+            root = _upload_root(search)
+            for entry in search:
+                files = (
+                    [entry]
+                    if entry.is_file()
+                    else [f for f in entry.rglob("*") if f.is_file()]
+                )
+                for f in files:
+                    target = download / f.relative_to(root)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(f, target)
+    return download
+
+
+class TestHandoff:
+    """The sync job's artifact must reach publish at repo paths (FND-5015)."""
+
+    def test_the_workflow_handoff_round_trips_every_output(
+        self, repo: Path, tmp_path: Path
+    ):
+        for path in sync.OUTPUT_PATHS:
+            (repo / path).write_text(f"synced {path}\n")
+        runner_temp = tmp_path / "runner-temp"
+        runner_temp.mkdir()
+        download = _run_sync_job_handoff(repo, runner_temp)
+        assert sync.main(["--apply-from", str(download)]) == 0
+        committed = set(
+            git(repo, "show", "--name-only", "--format=", "HEAD").stdout.split()
+        )
+        assert committed == set(sync.OUTPUT_PATHS)
+
+    def test_staging_then_apply_round_trips_every_output(
+        self, repo: Path, tmp_path: Path
+    ):
+        for path in sync.OUTPUT_PATHS:
+            (repo / path).write_text(f"synced {path}\n")
+        staged = tmp_path / "staged"
+        assert sync.main(["--stage-to", str(staged)]) == 0
+        staged_files = {
+            str(f.relative_to(staged)) for f in staged.rglob("*") if f.is_file()
+        }
+        assert staged_files == set(sync.OUTPUT_PATHS)
+        git(repo, "checkout", "-q", "--", ".")  # back to the branch's outputs
+        assert sync.main(["--apply-from", str(staged)]) == 0
+        for path in sync.OUTPUT_PATHS:
+            assert (repo / path).read_text() == f"synced {path}\n"
+
+    def test_the_old_flattened_layout_is_still_refused(
+        self, repo: Path, tmp_path: Path
+    ):
+        # apply_outputs stays strict: an artifact rooted at the outputs'
+        # common parent (the pre-FND-5015 layout) is a broken handoff.
+        root = _upload_root([repo / p for p in sync.OUTPUT_PATHS])
+        flat = tmp_path / "flat"
+        for path in sync.OUTPUT_PATHS:
+            target = flat / (repo / path).relative_to(root)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(repo / path, target)
+        with pytest.raises(FileNotFoundError, match=sync.OUTPUT_PATHS[0]):
+            sync.main(["--apply-from", str(flat)])
+
+    def test_staging_refuses_a_missing_output(self, repo: Path, tmp_path: Path):
+        (repo / lanes.RELATIONSHIP_DIRECTIONS).unlink()
+        staged = tmp_path / "staged"
+        with pytest.raises(FileNotFoundError):
+            sync.main(["--stage-to", str(staged)])
+        assert not staged.exists()  # checked before anything is copied
+
+    def test_staging_refuses_a_symlinked_output(self, repo: Path, tmp_path: Path):
+        outside = tmp_path / "outside.json"
+        outside.write_text("{}\n")
+        (repo / lanes.RELATIONSHIP_DIRECTIONS).unlink()
+        (repo / lanes.RELATIONSHIP_DIRECTIONS).symlink_to(outside)
+        with pytest.raises(ValueError, match="symlinked"):
+            sync.main(["--stage-to", str(tmp_path / "staged")])
+
+    def test_staging_refuses_a_non_empty_folder(self, repo: Path, tmp_path: Path):
+        staged = tmp_path / "staged"
+        staged.mkdir()
+        (staged / "stale.txt").write_text("left over\n")
+        with pytest.raises(FileExistsError):
+            sync.main(["--stage-to", str(staged)])
+
+
 class TestWiring:
     """Drift guards: each of these fails silently in production if it drifts."""
 
@@ -241,11 +393,24 @@ class TestWiring:
         )
         assert guard and sync.COMMIT_MESSAGE.startswith(guard.group(1))
 
-    def test_the_artifact_carries_exactly_the_output_paths(self):
-        for step in self.workflow["jobs"]["sync"]["steps"]:
-            if "upload-artifact" in step.get("uses", ""):
-                paths = step["with"]["path"].split()
-                assert sorted(paths) == sorted(sync.OUTPUT_PATHS), step["name"]
+    def test_every_upload_carries_the_one_folder_the_staging_step_fills(self):
+        steps = _sync_steps()
+        staging = [
+            i
+            for i, step in enumerate(steps)
+            if "renovate_pyatlan_sync.py --stage-to" in step.run
+        ]
+        assert len(staging) == 1
+        assert shlex.split(steps[staging[0]].run)[-1] == "$RUNNER_TEMP/pyatlan-sync-out"
+        uploads = [
+            (i, step) for i, step in enumerate(steps) if "upload-artifact" in step.uses
+        ]
+        assert len(uploads) == 2  # the first try and the retry
+        for i, step in uploads:
+            assert i > staging[0], step.name
+            # One folder, never a list of files: several paths make
+            # upload-artifact drop their common prefix (FND-5015).
+            assert step.path == "${{ runner.temp }}/pyatlan-sync-out", step.name
 
     def test_only_the_minor_patch_branch_triggers_it(self):
         # YAML 1.1 reads a bare `on` as True.
