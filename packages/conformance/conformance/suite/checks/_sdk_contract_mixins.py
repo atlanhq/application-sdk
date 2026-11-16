@@ -58,14 +58,18 @@ pairs such an app with it. ``BaseMetadataExtractor`` is absent on purpose: its
 ``run`` is still ``App.run``, so a subclass without its own ``run()`` has no
 implicit entrypoint at all.
 
-**Missing or unreadable table.** Import fails. Empty registries would not be a
-safe fallback: every consumer contract inheriting an SDK base would resolve to
-no inherited fields, which is a fleet-wide B005/B006/K018 false positive.
+**Missing, unreadable or empty table.** Import fails. Empty registries would not
+be a safe fallback: every consumer contract inheriting an SDK base would resolve
+to no inherited fields, which is a fleet-wide B005/B006/K018 false positive. The
+one exception is the generator itself: it sets :data:`BOOTSTRAP_ENV` around its
+import so it can recreate a missing or broken table. It never reads these
+registries, because every SDK class it resolves is found in SDK source.
 """
 
 from __future__ import annotations
 
 import importlib.resources as _ir
+import os
 from pathlib import Path
 from typing import NamedTuple, TypedDict, cast
 
@@ -74,6 +78,11 @@ from conformance.suite.checks._ast_common._io import safe_read_json
 DATA_PATH = Path(str(_ir.files("conformance"))).joinpath(
     "data", "sdk_contract_fields.json"
 )
+
+#: Set to ``"1"`` only by ``generate_sdk_contract_fields`` while it imports the
+#: resolver, so a missing or broken table can be regenerated. Never set it
+#: anywhere else: with it set, a broken table loads as empty registries.
+BOOTSTRAP_ENV = "_CONFORMANCE_SDK_CONTRACT_FIELDS_BOOTSTRAP"
 
 
 class SdkField(NamedTuple):
@@ -107,18 +116,63 @@ class _Table(TypedDict):
     template_run_contracts: dict[str, dict[str, str]]
 
 
-def _load_table() -> _Table:
-    table = safe_read_json(DATA_PATH)
-    if not isinstance(table, dict):
-        # Fail loud: empty registries would be a fleet-wide false positive.
-        raise RuntimeError(
-            f"{DATA_PATH} is missing or unreadable — regenerate it with "
-            "`uv run atlan-application-sdk-conformance gen-sdk-contract-fields`."
-        )
-    return cast(_Table, table)
+class SdkContractTableError(RuntimeError):
+    """The packaged SDK contract-field table is missing, unreadable or empty."""
 
 
-_TABLE = _load_table()
+_SECTIONS: tuple[str, ...] = (
+    "contract_base_fields",
+    "template_contract_fields",
+    "template_contract_bases",
+    "template_run_contracts",
+)
+_CONTRACT_ROOTS: frozenset[str] = frozenset({"Input", "Output", "PublishInputMixin"})
+
+
+def _validate_table(raw: object) -> str | None:
+    """Why *raw* is not a usable table, or ``None`` when it is."""
+    if not isinstance(raw, dict):
+        return "missing or not valid JSON"
+    for section in _SECTIONS:
+        value = raw.get(section)
+        if not isinstance(value, dict) or not value:
+            return f"section {section!r} is missing or empty"
+    missing_roots = _CONTRACT_ROOTS - set(raw["contract_base_fields"])
+    if missing_roots:
+        return f"contract_base_fields lacks {sorted(missing_roots)}"
+    return None
+
+
+def _empty_table() -> _Table:
+    return {
+        "contract_base_fields": {},
+        "template_contract_fields": {},
+        "template_contract_bases": {},
+        "template_run_contracts": {},
+    }
+
+
+def load_table(path: Path = DATA_PATH) -> _Table:
+    """Read and validate the table at *path*.
+
+    Raises:
+        SdkContractTableError: the table is missing, unreadable, or lacks a
+            section, unless :data:`BOOTSTRAP_ENV` is set, in which case an empty
+            table is returned so the generator can rebuild it.
+    """
+    raw = safe_read_json(path)
+    problem = _validate_table(raw)
+    if problem is None:
+        return cast(_Table, raw)
+    if os.environ.get(BOOTSTRAP_ENV) == "1":
+        return _empty_table()
+    raise SdkContractTableError(
+        f"{path}: {problem} — regenerate it with "
+        "`uv run atlan-application-sdk-conformance gen-sdk-contract-fields`."
+    )
+
+
+_TABLE = load_table()
 
 SDK_CONTRACT_BASE_FIELDS: dict[str, tuple[SdkField, ...]] = _fields(
     _TABLE["contract_base_fields"]

@@ -39,24 +39,29 @@ Four tables are emitted, matching the four public names in
 
 The AST tables read source files of the same installed package the run-contract
 table imports, so all four come from one SDK version.
+
+The resolver this tool reuses imports ``_sdk_contract_mixins``, which refuses to
+load a missing or broken table. That module is imported here with its bootstrap
+switch set, so the tool can still recreate the table. The registries it then
+holds are never consulted: every SDK class is found in the SDK source being
+scanned, and the registries are only the fallback for classes that are not.
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
+import importlib.resources as _ir
 import importlib.util
 import json
+import os
 import sys
 import typing
+from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
-from conformance.suite.checks._entrypoint_contract_fields import (
-    _iter_fields,
-    resolve_contract_fields,
-)
-from conformance.suite.checks._sdk_contract_mixins import DATA_PATH
 from conformance.suite.checks.prescriptions._error_code_prefix import (
     ClassRecord,
     collect_classes,
@@ -65,11 +70,34 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
 
 SDK_PACKAGE = "application_sdk"
 
+#: Must equal ``_sdk_contract_mixins.DATA_PATH``. It is not imported from there,
+#: because importing that module loads (and validates) the very file this tool
+#: may need to recreate.
+DATA_PATH = Path(str(_ir.files("conformance"))).joinpath(
+    "data", "sdk_contract_fields.json"
+)
+
+#: Must equal ``_sdk_contract_mixins.BOOTSTRAP_ENV``, for the same reason.
+BOOTSTRAP_ENV = "_CONFORMANCE_SDK_CONTRACT_FIELDS_BOOTSTRAP"
+
 #: Root contract classes: anything transitively derived from one of these is a
 #: contract, and each has an entry in ``contract_base_fields``.
 CONTRACT_ROOTS: tuple[str, ...] = ("Input", "Output", "PublishInputMixin")
 _CONTRACT_BASE_MODULE = "application_sdk.contracts.base"
 TEMPLATE_PKG = "application_sdk.templates.contracts"
+
+
+@contextlib.contextmanager
+def _bootstrap_env() -> Iterator[None]:
+    previous = os.environ.get(BOOTSTRAP_ENV)
+    os.environ[BOOTSTRAP_ENV] = "1"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(BOOTSTRAP_ENV, None)
+        else:
+            os.environ[BOOTSTRAP_ENV] = previous
 
 
 class SdkSources(NamedTuple):
@@ -148,6 +176,8 @@ def ambiguous_template_names(sources: SdkSources) -> dict[str, set[str]]:
 
 
 def _build_base_fields(sources: SdkSources) -> dict[str, list[list[str]]]:
+    with _bootstrap_env():
+        from conformance.suite.checks._entrypoint_contract_fields import _iter_fields
     _aliases, records = sources.per_module[_CONTRACT_BASE_MODULE]
     by_name = {record.name: record for record in records}
     table: dict[str, list[list[str]]] = {}
@@ -162,6 +192,11 @@ def _build_base_fields(sources: SdkSources) -> dict[str, list[list[str]]]:
 
 
 def _build_template_fields(sources: SdkSources) -> dict[str, list[list[str]]]:
+    with _bootstrap_env():
+        from conformance.suite.checks._entrypoint_contract_fields import (
+            resolve_contract_fields,
+        )
+
     flattened: dict[str, list[list[str]]] = {}
     for module, (aliases, records) in sources.per_module.items():
         if not module.startswith(TEMPLATE_PKG):
@@ -264,13 +299,14 @@ def main(argv: list[str] | None = None) -> None:
         )
         sys.exit(2)
 
-    content = serialize(build_sdk_contract_fields(sdk_pkg))
     outfile: Path = args.outfile
+    if args.check and not outfile.exists():
+        print(f"MISSING: {outfile}", file=sys.stderr)
+        sys.exit(1)
+
+    content = serialize(build_sdk_contract_fields(sdk_pkg))
 
     if args.check:
-        if not outfile.exists():
-            print(f"MISSING: {outfile}", file=sys.stderr)
-            sys.exit(1)
         if outfile.read_text(encoding="utf-8") != content:
             print(
                 f"STALE: {outfile}\nRun `uv run atlan-application-sdk-conformance "
