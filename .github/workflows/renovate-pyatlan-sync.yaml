@@ -87,16 +87,20 @@ jobs:
             --baseline-ref "origin/$BASE_BRANCH" \
             --no-commit
 
-      # Exactly the script's OUTPUT_PATHS — a test pins the two together.
+      # One folder holding exactly the script's OUTPUT_PATHS at their repo
+      # paths. Not the files themselves: given several paths, upload-artifact
+      # roots the artifact at their common parent and drops that prefix, and
+      # publish then finds none of them (FND-5015). A test replays this handoff.
+      - name: Stage the synced outputs
+        run: python3 .github/scripts/renovate_pyatlan_sync.py --stage-to "$RUNNER_TEMP/pyatlan-sync-out"
+
       - name: Upload the synced outputs
         id: upload-outputs
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: pyatlan-sync
-          path: |
-            packages/conformance/uv.lock
-            packages/conformance/conformance/data/relationship_directions.json
+          path: ${{ runner.temp }}/pyatlan-sync-out
           if-no-files-found: error
           retention-days: 1
           overwrite: true
@@ -110,9 +114,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: pyatlan-sync-retry
-          path: |
-            packages/conformance/uv.lock
-            packages/conformance/conformance/data/relationship_directions.json
+          path: ${{ runner.temp }}/pyatlan-sync-out
           if-no-files-found: error
           retention-days: 1
           overwrite: true

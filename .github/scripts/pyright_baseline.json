@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 144,
-    "warning": 5936
+    "warning": 5933
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -669,7 +669,7 @@
       "warning:reportUnknownMemberType": 109
     },
     ".github/scripts/tests/test_renovate_pyatlan_sync.py": {
-      "warning:reportUnknownMemberType": 20
+      "warning:reportUnknownMemberType": 17
     },
     ".github/scripts/tests/test_renovate_reap_refused_locks.py": {
       "warning:reportArgumentType": 3,
