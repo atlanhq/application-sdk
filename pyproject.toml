@@ -164,6 +164,10 @@ distributed_lock = [
 ]
 mcp = [
     "fastmcp>=3.2.0,<4.0.0",
+    # Published CVE floor: arrives via fastmcp -> pydantic[email] ->
+    # email-validator. Not core: the SDK never imports it, and only this extra
+    # installs it.
+    "dnspython>=2.9.2",  # CVE-2026-128089
 ]
 tests = [
     "pandera[io]>=0.36.0,<0.37.0",
@@ -626,6 +630,7 @@ constraint-dependencies = [
     "python-dotenv>=1.2.2",      # CVE-2026-28684 (symlink file overwrite)
     "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2
     "filelock>=4.2.1",           # ReadWriteLock SQLite symlink/journal overwrite (dev/test only)
+    "dnspython>=2.9.2",          # CVE-2026-128089
 ]
 
 [tool.uv.sources]
