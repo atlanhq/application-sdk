@@ -21,8 +21,9 @@ What it does, all of it in the tested functions below:
    over.
 3. If anything drifted or needs a pin, relock with
    ``uv lock --upgrade-package <pkg>==<root version>`` for every pin. A package
-   the relock newly added (a new dependency's own dependencies) is pinned to
-   the root's version too, in a second relock, for the same reason.
+   a relock newly added (a new dependency's own dependencies) is pinned to the
+   root's version too, for the same reason, relocking again until a relock
+   adds nothing new (``relock_until_settled``).
 4. Fail if the relocked lock still drifts: committing it would leave the PR red.
 5. If the conformance lock's pyatlan now differs from the base branch's,
    regenerate ``relationship_directions.json`` with
@@ -131,6 +132,48 @@ def newly_added_pins(
     }
 
 
+#: Relocks allowed after the first before the added set must have settled. Each
+#: round can only pin packages the previous one newly added, so a real
+#: dependency chain settles in one or two; hitting the cap means something is
+#: undoing the pins, and committing that lock would be outside the root's picks.
+MAX_PIN_ROUNDS = 5
+
+
+def relock_until_settled(
+    pins: dict[str, str],
+    before: dict[str, str],
+    root_versions: dict[str, str],
+    root: Path,
+) -> int:
+    """Relock with ``pins``, then re-pin newly added packages until none are new.
+
+    A pin can pull in packages of its own, so every relock is re-scanned
+    against the lock as it was before the first one, not only the first
+    relock's result. Returns a process exit code.
+    """
+    code = relock(pins, root)
+    lock_path = root / lanes.PYATLAN_LOCK
+    for round_ in range(MAX_PIN_ROUNDS + 1):
+        if code != 0:
+            return code
+        after = locked_versions(lock_path.read_text("utf-8"))
+        added = newly_added_pins(before, after, root_versions)
+        fresh = {name: v for name, v in added.items() if pins.get(name) != v}
+        if not fresh:
+            return 0
+        if round_ == MAX_PIN_ROUNDS:
+            break
+        print(f"Pinning newly added packages to the root's: {fresh}.", flush=True)
+        pins = {**pins, **fresh}
+        code = relock(pins, root)
+    print(
+        f"Newly added packages still off the root's versions after "
+        f"{MAX_PIN_ROUNDS} re-pins; committing nothing.",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def sync(baseline_ref: str, root: Path) -> int:
     """Steps 1-5 of the module docstring. Returns a process exit code."""
     lock_path = root / lanes.PYATLAN_LOCK
@@ -146,15 +189,7 @@ def sync(baseline_ref: str, root: Path) -> int:
         print(
             f"Relocking {lanes.PYATLAN_LOCK}, pinning {pins or 'nothing'}.", flush=True
         )
-        code = relock(pins, root)
-        if code == 0:
-            after = locked_versions(lock_path.read_text("utf-8"))
-            added = newly_added_pins(before, after, root_versions)
-            if added:
-                print(
-                    f"Pinning newly added packages to the root's: {added}.", flush=True
-                )
-                code = relock({**pins, **added}, root)
+        code = relock_until_settled(pins, before, root_versions, root)
         if code != 0:
             print(
                 "uv lock failed for the conformance package; committing nothing.",

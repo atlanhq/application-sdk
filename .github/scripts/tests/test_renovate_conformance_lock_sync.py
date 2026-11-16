@@ -17,7 +17,8 @@ import shlex
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+import zipfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
@@ -144,6 +145,9 @@ class FakeUv:
     The relock does what uv does with ``--upgrade-package``: it records the
     SDK's current declarations, keeps every existing version except the pinned
     ones, and adds ``new_dependencies`` (at their own version, unless pinned).
+    ``pulled_in_by`` maps ``name==version`` to the packages that exact version
+    depends on, added the same way: pinning to another version of a package
+    can bring in dependencies of its own.
     """
 
     repo: Path
@@ -151,6 +155,9 @@ class FakeUv:
     relocks: list[dict[str, str]]
     regens: list[str | None]
     records_declarations: bool = True
+    pulled_in_by: dict[str, dict[str, str]] = field(
+        default_factory=dict[str, dict[str, str]]
+    )
 
     def relock(self, pins: dict[str, str], root: Path) -> int:
         self.relocks.append(dict(pins))
@@ -158,8 +165,14 @@ class FakeUv:
         versions = {
             **sync.locked_versions(lock.read_text()),
             **self.new_dependencies,
-            **pins,
         }
+        versions.update(pins)
+        for name, version in list(versions.items()):
+            for dep, dep_version in self.pulled_in_by.get(
+                f"{name}=={version}", {}
+            ).items():
+                versions.setdefault(dep, dep_version)
+        versions.update(pins)
         project = gate.read_lock(lock)
         declared = (
             {
@@ -339,6 +352,59 @@ class TestSync:
         ]
         assert conformance_versions(repo)["transitive"] == "1.4.0"
 
+    def test_packages_a_re_pin_pulls_in_are_pinned_too(self, repo: Path, uv: FakeUv):
+        # F-b4e3de: pinning `transitive` back to the root's 1.4.0 pulls in
+        # `deeper`, which the first relock never saw. A single re-scan of the
+        # first relock would leave `deeper` at its free 3.1.0.
+        declared = {**MAIN_DECLARED, "newdep": ">=2.0"}
+        write_branch(
+            repo,
+            declared,
+            {
+                **MAIN_LOCKED,
+                "newdep": "2.0.0",
+                "transitive": "1.4.0",
+                "deeper": "3.0.0",
+            },
+        )
+        uv.new_dependencies = {"newdep": "2.1.0", "transitive": "1.5.0"}
+        uv.pulled_in_by = {"transitive==1.4.0": {"deeper": "3.1.0"}}
+        assert run_sync() == 0
+        assert uv.relocks == [
+            {"newdep": "2.0.0"},
+            {"newdep": "2.0.0", "transitive": "1.4.0"},
+            {"newdep": "2.0.0", "transitive": "1.4.0", "deeper": "3.0.0"},
+        ]
+        assert conformance_versions(repo)["deeper"] == "3.0.0"
+
+    def test_pins_that_never_settle_fail(
+        self, repo: Path, uv: FakeUv, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Every relock adds a fresh package off the root's version: the loop
+        # must stop at the cap and fail rather than commit or spin forever.
+        rounds = sync.MAX_PIN_ROUNDS + 2
+        root = {**MAIN_LOCKED, **{f"p{i}": "1.0.0" for i in range(rounds)}}
+        write_branch(repo, MAIN_DECLARED, {**root, "pyatlan": "11.6.0"})
+        calls: list[dict[str, str]] = []
+
+        def runaway(pins: dict[str, str], root_dir: Path) -> int:
+            calls.append(dict(pins))
+            lock = root_dir / lanes.PYATLAN_LOCK
+            versions = {
+                k: v
+                for k, v in sync.locked_versions(lock.read_text()).items()
+                if k not in (SDK, API)
+            }
+            versions.update(pins)
+            versions[f"p{len(calls) - 1}"] = "2.0.0"
+            lock.write_text(uv_lock(versions, MAIN_DECLARED))
+            return 0
+
+        monkeypatch.setattr(sync, "relock", runaway)
+        assert run_sync() == 1
+        assert len(calls) == sync.MAX_PIN_ROUNDS + 1
+        assert uv.regens == []
+
     def test_a_dropped_dependency_relocks_with_no_pins(self, repo: Path, uv: FakeUv):
         declared = {"pyatlan": MAIN_DECLARED["pyatlan"]}
         write_branch(repo, declared, MAIN_LOCKED)
@@ -395,6 +461,114 @@ class TestSync:
                 "pyatlan==11.6.0",
             ]
         ]
+
+
+UV = shutil.which("uv")
+needs_uv = pytest.mark.skipif(UV is None, reason="uv not on PATH")
+
+
+def build_wheel(dest: Path, name: str, version: str, requires: list[str]) -> None:
+    """A minimal pure-python wheel: enough metadata for ``uv lock``."""
+    dist = f"{name}-{version}.dist-info"
+    metadata = f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
+    metadata += "".join(f"Requires-Dist: {req}\n" for req in requires)
+    wheel = "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+    with zipfile.ZipFile(dest / f"{name}-{version}-py3-none-any.whl", "w") as zf:
+        zf.writestr(f"{name}/__init__.py", "")
+        zf.writestr(f"{dist}/METADATA", metadata)
+        zf.writestr(f"{dist}/WHEEL", wheel)
+        zf.writestr(f"{dist}/RECORD", "")
+
+
+def project(name: str, deps: list[str], sources: dict[str, str] | None = None) -> str:
+    text = (
+        f'[project]\nname = "{name}"\nversion = "1.0.0"\n'
+        'requires-python = ">=3.11"\n'
+        f"dependencies = [{', '.join(json.dumps(d) for d in deps)}]\n\n"
+        '[build-system]\nrequires = ["hatchling"]\nbuild-backend = "hatchling.build"\n'
+    )
+    if sources:
+        text += "\n[tool.uv.sources]\n"
+        for dep, path in sources.items():
+            text += f'{dep} = {{ path = "{path}", editable = true }}\n'
+    return text
+
+
+@needs_uv
+class TestRealUvLock:
+    """F-96d5d1: the relock against a lock uv itself wrote, not a hand-made one.
+
+    Offline: every distribution is a local wheel served with --find-links and
+    no index, so this exercises uv's real lock format, metadata recording and
+    ``--upgrade-package name==version`` resolution without the network.
+    """
+
+    @pytest.fixture
+    def real(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        wheels = tmp_path / "wheels"
+        wheels.mkdir()
+        build_wheel(wheels, "pyatlan", "11.5.0", [])
+        build_wheel(wheels, "loguru", "0.7.3", [])
+        build_wheel(wheels, "loguru", "0.8.0", ["colorama>=0.4"])
+        build_wheel(wheels, "loguru", "0.8.1", [])
+        build_wheel(wheels, "colorama", "0.4.5", [])
+        build_wheel(wheels, "colorama", "0.4.6", [])
+        repo = tmp_path / "repo"
+        conformance = repo / sync.CONFORMANCE_DIR
+        (repo / "packages" / "api").mkdir(parents=True)
+        conformance.mkdir(parents=True)
+        (repo / "pyproject.toml").write_text(
+            project(SDK, ["loguru>=0.7.3,<0.8.0", "pyatlan>=11.5.0,<12"])
+        )
+        (repo / "packages" / "api" / "pyproject.toml").write_text(project(API, []))
+        (conformance / "pyproject.toml").write_text(
+            project(
+                "atlan-application-sdk-conformance",
+                [SDK, API],
+                {SDK: "../..", API: "../api"},
+            )
+        )
+        for key, value in {
+            "UV_NO_INDEX": "1",
+            "UV_FIND_LINKS": str(wheels),
+            "UV_CACHE_DIR": str(tmp_path / "uv-cache"),
+            "UV_NO_CONFIG": "1",
+            "UV_PYTHON_DOWNLOADS": "never",
+        }.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setattr(
+            gate, "LOCAL_PACKAGES", {SDK: repo, API: repo / "packages" / "api"}
+        )
+        assert sync.relock({}, repo) == 0  # main's lock, written by uv
+        return repo
+
+    def test_a_bump_relocks_to_the_roots_picks_not_the_newest(self, real: Path):
+        # The SDK moves to loguru 0.8.x. The root lock (Renovate's, after the
+        # cooldown) took 0.8.0 and colorama 0.4.5; 0.8.1 and colorama 0.4.6
+        # are newer and must not be picked.
+        lock = real / lanes.PYATLAN_LOCK
+        assert sync.locked_versions(lock.read_text())["loguru"] == "0.7.3"
+        (real / "pyproject.toml").write_text(
+            project(SDK, ["loguru>=0.8.0,<0.9.0", "pyatlan>=11.5.0,<12"])
+        )
+        assert gate.lock_drift(lock)  # red: uv's own lock records the old range
+        (real / "uv.lock").write_text(
+            uv_lock(
+                {"loguru": "0.8.0", "colorama": "0.4.5", "pyatlan": "11.5.0"},
+                {},
+            )
+        )
+        before = sync.locked_versions(lock.read_text())
+        root = sync.locked_versions((real / "uv.lock").read_text())
+        pins = sync.plan_pins(gate.drifted_packages(lock), root, before)
+        assert pins == {"loguru": "0.8.0"}
+
+        assert sync.relock_until_settled(pins, before, root, real) == 0
+
+        after = sync.locked_versions(lock.read_text())
+        assert after["loguru"] == "0.8.0"
+        assert after["colorama"] == "0.4.5"  # pulled in by 0.8.0, root's pick
+        assert gate.lock_drift(lock) == []  # green
 
 
 class TestApply:
