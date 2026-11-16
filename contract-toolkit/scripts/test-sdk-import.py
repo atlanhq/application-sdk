@@ -166,7 +166,15 @@ def check_substitution_round_trip(subs_path: Path) -> list[str]:
     rel = subs_path.relative_to(REPO_ROOT).as_posix()
     errors: list[str] = []
     for name, field in subs_cls.model_fields.items():
-        if name in inherited or name not in input_cls.model_fields:
+        if name in inherited:
+            continue
+        # Both files are generated from the same uiConfig key, so a substitution
+        # with no input field (SDK base-class fields count) means the generators
+        # diverged on the field's name or inclusion.
+        if name not in input_cls.model_fields:
+            errors.append(
+                f"{rel}: substitution field '{name}' has no AppInputContract field"
+            )
             continue
         default = field.get_default(call_default_factory=True)
         dumped = TypeAdapter(field.annotation).dump_python(default, mode="json")
