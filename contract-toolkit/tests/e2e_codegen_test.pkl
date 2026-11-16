@@ -130,6 +130,8 @@ local widgetApp = (App) {
             credentialType = "test-cred"
           }
           ["text_field"] = new App.TextInput { title = "Text"; default = "hello" }
+          ["date_field"] = new App.DateInput { title = "Date" }
+          ["file_field"] = new App.FileUploader { title = "File"; fileTypes { "text/csv" } }
           ["connection"] = new App.ConnectionCreator { placeholderText = "Conn" }
         }
       }
@@ -734,6 +736,16 @@ facts {
 
   ["BooleanInput with default=true emits bool field with True default"] {
     widgetSubs.contains("bool_field: bool = Field(default=True, alias=\"{{bool_field}}\")")
+  }
+
+  // DateInput and FileUploader follow `_input.py` (`int` / `FileReference | None`):
+  // the `str` fallback's `""` default failed the app's own input validation.
+  ["DateInput emits int field with 0 default, matching _input.py"] {
+    widgetSubs.contains("date_field: int = Field(default=0, alias=\"{{date_field}}\")")
+  }
+
+  ["FileUploader emits nullable dict field with None default, matching _input.py"] {
+    widgetSubs.contains("file_field: dict[str, Any] | None = Field(default=None, alias=\"{{file_field}}\")")
   }
 
   ["NumericInput emits int field with numeric default"] {
