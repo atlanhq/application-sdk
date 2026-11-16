@@ -76,10 +76,32 @@ from conformance.suite.checks import (
     text_io_encoding,
     transform_templates,
 )
-from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
+from conformance.suite.checks._ast_common import (
+    TOOL_VERSION,
+    ParseFailure,
+    detect_scope,
+    parse_failure,
+)
 from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 from conformance.suite.schema.findings import Finding, findings_to_report
+from conformance.suite.schema.sarif import (
+    ArtifactLocation,
+    Location,
+    Notification,
+    PhysicalLocation,
+    Region,
+)
+
+# reportingDescriptorReference id on the notification for an unparseable file.
+PARSE_FAILURE_ID = "conformance/parse-failure"
+
+# Per-file parse-failure annotations emitted before the aggregate one stands in
+# for the rest. GitHub keeps at most 10 annotations of each level per step and
+# drops the rest silently. The other summaries can use up to 2 of the same level
+# (blocking + warning under --exit-zero), and the aggregate needs 1, so 7 leaves
+# room for all of them.
+_MAX_PARSE_FILE_ANNOTATIONS = 7
 
 
 @dataclass(frozen=True)
@@ -425,13 +447,34 @@ def _series_in_scope(series: str, active: RuleScope | None) -> bool:
     )
 
 
+def _print_parse_failures(
+    parse_failures: list[ParseFailure], label: str, *, gating: bool = True
+) -> None:
+    """List the files no check scanned, so a clean summary is never a lie."""
+    if not parse_failures:
+        return
+    tag = "FAIL" if gating else "WARN"
+    n = len(parse_failures)
+    print(
+        f"conformance ({label}): {n} file{'s' if n != 1 else ''} could not be "
+        f"parsed, so no check scanned {'them' if n != 1 else 'it'}.\n"
+    )
+    for failure in parse_failures:
+        print(f"  [PARSE] [{tag}] {failure.file}:{failure.line}:{failure.column}")
+        print(f"  {failure.message}\n")
+
+
 def _print_human_summary(
     findings: list[Finding],
     series: str | None,
     excluded_prefixes: tuple[str, ...] = (),
+    parse_failures: list[ParseFailure] | None = None,
+    *,
+    parse_failures_gate: bool = True,
 ) -> None:
     """Print a human-readable violation/warning summary to stdout."""
     label = f"{series}-series" if series else "conformance suite"
+    _print_parse_failures(parse_failures or [], label, gating=parse_failures_gate)
     active = [f for f in findings if not f.suppressed]
     suppressed = [f for f in findings if f.suppressed]
     excluded_note = (
@@ -439,6 +482,8 @@ def _print_human_summary(
         if excluded_prefixes
         else ""
     )
+    if parse_failures:
+        excluded_note += " (files listed above were not scanned)"
     if not active and not suppressed:
         print(f"conformance ({label}): no violations found.{excluded_note}")
         return
@@ -466,14 +511,26 @@ def _pct(msg: str) -> str:
     return msg.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
+def _pct_prop(value: str) -> str:
+    """Percent-encode a workflow-command *property* value (``file=``, ``title=``).
+
+    Properties also need ``:`` and ``,`` escaped: unescaped, a repo-controlled
+    file name could end the property list early or, with a newline, start a
+    forged workflow command of its own.
+    """
+    return _pct(value).replace(":", "%3A").replace(",", "%2C")
+
+
 def _emit_github_summary_annotations(
     findings: list[Finding],
     series: str | None,
     excluded_prefixes: tuple[str, ...] = (),
     *,
     exit_zero: bool = False,
+    parse_failures: list[ParseFailure] | None = None,
+    parse_failures_gate: bool = True,
 ) -> None:
-    """Emit at most four summary annotations to the GitHub Actions log.
+    """Emit summary annotations to the GitHub Actions log.
 
     Per-finding annotations are capped at 10 per type by GitHub without any
     visible indication of truncation, making it impossible to track overall
@@ -488,8 +545,17 @@ def _emit_github_summary_annotations(
     downgraded from ``::error`` to ``::warning`` so the annotation severity
     matches the job exit code — preventing red error banners on a green job.
 
-    Emits nothing when there are no findings and no exclusions.
+    Files that could not be parsed get one aggregate annotation with the full
+    count, plus a file-anchored annotation each for the first
+    :data:`_MAX_PARSE_FILE_ANNOTATIONS`: there is no SARIF result for such a
+    file, so this is its only mark on the PR. The aggregate is what survives
+    GitHub's cap. They are ``::error`` only when they gate the run and
+    ``exit_zero`` is off.
+
+    Emits nothing when there are no findings, no exclusions and no parse
+    failures.
     """
+    parse_failures = parse_failures or []
     blocking = [
         f for f in findings if not f.suppressed and _tier(f) == EnforcementTier.BLOCK
     ]
@@ -498,7 +564,13 @@ def _emit_github_summary_annotations(
     ]
     suppressed = [f for f in findings if f.suppressed]
 
-    if not blocking and not warns and not suppressed and not excluded_prefixes:
+    if (
+        not blocking
+        and not warns
+        and not suppressed
+        and not excluded_prefixes
+        and not parse_failures
+    ):
         return
 
     server = os.getenv("GITHUB_SERVER_URL", "https://github.com")
@@ -510,6 +582,31 @@ def _emit_github_summary_annotations(
         detail = "Download the SARIF artifact from this workflow run for full details."
 
     label = f"{series}-series" if series else "conformance suite"
+
+    if parse_failures:
+        parse_level = "error" if parse_failures_gate and not exit_zero else "warning"
+        n = len(parse_failures)
+        shown = parse_failures[:_MAX_PARSE_FILE_ANNOTATIONS]
+        for failure in shown:
+            print(
+                f"::{parse_level} file={_pct_prop(failure.file)},"
+                f"line={failure.line},col={failure.column},"
+                f"title={_pct_prop('Conformance: file not scanned')}"
+                f"::{_pct(failure.message)}"
+            )
+        more = (
+            f" Only the first {len(shown)} are annotated; the log lists all {n}."
+            if n > len(shown)
+            else ""
+        )
+        msg = _pct(
+            f"{n} file{'s' if n != 1 else ''} could not be parsed, so no check "
+            f"in {label} scanned {'them' if n != 1 else 'it'}.{more} {detail}"
+        )
+        title = _pct_prop(
+            f"Conformance: {n} file{'s' if n != 1 else ''} not scanned ({label})"
+        )
+        print(f"::{parse_level} title={title}::{msg}")
 
     if blocking:
         n = len(blocking)
@@ -588,6 +685,40 @@ def _drop_excluded(
         for p in paths
         if not _is_excluded(p.relative_to(root).as_posix(), excluded_prefixes)
     ]
+
+
+def _python_files(paths: Iterable[Path]) -> set[Path]:
+    """The discovered paths that are Python sources (checks also discover YAML,
+    Dockerfiles and the repo root itself)."""
+    return {p for p in paths if p.suffix == ".py" and p.is_file()}
+
+
+def _parse_failures(py_paths: Iterable[Path], root: Path) -> list[ParseFailure]:
+    """Parse each discovered Python file once; return the ones that fail.
+
+    Every AST check skips a file it cannot parse, and nearly all of them do it
+    silently.  Checking once here, over the union of what the in-scope checks
+    discovered, reports that gap for every check without each one having to.
+    """
+    failures = (parse_failure(p, root) for p in sorted(py_paths))
+    return [f for f in failures if f is not None]
+
+
+def _to_notification(failure: ParseFailure, *, gating: bool = True) -> Notification:
+    """SARIF notification for *failure*; ``error`` gates the run, ``warning`` does not."""
+    return Notification(
+        message={"text": failure.message},
+        level="error" if gating else "warning",
+        descriptor={"id": PARSE_FAILURE_ID},
+        locations=[
+            Location(
+                physical_location=PhysicalLocation(
+                    artifact_location=ArtifactLocation(uri=failure.file),
+                    region=Region(start_line=failure.line, start_column=failure.column),
+                )
+            )
+        ],
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -689,12 +820,14 @@ def main(argv: list[str] | None = None) -> int:
     active_scope = RuleScope(args.scope) if args.scope else detect_scope(root)
 
     all_findings: list[Finding] = []
+    py_paths: set[Path] = set()
     for check in active:
         # Skip a whole check when none of its series' rules could be in scope
         # (e.g. the all-APP D-series when scanning the SDK itself).
         if not _series_in_scope(check.series, active_scope):
             continue
         paths = _drop_excluded(check.discover(root), root, excluded_prefixes)
+        py_paths |= _python_files(paths)
         if check.scan_all is not None:
             all_findings.extend(check.scan_all(paths, root))
         else:
@@ -738,8 +871,21 @@ def main(argv: list[str] | None = None) -> int:
     if rule_ids is not None:
         all_findings = [f for f in all_findings if f.rule_id in rule_ids]
 
+    parse_failures = _parse_failures(py_paths, root)
+    # A --rule run's exit code is scoped to exactly the requested rules, but
+    # py_paths spans every check in their series, and no mapping says which
+    # check owns which rule. An unparseable file there may be one the requested
+    # rules never scan, so it is reported as a warning and does not gate.
+    parse_failures_gate = rule_ids is None
+
     # Always surface violations in a human-readable form so CI logs are actionable.
-    _print_human_summary(all_findings, args.rule or args.series, excluded_prefixes)
+    _print_human_summary(
+        all_findings,
+        args.rule or args.series,
+        excluded_prefixes,
+        parse_failures,
+        parse_failures_gate=parse_failures_gate,
+    )
 
     if os.getenv("GITHUB_ACTIONS") == "true":
         _emit_github_summary_annotations(
@@ -747,6 +893,8 @@ def main(argv: list[str] | None = None) -> int:
             args.rule or args.series,
             excluded_prefixes,
             exit_zero=args.exit_zero,
+            parse_failures=parse_failures,
+            parse_failures_gate=parse_failures_gate,
         )
 
     report = findings_to_report(
@@ -754,6 +902,9 @@ def main(argv: list[str] | None = None) -> int:
         tool_version=args.tool_version,
         excluded_paths=list(excluded_prefixes),
         rule_ids=rule_ids,
+        notifications=[
+            _to_notification(f, gating=parse_failures_gate) for f in parse_failures
+        ],
     )
     for result in report.runs[0].results:
         if result.rule_id == "F019":

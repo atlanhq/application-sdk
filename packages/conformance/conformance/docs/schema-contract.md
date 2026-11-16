@@ -45,7 +45,8 @@ validation contract.  Every produced document must validate against it via
 | **Remediation hint** | `result.properties["atlan/hint"]` | machine-actionable hint for the model |
 | **Suite version** | `run.tool.driver.version` | = conformance package release, e.g. `"0.4.0"` |
 | **Repo / commit** | `run.versionControlProvenance[]` | `repositoryUri`, `revisionId` (SHA), `branch` |
-| **Gate decision** | `run.invocations[0].exitCode` | `0` = gate passed, `1` = gate failed |
+| **Gate decision** | `run.invocations[0].exitCode` | `0` = gate passed, `1` = gate failed (≥1 failing result, or ≥1 file not analysed) |
+| **File not analysed** (e.g. it does not parse) | `run.invocations[0].toolExecutionNotifications[]` | `level: "error"`, `descriptor.id: "conformance/parse-failure"`, location = the file and the line the parser stopped at; also sets `executionSuccessful: false`. `level: "warning"` (non-gating) in a `--rule` run |
 | **Disposition totals** | `run.properties["atlan/summary"]` | `{passing, failing, warning, suppressed}` counts |
 
 ---
@@ -259,6 +260,31 @@ echo "Exit code: $?"
 
 # Run only the C001 action-pinning check (low-level):
 uv run python -m conformance.suite.checks.actions_pinning --root . .github
+```
+
+### Files the suite could not analyse
+
+The runner parses every Python file the in-scope checks discovered, once, with
+its own interpreter. A file that does not parse is skipped by every check, so
+it has no results. It is not clean: the runner records it as an `error`-level
+`toolExecutionNotifications` entry, sets `executionSuccessful` to `false`, and
+fails the gate. `--exit-zero` softens it like any blocking violation, and
+`--exclude` takes the file out of scope altogether.
+
+A `--rule` run is the exception. Its exit code covers exactly the requested
+rules, but the parsed files come from every check in their series, and the
+runner cannot tell whether a requested rule would ever scan a given file. So in
+a `--rule` run the notification is `level: "warning"`, `executionSuccessful`
+stays `true`, and the gate is not failed.
+
+On GitHub Actions each failure is annotated on its file, up to seven, plus one
+aggregate annotation with the full count. GitHub drops annotations past ten per
+level without saying so; the aggregate is the one that always survives.
+
+```python
+invocation = report.runs[0].invocations[0]
+for note in invocation.tool_execution_notifications or []:
+    print(note.locations[0].physical_location.artifact_location.uri, note.message["text"])
 ```
 
 ### Parsing for dashboards

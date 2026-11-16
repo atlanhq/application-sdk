@@ -41,6 +41,15 @@ comment to) is instead exempted via a `[tool.conformance]` key in the repo's own
 [`docs/schema-contract.md` §6.4](conformance/docs/schema-contract.md#64-config-based-tier-exemption-toolconformance)
 for the canonical convention and when to use it over inline suppression.
 
+## Files that do not parse
+
+A Python file the runner cannot parse is skipped by every check, so it would
+otherwise look clean. The runner reports each one instead: a `[PARSE]` line in
+the log, a SARIF `toolExecutionNotifications` entry, `executionSuccessful:
+false`, and a failed gate. Fix the syntax error, or `--exclude` the path if it
+is deliberately not Python. See
+[`docs/schema-contract.md` §8](conformance/docs/schema-contract.md#files-the-suite-could-not-analyse).
+
 ## In CI
 
 Consumer repos should reference this package via the reusable workflow in

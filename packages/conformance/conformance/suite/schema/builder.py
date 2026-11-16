@@ -54,6 +54,7 @@ from conformance.suite.schema.sarif import (
     ArtifactLocation,
     Invocation,
     Location,
+    Notification,
     PhysicalLocation,
     Region,
     ReportingDescriptor,
@@ -268,7 +269,11 @@ class ReportBuilder:
         return self
 
     def build(
-        self, *, exit_code: int | None = None, excluded_paths: list[str] | None = None
+        self,
+        *,
+        exit_code: int | None = None,
+        excluded_paths: list[str] | None = None,
+        notifications: list[Notification] | None = None,
     ) -> SarifReport:
         """Finalise and return the :class:`SarifReport`.
 
@@ -278,7 +283,12 @@ class ReportBuilder:
 
         The ``exit_code`` is derived automatically as:
         * 0 — no ``FAILING`` results
-        * 1 — ≥1 ``FAILING`` result
+        * 1 — ≥1 ``FAILING`` result, or ≥1 ``error``-level notification
+
+        *notifications* become ``invocations[0].toolExecutionNotifications``.
+        An ``error``-level one means a file went unanalysed, so it sets
+        ``executionSuccessful`` to ``False`` and fails the gate: a clean
+        report must mean every discovered file was scanned.
 
         Pass an explicit ``exit_code`` only when the caller has additional
         gating logic beyond per-result disposition.
@@ -295,8 +305,20 @@ class ReportBuilder:
                 summary.suppressing += 1
 
         # Gate decision
-        derived_exit_code = 1 if summary.failing > 0 else 0
+        tool_errors = [n for n in notifications or [] if n.level == "error"]
+        derived_exit_code = 1 if summary.failing > 0 or tool_errors else 0
         effective_exit_code = exit_code if exit_code is not None else derived_exit_code
+        if effective_exit_code == 0:
+            exit_description = "Gate passed."
+        elif tool_errors and summary.failing == 0:
+            exit_description = (
+                "Gate failed: one or more files could not be analysed "
+                "(see toolExecutionNotifications)."
+            )
+        else:
+            # Blocking results, or a caller's explicit exit_code override: the
+            # wording predates parse-failure notifications and stays as it was.
+            exit_description = "Gate failed: one or more blocking violations found."
 
         # Version-control provenance
         provenance: list[VersionControlDetails] = []
@@ -326,13 +348,12 @@ class ReportBuilder:
             results=list(self._results),
             invocations=[
                 Invocation(
-                    execution_successful=True,
+                    execution_successful=not tool_errors,
+                    tool_execution_notifications=list(notifications)
+                    if notifications
+                    else None,
                     exit_code=effective_exit_code,
-                    exit_code_description=(
-                        "Gate failed: one or more blocking violations found."
-                        if effective_exit_code != 0
-                        else "Gate passed."
-                    ),
+                    exit_code_description=exit_description,
                 )
             ],
             version_control_provenance=provenance,
