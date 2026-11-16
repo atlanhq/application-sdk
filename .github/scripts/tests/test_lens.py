@@ -7001,3 +7001,97 @@ def test_a_refusal_beside_a_transport_failure_still_offers_a_retry_for_the_other
     res.incomplete = ["a: refused", "b: llm_error"]
     hint = review_mod._retry_hint(res)
     assert "refused again" in hint and "other parts that failed" in hint
+
+
+# ---- advisory notes: rules no code change can satisfy ------------------------------
+
+PYPROJECT_DIFF = """\
+diff --git a/pyproject.toml b/pyproject.toml
+index 1111111..2222222 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,3 +1,3 @@
+ [project]
+ name = "x"
+-dependencies = ["dnspython>=2.7"]
++dependencies = ["dnspython>=2.8"]
+"""
+
+
+def test_a_dependency_change_gets_a_scan_advisory_not_a_finding(repo: Path):
+    """The trivy/grype scan rule asks for something only the PR description can
+    show, and verify judges only code, so a finding for it could never close. A
+    dependency-only diff with no scan in its description therefore draws no finding
+    (the real build-config card no longer asks for one) and does carry a
+    non-blocking advisory note in the summary, which survives a later re-render."""
+    real_cfg = Path(__file__).resolve().parents[2] / "lens"
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname = "x"\ndependencies = ["dnspython>=2.8"]\n'
+    )
+    gh = FakeGitHub(
+        diffs={("b0", "h1"): PYPROJECT_DIFF},
+        files={
+            ("pyproject.toml", "h1"): (repo / "pyproject.toml").read_text(),
+        },
+    )
+    script = Script()  # the reviewer raises nothing and calls task_done
+    res = run(
+        gh=cast(GitHub, gh),
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(real_cfg),
+        client_factory=_factory(script),
+    )
+    sent = json.dumps(script.requests)
+    assert "build-config" in sent  # the card did reach the reviewer
+    # No card line asks the reviewer to flag a missing scan.
+    assert not re.search(r"- Flag:[^\n\\]*trivy", sent)
+    assert res.state is not None and res.state.open_findings() == []
+    [summary] = gh.comments
+    body = summary["body"]
+    assert "Ready to merge" in body
+    assert "**Advisory** (does not block)" in body
+    advisory = body.split("**Advisory** (does not block)")[1].split("\n")[0]
+    assert (
+        "trivy" in advisory and "grype" in advisory and "`pyproject.toml`" in advisory
+    )
+    # A later round, dismiss or recheck re-renders from stored state: the note stays.
+    back = PRState.decode(body)
+    assert back is not None and back.advisories == res.state.advisories
+    again = render_summary(RunResult("reviewed", mode="full", state=back))
+    assert "**Advisory** (does not block)" in again
+
+
+def test_a_code_only_change_gets_no_scan_advisory(repo: Path):
+    gh = FakeGitHub()
+    res = run(
+        gh=cast(GitHub, gh),
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=_factory(Script()),
+    )
+    assert res.state is not None and res.state.advisories == []
+    assert "**Advisory**" not in gh.comments[0]["body"]
+
+
+def test_state_from_a_newer_lens_with_unknown_fields_still_decodes():
+    """A field added by a later lens (or dropped by a revert) must not make every
+    PR's stored state unreadable."""
+    st = PRState(round=2)
+    body = st.encode()
+    raw = json.loads(
+        findings_mod.zlib.decompress(
+            findings_mod.base64.b64decode(
+                re.search(r"<!-- [^:]+:(\S+) -->", body).group(1)  # type: ignore[union-attr]
+            )
+        )
+    )
+    raw["some_future_field"] = [1]
+    blob = findings_mod.base64.b64encode(
+        findings_mod.zlib.compress(json.dumps(raw).encode())
+    ).decode()
+    back = PRState.decode(f"<!-- {findings_mod.STATE_MARKER}:{blob} -->")
+    assert back is not None and back.round == 2

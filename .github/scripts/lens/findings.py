@@ -17,7 +17,7 @@ import hashlib
 import json
 import re
 import zlib
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
 SEVERITIES = ("critical", "high", "medium", "low")
@@ -99,6 +99,9 @@ class PRState:
     findings: list[Finding] = field(default_factory=list)
     ledger: dict[str, Any] = field(default_factory=dict)
     approach: dict[str, Any] = field(default_factory=dict)  # once-per-PR approach check
+    # Non-blocking reminders from the PR's changed paths (lens/advisory.py): shown in
+    # the summary, never findings, so verify never has to close them.
+    advisories: list[str] = field(default_factory=list)
     pending_files: list[str] = field(
         default_factory=list
     )  # left unreviewed by a failure
@@ -138,7 +141,10 @@ class PRState:
         except (ValueError, zlib.error):
             return None
         raw["findings"] = [Finding(**f) for f in raw.get("findings", [])]
-        return cls(**raw)
+        # A field a newer lens added (or a revert dropped) must not make every
+        # PR's stored state unreadable: keep only the fields this version knows.
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in raw.items() if k in known})
 
 
 def merge_new(state: PRState, fresh: list[Finding], *, round_no: int) -> list[Finding]:
