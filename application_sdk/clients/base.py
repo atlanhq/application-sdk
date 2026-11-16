@@ -103,17 +103,38 @@ class _EnvProxyHTTPTransport(httpx.AsyncHTTPTransport):
     def _make_proxied_transport(self, proxy: str) -> httpx.AsyncBaseTransport:
         return httpx.AsyncHTTPTransport(**self._transport_kwargs, proxy=proxy)
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def _close_proxied(self) -> BaseException | None:
+        """Close every proxied pool, even when one close raises or is cancelled.
+
+        The owning ``BaseClient`` drops its reference before closing, so a pool
+        skipped here would never be closed. Returns the first failure for the
+        caller to raise once the direct pool is closed too.
+        """
         proxied, self._proxied = list(self._proxied.values()), {}
+        first_error: BaseException | None = None
         for transport in proxied:
-            await transport.aclose()
-        await super().__aexit__(*args)
+            try:
+                await transport.aclose()
+            except BaseException as exc:  # includes CancelledError; re-raised by caller
+                if first_error is None:
+                    first_error = exc
+        return first_error
+
+    async def __aexit__(self, *args: Any) -> None:
+        error = await self._close_proxied()
+        try:
+            await super().__aexit__(*args)
+        finally:
+            if error is not None:
+                raise error
 
     async def aclose(self) -> None:
-        proxied, self._proxied = list(self._proxied.values()), {}
-        for transport in proxied:
-            await transport.aclose()
-        await super().aclose()
+        error = await self._close_proxied()
+        try:
+            await super().aclose()
+        finally:
+            if error is not None:
+                raise error
 
 
 class BaseClient(ClientInterface):

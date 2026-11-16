@@ -189,3 +189,37 @@ async def test_no_proxy_env_goes_direct(proxy_env, fake_proxied):
     assert response is not None and response.status_code == 200
     assert fake_proxied.instances == []
     await client.close()
+
+
+class _FailingCloseTransport(_FakeProxiedTransport):
+    async def aclose(self) -> None:
+        self.closed = True
+        raise RuntimeError("proxied pool close failed")
+
+
+@pytest.mark.parametrize("close", ["aclose", "__aexit__"])
+async def test_close_failure_still_closes_every_pool(proxy_env, close):
+    """One proxied pool failing to close must not leak the others or the
+    direct pool; the failure is still raised."""
+    transport = _EnvProxyHTTPTransport()
+    failing = _FailingCloseTransport()
+    healthy = _FakeProxiedTransport()
+    transport._proxied = {"http://a:1": failing, "http://b:2": healthy}  # type: ignore[assignment]
+    direct_closed: list[bool] = []
+    original_pool_aclose = transport._pool.aclose
+
+    async def _record_pool_close() -> None:
+        direct_closed.append(True)
+        await original_pool_aclose()
+
+    transport._pool.aclose = _record_pool_close  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="proxied pool close failed"):
+        if close == "aclose":
+            await transport.aclose()
+        else:
+            await transport.__aexit__(None, None, None)
+
+    assert failing.closed and healthy.closed
+    assert direct_closed == [True]
+    assert transport._proxied == {}
