@@ -62,7 +62,7 @@ dependencies = [
     # but it is imported directly, so it is declared directly.
     "typing-extensions>=4.12.2,<5",
     "packaging>=24.0",
-    "loguru>=0.7.3,<0.8.0",
+    "loguru>=0.8.0,<0.9.0",
     "python-dotenv>=1.2.2,<2.0.0",  # CVE-2026-28684 (symlink file overwrite)
     "pyyaml>=6.0.2,<7.0.0",
     "obstore>=0.12.0,<0.13.0",
