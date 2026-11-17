@@ -5,7 +5,10 @@ from __future__ import annotations
 import ast
 from functools import lru_cache
 
-from conformance.suite.checks._ast_common import make_finding
+from conformance.suite.checks._ast_common import (
+    leaf_name,
+    make_finding,
+)
 from conformance.suite.checks.prescriptions._decorator_provenance import (
     is_entrypoint_decorator,
 )
@@ -227,7 +230,7 @@ def _audience_value(node: ast.AST | None) -> str | None:
 
 def _category_value(node: ast.AST | None) -> object:
     """A ``FailureCategory`` member's name, or ``_UNKNOWN`` for anything else."""
-    if isinstance(node, ast.Attribute) and _get_leaf(node.value) == "FailureCategory":
+    if isinstance(node, ast.Attribute) and leaf_name(node.value) == "FailureCategory":
         return node.attr
     return _UNKNOWN
 
@@ -237,14 +240,6 @@ def _retryable_value(node: ast.AST | None) -> object:
     if isinstance(node, ast.Constant) and isinstance(node.value, bool):
         return node.value
     return _UNKNOWN
-
-
-def _get_leaf(node: ast.AST | None) -> str | None:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    return None
 
 
 class _Checker:

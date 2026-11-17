@@ -74,6 +74,7 @@ import tomllib
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
+    base_names,
     is_collectable_test_file,
     is_test_class,
     make_cli_main,
@@ -145,17 +146,6 @@ def _class_string_attrs(cls: ast.ClassDef, wanted: str) -> list[str]:
     return found
 
 
-def _base_names(cls: ast.ClassDef) -> set[str]:
-    """Bare names of *cls*'s bases, including the tail of dotted ones."""
-    names: set[str] = set()
-    for base in cls.bases:
-        if isinstance(base, ast.Name):
-            names.add(base.id)
-        elif isinstance(base, ast.Attribute):
-            names.add(base.attr)
-    return names
-
-
 def _generated_base_entrypoints(
     bases: set[str], candidates: frozenset[str]
 ) -> set[str]:
@@ -195,7 +185,7 @@ def _entrypoints_covered_by_class(
             if f"/generated/{ep}/" in manifest_path:
                 covered.add(ep)
 
-    covered |= _generated_base_entrypoints(_base_names(cls), candidates)
+    covered |= _generated_base_entrypoints(set(base_names(cls)), candidates)
     return covered
 
 

@@ -42,6 +42,7 @@ from typing import NamedTuple, TypeGuard
 
 from conformance.suite.checks._ast_common import (
     collect_module_alias_targets,
+    leaf_name,
     merge_alias_targets,
     qualified_class_key,
     qualified_rebound_imports,
@@ -395,15 +396,6 @@ def _iter_fields(
     return result
 
 
-def _base_name(base: ast.expr) -> str | None:
-    """Return the simple name of a base-class expression (``Name`` or ``Attribute``)."""
-    if isinstance(base, ast.Name):
-        return base.id
-    if isinstance(base, ast.Attribute):
-        return base.attr
-    return None
-
-
 def _keep_model_declared(new: _FieldInfo, previous: _FieldInfo | None) -> _FieldInfo:
     """Carry ``model_declared`` forward when a redeclaration would drop it.
 
@@ -524,7 +516,7 @@ def resolve_contract_fields(
 
     visiting: set[str] = {classdef.name}
     for base in reversed(classdef.bases):
-        bname = _base_name(base)
+        bname = leaf_name(base)
         if bname is not None:
             merge_ancestor(aliases.get(bname, bname), visiting)
 
@@ -594,7 +586,7 @@ def sdk_contract_ancestors(
         {},
     )
     for base in classdef.bases:
-        bname = _base_name(base)
+        bname = leaf_name(base)
         if bname is not None:
             walk(aliases.get(bname, bname), own_foreign)
     return frozenset(found)

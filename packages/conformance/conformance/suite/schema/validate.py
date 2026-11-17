@@ -24,9 +24,39 @@ from typing import Any
 _SCHEMA_PATH = Path(__file__).parent / "sarif-schema-2.1.0.json"
 
 
-@lru_cache(maxsize=1)
-def _load_schema() -> dict[str, Any]:
-    return json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+@lru_cache(maxsize=None)
+def _load_schema(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def validate_against_schema(
+    doc_or_model: Any, schema_path: Path, missing_dependency_hint: str
+) -> None:
+    """Validate *doc_or_model* against the JSON Schema vendored at *schema_path*.
+
+    *doc_or_model* is a pydantic model (dumped by alias, ``None`` fields left
+    out) or a plain ``dict``. Shared by :func:`validate_sarif` and
+    ``conformance.scorecard.validate_scorecard``.
+
+    Raises
+    ------
+    ImportError
+        If ``jsonschema`` is not installed; the message ends with
+        *missing_dependency_hint*.
+    jsonschema.ValidationError
+        If the document does not conform to the schema.
+    """
+    try:
+        import jsonschema
+    except ImportError as exc:
+        raise ImportError(missing_dependency_hint) from exc
+
+    if hasattr(doc_or_model, "model_dump"):
+        doc = doc_or_model.model_dump(by_alias=True, exclude_none=True)
+    else:
+        doc = doc_or_model
+
+    jsonschema.validate(instance=doc, schema=_load_schema(schema_path))
 
 
 def validate_sarif(report_or_dict: Any) -> None:  # type: ignore[misc]
@@ -47,17 +77,9 @@ def validate_sarif(report_or_dict: Any) -> None:  # type: ignore[misc]
     jsonschema.ValidationError
         If the document does not conform to SARIF 2.1.0.
     """
-    try:
-        import jsonschema
-    except ImportError as exc:
-        raise ImportError(
-            "jsonschema is required to validate SARIF documents.  "
-            "Install it with: uv sync --group conformance"
-        ) from exc
-
-    if hasattr(report_or_dict, "model_dump"):
-        doc = report_or_dict.model_dump(by_alias=True, exclude_none=True)
-    else:
-        doc = report_or_dict
-
-    jsonschema.validate(instance=doc, schema=_load_schema())
+    validate_against_schema(
+        report_or_dict,
+        _SCHEMA_PATH,
+        "jsonschema is required to validate SARIF documents.  "
+        "Install it with: uv sync --group conformance",
+    )

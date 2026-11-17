@@ -89,3 +89,17 @@ def locked_sdk_version(root: Path) -> str | None:
             version = pkg.get("version")
             return str(version) if version is not None else None
     return None
+
+
+def locked_sdk_reaches(root: Path, floor: tuple[int, ...]) -> bool:
+    """True iff ``root/uv.lock`` resolves an SDK at or above *floor*.
+
+    Fails closed: an unreadable or unparseable version returns ``False``. The
+    rules that gate on this prescribe an SDK API, and prescribing one the app's
+    SDK may not have is a finding nobody can act on.
+    """
+    locked = locked_sdk_version(root)
+    if locked is None:
+        return False
+    parsed = parse_version(locked)
+    return parsed is not None and version_reached(floor, parsed)

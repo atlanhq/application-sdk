@@ -93,6 +93,8 @@ from conformance.suite.checks._ast_common import (
     make_cli_main,
     make_toml_finding,
     parse_toml_suppressions,
+    strip_yaml_comment,
+    yaml_comment_start,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -244,20 +246,6 @@ def _is_sdr_app(root: Path) -> bool:
     return m is not None and m.group(1).lower() == "true"
 
 
-def _strip_comment(value: str) -> str:
-    """Drop a trailing YAML comment and surrounding quotes from a scalar."""
-    idx = value.find("#")
-    if idx != -1:
-        value = value[:idx]
-    return value.strip().strip("'\"").strip()
-
-
-def _without_comment(line: str) -> str:
-    """Drop a trailing `` # ...`` comment (leaves a leading-``#`` line intact)."""
-    idx = line.find(" #")
-    return line[:idx] if idx != -1 else line
-
-
 def _yaml_bool(value: str, default: bool) -> bool:
     """Parse a YAML 1.1 boolean scalar, falling back to *default*.
 
@@ -317,7 +305,7 @@ def _names_e2e_path(lines: list[str]) -> bool:
 
         if raw.lstrip().startswith("#"):
             continue
-        line = _without_comment(raw)
+        line = raw[: yaml_comment_start(raw)]
 
         if skip_block_indent is not None:
             continue
@@ -435,7 +423,9 @@ def _reusable_inputs(lines: list[str], uses_idx: int) -> dict[str, str]:
             break  # `with:` block closed
         m = _WITH_ENTRY_RE.match(line)
         if m is not None:
-            inputs[m.group("key")] = _strip_comment(m.group("val"))
+            inputs[m.group("key")] = (
+                strip_yaml_comment(m.group("val")).strip("'\"").strip()
+            )
     return inputs
 
 

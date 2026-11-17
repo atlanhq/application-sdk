@@ -22,8 +22,6 @@ contract-toolkit baseline.
 
 from __future__ import annotations
 
-import argparse
-import sys
 from pathlib import Path
 
 from conformance.suite.checks.deprecation._sdk_type_aliases import (
@@ -32,76 +30,31 @@ from conformance.suite.checks.deprecation._sdk_type_aliases import (
     build_sdk_type_aliases,
     serialize,
 )
+from conformance.tools._generator import Generated, GeneratorSpec, run_generator
 
 
-def _find_sdk_root() -> Path | None:
-    """Locate the repo root containing the ``application_sdk`` package."""
-    starts = [Path.cwd(), Path(__file__).resolve()]
-    for start in starts:
-        for parent in [start, *start.parents]:
-            if parent.joinpath(SDK_PACKAGE, "__init__.py").is_file():
-                return parent
-    return None
+def _build(sdk_root: Path | None) -> Generated:
+    assert sdk_root is not None
+    table = build_sdk_type_aliases(sdk_root)
+    detail = f"{len(table)} aliases"
+    return Generated(serialize(table), detail, detail)
 
 
-def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Generate the SDK type-alias table from application_sdk/.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    parser.add_argument(
-        "--sdk-root",
-        type=Path,
-        default=None,
-        help="Repo root containing application_sdk/ (default: auto-detected).",
-    )
-    parser.add_argument(
-        "--outfile",
-        type=Path,
-        default=DATA_PATH,
-        help=f"Table path to write (default: {DATA_PATH}).",
-    )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="Verify the committed table matches generated output (exit 1 if stale).",
-    )
-    return parser.parse_args(argv)
+SPEC = GeneratorSpec(
+    doc=__doc__ or "",
+    description="Generate the SDK type-alias table from application_sdk/.",
+    command="gen-sdk-type-aliases",
+    outfile=DATA_PATH,
+    noun="table",
+    title="Type-alias table",
+    build=_build,
+    sdk_marker=(SDK_PACKAGE, "__init__.py"),
+    sdk_marker_label="application_sdk/",
+)
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = _parse_args(argv)
-
-    sdk_root: Path | None = args.sdk_root or _find_sdk_root()
-    if sdk_root is None or not sdk_root.joinpath(SDK_PACKAGE, "__init__.py").is_file():
-        print(
-            "error: could not locate application_sdk/ — pass --sdk-root DIR.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    table = build_sdk_type_aliases(sdk_root)
-    content = serialize(table)
-    outfile: Path = args.outfile
-
-    if args.check:
-        if not outfile.exists():
-            print(f"MISSING: {outfile}", file=sys.stderr)
-            sys.exit(1)
-        if outfile.read_text(encoding="utf-8") != content:
-            print(
-                f"STALE: {outfile}\nRun `uv run atlan-application-sdk-conformance "
-                "gen-sdk-type-aliases` to update.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        print(f"Type-alias table up-to-date ({len(table)} aliases).")
-        return
-
-    outfile.parent.mkdir(parents=True, exist_ok=True)
-    outfile.write_text(content, encoding="utf-8")
-    print(f"Wrote {outfile} ({len(table)} aliases).")
+    run_generator(SPEC, argv)
 
 
 if __name__ == "__main__":

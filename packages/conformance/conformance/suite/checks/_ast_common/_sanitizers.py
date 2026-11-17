@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import ast
 
+from ._names import leaf_name
+
 #: Substrings that mark a callable as a redaction helper.  Matched
 #: case-insensitively against the call target's simple name (``redact_secrets``)
 #: or attribute leaf (``utils.redact``).  ``sanitiz`` covers
@@ -76,15 +78,6 @@ def _name_is_sanitized_value(name: str) -> bool:
     return any(word in lowered for word in _SANITIZED_VALUE_WORDS)
 
 
-def _leaf_name(expr: ast.expr) -> str | None:
-    """Return the identifier a call target or variable resolves to, if simple."""
-    if isinstance(expr, ast.Name):
-        return expr.id
-    if isinstance(expr, ast.Attribute):
-        return expr.attr
-    return None
-
-
 def expr_sanitizes_name(expr: ast.expr, name: str) -> bool:
     """True when *expr* passes the variable *name* through a recognised sanitizer.
 
@@ -101,7 +94,7 @@ def expr_sanitizes_name(expr: ast.expr, name: str) -> bool:
     for node in ast.walk(expr):
         if not isinstance(node, ast.Call):
             continue
-        target = _leaf_name(node.func)
+        target = leaf_name(node.func)
         if target is None or not _name_is_sanitizer(target):
             continue
         for arg in [*node.args, *[kw.value for kw in node.keywords]]:
@@ -133,7 +126,7 @@ def _sanitized_assignment_name(stmt: ast.stmt, exception_name: str) -> str | Non
 
     if not isinstance(target, ast.Name) or not isinstance(value, ast.Call):
         return None
-    sanitizer = _leaf_name(value.func)
+    sanitizer = leaf_name(value.func)
     if sanitizer is None or not _name_is_sanitizer(sanitizer):
         return None
 
@@ -331,7 +324,7 @@ def is_sanitizer_call(expr: ast.expr) -> bool:
         expr = expr.value
     if not isinstance(expr, ast.Call):
         return False
-    target = _leaf_name(expr.func)
+    target = leaf_name(expr.func)
     return target is not None and _name_is_sanitizer(target)
 
 
@@ -367,7 +360,7 @@ def call_uses_sanitizer(
     for arg in [*call.args, *[kw.value for kw in call.keywords]]:
         for node in ast.walk(arg):
             if isinstance(node, ast.Call):
-                target = _leaf_name(node.func)
+                target = leaf_name(node.func)
                 if target is not None and _name_is_sanitizer(target):
                     return True
             elif isinstance(node, ast.Name) and _name_is_sanitized_value(node.id):

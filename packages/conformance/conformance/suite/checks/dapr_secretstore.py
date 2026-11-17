@@ -35,14 +35,11 @@ from conformance.suite.checks._ast_common import (
     safe_read_text,
 )
 from conformance.suite.checks.dapr_objectstore import (
+    contract_false_findings,
     contract_files,
     deploy_dapr_false_line,
     discover,
     pkl_code_lines,
-)
-from conformance.suite.checks.legacy_contract._directives_pkl import (
-    _make_pkl_finding_suppressed,
-    _parse_pkl_directives,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -159,36 +156,17 @@ def app_uses_credentials(root: Path) -> bool:
 
 
 def _contract_findings(root: Path) -> list[Finding]:
-    findings: list[Finding] = []
-    for path in contract_files(root):
-        text = safe_read_text(path)
-        if text is None:
-            continue
-        directives = _parse_pkl_directives(text)
-        rel = path.relative_to(root).as_posix()
-        for lineno, code in enumerate(pkl_code_lines(text), start=1):
-            if not _PKL_FALSE_RE.search(code):
-                continue
-            suppressed, justification = _make_pkl_finding_suppressed(
-                rule_id=_RULE_ID, line=lineno, directives=directives
-            )
-            findings.append(
-                Finding(
-                    rule_id=_RULE_ID,
-                    file=rel,
-                    line=lineno,
-                    column=1,
-                    message=(
-                        "The contract sets deploy.dapr.secretstore to false, but "
-                        "the app resolves credentials. The deployer then leaves out "
-                        "the secret store the SDK reads every credential through, "
-                        f"and each credential lookup fails with HTTP 500. {_FIX}"
-                    ),
-                    suppressed=suppressed,
-                    suppression_justification=justification,
-                )
-            )
-    return findings
+    return contract_false_findings(
+        root,
+        rule_id=_RULE_ID,
+        pattern=_PKL_FALSE_RE,
+        message=(
+            "The contract sets deploy.dapr.secretstore to false, but "
+            "the app resolves credentials. The deployer then leaves out "
+            "the secret store the SDK reads every credential through, "
+            f"and each credential lookup fails with HTTP 500. {_FIX}"
+        ),
+    )
 
 
 def _atlan_yaml_findings(root: Path) -> list[Finding]:

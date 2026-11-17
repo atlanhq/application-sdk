@@ -96,7 +96,11 @@ import re
 import sys
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import discover, make_cli_main
+from conformance.suite.checks._ast_common import (
+    base_names,
+    discover,
+    make_cli_main,
+)
 from conformance.suite.checks._version import (
     SDK_DISTRIBUTION,
     locked_sdk_version,
@@ -1251,17 +1255,6 @@ def _manifest_carries_agent_routing(manifest_path: Path) -> bool:
     return isinstance(args, dict) and _carries_agent_routing(args)
 
 
-def _class_base_names(node: ast.ClassDef) -> list[str]:
-    """Simple names of a class's bases (``Name.id`` / ``Attribute.attr``)."""
-    names: list[str] = []
-    for base in node.bases:
-        if isinstance(base, ast.Name):
-            names.append(base.id)
-        elif isinstance(base, ast.Attribute):
-            names.append(base.attr)
-    return names
-
-
 def _class_allows_extra_fields(node: ast.ClassDef) -> bool:
     """Whether the model opts out of Pydantic payload-safety (accepts extra keys).
 
@@ -1362,7 +1355,7 @@ def _generated_input_contract_findings(
             or _GENERATED_BUNDLE_INPUT_CLASS.fullmatch(node.name)
         ):
             continue
-        bases = _class_base_names(node)
+        bases = base_names(node)
         # The *ExtractionInput family (SDK templates) declares agent_json → safe.
         in_extraction_family = any(b.endswith("ExtractionInput") for b in bases)
         extends_bare_input = "Input" in bases

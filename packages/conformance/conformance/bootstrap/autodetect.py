@@ -10,6 +10,7 @@ argv parsing and the actual write phase.
 from __future__ import annotations
 
 import pathlib
+from collections.abc import Callable
 
 from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
@@ -30,196 +31,107 @@ from conformance.bootstrap.extract import (
 )
 
 
+def _read_with(path: pathlib.Path, extractor: Callable[[str], str]) -> str:
+    """Return ``extractor(<text of path>)``, or ``""`` if *path* is missing or
+    unreadable.
+
+    Every extractor passed here comes from ``conformance.bootstrap.extract`` and
+    is the same one the C002 drift checker uses, so a value detected here is
+    re-rendered byte-identically and can't read as drift.
+    """
+    if not path.exists():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    return extractor(text)
+
+
 def _read_workflow_field(path: pathlib.Path, field: str) -> str:
-    """Return the value of ``field: <value>`` in *path*, or ``""``.
+    """Return the value of ``field: <value>`` in *path*, or ``""``."""
+    return _read_with(path, lambda text: extract_field(text, field))
 
-    Delegates to ``conformance.bootstrap.extract``'s ``extract_field`` (the
-    single source of truth also used by the C002 checker's "read a rendered
-    param back off disk" extraction) so this autodetection path and C002's
-    drift-comparison extraction can never silently diverge on how a rendered
-    field is parsed.
+
+def _ci_system_deps(text: str) -> str:
+    """Normalise ``ci-system-deps.txt`` (a whitespace-separated package list).
+
+    Goes through the same package-name filter as the checks.yml extraction, so
+    a hand-edited file can't inject anything into the rendered workflow step.
     """
-    if not path.exists():
-        return ""
-    try:
-        return extract_field(path.read_text(encoding="utf-8"), field)
-    except (OSError, UnicodeDecodeError):
-        return ""
+    return " ".join(sanitize_package_list(text))
 
 
-def _read_apt_packages(path: pathlib.Path) -> str:
-    """Return the apt packages *path* (a ``checks.yml``) already installs, or ``""``.
+_WORKFLOWS = pathlib.Path(".github") / "workflows"
 
-    Delegates to ``conformance.bootstrap.extract``'s ``extract_apt_packages``
-    — the same extractor the C002 drift checker uses — so a detected step is
-    re-rendered byte-identically and can't read as drift.
-    """
-    if not path.exists():
-        return ""
-    try:
-        return extract_apt_packages(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
-        return ""
-
-
-def _read_ci_system_deps(path: pathlib.Path) -> str:
-    """Return the packages declared in *path* (``ci-system-deps.txt``), or ``""``.
-
-    The file is a plain whitespace-separated package list. Re-normalised through
-    the same package-name filter as the checks.yml extraction so a hand-edited
-    file can't inject anything into the rendered workflow step.
-    """
-    if not path.exists():
-        return ""
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return ""
-    return " ".join(sanitize_package_list(raw))
-
-
-def _read_use_ghcr_base(path: pathlib.Path) -> str:
-    """Return ``"true"`` if *path* (a ``build-and-publish.yaml``) opts into the
-    GHCR base redirect, else ``""``.
-
-    Delegates to ``conformance.bootstrap.extract``'s ``extract_use_ghcr_base``
-    — the same extractor the C002 drift checker uses — so a detected opt-in is
-    re-rendered byte-identically and can't read as drift.
-    """
-    if not path.exists():
-        return ""
-    try:
-        return extract_use_ghcr_base(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
-        return ""
-
-
-def _read_sarif_upload(path: pathlib.Path) -> str:
-    """Return ``"true"`` if *path* (a ``conformance-upload-sarif.yaml``) is an
-    opted-in copy, else ``""``.
-
-    Delegates to ``extract_sarif_upload`` — the same extractor the C002 drift
-    checker uses — so the copy bootstrap keeps is exactly the copy C002 accepts.
-    """
-    if not path.exists():
-        return ""
-    try:
-        return extract_sarif_upload(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
-        return ""
-
-
-def _read_vuln_scan_lfs(path: pathlib.Path) -> str:
-    """Return ``"true"`` if *path* (a ``vulnerability-scan.yml``) opts into the
-    LFS checkout on the scan's image build, else ``""``.
-
-    Delegates to ``conformance.bootstrap.extract``'s
-    ``extract_vulnerability_scan_lfs`` — the same extractor the C002 drift
-    checker uses — so a detected opt-in is re-rendered byte-identically and
-    can't read as drift.
-    """
-    if not path.exists():
-        return ""
-    try:
-        return extract_vulnerability_scan_lfs(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
-        return ""
-
-
-def _read_build_publish_apt_packages(path: pathlib.Path) -> str:
-    """Return the certify gate's apt packages declared by *path* (a
-    ``build-and-publish.yaml``), else ``""``.
-
-    Delegates to ``extract_build_publish_apt_packages`` — the same extractor
-    the C002 drift checker uses — so a detected value is re-rendered
-    byte-identically and can't read as drift.
-    """
-    if not path.exists():
-        return ""
-    try:
-        return extract_build_publish_apt_packages(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
-        return ""
-
-
-def _read_build_publish_lfs(path: pathlib.Path) -> str:
-    """Return ``"true"`` if *path* (a ``build-and-publish.yaml``) opts into the
-    LFS checkout on the release image build, else ``""``.
-
-    Delegates to ``extract_build_publish_lfs`` — the same extractor the C002
-    drift checker uses — so a detected opt-in is re-rendered byte-identically
-    and can't read as drift.
-    """
-    if not path.exists():
-        return ""
-    try:
-        return extract_build_publish_lfs(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
-        return ""
-
-
-def _read_conformance_private_git_deps(path: pathlib.Path) -> str:
-    """Return ``"true"`` if *path* (a ``conformance.yaml``) opts the suite into
-    private ``atlanhq`` git dependencies, else ``""``.
-
-    Delegates to ``conformance.bootstrap.extract``'s
-    ``extract_conformance_private_git_deps`` — the same extractor the C002
-    drift checker uses — so a detected opt-in is re-rendered byte-identically
-    and can't read as drift.
-    """
-    if not path.exists():
-        return ""
-    try:
-        return extract_conformance_private_git_deps(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
-        return ""
-
-
-def _read_release_private_git_auth(path: pathlib.Path) -> str:
-    """Return ``"true"`` if *path* (a ``release.yaml``) opts the version-bump
-    job into private ``atlanhq`` git auth, else ``""``.
-
-    Delegates to ``conformance.bootstrap.extract``'s
-    ``extract_release_private_git_auth`` — the same extractor the C002 drift
-    checker uses — so a detected opt-in is re-rendered byte-identically and
-    can't read as drift.
-    """
-    if not path.exists():
-        return ""
-    try:
-        return extract_release_private_git_auth(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
-        return ""
-
-
-def _read_build_publish_private_git_auth(path: pathlib.Path) -> str:
-    """Return ``"true"`` if *path* (a ``build-and-publish.yaml``) opts the
-    release image build into private ``atlanhq`` git auth, else ``""``.
-
-    Same extractor as the C002 drift checker, so a detected opt-in is
-    re-rendered byte-identically and can't read as drift.
-    """
-    if not path.exists():
-        return ""
-    try:
-        return extract_build_publish_private_git_auth(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
-        return ""
-
-
-def _read_checks_private_git_deps(path: pathlib.Path) -> str:
-    """Return ``"true"`` if *path* (a ``checks.yml``) opts pre-commit into
-    private ``atlanhq`` git auth, else ``""``.
-
-    Same extractor as the C002 drift checker, so a detected opt-in is
-    re-rendered byte-identically and can't read as drift.
-    """
-    if not path.exists():
-        return ""
-    try:
-        return extract_checks_private_git_deps(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
-        return ""
+# Flags whose value is read back from one always-overwrite managed workflow:
+# (kwarg, path relative to the repo root, extractor). Without the read-back a
+# bare bootstrap re-run deletes the per-repo choice the file carries.
+#
+# * use_ghcr_base: an app that opted into the GHCR base redirect would silently
+#   revert to Harbor. The SDK default stays false until the fleet has soaked,
+#   so opting in early has to be an app-owned, drift-free choice.
+# * sarif_upload (FND-3336): keyed on the opt-in marker, not on the file
+#   existing. Every repo bootstrapped before the opt-in holds an unmarked
+#   copy, and on private repos that is exactly the copy this run must remove.
+# * vuln_scan_lfs: an app that vendors LFS-tracked assets into its Docker build
+#   context (a parser jar, a native lib) needs it, or the scan's image build
+#   copies the pointer file. There is no unpreserved_declarations guard on
+#   this file, so the line would just disappear on every bootstrap invocation,
+#   including granular ones that have nothing to do with it.
+# * build_publish_lfs: the same opt-in on the RELEASE image build. The gap only
+#   bites a `release` event, so every PR stays green while the release path is
+#   broken. One connector lost the line to a conformance rollout and did not
+#   find out until a version could not be published.
+# * conformance_private_git_deps / release_private_git_auth: a repo pinning a
+#   private atlanhq package via ssh:// needs `private-git-deps` (plus the
+#   `secrets: inherit` that feeds it ORG_PAT_GITHUB) for its D-series leg to
+#   resolve, and `private_git_auth` for the release bump's `uv lock`. Both were
+#   deleted on every bootstrap run. The first failure is loud (a REQUIRED
+#   Conformance Gate goes red on a cold uv cache); the second is silent until
+#   a release simply never happens.
+# * build_publish_private_git_auth / checks_private_git_deps: the other two
+#   places the same private dep is resolved: certify's `uv sync` in
+#   build-and-publish.yaml, and setup-deps' `uv sync` ahead of pre-commit in
+#   checks.yml.
+_WORKFLOW_FLAGS: tuple[tuple[str, pathlib.Path, Callable[[str], str]], ...] = (
+    ("use_ghcr_base", _WORKFLOWS / "build-and-publish.yaml", extract_use_ghcr_base),
+    (
+        "sarif_upload",
+        _WORKFLOWS / "conformance-upload-sarif.yaml",
+        extract_sarif_upload,
+    ),
+    (
+        "vuln_scan_lfs",
+        _WORKFLOWS / "vulnerability-scan.yml",
+        extract_vulnerability_scan_lfs,
+    ),
+    (
+        "build_publish_lfs",
+        _WORKFLOWS / "build-and-publish.yaml",
+        extract_build_publish_lfs,
+    ),
+    (
+        "conformance_private_git_deps",
+        _WORKFLOWS / "conformance.yaml",
+        extract_conformance_private_git_deps,
+    ),
+    (
+        "release_private_git_auth",
+        _WORKFLOWS / "release.yaml",
+        extract_release_private_git_auth,
+    ),
+    (
+        "build_publish_private_git_auth",
+        _WORKFLOWS / "build-and-publish.yaml",
+        extract_build_publish_private_git_auth,
+    ),
+    (
+        "checks_private_git_deps",
+        _WORKFLOWS / "checks.yml",
+        extract_checks_private_git_deps,
+    ),
+)
 
 
 def _read_atlan_yaml_name(root: pathlib.Path) -> str:
@@ -254,15 +166,12 @@ def _read_enforce_from_renovate(root: pathlib.Path) -> str:
     uses); this just inverts its polarity to the ``--enforce`` value this
     function returns.
     """
-    renovate = root / "renovate.json"
-    if not renovate.exists():
-        return ""
-    try:
-        renovate_text = renovate.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return ""
-    exit_zero = resolve_renovate_fallback_exit_zero(renovate_text)
-    return "false" if exit_zero == "true" else "true"
+    return _read_with(
+        root / "renovate.json",
+        lambda text: (
+            "false" if resolve_renovate_fallback_exit_zero(text) == "true" else "true"
+        ),
+    )
 
 
 def _read_conformance_enforce(path: pathlib.Path, root: pathlib.Path) -> str:
@@ -324,77 +233,11 @@ def apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) ->
             )
             or "tests.yaml"
         )
-    # use-ghcr-base: an existing build-and-publish.yaml's opt-in, else unset.
-    # build-and-publish.yaml is always-overwrite, so without this a bare re-run
-    # silently reverts an app that self-selected the GHCR base redirect back to
-    # Harbor -- the same failure mode --system-deps has, and the reason apps
-    # can't be expected to hand-re-add the line after every bootstrap. The
-    # SDK-side default stays false until the fleet has soaked, so opting in
-    # ahead of that flip has to be an app-owned, drift-free choice.
-    if not kwargs["use_ghcr_base"]:
-        kwargs["use_ghcr_base"] = _read_use_ghcr_base(
-            root / ".github" / "workflows" / "build-and-publish.yaml"
-        )
-    # sarif-upload: an existing conformance-upload-sarif.yaml's opt-in marker,
-    # else unset (FND-3336). Keyed on the marker rather than the file existing:
-    # every repo bootstrapped before the opt-in holds an unmarked copy, and on
-    # the private repos that is exactly the copy this run must remove.
-    if not kwargs["sarif_upload"]:
-        kwargs["sarif_upload"] = _read_sarif_upload(
-            root / ".github" / "workflows" / "conformance-upload-sarif.yaml"
-        )
-    # vuln-scan lfs: an existing vulnerability-scan.yml's opt-in, else unset.
-    # Exactly the use-ghcr-base case above -- an always-overwrite shim carrying
-    # a per-repo choice -- but with a sharper failure. An app that vendors
-    # LFS-tracked assets into its Docker build context (a parser jar, a native
-    # lib) needs this or the scan's image build copies the pointer file, and
-    # unlike tests.yaml there is no unpreserved_declarations guard here to
-    # refuse the write: the line just disappears, on every bootstrap
-    # invocation including granular ones that have nothing to do with this
-    # file. Autodetected rather than flag-driven because the value already
-    # lives in the repo that needs it.
-    if not kwargs["vuln_scan_lfs"]:
-        kwargs["vuln_scan_lfs"] = _read_vuln_scan_lfs(
-            root / ".github" / "workflows" / "vulnerability-scan.yml"
-        )
-    # build-publish lfs: the same opt-in on the RELEASE image build. Identical
-    # mechanics to the scan's above, but the failure is quieter and lands
-    # later: the gap only bites a `release` event, so every PR stays green
-    # while the release path is broken. One connector lost the line to a
-    # conformance rollout and did not find out until a version could not be
-    # published.
-    if not kwargs["build_publish_lfs"]:
-        kwargs["build_publish_lfs"] = _read_build_publish_lfs(
-            root / ".github" / "workflows" / "build-and-publish.yaml"
-        )
-    # private-dep opt-ins on conformance.yaml and release.yaml. Same
-    # always-overwrite-shim-carrying-a-per-repo-choice case as the three
-    # above, and the one that was actually losing lines: a repo pinning a
-    # private atlanhq package via ssh:// needs `private-git-deps` (plus the
-    # `secrets: inherit` that feeds it ORG_PAT_GITHUB) for its D-series leg to
-    # resolve, and `private_git_auth` for the release bump's `uv lock`. Both
-    # were deleted on every bootstrap run. The first failure is loud (a
-    # REQUIRED Conformance Gate goes red on a cold uv cache); the second is
-    # silent until a release simply never happens.
-    if not kwargs["conformance_private_git_deps"]:
-        kwargs["conformance_private_git_deps"] = _read_conformance_private_git_deps(
-            root / ".github" / "workflows" / "conformance.yaml"
-        )
-    if not kwargs["release_private_git_auth"]:
-        kwargs["release_private_git_auth"] = _read_release_private_git_auth(
-            root / ".github" / "workflows" / "release.yaml"
-        )
-    # The other two places the same private dep is resolved: certify's
-    # `uv sync` in build-and-publish.yaml, and setup-deps' `uv sync` ahead of
-    # pre-commit in checks.yml. Both shims are always-overwrite too.
-    if not kwargs["build_publish_private_git_auth"]:
-        kwargs["build_publish_private_git_auth"] = _read_build_publish_private_git_auth(
-            root / ".github" / "workflows" / "build-and-publish.yaml"
-        )
-    if not kwargs["checks_private_git_deps"]:
-        kwargs["checks_private_git_deps"] = _read_checks_private_git_deps(
-            root / ".github" / "workflows" / "checks.yml"
-        )
+    # Per-repo opt-ins carried by always-overwrite workflows (see
+    # _WORKFLOW_FLAGS for why each one has to be read back).
+    for flag, relpath, extractor in _WORKFLOW_FLAGS:
+        if not kwargs[flag]:
+            kwargs[flag] = _read_with(root / relpath, extractor)
     # app-name: atlan.yaml `name:` field, else the repo directory name.
     if not kwargs["app_name"]:
         kwargs["app_name"] = _read_atlan_yaml_name(root) or derive_app_name_from_dir(
@@ -409,9 +252,9 @@ def apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) ->
     # Falls back to .github/ci-system-deps.txt (the declaration the D-series
     # leg reads) so the value survives even if checks.yml was hand-stripped.
     if not kwargs["system_deps"]:
-        kwargs["system_deps"] = _read_apt_packages(
-            root / ".github" / "workflows" / "checks.yml"
-        ) or _read_ci_system_deps(root / ".github" / "ci-system-deps.txt")
+        kwargs["system_deps"] = _read_with(
+            root / _WORKFLOWS / "checks.yml", extract_apt_packages
+        ) or _read_with(root / ".github" / "ci-system-deps.txt", _ci_system_deps)
     # build-publish apt packages: the certify gate's `uv sync` builds the same
     # native extensions checks.yml and tests.yaml install headers for, so an
     # existing build-and-publish.yaml's `apt_packages` is kept, and a repo that
@@ -421,8 +264,9 @@ def apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) ->
     # every bootstrap run deleted a hand-added line.
     if not kwargs["build_publish_apt_packages"]:
         kwargs["build_publish_apt_packages"] = (
-            _read_build_publish_apt_packages(
-                root / ".github" / "workflows" / "build-and-publish.yaml"
+            _read_with(
+                root / _WORKFLOWS / "build-and-publish.yaml",
+                extract_build_publish_apt_packages,
             )
             # system_deps' grammar is wider (apt-get takes pins, releases);
             # narrow it to what the reusable's certify validation accepts.

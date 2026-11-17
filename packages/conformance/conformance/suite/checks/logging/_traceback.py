@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from collections import deque
 
+from .._ast_common._names import leaf_name
 from .._ast_common._sanitizers import (
     call_logs_raw_exception,
     call_uses_sanitizer,
@@ -187,15 +188,6 @@ def _call_uses_sanitized_local(call: ast.Call, names: set[str]) -> bool:
     )
 
 
-def _call_target_leaf(call: ast.Call) -> str | None:
-    """Return a simple call target's name or attribute leaf."""
-    if isinstance(call.func, ast.Name):
-        return call.func.id
-    if isinstance(call.func, ast.Attribute):
-        return call.func.attr
-    return None
-
-
 def _is_exception_name(node: ast.expr | None, name: str) -> bool:
     return (
         isinstance(node, ast.Name)
@@ -214,7 +206,7 @@ def _helper_traces_exception(helper: ast.Call, name: str) -> bool:
     """
     if helper.args and _is_exception_name(helper.args[0], name):
         return True
-    if _call_target_leaf(helper) != "format_exception":
+    if leaf_name(helper.func) != "format_exception":
         return False
     if len(helper.args) >= 2 and _is_exception_name(helper.args[1], name):
         return True
@@ -228,7 +220,7 @@ def _is_sanitized_traceback_call(node: ast.AST, exception_name: str) -> bool:
     """True if *node* is a redaction helper producing this exception's trace."""
     if not isinstance(node, ast.Call):
         return False
-    target = _call_target_leaf(node)
+    target = leaf_name(node.func)
     if target is not None and "safe_traceback" in target.lower():
         return _helper_traces_exception(node, exception_name)
     if not is_sanitizer_call(node):
@@ -242,7 +234,7 @@ def _is_sanitized_traceback_call(node: ast.AST, exception_name: str) -> bool:
         return False
     return any(
         isinstance(formatted, ast.Call)
-        and _call_target_leaf(formatted) == "format_exception"
+        and leaf_name(formatted.func) == "format_exception"
         and _helper_traces_exception(formatted, exception_name)
         for formatted in ast.walk(node)
     )
