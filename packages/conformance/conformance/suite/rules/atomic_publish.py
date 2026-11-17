@@ -97,6 +97,5 @@ RULES: tuple[RuleDefinition, ...] = (
             "<reason>`` records any single-consumer exception (e.g. a signal\n"
             "handler's diagnostic dump) and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p050",
     ),
 )

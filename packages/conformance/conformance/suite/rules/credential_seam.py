@@ -197,7 +197,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "an object that is not the entry-point input — records that with a\n"
             "justified ``# conformance: ignore[P053] <reason>``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p053",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",

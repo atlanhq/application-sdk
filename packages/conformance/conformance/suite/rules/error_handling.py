@@ -44,7 +44,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "error with ``exc_info=True``.  Never acceptable — even cleanup paths\n"
             "should log at DEBUG.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e001",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -87,7 +86,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "100% expected AND the surrounding code handles the missing result, AND\n"
             "there is a comment explaining the reasoning.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e002",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -120,7 +118,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "acceptable.  The checker must inspect the suppressed exception type before\n"
             "classifying.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e003",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -345,7 +342,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "and returning the failure as typed data remains the preferred "
             "shape for a probe arm."
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e004",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -394,7 +390,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "would serialize the raw exception past the sanitizer and can leak\n"
             "credentials (JDBC URLs, Authorization headers, OAuth bodies)."
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e005",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -427,7 +422,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Like P001 but the block may have a body.  Still catches KeyboardInterrupt\n"
             "and SystemExit.  Always specify at least ``except Exception:``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e006",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -568,7 +562,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "judgment residue, never a raise.  E020 gives the same advice for HTTP\n"
             "response guards.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e007",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -619,7 +612,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "* Keep the import where it is: moving it to module level or into a function changes when the app loads its drivers, and the repo's ruff rules then reject the new shape.\n\n"
             "* Never add ``noqa`` to get past ruff; if ruff objects, the shape is wrong — log at the original site.\n\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e008",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -657,7 +649,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "(``error = exc`` ... ``if error is not None: raise error``), the same\n"
             "predicate E004 uses — the failure is deferred, not hidden.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e009",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -696,7 +687,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "instances, errors vanish silently.  The pattern is only a bug when results\n"
             "are not checked; ``return_exceptions=True`` itself is acceptable.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e010",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -736,7 +726,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``getattr(record, 'field', default)`` for optional record attributes.\n"
             "Never acceptable — filter methods must never let exceptions propagate.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e011",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -790,7 +779,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "build and dev tooling that never reaches the error envelope and are not\n"
             "checked; an app package with the same name (``app/tools/``) still is.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e012",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -826,7 +814,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "wire envelope.  Scheduled for removal in v4.0.  Replace with the\n"
             "appropriate leaf from ``application_sdk.errors``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e013",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -865,7 +852,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "genuine unexpected error, re-raise or log at WARNING/ERROR with\n"
             "``exc_info=True``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e014",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -904,7 +890,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "field (``cause=exc``, ``network_error=str(exc)``) and keep ``message=`` a\n"
             "stable human summary.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e015",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -960,7 +945,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Only a proven group counts: an app class that merely exposes an\n"
             "``exceptions`` sequence (``except AggregateError as group``) still fires.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e016",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -1001,7 +985,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "caught before any code runs.  Rename the evidence field to a safe key (e.g.\n"
             "``credential_name``, ``token_type``) or pass the value via ``cause=exc``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e017",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -1045,7 +1028,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "legitimate in small apps or during active migration.  Review findings\n"
             "before suppressing.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e018",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -1104,7 +1086,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Extending both rules to those shapes is a deliberate future follow-up kept\n"
             "symmetric across E015/E019.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e019",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -1241,7 +1222,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "skip also still reports: whether a permission denial should skip or\n"
             "raise is a site-level judgment that this rule does not make.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e020",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -1304,7 +1284,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "the rule matches the structural pattern and does not infer intent from\n"
             "names.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e021",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",

@@ -186,10 +186,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "deliberate delay is justified (e.g. phased migration tracked in a "
             "follow-on ticket).\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k001"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -305,10 +301,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "**Suppress** with ``// conformance: ignore[K002] <reason>`` on "
             "the violating line or the comment-only line directly above it.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k002"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -393,10 +385,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "**Suppress** with ``// conformance: ignore[K003] <reason>`` on the "
             "``uri`` line in ``contract/PklProject`` (or the comment-only line "
             "directly above it) when a deliberate lag is justified.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k003"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -489,10 +477,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``amends`` line of ``contract/app.pkl`` when an output is legitimately "
             "not produced for this app.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k004"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -559,10 +543,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "**Suppress** with ``# conformance: ignore[K005] <reason>`` on the "
             "first line of the file (or the line above it) for an app that "
             "deliberately hand-maintains this artifact.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k005"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
@@ -644,10 +624,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``Output`` class definition (or the comment-only line directly above "
             "it) when a mismatch is understood and deliberately deferred.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k006"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -709,10 +685,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``uri`` line (or the comment-only line directly above it) when a "
             "deliberate lag is justified.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k007"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -766,10 +738,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "**Suppress** with ``// conformance: ignore[K008] <reason>`` on the "
             "``uri`` line (or the comment-only line directly above it).\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k008"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -856,10 +824,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "available for text artifacts; a placeholder in a ``.json`` output has "
             "no comment syntax to suppress and must be regenerated.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k009"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -910,10 +874,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "**Suppress** with ``// conformance: ignore[K010] <reason>`` on the "
             "``amends`` line of ``contract/app.pkl`` when the app legitimately ships "
             "no E2E scaffolding.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k010"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -998,10 +958,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "publish. It exists only for the rare non-published app that still "
             "ships an ``atlan.yaml``.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k011"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -1077,10 +1033,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``[tool.poe.tasks]`` header line (or the line above). Only justified "
             "for an app that is genuinely never published through the "
             "marketplace pipeline.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k012"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -1180,10 +1132,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "a directive -- as with K009, the only resolution is to fix the "
             "contract and regenerate. Never hand-edit ``manifest.json``.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k013"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -1278,10 +1226,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "first line of ``atlan.yaml`` (or the line above the key). A "
             "suppression is rarely the right answer: declaring the value is one "
             "line and is the entire point of the rule.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k014"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -1408,10 +1352,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``App`` subclass. Suppressing leaves the two sites free to diverge, "
             "and P016 keeps routing off the manifest either way.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k015"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -1527,10 +1467,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "artifact no other app reads, and the wrong call for one that "
             "crosses an app boundary.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k016"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -1643,10 +1579,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "declaration and the writer are allowed to disagree, which leaves "
             "the consuming side reading an assertion the producer does not "
             "honour.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k017"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
@@ -1806,10 +1738,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "it) — or, for an app that inherits a template's ``run()``, on the "
             "app class definition, where that finding is anchored.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k018"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -1886,10 +1814,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "widget's line in ``contract/app.pkl`` (or the comment-only line "
             "directly above it) — for example a field the frontend consumes "
             "directly and deliberately never sends to the workflow.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k019"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -1980,10 +1904,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``contract/app.pkl`` when an app is deliberately staying on the legacy "
             "envelope for now — a suppression here is a statement that the "
             "migration is scheduled, not that the shape is fine.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k020"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
@@ -2080,10 +2000,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "it) — for example when the string is genuinely coerced by a path the "
             "static check cannot follow.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k021"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -2157,10 +2073,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "**Suppress** with ``# conformance: ignore[K027] <reason>`` on the "
             "entrypoint method definition (or the comment-only line directly above "
             "it).\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k027"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -2237,10 +2149,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "line above it), or ``# conformance: ignore[K029] <reason>`` on the "
             "``objectstore:`` line of ``atlan.yaml``. A suppression is almost "
             "never correct: no app built on the SDK starts without the store.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k029"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -2319,10 +2227,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "above it), or ``# conformance: ignore[K030] <reason>`` on the "
             "``secretstore:`` line of ``atlan.yaml``. A suppression is almost never "
             "correct: an app with credentials cannot resolve them without the store.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k030"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,

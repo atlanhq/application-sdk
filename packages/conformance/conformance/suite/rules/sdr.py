@@ -187,10 +187,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "  the deployed image ships it.  A merged PR alone does not clear the\n"
             "  runtime failure.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p029"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/prescriptions.prose.md",
@@ -387,10 +383,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "app has nothing to hand the extracted assets off to, so the absence\n"
             "of an upload call is by design, not a gap.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p030"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -467,10 +459,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``CredentialRef.from_workflow_args(workflow_args)`` (both consume\n"
             "``agent_json`` and pick the correct route), keeping the direct\n"
             "``credential_guid`` path only as a fallback after the agent-aware call.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p037"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
@@ -561,10 +549,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``self._app_name`` (or use ``WORKFLOW_OUTPUT_PATH_TEMPLATE.format(\n"
             "application_name=APPLICATION_NAME, ...)``), or default the contract field\n"
             "to the app name; never derive it from an empty-defaulting workflow arg.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p038"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
@@ -666,10 +650,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``contract/app.pkl`` and regenerate, subclass the SDK ``ExtractionInput``\n"
             "family (which declares it), or set ``allow_unbounded_fields=True`` on the\n"
             "contract — as the passing counterexample connectors in fleet testing do.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p039"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
@@ -777,10 +757,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "is why the rule carries ``superseded_by: sdk>=4.0.0``.  It retires when\n"
             "that removal lands and the shape stops being expressible.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p042"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -883,10 +859,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "  version can't be read) the picker falls back to a plain text box. This\n"
             "  follows the same floor gate automatically — no per-connector change\n"
             "  beyond declaring the filter widget.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p051"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,

@@ -27,6 +27,7 @@ from conformance.suite.checks.credential_seam import (
     scan_text,
 )
 from conformance.suite.rules import get_rule
+from conformance.suite.schema.catalog import rule_help_uri
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -55,7 +56,7 @@ def test_p053_rule_metadata() -> None:
     assert rule.category == "credential-seam"
     assert rule.autofixable is False
     assert rule.since == "0.40.0"
-    assert rule.help_uri and rule.help_uri.endswith("prescriptions.md#p053")
+    assert rule.help_uri == rule_help_uri("P053")
     assert "route_credentials" in rule.full_description
 
 

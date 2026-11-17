@@ -92,10 +92,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "are also exempt — packages whose ``[project].name`` starts with "
             "``atlan-application-sdk`` are skipped entirely."
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d001"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/dependency.prose.md",
@@ -137,10 +133,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``importlib.metadata.requires('atlan-application-sdk')``; if the "
             "SDK is not importable in the runtime environment, this rule is "
             "skipped silently."
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d002"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -188,10 +180,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``importlib.metadata.requires('atlan-application-sdk')``; if the "
             "SDK is not importable, this rule is skipped silently. Cite: BLDX-1410."
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d004"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/dependency.prose.md",
@@ -234,10 +222,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "(map a typo to the intended extra) is judgment, so the fix is "
             "written per site rather than applied mechanically.  Cite: BLDX-1410."
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d005"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/dependency.prose.md",
@@ -278,10 +262,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "installed metadata, so this rule needs no resolved environment. "
             "Cite: BLDX-1410."
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d006"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/dependency.prose.md",
@@ -313,10 +293,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "build-and-publish workflow and wheel layout are uniform; a "
             "different backend diverges from that baseline.  A pyproject with "
             "no ``build-backend`` key is not flagged.  Cite: BLDX-1410."
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d007"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -353,10 +329,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "pyproject that does not set ``typeCheckingMode`` is not flagged; "
             "blanket ``reportX = false`` overrides are out of scope (they can "
             "be legitimate).  Cite: BLDX-1410."
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d008"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -467,10 +439,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "that floor; a currently resolved lockfile version alone is not enough. "
             "The SDK's own pyproject is exempt."
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d003"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/dependency.prose.md",
@@ -530,10 +498,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Inline suppression: "
             "``# conformance: ignore[D009] <reason>`` on the line above the "
             "offending entry."
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d009"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -670,10 +634,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "suppress it as above, since the bump would activate ``[sql]`` and\n"
             "ship an unused ``duckdb``.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d010"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/dependency.prose.md",
@@ -793,10 +753,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "the D leg reading the lockfile at all, which is FND-419's Step 1 +\n"
             "Step 2 and does not require any app-repo change.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d011"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/dependency.prose.md",
@@ -874,10 +830,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "as an app does.  This rule pins the index; ``D013`` checks whether\n"
             "a non-PyPI host has already reached ``uv.lock``.  Cite: FND-1928."
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d012"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/dependency.prose.md",
@@ -950,10 +902,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "undetermined rather than passing silently: the URL spelling is a uv\n"
             "implementation detail, and a matcher that has gone inert must not\n"
             "read as a clean result.  Cite: FND-1928."
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d013"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -1054,10 +1002,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``postUpgradeTasks``, neither of which can rot in a repo.\n"
             "Cite: FND-1985, FND-1999, FND-2000, FND-2001."
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d014"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/dependency.prose.md",
@@ -1157,10 +1101,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Scope is ``both``: application-sdk's own ``pyproject.toml``\n"
             "carries this exact shape.  Cite: FND-2229."
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d015"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/dependency.prose.md",
@@ -1221,10 +1161,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "exclusion clause (``!=``) or a micro-version pin/bound is\n"
             "routed to human review instead.\n"
             "Cite: FND-4505."
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d016"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -1303,10 +1239,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "extras, a leftover reference is an unknown extra, which D005 blocks.\n"
             "Cite: FND-4255."
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d017"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/dependency.prose.md",
@@ -1378,10 +1310,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "directly (``pandera``, say), declare that package in\n"
             "``[project.dependencies]`` on its own rather than keeping the extra.\n"
             "Cite: FND-4657."
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dependency.md#d018"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,

@@ -141,10 +141,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "From 3.28.0 both spellings resolve and render identically, so the\n"
             "upgrade is the fix and the template edit is unnecessary.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p040"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",

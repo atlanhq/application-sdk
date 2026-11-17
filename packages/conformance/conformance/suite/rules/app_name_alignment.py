@@ -143,10 +143,6 @@ RULES: tuple[RuleDefinition, ...] = (
             " class definition line (or the comment-only line directly above it)"
             " when a deliberate mismatch is justified.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p025"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.DECISION,
             target="app owner",

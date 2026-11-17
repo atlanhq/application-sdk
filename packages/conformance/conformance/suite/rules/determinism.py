@@ -34,11 +34,6 @@ from conformance.suite.schema.disposition import (
     RuleScope,
 )
 
-_HELP_BASE = (
-    "https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/"
-    "conformance/docs/rules/prescriptions.md"
-)
-
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P020",
@@ -90,7 +85,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Land as ``WARN``; record an unavoidable exception with\n"
             "``# conformance: ignore[P020] <reason>``.\n"
         ),
-        help_uri=f"{_HELP_BASE}#p020",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/prescriptions.prose.md",
@@ -165,7 +159,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "part of the same defect and are not separately reported — clearing "
             "only the flagged line leaves the non-determinism in place."
         ),
-        help_uri=f"{_HELP_BASE}#p021",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-orchestration",
@@ -216,7 +209,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P022] <reason>`` only where the constructed\n"
             "coroutine is deliberately discarded and that is provably harmless.\n"
         ),
-        help_uri=f"{_HELP_BASE}#p022",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/prescriptions.prose.md",
@@ -380,7 +372,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "fixed.  Land as ``WARN``; suppress with\n"
             "``# conformance: ignore[P023] <reason>``.\n"
         ),
-        help_uri=f"{_HELP_BASE}#p023",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/prescriptions.prose.md",
@@ -434,7 +425,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "restructure routed to residue.  Land as ``WARN``; suppress with\n"
             "``# conformance: ignore[P024] <reason>``.\n"
         ),
-        help_uri=f"{_HELP_BASE}#p024",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/prescriptions.prose.md",
@@ -506,7 +496,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "remaining preflight budget. A swap that keeps an existing deadline "
             "must keep it around the new call."
         ),
-        help_uri=f"{_HELP_BASE}#p031",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/prescriptions.prose.md",
@@ -568,7 +557,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "deliberate CPU-bound pool that never touches the worker) with\n"
             "``# conformance: ignore[P036] <reason>``.\n"
         ),
-        help_uri=f"{_HELP_BASE}#p036",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -635,7 +623,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "anchors there, not on the ``run_in_executor`` call) with\n"
             "``# conformance: ignore[P054] <reason>``.\n"
         ),
-        help_uri=f"{_HELP_BASE}#p054",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/prescriptions.prose.md",

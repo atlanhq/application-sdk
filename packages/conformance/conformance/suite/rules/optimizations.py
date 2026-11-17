@@ -118,7 +118,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "location, or names a consumer that only parses the JSON or sits inside the "
             "app, is unremediated: make the swap."
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o001",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/optimizations.prose.md",
@@ -172,7 +171,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``.dict()`` on a *non-asset* pydantic model in such a file is a known\n"
             "false-positive — suppress with ``# conformance: ignore[O002] <reason>``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o002",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-asset-modeling",
@@ -220,7 +218,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[O003] <reason>`` when an untyped return is\n"
             "intentional.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o003",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-asset-modeling",
@@ -278,7 +275,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Suppress with ``# conformance: ignore[O004] <reason>`` when a connector\n"
             "is intentionally pinned to the legacy ``AtlasTransformer`` surface.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o004",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-asset-modeling",
@@ -348,7 +344,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``rocks_backed_dict.py``'s ``append_to_key`` that ``SpillableDict`` "
             "does not provide).\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o006",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/optimizations.prose.md",
@@ -439,7 +434,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[O005] <reason>`` for a template resolved by a\n"
             "caller in a different file than the one being scanned.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o005",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/optimizations.prose.md",
