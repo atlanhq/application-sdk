@@ -361,7 +361,8 @@ every retry, which is what makes it look like a consumer bug.
 
 Covered writers: the incremental carry-forward state copy, the incremental
 marker, incremental diff metadata, writer chunk output and its statistics
-sidecar, and the local `.sha256` sidecar. Downloads get the same treatment:
+sidecar, the output of `map_records` / `map_jsonl`, and the local `.sha256`
+sidecar. Downloads get the same treatment:
 `download_file` and `download_file_chunked` stage in `.sdk-partial/` and
 publish with `os.replace`, so a shared `local_path` never exposes a partial
 file to a concurrent reader (CONNECT-1126). Two consequences of the rename
@@ -423,6 +424,55 @@ M` rather than corrupting output forty minutes in. The check is strict — free
 space is not padded with an invented margin — so it catches the impossible write,
 not the marginal one; a marginal write that still runs out is caught during the
 write and reported identically.
+
+## Streaming records
+
+`application_sdk.storage.streaming` is for transforms whose input grows with the
+tenant. Loading a file whole — into a list, or a DataFrame — makes memory grow
+with the tenant too, so an activity that fits a small tenant runs a large one out
+of memory. These helpers hold one record at a time:
+
+```python
+from application_sdk.common.asset_serialization import entity_bytes
+from application_sdk.common.last_sync import resolve_last_sync_details
+from application_sdk.storage.streaming import iter_jsonl_batches, map_jsonl
+
+# Resolve once, on the event loop: it reads the activity's execution context,
+# and every entity of the run carries the same lastSync* values.
+last_sync = resolve_last_sync_details()
+
+# Row to row: read a record, map it, write it, move on. Runs off the event loop.
+result = await map_jsonl(
+    raw_path,                       # one file, or a list read in order
+    transformed_path,               # written atomically
+    lambda record: entity_bytes(
+        map_table(record),
+        connection_name=name,
+        last_sync=last_sync,
+        entity_type="table",
+    ),
+)
+result.read, result.written         # a map returning None drops the record
+
+# When the work genuinely needs a batch (a bulk call, a bounded join), size it
+# in bytes. The same row count can be 10 MiB for one table and 1 GiB for another.
+for batch in iter_jsonl_batches(raw_path, max_bytes=32 * 1024 * 1024):
+    ...
+```
+
+| Helper | Use it for |
+|---|---|
+| `map_jsonl(src, dst, fn)` | Async. A JSON-lines file mapped to a JSON-lines file, in one `run_in_thread` hop. |
+| `map_records(records, dst, fn)` | Blocking. Any iterable of records (parquet rows, an API pager) mapped to a JSON-lines file. |
+| `write_records(records, out, fn)` | Blocking. The same loop into a binary handle the caller already holds; the caller owns how that file is published. |
+| `iter_jsonl(paths)` | One record at a time from one or more JSON-lines files; blank lines skipped. |
+| `batched_by_bytes(items, max_bytes, size_of=...)` | Group any iterable into byte-budgeted lists. An item over the budget is a batch of one. |
+| `iter_jsonl_batches(paths, max_bytes)` | Byte-budgeted batches of a JSON-lines file, sized by each serialized line (no re-serialization). |
+| `serialized_size(record)` | Bytes one record takes as a JSON line; the default `size_of` for `batched_by_bytes`. |
+
+`fn` returns a mapping (serialized with orjson), `bytes` or `str` that is
+already one serialized line, or `None` to drop the record. `DEFAULT_BATCH_BYTES` is 32 MiB.
+`SqlApp` runs every `transform_*` task through `write_records`.
 
 ---
 
