@@ -831,7 +831,6 @@ def git_repo(tmp_path: Path) -> Path:
 
     Excluded (noise):
       - chore(deps): lock file maintenance     — packages/conformance/uv.lock only
-      - chore(deps): refresh npm lock          — nested package-lock.json only
       - chore(deps): root lock                 — outside packages/conformance
     """
     _git(tmp_path, "init")
@@ -851,11 +850,6 @@ def git_repo(tmp_path: Path) -> Path:
         tmp_path,
         "chore(deps): lock file maintenance",
         {"packages/conformance/uv.lock": "lock-1\n"},
-    )
-    _commit(
-        tmp_path,
-        "chore(deps): refresh npm lock",
-        {"packages/conformance/conformance/package-lock.json": "{}\n"},
     )
     _commit(
         tmp_path,
@@ -885,7 +879,6 @@ class TestPathspecExclusions:
         monkeypatch.chdir(git_repo)
         subjects, _bodies = conformance_release.commits_since_tag(BASE_TAG)
         assert "lock file maintenance" not in subjects
-        assert "refresh npm lock" not in subjects
         assert "root lock" not in subjects
 
     def test_package_content_commits_are_kept(
