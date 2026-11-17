@@ -196,6 +196,29 @@ jobs:
       - name: Run shell script tests
         run: uv run poe test-scripts
 
+  # Collects the test trees no PR job executes: the storage load suite in
+  # tests/load (nightly smoke only, schedule.yaml) and the integration example
+  # connector authors copy. Collecting is enough to catch the ways these rot
+  # unseen: an import that no longer resolves, or a tree that collects nothing.
+  # pytest exits 5 when a path collects zero tests, so a class renamed out of
+  # the `Test*` pattern fails this job instead of passing silently (FND-4291).
+  # `-m ""` clears the default marker filter so marked tests are counted.
+  test-tree-collection:
+    name: Test Tree Collection
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: "./.github/actions/setup-deps"
+        with:
+          checkout: "false"
+      - name: Collect tests/load
+        run: uv run pytest --collect-only -q -m "" tests/load
+      - name: Collect tests/integration/_example
+        run: uv run pytest --collect-only -q -m "" tests/integration/_example
+
   # Decides whether the integration tier runs (FND-4306). Only the two tier
   # jobs need it, so `/e2e` re-runs this job alone (pr_test_command.py,
   # SDK_E2E_RERUN_JOBS) and the tier and SDK Gate's verdict re-run with it,

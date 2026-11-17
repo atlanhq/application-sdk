@@ -478,10 +478,12 @@ Edit `test_integration.py`:
 from application_sdk.testing.integration import BaseIntegrationTest
 from .scenarios import scenarios
 
-class MyConnectorTest(BaseIntegrationTest):
+class TestMyConnector(BaseIntegrationTest):
     scenarios = scenarios
     server_host = "http://localhost:8000"
 ```
+
+The class name must start with `Test`. pytest only collects classes that match its `python_classes` pattern (`Test*` by default), so a class named `MyConnectorTest` collects zero tests and the run passes without executing a single scenario. Check with `pytest --collect-only -q tests/integration/my_connector`: it should list one test per scenario.
 
 ### Step 4: Run Tests
 
@@ -755,7 +757,7 @@ workflow_scenarios = [
 ### Basic Configuration
 
 ```python
-class MyConnectorTest(BaseIntegrationTest):
+class TestMyConnector(BaseIntegrationTest):
     scenarios = scenarios
     server_host = "http://localhost:8000"
     server_version = "v1"
@@ -768,7 +770,7 @@ class MyConnectorTest(BaseIntegrationTest):
 If your workflow endpoint is different from `/start`:
 
 ```python
-class MyConnectorTest(BaseIntegrationTest):
+class TestMyConnector(BaseIntegrationTest):
     scenarios = scenarios
     workflow_endpoint = "/extract"  # Custom endpoint
 ```
@@ -808,7 +810,7 @@ Scenario(
 Or suite-wide, when every scenario in the class targets one entrypoint:
 
 ```python
-class MinerIntegrationTest(BaseIntegrationTest):
+class TestMinerIntegration(BaseIntegrationTest):
     entrypoint = "miner"         # applies to every workflow scenario
     scenarios = miner_scenarios
 ```
@@ -844,7 +846,7 @@ await executor.execute(MyApp, input_data, entry_point="extract-metadata")
 ### Setup and Teardown Hooks
 
 ```python
-class MyConnectorTest(BaseIntegrationTest):
+class TestMyConnector(BaseIntegrationTest):
     scenarios = scenarios
 
     @classmethod
@@ -1002,7 +1004,7 @@ pytest -v --log-cli-level=DEBUG
 
 Increase timeout:
 ```python
-class MyTest(BaseIntegrationTest):
+class TestMyConnector(BaseIntegrationTest):
     timeout = 60  # Increase from default 30
 ```
 

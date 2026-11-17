@@ -9,7 +9,7 @@ scenario suite and the connector suites.
 
 Four of the original seven fields (``app_module``, ``image``,
 ``worker_health_port``, ``timeout``) were never read by anything — not by the
-harness, not by ``tests/e2e/conftest.py``'s helpers, not by any consumer repo —
+harness, not by any consumer repo —
 so they are dropped here rather than carried into the shared vocabulary. The
 deprecated :class:`~application_sdk.testing.e2e.config.AppConfig` alias still
 accepts them so an existing ``AppConfig(...)`` call site keeps working.

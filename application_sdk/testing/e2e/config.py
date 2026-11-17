@@ -44,7 +44,7 @@ class AppConfig(AppUnderTest):
     mis-binds its arguments is a silent break, not a deprecation.
 
     Four of the seven fields were never read by anything — not by this package,
-    not by ``tests/e2e/conftest.py``'s fixtures, not by any consumer repo — so
+    not by any consumer repo — so
     they are accepted and stored but carry no meaning. They are absent from
     :class:`AppUnderTest`.
 

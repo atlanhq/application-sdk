@@ -33,6 +33,28 @@ jobs:
           days-before-stale: 60
           debug-only: 'true'
 
+  # Nightly smoke of the opt-in storage load suite (tests/load). Same
+  # scenarios as `poe load-test-storage`, at 64 MiB instead of 1 GiB: the
+  # smallest size that still exercises the multi-chunk resume path, so the
+  # suite cannot silently rot between manual volume runs (FND-4291).
+  load-smoke:
+    name: Storage Load Tests — nightly smoke (64 MiB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: "./.github/actions/setup-deps"
+        with:
+          checkout: "false"
+      - name: Run storage load tests at smoke size
+        env:
+          ATLAN_LOAD_TEST_SIZE_MIB: "64"
+        run: uv run pytest tests/load -m load -v --timeout=600
+
   # Nightly real-cloud storage integration tests against main (no PR context →
   # no label gate). Same suites as the PR job in pull_request.yaml.
   # STORAGE_CLOUD_REQUIRED=1 makes conftest fail, not skip, a cloud whose

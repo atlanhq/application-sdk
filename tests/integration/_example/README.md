@@ -85,7 +85,7 @@ The test class that runs scenarios:
 from application_sdk.testing.integration import BaseIntegrationTest
 from .scenarios import scenarios
 
-class ExampleIntegrationTest(BaseIntegrationTest):
+class TestExampleIntegration(BaseIntegrationTest):
     scenarios = scenarios
     server_host = "http://localhost:8000"
 ```
