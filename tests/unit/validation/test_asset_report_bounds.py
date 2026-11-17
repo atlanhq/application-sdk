@@ -142,6 +142,10 @@ def test_a_hand_built_report_still_derives_its_counts_from_its_lists() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the golden holds the POSIX file paths the walk reports verbatim",
+)
 @pytest.mark.parametrize("batch", sorted(parity.BATCHES))
 def test_every_surface_matches_the_unbounded_walk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, batch: str
@@ -150,8 +154,8 @@ def test_every_surface_matches_the_unbounded_walk(
     at the hook's cap and at a smaller one, and the shared report's counts, body,
     matrix and event map, for the single-path, multi-part and wrapper routes.
 
-    The golden file was written by the walk before it bounded its report, over the
-    same synthetic batches; the batches overflow the cap on both axes, sit under it,
+    The golden file was written by the unbounded walk (every failure held as an
+    object) over the same synthetic batches; the batches overflow the cap on both axes, sit under it,
     and are clean, so the overflow arithmetic, the failures-then-orphans ordering of
     the shared list and the clean row are all covered.
     """
@@ -172,6 +176,14 @@ def test_every_surface_matches_the_unbounded_walk(
 
 
 EVERY = assets_module._BUDGET_CHECK_EVERY
+_GIB = 1024**3
+
+
+def _rss_readings(start: int, then: int):  # type: ignore[no-untyped-def]
+    """A stand-in RSS reader: ``start`` for the reading taken as the scan begins,
+    ``then`` for every check after it."""
+    readings = iter([start])
+    return lambda: next(readings, then)
 
 
 def test_a_scan_past_its_rss_budget_stops_and_says_so(tmp_path: Path) -> None:
@@ -179,9 +191,11 @@ def test_a_scan_past_its_rss_budget_stops_and_says_so(tmp_path: Path) -> None:
     verdict (the present-set is partial), and a truncation mark the event carries."""
     batch = _all_failing_batch(tmp_path, EVERY * 3)
 
-    with patch.object(assets_module, "_current_rss_bytes", lambda: 2 * 1024**3):
+    with patch.object(
+        assets_module, "_current_rss_bytes", _rss_readings(_GIB // 8, 2 * _GIB)
+    ):
         report = validate_assets_as_artifact(
-            batch, budget=ScanBudget(max_rss_bytes=1024**3)
+            batch, budget=ScanBudget(max_rss_bytes=_GIB)
         )
     assets = report.assets
 
@@ -199,11 +213,16 @@ def test_a_scan_past_its_rss_budget_stops_and_says_so(tmp_path: Path) -> None:
 
 
 def test_a_scan_under_its_rss_budget_reads_everything(tmp_path: Path) -> None:
+    """Memory the process held before the scan does not count against it: a process
+    already past the budget at the start still reads the whole batch while the
+    scan's own growth stays under it."""
     batch = _all_failing_batch(tmp_path, EVERY * 2)
 
-    with patch.object(assets_module, "_current_rss_bytes", lambda: 1024**3 - 1):
+    with patch.object(
+        assets_module, "_current_rss_bytes", _rss_readings(2 * _GIB, 3 * _GIB - 1)
+    ):
         report = validate_assets_as_artifact(
-            batch, budget=ScanBudget(max_rss_bytes=1024**3)
+            batch, budget=ScanBudget(max_rss_bytes=_GIB)
         )
 
     assert report.assets.truncated == ""
@@ -260,12 +279,14 @@ def test_the_cell_takes_its_budgets_from_the_deployment(tmp_path: Path) -> None:
 
     with (
         patch("application_sdk.constants.VALIDATE_ASSETS_MAX_RSS_MB", 1),
-        patch.object(assets_module, "_current_rss_bytes", lambda: 2 * 1024**2),
+        patch.object(
+            assets_module, "_current_rss_bytes", _rss_readings(0, 2 * 1024**2)
+        ),
     ):
         over_rss = validate_assets_as_artifact(batch)
     with (
         patch("application_sdk.constants.VALIDATE_ASSETS_MAX_RSS_MB", 0),
-        patch.object(assets_module, "_current_rss_bytes", lambda: 1024**4),
+        patch.object(assets_module, "_current_rss_bytes", _rss_readings(0, _GIB)),
     ):
         rss_off = validate_assets_as_artifact(batch)
     with patch("application_sdk.constants.VALIDATE_ASSETS_TIMEOUT_SECONDS", 0.0):
@@ -276,6 +297,51 @@ def test_the_cell_takes_its_budgets_from_the_deployment(tmp_path: Path) -> None:
     assert walled.assets.truncated == TRUNCATED_WALL_BUDGET
     with patch("application_sdk.constants.VALIDATE_ASSETS_TIMEOUT_SECONDS", 600.0):
         assert ScanBudget.from_deployment().wall_seconds == pytest.approx(540.0)
+
+
+def test_a_stopped_scan_that_found_nothing_is_never_clean_on_the_shared_report(
+    tmp_path: Path,
+) -> None:
+    """The part read was fine; the rest was never checked. A generic consumer sees
+    what it sees for a scan killed at the timeout — ``absent``, validator broken —
+    while the asset vocabulary keeps the partial counts and the truncation mark."""
+    batch = tmp_path / "transformed" / "Table" / "chunk-0.json"
+    batch.parent.mkdir(parents=True)
+    batch.write_text(
+        "".join(json.dumps(parity._table(f"T{i}")) + "\n" for i in range(EVERY * 2))
+    )
+
+    report = validate_assets_as_artifact(
+        tmp_path / "transformed",
+        check_referential_integrity=False,
+        budget=ScanBudget(wall_seconds=0.0),
+    )
+
+    assert report.outcome == "absent"
+    assert report.validator_broken
+    assert "stopped at its wall budget" in report.reason
+    assert report.assets.ok
+    assert report.assets.truncated == TRUNCATED_WALL_BUDGET
+    assert report.assets.total == EVERY
+
+
+def test_the_cell_keeps_every_failure_when_asked(tmp_path: Path) -> None:
+    batch = _all_failing_batch(tmp_path, CAP * 2)
+
+    report = validate_assets_as_artifact(batch, max_samples=None)
+
+    assert len(report.assets.failures) == CAP * 2
+    assert report.assets.failures_omitted == 0
+    assert report.failure_counts is None
+
+
+def test_a_sample_cap_below_one_still_lists_one_failure(tmp_path: Path) -> None:
+    report = validate_transformed_dir(_all_failing_batch(tmp_path, 5), max_samples=0)
+
+    assert len(report.failures) == 1
+    assert report.failures_omitted == 4
+    assert report.failed == 5
+    assert "... and 4 more invalid assets" in report.format_report()
 
 
 def test_an_untruncated_event_carries_no_truncation_key(tmp_path: Path) -> None:

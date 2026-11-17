@@ -991,7 +991,7 @@ auto-stamped and each row joins to the workflow outcome by run id:
 - The scan's child process works to a fixed memory budget. Its report keeps counts plus at most
   25 sampled failures and 25 sampled orphans (every row the matrix and the WARNING list), so it is
   the same few KB whether one record failed or every record did. Past
-  `ATLAN_VALIDATE_ASSETS_MAX_RSS_MB` (default 1024) of resident memory, or 90% of
+  `ATLAN_VALIDATE_ASSETS_MAX_RSS_MB` (default 1024) of resident-memory growth, or 90% of
   `ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS`, the scan stops and reports the records it read; the row
   then carries `validation_truncated` and `assets_referential_check=skipped_budget`.
 

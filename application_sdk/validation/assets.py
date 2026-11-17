@@ -43,17 +43,20 @@ Design constraints worth preserving if you edit this file:
   referenced-target set to disk via
   :class:`~application_sdk.common.spillable_dict.SpillableDict`, so a
   multi-million-asset batch never blows the heap.
-* **A fixed-size report.** The upload-time cell keeps at most
-  ``ASSET_VALIDATION_MAX_ITEMS_PER_AXIS`` failures and orphans as objects and
-  counts the rest, tallying the per-rule summary as it walks. Every consumer
-  lists no more rows than that, so nothing it reads changes, while the report
-  the scan's child pickles back stays a few KB on a batch where every record
-  fails. One object per failure would grow with the failure count three times
+* **A report that does not grow with the failure count.** The upload-time cell
+  keeps at most ``ASSET_VALIDATION_MAX_ITEMS_PER_AXIS`` failures and orphans as
+  objects and counts the rest, tallying the per-rule summary as it walks. Every
+  consumer lists no more rows than that, so nothing it reads changes, while the
+  report the scan's child pickles back stays a few KB on a batch where every
+  record fails. The summary tallies grow only with distinct
+  ``(kind, typeName, rule)`` keys, which the type model bounds for real output. One object per failure would grow with the failure count three times
   over: in the child, in the pickle and in the parent that unpickles it.
 * **The walk polices its own budget.** Every ``_BUDGET_CHECK_EVERY`` records it
-  checks its RSS and its clock, and past either budget it stops and reports what
-  it read, marked ``truncated``, so the outer timeout is a backstop rather than
-  the usual way a slow scan ends.
+  checks how far its RSS has grown and how long it has run, and past either
+  budget it stops and reports what it read, marked ``truncated``. The wall
+  budget starts when the walk does, so time spent queued behind a busy process
+  pool or spawning the child counts only against the caller's outer timeout,
+  which can still fire first under that contention.
 """
 
 from __future__ import annotations
@@ -84,6 +87,7 @@ from application_sdk.contracts.types import (
 from application_sdk.observability.logger_adaptor import (
     ASSET_VALIDATION_MATRIX_KEY,
     ASSET_VALIDATION_SUMMARY_KEY,
+    ASSET_VALIDATION_TRUNCATED_KEY,
     get_logger,
 )
 from application_sdk.validation.artifacts import (
@@ -600,15 +604,18 @@ class ScanBudget:
     """
 
     max_rss_bytes: int | None = None
-    """Stop once this process's resident memory exceeds this many bytes."""
+    """Stop once this process's resident memory has grown by more than this many
+    bytes since the scan started. Growth rather than the absolute figure, so memory
+    the process already held — its imports, or what a reused pool child kept from
+    an earlier task — never cuts a scan short that has itself used little."""
     wall_seconds: float | None = None
     """Stop once the scan has run this long."""
 
     @classmethod
     def from_deployment(cls) -> ScanBudget:
         """The budgets the upload-time scan runs under, from the deployment's env:
-        ``ATLAN_VALIDATE_ASSETS_MAX_RSS_MB`` (``0`` = no memory check) and 90% of
-        ``ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS``."""
+        ``ATLAN_VALIDATE_ASSETS_MAX_RSS_MB`` of RSS growth (``0`` = no memory check)
+        and 90% of ``ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS``."""
         from application_sdk import (  # noqa: PLC0415 — read at call time so a deployment (or a test) can retune them
             constants,
         )
@@ -624,9 +631,9 @@ def _current_rss_bytes() -> int | None:
     """This process's resident memory now, its peak where "now" is not readable, or
     ``None`` where neither is (Windows, which then runs without the memory check).
 
-    Linux (every deployed worker) reads ``/proc/self/statm``. Elsewhere the peak
-    from ``getrusage`` stands in: it never under-reads, so the budget can only trip
-    early, never late.
+    Linux (every deployed worker) reads ``/proc/self/statm``. Elsewhere the
+    lifetime peak from ``getrusage`` stands in, so growth there is measured past
+    the highest point the process had already reached.
     """
     try:
         import resource  # noqa: PLC0415 — POSIX-only module; absent on Windows
@@ -648,12 +655,17 @@ def _current_rss_bytes() -> int | None:
 class _BudgetClock:
     """Answers "has the scan used up a budget?" once every ``_BUDGET_CHECK_EVERY`` ticks."""
 
-    __slots__ = ("_budget", "_deadline", "_ticks")
+    __slots__ = ("_deadline", "_rss_ceiling", "_ticks")
 
     def __init__(self, budget: ScanBudget) -> None:
-        self._budget = budget
         self._deadline = (
             None if budget.wall_seconds is None else _monotonic() + budget.wall_seconds
+        )
+        start_rss = None if budget.max_rss_bytes is None else _current_rss_bytes()
+        self._rss_ceiling = (
+            None
+            if budget.max_rss_bytes is None or start_rss is None
+            else start_rss + budget.max_rss_bytes
         )
         self._ticks = 0
 
@@ -664,8 +676,10 @@ class _BudgetClock:
         if self._ticks and not self._ticks % _BUDGET_CHECK_EVERY:
             if self._deadline is not None and _monotonic() >= self._deadline:
                 return TRUNCATED_WALL_BUDGET
-            limit = self._budget.max_rss_bytes
-            if limit is not None and (_current_rss_bytes() or 0) > limit:
+            if (
+                self._rss_ceiling is not None
+                and (_current_rss_bytes() or 0) > self._rss_ceiling
+            ):
                 return TRUNCATED_RSS_BUDGET
         self._ticks += 1
         return ""
@@ -756,7 +770,8 @@ def validate_transformed_dir(
         max_samples: Keep at most this many failures and this many orphans as
             objects on the report; count the rest. The counts, and the per-rule
             summary the walk tallies, still cover every record. ``None`` (default)
-            keeps every one. Must be at least 1.
+            keeps every one; a value below 1 is read as 1, so a failing batch
+            always lists at least one failure.
         budget: Stop early at a memory or wall budget (see :class:`ScanBudget`),
             returning the counts for the records read so far. ``None`` (default)
             reads the whole batch whatever it costs.
@@ -764,8 +779,8 @@ def validate_transformed_dir(
     Returns:
         An :class:`AssetValidationReport` aggregating all axes of failure.
     """
-    if max_samples is not None and max_samples < 1:
-        raise ValueError(f"max_samples must be at least 1, got {max_samples}")
+    if max_samples is not None:
+        max_samples = max(1, max_samples)
     summary_counts: dict[_SummaryKey, int] = {}
     summary_references: dict[_SummaryKey, int] = {}
     report = AssetValidationReport(
@@ -1117,6 +1132,7 @@ def validate_assets_as_artifact(
     check_referential_integrity: bool = True,
     creation_rules: frozenset[AssetCreationRules] = frozenset(),
     budget: ScanBudget | None = None,
+    max_samples: int | None = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
 ) -> AssetArtifactReport:
     """The NDJSON x ``ModelSource`` cell: :func:`validate_transformed_dir`, reported
     in the shared shape.
@@ -1146,6 +1162,8 @@ def validate_assets_as_artifact(
             deployment's, :meth:`ScanBudget.from_deployment` — the upload hook
             reaches this cell through the wrapper, which carries no options, so the
             cell reads them itself.
+        max_samples: Failures, and orphans, kept as objects (see below). ``None``
+            keeps every one, for a caller that reads the whole list in-process.
 
     The report is constant-size: at most
     :data:`~application_sdk.constants.ASSET_VALIDATION_MAX_ITEMS_PER_AXIS` failures
@@ -1180,7 +1198,7 @@ def validate_assets_as_artifact(
         for_creation=for_creation,
         check_referential_integrity=check_referential_integrity,
         creation_rules=creation_rules,
-        max_samples=ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
+        max_samples=max_samples,
         budget=budget if budget is not None else ScanBudget.from_deployment(),
     )
 
@@ -1188,6 +1206,18 @@ def validate_assets_as_artifact(
         return AssetArtifactReport(
             verdict=OUTCOME_ABSENT,
             reason=f"no ndjson records found at {path}",
+            assets=assets,
+        )
+
+    if assets.truncated and assets.ok:
+        # Nothing wrong in the part read is not a clean artifact: the rest was never
+        # checked. ``absent`` + broken is what a scan killed at the timeout reports,
+        # so a generic consumer counts a stopped scan the same way, never as clean.
+        # The asset event reads ``assets`` and is unaffected.
+        return AssetArtifactReport(
+            verdict=OUTCOME_ABSENT,
+            validator_broken=True,
+            reason=_truncation_reason(assets),
             assets=assets,
         )
 
@@ -1549,5 +1579,9 @@ def asset_validation_event_fields(
         ),
         # Present only on a scan that stopped at a budget, so the row of every
         # complete scan is exactly what it was before the budgets existed.
-        **({"validation_truncated": report.truncated} if report.truncated else {}),
+        **(
+            {ASSET_VALIDATION_TRUNCATED_KEY: report.truncated}
+            if report.truncated
+            else {}
+        ),
     }

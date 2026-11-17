@@ -217,7 +217,8 @@ async def _warn_on_invalid_transformed_assets(
     are full by design by default, so the batch — the whole hand-off, see below —
     is complete and the orphan pass is accurate. This **never** blocks the upload
     and **never** raises — a defect in the scaffold must not break a real handoff
-    — and it scans every record (no sampling) so the summary is accurate.
+    — and it reads every record (no sampling) so the counts and the summary are
+    exact, unless the scan stops at its memory or wall budget (see below).
 
     **The check is reached through the generic wrapper** (ADR-0020, FND-690):
     ``validate_artifact(target, ModelSource(model=Asset))`` is the NDJSON x

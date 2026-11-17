@@ -12,14 +12,17 @@ path rather than of the import graph alone.
 **Memory.** The scan holds one record at a time, so peak memory tracks the widest
 record rather than the artifact — a directory of 20k records across many files
 peaks the same as a directory of 200. The one thing that does grow is the failure
-list, exactly as :class:`~application_sdk.validation.assets.AssetValidationReport`
-grows its own: an artifact where *every* record fails holds one failure per failing
-record. That is the report's stated contract — the failure list is unbounded and
-the two *output* surfaces are what the shared cap bounds — and it is what keeps
-``undecodable``, derived from that list, exact.
+list: an artifact where *every* record fails holds one failure per failing record.
+That is the field-map cell's contract — the failure list is unbounded and the two
+*output* surfaces are what the shared cap bounds — and it is what keeps
+``undecodable``, derived from that list, exact. The model cell
+(:func:`~application_sdk.validation.assets.validate_assets_as_artifact`) instead
+keeps a capped sample and carries exact per-kind counts beside it, because its
+report crosses a process boundary.
 
-**Every record is scanned.** There is no sampling and no early exit, so the scalar
-counts always describe the whole artifact. A record that fails to decode is counted
+**Every record is scanned.** There is no sampling, so the scalar counts describe the
+whole artifact; the model cell's only early exit is its memory or wall budget, which
+it names in the report's ``reason``. A record that fails to decode is counted
 as ``undecodable`` and the scan continues, the same posture the asset path takes:
 one malformed line must not abort the batch and take every other record's verdict
 with it.
@@ -58,7 +61,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path
-from typing import Callable, Final, Iterator, Mapping, Sequence
+from typing import Callable, Final, Generator, Mapping, Sequence
 
 import orjson
 
@@ -104,7 +107,7 @@ NDJSON_SUFFIXES: Final[tuple[str, ...]] = (".json", ".jsonl", ".ndjson")
 
 def iter_ndjson_lines(
     path: str | Path | Sequence[str | Path],
-) -> Iterator[tuple[str, int, bytes]]:
+) -> Generator[tuple[str, int, bytes], None, None]:
     """Yield ``(file, 1-based line number, raw bytes)`` for every non-blank line.
 
     Accepts a directory (walked recursively, sorted for stable ordering) or a
@@ -675,7 +678,8 @@ class NdjsonValidator:
                 :class:`~application_sdk.validation.artifacts.ModelDeclaration`.
 
         Returns:
-            A report whose scalar counts describe the whole artifact. ``absent``
+            A report whose scalar counts describe the whole artifact (or, for a
+            model scan stopped at its budget, the part read — see ``reason``). ``absent``
             when there was nothing to read — a missing path, or a directory with no
             records in it. Reporting that as ``clean`` would be the exact failure
             this capability was built to remove: zero records checked, and a pass

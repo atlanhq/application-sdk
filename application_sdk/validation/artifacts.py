@@ -611,7 +611,8 @@ class ArtifactValidationReport:
     fields_declared: int = 0
     """How many fields the declaration named (0 for a model declaration)."""
     total: int = 0
-    """Units examined. Always the whole artifact — the scan is never sampled."""
+    """Units examined. The whole artifact — the scan is never sampled — unless a
+    cell stopped at a budget, which it then names in :attr:`reason`."""
     passed: int = 0
     """Units with no failure."""
     failures: list[ArtifactValidationFailure] = dataclasses.field(default_factory=list)
@@ -724,8 +725,9 @@ class ArtifactValidationReport:
     def undecodable(self) -> int:
         """Units that could not be parsed at all.
 
-        Derived from the failure list rather than tracked alongside it, so the two
-        cannot disagree.
+        Derived from the failure list — or, when the list is a sample, from
+        :attr:`failure_counts`, set by the cell from the same walk — rather than
+        tracked alongside them, so the two cannot disagree.
         """
         return self._kind_counts().get("undecodable", 0)
 
