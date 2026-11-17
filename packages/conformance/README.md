@@ -46,6 +46,48 @@ Run each as `uv run atlan-application-sdk-conformance <command>` from
 
 See [preflight conformance](conformance/docs/preflight-testing.md) for static checks, opt-in behavior scenarios, and their coverage limits, and the [F-series rule catalog](conformance/docs/rules/preflight.md) for the rules themselves.
 
+## Grading a change instead of the repository (`--since`)
+
+A plain `detect` grades the repository: every blocking finding fails it, old
+or new. That is what the scheduled run and the dashboard want. A pull request
+wants a different question answered: did *this change* add a blocking finding?
+
+```bash
+# Fail only on blocking findings added since the fork from origin/main
+uv run atlan-application-sdk-conformance detect --repo . --since origin/main --output report.sarif
+
+# The same, through the environment (how PR CI sets it for every series step)
+CONFORMANCE_SINCE=origin/main uv run atlan-application-sdk-conformance detect --repo . --output report.sarif
+```
+
+- The exit code is non-zero only for blocking findings the working tree has
+  over the merge-base of the ref and `HEAD`. Each is printed as `[INTRODUCED]`.
+- Findings the base already carries are still printed and still written to the
+  SARIF, which stays the whole-repository result. They do not fail the run.
+- Warnings never fail the run, with or without `--since`.
+- A file that cannot be parsed still fails the run, exactly as without
+  `--since`: it is not compared with the base, because a clean verdict must
+  mean every discovered file was scanned.
+- The working tree is compared, so an uncommitted change is judged the same as
+  a committed one, including a file moved with a plain `mv`.
+- `--repo` may be a subdirectory of the checkout; the same subdirectory of the
+  base is what it is compared with.
+- Findings are counted per rule, file and discriminator rather than matched
+  line by line, so moving or rewording an existing violation does not count as
+  adding one. A change that fixes one violation and adds another of the same
+  rule in the same file nets to zero and passes.
+- The base is only scanned when the working tree has blocking findings, and
+  then only for the rules that fired, in a temporary `git worktree`.
+- If the base cannot be compared (a shallow clone, an unknown ref, no git), the
+  run says `falling back to the whole-repository verdict` and does exactly
+  that: stricter, never laxer. No `[INTRODUCED]` line is printed then, so a
+  failure after that message is about the missing base, not about the change.
+- `--exit-zero` still forces exit 0.
+
+`conformance-reusable.yaml` sets `CONFORMANCE_SINCE` to the base commit on
+`pull_request` and `merge_group` events. Push, scheduled and dispatched runs
+leave it empty and grade the whole repository.
+
 ## Suppressing a finding
 
 Most findings are suppressed inline, next to the violating line:
