@@ -7,6 +7,9 @@
 ///
 /// Use this pattern for purely operational apps (e.g. housekeeping jobs,
 /// internal orchestration) that should never be user-visible in the marketplace.
+///
+/// It also shows root `e2eOverrides`: the app declares no `connector`, so its
+/// generated e2e base names the connection its suite creates explicitly.
 amends "../../src/App.pkl"
 
 name = "behind-the-scenes"
@@ -14,6 +17,11 @@ displayName = "Behind the Scenes Example"
 icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
 hasCredentialConfig = false
 marketplaceCard = false
+
+e2eOverrides {
+  connectionType = "postgres"
+  connectionCategory = "database"
+}
 
 pipeline {
   publish = null

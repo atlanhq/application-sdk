@@ -849,6 +849,27 @@ artifactSchemas: Mapping<ContractFieldName, ArtifactSchema> = new Mapping {}
 /// a full example with Dapr, KEDA, resources, env, and overrides.
 deploy: DeployConfig? = null
 
+/// E2E-harness-only overrides for a single-entrypoint app. See [E2EOverrides].
+///
+/// Default: `{}` — the generated `app/generated/_e2e_base.py` is byte-identical
+/// to an app that does not declare it. Each set field replaces one derived
+/// value in that file and changes no other generated file.
+///
+/// Only `connectorShortName`, `connectionType` and `connectionCategory` apply
+/// here; `argoPackageName`, `argoTemplateName` and `connectorConfigName` are
+/// refused, because the root `argoPackageNames`, `argoTemplateName` and
+/// `connectorConfigName` already drive the same lines. Setting
+/// `connectorShortName` changes which app the run targets, because the harness
+/// fills the manifest's `{app_name}` token from it. With a primary credential
+/// config it also emits `connector_config_name` (the root `connectorConfigName`),
+/// so the harness does not derive a config name from the alias. A system app's
+/// base never names a connector config.
+///
+/// Refused on a multi-entrypoint bundle root, which renders no `_e2e_base.py` of
+/// its own, and on an entrypoint's `contract`, whose base the bundle replaces:
+/// declare `Entrypoint.e2eOverrides` there instead.
+e2eOverrides: E2EOverrides = new E2EOverrides {}
+
 // ── ENTRYPOINTS ──────────────────────────────────────────────────────────────
 
 /// One marketplace card / SDK entrypoint under the deployed app.
@@ -2474,18 +2495,26 @@ class Pipeline {
 
 // ── E2E harness overrides ─────────────────────────────────────────────────────
 
-/// Optional overrides for the generated e2e test harness of one bundle entrypoint.
+/// Optional overrides for a generated e2e test harness.
 ///
-/// Affects only `app/generated/<entrypoint>/_e2e_base.py` — never `atlan.yaml`,
-/// the manifests, the marketplace card or any runtime artifact. Every field is
-/// optional; an unset field keeps exactly the value the generator derives today.
+/// Declared on a bundle entrypoint (`Entrypoint.e2eOverrides`) it affects only
+/// `app/generated/<entrypoint>/_e2e_base.py`; declared on a single-entrypoint
+/// app's root (`App.e2eOverrides`) it affects only `app/generated/_e2e_base.py`.
+/// Never `atlan.yaml`, the manifests, the marketplace card or any runtime
+/// artifact. Every field is optional; an unset field keeps exactly the value the
+/// generator derives today.
 ///
-/// Use it when a bundle entrypoint's e2e identity cannot be derived: e.g. its
+/// Use it when the e2e identity cannot be derived: e.g. a bundle entrypoint's
 /// name matches no `argoPackageNames` leaf and `packageId` cannot be set because
-/// it would re-key the marketplace card. Stating the values here keeps them in
-/// the contract instead of hand-pinned in the test module (conformance T023).
+/// it would re-key the marketplace card, or an app enriches a connection of a
+/// source it does not itself declare as its `connector` (a query-history miner
+/// whose user picks any warehouse connection). Stating the values here keeps them
+/// in the contract instead of hand-pinned in the test module (conformance T023).
 class E2EOverrides {
-  /// `connector_short_name` for this entrypoint's harness (default: the bundle `name`).
+  /// `connector_short_name` for the harness (default: the bundle `name` on a bundle
+  /// entrypoint, the app's own `name` at a single-entrypoint root).
+  /// Not cosmetic: the harness fills the manifest's `{app_name}` token and the
+  /// extract node's app from it, so an alias changes which app the run targets.
   connectorShortName: String?
 
   /// `argo_package_name` (default: matched from `packageId` / `argoPackageNames`).
@@ -2496,6 +2525,21 @@ class E2EOverrides {
 
   /// `connector_config_name` (default: the bundle's `connectorConfigName`).
   connectorConfigName: String?
+
+  /// `connection_type` — the Atlan catalog type segment of the Connection the
+  /// suite creates and the run enriches (default: the entrypoint's `source`, else
+  /// the contract's `connector.value`). Set it when the app's own `connector` is
+  /// not a real Atlas connector type, e.g. `"snowflake"` for a generic miner.
+  /// Overrides `Entrypoint.source` on a bundle entrypoint.
+  connectionType: String?
+
+  /// `connection_category` (default: the entrypoint's `sourceCategory`, else the
+  /// contract's `connector.category`; `"warehouse"` is the harness default and is
+  /// not emitted). Overrides `Entrypoint.sourceCategory` on a bundle entrypoint.
+  /// Does not change the generated base class, which still follows the
+  /// entrypoint's `sourceCategory` on a bundle entrypoint, else the contract's
+  /// `connector.category`.
+  connectionCategory: ConnectorsPkg.AtlanConnectionCategory?
 }
 
 // ── Entrypoint class ──────────────────────────────────────────────────────────
@@ -4456,6 +4500,16 @@ local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
       else "")
     fmtSubsField(pyName, "str", "default=\"\(escapePyStr(defVal))\"", k)
 
+local primaryConfigmapWritten: Boolean =
+  uiConfig != null && hasCredentialConfig && credentialAuthOptions != null
+
+local function e2eConnectionLines(o: E2EOverrides, fallbackType: String?, fallbackCategory: String?): String =
+  let (connType = o.connectionType ?? fallbackType)
+  let (connCat = o.connectionCategory ?? fallbackCategory)
+    (if (connType != null) e2eAttr("connection_type") + "\"\(escapePyStr(connType))\"\n" else "")
+      + (if (connCat != null && connCat != SdkNamesPkg.e2eConnectionCategoryDefault)
+          e2eAttr("connection_category") + "\"\(escapePyStr(connCat))\"\n" else "")
+
 local function generateE2EBasePy(): FileOutput = new FileOutput {
   local baseClass = e2eBaseClass()
   local cname = pascalCase(name)
@@ -4466,22 +4520,22 @@ local function generateE2EBasePy(): FileOutput = new FileOutput {
   // Emitting unconditionally makes this artifact agree with the frontend config
   // and removes the entire latent app-name-fallback bug class. When value ==
   // name the emitted line simply restates the fallback (harmless).
-  local emitConnType = connector != null
-  local emitConnCat = connector != null && connector!!.category != SdkNamesPkg.e2eConnectionCategoryDefault
   text = PyFormatPkg.format(
     "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
     "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
     "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
     "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
-    e2eAttr("connector_short_name") + "\"\(escapePyStr(name))\"\n" +
+    e2eAttr("connector_short_name") + "\"\(escapePyStr(e2eOverrides.connectorShortName ?? name))\"\n" +
     // SystemAppE2ETest submits straight to AE and never sends the Heracles
     // envelope these name, so a system app's base leaves them out.
     (if (isSystemApp) "" else
       e2eAttr("argo_package_name") + "\"\(escapePyStr(resolvedArgoPackageName))\"\n" +
       e2eAttr("argo_template_name") + "\"\(escapePyStr(argoTemplateName))\"\n" +
       e2eAttr("app_service_url") + "\"\(escapePyStr(appServiceUrl))\"\n") +
-    (if (emitConnType) e2eAttr("connection_type") + "\"\(escapePyStr(connector!!.value))\"\n" else "") +
-    (if (emitConnCat) e2eAttr("connection_category") + "\"\(escapePyStr(connector!!.category))\"\n" else "") +
+    e2eConnectionLines(e2eOverrides, connector?.value, connector?.category) +
+    (if (!isSystemApp && primaryConfigmapWritten && e2eOverrides.connectorShortName != null)
+      e2eAttr("connector_config_name") + "\"\(escapePyStr(connectorConfigName))\"\n"
+    else "") +
     // No manifest.json is generated without a uiConfig, so the harness's
     // default manifest_path names a file that does not exist.
     (if (isSystemApp && uiConfig == null)
@@ -4617,8 +4671,6 @@ local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOut
   // `connection_type` is always emitted (never gated on `value != name`): the SDK
   // falls back to `connector_short_name`, which is now the BUNDLE name and so is
   // wrong for every bundle whose source differs from it.
-  local connType = ep.source ?? c.connector?.value
-  local connCat = ep.sourceCategory ?? c.connector?.category
   text = PyFormatPkg.format(
     "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
     "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
@@ -4630,8 +4682,7 @@ local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOut
       e2eAttr("argo_package_name") + "\"\(escapePyStr(pkgName))\"\n" +
       e2eAttr("argo_template_name") + "\"\(escapePyStr(tmplName))\"\n" +
       e2eAttr("app_service_url") + "\"\(escapePyStr(appServiceUrl))\"\n") +
-    (if (connType != null) e2eAttr("connection_type") + "\"\(escapePyStr(connType))\"\n" else "") +
-    (if (connCat != null && connCat != SdkNamesPkg.e2eConnectionCategoryDefault) e2eAttr("connection_category") + "\"\(escapePyStr(connCat))\"\n" else "") +
+    e2eConnectionLines(ep.e2eOverrides, ep.source ?? c.connector?.value, ep.sourceCategory ?? c.connector?.category) +
     // FND-3563: a UI-less system entrypoint has no manifest.json, credential or
     // extract/publish DAG of its own. As for a single-entrypoint system app, the
     // suite is told to supply the DAG; only the entrypoint selector is kept.
@@ -5466,6 +5517,33 @@ local artifactSchemasOutput: FileOutput = new FileOutput {
   renderer = new JsonRenderer {}
 }
 
+local function declaresE2EOverride(o: Any): Boolean =
+  o is Typed && (o as Typed).toMap().values.any((v) -> v != null)
+
+hidden _e2eOverridesCheck: Any =
+  if (!entrypoints.isEmpty && declaresE2EOverride(e2eOverrides))
+    throw("App.pkl: `e2eOverrides` is declared on a multi-entrypoint bundle root, "
+      + "which renders no _e2e_base.py of its own, so the values would be dropped "
+      + "silently. Declare `e2eOverrides` on each entrypoint instead.")
+  else if (entrypoints.toList().any((ep) -> ep.contract != null
+      && declaresE2EOverride(ep.contract!!.getPropertyOrNull("e2eOverrides"))))
+    throw("App.pkl: `e2eOverrides` is declared on an entrypoint's `contract`, whose "
+      + "_e2e_base.py the bundle replaces, so the values would be dropped silently. "
+      + "Declare them on the `Entrypoint` itself (`Entrypoint.e2eOverrides`).")
+  else if (entrypoints.isEmpty && (e2eOverrides.argoPackageName != null
+      || e2eOverrides.argoTemplateName != null || e2eOverrides.connectorConfigName != null))
+    throw("App.pkl: `e2eOverrides.argoPackageName`, `argoTemplateName` and "
+      + "`connectorConfigName` are bundle-entrypoint overrides. On a single-entrypoint "
+      + "app set the root `argoPackageNames`, `argoTemplateName` or `connectorConfigName` "
+      + "instead, which already drive _e2e_base.py.")
+  else if (entrypoints.isEmpty && !isSystemApp && e2eOverrides.connectorShortName != null
+      && !primaryConfigmapWritten && !additionalCredentialConfigs.isEmpty)
+    throw("App.pkl: `e2eOverrides.connectorShortName` is set on an app whose only credential "
+      + "configs are `additionalCredentialConfigs`, so _e2e_base.py has no primary config to "
+      + "pin and the harness would look for `atlan-connectors-<alias>`, which is never "
+      + "generated. Drop the alias, or declare the primary credential config.")
+  else null
+
 // A bundle root has no contract model of its own, so a key here could never name a
 // real `FileReference` field. Emitting it anyway would put a shared
 // `app/generated/artifact_schemas.json` next to the per-entrypoint ones, where a
@@ -5686,7 +5764,7 @@ local _additionalCredentialConfigsCheck: Any =
   let (badPrefix = names.filter((n) -> !n.matches(Regex(#"(atlan|csa)-connectors-[a-z0-9]+(-[a-z0-9]+)*"#))))
   let (dupes = names.filter((n) -> names.filter((m) -> m == n).length > 1).distinct)
   let (reserved = List(workflowConfigName)
-    + (if (hasCredentialConfig && credentialAuthOptions != null) List(connectorConfigName) else List()))
+    + (if (primaryConfigmapWritten) List(connectorConfigName) else List()))
   let (clashes = names.filter((n) -> reserved.contains(n)))
   let (noConnector = cs.filter((c) -> c.wrapper && c.connector == null && connector == null).map((c) -> c.name))
   let (unusedWrapperKeys = cs.filter((c) -> !c.wrapper
@@ -5765,6 +5843,7 @@ output =
   // reader of `artifactSchemas`, so a bundle root's declaration would otherwise
   // never be evaluated and would vanish without a word.
   let (_bundleSchemaCheck = _bundleArtifactSchemaCheck)
+  let (_e2eOverridesOutputCheck = _e2eOverridesCheck)
   let (_bundleInputNameCheck = _bundleInputClassNameCheck)
   let (_treeSelectionCheck = _treeSelectionWidgetCheck)
   let (_treeFilterCheck = _treeFilterModeCheck)
@@ -5786,7 +5865,7 @@ output =
         // uiConfig-dependent runtime artifacts
         when (uiConfig != null) {
           ["app/generated/\(workflowConfigName).json"] = workflowConfigOutput
-          when (hasCredentialConfig && credentialAuthOptions != null) {
+          when (primaryConfigmapWritten) {
             ["app/generated/\(connectorConfigName).json"] = credentialConfigOutput
           }
           for (c in additionalCredentialConfigs) {

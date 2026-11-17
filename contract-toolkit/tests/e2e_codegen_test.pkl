@@ -91,6 +91,50 @@ local overrideApp = (App) {
   uiConfig = minimalUiConfig
 }
 
+local rootOvrPlainApp = (App) {
+  name = "query-miner"
+  displayName = "Query Miner"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = new Connectors.Type { value = "query-miner"; category = "custom" }
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = minimalUiConfig
+}
+
+local rootOvrApp = (rootOvrPlainApp) {
+  e2eOverrides {
+    connectionType = "postgres"
+    connectionCategory = "database"
+  }
+}
+
+local rootOvrAliasApp = (rootOvrPlainApp) {
+  e2eOverrides { connectorShortName = "miner-alias" }
+}
+
+local rootOvrSystemAliasApp = (App) {
+  name = "sys-miner"
+  displayName = "Sys Miner"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  type = "system"
+  e2eOverrides { connectorShortName = "sys-alias" }
+}
+
+local rootOvrRefusedFields: Mapping<String, App.E2EOverrides> = new {
+  ["argoPackageName"] = new { argoPackageName = "@csa/query-miner" }
+  ["argoTemplateName"] = new { argoTemplateName = "csa-query-miner" }
+  ["connectorConfigName"] = new { connectorConfigName = "atlan-connectors-x" }
+}
+
+local bundleRootFields: Mapping<String, App.E2EOverrides> = new {
+  ["connectorShortName"] = new { connectorShortName = "x" }
+  ["argoPackageName"] = new { argoPackageName = "@atlan/x" }
+  ["argoTemplateName"] = new { argoTemplateName = "atlan-x" }
+  ["connectorConfigName"] = new { connectorConfigName = "atlan-connectors-x" }
+  ["connectionType"] = new { connectionType = "snowflake" }
+  ["connectionCategory"] = new { connectionCategory = "warehouse" }
+}
+
 // App with diverse widget types for getSubsFieldLine coverage.
 local widgetApp = (App) {
   name = "widget-test"
@@ -543,6 +587,8 @@ local e2eOverridesApp = (App) {
         argoPackageName = "@atlan/alpha"
         argoTemplateName = "atlan-alpha"
         connectorConfigName = "atlan-connectors-alpha"
+        connectionType = "databricks"
+        connectionCategory = "lake"
       }
     }
     new App.Entrypoint {
@@ -550,6 +596,23 @@ local e2eOverridesApp = (App) {
       source = "snowflake"
       sourceCategory = "database"
       contract = bundleCrawlerContract
+    }
+  }
+}
+
+local function bundleRootWith(o: App.E2EOverrides) = (e2eOverridesPlainApp) {
+  e2eOverrides = o
+}
+
+local e2eOverridesOnSubContractApp = (e2eOverridesPlainApp) {
+  entrypoints = new Listing {
+    new App.Entrypoint {
+      name = "cloud"
+      source = "snowflake"
+      sourceCategory = "database"
+      contract = (bundleCrawlerContract) {
+        e2eOverrides { connectionType = "databricks" }
+      }
     }
   }
 }
@@ -573,6 +636,8 @@ local ovrCloudBase: String =
   e2eOverridesApp.output.files["app/generated/cloud/_e2e_base.py"].text
 local ovrSelfhostedBase: String =
   e2eOverridesApp.output.files["app/generated/selfhosted/_e2e_base.py"].text
+local sysAliasBase: String =
+  rootOvrSystemAliasApp.output.files["app/generated/_e2e_base.py"].text
 local plainSelfhostedBase: String =
   e2eOverridesPlainApp.output.files["app/generated/selfhosted/_e2e_base.py"].text
 
@@ -1120,6 +1185,94 @@ facts {
     ovrCloudBase.contains("argo_package_name = \"@atlan/alpha\"")
     ovrCloudBase.contains("argo_template_name = \"atlan-alpha\"")
     ovrCloudBase.contains("connector_config_name = \"atlan-connectors-alpha\"")
+    ovrCloudBase.contains("connection_type = \"databricks\"")
+    ovrCloudBase.contains("connection_category = \"lake\"")
+    !ovrCloudBase.contains("connection_type = \"snowflake\"")
+  }
+
+  ["root e2eOverrides set connection_type and category on a single-entrypoint base"] {
+    let (b = rootOvrApp.output.files["app/generated/_e2e_base.py"].text)
+      b.contains("connection_type = \"postgres\"")
+        && b.contains("connection_category = \"database\"")
+        && b.contains("class QueryMinerGeneratedE2EBase(BaseE2ETest):")
+        && b.contains("connector_short_name = \"query-miner\"")
+  }
+
+  ["a root connectorShortName alias pins connector_config_name to the app's primary credential config"] {
+    let (b = (singleAuthApp) { e2eOverrides { connectorShortName = "auth-alias" } }.output.files["app/generated/_e2e_base.py"].text)
+      b.contains("connector_short_name = \"auth-alias\"")
+        && b.contains("connector_config_name = \"atlan-connectors-single-auth\"")
+  }
+
+  ["a root connectorShortName alias names no connector config when the app generates none"] {
+    let (b = rootOvrAliasApp.output.files["app/generated/_e2e_base.py"].text)
+      b.contains("connector_short_name = \"miner-alias\"")
+        && !b.contains("connector_config_name =")
+        && b.contains("argo_package_name = \"@atlan/query-miner\"")
+  }
+
+  ["an alias on an app with empty credentialAuthOptions still pins its written configmap"] {
+    let (b = (singleAuthApp) {
+      credentialAuthOptions = new Mapping {}
+      e2eOverrides { connectorShortName = "auth-alias" }
+    }.output.files["app/generated/_e2e_base.py"].text)
+      b.contains("connector_short_name = \"auth-alias\"")
+        && b.contains("connector_config_name = \"atlan-connectors-single-auth\"")
+  }
+
+  ["an alias on an app with no uiConfig names no connector config"] {
+    let (b = (singleAuthApp) {
+      uiConfig = null
+      e2eOverrides { connectorShortName = "auth-alias" }
+    }.output.files["app/generated/_e2e_base.py"].text)
+      b.contains("connector_short_name = \"auth-alias\"") && !b.contains("connector_config_name =")
+  }
+
+  ["an alias on an app whose only credential configs are additional ones is refused"] {
+    err((rootOvrPlainApp) {
+      e2eOverrides { connectorShortName = "miner-alias" }
+      additionalCredentialConfigs {
+        new App.CredentialConfig {
+          name = "atlan-connectors-query-miner-objectstore"
+          authOptions { ["basic"] = new App.AuthOption { label = "Basic"; fields {} } }
+        }
+      }
+    }).contains("`e2eOverrides.connectorShortName` is set on an app whose only credential configs are `additionalCredentialConfigs`")
+  }
+
+  ["a system app's root connectorShortName names no connector config"] {
+    let (b = sysAliasBase)
+      b.contains("connector_short_name = \"sys-alias\"") && !b.contains("connector_config_name =")
+  }
+
+  ["root argo and connector-config overrides are refused"] {
+    for (field, o in rootOvrRefusedFields) {
+      err((rootOvrPlainApp) { e2eOverrides = o }).contains("`e2eOverrides.argoPackageName`, `argoTemplateName` and `connectorConfigName` are bundle-entrypoint overrides")
+    }
+  }
+
+  ["root e2eOverrides change only _e2e_base.py"] {
+    let (a = rootOvrApp.output.files.toMap().filter((k, _) -> k != "app/generated/_e2e_base.py").mapValues((_, f) -> f.text))
+    let (p = rootOvrPlainApp.output.files.toMap().filter((k, _) -> k != "app/generated/_e2e_base.py").mapValues((_, f) -> f.text))
+      a == p
+  }
+
+  ["without e2eOverrides a single-entrypoint base keeps the derived values"] {
+    let (b = rootOvrPlainApp.output.files["app/generated/_e2e_base.py"].text)
+      b.contains("connection_type = \"query-miner\"")
+        && b.contains("connection_category = \"custom\"")
+        && !b.contains("connector_config_name =")
+  }
+
+  ["e2eOverrides on a bundle root is refused for every field"] {
+    for (field, o in bundleRootFields) {
+      err(bundleRootWith(o)).contains("`e2eOverrides` is declared on a multi-entrypoint bundle root")
+    }
+    e2eOverridesPlainApp.output.files.containsKey("app/generated/cloud/_e2e_base.py")
+  }
+
+  ["e2eOverrides on an entrypoint's contract is refused"] {
+    err(e2eOverridesOnSubContractApp).contains("`e2eOverrides` is declared on an entrypoint's `contract`")
   }
 
   ["an entrypoint without e2eOverrides is generated exactly as before"] {
