@@ -56,6 +56,7 @@ from conformance.suite.checks import (
     error_seam,
     generated_freshness,
     gitignore_entries,
+    httpx_proxy,
     integration_deselect,
     integration_marking,
     legacy_contract,
@@ -131,6 +132,11 @@ _CHECKS: list[CheckRegistration] = [
         discover=offload_cancel.discover,
         scan_path=offload_cancel.scan_path,
         scan_all=offload_cancel.scan_all,
+    ),
+    CheckRegistration(
+        series=httpx_proxy.SERIES,
+        discover=httpx_proxy.discover,
+        scan_path=httpx_proxy.scan_path,
     ),
     CheckRegistration(
         series=persistence_seam.SERIES,
