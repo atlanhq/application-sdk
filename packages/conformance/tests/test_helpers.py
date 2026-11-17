@@ -54,3 +54,9 @@ def test_sdk_root_skips_outside_ci(
     monkeypatch.delenv("CI", raising=False)
     with pytest.raises(pytest.skip.Exception, match="monorepo root not found"):
         sdk_root(start)
+
+
+def test_find_sdk_root_accepts_the_root_itself() -> None:
+    root = find_sdk_root()
+    assert root is not None
+    assert find_sdk_root(root) == root

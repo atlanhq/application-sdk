@@ -96,10 +96,11 @@ def extract_node(
 def find_sdk_root(start: Path = Path(__file__)) -> Path | None:
     """The monorepo checkout holding *start*, or ``None`` outside one.
 
-    The root is the first parent with both ``application_sdk/__init__.py`` and
+    The root is *start* or the first parent of it with both ``application_sdk/__init__.py`` and
     ``packages/conformance/pyproject.toml``.
     """
-    for parent in start.resolve().parents:
+    resolved = start.resolve()
+    for parent in (resolved, *resolved.parents):
         if (parent / "application_sdk" / "__init__.py").is_file() and (
             parent / "packages" / "conformance" / "pyproject.toml"
         ).is_file():
