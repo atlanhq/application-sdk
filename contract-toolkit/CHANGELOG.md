@@ -6,6 +6,18 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.38.1] - 2026-11-17
+
+### Bug fixes
+
+- move check-invariants.sh cases to pkl facts and delete the script [FND-4938] (#4934) ([4ee4b86](https://github.com/atlanhq/application-sdk/commit/4ee4b86))
+- type DateInput and FileUploader e2e substitutions to match _input.py [FND-4935] (#4928) ([6fc4a36](https://github.com/atlanhq/application-sdk/commit/6fc4a36))
+- rewrite the PKL guide around App.pkl and point toolkit AGENTS.md at CLAUDE.md [FND-4932] (#4926) ([63300b9](https://github.com/atlanhq/application-sdk/commit/63300b9))
+
+### Other changes
+
+- refactor(contract-toolkit): remove dead release template, deprecate resolveInputs, raise minPklVersion to the tested pin [FND-4939] (#4933) ([9d875cd](https://github.com/atlanhq/application-sdk/commit/9d875cd))
+
 ## [0.38.0] - 2026-11-12
 
 ### Features
