@@ -18,11 +18,10 @@ path outside the destination root.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from unittest import mock
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from application_sdk import constants
@@ -121,16 +120,13 @@ _traversal_rel = st.lists(
 
 
 @given(rel=_traversal_rel, leading_slash=st.booleans())
-@settings(
-    max_examples=100,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+@settings(max_examples=100)
 def test_safe_join_under_never_escapes_root(
-    tmp_path: Path, rel: str, leading_slash: bool
+    tmp_path_factory: pytest.TempPathFactory, rel: str, leading_slash: bool
 ) -> None:
     """Every input either raises StorageError or resolves inside the root."""
     candidate = f"/{rel}" if leading_slash else rel
-    root = tmp_path.resolve()
+    root = tmp_path_factory.getbasetemp().resolve()
     try:
         joined = _safe_join_under(root, candidate)
     except StorageError:

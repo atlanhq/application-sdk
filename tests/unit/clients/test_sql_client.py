@@ -24,18 +24,18 @@ from application_sdk.clients.sql_errors import (
     UnsupportedSqlCursorError,
 )
 from application_sdk.testing.hypothesis.strategies.clients.sql import (
-    sql_credentials_strategy,
-    sqlalchemy_connect_args_strategy,
-)
-from application_sdk.testing.hypothesis.strategies.sql_client import (
     mock_sql_query_result_strategy,
     sql_connection_string_strategy,
+    sql_credentials_strategy,
     sql_error_strategy,
+    sqlalchemy_connect_args_strategy,
 )
 
 
-@pytest.fixture
-def sql_client():
+def _make_sql_client() -> BaseSQLClient:
+    """A fresh client. Property tests build one per example: a function-scoped
+    fixture is created once per test, so every example would mutate the same
+    client."""
     client = BaseSQLClient()
     client.DB_CONFIG = DatabaseConfig(
         template="test://{username}:{password}@{host}:{port}/{database}",
@@ -44,6 +44,11 @@ def sql_client():
     )
     client.get_sqlalchemy_connection_string = lambda: "test_connection_string"
     return client
+
+
+@pytest.fixture
+def sql_client() -> BaseSQLClient:
+    return _make_sql_client()
 
 
 @patch("sqlalchemy.create_engine")
@@ -129,13 +134,12 @@ async def test_load_uses_run_in_thread_for_ping(
 @given(
     credentials=sql_credentials_strategy, connect_args=sqlalchemy_connect_args_strategy
 )
-@settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_load_property_based(
-    sql_client: BaseSQLClient,
     credentials: dict[str, Any],
     connect_args: dict[str, Any],
 ):
     """Property-based test for loading with various credentials and connection arguments"""
+    sql_client = _make_sql_client()
     with patch("sqlalchemy.create_engine") as mock_create_engine:
         # Mock the engine and connection
         mock_engine = MagicMock()
@@ -291,11 +295,9 @@ async def test_run_query_with_error(
 
 
 @given(connection_string=sql_connection_string_strategy)
-@settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
-def test_connection_string_property_based(
-    sql_client: BaseSQLClient, connection_string: str
-):
+def test_connection_string_property_based(connection_string: str):
     """Property-based test for various connection string formats"""
+    sql_client = _make_sql_client()
     with patch("sqlalchemy.create_engine") as mock_create_engine:
         # Mock the engine and connection
         mock_engine = MagicMock()
@@ -379,12 +381,11 @@ async def test_run_query_property_based(
 
 
 @given(error_type=sql_error_strategy)
-@settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
 async def test_run_query_error_property_based(
-    sql_client: BaseSQLClient,
     error_type: str,
 ):
     """Property-based test for query execution with various error scenarios"""
+    sql_client = _make_sql_client()
     with (
         patch("sqlalchemy.text") as mock_text,
         patch(

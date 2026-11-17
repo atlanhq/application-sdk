@@ -1,51 +1,61 @@
+"""Hypothesis strategies for the SQL metadata handler's query results.
+
+.. deprecated:: 3.59.0
+    Every strategy here is deprecated and removed in v4.0.0. Nothing in the
+    SDK imports them and no test exercises them; build strategies from your
+    app's own models in its tests instead.
+"""
+
+import warnings
+
 from hypothesis import strategies as st
 
 # Strategy for generating SQL query strings
-sql_query_strategy = st.text()
+_sql_query_strategy = st.text()
 
 # Strategy for generating database names
-database_name_strategy = st.text()
+_database_name_strategy = st.text()
 
 # Strategy for generating schema names
-schema_name_strategy = st.text()
+_schema_name_strategy = st.text()
 
 # Strategy for generating database entries (for database-only queries)
-database_entry_strategy = st.builds(
-    lambda name: {"TABLE_CATALOG": name}, name=database_name_strategy
+_database_entry_strategy = st.builds(
+    lambda name: {"TABLE_CATALOG": name}, name=_database_name_strategy
 )
 
 # Strategy for generating schema entries (for schema-only queries)
-schema_entry_strategy = st.builds(
-    lambda name: {"TABLE_SCHEMA": name}, name=schema_name_strategy
+_schema_entry_strategy = st.builds(
+    lambda name: {"TABLE_SCHEMA": name}, name=_schema_name_strategy
 )
 
 # Strategy for generating full metadata entries (for combined database/schema queries)
-metadata_entry_strategy = st.builds(
+_metadata_entry_strategy = st.builds(
     lambda db, schema: {"TABLE_CATALOG": db, "TABLE_SCHEMA": schema},
-    db=database_name_strategy,
-    schema=schema_name_strategy,
+    db=_database_name_strategy,
+    schema=_schema_name_strategy,
 )
 
 # Strategy for generating lists of database entries
-database_list_strategy = st.lists(
-    database_entry_strategy,
+_database_list_strategy = st.lists(
+    _database_entry_strategy,
     unique_by=lambda x: x["TABLE_CATALOG"],
 )
 
 # Strategy for generating lists of schema entries
-schema_list_strategy = st.lists(
-    schema_entry_strategy,
+_schema_list_strategy = st.lists(
+    _schema_entry_strategy,
     unique_by=lambda x: x["TABLE_SCHEMA"],
 )
 
 # Strategy for generating lists of metadata entries
-metadata_list_strategy = st.lists(
-    metadata_entry_strategy,
+_metadata_list_strategy = st.lists(
+    _metadata_entry_strategy,
     unique_by=lambda x: (x["TABLE_CATALOG"], x["TABLE_SCHEMA"]),
 )
 
 # Strategy for generating SQL handler configuration
-sql_handler_config_strategy = st.just(
+_sql_handler_config_strategy = st.just(
     {
         "metadata_sql": "SELECT * FROM test",
         "fetch_databases_sql": "SELECT database_name FROM databases",
@@ -56,3 +66,72 @@ sql_handler_config_strategy = st.just(
         "schema_alias_key": "schema_alias",
     }
 )
+
+
+#: name -> (replacement, why). Served by __getattr__ below (PEP 562).
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "sql_query_strategy": (
+        "a strategy built from your app's own metadata rows",
+        "no SDK code or test uses this module",
+    ),
+    "database_name_strategy": (
+        "a strategy built from your app's own metadata rows",
+        "no SDK code or test uses this module",
+    ),
+    "schema_name_strategy": (
+        "a strategy built from your app's own metadata rows",
+        "no SDK code or test uses this module",
+    ),
+    "database_entry_strategy": (
+        "a strategy built from your app's own metadata rows",
+        "no SDK code or test uses this module",
+    ),
+    "schema_entry_strategy": (
+        "a strategy built from your app's own metadata rows",
+        "no SDK code or test uses this module",
+    ),
+    "metadata_entry_strategy": (
+        "a strategy built from your app's own metadata rows",
+        "no SDK code or test uses this module",
+    ),
+    "database_list_strategy": (
+        "a strategy built from your app's own metadata rows",
+        "no SDK code or test uses this module",
+    ),
+    "schema_list_strategy": (
+        "a strategy built from your app's own metadata rows",
+        "no SDK code or test uses this module",
+    ),
+    "metadata_list_strategy": (
+        "a strategy built from your app's own metadata rows",
+        "no SDK code or test uses this module",
+    ),
+    "sql_handler_config_strategy": (
+        "a strategy built from your app's own metadata rows",
+        "no SDK code or test uses this module",
+    ),
+}
+
+#: A star import reads ``__all__`` and resolves each name through ``__getattr__``,
+#: so ``import *`` keeps binding every old name, with the warning. Without it,
+#: Python would enumerate only the module's real globals and skip them all.
+__all__ = [*_DEPRECATED_CONSTANTS]
+
+
+def _deprecated_constant_value(name: str) -> object:
+    return globals()[f"_{name}"]
+
+
+def __getattr__(name: str) -> object:
+    """Serve the deprecated strategies with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _deprecated_constant_value(name)
