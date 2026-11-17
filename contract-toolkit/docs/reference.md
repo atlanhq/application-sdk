@@ -755,6 +755,8 @@ Only `_e2e_credential.py` carries both classes; the credential configmap (`atlan
 
 > **ConditionalInput value space:** when an `extraction-method` (or any radio `ConditionalInput`) exposes extra options via a condition's `overrideEnum`, the generated `_e2e_substitutions.py` types that field as the **union** of `baseEnum` and every `overrideEnum` (e.g. `Literal["direct", "agent"]`), so an agent-mode e2e run can submit `"agent"`.
 
+> **DateInput and FileUploader:** `_e2e_substitutions.py` types a `DateInput` as `int` (default `0`) and a `FileUploader` as `dict[str, Any] | None` (default `None`), matching the `int` and `FileReference | None` fields `_input.py` declares for them. The harness substitutes the dumped default into the DAG arg, so a `str` default of `""` would fail the app's own input validation on a default e2e submission.
+
 > **multiSelect DropDown — `defaultSelection`, never a stringified `default`:** a `DropDown` with `multiSelect = true` submits a *list* of keys, so `_e2e_substitutions.py` types it `list[str]` (never `Literal[...]`, which describes a single choice).
 >
 > The frontend's multi-select widget reads its pre-selection from `default` as a **JSON-stringified array**. A contract never writes that string — it declares the keys structurally in `defaultSelection` and the toolkit renders it:
