@@ -106,6 +106,11 @@ runs, all read-only.
 | Outcome row | Lands in ClickHouse once per run, with the allowlisted keys; 3 days of scheduled runs |
 | Time and memory at 1M assets | Within run-to-run noise of the in-app build |
 
+A second app was mapped the same way. Power BI's 26 outcome codes became subclasses of the SDK's
+reasons; over its golden corpus (2,199 recorded outcomes, 6 codes) and a live run (1 more code),
+every outcome maps to an SDK category and its verdict agrees with Power BI's own. One gap: Power
+BI counts expected skips but records no code for them, so those assets can't carry a reason yet.
+
 Two things the tests changed in this design. Lookup outcomes join on `componentsHash`, because ref
 positions differ from Process input order and even between two runs of the same build. And an app
 can restate an SDK reason under its code to keep its own wording (5 Tableau codes needed it).
@@ -130,8 +135,9 @@ can restate an SDK reason under its code to keep its own wording (5 Tableau code
 4. Fold this into #2204, or open a new PR?
 5. Restating an SDK reason by subclassing it under the same code: the right shape, or should
    customer wording live outside the reason class?
-6. A field that inherits its parent's verdict gets the parent's gap but keeps its own code, so its
-   category can point at a different stage than its gap. Count it under the parent's reason?
+6. A field that inherits its parent's verdict gets the parent's gap but keeps its own code. Decided
+   for the Tableau port: its category also comes from the parent's reason, so category and gap
+   name the same stage; the code stays its own and the row records `inheritedFrom`.
 7. Rolling fields up into their parent keeps field column refs only as counts, so stage 2 can't
    settle them per field. For now fields settle from their parent's outcome: the parent is the
    unit people act on. Per-field settle (keeping the refs, at a memory cost) can come later.
