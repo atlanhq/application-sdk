@@ -899,8 +899,10 @@ def test_module_compiles_without_syntax_warning() -> None:
     """The module source has no invalid escape sequences (FND-4670).
 
     An invalid escape such as ``\\s`` in a non-raw docstring is a
-    SyntaxWarning today and a SyntaxError in a future Python, which would turn
-    every scan that imports this check into an import failure.
+    DeprecationWarning on Python 3.11, a SyntaxWarning from 3.12 and a
+    SyntaxError in a future Python, which would turn every scan that imports
+    this check into an import failure. Every warning category is promoted so
+    the guard holds on each supported version.
     """
     import warnings
 
@@ -908,5 +910,5 @@ def test_module_compiles_without_syntax_warning() -> None:
 
     source = Path(module.__file__).read_text(encoding="utf-8")
     with warnings.catch_warnings():
-        warnings.simplefilter("error", SyntaxWarning)
+        warnings.simplefilter("error")
         compile(source, module.__file__, "exec")
