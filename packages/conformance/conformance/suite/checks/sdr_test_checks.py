@@ -53,6 +53,7 @@ from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     _parse_directives,
+    base_names,
     make_cli_main,
     make_finding,
 )
@@ -89,18 +90,8 @@ def discover(root: Path) -> list[Path]:
     return sorted(paths)
 
 
-def _base_names(bases: list[ast.expr]) -> set[str]:
-    names: set[str] = set()
-    for base in bases:
-        if isinstance(base, ast.Name):
-            names.add(base.id)
-        elif isinstance(base, ast.Attribute):
-            names.add(base.attr)
-    return names
-
-
 def _is_sdr_subclass(node: ast.ClassDef) -> bool:
-    return bool(_base_names(node.bases) & _BASE_SDR_NAMES)
+    return bool(_BASE_SDR_NAMES.intersection(base_names(node)))
 
 
 def _is_agent_mode_value(val: ast.expr) -> bool:

@@ -56,7 +56,11 @@ import re
 import sys
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import TOOL_VERSION, make_cli_main
+from conformance.suite.checks._ast_common import (
+    TOOL_VERSION,
+    make_cli_main,
+    yaml_comment_start,
+)
 from conformance.suite.checks._toolkit_baseline import ToolkitBaseline, load_baseline
 from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.legacy_contract._directives_pkl import (
@@ -131,40 +135,6 @@ _E2E_BASE_OUTPUT = "app/generated/_e2e_base.py"
 # get comment-aware scanning: a ``{token}`` inside a ``#`` comment is prose,
 # not a scaffold leftover.
 _YAML_EXTENSIONS = (".yaml", ".yml")
-
-
-def _yaml_comment_start(line: str) -> int:
-    """Return the index where a YAML ``#`` comment begins on *line*.
-
-    A ``#`` starts a comment only at the start of the line or when preceded by
-    whitespace, and never inside a single- or double-quoted scalar — so a
-    placeholder inside a quoted value that merely contains ``#`` (e.g.
-    ``"{app_name}#frag"``) is still scanned. Returns ``len(line)`` when the
-    line carries no comment.
-    """
-    quote: str | None = None
-    i = 0
-    while i < len(line):
-        ch = line[i]
-        if quote == "'":
-            if ch == "'":
-                quote = None
-            i += 1
-            continue
-        if quote == '"':
-            if ch == "\\":
-                i += 2
-                continue
-            if ch == '"':
-                quote = None
-            i += 1
-            continue
-        if ch in ("'", '"'):
-            quote = ch
-        elif ch == "#" and (i == 0 or line[i - 1] in " \t"):
-            return i
-        i += 1
-    return len(line)
 
 
 # A contract that declares an ``entrypoints`` block is a multi-entrypoint bundle;
@@ -879,7 +849,7 @@ def _scan_placeholders(root: Path, present: set[str]) -> list[Finding]:
             # comment is prose — e.g. an explanatory note documenting the
             # runtime URL template ``GET /workflows/v1/manifest?entrypoint={name}``
             # — not an unresolved leftover, so it is never flagged.
-            scan_region = line[: _yaml_comment_start(line)] if is_yaml else line
+            scan_region = line[: yaml_comment_start(line)] if is_yaml else line
             for m in _SCAFFOLD_PLACEHOLDER_RE.finditer(scan_region):
                 suppressed, justification = _line_hash_suppressed(lines, i, "K009")
                 findings.append(

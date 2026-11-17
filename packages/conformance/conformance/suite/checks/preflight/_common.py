@@ -12,7 +12,12 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import _IgnoreDirective, _parse_directives
+from conformance.suite.checks._ast_common import (
+    _IgnoreDirective,
+    _parse_directives,
+    collect_module_alias_targets,
+    register_alias_records,
+)
 from conformance.suite.checks._sdk_contract_mixins import SDK_TEMPLATE_CONTRACT_FIELDS
 from conformance.suite.checks.prescriptions._boundary_methods import (
     BoundaryScope,
@@ -134,10 +139,10 @@ def registry_from_texts(
         aliases_by_rel[rel] = aliases
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)
-        for local, target in _module_alias_targets(tree, aliases).items():
+        for local, target in collect_module_alias_targets(tree, aliases).items():
             alias_targets.setdefault(local, target)
 
-    _resolve_alias_records(by_name, alias_targets)
+    register_alias_records(by_name, alias_targets)
 
     return Registry(
         sources=tuple(sources),
@@ -158,69 +163,6 @@ def preflight_scope_lines(reg: Registry) -> dict[str, frozenset[int]]:
     for src, func in reachable_preflight_sites(reg):
         lines.setdefault(src.rel, set()).add(func.lineno)
     return {rel: frozenset(found) for rel, found in lines.items()}
-
-
-def _module_alias_targets(tree: ast.Module, aliases: dict[str, str]) -> dict[str, str]:
-    """Return module-level ``Local = Target`` bindings as ``{local: target_name}``.
-
-    A contract generated from ``contract/app.pkl`` is imported under its
-    generated name and re-bound to a domain name
-    (``OpenAPIConnectorInput = AppInputContract``); the ``TypeAlias``-annotated
-    form is the same shape. The right-hand side is de-aliased through the
-    file's import aliases so a renamed import still lands on the original class
-    name. Only a plain ``Name``/``Attribute`` value qualifies — ``X = list[Y]``
-    is not an alias of ``Y``.
-    """
-    targets: dict[str, str] = {}
-    for stmt in tree.body:
-        bindings: list[ast.Name]
-        if isinstance(stmt, ast.Assign):
-            bindings = [t for t in stmt.targets if isinstance(t, ast.Name)]
-            value = stmt.value
-        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
-            bindings = [stmt.target]
-            value = stmt.value
-        else:
-            continue
-        if isinstance(value, ast.Name):
-            target = value.id
-        elif isinstance(value, ast.Attribute):
-            target = value.attr
-        else:
-            continue
-        for binding in bindings:
-            if binding.id != target:
-                targets.setdefault(binding.id, aliases.get(target, target))
-    return targets
-
-
-def _resolve_alias_records(
-    by_name: dict[str, ClassRecord], alias_targets: dict[str, str]
-) -> None:
-    """Point every alias name at the :class:`ClassRecord` it ultimately names.
-
-    Without this an entrypoint that declares its input under an alias has no
-    entry in ``by_name`` at all, and every pass that resolves a contract by
-    name reports it as unanalysable while the class sits in the same scan.
-
-    The registry is keyed on bare names and is first-wins, so the chain is
-    followed globally and a real class definition always beats an alias. The
-    walk continues through alias-to-alias hops, which covers a re-export chain
-    across modules; a cycle stops at the name that started it. An alias whose
-    chain never reaches a scanned class is left out, so an unresolvable name
-    still reports conservatively.
-    """
-    for name, first in alias_targets.items():
-        if name in by_name:
-            continue
-        seen = {name}
-        target = first
-        while target not in by_name and target in alias_targets and target not in seen:
-            seen.add(target)
-            target = alias_targets[target]
-        rec = by_name.get(target)
-        if rec is not None:
-            by_name[name] = rec
 
 
 def effective_task_name(

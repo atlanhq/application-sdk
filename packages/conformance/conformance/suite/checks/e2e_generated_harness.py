@@ -96,6 +96,7 @@ from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     _parse_directives,
+    base_names,
     is_collectable_test_file,
     is_test_class,
     make_cli_main,
@@ -152,17 +153,6 @@ def discover(root: Path) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
-def _base_names(node: ast.ClassDef) -> set[str]:
-    """Bare names of *node*'s bases (``X`` and ``mod.X`` both yield ``X``)."""
-    names: set[str] = set()
-    for base in node.bases:
-        if isinstance(base, ast.Name):
-            names.add(base.id)
-        elif isinstance(base, ast.Attribute):
-            names.add(base.attr)
-    return names
-
-
 def _class_body_assignments(node: ast.ClassDef) -> dict[str, ast.stmt]:
     """Direct class-body attribute assignments, ``{attr: statement}``.
 
@@ -189,7 +179,7 @@ class _ClassInfo:
     def __init__(self, file: str, node: ast.ClassDef) -> None:
         self.file = file
         self.node = node
-        self.bases = _base_names(node)
+        self.bases = set(base_names(node))
         self.assignments = _class_body_assignments(node)
 
 

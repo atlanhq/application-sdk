@@ -49,11 +49,7 @@ from conformance.suite.checks._ast_common import (
     discover,
     make_cli_main,
 )
-from conformance.suite.checks._version import (
-    locked_sdk_version,
-    parse_version,
-    version_reached,
-)
+from conformance.suite.checks._version import locked_sdk_reaches
 from conformance.suite.schema.findings import Finding
 
 from ._unclosed_client import ModuleIndex, Registry, check_p056, check_p057
@@ -74,11 +70,7 @@ def sdk_has_shared_pool(root: Path) -> bool:
     and prescribing ``async with`` to an SDK that does not support it is a
     finding nobody can act on.
     """
-    locked = locked_sdk_version(root)
-    if locked is None:
-        return False
-    parsed = parse_version(locked)
-    return parsed is not None and version_reached(SHARED_POOL_SDK_FLOOR, parsed)
+    return locked_sdk_reaches(root, SHARED_POOL_SDK_FLOOR)
 
 
 class _ParsedFile:

@@ -22,19 +22,15 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.checks._ast_common import (
+    _IgnoreDirective,
+    leaf_name,
+    make_finding,
+)
 from conformance.suite.schema.findings import Finding
 
 _GET = "get_app_state"
 _SET = "set_app_state"
-
-
-def _call_name(func: ast.expr) -> str | None:
-    if isinstance(func, ast.Attribute):
-        return func.attr
-    if isinstance(func, ast.Name):
-        return func.id
-    return None
 
 
 def _module_str_constants(tree: ast.AST) -> dict[str, str]:
@@ -86,7 +82,7 @@ def check_p027(
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not node.args:
                 continue
-            name = _call_name(node.func)
+            name = leaf_name(node.func)
             if name == _SET:
                 key = resolve(node.args[0])
                 value = node.args[1] if len(node.args) >= 2 else None

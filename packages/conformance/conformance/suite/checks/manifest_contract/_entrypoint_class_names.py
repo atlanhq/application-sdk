@@ -34,10 +34,10 @@ from conformance.suite.checks._ast_common import (
     SDK_APP_BASE_NAMES,
     _IgnoreDirective,
     _parse_directives,
+    leaf_name,
     make_finding,
 )
 from conformance.suite.checks._entrypoint_contract_classes import _extract_wire_name
-from conformance.suite.checks._entrypoint_contract_fields import _base_name
 from conformance.suite.checks.prescriptions._contract_common import (
     _unwrap_annotated,
     _unwrap_optional_node,
@@ -321,7 +321,7 @@ def _entrypoint_methods(
             if func.name != "run" or not isinstance(func, ast.AsyncFunctionDef):
                 continue
             for base in class_node.bases:
-                bname = _base_name(base)
+                bname = leaf_name(base)
                 if bname is None:
                     continue
                 bname = aliases.get(bname, bname)

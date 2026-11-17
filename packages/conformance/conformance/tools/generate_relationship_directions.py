@@ -28,7 +28,6 @@ the drift test until the table is regenerated in the same PR.
 
 from __future__ import annotations
 
-import argparse
 import sys
 from pathlib import Path
 
@@ -37,31 +36,10 @@ from conformance.suite.checks.prescriptions._relationship_directions import (
     build_relationship_data,
     serialize,
 )
+from conformance.tools._generator import Generated, GeneratorSpec, run_generator
 
 
-def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Generate the 1-to-N relationship table from pyatlan_v9.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    parser.add_argument(
-        "--outfile",
-        type=Path,
-        default=DATA_PATH,
-        help=f"Table path to write (default: {DATA_PATH}).",
-    )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="Verify the committed table matches generated output (exit 1 if stale).",
-    )
-    return parser.parse_args(argv)
-
-
-def main(argv: list[str] | None = None) -> None:
-    args = _parse_args(argv)
-
+def _build(_sdk_root: Path | None) -> Generated:
     try:
         data = build_relationship_data()
     except ImportError:
@@ -71,27 +49,24 @@ def main(argv: list[str] | None = None) -> None:
             file=sys.stderr,
         )
         sys.exit(2)
-    content = serialize(data)
-    outfile: Path = args.outfile
     entries = sum(len(fields) for fields in data.set_ends.values())
+    detail = f"{entries} list ends"
+    return Generated(serialize(data), detail, detail)
 
-    if args.check:
-        if not outfile.exists():
-            print(f"MISSING: {outfile}", file=sys.stderr)
-            sys.exit(1)
-        if outfile.read_text(encoding="utf-8") != content:
-            print(
-                f"STALE: {outfile}\nRun `uv run atlan-application-sdk-conformance "
-                "gen-relationship-directions` to update.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        print(f"Relationship table up-to-date ({entries} list ends).")
-        return
 
-    outfile.parent.mkdir(parents=True, exist_ok=True)
-    outfile.write_text(content, encoding="utf-8")
-    print(f"Wrote {outfile} ({entries} list ends).")
+SPEC = GeneratorSpec(
+    doc=__doc__ or "",
+    description="Generate the 1-to-N relationship table from pyatlan_v9.",
+    command="gen-relationship-directions",
+    outfile=DATA_PATH,
+    noun="table",
+    title="Relationship table",
+    build=_build,
+)
+
+
+def main(argv: list[str] | None = None) -> None:
+    run_generator(SPEC, argv)
 
 
 if __name__ == "__main__":

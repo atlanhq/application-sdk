@@ -28,7 +28,11 @@ from __future__ import annotations
 import ast
 from collections.abc import Iterable, Iterator
 
-from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.checks._ast_common import (
+    _IgnoreDirective,
+    leaf_name,
+    make_finding,
+)
 from conformance.suite.checks.orchestration._temporal_common import (
     collect_import_bindings,
 )
@@ -68,24 +72,13 @@ _HINT = (
 )
 
 
-def _callable_final_name(func: ast.expr) -> str | None:
-    if isinstance(func, ast.Attribute):
-        return func.attr
-    if isinstance(func, ast.Name):
-        return func.id
-    return None
-
-
 def _binds_thread_pool(item: ast.withitem, bindings: dict[str, str]) -> str | None:
     """Return the name bound by ``with <ThreadPoolExecutor>() as name``."""
     ctx = item.context_expr
     if not isinstance(ctx, ast.Call):
         return None
     target = resolve_call_target(ctx.func, bindings)
-    if (
-        target not in _THREAD_POOLS
-        and _callable_final_name(ctx.func) not in _THREAD_POOL_NAMES
-    ):
+    if target not in _THREAD_POOLS and leaf_name(ctx.func) not in _THREAD_POOL_NAMES:
         return None
     bound = item.optional_vars
     if isinstance(bound, ast.Name):

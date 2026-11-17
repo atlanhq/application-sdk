@@ -7,6 +7,7 @@ from pathlib import PurePosixPath
 from typing import Literal, TypeGuard
 
 from .._ast_common._exc_info import has_exc_info_traceback
+from .._ast_common._names import leaf_name
 from ._constants import ADAPTER_MARKERS, LOG_METHODS, LOGGER_NAMES
 
 Framework = Literal["stdlib", "structlog", "loguru", "unknown"]
@@ -836,14 +837,6 @@ def is_resource_token_name(name: str) -> bool:
     return qualifier.rsplit("_", 1)[-1] not in RESOURCE_TOKEN_AUTH_QUALIFIERS
 
 
-def _interpolated_name(node: ast.expr) -> str | None:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    return None
-
-
 def _path_segment_names_in_joined_str(parts: list[ast.expr]) -> set[str]:
     """Names interpolated as a URL path segment in one f-string.
 
@@ -860,7 +853,7 @@ def _path_segment_names_in_joined_str(parts: list[ast.expr]) -> set[str]:
             continue
         if in_query_or_fragment or i == 0 or not isinstance(part, ast.FormattedValue):
             continue
-        name = _interpolated_name(part.value)
+        name = leaf_name(part.value)
         before = parts[i - 1]
         if name is None or not (
             isinstance(before, ast.Constant) and isinstance(before.value, str)
