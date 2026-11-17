@@ -46,7 +46,6 @@ only.
 from __future__ import annotations
 
 import ast
-import re
 import sys
 from pathlib import Path
 
@@ -54,6 +53,7 @@ from conformance.suite.checks._ast_common import (
     _parse_directives,
     base_names,
     discover_tree,
+    is_sdr_app,
     make_cli_main,
     make_finding,
 )
@@ -63,10 +63,6 @@ SERIES = "T"
 RULE_T002 = "T002"
 RULE_T003 = "T003"
 
-_SDR_FLAG_RE = re.compile(
-    r"^self_deployed_runtime:\s*(true|false)\b",
-    re.MULTILINE | re.IGNORECASE,
-)
 _BASE_SDR_NAMES: frozenset[str] = frozenset({"BaseSDRIntegrationTest"})
 
 __all__ = ["SERIES", "discover", "main", "scan_all"]
@@ -123,18 +119,6 @@ def _is_agent_mode_e2e(node: ast.ClassDef) -> bool:
         if _is_agent_mode_value(val):
             return True
     return False
-
-
-def _is_sdr_app(root: Path) -> bool:
-    atlan_yaml = root / "atlan.yaml"
-    if not atlan_yaml.is_file():
-        return False
-    try:
-        text = atlan_yaml.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return False
-    m = _SDR_FLAG_RE.search(text)
-    return m is not None and m.group(1).lower() == "true"
 
 
 def _scan_file(path: Path, root: Path) -> tuple[list[Finding], bool]:
@@ -224,7 +208,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         if has_sdr:
             any_sdr_coverage = True
 
-    if not any_sdr_coverage and _is_sdr_app(root):
+    if not any_sdr_coverage and is_sdr_app(root):
         findings.append(
             Finding(
                 rule_id=RULE_T002,

@@ -67,6 +67,7 @@ from conformance.suite.checks._ast_common import (
     _parse_directives,
     make_cli_main,
     make_finding,
+    make_scan_path,
 )
 from conformance.suite.checks._ast_common import is_test_class as _is_test_class
 from conformance.suite.checks._ast_common import is_test_function as _is_test_function
@@ -322,21 +323,10 @@ def scan_text(
     return findings
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single test file, producing repo-root-relative URIs.
-
-    Derives the accepted-marker set from ``root/pyproject.toml`` so the check
-    self-calibrates to the repo's own unit-job deselection filter.
-    """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel), accepted_markers=accepted_markers_for_repo(root))
+scan_path = make_scan_path(
+    scan_text,
+    context=lambda path, root: {"accepted_markers": accepted_markers_for_repo(root)},
+)
 
 
 def discover(root: Path) -> list[Path]:

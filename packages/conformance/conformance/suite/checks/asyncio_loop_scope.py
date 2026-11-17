@@ -79,6 +79,7 @@ from conformance.suite.checks._ast_common import (
     is_test_function,
     leaf_name,
     make_cli_main,
+    make_scan_path,
     make_toml_finding,
     parse_toml_suppressions,
 )
@@ -291,21 +292,10 @@ def in_body_workflow_drivers(root: Path) -> list[str]:
     return labels
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan the repo-root ``pyproject.toml`` for T019.
-
-    Resolves the in-body workflow drivers from *root* so the finding reflects the
-    real interaction between the app's loop-scope config and its test suite.
-    """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel), in_body_drivers=in_body_workflow_drivers(root))
+scan_path = make_scan_path(
+    scan_text,
+    context=lambda path, root: {"in_body_drivers": in_body_workflow_drivers(root)},
+)
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

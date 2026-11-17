@@ -57,7 +57,6 @@ from __future__ import annotations
 
 import ast
 import sys
-from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     _IgnoreDirective,
@@ -65,7 +64,7 @@ from conformance.suite.checks._ast_common import (
     discover,
     make_cli_main,
     make_finding,
-    safe_read_text,
+    make_scan_path,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -396,16 +395,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     return checker.findings
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file for P050 findings."""
-    text = safe_read_text(path)
-    if text is None:
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 main = make_cli_main(

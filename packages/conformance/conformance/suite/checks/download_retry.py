@@ -78,7 +78,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import make_cli_main, safe_read_text
+from conformance.suite.checks._ast_common import make_cli_main, make_scan_path
 from conformance.suite.schema.findings import Finding
 
 SERIES = "C"
@@ -335,16 +335,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     return findings
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single file, producing repo-root-relative URIs."""
-    text = safe_read_text(path)
-    if text is None:
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 def discover(root: Path) -> list[Path]:

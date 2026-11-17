@@ -86,6 +86,7 @@ from conformance.suite.checks._ast_common import (
     collect_module_alias_targets,
     discover,
     make_cli_main,
+    make_scan_path,
     register_alias_records,
 )
 from conformance.suite.schema.findings import Finding
@@ -183,20 +184,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     )
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file (P001 + P002 + P008–P012 + P015 + P026 + P028 + P044 + P052 + P055 + P058).
-
-    P003, P013, P014 and P027 require :func:`scan_all` for cross-file resolution.
-    """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

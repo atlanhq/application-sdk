@@ -48,6 +48,26 @@ def sdk_app_base_bindings(tree: ast.AST) -> frozenset[str]:
     return frozenset(bound - _module_level_definitions(tree))
 
 
+def sdk_app_import_aliases(tree: ast.AST) -> frozenset[str]:
+    """Every local name *tree* binds to an SDK ``App``-family base by import.
+
+    Any absolute ``from application_sdk[.<sub>] import <Base> [as <alias>]``
+    anywhere in *tree* counts, with no shadowing analysis and no star-import
+    expansion. :func:`sdk_app_base_bindings` is the stricter reading (source
+    order, shadowing, ``import *``); this one is what the app-name,
+    entrypoint-alignment and workflow-method checks have always used.
+    """
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and _is_sdk_import(node):
+            bound.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name in SDK_APP_BASE_NAMES
+            )
+    return frozenset(bound)
+
+
 def non_sdk_import_bindings(tree: ast.AST) -> frozenset[str]:
     """Local names *tree* binds by a ``from … import`` of any non-SDK module.
 

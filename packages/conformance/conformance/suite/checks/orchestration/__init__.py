@@ -40,6 +40,7 @@ from conformance.suite.checks._ast_common import (
     _parse_directives,
     discover_with_tests,
     make_cli_main,
+    make_scan_path,
 )
 from conformance.suite.checks._ast_common._safe_swap import source_lines
 from conformance.suite.schema.findings import Finding
@@ -83,17 +84,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     ]
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file (P004 + P005 + P006).  P007 requires :func:`scan_all`."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

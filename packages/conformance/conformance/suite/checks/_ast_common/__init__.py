@@ -47,6 +47,7 @@ from ._pytest_collection import (
     is_test_function,
 )
 from ._repo_modules import repo_module_file
+from ._scan_path import make_scan_path, read_source, relative_uri
 from ._scope import SDK_PACKAGE_PREFIX, detect_scope, is_sdk_package_name
 from ._sdk_app import (
     SDK_APP_BASE_NAMES,
@@ -54,13 +55,16 @@ from ._sdk_app import (
     non_sdk_import_bindings,
     non_sdk_import_roots,
     sdk_app_base_bindings,
+    sdk_app_import_aliases,
 )
+from ._sdr import is_sdr_app
 from ._toml_suppress import (
     SuppressionsMap,
     _is_suppressed,
     make_toml_finding,
     parse_toml_suppressions,
 )
+from ._values import iter_strings
 from ._yaml import strip_yaml_comment, yaml_comment_start
 
 __all__ = [
@@ -116,4 +120,10 @@ __all__ = [
     "non_sdk_import_bindings",
     "non_sdk_import_roots",
     "sdk_app_base_bindings",
+    "sdk_app_import_aliases",
+    "is_sdr_app",
+    "iter_strings",
+    "make_scan_path",
+    "read_source",
+    "relative_uri",
 ]

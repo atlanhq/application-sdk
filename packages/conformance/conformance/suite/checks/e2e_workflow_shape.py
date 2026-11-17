@@ -90,6 +90,7 @@ from pathlib import Path
 from conformance.suite.checks._ast_common import (
     SuppressionsMap,
     is_collectable_test_file,
+    is_sdr_app,
     make_cli_main,
     make_toml_finding,
     parse_toml_suppressions,
@@ -193,10 +194,6 @@ _YAML_FALSE = frozenset({"false", "no", "off", "n"})
 # `.yaml` suffix and correctly does not match either.
 _USES_E2E_REUSABLE_RE = re.compile(r"^\s*uses:\s*['\"]?\S*e2e[^\s'\"]*\.ya?ml@")
 
-_SDR_FLAG_RE = re.compile(
-    r"^self_deployed_runtime:\s*(true|false)\b",
-    re.MULTILINE | re.IGNORECASE,
-)
 
 # A `key: value` entry inside the caller's `with:` block.
 _WITH_ENTRY_RE = re.compile(
@@ -231,19 +228,6 @@ def _has_e2e_suites(root: Path) -> bool:
         for p in base.rglob("*.py")
         if "__pycache__" not in p.parts
     )
-
-
-def _is_sdr_app(root: Path) -> bool:
-    """True when the generated ``atlan.yaml`` declares self-deployed runtime."""
-    atlan_yaml = root / "atlan.yaml"
-    if not atlan_yaml.is_file():
-        return False
-    try:
-        text = atlan_yaml.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return False
-    m = _SDR_FLAG_RE.search(text)
-    return m is not None and m.group(1).lower() == "true"
 
 
 def _yaml_bool(value: str, default: bool) -> bool:
@@ -590,7 +574,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         )
 
     # T022 — SDR apps must run the e2e under the two-store posture.
-    if _is_sdr_app(root):
+    if is_sdr_app(root):
         for rel, _text, suppressions, uses_idx in callers:
             inputs = _reusable_inputs(_read_lines(root, rel), uses_idx)
             # Absent or unparseable is not "unconditionally true", so it reports

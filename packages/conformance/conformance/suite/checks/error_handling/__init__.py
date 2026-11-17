@@ -46,6 +46,7 @@ from conformance.suite.checks._ast_common import (
     discover,
     make_cli_main,
     parse_ignore_directive,
+    read_source,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -197,17 +198,11 @@ def scan_path(
     path: Path, root: Path, *, preflight_lines: frozenset[int] | None = None
 ) -> list[Finding]:
     """Scan a single Python file, producing repo-root-relative URIs."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    source = read_source(path, root)
+    if source is None:
         return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(
-        text, str(rel), path=path, root=root, preflight_lines=preflight_lines
-    )
+    text, uri = source
+    return scan_text(text, uri, path=path, root=root, preflight_lines=preflight_lines)
 
 
 def _scan_all(paths: list[Path], root: Path) -> list[Finding]:

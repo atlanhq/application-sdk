@@ -90,6 +90,7 @@ from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     make_cli_main,
+    make_scan_path,
     make_toml_finding,
     parse_toml_suppressions,
     strip_yaml_comment,
@@ -351,17 +352,7 @@ def discover(root: Path) -> list[Path]:
     return sorted(paths)
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single transform-template file for P040 findings."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 main = make_cli_main(

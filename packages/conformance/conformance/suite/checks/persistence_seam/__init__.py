@@ -31,12 +31,12 @@ from __future__ import annotations
 
 import ast
 import sys
-from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     _parse_directives,
     discover,
     make_cli_main,
+    make_scan_path,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -61,17 +61,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     ]
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file, producing repo-root-relative URIs."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 main = make_cli_main(
