@@ -58,7 +58,8 @@ def _imported_modules(tree: ast.Module) -> set[str]:
 @functools.cache
 def _test_trees() -> tuple[tuple[Path, ast.Module], ...]:
     return tuple(
-        (p, ast.parse(p.read_text(), str(p))) for p in sorted(_TESTS.rglob("*.py"))
+        (p, ast.parse(p.read_text(encoding="utf-8"), str(p)))
+        for p in sorted(_TESTS.rglob("*.py"))
     )
 
 
@@ -80,7 +81,7 @@ def test_the_scan_sees_the_strategy_modules() -> None:
 
 @pytest.mark.parametrize("module", _strategy_modules(), ids=_rel)
 def test_every_strategy_module_has_an_importer_or_a_deprecation(module: Path) -> None:
-    if _is_deprecated(ast.parse(module.read_text())):
+    if _is_deprecated(ast.parse(module.read_text(encoding="utf-8"))):
         return
     dotted = _dotted(module)
     # The deprecation tests import every deprecated module; they are not users.
@@ -117,7 +118,7 @@ def _unbounded_integers(tree: ast.Module) -> list[int]:
 def test_every_integer_strategy_is_bounded(module: Path) -> None:
     if _rel(module) in _UNBOUNDED_INTEGERS_PENDING:
         pytest.skip("bounded by FND-4286")
-    lines = _unbounded_integers(ast.parse(module.read_text()))
+    lines = _unbounded_integers(ast.parse(module.read_text(encoding="utf-8")))
     assert not lines, (
         f"{_rel(module)}: st.integers() without both min_value and max_value "
         f"at line(s) {lines}"

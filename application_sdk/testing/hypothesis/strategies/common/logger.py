@@ -1,4 +1,11 @@
-"""Hypothesis strategies for testing logger components."""
+"""Hypothesis strategies for testing logger components.
+
+Value ranges (bounded since FND-4292; before that every integer was unbounded):
+
+* ``attempt``: 1 to 2**31 - 1. Temporal counts attempts from 1.
+* ``schedule_to_close_timeout`` / ``start_to_close_timeout``: ``"<n>s"`` with
+  ``n`` from 0 to 86,400 (one day).
+"""
 
 from unittest import mock
 
