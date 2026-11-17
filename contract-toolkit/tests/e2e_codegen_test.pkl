@@ -2,9 +2,14 @@ amends "pkl:test"
 
 import "../src/App.pkl" as App
 import "../src/Connectors.pkl"
+import "../src/SdkNames.pkl"
 import "../examples/full/app.pkl" as fullExampleApp
 
 // ── Fixture helpers ────────────────────────────────────────────────────────────
+
+// Renders every output file, as `pkl eval -m` does, and returns the refusal message.
+local function err(m: Module): String =
+  module.catch(() -> m.output.files.toMap().mapValues((_, f) -> f.text))
 
 // Minimal uiConfig used by fixtures that only need the base file (no custom subs).
 local minimalUiConfig = new App.UIConfig {
@@ -14,6 +19,18 @@ local minimalUiConfig = new App.UIConfig {
         ["connection"] = new App.ConnectionCreator { placeholderText = "Connection" }
       }
     }
+  }
+}
+
+// A contract whose only uiConfig property is the given DropDown.
+local function withScopeDropDown(dd: App.DropDown) = (App) {
+  name = "dropdown-default-app"
+  displayName = "DropDown Default"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = new App.UIConfig {
+    tasks { ["Configuration"] { inputs { ["asset_scope"] = dd } } }
   }
 }
 
@@ -130,6 +147,8 @@ local widgetApp = (App) {
             credentialType = "test-cred"
           }
           ["text_field"] = new App.TextInput { title = "Text"; default = "hello" }
+          ["date_field"] = new App.DateInput { title = "Date" }
+          ["file_field"] = new App.FileUploader { title = "File"; fileTypes { "text/csv" } }
           ["connection"] = new App.ConnectionCreator { placeholderText = "Conn" }
         }
       }
@@ -564,6 +583,20 @@ local selfNamedBase: String = selfNamedApp.output.files["app/generated/_e2e_base
 local overrideBase: String = overrideApp.output.files["app/generated/_e2e_base.py"].text
 local widgetSubs: String = widgetApp.output.files["app/generated/_e2e_substitutions.py"].text
 
+// Every generated e2e base in this file: single-entrypoint and bundle, SQL and
+// not, with and without overrides.
+local allE2EBases: List<String> = List(
+  apiBase, postgresBase, warehouseBase, selfNamedBase, overrideBase,
+  bundleCrawlerBase, bundleMinerBase, suffixCrawlerBase, suffixMinerBase,
+  apiBundleBase, explicitCrawlerBase, explicitMinerBase,
+  ovrCloudBase, ovrSelfhostedBase, plainSelfhostedBase
+)
+
+// Class attributes a generated base assigns (`    name = ...` in the class body).
+local assignedE2EAttrs: Set<String> = allE2EBases
+  .flatMap((text) -> Regex(#"(?m)^    ([a-z_]+) = "#).findMatchesIn(text).map((m) -> m.groups[1]!!.value))
+  .toSet()
+
 // Substitution fields too long for one line, in each layout ruff gives them.
 // Every expected string below is what ruff 0.17.3 (default settings) leaves
 // unchanged when run on this app's generated file.
@@ -676,7 +709,20 @@ facts {
   }
 
   ["connection_category omitted when category is warehouse (SDK default)"] {
+    SdkNames.e2eConnectionCategoryDefault == "warehouse"
     !warehouseBase.contains("connection_category =")
+  }
+
+  // ── _e2e_base.py: every assigned attribute comes from SdkNames ───────────────
+  // scripts/test-sdk-import.py checks each SdkNames.e2eBaseAttributes name is
+  // declared on BaseE2ETest, so a base may assign only listed names.
+
+  ["a generated e2e base assigns only SdkNames.e2eBaseAttributes"] {
+    assignedE2EAttrs.difference(SdkNames.e2eBaseAttributes).isEmpty
+  }
+
+  ["every SdkNames.e2eBaseAttributes name is assigned by some generated base"] {
+    SdkNames.e2eBaseAttributes.difference(assignedE2EAttrs).isEmpty
   }
 
   // ── _e2e_base.py: pascalCase name → class name ───────────────────────────────
@@ -734,6 +780,16 @@ facts {
 
   ["BooleanInput with default=true emits bool field with True default"] {
     widgetSubs.contains("bool_field: bool = Field(default=True, alias=\"{{bool_field}}\")")
+  }
+
+  // DateInput and FileUploader follow `_input.py` (`int` / `FileReference | None`):
+  // the `str` fallback's `""` default failed the app's own input validation.
+  ["DateInput emits int field with 0 default, matching _input.py"] {
+    widgetSubs.contains("date_field: int = Field(default=0, alias=\"{{date_field}}\")")
+  }
+
+  ["FileUploader emits nullable dict field with None default, matching _input.py"] {
+    widgetSubs.contains("file_field: dict[str, Any] | None = Field(default=None, alias=\"{{file_field}}\")")
   }
 
   ["NumericInput emits int field with numeric default"] {
@@ -1127,4 +1183,45 @@ facts {
     !bundleMinerBase.contains("connection_category = \"warehouse\"")
   }
 
+  // ── multiSelect DropDown `default` is generated from `defaultSelection` ──────
+  // Hand-writing the JSON-stringified `default` is refused: an unescaped quote in it
+  // used to emit invalid Python into _e2e_substitutions.py (FND-1980). The control
+  // is "defaultSelection renders the JSON-stringified array into the workflow config".
+  ["a hand-written multiSelect DropDown default is refused"] {
+    err(withScopeDropDown(new App.DropDown {
+      title = "Asset scope"
+      possibleValues { ["S3Bucket"] = "Bucket"; ["S3Object"] = "Object" }
+      default = "[\"S3Bucket\",\"S3Object\"]"
+      multiSelect = true
+    })).contains("cannot be set by hand")
+  }
+
+  // Without a guard the hand-written value overrides the generated one and
+  // `defaultSelection` is ignored in silence — the case a `default == null` check misses.
+  ["a hand-written default alongside defaultSelection is refused"] {
+    err(withScopeDropDown(new App.DropDown {
+      title = "Asset scope"
+      possibleValues { ["S3Bucket"] = "Bucket"; ["S3Object"] = "Object" }
+      defaultSelection { "S3Bucket"; "S3Object" }
+      default = "SILENTLY-WINS"
+      multiSelect = true
+    })).contains("generated from `defaultSelection`")
+  }
+
+  ["defaultSelection on a single-select DropDown is refused"] {
+    err(withScopeDropDown(new App.DropDown {
+      title = "Asset scope"
+      possibleValues { ["S3Bucket"] = "Bucket"; ["S3Object"] = "Object" }
+      defaultSelection { "S3Bucket" }
+    })).contains("multi-select only")
+  }
+
+  ["defaultSelection with a key absent from possibleValues is refused"] {
+    err(withScopeDropDown(new App.DropDown {
+      title = "Asset scope"
+      possibleValues { ["S3Bucket"] = "Bucket"; ["S3Object"] = "Object" }
+      defaultSelection { "S3Bucket"; "S3Nonsense" }
+      multiSelect = true
+    })).contains("Unknown: S3Nonsense")
+  }
 }

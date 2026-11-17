@@ -144,7 +144,6 @@ class SilentSwallowMixin:
         if not broad:
             return
         exc_type = next(iter(broad))
-        from .._ast_common._sanitizers import is_sanitizer_call
 
         local_helpers = visible_helpers(self._local_helpers, self._function_stack)
 

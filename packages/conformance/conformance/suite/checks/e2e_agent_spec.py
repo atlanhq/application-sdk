@@ -56,6 +56,7 @@ from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     _parse_directives,
+    discover_tree,
     make_cli_main,
     make_finding,
 )
@@ -73,10 +74,7 @@ __all__ = ["SERIES", "discover", "main", "scan_path", "scan_text"]
 
 def discover(root: Path) -> list[Path]:
     """Walk ``tests/`` for all Python source files."""
-    base = root / "tests"
-    if not base.is_dir():
-        return []
-    return sorted(p for p in base.rglob("*.py") if "__pycache__" not in p.parts)
+    return discover_tree(root, "tests")
 
 
 def _is_agentspec_call(node: ast.expr) -> bool:

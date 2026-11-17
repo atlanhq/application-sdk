@@ -106,7 +106,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/credential-configs/`](examples/credential-configs/) — `additionalCredentialConfigs`: an entrypoint that emits more than one credential configmap (primary + wrapped delivery + bare object-store), and one whose only credential is the shared bare config. The bundle hoists and dedupes them. See [CredentialConfig](docs/reference.md#credentialconfig--additional-credential-configmaps).
 - [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`packageId` on the card entrypoint; route-only entrypoint has none).
 - [`examples/behind-the-scenes/`](examples/behind-the-scenes/) — single-entrypoint app with `marketplaceCard = false`; routable but no marketplace card or `package_id` emitted.
-- [`examples/system-app/`](examples/system-app/) — `type = "system"`: an in-tenant app started by other apps' DAG nodes. No `entrypoints` block, no card, no credential config, no manifest. Typed `inputs` (string, number, enum, bounded list/map, nested object) render `_input.py` without a `uiConfig`. They also render `contract/generated/input.pkl`, the typed DAG node that is synced into the toolkit as `src/system/<name>.pkl` for callers to import.
+- [`examples/system-app/`](examples/system-app/) — `type = "system"`: an in-tenant app started by other apps' DAG nodes. No `entrypoints` block, no card, no credential config, no manifest. Typed `inputs` (string, number, enum, bounded list/map, nested object) render `_input.py` without a `uiConfig`. They also render `contract/generated/input.pkl`, the typed DAG node for callers. Its planned toolkit home, `src/system/<name>.pkl`, does not exist yet, so callers cannot import it through the toolkit today.
 - [`examples/system-bundle/`](examples/system-bundle/) — `type = "system"` with two entrypoints, each a UI-less system sub-contract with its own `inputs`. Each renders `app/generated/<entrypoint_snake>/` (importable), `contract/generated/<entrypoint>/input.pkl`, and an `_e2e_base.py` extending `SystemAppE2ETest`.
 - [`examples/system-triggers/`](examples/system-triggers/) — `type = "system"` bundle whose entrypoints declare `schedules` and streaming `events`. `atlan.yaml` renders an `entrypoints` block listing those entrypoints (`type: utility`, `marketplace_card: false`), so Local Marketplace reconciles the triggers and no card appears.
 - [`examples/deploy/`](examples/deploy/) — single-pool deployment: KEDA, resources, env, and per-pool `overrides` under `deploy.pools["default"]`.
@@ -260,7 +260,7 @@ See the [Widget Types](#widget-types) reference below.
 
 ### `Connectors.pkl` — Connector Registry
 
-90+ connector type constants:
+162 connector type constants, copied from pyatlan's `AtlanConnectorType`. CI (`scripts/test-sdk-import.py`) fails when pyatlan has a connector type or category this module lacks, or when a shared constant's value or category differs. When pyatlan adds one, add it here. `SAP_ECC` stays `warehouse` (pyatlan says `erp`) so contracts using it keep their generated e2e base class.
 
 ```pkl
 import "@app-contract-toolkit/Connectors.pkl"
@@ -270,6 +270,8 @@ connector = Connectors.SNOWFLAKE  // { value = "snowflake"; category = "warehous
 ### `SdkNames.pkl` — SDK Names Copied Into the Toolkit
 
 The SDK names `App.pkl` needs to render `_input.py` without shadowing the SDK: the fields `Input` and `ExtractionInput` declare (a form field of one of these names generates no field, so the SDK's type and validators win), and the class-shaped names `_input.py` imports (a nested `ObjectField` class of one of these names is refused). In CI, `scripts/test-sdk-import.py` checks that the field sets equal the installed SDK models' fields, and that every class-shaped name a generated example's `_input.py` imports is reserved. The class-name check runs one way only: a reserved name that nothing imports any more is not flagged. When the SDK adds or renames a base-class field, update this module. If the new field is newer than some app's SDK pin, also add it to `fieldMinSdk` with the release that added it. When a generated `_input.py` skips such a field, it raises `ImportError` at import on an older SDK, instead of the base class silently dropping the form value.
+
+The module also holds the e2e and artifact names `App.pkl` copies from the SDK. `mustacheSubstitutionFields` and `sqlMustacheSubstitutionFields` are the fields of the SDK's two substitution parents, which a generated `_e2e_substitutions.py` never redeclares; CI checks they equal the SDK models' fields. `e2eBaseAttributes` are the class attributes a generated `_e2e_base.py` may assign: `App.pkl` refuses to emit any other, CI checks each is declared on `BaseE2ETest`, and it checks every name a generated base assigns is declared on its SDK base class. `e2eConnectionCategoryDefault` is `BaseE2ETest.connection_category`'s default, which the base leaves out. `artifactFieldTypes`, `artifactFieldTypesExtended` and `artifactFormats` must equal the SDK's `ARTIFACT_FIELD_TYPES`, `ARTIFACT_FIELD_TYPES_EXTENDED` and `ARTIFACT_FORMATS`, and `tests/artifact_schemas_test.pkl` checks the `ArtifactFieldType`, `ArtifactFieldTypeExtended` and `ArtifactFormat` typealiases accept exactly these.
 
 ### Legacy modules (reference only)
 
@@ -537,8 +539,8 @@ See [`examples/bundle/`](examples/bundle/) for a runnable example.
 **System bundles (FND-3563):** a bundle entrypoint is a *UI-less system entrypoint* when its contract (or the bundle root) sets `type = "system"` and the contract declares no `uiConfig`. Only these entrypoints change layout; every other entrypoint renders byte-for-byte as before.
 
 - Its files go to `app/generated/<entrypoint_snake>/` (`usage-analysis` → `usage_analysis`), so `from app.generated.usage_analysis._input import UsageAnalysisAppInputContract` imports. A hyphen-free name is unchanged. The SDK already imports `app.generated.<entrypoint_snake>._input`. The SDK's artifact-schema readers (`validation.sources.artifact_schema_paths` and the registration-time guard) look for `artifact_schemas.json` under the wire-name dir, then the snake_case dir. Conformance K016 does not check these entrypoints: it only sees entrypoint dirs that hold a `manifest.json`.
-- Its caller node goes to `contract/generated/<entrypoint>/input.pkl` instead of `app/generated/<entrypoint>/contract/generated/input.pkl`. This also applies to a system sub-contract that has a `uiConfig`; that entrypoint otherwise keeps its wire-name dir, because the SDK reads its manifest and form under the wire name. Each sub-contract's file names its own synced home, `src/system/<contract name>.pkl`, and its `inputContractToolkitImport` default (`../App.pkl`) resolves from there as it does for a single-entrypoint system app.
-- Its caller node takes `appName` from the bundle root's `name` and `taskQueue` from the root's `<taskQueuePrefix>-{deployment_name}` (default `atlan-<root name>-{deployment_name}`), not from the sub-contract. A system bundle is one App class, run by one worker on one queue for every entrypoint, so a node that names the sub-contract would route to an app and queue that nothing serves. `workflowType` still comes from the sub-contract: set `workflowType` there to keep a legacy name such as `KeifuWorkflow`. The file's header and sync home (`src/system/<contract name>.pkl`) still name the sub-contract.
+- Its caller node goes to `contract/generated/<entrypoint>/input.pkl` instead of `app/generated/<entrypoint>/contract/generated/input.pkl`. This also applies to a system sub-contract that has a `uiConfig`; that entrypoint otherwise keeps its wire-name dir, because the SDK reads its manifest and form under the wire name. Each sub-contract's `inputContractToolkitImport` default (`../App.pkl`) is written for its own planned toolkit home, `src/system/<contract name>.pkl`, as for a single-entrypoint system app.
+- Its caller node takes `appName` from the bundle root's `name` and `taskQueue` from the root's `<taskQueuePrefix>-{deployment_name}` (default `atlan-<root name>-{deployment_name}`), not from the sub-contract. A system bundle is one App class, run by one worker on one queue for every entrypoint, so a node that names the sub-contract would route to an app and queue that nothing serves. `workflowType` still comes from the sub-contract: set `workflowType` there to keep a legacy name such as `KeifuWorkflow`. The file's header and planned toolkit home (`src/system/<contract name>.pkl`) still name the sub-contract.
 - Any system entrypoint's `_e2e_base.py` (with or without a `uiConfig`) extends `SystemAppE2ETest` and names no `argo_*`, `app_service_url` or `connector_config_name`: `type` decides the base class, as for a single-entrypoint system app. A UI-less one also has no `manifest_path`, `required_dag_nodes` or `expect_*` lines (it has no manifest or extract/publish DAG), a comment telling the suite to set `manifest_path` and `required_dag_nodes`, and `entrypoint = "<entrypoint>"`.
 
 See [`examples/system-bundle/`](examples/system-bundle/).
@@ -809,7 +811,6 @@ After modifying any PKL module, regenerate all examples and verify no breakage:
 
 ```bash
 ./scripts/regenerate-all.sh            # regenerates every example under examples/
-./scripts/check-invariants.sh          # invariant checks on generated output
 pkl test tests/*.pkl                   # Pkl behavior tests
 python scripts/test-sdk-import.py      # imports every generated _input.py against SDK deps
 uv run python scripts/check-ruff-stable.py  # ruff (default settings) changes no generated .py
@@ -850,7 +851,7 @@ Releases are **automatic** — no manual trigger required.
   the CI workflows use with `python -m application_sdk.dev.pkl path`, check the one on
   your `PATH` with `python -m application_sdk.dev.pkl check`, or `brew install pkl` for
   exploration only.
-- Python 3 for invariant checks and SDK import validation
+- Python 3 for SDK import validation
 - `uv` (the SDK's locked ruff) for `scripts/check-ruff-stable.py`
 - Application SDK import dependencies for `python scripts/test-sdk-import.py`
 - Atlan CLI for consuming app workflows (`atlan app contract validate`, `atlan app contract generate`, `atlan app run -p .`)

@@ -62,9 +62,8 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import detect_scope, discover
+from conformance.suite.checks._ast_common import detect_scope, discover, leaf_name
 from conformance.suite.checks._entrypoint_contract_fields import (
-    _base_name,
     build_contract_registry,
     resolve_contract_fields,
     resolve_entrypoint_contracts,
@@ -120,7 +119,7 @@ def _ambiguous_bases(
     """
     found: set[str] = set()
     seen: set[str] = {class_node.name}
-    stack = [aliases.get(n, n) for b in class_node.bases if (n := _base_name(b))]
+    stack = [aliases.get(n, n) for b in class_node.bases if (n := leaf_name(b))]
     while stack:
         name = stack.pop()
         if name in seen:

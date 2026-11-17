@@ -41,9 +41,9 @@ PACKAGE_DIR = "packages/conformance"
 # path rather than by commit subject keeps mixed commits intact: a PR that changes
 # a rule *and* refreshes uv.lock still appears. Real dependency changes move
 # packages/conformance/pyproject.toml, which stays in scope.
-# The `glob` magic makes `**/` match zero or more directories, so these cover both
-# packages/conformance/uv.lock and packages/conformance/conformance/package-lock.json.
-LOCK_FILES = ("uv.lock", "package-lock.json")
+# The `glob` magic makes `**/` match zero or more directories, so this covers
+# packages/conformance/uv.lock itself as well as any nested one.
+LOCK_FILES = ("uv.lock",)
 PATHSPEC = [
     f"{PACKAGE_DIR}/**",
     "contract_schema.lock.json",

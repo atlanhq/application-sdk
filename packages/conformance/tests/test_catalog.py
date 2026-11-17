@@ -27,6 +27,21 @@ def test_catalog_loads_without_error() -> None:
     assert len(rules) > 0
 
 
+def test_mechanism_defaults_to_static_and_still_reaches_sarif() -> None:
+    """A rule that leaves ``mechanism`` unset is ``static``, and the SARIF
+    descriptor still carries ``atlan/mechanism`` — the default changes no output."""
+    rule = RuleDefinition(
+        id="Z999",
+        name="DefaultMechanism",
+        tier=EnforcementTier.WARN,
+        scope=RuleScope.APP,
+        category="test",
+        rationale="r",
+    )
+    assert rule.mechanism is RuleMechanism.STATIC
+    assert rule.to_reporting_descriptor().properties["atlan/mechanism"] == "static"
+
+
 def test_catalog_no_duplicate_ids() -> None:
     """Every rule ID in the catalog is unique."""
     rules = load_catalog()
@@ -485,6 +500,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # P064/P065: offload cancel — they describe consumer code that offloads raw
     # cursor statements or iterates batched results, and the version gate reads
     # a consumed SDK version the SDK repo does not have (FND-4707).
+    # P066: httpx transport without proxy= — the SDK's BaseClient default
+    # transport applies the environment proxy itself and its other transports
+    # only reach localhost; hand-built transports to customer sources live in
+    # consumer apps.
     assert app_scoped == {
         "B001",
         "B007",
@@ -509,6 +528,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P059",
         "P064",
         "P065",
+        "P066",
         "C002",
         "D001",
         "D002",
@@ -816,6 +836,8 @@ def test_catalog_p_series_present() -> None:
     (a run_in_thread cursor statement with no driver cancel registered) and
     BatchedResultsIteratedOnLoop (get_batched_results read with a sync for in an
     async def); gated on the SDK release that ships FND-4707.
+    P066 is HttpxTransportWithoutProxy — an httpx transport built without
+    ``proxy=``, so its client ignores HTTPS_PROXY / NO_PROXY.
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -878,6 +900,7 @@ def test_catalog_p_series_present() -> None:
         "P060",
         "P064",
         "P065",
+        "P066",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"

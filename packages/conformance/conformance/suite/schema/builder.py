@@ -49,7 +49,11 @@ from typing import Any
 
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import Disposition, derive_disposition
-from conformance.suite.schema.extensions import AtlanRunProperties, DispositionSummary
+from conformance.suite.schema.extensions import (
+    AtlanResultProperties,
+    AtlanRunProperties,
+    DispositionSummary,
+)
 from conformance.suite.schema.sarif import (
     ArtifactLocation,
     Invocation,
@@ -200,7 +204,6 @@ class ReportBuilder:
             rules that emit several findings at one location (see
             :func:`_fingerprint`). ``None`` keeps the legacy fingerprint.
         """
-        from conformance.suite.schema.extensions import AtlanResultProperties
 
         region = Region(
             start_line=start_line,

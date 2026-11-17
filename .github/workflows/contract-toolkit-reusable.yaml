@@ -79,9 +79,6 @@ jobs:
       # application_sdk/pkl_version.py, the one place it is declared.
       - uses: ./.github/actions/install-pkl
 
-      - name: Check generated output invariants
-        run: contract-toolkit/scripts/check-invariants.sh
-
       - name: Run PKL tests
         run: |
           cd contract-toolkit

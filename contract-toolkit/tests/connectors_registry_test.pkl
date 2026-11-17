@@ -1,0 +1,70 @@
+// Tests for the connector registry in Connectors.pkl (FND-4933).
+//
+// Connectors.pkl copies pyatlan's `AtlanConnectorType` by hand;
+// `scripts/test-sdk-import.py` compares the two in CI. These facts pin what
+// that comparison cannot see: the constants' values are distinct, and a
+// connector in a category pyatlan added (`ai`, `erp`, `data-processing`)
+// generates, with the non-SQL e2e base and its category passed on.
+
+amends "pkl:test"
+
+import "pkl:reflect"
+import "../src/App.pkl" as App
+import "../src/Connectors.pkl"
+
+local registry: List<Connectors.Type> =
+  reflect.Module(Connectors).moduleClass.properties.keys.toList()
+    .map((n) -> Connectors.getProperty(n))
+    .filter((v) -> v is Connectors.Type)
+
+local values: List<String> = registry.map((t) -> t.value)
+
+local function appFor(c: Connectors.Type) = (App) {
+  name = "registry-app"
+  displayName = "Registry App"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = c
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Connection"] {
+        inputs {
+          ["connection"] = new App.ConnectionCreator { placeholderText = "Connection" }
+        }
+      }
+    }
+  }
+}
+
+local function e2eBase(c: Connectors.Type): String =
+  appFor(c).output.files["app/generated/_e2e_base.py"].text
+
+facts {
+  ["the registry is found by reflection"] {
+    registry.length > 150
+    values.contains("snowflake")
+  }
+
+  ["every connector value is distinct"] {
+    values.isDistinct
+  }
+
+  ["connectors in the categories pyatlan added generate with BaseE2ETest"] {
+    for (c in List(Connectors.AI, Connectors.SAP_S4, Connectors.GENERIC_OPENLINEAGE)) {
+      e2eBase(c).contains("(BaseE2ETest):")
+      e2eBase(c).contains("connection_category = \"\(c.category)\"")
+    }
+  }
+
+  ["SAP_ECC keeps the warehouse category and SQLAppE2ETest"] {
+    Connectors.SAP_ECC.category == "warehouse"
+    e2eBase(Connectors.SAP_ECC).contains("(SQLAppE2ETest):")
+  }
+
+  ["the typealias accepts the categories pyatlan added"] {
+    (new Connectors.Type { value = "x"; category = "ai" }).category == "ai"
+    (new Connectors.Type { value = "x"; category = "erp" }).category == "erp"
+    (new Connectors.Type { value = "x"; category = "data-processing" }).category == "data-processing"
+  }
+}

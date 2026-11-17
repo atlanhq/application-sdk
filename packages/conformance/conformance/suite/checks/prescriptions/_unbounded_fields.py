@@ -38,7 +38,12 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.checks._ast_common import (
+    _IgnoreDirective,
+    base_names,
+    leaf_name,
+    make_finding,
+)
 from conformance.suite.schema.extensions import SafeSwap, SafeSwapRequires
 from conformance.suite.schema.findings import Finding
 
@@ -52,18 +57,9 @@ _CONTRACT_BASES = frozenset({"Input", "Output"})
 _OPTOUT_FIND = ", allow_unbounded_fields=True"
 
 
-def _simple_name(node: ast.expr | None) -> str | None:
-    """Bare or dotted terminal name (``Any``, ``typing.Any`` → ``Any``)."""
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    return None
-
-
 def _annotated_arg(node: ast.expr | None) -> ast.expr | None:
     """Inner type of ``Annotated[T, ...]``, or ``None`` if *node* is not that."""
-    if not isinstance(node, ast.Subscript) or _simple_name(node.value) != "Annotated":
+    if not isinstance(node, ast.Subscript) or leaf_name(node.value) != "Annotated":
         return None
     sl = node.slice
     if isinstance(sl, ast.Tuple) and sl.elts:
@@ -92,8 +88,8 @@ def _is_classvar_annotation(annotation: ast.expr | None) -> bool:
     if node is None:
         return False
     if isinstance(node, ast.Subscript):
-        return _simple_name(node.value) == "ClassVar"
-    return _simple_name(node) == "ClassVar"
+        return leaf_name(node.value) == "ClassVar"
+    return leaf_name(node) == "ClassVar"
 
 
 #: Collections payload safety refuses without a ``MaxItems`` bound. The runtime refuses every
@@ -176,12 +172,12 @@ _REFUSED, _OPEN, _UNKNOWN = "refused", "open", "unknown"
 
 def _has_max_items(node: ast.expr) -> bool:
     """True if *node* is ``Annotated[T, ..., MaxItems(n), ...]``."""
-    if not isinstance(node, ast.Subscript) or _simple_name(node.value) != "Annotated":
+    if not isinstance(node, ast.Subscript) or leaf_name(node.value) != "Annotated":
         return False
     sl = node.slice
     metadata = sl.elts[1:] if isinstance(sl, ast.Tuple) else []
     return any(
-        isinstance(m, ast.Call) and _simple_name(m.func) == "MaxItems" for m in metadata
+        isinstance(m, ast.Call) and leaf_name(m.func) == "MaxItems" for m in metadata
     )
 
 
@@ -191,7 +187,7 @@ def _args(node: ast.Subscript) -> list[ast.expr]:
 
 def _fixed_tuple(node: ast.Subscript) -> bool:
     """True if *node* is a ``tuple[A, B]`` of fixed arity (no ``...`` argument)."""
-    return _simple_name(node.value) in _TUPLES and not any(
+    return leaf_name(node.value) in _TUPLES and not any(
         isinstance(a, ast.Constant) and a.value is Ellipsis for a in _args(node)
     )
 
@@ -278,7 +274,7 @@ class _Types:
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
             return self.judge(node.left, seen=seen) + self.judge(node.right, seen=seen)
         if isinstance(node, ast.Subscript):
-            name = _simple_name(node.value)
+            name = leaf_name(node.value)
             if name == "Annotated":
                 return self.judge(
                     _annotated_arg(node),
@@ -301,7 +297,7 @@ class _Types:
     def _name(
         self, node: ast.expr, *, bounded: bool, seen: frozenset[str]
     ) -> list[tuple[str, str]]:
-        name = _simple_name(node)
+        name = leaf_name(node)
         if name is None:
             return [(_UNKNOWN, f"`{ast.unparse(node)}`")]
         if name == "Any":
@@ -522,10 +518,6 @@ def _keyword_optout(node: ast.ClassDef) -> bool:
     )
 
 
-def _base_names(node: ast.ClassDef) -> list[str]:
-    return [n for b in node.bases if (n := _simple_name(b))]
-
-
 def _mentions_any(node: ast.expr | None) -> bool:
     """True if ``Any`` appears anywhere in an annotation.
 
@@ -632,19 +624,19 @@ def reused_class_names(root: Path) -> frozenset[str]:
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 for b in node.bases:
-                    n = _simple_name(b)
+                    n = leaf_name(b)
                     names.update([n] if n else _names_in(b))
             elif isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(
                 node.value, (ast.Tuple, ast.List)
             ):
                 names.update(_names_in(node.value))
-            elif isinstance(node, (ast.Assign, ast.AnnAssign)) and _simple_name(
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)) and leaf_name(
                 node.value
             ):
-                names.add(_simple_name(node.value))  # type: ignore[arg-type]
+                names.add(leaf_name(node.value))  # type: ignore[arg-type]
             elif (
                 isinstance(node, ast.Call)
-                and _simple_name(node.func) == "type"
+                and leaf_name(node.func) == "type"
                 and len(node.args) == 3
             ):
                 names.update(_names_in(node.args[1]))
@@ -660,7 +652,7 @@ def reused_class_names(root: Path) -> frozenset[str]:
                         if isinstance(node.value, ast.Tuple)
                         else [node.value]
                     )
-                    if (n := _simple_name(v))
+                    if (n := leaf_name(v))
                 )
     return frozenset(names)
 
@@ -735,7 +727,7 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
                 isinstance(stmt, ast.AnnAssign)
                 and isinstance(stmt.target, ast.Name)
                 and stmt.value is not None
-                and _simple_name(stmt.annotation) == "TypeAlias"
+                and leaf_name(stmt.annotation) == "TypeAlias"
             ):
                 aliases[stmt.target.id] = stmt.value
             elif type(stmt).__name__ == "TypeAlias":  # `type X = ...` (Python 3.12+)
@@ -764,7 +756,7 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
         off = object()
         source: dict[ast.ClassDef, object] = {}
         for c in sorted(all_classes, key=lambda c: (c.lineno, c.col_offset)):
-            bases = [bound[b] for b in _base_names(c) if b in bound]
+            bases = [bound[b] for b in base_names(c) if b in bound]
             if _is_contract_subclass(c) or any(b in self._contracts for b in bases):
                 self._contracts.add(c)
             found = next((source[b] for b in bases if b in source), None)

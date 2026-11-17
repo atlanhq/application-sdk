@@ -33,7 +33,7 @@ Contracts generate — from one `pkl eval --project-dir contract -m . contract/a
 - `src/PyFormat.pkl`: lays every generated `.py` out as ruff does with default settings (import order, 88-column wrapping). Renderers emit plain one-line statements and pass the module through `format`. One exception: `fmtSubsField` keeps the one-argument-per-line layout (trailing comma) for long `_e2e_substitutions.py` fields, because ruff preserves it and apps already commit it; don't replace it with a one-line statement.
 - `src/Deployment.pkl`: deployment classes (`DeployConfig`, `Pool`, `KedaConfig`, `DaprComponents`, `ResourceConfig`, `VpaConfig`) re-exported from `App.pkl`.
 - `src/Connectors.pkl`: connector type registry (still imported explicitly by consumers).
-- `src/SdkNames.pkl`: SDK base-class field names and `_input.py` import names `App.pkl` must not shadow. `scripts/test-sdk-import.py` compares them with the SDK; update them when the SDK's base input classes change.
+- `src/SdkNames.pkl`: SDK names `App.pkl` copies: base-class field names and `_input.py` import names it must not shadow, the e2e substitution parents' fields, the class attributes a generated `_e2e_base.py` may assign, and the artifact type and format vocabulary. `scripts/test-sdk-import.py` compares them with the SDK; update them when the SDK's base input classes, e2e harness or artifact vocabulary change.
 - Legacy modules (reference only, not for new apps):
   - `src/NativeApp.pkl`, `src/NativeAppBundle.pkl`
   - `src/Config.pkl`, `src/Credential.pkl`, `src/Renderers.pkl`
@@ -44,7 +44,6 @@ Contracts generate — from one `pkl eval --project-dir contract -m . contract/a
 
 ```bash
 ./scripts/regenerate-all.sh
-./scripts/check-invariants.sh
 pkl test tests/*.pkl
 python scripts/test-sdk-import.py
 uv run python scripts/check-ruff-stable.py
@@ -72,7 +71,7 @@ demonstrates distinct feature surface, verified by `tests/*.pkl`.
   configmap per entrypoint, including a bare (wrapper-less) one; hoisted and deduped.
 - `deploy`: single-pool migration example — KEDA, resources, env, pool-level `overrides`; shows v0.16.x → v0.17.0 migration path.
 - `pools`: `pools` map (preferred) — named hot/cold worker pools with per-pool `cooldownPeriod` and resources.
-- `system-app`: `type = "system"` — no `entrypoints` block or card, no credential config, no `uiConfig`; typed `inputs` render `_input.py` with no manifest, and `contract/generated/input.pkl`, synced into the toolkit as `src/system/<name>.pkl` for callers.
+- `system-app`: `type = "system"` — no `entrypoints` block or card, no credential config, no `uiConfig`; typed `inputs` render `_input.py` with no manifest, and `contract/generated/input.pkl`, the caller node (its planned toolkit home, `src/system/<name>.pkl`, does not exist yet).
 - `system-bundle`: `type = "system"` with two UI-less system sub-contracts; each renders an importable `app/generated/<ep_snake>/`, `contract/generated/<ep>/input.pkl`, and a `SystemAppE2ETest` e2e base.
 - `system-triggers`: `type = "system"` bundle whose entrypoints declare `schedules` / `events`; `atlan.yaml` renders an `entrypoints` block with `marketplace_card: false` so Local Marketplace reconciles the triggers.
 - `connection-ref`: `ConnectionRefInput` widget, `pipeline.publish = null`.
@@ -123,6 +122,11 @@ over a raw `DAGNode` in `extraNodes`.
 - Legacy modules (`NativeApp.pkl`, `Config.pkl`, etc.) are frozen reference material.
 - If `src/` changes, update `README.md` and `docs/reference.md`.
 - Add or update an example when adding behavior.
+- Test an eval-time refusal (a `throw` or a type constraint) with a `module.catch`
+  fact in `tests/*_test.pkl`, forcing every output file the way `pkl eval -m` does:
+  `module.catch(() -> m.output.files.toMap().mapValues((_, f) -> f.text)).contains("<message>")`.
+  Assert the message, not just that eval failed, and keep a control fact showing the
+  same contract minus the offending value generates.
 - Commit regenerated example outputs with the source change.
 - Toolkit repo skills live at the SDK repo root. Mirror changes between
   `.agents/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md`, and do
@@ -175,7 +179,6 @@ Before opening a PR that touches `src/`:
 
 ```bash
 ./scripts/regenerate-all.sh
-./scripts/check-invariants.sh
 pkl test tests/*.pkl
 python scripts/test-sdk-import.py
 uv run python scripts/check-ruff-stable.py

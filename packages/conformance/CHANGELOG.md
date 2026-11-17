@@ -2,6 +2,28 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.59.0] - 2026-11-17
+
+### Features
+
+- P066 flags httpx transports built without proxy= (#4932) ([e26a8aa](https://github.com/atlanhq/application-sdk/commit/e26a8aa))
+- assert a kit run's output against declared schemas with value rules, replacing validate_with_pandera [FND-5007] (#4905) ([5e0338d](https://github.com/atlanhq/application-sdk/commit/5e0338d))
+
+### Bug fixes
+
+- read YAML comments one way in every check and share the duplicated helpers [FND-4946] (#4930) ([1c308ce](https://github.com/atlanhq/application-sdk/commit/1c308ce))
+- stop shipping an unused npm project in the wheel and drop its Renovate lock bound [FND-4666] (#4923) ([188d10d](https://github.com/atlanhq/application-sdk/commit/188d10d))
+- generate the SDK contract-field registries from SDK source instead of hand-mirroring them [FND-4947] (#4927) ([35bc7d1](https://github.com/atlanhq/application-sdk/commit/35bc7d1))
+- report a file that fails to parse instead of reading it as clean [FND-4664] (#4924) ([aa70cfb](https://github.com/atlanhq/application-sdk/commit/aa70cfb))
+- update ruff to v0.17.5 (#4913) ([1fa3a61](https://github.com/atlanhq/application-sdk/commit/1fa3a61))
+- read the CPU limit in get_actual_cpu_count, and deprecate file_converter, the Redshift helpers, get_safe_num_threads, TaskResult and the v2 event-registration models for v4.0 [FND-4914] (#4906) ([e643594](https://github.com/atlanhq/application-sdk/commit/e643594))
+- raise non-deprecated leaves instead of the ten error classes due for v4.0 removal [FND-4910] (#4902) ([f461f45](https://github.com/atlanhq/application-sdk/commit/f461f45))
+
+### Other changes
+
+- refactor(testing): deprecate the 46 names that exist only to serve BaseIntegrationTest, pointing the pandera validators and IntegrationTestClient at their replacements [FND-4911] (#4909) ([a6a6a08](https://github.com/atlanhq/application-sdk/commit/a6a6a08))
+- refactor(testing): import the AE DAG types from harness.automation_engine, not the deprecated e2e.client, and point the full_dag notices there [FND-4912] (#4900) ([b7b01bd](https://github.com/atlanhq/application-sdk/commit/b7b01bd))
+
 ## [0.58.0] - 2026-11-13
 
 ### Features

@@ -43,7 +43,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -60,7 +59,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="NonPublicErrorControlFlow",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="error-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -127,7 +125,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="PrivateErrorClassImport",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="error-seam",
         autofixable=False,
         orthogonal_gate="tests",

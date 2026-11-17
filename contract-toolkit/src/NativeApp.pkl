@@ -13,7 +13,7 @@
 /// 1. Workflow config JSON — UI form schema served at GET /workflows/v1/configmap/{name}
 /// 2. Credential config JSON — auth form schema served at GET /workflows/v1/configmap/{connectorConfigName}
 /// 3. Manifest JSON — AE DAG template served at GET /manifest
-@ModuleInfo { minPklVersion = "0.25.1" }
+@ModuleInfo { minPklVersion = "0.33.0" }
 open module com.atlan.app.contract.NativeApp
 
 import "Config.pkl"

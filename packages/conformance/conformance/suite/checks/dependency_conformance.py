@@ -350,8 +350,8 @@ def _sdk_requirement_proves_pre_removal(spec: str, removed_in: str) -> bool:
     if not spec.strip():
         return False
     try:
-        from packaging.specifiers import InvalidSpecifier, SpecifierSet
-        from packaging.version import InvalidVersion, Version
+        from packaging.specifiers import InvalidSpecifier, SpecifierSet  # noqa: PLC0415 — guarded by the deliberate ImportError fallback below
+        from packaging.version import InvalidVersion, Version  # noqa: PLC0415 — guarded by the deliberate ImportError fallback below
     except ImportError:
         return False
     try:
@@ -887,7 +887,7 @@ def _requires_python_excludes_runtime(data: Mapping[str, Any]) -> str | None:
     if not isinstance(spec, str) or not spec.strip():
         return None
     try:
-        from packaging.specifiers import InvalidSpecifier, SpecifierSet
+        from packaging.specifiers import InvalidSpecifier, SpecifierSet  # noqa: PLC0415 — guarded by the ImportError fallback below
     except ImportError:  # pragma: no cover - packaging is a declared dependency
         return None
     try:
@@ -1548,7 +1548,7 @@ def _marker_can_hold(marker: object) -> bool:
     if not axes or not axes <= _PLATFORM_MARKER_AXES:
         return True  # non-decidable (or unrecognised): stay conservative
     try:
-        from packaging.markers import InvalidMarker, Marker
+        from packaging.markers import InvalidMarker, Marker  # noqa: PLC0415 — guarded by the deliberate ImportError fallback (see docstring)
     except ImportError:
         return True
     try:
@@ -2956,7 +2956,7 @@ def _scan_lockfile_index(root: Path, text: str, rel_pyproject: str) -> list[Find
 
     urls = _LOCK_URL_RE.findall(lock_text)
     if not urls:
-        print(
+        print(  # noqa: T201 — stderr diagnostic; stdout carries the SARIF report
             "conformance (D013): found no download URLs in uv.lock "
             "(non-PyPI index status undetermined). Either the lock declares no "
             "registry packages or its URL format changed and this check is now "
@@ -3291,7 +3291,7 @@ def scan_all(
         # not analysed; surface it (to stderr, so SARIF on stdout stays clean)
         # rather than letting "0 D003 findings" imply full coverage.
         noun = "dependency" if len(unresolved) == 1 else "dependencies"
-        print(
+        print(  # noqa: T201 — stderr diagnostic; stdout carries the SARIF report
             f"conformance (D003): skipped {len(unresolved)} {noun} not importable "
             f"in this environment (unused status undetermined): "
             f"{', '.join(sorted(unresolved))}",

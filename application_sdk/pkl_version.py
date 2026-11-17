@@ -32,7 +32,7 @@ Two consumers, one literal
 * **Apps**, by import — ``atlan-application-sdk`` is already a dependency of
   every connector, so an app's tooling can reach the exact version CI uses::
 
-      python -m application_sdk.dev.pkl print-version   # 0.32.1
+      python -m application_sdk.dev.pkl print-version   # 0.33.0
       python -m application_sdk.dev.pkl path            # cached pinned binary
 
   ``application_sdk.dev.pkl`` downloads and caches that exact build, so a local

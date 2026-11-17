@@ -40,6 +40,7 @@ from conformance.suite.checks._ast_common import (
     _IgnoreDirective,
     _parse_directives,
     collect_import_origins,
+    discover_root_file,
     make_cli_main,
     make_finding,
     qualify_chained_attr_call,
@@ -75,8 +76,7 @@ def discover(root: Path) -> list[Path]:
     Returns an empty list when no root ``main.py`` is present, so T004
     simply no-ops on repos that have not yet added one (e.g. libraries).
     """
-    main_py = root / "main.py"
-    return [main_py] if main_py.is_file() else []
+    return discover_root_file(root, "main.py")
 
 
 def scan_text(text: str, file: str) -> list[Finding]:

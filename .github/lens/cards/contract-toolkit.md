@@ -6,6 +6,6 @@
 - Flag: a generated `_input.py` field dropped/renamed/retyped (B005 on every app); `extraction_method`/`credential_guid`/`agent_json` moved off top level.
 - Flag: a changed identity key: DAG node id, schedule `name`, alias, configmap name, workflow type, baked `app_name`.
 - Flag: generated code importing an SDK symbol newer than apps' SDK with no floor stated (`contract-toolkit/scripts/test-sdk-import.py` tests HEAD only); a new generated JSON not in `application_sdk/app/_generated_tree.py`'s non-form stems.
-- Flag: a new eval-time throw with no case in `contract-toolkit/scripts/check-invariants.sh`; a fix with no `*_test.pkl` fact; a public property with no doc comment.
+- Flag: a new eval-time throw with no `module.catch` fact in `contract-toolkit/tests/*_test.pkl` (a refusal fact needs a control fact that generates); a fix with no `*_test.pkl` fact; a public property with no doc comment.
 - Don't flag (CI/release automation owns): stale examples, generated-Python lint, `PklProject` version, the toolkit CHANGELOG and baseline.
 - Severity: high for silent breakage of generated artifacts or the UI/manifest/SDK contract; medium for missing tests/docs; low otherwise.

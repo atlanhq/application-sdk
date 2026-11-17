@@ -41,11 +41,7 @@ from conformance.suite.checks._ast_common import (
     discover,
     make_cli_main,
 )
-from conformance.suite.checks._version import (
-    locked_sdk_version,
-    parse_version,
-    version_reached,
-)
+from conformance.suite.checks._version import locked_sdk_reaches
 from conformance.suite.schema.findings import Finding
 
 from ._detect import check_p064, check_p065
@@ -75,11 +71,7 @@ def sdk_has_offload_cancel(root: Path) -> bool:
     Fails closed: prescribing an API the app's SDK does not have is a finding
     nobody can act on.
     """
-    locked = locked_sdk_version(root)
-    if locked is None:
-        return False
-    parsed = parse_version(locked)
-    return parsed is not None and version_reached(OFFLOAD_CANCEL_SDK_FLOOR, parsed)
+    return locked_sdk_reaches(root, OFFLOAD_CANCEL_SDK_FLOOR)
 
 
 def scan_text(text: str, file: str) -> list[Finding]:

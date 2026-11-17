@@ -25,8 +25,6 @@ but ``--check`` keeps it honest anyway (CONNECT-970).
 
 from __future__ import annotations
 
-import argparse
-import sys
 from pathlib import Path
 
 from conformance.suite.checks.error_seam._public_error_surface import (
@@ -35,76 +33,31 @@ from conformance.suite.checks.error_seam._public_error_surface import (
     build_allowlist,
     serialize,
 )
+from conformance.tools._generator import Generated, GeneratorSpec, run_generator
 
 
-def _find_sdk_root() -> Path | None:
-    """Locate the repo root containing ``application_sdk/errors/__init__.py``."""
-    starts = [Path.cwd(), Path(__file__).resolve()]
-    for start in starts:
-        for parent in [start, *start.parents]:
-            if parent.joinpath(*SDK_ERRORS_INIT_RELPATH).is_file():
-                return parent
-    return None
+def _build(sdk_root: Path | None) -> Generated:
+    assert sdk_root is not None
+    names = build_allowlist(sdk_root)
+    detail = f"{len(names)} public error classes"
+    return Generated(serialize(names), detail, detail)
 
 
-def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Generate the public-error allowlist from application_sdk.errors.__all__.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    parser.add_argument(
-        "--sdk-root",
-        type=Path,
-        default=None,
-        help="Repo root containing application_sdk/errors/__init__.py (default: auto-detected).",
-    )
-    parser.add_argument(
-        "--outfile",
-        type=Path,
-        default=ALLOWLIST_PATH,
-        help=f"Allowlist path to write (default: {ALLOWLIST_PATH}).",
-    )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="Verify the committed allowlist matches generated output (exit 1 if stale).",
-    )
-    return parser.parse_args(argv)
+SPEC = GeneratorSpec(
+    doc=__doc__ or "",
+    description="Generate the public-error allowlist from application_sdk.errors.__all__.",
+    command="gen-public-errors",
+    outfile=ALLOWLIST_PATH,
+    noun="allowlist",
+    title="Allowlist",
+    build=_build,
+    sdk_marker=SDK_ERRORS_INIT_RELPATH,
+    sdk_marker_label="application_sdk/errors/__init__.py",
+)
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = _parse_args(argv)
-
-    sdk_root: Path | None = args.sdk_root or _find_sdk_root()
-    if sdk_root is None or not sdk_root.joinpath(*SDK_ERRORS_INIT_RELPATH).is_file():
-        print(
-            "error: could not locate application_sdk/errors/__init__.py — pass --sdk-root DIR.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    names = build_allowlist(sdk_root)
-    content = serialize(names)
-    outfile: Path = args.outfile
-
-    if args.check:
-        if not outfile.exists():
-            print(f"MISSING: {outfile}", file=sys.stderr)
-            sys.exit(1)
-        if outfile.read_text(encoding="utf-8") != content:
-            print(
-                f"STALE: {outfile}\nRun `uv run atlan-application-sdk-conformance "
-                "gen-public-errors` to update.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        print(f"Allowlist up-to-date ({len(names)} public error classes).")
-        return
-
-    outfile.parent.mkdir(parents=True, exist_ok=True)
-    outfile.write_text(content, encoding="utf-8")
-    print(f"Wrote {outfile} ({len(names)} public error classes).")
+    run_generator(SPEC, argv)
 
 
 if __name__ == "__main__":

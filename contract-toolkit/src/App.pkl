@@ -25,7 +25,7 @@
 /// **Multi-entrypoint apps**: set `entrypoints` with `contract` references on
 /// each `Entrypoint`. The bundle-level file owns `atlan.yaml`/`app.yaml` and
 /// re-exports per-entrypoint artifacts into `app/generated/{name}/`.
-@ModuleInfo { minPklVersion = "0.25.1" }
+@ModuleInfo { minPklVersion = "0.33.0" }
 open module com.atlan.app.contract.App
 
 import "Connectors.pkl" as ConnectorsPkg
@@ -587,10 +587,12 @@ inputContractClassName: InputsPkg.ClassName =
 /// Where the generated caller node is written, relative to the repo root.
 ///
 /// A system app with `inputs` renders the Pkl class its callers add to their
-/// `extraNodes`, with one typed property per input. The file is synced into
-/// the toolkit as `src/system/<name>.pkl`, so every connector (internal,
-/// public or partner-built) imports it through the toolkit dependency it
-/// already has:
+/// `extraNodes`, with one typed property per input. Its planned home is the
+/// toolkit, as `src/system/<name>.pkl`, so every connector (internal, public
+/// or partner-built) could import it through the toolkit dependency it
+/// already has. That directory and the sync that would fill it do not exist
+/// yet: no published toolkit version contains a `system/` module, so the
+/// import below is the intended shape, not one that resolves today:
 ///
 /// ```pkl
 /// import "@app-contract-toolkit/system/popularity.pkl" as Popularity
@@ -599,10 +601,10 @@ inputContractClassName: InputsPkg.ClassName =
 inputContractPath: String = "contract/generated/input.pkl"
 
 /// How the generated caller node imports the toolkit. The default,
-/// `../App.pkl`, resolves from the file's synced home in the toolkit,
-/// `src/system/<name>.pkl`. The copy left in the app's own repo is only the
-/// sync source and is not evaluated there. Only a contract that evaluates the
-/// file in place (as the toolkit's own example does) sets this.
+/// `../App.pkl`, would resolve from the file's planned home in the toolkit,
+/// `src/system/<name>.pkl`, which does not exist yet. The copy in the app's
+/// own repo is not evaluated there. Only a contract that evaluates the file in
+/// place (as the toolkit's own example does) sets this.
 inputContractToolkitImport: String = "../App.pkl"
 
 /// (Set by a bundle root) The `appName` the caller node defaults to. A
@@ -2635,7 +2637,14 @@ local function renderAnyField(f: CredentialFieldEntry): Any =
   else if (f is NamedProperty) (f as NamedProperty).property
   else renderField(f as FieldSpec)
 
-local function renderAuthOption(opt: AuthOption): Mapping<String, Any> = new Mapping {
+/// Render one `AuthOption` as a nested credential pane, rendering each field with
+/// [renderEntry]. The plain credential form passes [renderAnyField]; the
+/// `AdvancedJDBCUrlGroup` panes pass [renderAnyFieldStripped], which drops `ui`
+/// keys that only restate frontend defaults.
+local function renderAuthOptionWith(
+  opt: AuthOption,
+  renderEntry: (CredentialFieldEntry) -> Any
+): Mapping<String, Any> = new Mapping {
   ["type"] = "object"
   ["ui"] = new Mapping {
     ["widget"] = "nested"
@@ -2649,7 +2658,7 @@ local function renderAuthOption(opt: AuthOption): Mapping<String, Any> = new Map
   when (!opt.fields.isEmpty || !opt.extraFields.isEmpty || !opt.postExtraFields.isEmpty) {
     ["properties"] = new Mapping {
       for (f in opt.fields) {
-        [f.name] = renderAnyField(f)
+        [f.name] = renderEntry.apply(f)
       }
       when (!opt.extraFields.isEmpty) {
         ["extra"] = new Mapping {
@@ -2662,17 +2671,20 @@ local function renderAuthOption(opt: AuthOption): Mapping<String, Any> = new Map
           }
           ["properties"] = new Mapping {
             for (f in opt.extraFields) {
-              [f.name] = renderAnyField(f)
+              [f.name] = renderEntry.apply(f)
             }
           }
         }
       }
       for (f in opt.postExtraFields) {
-        [f.name] = renderAnyField(f)
+        [f.name] = renderEntry.apply(f)
       }
     }
   }
 }
+
+local function renderAuthOption(opt: AuthOption): Mapping<String, Any> =
+  renderAuthOptionWith(opt, (f) -> renderAnyField(f))
 
 // ── AdvancedJDBCUrlGroup renderer ─────────────────────────────────────────────
 
@@ -2696,44 +2708,8 @@ local function renderAnyFieldStripped(f: CredentialFieldEntry): Any =
   else if (f is NamedProperty) (f as NamedProperty).property
   else renderFieldStripped(f as FieldSpec)
 
-local function renderJdbcAuthOption(opt: AuthOption): Mapping<String, Any> = new Mapping {
-  ["type"] = "object"
-  ["ui"] = new Mapping {
-    ["widget"] = "nested"
-    ["label"] = opt.nestedLabel
-    when (opt.nestedPlaceholder != null) { ["placeholder"] = opt.nestedPlaceholder }
-    ["hidden"] = opt.nestedHidden
-    when (opt.nestedHelp != null) { ["help"] = opt.nestedHelp }
-    when (opt.nestedWidth != null) { ["grid"] = opt.nestedWidth }
-    ["nestedValue"] = false
-  }
-  when (!opt.fields.isEmpty || !opt.extraFields.isEmpty || !opt.postExtraFields.isEmpty) {
-    ["properties"] = new Mapping {
-      for (f in opt.fields) {
-        [f.name] = renderAnyFieldStripped(f)
-      }
-      when (!opt.extraFields.isEmpty) {
-        ["extra"] = new Mapping {
-          ["type"] = "object"
-          ["ui"] = new Mapping {
-            ["widget"] = "nested"
-            ["label"] = opt.nestedExtraLabel
-            when (opt.nestedExtraHeader != null) { ["header"] = opt.nestedExtraHeader }
-            ["hidden"] = false
-          }
-          ["properties"] = new Mapping {
-            for (f in opt.extraFields) {
-              [f.name] = renderAnyFieldStripped(f)
-            }
-          }
-        }
-      }
-      for (f in opt.postExtraFields) {
-        [f.name] = renderAnyFieldStripped(f)
-      }
-    }
-  }
-}
+local function renderJdbcAuthOption(opt: AuthOption): Mapping<String, Any> =
+  renderAuthOptionWith(opt, (f) -> renderAnyFieldStripped(f))
 
 local function renderJdbcAuthMergeTargetOption(opt: AuthOption): Mapping<String, Any> =
   let (auth = renderJdbcAuthOption(opt).toMap())
@@ -4362,18 +4338,18 @@ local function e2eSubsParent(): String =
     "SQLMustacheSubstitutions"
   else "MustacheSubstitutions"
 
-// Fields already provided by MustacheSubstitutions (always skip).
-local e2eSubsBaseSkip: Set<String> =
-  (new Listing { "credential"; "credential_guid"; "connection" }).toList().toSet()
-
-// Fields added by SQLMustacheSubstitutions (skip when parent is SQL).
-local e2eSubsSqlSkip: Set<String> =
-  List("extraction_method", "agent_json", "include_filter", "exclude_filter", "exclude_table_regex", "preflight_check")
-    .fold(e2eSubsBaseSkip, (acc, elem) -> (acc as Set<String>).add(elem))
-
+// Fields the SDK parent class already declares: never redeclared in the
+// generated subclass (`SdkNames.pkl` keeps them in step with the SDK).
 local function e2eSubsSkip(): Set<String> =
-  if (e2eSubsParent() == "SQLMustacheSubstitutions") e2eSubsSqlSkip
-  else e2eSubsBaseSkip
+  if (e2eSubsParent() == "SQLMustacheSubstitutions") SdkNamesPkg.sqlMustacheSubstitutionFields
+  else SdkNamesPkg.mustacheSubstitutionFields
+
+// A class attribute the generated e2e base assigns. Only names listed in
+// `SdkNames.e2eBaseAttributes`, which `scripts/test-sdk-import.py` checks are
+// declared on `BaseE2ETest`, may be emitted.
+local function e2eAttr(attr: String): String =
+  if (SdkNamesPkg.e2eBaseAttributes.contains(attr)) "    \(attr) = "
+  else throw("App.pkl: e2e base attribute `\(attr)` is not in SdkNames.e2eBaseAttributes. Add it there once BaseE2ETest declares it.")
 
 // One substitution Field line. Over 88 columns it is laid out one argument
 // per line with a trailing comma, not left to `PyFormatPkg.format` (which would
@@ -4401,6 +4377,14 @@ local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
   else if (u is Widgets.NumericInput)
     let (d = (u as Widgets.NumericInput).default)
     fmtSubsField(pyName, "int", "default=\(if (d != null) d!!.toInt() else 0)", k)
+  // DateInput and FileUploader must match `widgetInputField`: the harness
+  // substitutes the dumped default into the DAG arg, which the app's
+  // `_input.py` then validates. The `str` fallback below would submit `""`,
+  // which neither `int` nor `FileReference | None` accepts.
+  else if (u is Widgets.DateInput)
+    fmtSubsField(pyName, "int", "default=0", k)
+  else if (u is Widgets.FileUploader)
+    fmtSubsField(pyName, "dict[str, Any] | None", "default=None", k)
   else if (u is Widgets.TagsInput || u is Widgets.InputRepeater)
     fmtSubsField(pyName, "list[str]", "default_factory=list", k)
   else if (u is Widgets.Radio)
@@ -4483,21 +4467,21 @@ local function generateE2EBasePy(): FileOutput = new FileOutput {
   // and removes the entire latent app-name-fallback bug class. When value ==
   // name the emitted line simply restates the fallback (harmless).
   local emitConnType = connector != null
-  local emitConnCat = connector != null && connector!!.category != "warehouse"
+  local emitConnCat = connector != null && connector!!.category != SdkNamesPkg.e2eConnectionCategoryDefault
   text = PyFormatPkg.format(
     "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
     "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
     "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
     "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
-    "    connector_short_name = \"\(escapePyStr(name))\"\n" +
+    e2eAttr("connector_short_name") + "\"\(escapePyStr(name))\"\n" +
     // SystemAppE2ETest submits straight to AE and never sends the Heracles
     // envelope these name, so a system app's base leaves them out.
     (if (isSystemApp) "" else
-      "    argo_package_name = \"\(escapePyStr(resolvedArgoPackageName))\"\n" +
-      "    argo_template_name = \"\(escapePyStr(argoTemplateName))\"\n" +
-      "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n") +
-    (if (emitConnType) "    connection_type = \"\(escapePyStr(connector!!.value))\"\n" else "") +
-    (if (emitConnCat) "    connection_category = \"\(escapePyStr(connector!!.category))\"\n" else "") +
+      e2eAttr("argo_package_name") + "\"\(escapePyStr(resolvedArgoPackageName))\"\n" +
+      e2eAttr("argo_template_name") + "\"\(escapePyStr(argoTemplateName))\"\n" +
+      e2eAttr("app_service_url") + "\"\(escapePyStr(appServiceUrl))\"\n") +
+    (if (emitConnType) e2eAttr("connection_type") + "\"\(escapePyStr(connector!!.value))\"\n" else "") +
+    (if (emitConnCat) e2eAttr("connection_category") + "\"\(escapePyStr(connector!!.category))\"\n" else "") +
     // No manifest.json is generated without a uiConfig, so the harness's
     // default manifest_path names a file that does not exist.
     (if (isSystemApp && uiConfig == null)
@@ -4640,14 +4624,14 @@ local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOut
     "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
     "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
     "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
-    "    connector_short_name = \"\(escapePyStr(shortName))\"\n" +
+    e2eAttr("connector_short_name") + "\"\(escapePyStr(shortName))\"\n" +
     // As for a single-entrypoint system app: no Heracles envelope is sent.
     (if (isSystemEp) "" else
-      "    argo_package_name = \"\(escapePyStr(pkgName))\"\n" +
-      "    argo_template_name = \"\(escapePyStr(tmplName))\"\n" +
-      "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n") +
-    (if (connType != null) "    connection_type = \"\(escapePyStr(connType))\"\n" else "") +
-    (if (connCat != null && connCat != "warehouse") "    connection_category = \"\(escapePyStr(connCat))\"\n" else "") +
+      e2eAttr("argo_package_name") + "\"\(escapePyStr(pkgName))\"\n" +
+      e2eAttr("argo_template_name") + "\"\(escapePyStr(tmplName))\"\n" +
+      e2eAttr("app_service_url") + "\"\(escapePyStr(appServiceUrl))\"\n") +
+    (if (connType != null) e2eAttr("connection_type") + "\"\(escapePyStr(connType))\"\n" else "") +
+    (if (connCat != null && connCat != SdkNamesPkg.e2eConnectionCategoryDefault) e2eAttr("connection_category") + "\"\(escapePyStr(connCat))\"\n" else "") +
     // FND-3563: a UI-less system entrypoint has no manifest.json, credential or
     // extract/publish DAG of its own. As for a single-entrypoint system app, the
     // suite is told to supply the DAG; only the entrypoint selector is kept.
@@ -4655,25 +4639,25 @@ local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOut
       "    # This entrypoint generates no manifest.json: its callers declare its DAG node.\n" +
       "    # Set manifest_path in the suite to a fixture DAG copied from a calling\n" +
       "    # connector's manifest, and required_dag_nodes to the nodes it runs.\n" +
-      "    entrypoint = \"\(escapePyStr(ep.name))\"\n"
+      e2eAttr("entrypoint") + "\"\(escapePyStr(ep.name))\"\n"
     else
       // A system entrypoint has no credential config of its own and submits
       // straight to AE, so no connector config is named.
-      (if (isSystemEp) "" else "    connector_config_name = \"\(escapePyStr(configName))\"\n") +
+      (if (isSystemEp) "" else e2eAttr("connector_config_name") + "\"\(escapePyStr(configName))\"\n") +
       "    # This entrypoint's own manifest. Without it the harness reads the\n" +
       "    # single-entrypoint default (app/generated/manifest.json), which a bundle\n" +
       "    # does not have, and fails with ManifestFileNotFoundError.\n" +
-      "    manifest_path = \"app/generated/\(escapePyStr(ep.name))/manifest.json\"\n" +
+      e2eAttr("manifest_path") + "\"app/generated/\(escapePyStr(ep.name))/manifest.json\"\n" +
       "    # Sent as metadata.entrypoint on the AE submit so Automation Engine\n" +
       "    # fetches THIS entrypoint's manifest from the deployed pod. A bare fetch\n" +
       "    # 404s \"No manifest available\" on a multi-entrypoint app.\n" +
-      "    entrypoint = \"\(escapePyStr(ep.name))\"\n" +
+      e2eAttr("entrypoint") + "\"\(escapePyStr(ep.name))\"\n" +
       "    # Derived from this entrypoint's pipeline, so the assertions match the\n" +
       "    # DAG that was generated rather than the crawler-shaped SDK defaults.\n" +
-      "    required_dag_nodes = \(epRequiredDagNodes(c))\n" +
-      "    expect_connection = \(pyBool(publishes))\n" +
-      "    require_nonempty_assets = \(pyBool(publishes))\n" +
-      "    expect_lineage = \(pyBool(expectsLineage))\n"))
+      e2eAttr("required_dag_nodes") + "\(epRequiredDagNodes(c))\n" +
+      e2eAttr("expect_connection") + "\(pyBool(publishes))\n" +
+      e2eAttr("require_nonempty_assets") + "\(pyBool(publishes))\n" +
+      e2eAttr("expect_lineage") + "\(pyBool(expectsLineage))\n"))
 }
 
 local function generateE2ESubstitutionsPy(): FileOutput? =

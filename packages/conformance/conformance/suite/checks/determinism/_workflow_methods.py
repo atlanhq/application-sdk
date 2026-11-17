@@ -28,7 +28,10 @@ from __future__ import annotations
 
 import ast
 
-from conformance.suite.checks._ast_common import SDK_APP_BASE_NAMES
+from conformance.suite.checks._ast_common import (
+    SDK_APP_BASE_NAMES,
+    base_names,
+)
 from conformance.suite.checks.prescriptions._decorator_provenance import (
     ImportProvenance,
     collect_import_provenance,
@@ -57,16 +60,6 @@ def _sdk_app_aliases(tree: ast.AST) -> frozenset[str]:
     return frozenset(bound)
 
 
-def _base_names(node: ast.ClassDef) -> set[str]:
-    names: set[str] = set()
-    for base in node.bases:
-        if isinstance(base, ast.Name):
-            names.add(base.id)
-        elif isinstance(base, ast.Attribute):
-            names.add(base.attr)
-    return names
-
-
 def _app_family_classes(tree: ast.AST) -> list[ast.ClassDef]:
     """Classes deriving from an SDK ``App``-family base, directly or via a local base."""
     family = set(_sdk_app_aliases(tree))
@@ -78,7 +71,7 @@ def _app_family_classes(tree: ast.AST) -> list[ast.ClassDef]:
     while changed:
         changed = False
         for cls in classes:
-            if id(cls) not in found and _base_names(cls) & family:
+            if id(cls) not in found and family.intersection(base_names(cls)):
                 found[id(cls)] = cls
                 family.add(cls.name)
                 changed = True

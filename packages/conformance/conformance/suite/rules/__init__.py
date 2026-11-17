@@ -26,6 +26,7 @@ from conformance.suite.rules.entrypoint import RULES as _ENTRYPOINT_RULES
 from conformance.suite.rules.entrypoint_alignment import RULES as _EP_ALIGNMENT_RULES
 from conformance.suite.rules.error_handling import RULES as _E_RULES
 from conformance.suite.rules.error_seam import RULES as _ERROR_SEAM_RULES
+from conformance.suite.rules.httpx_proxy import RULES as _HTTPX_PROXY_RULES
 from conformance.suite.rules.logging import RULES as _L_RULES
 from conformance.suite.rules.offload_cancel import RULES as _OFFLOAD_CANCEL_RULES
 from conformance.suite.rules.optimizations import RULES as _O_RULES
@@ -73,6 +74,7 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _CLIENT_SEAM_RULES,
     _CLIENT_LIFECYCLE_RULES,
     _OFFLOAD_CANCEL_RULES,
+    _HTTPX_PROXY_RULES,
     _PERSISTENCE_SEAM_RULES,
     _CREDENTIAL_SEAM_RULES,
     _EP_ALIGNMENT_RULES,

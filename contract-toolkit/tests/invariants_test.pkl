@@ -1,9 +1,8 @@
 /// Unit tests for App.pkl compile-time invariants.
 ///
-/// Positive cases only — PKL's test framework has no "expect throw" primitive.
 /// The negative case (hasCredentialConfig=true without connector → error) is
-/// covered by check 5 in scripts/check-invariants.sh, which runs `pkl eval`
-/// against a deliberately bad contract and asserts the error message text.
+/// asserted with `module.catch` over the rendered output files; the positive
+/// cases are its controls.
 amends "pkl:test"
 
 import "../src/App.pkl" as App
@@ -75,5 +74,11 @@ facts {
   ["connector invariant: connector value appears in credential configmap"] {
     validCredApp.output.files["app/generated/atlan-connectors-cred-test.json"].text
       .contains("\"snowflake\"")
+  }
+
+  ["connector invariant: hasCredentialConfig=true without a connector is refused"] {
+    module.catch(() -> (validCredApp) { connector = null }
+      .output.files.toMap().mapValues((_, f) -> f.text))
+      .contains("connector must be set when hasCredentialConfig = true")
   }
 }

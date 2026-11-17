@@ -265,6 +265,15 @@ facts {
     credentialProperties["jdbcUrl"]["properties"]["basic"]["properties"]["password"]["ui"]["label"] == "Password"
   }
 
+  // An `input` widget and `hidden: false` are frontend defaults, so these panes
+  // omit them. The plain credential form keeps them (credential_field_rendering_test.pkl).
+  ["Auth pane fields drop ui keys that only restate frontend defaults"] {
+    !credentialProperties["jdbcUrl"]["properties"]["basic"]["properties"]["username"]["ui"].containsKey("widget")
+    !credentialProperties["jdbcUrl"]["properties"]["basic"]["properties"]["username"]["ui"].containsKey("hidden")
+    !credentialProperties["basic"]["properties"]["username"]["ui"].containsKey("widget")
+    !credentialProperties["basic"]["properties"]["username"]["ui"].containsKey("hidden")
+  }
+
   ["App.pkl single-auth JDBC exposes only the in-card auth pane"] {
     singleAuthProperties["basic"]["ui"]["hidden"] == true
     singleAuthProperties["jdbcUrl"]["properties"]["basic"]["ui"]["hidden"] == false

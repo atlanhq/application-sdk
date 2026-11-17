@@ -7,7 +7,15 @@ from pathlib import PurePosixPath
 from typing import Literal, TypeGuard
 
 from .._ast_common._exc_info import has_exc_info_traceback
-from ._constants import ADAPTER_MARKERS, LOG_METHODS, LOGGER_NAMES
+from .._ast_common._names import leaf_name
+from ._constants import (
+    ADAPTER_MARKERS,
+    CREDENTIAL_LABEL_SUFFIXES,
+    CREDENTIAL_VALUE_SUFFIXES,
+    LOG_METHODS,
+    LOGGER_NAMES,
+    RESOURCE_TOKEN_AUTH_QUALIFIERS,
+)
 
 Framework = Literal["stdlib", "structlog", "loguru", "unknown"]
 
@@ -806,8 +814,6 @@ def _is_credential_value_name(name: str) -> bool:
     does NOT also end with a label suffix (``_name``, ``_type``, ``_id``, …)
     that indicates the variable holds a label rather than the secret itself.
     """
-    from ._constants import CREDENTIAL_LABEL_SUFFIXES, CREDENTIAL_VALUE_SUFFIXES
-
     lower = name.lower()
     # If the name ends with a label suffix, it is a label, not a value.
     if any(lower.endswith(suf) for suf in CREDENTIAL_LABEL_SUFFIXES):
@@ -825,8 +831,6 @@ def is_resource_token_name(name: str) -> bool:
     exemption by itself.  A bare ``token`` and any auth-qualified token
     (``access_token``, ``refresh_token``, ``github_token``, …) never qualify.
     """
-    from ._constants import RESOURCE_TOKEN_AUTH_QUALIFIERS
-
     lower = name.lower().lstrip("_")
     if not lower.endswith("_token"):
         return False
@@ -834,14 +838,6 @@ def is_resource_token_name(name: str) -> bool:
     if not qualifier:
         return False
     return qualifier.rsplit("_", 1)[-1] not in RESOURCE_TOKEN_AUTH_QUALIFIERS
-
-
-def _interpolated_name(node: ast.expr) -> str | None:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    return None
 
 
 def _path_segment_names_in_joined_str(parts: list[ast.expr]) -> set[str]:
@@ -860,7 +856,7 @@ def _path_segment_names_in_joined_str(parts: list[ast.expr]) -> set[str]:
             continue
         if in_query_or_fragment or i == 0 or not isinstance(part, ast.FormattedValue):
             continue
-        name = _interpolated_name(part.value)
+        name = leaf_name(part.value)
         before = parts[i - 1]
         if name is None or not (
             isinstance(before, ast.Constant) and isinstance(before.value, str)

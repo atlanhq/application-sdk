@@ -62,6 +62,7 @@ from conformance.suite.checks._ast_common import (
     make_cli_main,
     make_toml_finding,
     parse_toml_suppressions,
+    strip_yaml_comment,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -116,15 +117,8 @@ def _assignment(line: str) -> tuple[str, str] | None:
 
 
 def _clean_value(value: str) -> str:
-    """Strip a trailing inline comment and surrounding quotes from *value*.
-
-    Deployment-name values never legitimately contain ``#``, so a ``#`` marks
-    the start of a YAML comment.
-    """
-    idx = value.find("#")
-    if idx != -1:
-        value = value[:idx]
-    return value.strip().strip("'\"").strip()
+    """Strip a trailing inline comment and surrounding quotes from *value*."""
+    return strip_yaml_comment(value).strip().strip("'\"").strip()
 
 
 # YAML null scalars. In a docker-compose ``environment`` MAP, a null value

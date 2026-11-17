@@ -401,4 +401,22 @@ facts {
   ["NativeApp omits filter_rules entirely when none declared"] {
     !nativeEventsOnlyManifest["triggers"]["events"][0].containsKey("filter_rules")
   }
+
+  // `name` is the reconcile identity key downstream (Local Marketplace keys AE
+  // triggers on it), so a duplicate would collapse to one trigger (last wins). The
+  // Listing's isDistinct constraint fires once the manifest renders `schedules`.
+  ["App refuses a duplicate schedule name within an entrypoint"] {
+    module.catch(() -> (App) {
+      name = "dup-sched-app"
+      displayName = "Dup Sched App"
+      icon = "https://example.com/icon.svg"
+      hasCredentialConfig = false
+      uiConfig = appUiConfig
+      pipeline { publish = null }
+      schedules {
+        new App.ScheduleSpec { name = "dup"; cronExpression = "0 0 * * *" }
+        new App.ScheduleSpec { name = "dup"; cronExpression = "0 6 * * *" }
+      }
+    }.output.files.toMap().mapValues((_, f) -> f.text)).contains("isDistinct")
+  }
 }

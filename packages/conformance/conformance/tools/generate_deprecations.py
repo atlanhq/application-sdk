@@ -26,8 +26,6 @@ PR (BLDX-1418).
 
 from __future__ import annotations
 
-import argparse
-import sys
 from pathlib import Path
 
 from conformance.suite.checks.deprecation._manifest import (
@@ -36,80 +34,34 @@ from conformance.suite.checks.deprecation._manifest import (
     build_manifest,
     serialize,
 )
+from conformance.tools._generator import Generated, GeneratorSpec, run_generator
 
 
-def _find_sdk_root() -> Path | None:
-    """Locate the repo root containing ``application_sdk/`` (best-effort).
-
-    Walks up from the current directory and from this file, returning the first
-    ancestor that holds an ``application_sdk/__init__.py``.
-    """
-    starts = [Path.cwd(), Path(__file__).resolve()]
-    for start in starts:
-        for parent in [start, *start.parents]:
-            if (parent / SDK_IMPORT_ROOT / "__init__.py").is_file():
-                return parent
-    return None
+def _build(sdk_root: Path | None) -> Generated:
+    assert sdk_root is not None
+    manifest = build_manifest(sdk_root)
+    detail = f"{len(manifest.symbols)} symbols"
+    return Generated(serialize(manifest), detail, detail)
 
 
-def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Generate the deprecated-symbol manifest from SDK source.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    parser.add_argument(
-        "--sdk-root",
-        type=Path,
-        default=None,
-        help="Repo root containing application_sdk/ (default: auto-detected).",
-    )
-    parser.add_argument(
-        "--outfile",
-        type=Path,
-        default=MANIFEST_PATH,
-        help=f"Manifest path to write (default: {MANIFEST_PATH}).",
-    )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="Verify the committed manifest matches generated output (exit 1 if stale).",
-    )
-    return parser.parse_args(argv)
+SPEC = GeneratorSpec(
+    doc=__doc__ or "",
+    description="Generate the deprecated-symbol manifest from SDK source.",
+    command="gen-deprecations",
+    outfile=MANIFEST_PATH,
+    noun="manifest",
+    title="Manifest",
+    build=_build,
+    sdk_marker=(SDK_IMPORT_ROOT, "__init__.py"),
+    sdk_marker_label="application_sdk/",
+    # build_manifest scans the directory's .py files and needs no
+    # __init__.py, so an explicit root only has to hold the directory.
+    accepts_sdk_root=lambda root: (root / SDK_IMPORT_ROOT).is_dir(),
+)
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = _parse_args(argv)
-
-    sdk_root: Path | None = args.sdk_root or _find_sdk_root()
-    if sdk_root is None or not (sdk_root / SDK_IMPORT_ROOT).is_dir():
-        print(
-            "error: could not locate application_sdk/ — pass --sdk-root DIR.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    manifest = build_manifest(sdk_root)
-    content = serialize(manifest)
-    outfile: Path = args.outfile
-
-    if args.check:
-        if not outfile.exists():
-            print(f"MISSING: {outfile}", file=sys.stderr)
-            sys.exit(1)
-        if outfile.read_text(encoding="utf-8") != content:
-            print(
-                f"STALE: {outfile}\nRun `uv run atlan-application-sdk-conformance "
-                "gen-deprecations` to update.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        print(f"Manifest up-to-date ({len(manifest.symbols)} symbols).")
-        return
-
-    outfile.parent.mkdir(parents=True, exist_ok=True)
-    outfile.write_text(content, encoding="utf-8")
-    print(f"Wrote {outfile} ({len(manifest.symbols)} symbols).")
+    run_generator(SPEC, argv)
 
 
 if __name__ == "__main__":

@@ -26,9 +26,8 @@ Cross-artifact checks for SDR integration-test quality:
   agent-mode e2e covers.  The finding splits the suite by concern rather than
   pointing at a replacement class.
 
-``scan_path`` is a no-op — T002 requires cross-file context (does *any* test
-file declare the subclass?) plus ``atlan.yaml`` for the SDR gate.  The runner
-must call ``scan_all``.
+The module defines only ``scan_all`` — T002 requires cross-file context (does
+*any* test file declare the subclass?) plus ``atlan.yaml`` for the SDR gate.
 
 Discovery
 ---------
@@ -53,6 +52,8 @@ from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     _parse_directives,
+    base_names,
+    discover_tree,
     make_cli_main,
     make_finding,
 )
@@ -68,7 +69,7 @@ _SDR_FLAG_RE = re.compile(
 )
 _BASE_SDR_NAMES: frozenset[str] = frozenset({"BaseSDRIntegrationTest"})
 
-__all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
+__all__ = ["SERIES", "discover", "main", "scan_all"]
 
 
 def discover(root: Path) -> list[Path]:
@@ -78,29 +79,11 @@ def discover(root: Path) -> list[Path]:
     ``tests/integration/``) because a ``BaseSDRIntegrationTest`` subclass may
     live in any helper or fixture module under the test tree.
     """
-    base = root / "tests"
-    if not base.is_dir():
-        return []
-    paths: list[Path] = []
-    for path in base.rglob("*.py"):
-        if "__pycache__" in path.parts:
-            continue
-        paths.append(path)
-    return sorted(paths)
-
-
-def _base_names(bases: list[ast.expr]) -> set[str]:
-    names: set[str] = set()
-    for base in bases:
-        if isinstance(base, ast.Name):
-            names.add(base.id)
-        elif isinstance(base, ast.Attribute):
-            names.add(base.attr)
-    return names
+    return discover_tree(root, "tests")
 
 
 def _is_sdr_subclass(node: ast.ClassDef) -> bool:
-    return bool(_base_names(node.bases) & _BASE_SDR_NAMES)
+    return bool(_BASE_SDR_NAMES.intersection(base_names(node)))
 
 
 def _is_agent_mode_value(val: ast.expr) -> bool:
@@ -220,11 +203,6 @@ def _scan_file(path: Path, root: Path) -> tuple[list[Finding], bool]:
         )
 
     return findings, has_sdr_coverage
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: T002/T003 require cross-artifact analysis; use scan_all."""
-    return []
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

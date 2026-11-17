@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**56 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015, P059), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.retry_ladder` (P060), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK), `suite.checks.offload_cancel` (P064/P065, gated on the app's locked SDK) (all AST-based / cross-artifact)
+**57 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015, P059), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.httpx_proxy` (P066), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.retry_ladder` (P060), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK), `suite.checks.offload_cancel` (P064/P065, gated on the app's locked SDK) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -79,6 +79,7 @@ reassigned.
 | [P060](#p060) | `HandRolledRetryLadder` | `warn` | `sdk` | `retry-policy` | — | 0.54.0 |
 | [P064](#p064) | `UncancellableOffloadedCursorStatement` | `warn` | `app` | `async-correctness` | — | 0.56.0 |
 | [P065](#p065) | `BatchedResultsIteratedOnLoop` | `warn` | `app` | `async-correctness` | — | 0.56.0 |
+| [P066](#p066) | `HttpxTransportWithoutProxy` | `warn` | `app` | `client-seam` | — | 0.59.0 |
 
 ---
 
@@ -3422,6 +3423,70 @@ whose `get_batched_results` result supports `async for`.  See
 https://github.com/atlanhq/application-sdk/blob/main/docs/concepts/apps.md.
 
 Land as `WARN`: a justified inline `# conformance: ignore[P065] <reason>` records a
+deliberate exception and stays visible in SARIF.
+
+---
+
+## P066 — `HttpxTransportWithoutProxy` {#p066}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `client-seam` · **Autofixable:** — · **Since:** 0.59.0
+
+> httpx.AsyncHTTPTransport / HTTPTransport built without `proxy=` (bypasses HTTPS_PROXY / NO_PROXY)
+
+**Rationale:** httpx skips HTTPS_PROXY / NO_PROXY for any client given an explicit transport. An httpx
+transport built without proxy= therefore makes every request through it connect
+directly; on a self-deployed runtime whose egress is proxy-only, those requests time out
+with no HTTP response and the source looks unreachable.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/api_client.py — builds its client as `httpx.AsyncClient(...)`
+  without `transport=`, so httpx applies HTTPS_PROXY / NO_PROXY itself. Apps that need a
+  custom transport subclass the SDK's BaseClient, whose default transport resolves the
+  environment proxy per request
+  (https://github.com/atlanhq/application-sdk/blob/main/docs/concepts/clients.md).
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+
+A call constructs `httpx.AsyncHTTPTransport(...)` or `httpx.HTTPTransport(...)` with no
+`proxy=` keyword.  httpx reads the proxy environment variables only when the client
+builds its own transport — `allow_env_proxies = trust_env and transport is None` — so a
+client given this transport ignores `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and
+`NO_PROXY`.  Apps usually build a transport to set `verify=` (a client-level `verify=`
+is ignored next to a transport), pool `limits=` or connect `retries=`, and lose the
+proxy as a side effect.  On a host whose egress is proxy-only the request then connects
+directly and times out.
+
+Fix — resolve the proxy for the request URL and pass it on:
+
+```python
+import urllib.request
+
+def env_proxy_for(url: str) -> str | None:
+    parsed = httpx.URL(url)
+    proxies = urllib.request.getproxies_environment()
+    proxy = proxies.get(parsed.scheme) or proxies.get("all")
+    if not proxy or urllib.request.proxy_bypass_environment(
+        parsed.host, proxies
+    ):
+        return None
+    return proxy
+
+transport = httpx.AsyncHTTPTransport(
+    verify=ctx, limits=limits, proxy=env_proxy_for(url)
+)
+```
+
+or drop the custom transport and let the client build one
+(`httpx.AsyncClient(verify=ctx, limits=limits)`), or subclass the SDK's `BaseClient`,
+whose default transport applies the environment proxy itself.  See
+https://github.com/atlanhq/application-sdk/blob/main/docs/concepts/clients.md.
+
+Any explicit `proxy=` satisfies the rule — pass `proxy=None` for a transport that only
+ever reaches localhost (a sidecar, a local emulator).  A call that splats `**kwargs` is
+not flagged, since the proxy may be among them.  Subclasses of the transport and
+`httpx.MockTransport` are not matched.  Test directories are not scanned.
+
+Land as `WARN`: a justified inline `# conformance: ignore[P066] <reason>` records a
 deliberate exception and stays visible in SARIF.
 
 ---

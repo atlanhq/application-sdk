@@ -14,8 +14,8 @@ The rule reports the setting once per app, where the fix belongs:
   the whole ``dapr`` block as soon as any other component was enabled.
 
 APP-scoped and gated on a ``contract/`` directory, like the sibling K checks.
-It reads fixed artifacts across the repo, so it implements ``scan_all`` and a
-no-op ``scan_path``, mirroring ``release_contract``.
+It reads fixed artifacts across the repo, so it implements only ``scan_all``,
+mirroring ``release_contract``.
 """
 
 from __future__ import annotations
@@ -25,10 +25,12 @@ import sys
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
+    discover_contract_repo,
     make_cli_main,
     make_toml_finding,
     parse_toml_suppressions,
     safe_read_text,
+    strip_yaml_comment,
 )
 from conformance.suite.checks.legacy_contract._directives_pkl import (
     _make_pkl_finding_suppressed,
@@ -41,13 +43,13 @@ _RULE_ID = "K029"
 
 __all__ = [
     "SERIES",
+    "contract_false_findings",
     "contract_files",
     "deploy_dapr_false_line",
     "discover",
     "main",
     "pkl_code_lines",
     "scan_all",
-    "scan_path",
 ]
 
 # ``objectstore = false`` anywhere on a pkl line, including the one-line form
@@ -73,7 +75,7 @@ _FIX = (
 
 def discover(root: Path) -> list[Path]:
     """Return ``[root]`` for a pkl-contract-driven app repo, else ``[]``."""
-    return [root] if (root / "contract").is_dir() else []
+    return discover_contract_repo(root)
 
 
 def pkl_code_lines(text: str) -> list[str]:
@@ -142,7 +144,15 @@ def contract_files(root: Path) -> list[Path]:
     )
 
 
-def _contract_findings(root: Path) -> list[Finding]:
+def contract_false_findings(
+    root: Path, *, rule_id: str, pattern: re.Pattern[str], message: str
+) -> list[Finding]:
+    """One *rule_id* finding per contract line whose code matches *pattern*.
+
+    Shared with K030 (``secretstore``): both rules flag a ``deploy.dapr``
+    toggle set to ``false`` at its source in ``contract/*.pkl``, honouring the
+    Pkl suppression directives.
+    """
     findings: list[Finding] = []
     for path in contract_files(root):
         text = safe_read_text(path)
@@ -151,28 +161,37 @@ def _contract_findings(root: Path) -> list[Finding]:
         directives = _parse_pkl_directives(text)
         rel = path.relative_to(root).as_posix()
         for lineno, code in enumerate(pkl_code_lines(text), start=1):
-            if not _PKL_FALSE_RE.search(code):
+            if not pattern.search(code):
                 continue
             suppressed, justification = _make_pkl_finding_suppressed(
-                rule_id=_RULE_ID, line=lineno, directives=directives
+                rule_id=rule_id, line=lineno, directives=directives
             )
             findings.append(
                 Finding(
-                    rule_id=_RULE_ID,
+                    rule_id=rule_id,
                     file=rel,
                     line=lineno,
                     column=1,
-                    message=(
-                        "The contract sets deploy.dapr.objectstore to false. The "
-                        "atlan-app chart then omits the object-store component "
-                        "the SDK requires, and the app's worker and handler fail "
-                        f"at startup. {_FIX}"
-                    ),
+                    message=message,
                     suppressed=suppressed,
                     suppression_justification=justification,
                 )
             )
     return findings
+
+
+def _contract_findings(root: Path) -> list[Finding]:
+    return contract_false_findings(
+        root,
+        rule_id=_RULE_ID,
+        pattern=_PKL_FALSE_RE,
+        message=(
+            "The contract sets deploy.dapr.objectstore to false. The "
+            "atlan-app chart then omits the object-store component "
+            "the SDK requires, and the app's worker and handler fail "
+            f"at startup. {_FIX}"
+        ),
+    )
 
 
 def deploy_dapr_false_line(text: str, component: str) -> int | None:
@@ -194,7 +213,7 @@ def deploy_dapr_false_line(text: str, component: str) -> int | None:
         while path and path[-1][0] >= indent:
             path.pop()
         key = m.group("key")
-        value = m.group("value").split(" #", 1)[0].strip()
+        value = strip_yaml_comment(m.group("value")).strip()
         keys = [k for _, k in path]
         if keys == ["deploy", "dapr"] and key == component:
             return lineno if value in _YAML_FALSE else None
@@ -234,11 +253,6 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     if not paths:
         return []
     return _contract_findings(root) or _atlan_yaml_findings(root)
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: K029 is cross-artifact; use :func:`scan_all`."""
-    return []
 
 
 main = make_cli_main(

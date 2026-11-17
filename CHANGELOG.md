@@ -1,5 +1,35 @@
 # Changelog
 
+## v3.58.0 (November 17, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.57.0...v3.58.0
+
+### Features
+
+- assert a kit run's output against declared schemas with value rules, replacing validate_with_pandera [FND-5007] (#4905) (by @cmgrote in [5e0338d](https://github.com/atlanhq/application-sdk/commit/5e0338d))
+
+### Bug Fixes
+
+- raise non-deprecated leaves instead of the ten error classes due for v4.0 removal [FND-4910] (#4902) (by @cmgrote in [f461f45](https://github.com/atlanhq/application-sdk/commit/f461f45))
+- emit @observability spans with their real duration, and stop uploading trace files nothing reads [FND-4913] (#4904) (by @cmgrote in [6a117d0](https://github.com/atlanhq/application-sdk/commit/6a117d0))
+- read the CPU limit in get_actual_cpu_count, and deprecate file_converter, the Redshift helpers, get_safe_num_threads, TaskResult and the v2 event-registration models for v4.0 [FND-4914] (#4906) (by @cmgrote in [e643594](https://github.com/atlanhq/application-sdk/commit/e643594))
+- BaseClient default transport honors HTTPS_PROXY/NO_PROXY (#4921) (by @Lalit3716-atlan in [60c2a84](https://github.com/atlanhq/application-sdk/commit/60c2a84))
+
+### Refactoring
+
+- import the AE DAG types from harness.automation_engine, not the deprecated e2e.client, and point the full_dag notices there [FND-4912] (#4900) (by @cmgrote in [b7b01bd](https://github.com/atlanhq/application-sdk/commit/b7b01bd))
+- deprecate the 46 names that exist only to serve BaseIntegrationTest, pointing the pandera validators and IntegrationTestClient at their replacements [FND-4911] (#4909) (by @cmgrote in [a6a6a08](https://github.com/atlanhq/application-sdk/commit/a6a6a08))
+
+### Chores
+
+- rewrite v2 SQL metadata imports to SqlApp, keep one base-name table, and run check_migration on the stdlib alone [FND-4915] (#4903) (by @cmgrote in [25a7a13](https://github.com/atlanhq/application-sdk/commit/25a7a13))
+- allowlist CVE-2026-128089 (HIGH 30d SLA) (#4910) (by @atlan-app-fleet[bot] in [4256849](https://github.com/atlanhq/application-sdk/commit/4256849))
+- raise the dnspython floor to 2.9.2 as a constraint to clear CVE-2026-128089 (#4917) (by @cmgrote in [cd398ed](https://github.com/atlanhq/application-sdk/commit/cd398ed))
+- update dependency pyatlan to >=11.7.1,<12 (#4916) (by @renovate[bot] in [5b6a578](https://github.com/atlanhq/application-sdk/commit/5b6a578))
+- update dependency loguru to >=0.8.0,<0.9.0 (#4912) (by @renovate[bot] in [658d8c5](https://github.com/atlanhq/application-sdk/commit/658d8c5))
+- clear 1 vulnerability (authlib) (#4935) (by @connectivity-ai[bot] in [01e87d9](https://github.com/atlanhq/application-sdk/commit/01e87d9))
+
+
 ## v3.57.0 (November 13, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.56.0...v3.57.0

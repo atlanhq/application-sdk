@@ -1,6 +1,6 @@
 """Preflight conformance static checks.
 
-Cross-file only: ``scan_path`` is a no-op and ``scan_all`` builds one shared
+Cross-file only: the module defines only ``scan_all``, which builds one shared
 :class:`~._common.Registry` (single parse + import walk) then runs all rule
 passes over it. Owns the ``F`` series and its leg of the fleet CI matrix.
 
@@ -31,7 +31,7 @@ from ._common import SCENARIO_COVERAGE, build_registry, coverage_findings
 
 SERIES = "F"
 
-__all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
+__all__ = ["SERIES", "discover", "main", "scan_all"]
 
 
 def discover(root: Path) -> list[Path]:
@@ -48,11 +48,6 @@ def discover(root: Path) -> list[Path]:
         else []
     )
     return sorted({*discover_sources(root), *scenario_modules})
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """No-op: the preflight checks need the whole repo; use :func:`scan_all`."""
-    return []
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

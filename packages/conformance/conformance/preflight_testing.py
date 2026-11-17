@@ -37,8 +37,8 @@ def assert_preflight_result(
     expected_errors: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Validate a real handler result against adapter-supplied probe evidence."""
-    from application_sdk.errors.wire import FailureDetails
-    from application_sdk.handler.contracts import PreflightOutput
+    from application_sdk.errors.wire import FailureDetails  # noqa: PLC0415 — application_sdk is only in the `test` extra
+    from application_sdk.handler.contracts import PreflightOutput  # noqa: PLC0415 — application_sdk is only in the `test` extra
 
     assert isinstance(result, PreflightOutput), "Handler must return PreflightOutput"
     checks = {check.name: check for check in result.checks}

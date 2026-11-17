@@ -162,6 +162,7 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.entrypoint_alignment` (P016), "
             "`suite.checks.entrypoint` (P017–P018, scans test files too), "
             "`suite.checks.client_seam` (P019), "
+            "`suite.checks.httpx_proxy` (P066), "
             "`suite.checks.error_seam` (P043/P045, scans test files too), "
             "`suite.checks.determinism` (P020–P024, P031, P036, P054), "
             "`suite.checks.app_name_alignment` (P025), "

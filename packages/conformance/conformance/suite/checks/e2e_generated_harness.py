@@ -96,6 +96,8 @@ from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     _parse_directives,
+    base_names,
+    discover_tree,
     is_collectable_test_file,
     is_test_class,
     make_cli_main,
@@ -136,31 +138,17 @@ _GENERATED_MODEL_BASES: dict[str, str] = {
 _MODE_ATTR = "mode"
 _GENERATED_BASE_FILENAME = "_e2e_base.py"
 
-__all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
+__all__ = ["SERIES", "discover", "main", "scan_all"]
 
 
 def discover(root: Path) -> list[Path]:
     """Walk ``tests/`` for all Python source files."""
-    base = root / "tests"
-    if not base.is_dir():
-        return []
-    return sorted(p for p in base.rglob("*.py") if "__pycache__" not in p.parts)
+    return discover_tree(root, "tests")
 
 
 # ---------------------------------------------------------------------------
 # Class indexing
 # ---------------------------------------------------------------------------
-
-
-def _base_names(node: ast.ClassDef) -> set[str]:
-    """Bare names of *node*'s bases (``X`` and ``mod.X`` both yield ``X``)."""
-    names: set[str] = set()
-    for base in node.bases:
-        if isinstance(base, ast.Name):
-            names.add(base.id)
-        elif isinstance(base, ast.Attribute):
-            names.add(base.attr)
-    return names
 
 
 def _class_body_assignments(node: ast.ClassDef) -> dict[str, ast.stmt]:
@@ -189,7 +177,7 @@ class _ClassInfo:
     def __init__(self, file: str, node: ast.ClassDef) -> None:
         self.file = file
         self.node = node
-        self.bases = _base_names(node)
+        self.bases = set(base_names(node))
         self.assignments = _class_body_assignments(node)
 
 
@@ -524,11 +512,6 @@ def _t024_message(class_name: str) -> str:
 # ---------------------------------------------------------------------------
 # Scan
 # ---------------------------------------------------------------------------
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: T023/T024 resolve inheritance across files; use scan_all."""
-    return []
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

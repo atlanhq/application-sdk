@@ -21,6 +21,7 @@ import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 
 import conformance.suite.checks.logging as logging_checks
 import conformance.suite.checks.sdr as sdr_checks
@@ -56,6 +57,7 @@ from conformance.suite.checks import (
     error_seam,
     generated_freshness,
     gitignore_entries,
+    httpx_proxy,
     integration_deselect,
     integration_marking,
     legacy_contract,
@@ -82,8 +84,10 @@ from conformance.suite.checks._ast_common import (
     detect_scope,
     parse_failure,
 )
+from conformance.suite.checks.preflight._lifetime import scan_removed_config
 from conformance.suite.introduced import BaseUnavailable, introduced_since
 from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
+from conformance.suite.rules.preflight import RULES as PREFLIGHT_RULES
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 from conformance.suite.schema.findings import Finding, findings_to_report
 from conformance.suite.schema.sarif import (
@@ -113,313 +117,113 @@ _MAX_PARSE_FILE_ANNOTATIONS = 7
 class CheckRegistration:
     """A registered check module, identified by its rule-series letter.
 
-    A check supplies either ``scan_path`` (per-file scanning) or ``scan_all``
-    (cross-file scanning that needs to see every file before emitting findings —
-    e.g. transitive inheritance resolution).  When ``scan_all`` is set the
-    runner calls it once with the post-exclusion path list; otherwise it calls
-    ``scan_path`` per file.
+    A check supplies ``scan_path`` (per-file scanning), ``scan_all`` (cross-file
+    scanning that needs to see every file before emitting findings — e.g.
+    transitive inheritance resolution), or both.  When ``scan_all`` is set the
+    runner calls it once with the post-exclusion path list and never calls
+    ``scan_path``; otherwise it calls ``scan_path`` per file.
     """
 
     series: str
     discover: Callable[[Path], list[Path]]
-    scan_path: Callable[[Path, Path], list[Finding]]
+    scan_path: Callable[[Path, Path], list[Finding]] | None = None
     scan_all: Callable[[list[Path], Path], list[Finding]] | None = None
 
+    def __post_init__(self) -> None:
+        if self.scan_path is None and self.scan_all is None:
+            raise TypeError(
+                f"check series {self.series!r} defines neither scan_path nor scan_all"
+            )
+
+    @classmethod
+    def from_module(cls, module: ModuleType) -> CheckRegistration:
+        """Register a check module by the names every check module exports.
+
+        ``SERIES`` and ``discover`` are required; ``scan_path`` and ``scan_all``
+        are read when the module defines them.
+        """
+        return cls(
+            series=module.SERIES,
+            discover=module.discover,
+            scan_path=getattr(module, "scan_path", None),
+            scan_all=getattr(module, "scan_all", None),
+        )
+
+    def scan(self, paths: list[Path], root: Path) -> list[Finding]:
+        """Run the check over its post-exclusion *paths*."""
+        if self.scan_all is not None:
+            return self.scan_all(paths, root)
+        assert self.scan_path is not None  # guaranteed by __post_init__
+        findings: list[Finding] = []
+        for path in paths:
+            findings.extend(self.scan_path(path, root))
+        return findings
+
+
+# Every check module the runner dispatches, in dispatch order.  A module under
+# ``conformance/suite/checks`` that defines ``SERIES`` must appear here:
+# ``tests/test_runner_registration.py`` fails otherwise, so a new check cannot
+# be documented and unit-tested yet never run.
+_CHECK_MODULES: tuple[ModuleType, ...] = (
+    actions_pinning,
+    asyncio_loop_scope,
+    bootstrap_drift,
+    client_seam,
+    client_lifecycle,
+    offload_cancel,
+    httpx_proxy,
+    persistence_seam,
+    credential_seam,
+    download_retry,
+    error_handling,
+    error_seam,
+    dependency_conformance,
+    optimizations,
+    prescriptions,
+    gitignore_entries,
+    orchestration,
+    determinism,
+    entrypoint,
+    logging_checks,
+    integration_marking,
+    test_quality,
+    test_structure,
+    coverage_config,
+    integration_deselect,
+    e2e_deployment_name,
+    e2e_agent_spec,
+    e2e_workflow_shape,
+    e2e_generated_harness,
+    entrypoint_e2e_coverage,
+    e2e_system_app_base,
+    dockerfile_conformance,
+    deprecation,
+    entrypoint_alignment,
+    app_name_alignment,
+    preflight,
+    legacy_contract,
+    generated_freshness,
+    artifact_schema_declared,
+    artifact_schema_writer,
+    manifest_contract,
+    manifest_app_name,
+    release_contract,
+    dapr_objectstore,
+    dapr_secretstore,
+    sdr_checks,
+    transform_templates,
+    sdr_test_checks,
+    dev_entrypoint,
+    security,
+    text_io_encoding,
+    atomic_publish,
+    retry_ladder,
+)
 
 _CHECKS: list[CheckRegistration] = [
-    CheckRegistration(
-        series=actions_pinning.SERIES,
-        discover=actions_pinning.discover,
-        scan_path=actions_pinning.scan_path,
-    ),
-    CheckRegistration(
-        series=asyncio_loop_scope.SERIES,
-        discover=asyncio_loop_scope.discover,
-        scan_path=asyncio_loop_scope.scan_path,
-    ),
-    CheckRegistration(
-        series=bootstrap_drift.SERIES,
-        discover=bootstrap_drift.discover,
-        scan_path=bootstrap_drift.scan_path,
-    ),
-    CheckRegistration(
-        series=client_seam.SERIES,
-        discover=client_seam.discover,
-        scan_path=client_seam.scan_path,
-    ),
-    CheckRegistration(
-        series=client_lifecycle.SERIES,
-        discover=client_lifecycle.discover,
-        scan_path=client_lifecycle.scan_path,
-        scan_all=client_lifecycle.scan_all,
-    ),
-    CheckRegistration(
-        series=offload_cancel.SERIES,
-        discover=offload_cancel.discover,
-        scan_path=offload_cancel.scan_path,
-        scan_all=offload_cancel.scan_all,
-    ),
-    CheckRegistration(
-        series=persistence_seam.SERIES,
-        discover=persistence_seam.discover,
-        scan_path=persistence_seam.scan_path,
-    ),
-    CheckRegistration(
-        series=credential_seam.SERIES,
-        discover=credential_seam.discover,
-        scan_path=credential_seam.scan_path,
-        scan_all=credential_seam.scan_all,
-    ),
-    CheckRegistration(
-        series=download_retry.SERIES,
-        discover=download_retry.discover,
-        scan_path=download_retry.scan_path,
-    ),
-    CheckRegistration(
-        series=error_handling.SERIES,
-        discover=error_handling.discover,
-        scan_path=error_handling.scan_path,
-        # scan_all builds F005's preflight scope across files for E004.
-        scan_all=error_handling.scan_all,
-    ),
-    CheckRegistration(
-        series=error_seam.SERIES,
-        discover=error_seam.discover,
-        scan_path=error_seam.scan_path,
-    ),
-    CheckRegistration(
-        series=dependency_conformance.SERIES,
-        discover=dependency_conformance.discover,
-        scan_path=dependency_conformance.scan_path,
-        scan_all=dependency_conformance.scan_all,
-    ),
-    CheckRegistration(
-        series=optimizations.SERIES,
-        discover=optimizations.discover,
-        scan_path=optimizations.scan_path,
-    ),
-    CheckRegistration(
-        series=prescriptions.SERIES,
-        discover=prescriptions.discover,
-        scan_path=prescriptions.scan_path,
-        scan_all=prescriptions.scan_all,
-    ),
-    CheckRegistration(
-        series=gitignore_entries.SERIES,
-        discover=gitignore_entries.discover,
-        scan_path=gitignore_entries.scan_path,
-    ),
-    CheckRegistration(
-        series=orchestration.SERIES,
-        discover=orchestration.discover,
-        scan_path=orchestration.scan_path,
-        scan_all=orchestration.scan_all,
-    ),
-    CheckRegistration(
-        series=determinism.SERIES,
-        discover=determinism.discover,
-        scan_path=determinism.scan_path,
-    ),
-    CheckRegistration(
-        series=entrypoint.SERIES,
-        discover=entrypoint.discover,
-        scan_path=entrypoint.scan_path,
-    ),
-    CheckRegistration(
-        series=logging_checks.SERIES,
-        discover=logging_checks.discover,
-        scan_path=logging_checks.scan_path,
-        scan_all=logging_checks.scan_all,
-    ),
-    CheckRegistration(
-        series=integration_marking.SERIES,
-        discover=integration_marking.discover,
-        scan_path=integration_marking.scan_path,
-    ),
-    CheckRegistration(
-        series=test_quality.SERIES,
-        discover=test_quality.discover,
-        scan_path=test_quality.scan_path,
-    ),
-    CheckRegistration(
-        series=test_structure.SERIES,
-        discover=test_structure.discover,
-        scan_path=test_structure.scan_path,
-        scan_all=test_structure.scan_all,
-    ),
-    CheckRegistration(
-        series=coverage_config.SERIES,
-        discover=coverage_config.discover,
-        scan_path=coverage_config.scan_path,
-    ),
-    CheckRegistration(
-        series=integration_deselect.SERIES,
-        discover=integration_deselect.discover,
-        scan_path=integration_deselect.scan_path,
-    ),
-    CheckRegistration(
-        series=e2e_deployment_name.SERIES,
-        discover=e2e_deployment_name.discover,
-        scan_path=e2e_deployment_name.scan_path,
-    ),
-    CheckRegistration(
-        series=e2e_agent_spec.SERIES,
-        discover=e2e_agent_spec.discover,
-        scan_path=e2e_agent_spec.scan_path,
-    ),
-    CheckRegistration(
-        series=e2e_workflow_shape.SERIES,
-        discover=e2e_workflow_shape.discover,
-        scan_path=e2e_workflow_shape.scan_path,
-        scan_all=e2e_workflow_shape.scan_all,
-    ),
-    CheckRegistration(
-        series=e2e_generated_harness.SERIES,
-        discover=e2e_generated_harness.discover,
-        scan_path=e2e_generated_harness.scan_path,
-        scan_all=e2e_generated_harness.scan_all,
-    ),
-    CheckRegistration(
-        series=entrypoint_e2e_coverage.SERIES,
-        discover=entrypoint_e2e_coverage.discover,
-        scan_path=entrypoint_e2e_coverage.scan_path,
-        scan_all=entrypoint_e2e_coverage.scan_all,
-    ),
-    CheckRegistration(
-        series=e2e_system_app_base.SERIES,
-        discover=e2e_system_app_base.discover,
-        scan_path=e2e_system_app_base.scan_path,
-        scan_all=e2e_system_app_base.scan_all,
-    ),
-    CheckRegistration(
-        series=dockerfile_conformance.SERIES,
-        discover=dockerfile_conformance.discover,
-        scan_path=dockerfile_conformance.scan_path,
-    ),
-    CheckRegistration(
-        series=deprecation.SERIES,
-        discover=deprecation.discover,
-        scan_path=deprecation.scan_path,
-        scan_all=deprecation.scan_all,
-    ),
-    CheckRegistration(
-        series=entrypoint_alignment.SERIES,
-        discover=entrypoint_alignment.discover,
-        scan_path=entrypoint_alignment.scan_path,
-        scan_all=entrypoint_alignment.scan_all,
-    ),
-    CheckRegistration(
-        series=app_name_alignment.SERIES,
-        discover=app_name_alignment.discover,
-        scan_path=app_name_alignment.scan_path,
-        scan_all=app_name_alignment.scan_all,
-    ),
-    CheckRegistration(
-        series=preflight.SERIES,
-        discover=preflight.discover,
-        scan_path=preflight.scan_path,
-        scan_all=preflight.scan_all,
-    ),
-    CheckRegistration(
-        series=legacy_contract.SERIES,
-        discover=legacy_contract.discover,
-        scan_path=legacy_contract.scan_path,
-    ),
-    CheckRegistration(
-        series=generated_freshness.SERIES,
-        discover=generated_freshness.discover,
-        scan_path=generated_freshness.scan_path,
-        scan_all=generated_freshness.scan_all,
-    ),
-    CheckRegistration(
-        series=artifact_schema_declared.SERIES,
-        discover=artifact_schema_declared.discover,
-        scan_path=artifact_schema_declared.scan_path,
-        scan_all=artifact_schema_declared.scan_all,
-    ),
-    CheckRegistration(
-        series=artifact_schema_writer.SERIES,
-        discover=artifact_schema_writer.discover,
-        scan_path=artifact_schema_writer.scan_path,
-        scan_all=artifact_schema_writer.scan_all,
-    ),
-    CheckRegistration(
-        series=manifest_contract.SERIES,
-        discover=manifest_contract.discover,
-        scan_path=manifest_contract.scan_path,
-        scan_all=manifest_contract.scan_all,
-    ),
-    CheckRegistration(
-        series=manifest_app_name.SERIES,
-        discover=manifest_app_name.discover,
-        scan_path=manifest_app_name.scan_path,
-        scan_all=manifest_app_name.scan_all,
-    ),
-    CheckRegistration(
-        series=release_contract.SERIES,
-        discover=release_contract.discover,
-        scan_path=release_contract.scan_path,
-        scan_all=release_contract.scan_all,
-    ),
-    CheckRegistration(
-        series=dapr_objectstore.SERIES,
-        discover=dapr_objectstore.discover,
-        scan_path=dapr_objectstore.scan_path,
-        scan_all=dapr_objectstore.scan_all,
-    ),
-    CheckRegistration(
-        series=dapr_secretstore.SERIES,
-        discover=dapr_secretstore.discover,
-        scan_path=dapr_secretstore.scan_path,
-        scan_all=dapr_secretstore.scan_all,
-    ),
-    CheckRegistration(
-        series=sdr_checks.SERIES,
-        discover=sdr_checks.discover,
-        scan_path=sdr_checks.scan_path,
-        scan_all=sdr_checks.scan_all,
-    ),
-    CheckRegistration(
-        series=transform_templates.SERIES,
-        discover=transform_templates.discover,
-        scan_path=transform_templates.scan_path,
-    ),
-    CheckRegistration(
-        series=sdr_test_checks.SERIES,
-        discover=sdr_test_checks.discover,
-        scan_path=sdr_test_checks.scan_path,
-        scan_all=sdr_test_checks.scan_all,
-    ),
-    CheckRegistration(
-        series=dev_entrypoint.SERIES,
-        discover=dev_entrypoint.discover,
-        scan_path=dev_entrypoint.scan_path,
-    ),
-    CheckRegistration(
-        series=security.SERIES,
-        discover=security.discover,
-        scan_path=security.scan_path,
-    ),
-    CheckRegistration(
-        series=text_io_encoding.SERIES,
-        discover=text_io_encoding.discover,
-        scan_path=text_io_encoding.scan_path,
-    ),
-    CheckRegistration(
-        series=atomic_publish.SERIES,
-        discover=atomic_publish.discover,
-        scan_path=atomic_publish.scan_path,
-    ),
-    CheckRegistration(
-        series=retry_ladder.SERIES,
-        discover=retry_ladder.discover,
-        scan_path=retry_ladder.scan_path,
-    ),
+    CheckRegistration.from_module(module) for module in _CHECK_MODULES
 ]
 
-
-# Registry invariant: every registered checker's series must have rule
-# definitions in the catalog (so get_rule() resolves for each finding it emits).
 assert_registry_consistent(check_series=frozenset(c.series for c in _CHECKS))
 
 
@@ -654,8 +458,6 @@ def parse_rule_ids(raw: str) -> set[str]:
     the exact bug class ``--series L004`` used to cause (a series letter match
     against a full rule id selected zero checks and reported a clean repo).
     """
-    from conformance.suite.rules import CATALOG
-
     ids = {r.strip().upper() for r in raw.split(",") if r.strip()}
     if not ids:
         raise SystemExit("--rule was provided but contained no rule ids")
@@ -728,8 +530,6 @@ def _to_notification(failure: ParseFailure, *, gating: bool = True) -> Notificat
 
 def _checks_for_rules(rule_ids: set[str]) -> list[CheckRegistration]:
     """Return the registered checks that can emit any of *rule_ids*."""
-    from conformance.suite.rules.preflight import RULES as PREFLIGHT_RULES
-
     series = {rid[0] for rid in rule_ids}
     active = [c for c in _CHECKS if c.series in series]
     if rule_ids <= {rule.id for rule in PREFLIGHT_RULES}:
@@ -760,11 +560,7 @@ def _collect(
             continue
         paths = _drop_excluded(check.discover(root), root, excluded_prefixes)
         py_paths |= _python_files(paths)
-        if check.scan_all is not None:
-            all_findings.extend(check.scan_all(paths, root))
-        else:
-            for p in paths:
-                all_findings.extend(check.scan_path(p, root))
+        all_findings.extend(check.scan(paths, root))
 
     # --exclude also applies at the finding level: a check that discovers the
     # repo root (e.g. K029) reads files beneath it that _drop_excluded never
@@ -781,8 +577,6 @@ def _collect(
         and (series is None or rid[0] in series)
     }
     if "F015" in selected_rules:
-        from conformance.suite.checks.preflight._lifetime import scan_removed_config
-
         all_findings.extend(
             finding
             for finding in scan_removed_config(root)

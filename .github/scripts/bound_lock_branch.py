@@ -36,18 +36,11 @@ shape:
    ``[tool.uv.sources]`` (FND-4256), so there is no registry version for the
    bound to hold or move.
 
-3. **One commit, not three.** Each push to the branch re-fires the PR's entire
+3. **One commit, not two.** Each push to the branch re-fires the PR's entire
    required-check suite. Bounding every lock in a single commit costs one CI wave
    instead of one per file.
 
-4. **The npm lock is bounded too, by a different driver.** The lane rewrites a
-   third file, ``packages/conformance/conformance/package-lock.json``, and npm
-   can express none of the per-package retention ceilings the uv bound depends
-   on — so ``renovate_npm_lock_bounded`` gates the whole file instead: take the
-   bounded resolve, or restore the base branch's lock verbatim. FND-380. It rides
-   in the same commit for the same reason the two uv locks do.
-
-5. **A pyatlan move regenerates the table derived from it.** The conformance
+4. **A pyatlan move regenerates the table derived from it.** The conformance
    package commits ``relationship_directions.json``, built from the installed
    pyatlan's models and pinned to it by a drift test. A refresh that moves
    pyatlan without regenerating it is a red PR nobody on the lane can fix, so
@@ -83,7 +76,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-import renovate_npm_lock_bounded as npm_bounded
 import renovate_uv_lock_bounded as bounded
 
 COMMIT_MESSAGE = "chore(deps): bound the refreshed locks to the release-age window"
@@ -117,12 +109,6 @@ PROJECTS: tuple[Project, ...] = (
     Project(directory="packages/conformance", exempt=("pyatlan",)),
 )
 
-# The one npm project the refresh lane rewrites: dev-only devDependencies for the
-# remediation programs, never bundled in the published wheel. Its bound is a
-# different mechanism from the uv projects' (see renovate_npm_lock_bounded), so it
-# is declared separately rather than squeezed into Project.
-NPM_PROJECT = "packages/conformance/conformance"
-
 # The lock the relationship table is generated from. packages/conformance is the
 # project whose environment `gen-relationship-directions` runs in, so its lock —
 # not the root's — decides which pyatlan the table describes.
@@ -135,7 +121,6 @@ RELATIONSHIP_DIRECTIONS = (
 # commit. The workflow's artifact upload is pinned to this list by a drift test.
 OUTPUT_PATHS: tuple[str, ...] = (
     *(f"{p.directory}/uv.lock".removeprefix("./") for p in PROJECTS),
-    f"{NPM_PROJECT}/{npm_bounded.LOCKFILE}",
     RELATIONSHIP_DIRECTIONS,
 )
 
@@ -161,26 +146,6 @@ def bound_project(project: Project, window: str, baseline_ref: str, root: Path) 
     for name in project.hold:
         argv += ["--hold", name]
     return bounded.main(argv)
-
-
-def bound_npm(window: str, baseline_ref: str, root: Path) -> int:
-    """Run the npm driver over the one npm project. Returns its exit code.
-
-    Same window as the uv projects deliberately — see the driver's docstring for
-    what that leaves on the table against the org checker's own threshold, and why
-    closing that gap is the checker's change to make rather than a second window
-    here.
-    """
-    return npm_bounded.main(
-        [
-            "--window",
-            window,
-            "--baseline-ref",
-            baseline_ref,
-            "--project-dir",
-            str(root / NPM_PROJECT),
-        ]
-    )
 
 
 def pyatlan_version(lock_text: str) -> str | None:
@@ -344,15 +309,6 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return code
-
-    code = bound_npm(args.window, args.baseline_ref, root)
-    if code != 0:
-        print(
-            f"npm bound failed for {NPM_PROJECT!r}; committing nothing so the "
-            "unbounded locks cannot merge.",
-            file=sys.stderr,
-        )
-        return code
 
     if pyatlan_moved(args.baseline_ref, root):
         code = regenerate_relationship_directions(root)

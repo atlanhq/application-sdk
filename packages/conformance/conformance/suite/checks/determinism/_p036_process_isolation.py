@@ -35,7 +35,11 @@ from __future__ import annotations
 
 import ast
 
-from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.checks._ast_common import (
+    _IgnoreDirective,
+    leaf_name,
+    make_finding,
+)
 from conformance.suite.checks.orchestration._temporal_common import (
     collect_import_bindings,
 )
@@ -68,14 +72,6 @@ _PROCESS_PRIMITIVES = frozenset(
 _PROCESS_PRIMITIVE_NAMES = frozenset({"ProcessPoolExecutor"})
 
 
-def _callable_final_name(func: ast.expr) -> str | None:
-    if isinstance(func, ast.Attribute):
-        return func.attr
-    if isinstance(func, ast.Name):
-        return func.id
-    return None
-
-
 # The one file allowed to construct a process pool directly: this is where the
 # sanctioned run_fault_isolated() / run_best_effort() seam lives.
 _EXEMPT_SUFFIX = "_runtime/offload.py"
@@ -103,7 +99,7 @@ def check_p036(
             continue
         target = resolve_call_target(node.func, bindings)
         matched_by_target = target in _PROCESS_PRIMITIVES
-        final_name = _callable_final_name(node.func)
+        final_name = leaf_name(node.func)
         if matched_by_target or final_name in _PROCESS_PRIMITIVE_NAMES:
             display = target if matched_by_target else final_name
             findings.append(

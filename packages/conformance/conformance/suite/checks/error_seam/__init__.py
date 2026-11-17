@@ -39,8 +39,8 @@ import sys
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
-    EXCLUDE_DIRS,
     _parse_directives,
+    discover_with_tests,
     make_cli_main,
 )
 from conformance.suite.schema.findings import Finding
@@ -49,10 +49,6 @@ from ._catch_site import check_p043
 from ._private_error_import import check_p044
 
 SERIES = "P"
-
-# This series scans test files too (see module docstring), so the universal
-# ``tests``/``test`` directory exclusion is dropped from the discovery filter.
-_EXCLUDE_DIRS = EXCLUDE_DIRS - {"tests", "test"}
 
 __all__ = ["SERIES", "discover", "main", "scan_path", "scan_text"]
 
@@ -64,15 +60,7 @@ def discover(root: Path) -> list[Path]:
     the ``tests``/``test`` trees — a test that freezes a superseded exception
     shape into a fixture is exactly the case to catch.
     """
-    paths: list[Path] = []
-    for path in root.rglob("*.py"):
-        if set(path.parts) & _EXCLUDE_DIRS:
-            continue
-        rel_parts = path.relative_to(root).parts
-        if any(p.startswith(".") for p in rel_parts[:-1]):
-            continue
-        paths.append(path)
-    return sorted(paths)
+    return discover_with_tests(root)
 
 
 def scan_text(text: str, file: str) -> list[Finding]:

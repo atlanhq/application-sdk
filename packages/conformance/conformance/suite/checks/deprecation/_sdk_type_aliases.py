@@ -122,7 +122,7 @@ def build_sdk_type_aliases(sdk_root: Path) -> dict[str, TypeAliasDef]:
     A generic alias keeps its type parameters so a subscripted use
     (``BoundedDict[str, int]``) can substitute its arguments.
     """
-    from conformance.suite.checks.deprecation._contract_compat import (
+    from conformance.suite.checks.deprecation._contract_compat import (  # noqa: PLC0415 — circular: _contract_compat imports this module
         _AliasBudgetExceeded,
         _AliasExpander,
         collect_type_aliases,

@@ -225,6 +225,37 @@
           }
         }
       },
+      "modified_since": {
+        "type": "number",
+        "required": false,
+        "ui": {
+          "widget": "date",
+          "label": "Modified since",
+          "hidden": false,
+          "help": "Only extract assets modified on or after this date.",
+          "grid": 4,
+          "start": 1,
+          "min": -14,
+          "max": 0,
+          "default": 0
+        }
+      },
+      "mapping_file": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "fileUpload",
+          "label": "Mapping file",
+          "hidden": false,
+          "help": "Optional CSV that maps source owners to Atlan users.",
+          "placeholder": "Upload a CSV",
+          "grid": 8,
+          "accept": [
+            "text/csv"
+          ],
+          "fileMetadata": true
+        }
+      },
       "legacy_timeout": {
         "type": "number",
         "required": false,
@@ -330,6 +361,8 @@
           "lineage_depth",
           "table_prefix",
           "custom_attributes",
+          "modified_since",
+          "mapping_file",
           "legacy_timeout",
           "old_batch_mode"
         ]

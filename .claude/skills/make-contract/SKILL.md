@@ -160,7 +160,7 @@ pkl eval --project-dir contract -m . contract/app.pkl
   current directory, not next to the module, so from the app root a bare
   `pkl eval -m . contract/app.pkl` fails with "Cannot resolve dependency because
   there is no project found" on the `amends "@app-contract-toolkit/App.pkl"`
-  line (reproduced on the pinned pkl 0.32.2).
+  line (reproduced on the pinned pkl 0.33.0).
 - `-m .` sets the module output root to the app root so each output file lands at
   its natural path; running from inside `contract/` or with a different `-m`
   writes artifacts to the wrong tree.

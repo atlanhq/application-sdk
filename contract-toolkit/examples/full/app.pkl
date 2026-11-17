@@ -7,7 +7,7 @@
 ///   - credentialAuthOptions: JDBCUrlAuthOption with UrlPartMapping/UrlRef/UrlLiteral
 ///   - ConditionalFieldSpec: small field-level conditional credential input
 ///   - uiConfig: TextInput, BooleanInput, NumericInput, Radio, DropDown, SqlTree,
-///               conditional UIRule, CredentialInput, ConnectionCreator
+///               DateInput, FileUploader, conditional UIRule, CredentialInput, ConnectionCreator
 ///   - extraNodes: custom DAG node outside the typed pipeline
 ///   - notifications: explicit opt-in to the run-completion notification node
 ///   - marketplace metadata: docsUrl, shortDescription, longDescription, tags
@@ -290,6 +290,21 @@ uiConfig = new UIConfig {
             type = "json"
             formatOnBlur = true
           }
+        }
+        // DateInput → `int` (epoch seconds) in both `_input.py` and
+        // `_e2e_substitutions.py`; the substitution default is 0.
+        ["modified_since"] = new DateInput {
+          title = "Modified since"
+          helpText = "Only extract assets modified on or after this date."
+          width = 4
+        }
+        // FileUploader → `FileReference | None` in `_input.py` and
+        // `dict[str, Any] | None` (default None) in `_e2e_substitutions.py`.
+        ["mapping_file"] = new FileUploader {
+          title = "Mapping file"
+          helpText = "Optional CSV that maps source owners to Atlan users."
+          fileTypes { "text/csv" }
+          placeholderText = "Upload a CSV"
         }
         // lifecycle = "deprecated": generated Python field carries Field(deprecated=True).
         ["legacy_timeout"] = new NumericInput {

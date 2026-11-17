@@ -157,10 +157,6 @@ glob = "packages/api/**"
 cards = ["api-distribution", "build-config"]
 
 [[path]]
-glob = "packages/conformance/conformance/package*.json"
-cards = ["build-config"]
-
-[[path]]
 glob = "packages/conformance/conformance/renovate/**"
 cards = ["build-config"]
 

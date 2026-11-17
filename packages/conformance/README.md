@@ -25,6 +25,25 @@ uv run atlan-application-sdk-conformance programs-dir
 uv run atlan-application-sdk-conformance gen-rule-docs
 ```
 
+## SDK-derived data
+
+`conformance/data/` holds tables generated from SDK (and `pyatlan_v9`) source, baked into the wheel
+because the suite runs in consumer repos where that source is not available.
+Never hand-edit them: regenerate in the same PR as the SDK change, and each
+drift test under `tests/` fails until you do. Every generator takes `--check`.
+
+| Table | Command |
+|---|---|
+| `deprecated_symbols.json` | `gen-deprecations` |
+| `public_errors.json` | `gen-public-errors` |
+| `relationship_directions.json` | `gen-relationship-directions` |
+| `sdk_contract_fields.json` | `gen-sdk-contract-fields` |
+| `sdk_type_aliases.json` | `gen-sdk-type-aliases` |
+| `toolkit_baseline.json` | `gen-toolkit-baseline` |
+
+Run each as `uv run atlan-application-sdk-conformance <command>` from
+`packages/conformance/`.
+
 See [preflight conformance](conformance/docs/preflight-testing.md) for static checks, opt-in behavior scenarios, and their coverage limits, and the [F-series rule catalog](conformance/docs/rules/preflight.md) for the rules themselves.
 
 ## Grading a change instead of the repository (`--since`)

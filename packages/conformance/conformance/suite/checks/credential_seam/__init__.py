@@ -45,11 +45,7 @@ from conformance.suite.checks._ast_common import (
     discover,
     make_cli_main,
 )
-from conformance.suite.checks._version import (
-    locked_sdk_version,
-    parse_version,
-    version_reached,
-)
+from conformance.suite.checks._version import locked_sdk_reaches
 from conformance.suite.schema.findings import Finding
 
 from ._local_credential_routing import check_p053
@@ -69,11 +65,7 @@ def sdk_has_credential_seam(root: Path) -> bool:
     Fails closed — an unreadable version is not evidence the seam exists, and
     prescribing an import the app cannot make is a finding nobody can act on.
     """
-    locked = locked_sdk_version(root)
-    if locked is None:
-        return False
-    parsed = parse_version(locked)
-    return parsed is not None and version_reached(ROUTE_CREDENTIALS_SDK_FLOOR, parsed)
+    return locked_sdk_reaches(root, ROUTE_CREDENTIALS_SDK_FLOOR)
 
 
 def scan_text(text: str, file: str) -> list[Finding]:
