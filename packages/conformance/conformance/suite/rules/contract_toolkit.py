@@ -406,9 +406,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K004",
         canonical_reference=(
-            "atlan-metabase-app app/generated/ — atlan.yaml at the repo root plus "
-            "_input.py and manifest.json in app/generated/, the three outputs K004 "
-            "checks. A contract/app.pkl with any of those missing means the repo's own "
+            "atlan-metabase-app atlan.yaml at the repo root plus "
+            "app/generated/_input.py and app/generated/manifest.json, the three "
+            "outputs K004 checks. A contract/app.pkl with any of those missing means the repo's own "
             "generate task has not run since the contract last changed."
         ),
         fix_locus=FixLocus.CONTRACT,

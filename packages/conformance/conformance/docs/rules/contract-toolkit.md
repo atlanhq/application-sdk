@@ -270,10 +270,10 @@ set, so the remedy could never produce one.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/generated/ — atlan.yaml at the repo root plus _input.py and
-  manifest.json in app/generated/, the three outputs K004 checks. A contract/app.pkl
-  with any of those missing means the repo's own generate task has not run since the
-  contract last changed.
+- **Compliant example:** atlan-metabase-app atlan.yaml at the repo root plus app/generated/_input.py and
+  app/generated/manifest.json, the three outputs K004 checks. A contract/app.pkl with
+  any of those missing means the repo's own generate task has not run since the contract
+  last changed.
 - **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 The app defines `contract/app.pkl` but one or more of the artifacts `pkl eval` is

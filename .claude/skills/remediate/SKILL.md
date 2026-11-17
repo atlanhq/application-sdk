@@ -364,7 +364,11 @@ impact analysis and verification*):
 
 1. **Read** the whole file the finding's `canonical_reference` names, grep that
    reference app for the same pattern, and mirror it — never invent an API,
-   kwarg or config key the reference app does not use.
+   kwarg or config key the reference app does not use. If the file or the
+   function it names is gone from the checkout, the reference is stale: record
+   the finding as residue naming the rule and the missing path or symbol, and
+   do not mirror from a guess. `canonical-reference-check.yaml` catches the
+   same drift nightly.
 2. **Analyse the impact** across the whole repo before applying: callers and
    importers, tests that pin the old behaviour, the contract and generated
    tree, `pyproject.toml`/`uv.lock`, `.env.example` and docs. Fold every

@@ -628,9 +628,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E009",
         canonical_reference=(
-            "atlan-metabase-app app/credentials.py — `build_credential_ref` binds the "
-            "routing error, logs it, and then takes the inline-credentials path. A bound "
-            "name that is never read is the tell that the handler is a placeholder."
+            "atlan-metabase-app app/handler.py — `_authentication_check` binds the "
+            "exception, logs it at DEBUG through `sanitize_cause_repr`, and only then "
+            "assigns `check` from `_failed_check`, which carries the failure out as a "
+            "typed row. A bound name that is never read is the tell that the handler is "
+            "a placeholder."
         ),
         scope=RuleScope.BOTH,
         name="ExceptBlockOnlyAssigns",

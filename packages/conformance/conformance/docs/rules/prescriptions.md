@@ -1915,10 +1915,11 @@ for a table-format connector in fleet testing).
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/credentials.py — `build_credential_ref` routes through
-  `CredentialRef.resolve`, which covers direct (credential_guid) and agent (agent_json)
-  modes from one call. Resolving by credential_guid alone works in direct mode and
-  silently ignores agent_json in SDR mode.
+- **Compliant example:** atlan-metabase-app app/connector.py — `extract_metadata` calls the SDK's
+  `route_credentials(input)` once, which goes through `CredentialRef.resolve` and so
+  covers direct (credential_guid) and agent (agent_json) modes from one call. Resolving
+  by credential_guid alone works in direct mode and silently ignores agent_json in SDR
+  mode.
 - **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, credential resolution
@@ -2591,9 +2592,9 @@ takes someone to notice.
 
 - **Compliant example:** atlan-openapi-app app/connector.py — `_extract_spec_async(spec_url,
   connection_qualified_name, ...)` passes the value straight through to
-  `build_api_spec_qn` and on to `APISpec.creator()`; it never splits or parses it. The
-  SDK warns and proceeds on a malformed value; an app that parses and raises turns a
-  recoverable run into a failed one.
+  app/asset_mapper.py `build_api_spec_qn` and on to `APISpec.creator()`; it never splits
+  or parses it. The SDK warns and proceeds on a malformed value; an app that parses and
+  raises turns a recoverable run into a failed one.
 - **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 A function takes a `connection_qualified_name`, calls `.split(...)` on a value derived
@@ -2852,10 +2853,10 @@ never exercise (an agent-mode run, an inline pair with no value).
   `AppContext.resolve_credential_raw_or_inline(ref, inline)` reads it on the task side.
 - **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 - **Interacts with:** P037 (SdrAgentJsonNotConsumed) predates this rule and names `CredentialRef.resolve` as
-  its agent-aware fix, citing a hand-rolled `build_credential_ref` as its reference. On
-  an SDK below 3.40.0 that is still the right fix and this rule is silent; from 3.40.0
-  this rule flags that call and P037 also accepts `route_credentials` as agent-aware, so
-  migrating onto the seam clears both rather than trading one finding for the other.
+  its agent-aware fix. On an SDK below 3.40.0 that is still the right fix and this rule
+  is silent; from 3.40.0 this rule flags that call and P037 also accepts
+  `route_credentials` as agent-aware, so migrating onto the seam clears both rather than
+  trading one finding for the other.
 
 App code decides how a workflow input's credential channels become a credential — or
 declares its own copy of the types that carry the result — instead of using the SDK's

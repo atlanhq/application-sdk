@@ -1,0 +1,69 @@
+name: Canonical reference check
+
+# Every conformance rule's `canonical_reference` names a file (and often a
+# function) in atlan-openapi-app, atlan-mysql-app or atlan-metabase-app — the
+# file a remediation agent mirrors a fix from. Nothing else in this repo can
+# see those apps, so a refactor there silently leaves the reference pointing at
+# code that no longer exists (FND-4665). This checks out the three apps' main
+# and fails if any cited path, line span or backticked symbol is gone.
+#
+# Runs nightly from schedule.yaml (the apps change without touching this repo),
+# on demand, and on a PR that edits a rule or the verifier itself. Not a
+# required check: a red run means a reference app moved and the citing rule's
+# `canonical_reference` needs re-pointing, not that the PR is wrong.
+#
+# All three apps are public, so the default token reads them; checkout keeps
+# no credentials, and the job has read-only contents permission.
+
+on:
+  workflow_call: {}
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - packages/conformance/conformance/suite/rules/**
+      - packages/conformance/conformance/tools/verify_canonical_references.py
+      - .github/workflows/canonical-reference-check.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify canonical references
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/atlan-openapi-app
+          path: .refs/atlan-openapi-app
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/atlan-mysql-app
+          path: .refs/atlan-mysql-app
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/atlan-metabase-app
+          path: .refs/atlan-metabase-app
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+
+      - name: Verify every cited path, line span and symbol exists
+        working-directory: packages/conformance
+        run: |
+          uv run --frozen python -m conformance.tools.verify_canonical_references \
+            --sdk-root "$GITHUB_WORKSPACE" \
+            --app "atlan-openapi-app=$GITHUB_WORKSPACE/.refs/atlan-openapi-app" \
+            --app "atlan-mysql-app=$GITHUB_WORKSPACE/.refs/atlan-mysql-app" \
+            --app "atlan-metabase-app=$GITHUB_WORKSPACE/.refs/atlan-metabase-app"

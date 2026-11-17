@@ -33,10 +33,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="S001",
         canonical_reference=(
-            "atlan-metabase-app app/credentials.py — credentials arrive as a "
-            "`CredentialRef` built by `build_credential_ref`, or as an inline dict, and "
-            'the typed `MetabaseCredential` defaults `password` to "". No string literal '
-            "is assigned to a credential-named variable in any shipped app/ module of "
+            "atlan-metabase-app app/credentials.py — the typed `MetabaseCredential` "
+            'defaults `password` to "", and its values arrive at runtime: '
+            "app/connector.py `extract_metadata` routes the input through the SDK's "
+            "`route_credentials` into a credential ref or an inline dict. No string "
+            "literal is assigned to a credential-named variable in any shipped app/ module of "
             "the three reference apps."
         ),
         scope=RuleScope.BOTH,
@@ -99,11 +100,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="S002",
         canonical_reference=(
-            "atlan-metabase-app app/credentials.py — `build_credential_ref` routes the "
-            "input to a `CredentialRef` through the SDK's `CredentialRef.resolve` "
-            "(`credential_guid` or agent `agent_json`), and app/connector.py "
-            "`_build_client` fetches the secret with `self.context.resolve_credential_raw` "
-            "and parses it into the typed MetabaseCredential the API client consumes. No "
+            "atlan-metabase-app app/connector.py — `extract_metadata` routes the input "
+            "to a `CredentialRef` through the SDK's `route_credentials` (`credential_guid` "
+            "or agent `agent_json`), and `_build_client` fetches the secret with "
+            "`self.context.resolve_credential_raw_or_inline` and hands it to "
+            "app/credentials.py `parse_metabase_credentials` for the typed "
+            "MetabaseCredential the API client consumes. No "
             "credential-named environment variable is read in either module — resolution "
             "through the seam is what correct looks like, not a justified read."
         ),

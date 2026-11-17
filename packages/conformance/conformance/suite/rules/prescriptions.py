@@ -906,8 +906,9 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P058",
-        # Pinned by tests/test_raw_dict_entity.py::test_silent_on_canonical_reference,
-        # which scans verbatim copies of both cited files (tests/fixtures/p058_openapi/).
+        # The cited files are checked against a live checkout by
+        # conformance.tools.verify_canonical_references; their shape is pinned by
+        # tests/test_raw_dict_entity.py::test_silent_on_canonical_reference_shape.
         canonical_reference=(
             "atlan-openapi-app app/asset_mapper.py — every mapper builds its "
             "entity with a `pyatlan_v9.model.assets` creator and "

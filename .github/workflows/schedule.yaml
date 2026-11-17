@@ -33,6 +33,13 @@ jobs:
           days-before-stale: 60
           debug-only: 'true'
 
+  # Nightly: every rule's canonical_reference still names a path and symbol
+  # that exist on the three reference apps' main (FND-4665).
+  canonical-references:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/canonical-reference-check.yaml
+
   # Nightly smoke of the opt-in storage load suite (tests/load). Same
   # scenarios as `poe load-test-storage`, at 64 MiB instead of 1 GiB: the
   # smallest size that still exercises the multi-chunk resume path, so the
