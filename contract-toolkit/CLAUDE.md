@@ -71,7 +71,7 @@ demonstrates distinct feature surface, verified by `tests/*.pkl`.
   configmap per entrypoint, including a bare (wrapper-less) one; hoisted and deduped.
 - `deploy`: single-pool migration example — KEDA, resources, env, pool-level `overrides`; shows v0.16.x → v0.17.0 migration path.
 - `pools`: `pools` map (preferred) — named hot/cold worker pools with per-pool `cooldownPeriod` and resources.
-- `system-app`: `type = "system"` — no `entrypoints` block or card, no credential config, no `uiConfig`; typed `inputs` render `_input.py` with no manifest, and `contract/generated/input.pkl`, synced into the toolkit as `src/system/<name>.pkl` for callers.
+- `system-app`: `type = "system"` — no `entrypoints` block or card, no credential config, no `uiConfig`; typed `inputs` render `_input.py` with no manifest, and `contract/generated/input.pkl`, the caller node (its planned toolkit home, `src/system/<name>.pkl`, does not exist yet).
 - `system-bundle`: `type = "system"` with two UI-less system sub-contracts; each renders an importable `app/generated/<ep_snake>/`, `contract/generated/<ep>/input.pkl`, and a `SystemAppE2ETest` e2e base.
 - `system-triggers`: `type = "system"` bundle whose entrypoints declare `schedules` / `events`; `atlan.yaml` renders an `entrypoints` block with `marketplace_card: false` so Local Marketplace reconciles the triggers.
 - `connection-ref`: `ConnectionRefInput` widget, `pipeline.publish = null`.

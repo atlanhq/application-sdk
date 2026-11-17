@@ -587,10 +587,12 @@ inputContractClassName: InputsPkg.ClassName =
 /// Where the generated caller node is written, relative to the repo root.
 ///
 /// A system app with `inputs` renders the Pkl class its callers add to their
-/// `extraNodes`, with one typed property per input. The file is synced into
-/// the toolkit as `src/system/<name>.pkl`, so every connector (internal,
-/// public or partner-built) imports it through the toolkit dependency it
-/// already has:
+/// `extraNodes`, with one typed property per input. Its planned home is the
+/// toolkit, as `src/system/<name>.pkl`, so every connector (internal, public
+/// or partner-built) could import it through the toolkit dependency it
+/// already has. That directory and the sync that would fill it do not exist
+/// yet: no published toolkit version contains a `system/` module, so the
+/// import below is the intended shape, not one that resolves today:
 ///
 /// ```pkl
 /// import "@app-contract-toolkit/system/popularity.pkl" as Popularity
@@ -599,10 +601,10 @@ inputContractClassName: InputsPkg.ClassName =
 inputContractPath: String = "contract/generated/input.pkl"
 
 /// How the generated caller node imports the toolkit. The default,
-/// `../App.pkl`, resolves from the file's synced home in the toolkit,
-/// `src/system/<name>.pkl`. The copy left in the app's own repo is only the
-/// sync source and is not evaluated there. Only a contract that evaluates the
-/// file in place (as the toolkit's own example does) sets this.
+/// `../App.pkl`, would resolve from the file's planned home in the toolkit,
+/// `src/system/<name>.pkl`, which does not exist yet. The copy in the app's
+/// own repo is not evaluated there. Only a contract that evaluates the file in
+/// place (as the toolkit's own example does) sets this.
 inputContractToolkitImport: String = "../App.pkl"
 
 /// (Set by a bundle root) The `appName` the caller node defaults to. A
