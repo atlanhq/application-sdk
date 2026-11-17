@@ -59,6 +59,7 @@ from conformance.suite.checks._ast_common import (
     discover_tree,
     make_cli_main,
     make_finding,
+    make_scan_path,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -183,17 +184,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     return findings
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single test file for T017 findings."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 main = make_cli_main(

@@ -31,10 +31,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
-    SDK_APP_BASE_NAMES,
     _IgnoreDirective,
     _parse_directives,
     pascal_to_kebab,
+    sdk_app_import_aliases,
 )
 
 _SDK_PREFIX = "application_sdk"
@@ -55,20 +55,6 @@ def _sdk_entrypoint_aliases(tree: ast.Module) -> frozenset[str]:
         if module == _SDK_PREFIX or module.startswith(_SDK_PREFIX + "."):
             for alias in node.names:
                 if alias.name == "entrypoint":
-                    bound.add(alias.asname or alias.name)
-    return frozenset(bound)
-
-
-def _sdk_app_aliases(tree: ast.Module) -> frozenset[str]:
-    """Return local names bound to an SDK ``App``-family base in this module."""
-    bound: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom) or node.level > 0:
-            continue
-        module = node.module or ""
-        if module == _SDK_PREFIX or module.startswith(_SDK_PREFIX + "."):
-            for alias in node.names:
-                if alias.name in SDK_APP_BASE_NAMES:
                     bound.add(alias.asname or alias.name)
     return frozenset(bound)
 
@@ -285,7 +271,7 @@ def scan_file_for_entrypoints(
     imports (import-provenance guard).
     """
     ep_aliases = _sdk_entrypoint_aliases(tree)
-    app_aliases = _sdk_app_aliases(tree)
+    app_aliases = sdk_app_import_aliases(tree)
 
     if not ep_aliases and not app_aliases:
         return  # No SDK imports in this file — skip entirely.

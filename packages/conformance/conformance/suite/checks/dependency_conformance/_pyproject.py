@@ -6,8 +6,9 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
+    iter_strings,
     parse_toml_suppressions,
-    safe_read_text,
+    read_source,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -37,7 +38,6 @@ from ._common import (
     _is_self_check,
     _iter_dep_entries,
     _iter_dependency_group_entries,
-    _iter_strings,
     _line_of,
     _make_finding,
     _normalise_name,
@@ -240,7 +240,7 @@ def scan_text(
     if tasks is not None and any(
         _REMOTE_COMPONENT_FETCH_RE.search(s)
         for task_def in tasks.values()
-        for s in _iter_strings(task_def)
+        for s in iter_strings(task_def)
     ):
         for ln, line in enumerate(text.splitlines(), start=1):
             if not _REMOTE_COMPONENT_FETCH_RE.search(line):
@@ -459,16 +459,13 @@ def scan_path(
     test_imported_packages: Iterable[str] | None = None,
 ) -> list[Finding]:
     """Scan a single pyproject.toml on disk."""
-    text = safe_read_text(path)
-    if text is None:
+    source = read_source(path, root)
+    if source is None:
         return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
+    text, uri = source
     return scan_text(
         text,
-        str(rel),
+        uri,
         sdk_managed_packages=sdk_managed_packages,
         sdk_published_extras=sdk_published_extras,
         test_imported_packages=test_imported_packages,

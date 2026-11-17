@@ -858,23 +858,6 @@ def _poe_tasks(data: Mapping[str, Any]) -> Mapping[str, Any] | None:
     return tasks if isinstance(tasks, dict) else None
 
 
-def _iter_strings(value: Any) -> Iterator[str]:
-    """Recursively yield every string leaf under a poe task definition.
-
-    A task may be a bare string, a ``{shell = "..."}``/``{cmd = "..."}``/
-    ``{interpreter = "python", shell = "..."}`` table, or a sequence-task list
-    of steps — this walks all of those shapes uniformly.
-    """
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for v in value.values():
-            yield from _iter_strings(v)
-    elif isinstance(value, list):
-        for v in value:
-            yield from _iter_strings(v)
-
-
 def _is_self_check(name: str | None) -> bool:
     """Return True for the SDK and its sibling packages (exempt from D-series).
 

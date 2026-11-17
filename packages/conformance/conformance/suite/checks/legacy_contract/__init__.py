@@ -24,37 +24,22 @@ Currently implemented:
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
-from conformance.suite.checks._ast_common import TOOL_VERSION, make_cli_main
+from conformance.suite.checks._ast_common import (
+    TOOL_VERSION,
+    make_cli_main,
+    make_scan_path,
+)
 from conformance.suite.schema.findings import Finding
 
 from ._scan import discover, scan_text
 
 SERIES = "K"
 
-__all__ = ["SERIES", "discover", "main", "scan_path"]
+__all__ = ["SERIES", "discover", "main", "scan_path", "Finding"]
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan one ``contract/**/*.pkl`` file and return K-series findings.
-
-    Parameters
-    ----------
-    path:
-        Absolute path to the ``.pkl`` file to scan.
-    root:
-        Repo root — used for computing the repo-relative URI in findings.
-    """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 main = make_cli_main(

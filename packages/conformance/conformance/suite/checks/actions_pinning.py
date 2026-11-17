@@ -10,7 +10,7 @@ from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     make_cli_main,
-    safe_read_text,
+    make_scan_path,
     strip_yaml_comment,
 )
 from conformance.suite.schema.findings import Finding
@@ -95,16 +95,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     return findings
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single workflow file, producing repo-root-relative URIs."""
-    text = safe_read_text(path)
-    if text is None:
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 def discover(root: Path) -> list[Path]:

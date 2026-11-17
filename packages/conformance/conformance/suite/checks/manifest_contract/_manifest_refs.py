@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from conformance.suite.checks._ast_common import iter_strings
+
 
 def manifest_paths_for_contract(root: Path, contract) -> list[Path]:  # noqa: ANN001
     """Return the ``manifest.json`` paths implied by the P016 contract-scan mode."""
@@ -69,18 +71,6 @@ class ManifestDag:
                 yield ref
 
 
-def _iter_strings(value: Any) -> Iterator[str]:
-    """Recursively yield every string leaf inside a JSON value (dict/list/str)."""
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for v in value.values():
-            yield from _iter_strings(v)
-    elif isinstance(value, list):
-        for v in value:
-            yield from _iter_strings(v)
-
-
 def _extract_refs(dag: dict[str, Any]) -> list[ManifestRef]:
     refs: list[ManifestRef] = []
     for node_data in dag.values():
@@ -92,7 +82,7 @@ def _extract_refs(dag: dict[str, Any]) -> list[ManifestRef]:
         args = inputs.get("args")
         if args is None:
             continue
-        for s in _iter_strings(args):
+        for s in iter_strings(args):
             m = _REF_RE.match(s)
             if m:
                 refs.append(ManifestRef(node=m.group("node"), field=m.group("field")))

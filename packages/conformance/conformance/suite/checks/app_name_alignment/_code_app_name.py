@@ -41,34 +41,13 @@ import ast
 from dataclasses import dataclass, field
 
 from conformance.suite.checks._ast_common import (
-    SDK_APP_BASE_NAMES,
     pascal_to_kebab,
+    sdk_app_import_aliases,
 )
-
-_SDK_PREFIX = "application_sdk"
-
 
 # ---------------------------------------------------------------------------
 # Import-provenance helper
 # ---------------------------------------------------------------------------
-
-
-def _sdk_app_aliases(tree: ast.Module) -> frozenset[str]:
-    """Return local names bound to SDK App-family base classes in this module.
-
-    Tracks any ``from application_sdk.<sub>... import <SDKBase> [as alias]``
-    where ``<SDKBase>`` is in :data:`~conformance.suite.checks._ast_common.SDK_APP_BASE_NAMES`.
-    """
-    bound: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom) or node.level > 0:
-            continue
-        module = node.module or ""
-        if module == _SDK_PREFIX or module.startswith(_SDK_PREFIX + "."):
-            for alias in node.names:
-                if alias.name in SDK_APP_BASE_NAMES:
-                    bound.add(alias.asname or alias.name)
-    return frozenset(bound)
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +293,7 @@ def scan_file(
     Files without any SDK app-family import contribute no records (import-
     provenance guard: avoids false positives from coincidentally-named bases).
     """
-    sdk_aliases = _sdk_app_aliases(tree)
+    sdk_aliases = sdk_app_import_aliases(tree)
     if not sdk_aliases:
         return  # No SDK app-family import in this file — skip.
 

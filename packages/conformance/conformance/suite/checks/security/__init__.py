@@ -41,7 +41,11 @@ import ast
 import sys
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import _parse_directives, make_cli_main
+from conformance.suite.checks._ast_common import (
+    _parse_directives,
+    make_cli_main,
+    make_scan_path,
+)
 from conformance.suite.checks._ast_common import discover as _shared_discover
 from conformance.suite.schema.findings import Finding
 
@@ -117,17 +121,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     return s001._findings + check_s002(tree, file, directives)
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file for S001 + S002 findings."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 main = make_cli_main(
