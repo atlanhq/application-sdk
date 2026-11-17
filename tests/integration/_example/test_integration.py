@@ -32,6 +32,16 @@ from application_sdk.testing.integration import BaseIntegrationTest
 
 from .scenarios import scenarios
 
+# BaseIntegrationTest.setup_class loads .env, but the skip below is decided at
+# import, before that runs. Load it here too (same call, same no-override
+# semantics) so an app configured only in .env is not skipped.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(override=False)
+except ImportError:  # python-dotenv not installed; env vars come from the environment
+    pass
+
 # Skip, visibly and with a reason, until the app under test is configured.
 # Without this guard a bare ``pytest`` from the repo root would run the class
 # and fail its server health check on every machine that has no app running.
