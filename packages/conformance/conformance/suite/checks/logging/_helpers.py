@@ -8,7 +8,14 @@ from typing import Literal, TypeGuard
 
 from .._ast_common._exc_info import has_exc_info_traceback
 from .._ast_common._names import leaf_name
-from ._constants import ADAPTER_MARKERS, LOG_METHODS, LOGGER_NAMES
+from ._constants import (
+    ADAPTER_MARKERS,
+    CREDENTIAL_LABEL_SUFFIXES,
+    CREDENTIAL_VALUE_SUFFIXES,
+    LOG_METHODS,
+    LOGGER_NAMES,
+    RESOURCE_TOKEN_AUTH_QUALIFIERS,
+)
 
 Framework = Literal["stdlib", "structlog", "loguru", "unknown"]
 
@@ -807,8 +814,6 @@ def _is_credential_value_name(name: str) -> bool:
     does NOT also end with a label suffix (``_name``, ``_type``, ``_id``, …)
     that indicates the variable holds a label rather than the secret itself.
     """
-    from ._constants import CREDENTIAL_LABEL_SUFFIXES, CREDENTIAL_VALUE_SUFFIXES
-
     lower = name.lower()
     # If the name ends with a label suffix, it is a label, not a value.
     if any(lower.endswith(suf) for suf in CREDENTIAL_LABEL_SUFFIXES):
@@ -826,8 +831,6 @@ def is_resource_token_name(name: str) -> bool:
     exemption by itself.  A bare ``token`` and any auth-qualified token
     (``access_token``, ``refresh_token``, ``github_token``, …) never qualify.
     """
-    from ._constants import RESOURCE_TOKEN_AUTH_QUALIFIERS
-
     lower = name.lower().lstrip("_")
     if not lower.endswith("_token"):
         return False

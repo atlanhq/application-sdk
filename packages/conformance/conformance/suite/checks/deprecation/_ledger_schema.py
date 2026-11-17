@@ -19,6 +19,7 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from conformance import __version__
 from conformance.suite.schema.disposition import RuleScope
 
 _SDK_LEDGER_NAME = "contract_schema.lock.json"
@@ -46,8 +47,6 @@ def regen_command(scope: RuleScope | None = None) -> str:
     ``uv run`` is the only correct invocation — a published-wheel pin there would
     regenerate against whatever was last released, not the working tree.
     """
-    from conformance import __version__
-
     if scope is RuleScope.SDK:
         return "uv run atlan-application-sdk-conformance gen-contract-ledger"
     return f"uvx atlan-application-sdk-conformance=={__version__} gen-contract-ledger"
@@ -159,12 +158,12 @@ def load_ledger(
     except (FileNotFoundError, UnicodeDecodeError):
         return ContractLedger(version=LEDGER_VERSION, fields=[])
     except OSError as exc:  # pragma: no cover
-        print(f"warning: could not read contract ledger: {exc}", file=sys.stderr)
+        print(f"warning: could not read contract ledger: {exc}", file=sys.stderr)  # noqa: T201 — stderr diagnostic; stdout carries the SARIF report
         return ContractLedger(version=LEDGER_VERSION, fields=[])
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as exc:
-        print(
+        print(  # noqa: T201 — stderr diagnostic; stdout carries the SARIF report
             f"warning: contract ledger is malformed JSON ({exc}); "
             "B005/B006 contract-compat checks are disabled until it is regenerated "
             f"(`{regen_command()}`).",
@@ -204,7 +203,7 @@ def load_sdk_ledger() -> ContractLedger:
     packaged = _ir.files("conformance").joinpath(*_LEDGER_RELPATH)
     source = _source_tree_sdk_ledger() or (packaged if packaged.is_file() else None)
     if source is None:
-        print(
+        print(  # noqa: T201 — stderr diagnostic; stdout carries the SARIF report
             "warning: this conformance package carries no SDK contract ledger "
             f"({'/'.join(_LEDGER_RELPATH)}); B005 cannot recognise SDK-retired "
             "contract fields until it is reinstalled from a complete build.",
@@ -221,7 +220,7 @@ def load_sdk_ledger() -> ContractLedger:
         TypeError,
         AttributeError,
     ) as exc:
-        print(
+        print(  # noqa: T201 — stderr diagnostic; stdout carries the SARIF report
             f"warning: the SDK contract ledger is unreadable ({exc!r}); B005 "
             "cannot recognise SDK-retired contract fields.",
             file=sys.stderr,

@@ -320,8 +320,8 @@ class RuleDefinition(BaseModel):
 
     def to_reporting_descriptor(self) -> ReportingDescriptor:  # type: ignore[name-defined]  # noqa: F821
         """Return the SARIF ``ReportingDescriptor`` wire form for this rule."""
-        from conformance.suite.schema.extensions import AtlanRuleProperties
-        from conformance.suite.schema.sarif import (
+        from conformance.suite.schema.extensions import AtlanRuleProperties  # noqa: PLC0415 — circular: extensions imports catalog
+        from conformance.suite.schema.sarif import (  # noqa: PLC0415 — circular: extensions imports catalog
             ReportingConfiguration,
             ReportingDescriptor,
         )

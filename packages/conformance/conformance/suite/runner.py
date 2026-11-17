@@ -84,7 +84,9 @@ from conformance.suite.checks._ast_common import (
     detect_scope,
     parse_failure,
 )
+from conformance.suite.checks.preflight._lifetime import scan_removed_config
 from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
+from conformance.suite.rules.preflight import RULES as PREFLIGHT_RULES
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 from conformance.suite.schema.findings import Finding, findings_to_report
 from conformance.suite.schema.sarif import (
@@ -451,8 +453,6 @@ def parse_rule_ids(raw: str) -> set[str]:
     the exact bug class ``--series L004`` used to cause (a series letter match
     against a full rule id selected zero checks and reported a clean repo).
     """
-    from conformance.suite.rules import CATALOG
-
     ids = {r.strip().upper() for r in raw.split(",") if r.strip()}
     if not ids:
         raise SystemExit("--rule was provided but contained no rule ids")
@@ -597,7 +597,6 @@ def main(argv: list[str] | None = None) -> int:
         rule_ids = parse_rule_ids(args.rule)
         requested = {rid[0] for rid in rule_ids}
         active = [c for c in _CHECKS if c.series in requested]
-        from conformance.suite.rules.preflight import RULES as PREFLIGHT_RULES
 
         if rule_ids <= {rule.id for rule in PREFLIGHT_RULES}:
             active = [c for c in active if c.scan_all is preflight.scan_all]
@@ -647,8 +646,6 @@ def main(argv: list[str] | None = None) -> int:
         and (not args.series or rid[0] in requested)
     }
     if "F015" in selected_rules:
-        from conformance.suite.checks.preflight._lifetime import scan_removed_config
-
         all_findings.extend(
             finding
             for finding in scan_removed_config(root)

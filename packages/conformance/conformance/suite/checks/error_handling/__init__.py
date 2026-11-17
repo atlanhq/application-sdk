@@ -131,7 +131,7 @@ def _comment_lines_of(text: str) -> frozenset[int]:
 
 def _preflight_lines_of(text: str, file: str, path: Path | None) -> frozenset[int]:
     """F005's preflight scope within this one file (no cross-file reach)."""
-    from ..preflight._common import preflight_scope_lines, registry_from_texts
+    from ..preflight._common import preflight_scope_lines, registry_from_texts  # noqa: PLC0415 — circular: the preflight package imports error_handling
 
     registry = registry_from_texts([(path or Path(file), file, text)])
     return preflight_scope_lines(registry).get(file, frozenset())
@@ -214,7 +214,7 @@ def _scan_all(paths: list[Path], root: Path) -> list[Finding]:
     # scan_path, not scan_text: E004 and E021 follow the repo's own imports,
     # which needs each file's path and the repo root. F005's preflight scope
     # follows helpers across files, so it is computed once over every path.
-    from ..preflight._common import build_registry, preflight_scope_lines
+    from ..preflight._common import build_registry, preflight_scope_lines  # noqa: PLC0415 — circular: the preflight package imports error_handling
 
     scope = preflight_scope_lines(build_registry(paths, root))
 

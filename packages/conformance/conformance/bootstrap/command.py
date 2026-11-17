@@ -36,6 +36,11 @@ from conformance.bootstrap.render import (
     SARIF_UPLOAD_WORKFLOW,
     render,
 )
+from conformance.suite.checks.deprecation._ledger_schema import (
+    load_ledger_baseline,
+    serialize,
+)
+from conformance.tools.generate_contract_ledger import build_ledger
 
 _PACKAGE_NAME = "atlan-application-sdk-conformance"
 
@@ -606,12 +611,6 @@ def _sync_contract_ledger(root: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
     """
     ledger_dest = root / "contract_schema.lock.json"
     if not ledger_dest.exists():
-        from conformance.suite.checks.deprecation._ledger_schema import (
-            load_ledger_baseline,
-            serialize,
-        )
-        from conformance.tools.generate_contract_ledger import build_ledger
-
         ledger = build_ledger(root, load_ledger_baseline(ledger_dest))
         ledger_dest.write_text(serialize(ledger), encoding="utf-8")
         print(f"scaffolded: {ledger_dest} ({len(ledger.fields)} fields)")

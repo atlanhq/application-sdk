@@ -189,12 +189,12 @@ def load_manifest(path: Path | None = None) -> Manifest:
     except (FileNotFoundError, UnicodeDecodeError):
         return Manifest(symbols=())
     except OSError as exc:  # pragma: no cover - unusual IO failure
-        print(f"warning: could not read deprecation manifest: {exc}", file=sys.stderr)
+        print(f"warning: could not read deprecation manifest: {exc}", file=sys.stderr)  # noqa: T201 — stderr diagnostic; stdout carries the SARIF report
         return Manifest(symbols=())
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as exc:
-        print(
+        print(  # noqa: T201 — stderr diagnostic; stdout carries the SARIF report
             f"warning: deprecation manifest is malformed JSON ({exc}); "
             "B001 deprecated-symbol detection is disabled until it is regenerated "
             "(`atlan-application-sdk-conformance gen-deprecations`).",

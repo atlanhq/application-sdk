@@ -156,7 +156,7 @@ _UI_CONFIG_RE = re.compile(r"(?m)^\s*uiConfig\b(?!\s*=\s*null\b)")
 
 
 def _top_level_skeleton(text: str) -> str:
-    """*text* with comments and every ``{ … }`` body blanked out.
+    r"""*text* with comments and every ``{ … }`` body blanked out.
 
     Pkl allows a top-level property at any indentation, so column position
     cannot tell ``type = "system"`` at module level from one nested in an
