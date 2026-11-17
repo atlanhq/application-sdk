@@ -238,6 +238,14 @@ def test_the_builtins_carry_every_format_the_adr_names() -> None:
     assert {v.artifact_format for v in builtin_format_validators()} == ARTIFACT_FORMATS
 
 
+def test_the_format_constants_spell_the_format_vocabulary() -> None:
+    """``ARTIFACT_FORMATS`` is read off the ``ArtifactFormat`` Literal, and the
+    ``FORMAT_*`` constants spell its members a second time. A member added to one
+    and not the other would leave a format with no constant to dispatch on.
+    """
+    assert {FORMAT_NDJSON, FORMAT_PARQUET} == ARTIFACT_FORMATS
+
+
 def test_a_format_with_no_builtin_validator_says_so_out_loud(tmp_path: Path) -> None:
     """The invariant outlives the gap it was first written for.
 

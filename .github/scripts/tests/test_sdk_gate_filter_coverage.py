@@ -15,7 +15,9 @@ the source rather than restated, so a new read is covered or fails here:
 * every ``contract-toolkit/examples/...`` path an SDK or conformance-package
   test builds must run that test's job;
 * every ``application_sdk`` module a generated toolkit example imports must
-  run the toolkit suite, whose ``test-sdk-import.py`` imports those examples.
+  run the toolkit suite, whose ``test-sdk-import.py`` imports those examples;
+* so must every ``application_sdk`` module ``test-sdk-import.py`` imports
+  itself to compare ``src/SdkNames.pkl`` with the SDK (FND-4934).
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ RENDER = (
     REPO_ROOT / "packages" / "conformance" / "conformance" / "bootstrap" / "render.py"
 )
 EXAMPLES = REPO_ROOT / "contract-toolkit" / "examples"
+SDK_IMPORT_TEST = REPO_ROOT / "contract-toolkit" / "scripts" / "test-sdk-import.py"
 
 # The path filters whose match runs each test job (the job `if:`s in
 # sdk-gate.yaml). conformance-suite-tests also runs on `sdk`.
@@ -288,21 +291,28 @@ def test_resolved_reads_are_still_read() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _sdk_modules_imported_by(py: Path) -> set[str]:
+    """``application_sdk`` modules ``py`` imports, at any depth (function bodies too)."""
+    modules: set[str] = set()
+    for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            names = [node.module]
+        elif isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        else:
+            continue
+        modules.update(
+            n
+            for n in names
+            if n == "application_sdk" or n.startswith("application_sdk.")
+        )
+    return modules
+
+
 def _example_sdk_modules() -> set[str]:
     modules: set[str] = set()
     for py in EXAMPLES.rglob("*.py"):
-        for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-                names = [node.module]
-            elif isinstance(node, ast.Import):
-                names = [a.name for a in node.names]
-            else:
-                continue
-            modules.update(
-                n
-                for n in names
-                if n == "application_sdk" or n.startswith("application_sdk.")
-            )
+        modules |= _sdk_modules_imported_by(py)
     return modules
 
 
@@ -326,4 +336,30 @@ def test_sdk_modules_imported_by_toolkit_examples_run_the_toolkit_suite() -> Non
         f"generated toolkit examples import {missing}, but no `toolkit` filter in "
         "sdk-gate.yaml matches the module, so a change there skips "
         "contract-toolkit/scripts/test-sdk-import.py on the PR. Add the path."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guard 4: SDK modules test-sdk-import.py compares SdkNames.pkl with
+# ---------------------------------------------------------------------------
+
+
+def test_sdk_modules_imported_by_the_sdk_import_test_run_the_toolkit_suite() -> None:
+    """``check_sdk_names`` reads SDK constants the examples never import.
+
+    The artifact vocabulary in ``application_sdk.validation.artifacts`` is one:
+    without a ``toolkit`` filter entry, a PR adding a type there merges with the
+    comparison against ``src/SdkNames.pkl`` never run.
+    """
+    modules = _sdk_modules_imported_by(SDK_IMPORT_TEST)
+    assert "application_sdk.validation.artifacts" in modules, sorted(modules)
+    missing = sorted(
+        f"{m} ({_module_file(m)})"
+        for m in modules
+        if not _covering(_module_file(m), TOOLKIT_TESTS)
+    )
+    assert not missing, (
+        f"contract-toolkit/scripts/test-sdk-import.py imports {missing}, but no "
+        "`toolkit` filter in sdk-gate.yaml matches the module, so a change there "
+        "skips the SdkNames.pkl comparison on the PR. Add the path."
     )

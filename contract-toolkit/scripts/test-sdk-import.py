@@ -17,11 +17,13 @@ Runs against the SDK in this repository. From the repo root::
 
 import ast
 import importlib.util
+import inspect
 import json
 import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -96,20 +98,18 @@ def test_e2e(path: Path) -> bool:
             return False
         cls = getattr(mod, matches[0])
         if path.stem == "_e2e_base":
-            # BaseE2ETest subclasses are not Pydantic models; verify required harness attrs.
-            for attr in (
-                "connector_short_name",
-                "argo_package_name",
-                "argo_template_name",
-            ):
-                if not hasattr(cls, attr):
-                    logger.error(
-                        "FAIL: %s — %s missing required attr '%s'",
-                        path,
-                        matches[0],
-                        attr,
-                    )
-                    return False
+            # BaseE2ETest subclasses are not Pydantic models. hasattr on the
+            # generated class is true by construction (it assigns the name), so
+            # check every name its body assigns against its SDK bases instead:
+            # a name the SDK renamed or dropped is a dead class attribute.
+            if dead := _dead_class_attrs(path, cls):
+                logger.error(
+                    "FAIL: %s — %s assigns %s, which no SDK base declares",
+                    path,
+                    matches[0],
+                    dead,
+                )
+                return False
             logger.info("  OK: %s (%s)", path, matches[0])
         else:
             if not hasattr(cls, "model_fields"):
@@ -121,6 +121,39 @@ def test_e2e(path: Path) -> bool:
     else:
         logger.info("  OK: %s", path)
     return True
+
+
+def _assigned_class_attrs(path: Path, class_name: str) -> list[str]:
+    """Names the body of ``class_name`` in ``path`` assigns, in source order."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            names: list[str] = []
+            for stmt in node.body:
+                if isinstance(stmt, ast.Assign):
+                    names += [t.id for t in stmt.targets if isinstance(t, ast.Name)]
+                elif isinstance(stmt, ast.AnnAssign) and isinstance(
+                    stmt.target, ast.Name
+                ):
+                    names.append(stmt.target.id)
+            return names
+    raise ValueError(f"{path}: class {class_name} not found")
+
+
+def _sdk_declared_attrs(cls: type) -> set[str]:
+    """Names declared (assigned or annotated) on ``cls``'s bases."""
+    declared: set[str] = set()
+    for base in cls.__mro__[1:]:
+        declared |= set(vars(base)) | set(inspect.get_annotations(base))
+    return declared
+
+
+def _dead_class_attrs(path: Path, cls: type) -> list[str]:
+    """Names the generated class assigns that none of its SDK bases declare."""
+    declared = _sdk_declared_attrs(cls)
+    return sorted(
+        n for n in _assigned_class_attrs(path, cls.__name__) if n not in declared
+    )
 
 
 def _generated_class(mod: object, suffix: str) -> type | None:
@@ -233,6 +266,22 @@ def _imported_class_names(path: Path) -> set[str]:
     return names
 
 
+class _SdkNames(TypedDict):
+    """``pkl eval -f json src/SdkNames.pkl``."""
+
+    inputFields: list[str]
+    extractionInputFields: list[str]
+    fieldMinSdk: dict[str, str]
+    inputModuleNames: list[str]
+    mustacheSubstitutionFields: list[str]
+    sqlMustacheSubstitutionFields: list[str]
+    e2eBaseAttributes: list[str]
+    e2eConnectionCategoryDefault: str
+    artifactFieldTypes: list[str]
+    artifactFieldTypesExtended: list[str]
+    artifactFormats: list[str]
+
+
 def _diff(label: str, pkl: set[str], sdk: set[str]) -> list[str]:
     errors = []
     if missing := sorted(sdk - pkl):
@@ -251,12 +300,6 @@ def check_sdk_names(input_files: list[Path]) -> list[str]:
     shadows the SDK's (losing its type and validators), or a nested class
     replaces an imported name.
     """
-    from application_sdk.contracts.base import Input
-    from application_sdk.templates.contracts import (
-        ExtractionInput,
-        TreeSelectionExtractionInput,
-    )
-
     result = subprocess.run(
         ["pkl", "eval", "-f", "json", str(SDK_NAMES_PKL)],
         capture_output=True,
@@ -265,7 +308,20 @@ def check_sdk_names(input_files: list[Path]) -> list[str]:
     )
     if result.returncode != 0:
         return [f"pkl eval {SDK_NAMES_PKL} failed: {result.stderr.strip()}"]
-    names = json.loads(result.stdout)
+    names: _SdkNames = json.loads(result.stdout)
+    errors = _check_input_names(names, input_files)
+    errors += _check_e2e_names(names)
+    errors += _check_artifact_names(names)
+    return errors
+
+
+def _check_input_names(names: _SdkNames, input_files: list[Path]) -> list[str]:
+    from application_sdk.contracts.base import Input
+    from application_sdk.templates.contracts import (
+        ExtractionInput,
+        TreeSelectionExtractionInput,
+    )
+
     extraction = set(names["extractionInputFields"])
     module_names = set(names["inputModuleNames"])
 
@@ -292,6 +348,77 @@ def check_sdk_names(input_files: list[Path]) -> list[str]:
                 f"inputModuleNames: {path.relative_to(REPO_ROOT)} imports {unlisted}, "
                 "which a nested ObjectField class of the same name would shadow"
             )
+    return errors
+
+
+def _check_e2e_names(names: _SdkNames) -> list[str]:
+    """The e2e names App.pkl emits into ``_e2e_substitutions.py`` / ``_e2e_base.py``.
+
+    A substitution field the SDK adds but the skip set lacks is redeclared in
+    every connector's generated subclass with the toolkit's inferred type and
+    default, shadowing the SDK's. A base attribute the SDK renames is assigned
+    to a name the harness never reads.
+    """
+    from application_sdk.testing.e2e import BaseE2ETest
+    from application_sdk.testing.e2e.substitutions import (
+        MustacheSubstitutions,
+        SQLMustacheSubstitutions,
+    )
+
+    errors = _diff(
+        "mustacheSubstitutionFields vs MustacheSubstitutions",
+        set(names["mustacheSubstitutionFields"]),
+        set(MustacheSubstitutions.model_fields),
+    )
+    errors += _diff(
+        "sqlMustacheSubstitutionFields vs SQLMustacheSubstitutions",
+        set(names["sqlMustacheSubstitutionFields"]),
+        set(SQLMustacheSubstitutions.model_fields),
+    )
+    declared = set(vars(BaseE2ETest)) | set(inspect.get_annotations(BaseE2ETest))
+    if undeclared := sorted(set(names["e2eBaseAttributes"]) - declared):
+        errors.append(
+            f"e2eBaseAttributes: SdkNames.pkl lists {undeclared}, "
+            "BaseE2ETest does not declare"
+        )
+    default = names["e2eConnectionCategoryDefault"]
+    if BaseE2ETest.connection_category != default:
+        errors.append(
+            f"e2eConnectionCategoryDefault: SdkNames.pkl says {default!r}, "
+            f"BaseE2ETest.connection_category defaults to "
+            f"{BaseE2ETest.connection_category!r}"
+        )
+    return errors
+
+
+def _check_artifact_names(names: _SdkNames) -> list[str]:
+    """The artifact vocabulary App.pkl's typealiases accept.
+
+    ``tests/artifact_schemas_test.pkl`` pins each typealias to its SdkNames.pkl
+    set; this pins the set to the SDK, so a value one side adds is refused by
+    the other at the toolkit's ``pkl eval`` or the SDK's validator.
+    """
+    from application_sdk.validation.artifacts import (
+        ARTIFACT_FIELD_TYPES,
+        ARTIFACT_FIELD_TYPES_EXTENDED,
+        ARTIFACT_FORMATS,
+    )
+
+    errors = _diff(
+        "artifactFieldTypes vs ARTIFACT_FIELD_TYPES",
+        set(names["artifactFieldTypes"]),
+        set(ARTIFACT_FIELD_TYPES),
+    )
+    errors += _diff(
+        "artifactFieldTypesExtended vs ARTIFACT_FIELD_TYPES_EXTENDED",
+        set(names["artifactFieldTypesExtended"]),
+        set(ARTIFACT_FIELD_TYPES_EXTENDED),
+    )
+    errors += _diff(
+        "artifactFormats vs ARTIFACT_FORMATS",
+        set(names["artifactFormats"]),
+        set(ARTIFACT_FORMATS),
+    )
     return errors
 
 
