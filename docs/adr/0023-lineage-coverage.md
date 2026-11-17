@@ -182,7 +182,10 @@ can restate an SDK reason under its code to keep its own wording (5 Tableau code
    `VALID` with a flag instead? Data point: on one tenant, 775 refs had 2 candidates (the same tables
    crawled through two connections); publish broke every Redshift tie (749) towards the newer
    connection. Neither the app's extract (no server host) nor the catalog (one connection has no
-   host) records enough to say whether that's right.
+   host) records enough to say whether that's right. The shared resolver, run locally on the same
+   refs and catalog, agrees with publish on 5,757 of 5,759 and 1,507 of 1,519 refs, but its
+   default tie rule (lexically first) picks a different candidate on all 775 ties. A lookup that
+   moves onto it without publish's newest-first rule would move those edges.
 3. `CACHE_MISS` means "lookup miss" under ARS. Rename it now, while the set is unreleased?
 4. Fold this into #2204, or open a new PR?
 5. Restating an SDK reason by subclassing it under the same code: the right shape, or should
