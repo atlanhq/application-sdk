@@ -132,7 +132,10 @@ async def test_interrupted_download_resumes_only_missing_ranges(local_store, tmp
     fetched: list[int] = []
 
     async def counting_get(st, key, **kw):
-        fetched.append(1)
+        # Count range GETs only: verification also GETs the producer's
+        # ``{key}.sha256`` digest sidecar (FND-306), which is not a chunk.
+        if (kw.get("options") or {}).get("range"):
+            fetched.append(1)
         return await real_get(st, key, **kw)
 
     with Stopwatch() as resume:

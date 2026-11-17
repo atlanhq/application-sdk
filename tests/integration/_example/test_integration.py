@@ -24,12 +24,27 @@ Prerequisites:
         pytest tests/integration/ -v -k "auth_valid"
 """
 
+import os
+
+import pytest
+
 from application_sdk.testing.integration import BaseIntegrationTest
 
 from .scenarios import scenarios
 
+# Skip, visibly and with a reason, until the app under test is configured.
+# Without this guard a bare ``pytest`` from the repo root would run the class
+# and fail its server health check on every machine that has no app running.
+pytestmark = pytest.mark.skipif(
+    not os.getenv("ATLAN_APPLICATION_NAME"),
+    reason="ATLAN_APPLICATION_NAME is not set: no app under test to call",
+)
 
-class ExampleIntegrationTest(BaseIntegrationTest):
+
+# The ``Test`` prefix is load-bearing: pytest only collects classes whose
+# name starts with ``Test`` (``python_classes``). A class named
+# ``ExampleIntegrationTest`` collects zero tests and passes silently.
+class TestExampleIntegration(BaseIntegrationTest):
     """Integration tests for the example connector.
 
     Just define scenarios - the framework handles everything:
