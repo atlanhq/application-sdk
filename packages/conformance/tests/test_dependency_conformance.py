@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -14,16 +16,19 @@ import pytest
 from conformance.suite.checks import dependency_conformance
 from conformance.suite.checks._ast_common import _is_suppressed, parse_toml_suppressions
 from conformance.suite.checks.dependency_conformance import (
-    _LOCK_URL_RE,
-    _REMOTE_COMPONENT_FETCH_RE,
     DEPRECATED_SDK_EXTRAS,
     RUNTIME_IMAGE_PYTHON,
     SDK_PYTHON_FLOOR,
     TEST_ONLY_SDK_EXTRAS,
-    _collect_dialect_drivers,
-    _collect_dialect_names,
-    _dist_dialect_entry_points,
-    _env_dialect_entry_points,
+    _metadata,
+    _unused,
+    main,
+    scan_all,
+    scan_text,
+)
+from conformance.suite.checks.dependency_conformance._common import (
+    _LOCK_URL_RE,
+    _REMOTE_COMPONENT_FETCH_RE,
     _is_bounded_specifier,
     _is_floating_range,
     _iter_dep_entries,
@@ -32,9 +37,14 @@ from conformance.suite.checks.dependency_conformance import (
     _parse_requirement,
     _requires_python_lower_bound,
     _sdk_extras_in,
-    main,
-    scan_all,
-    scan_text,
+)
+from conformance.suite.checks.dependency_conformance._metadata import (
+    _dist_dialect_entry_points,
+    _env_dialect_entry_points,
+)
+from conformance.suite.checks.dependency_conformance._unused import (
+    _collect_dialect_drivers,
+    _collect_dialect_names,
 )
 from conformance.suite.schema import SarifReport, derive_disposition, validate_sarif
 from conformance.suite.schema.disposition import Disposition
@@ -268,7 +278,7 @@ def test_d002_skipped_when_sdk_metadata_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When importlib.metadata.requires returns None for the SDK, skip D002."""
-    from conformance.suite.checks import dependency_conformance as dc
+    from conformance.suite.checks.dependency_conformance import _metadata as dc
 
     monkeypatch.setattr(dc, "_sdk_managed_packages", lambda: None)
     text = _write_pyproject(
@@ -1066,12 +1076,12 @@ def _d004_scan_all_with_sources(
         path.write_text(source, encoding="utf-8")
 
     monkeypatch.setattr(
-        dependency_conformance,
+        _metadata,
         "_sdk_managed_packages",
         lambda: {"sample-transport"},
     )
     monkeypatch.setattr(
-        dependency_conformance.importlib_metadata,
+        _metadata.importlib_metadata,
         "packages_distributions",
         lambda: {"sample_transport": ["sample-transport"]},
     )
@@ -1149,10 +1159,10 @@ def test_d004_test_imports_do_not_leak_across_projects(
         "import sample_transport\n", encoding="utf-8"
     )
     monkeypatch.setattr(
-        dependency_conformance, "_sdk_managed_packages", lambda: {"sample-transport"}
+        _metadata, "_sdk_managed_packages", lambda: {"sample-transport"}
     )
     monkeypatch.setattr(
-        dependency_conformance.importlib_metadata,
+        _metadata.importlib_metadata,
         "packages_distributions",
         lambda: {"sample_transport": ["sample-transport"]},
     )
@@ -1248,7 +1258,7 @@ def test_d005_unknown_extra_in_dependency_group_fires() -> None:
 def test_d005_skipped_when_sdk_metadata_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import conformance.suite.checks.dependency_conformance as mod
+    import conformance.suite.checks.dependency_conformance._metadata as mod
 
     monkeypatch.setattr(mod, "_sdk_published_extras", lambda: None)
     findings = scan_text(
@@ -1547,6 +1557,30 @@ def test_main_exit_1_on_blocking_violation(tmp_path: Path) -> None:
     )
     code = main(["--root", str(tmp_path), str(tmp_path / "pyproject.toml")])
     assert code == 1
+
+
+def test_python_dash_m_runs_the_cli(tmp_path: Path) -> None:
+    """``python -m conformance.suite.checks.dependency_conformance`` still runs the
+    CLI now that the check is a package (its ``__init__`` never runs as main)."""
+    _scratch_pyproject(
+        tmp_path,
+        '[project]\nname = "x"\nversion = "0"\ndependencies = ["rich>=13,<14"]\n',
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "conformance.suite.checks.dependency_conformance",
+            "--root",
+            str(tmp_path),
+            str(tmp_path / "pyproject.toml"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 1, proc.stderr
+    assert "D001" in proc.stdout + proc.stderr
 
 
 def test_main_exit_0_when_clean(tmp_path: Path) -> None:
@@ -2355,17 +2389,15 @@ def test_collect_source_usage_parses_each_file_once(
         encoding="utf-8",
     )
 
-    original_parse = dependency_conformance.ast.parse
+    original_parse = _unused.ast.parse
     parsed: list[bytes | str] = []
 
     def count_parse(source: bytes | str, *args: object, **kwargs: object) -> object:
         parsed.append(source)
         return original_parse(source, *args, **kwargs)
 
-    monkeypatch.setattr(dependency_conformance.ast, "parse", count_parse)
-    modules, drivers, dialect_names = dependency_conformance._collect_source_usage(
-        [src]
-    )
+    monkeypatch.setattr(_unused.ast, "parse", count_parse)
+    modules, drivers, dialect_names = _unused._collect_source_usage([src])
 
     assert modules == {"requests", "sqlalchemy"}
     assert drivers == {"aiomysql"}
@@ -2385,7 +2417,7 @@ def test_scan_all_skips_dialect_metadata_without_url_schemes(
     src = tmp_path / "client.py"
     src.write_text("import requests\n", encoding="utf-8")
     monkeypatch.setattr(
-        dependency_conformance,
+        _metadata,
         "_env_distribution_metadata",
         lambda *args, **kwargs: pytest.fail(
             "no dialect URLs require entry-point metadata"
@@ -2434,7 +2466,7 @@ def test_env_dialect_entry_points_preserves_empty_registration(
         return interpreter_dist
 
     monkeypatch.setattr(
-        dependency_conformance.importlib_metadata,
+        _metadata.importlib_metadata,
         "distribution",
         interpreter_distribution,
     )
@@ -2469,7 +2501,7 @@ def test_env_dialect_entry_points_reads_installed_metadata(tmp_path: Path) -> No
         "some-cli": set(),
     }
     # Scoped to declared dependencies, undeclared distributions are not read.
-    _, scoped = dependency_conformance._env_distribution_metadata(
+    _, scoped = _metadata._env_distribution_metadata(
         [str(site)],
         include_imports=False,
         include_dialects=True,
@@ -2763,7 +2795,7 @@ def test_d003_repo_venv_does_not_mask_a_dependency_it_lacks(tmp_path: Path) -> N
 def test_d003_skips_non_utf8_source_without_crashing(tmp_path: Path) -> None:
     """A latin-1 source with a PEP 263 coding cookie is parsed (not skipped) and
     its imports counted, so a dep imported only there is not falsely flagged."""
-    from conformance.suite.checks.dependency_conformance import (
+    from conformance.suite.checks.dependency_conformance._unused import (
         _collect_top_level_imports,
     )
 

@@ -47,3 +47,14 @@ jobs:
           # run its suite (testpaths = ["tests"], asyncio_mode = auto).
           uv sync --all-extras --all-groups
           uv run pytest -v
+
+      # pytest above already fails on a count above or below
+      # ruff_complexity_baseline.json; this adds the check pytest cannot make:
+      # that the baseline itself was not raised over the PR's base (FND-4668).
+      # BASE_SHA is empty outside pull_request / merge_group, and the script
+      # then skips the base comparison.
+      - name: Complexity baseline not raised over base
+        working-directory: packages/conformance
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: uv run --frozen python tests/test_complexity_baseline.py --base-sha "$BASE_SHA"

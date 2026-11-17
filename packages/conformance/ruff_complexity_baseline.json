@@ -1,0 +1,309 @@
+{
+  "conformance/bootstrap/args.py": {
+    "C901": 1
+  },
+  "conformance/bootstrap/command.py": {
+    "C901": 2,
+    "PLR0915": 1
+  },
+  "conformance/bootstrap/extract.py": {
+    "C901": 1
+  },
+  "conformance/scorecard/cli.py": {
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/_ast_common/_bindings.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/_ast_common/_cli.py": {
+    "C901": 2
+  },
+  "conformance/suite/checks/_ast_common/_directives.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/_ast_common/_imports.py": {
+    "C901": 1,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/_ast_common/_yaml.py": {
+    "C901": 1,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/_entrypoint_contract_classes.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/_entrypoint_contract_fields.py": {
+    "C901": 4
+  },
+  "conformance/suite/checks/app_name_alignment/_code_app_name.py": {
+    "C901": 2
+  },
+  "conformance/suite/checks/artifact_schema_declared/_check.py": {
+    "C901": 1,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/artifact_schema_writer/_declarations.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/artifact_schema_writer/_writer.py": {
+    "C901": 2,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/atomic_publish.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/client_lifecycle/_unclosed_client.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/client_seam/_raw_http_to_atlan.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/dapr_objectstore.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/dependency_conformance/__init__.py": {
+    "C901": 1,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/dependency_conformance/_common.py": {
+    "C901": 4,
+    "PLR0915": 2
+  },
+  "conformance/suite/checks/dependency_conformance/_duckdb.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/dependency_conformance/_pyproject.py": {
+    "C901": 1,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/dependency_conformance/_unused.py": {
+    "C901": 2
+  },
+  "conformance/suite/checks/deprecation/_consumer.py": {
+    "C901": 2,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/deprecation/_contract_compat.py": {
+    "C901": 4,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/deprecation/_daft_runtime.py": {
+    "C901": 3
+  },
+  "conformance/suite/checks/deprecation/_extractor.py": {
+    "C901": 2
+  },
+  "conformance/suite/checks/deprecation/_private_imports.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/deprecation/_removed_imports.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/deprecation/_sdk_type_aliases.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/determinism/_p021_io.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/determinism/_p023_blocking_async.py": {
+    "C901": 2
+  },
+  "conformance/suite/checks/dockerfile_conformance.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/e2e_generated_harness.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/e2e_system_app_base.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/e2e_workflow_shape.py": {
+    "C901": 3,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/entrypoint/_server_bootstrap.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/entrypoint/_worker_bootstrap.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/entrypoint_alignment/_check.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/entrypoint_alignment/_code_entrypoints.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/entrypoint_alignment/_contract_entrypoints.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/error_handling/_helpers.py": {
+    "C901": 6,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/error_handling/exception_chaining.py": {
+    "C901": 2
+  },
+  "conformance/suite/checks/error_handling/http_failure.py": {
+    "C901": 2
+  },
+  "conformance/suite/checks/error_handling/silent_swallow/_e004.py": {
+    "C901": 5,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/error_handling/silent_swallow/_e007.py": {
+    "C901": 8,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/error_handling/silent_swallow/_e010.py": {
+    "C901": 2,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/error_handling/untyped_raise.py": {
+    "C901": 2
+  },
+  "conformance/suite/checks/error_seam/_catch_site.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/generated_freshness.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/integration_marking.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/logging/__init__.py": {
+    "C901": 1,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/logging/_config.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/logging/_crossfile.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/logging/_helpers.py": {
+    "C901": 5
+  },
+  "conformance/suite/checks/logging/_level.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/logging/_security.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/logging/_traceback.py": {
+    "C901": 2
+  },
+  "conformance/suite/checks/manifest_contract/_check.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/manifest_contract/_entrypoint_class_names.py": {
+    "C901": 2,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/manifest_contract/_filter_string_acceptance.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/manifest_contract/_input_fields.py": {
+    "C901": 1,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/manifest_contract/_legacy_aliases.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/manifest_contract/_manifest_args.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/optimizations/_app_name_placeholder.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/optimizations/_asset_mapper.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/orchestration/_public_temporal_surface.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/orchestration/_temporal_common.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/preflight/_common.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/preflight/_contracts.py": {
+    "C901": 7
+  },
+  "conformance/suite/checks/preflight/_error_flow.py": {
+    "C901": 2
+  },
+  "conformance/suite/checks/preflight/_lifetime.py": {
+    "C901": 1,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/preflight/_metadata_parity.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/preflight/_scenarios.py": {
+    "C901": 4
+  },
+  "conformance/suite/checks/preflight/_untyped_failure.py": {
+    "C901": 2
+  },
+  "conformance/suite/checks/prescriptions/__init__.py": {
+    "C901": 1,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/prescriptions/_app_state_seam.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/prescriptions/_decorator_provenance.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/prescriptions/_entity_serialization.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/prescriptions/_error_code_prefix.py": {
+    "C901": 2
+  },
+  "conformance/suite/checks/prescriptions/_json_string_fields.py": {
+    "C901": 2
+  },
+  "conformance/suite/checks/prescriptions/_prefix_transfer.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/prescriptions/_relationship_direction.py": {
+    "C901": 2
+  },
+  "conformance/suite/checks/prescriptions/_relationship_directions.py": {
+    "C901": 1,
+    "PLR0915": 1
+  },
+  "conformance/suite/checks/prescriptions/_store_construction.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/prescriptions/_typed_boundaries.py": {
+    "C901": 1
+  },
+  "conformance/suite/checks/prescriptions/_unbounded_fields.py": {
+    "C901": 3
+  },
+  "conformance/suite/checks/sdr.py": {
+    "C901": 6
+  },
+  "conformance/suite/checks/security/_s002.py": {
+    "C901": 1
+  },
+  "conformance/suite/runner.py": {
+    "C901": 1
+  },
+  "conformance/tools/generate_contract_ledger.py": {
+    "C901": 1
+  },
+  "conformance/tools/generate_rule_docs.py": {
+    "C901": 3,
+    "PLR0915": 1
+  },
+  "conformance/tools/generate_sdk_contract_fields.py": {
+    "C901": 1
+  },
+  "conformance/tools/ledger_guard.py": {
+    "C901": 1
+  }
+}

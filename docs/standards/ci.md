@@ -165,6 +165,34 @@ root. pyright auto-excludes `**/.*` below a config's root whatever `exclude`
 says, so a repo-root config can never reach `.github/`. If pyright reports 0
 files analysed, the check fails rather than matching an empty baseline.
 
+## Conformance function size: a C901 / PLR0915 baseline that only shrinks
+
+`packages/conformance` measures ruff's C901 (McCabe complexity above 10) and
+PLR0915 (more than 50 statements) over `conformance/`, at thresholds pinned in
+its `[tool.ruff.lint.mccabe]` / `[tool.ruff.lint.pylint]`. Neither rule is in
+the package's ruff `select`: about 190 existing functions exceed them. They are
+held instead to `packages/conformance/ruff_complexity_baseline.json`, per file
+and per rule, by `packages/conformance/tests/test_complexity_baseline.py`, with
+the same three outcomes as the pyright baseline above:
+
+- **A count above the baseline fails.** Split the new or grown function. The
+  failure lists every over-limit function in the file.
+- **A count below the baseline also fails.** Lock the improvement in with
+  `--update`.
+- **A baseline count above the base revision's fails.** The
+  `Conformance Suite Tests` job passes `--base-sha`. `--update` also refuses to
+  raise a count unless given `--allow-increase`.
+
+```bash
+uv run --frozen python packages/conformance/tests/test_complexity_baseline.py           # check
+uv run --frozen python packages/conformance/tests/test_complexity_baseline.py --update  # lock in a reduction
+```
+
+The file is both a pytest module (the package's own test run) and a script (the
+`conformance-complexity-baseline` pre-commit hook and the CI base check). It
+needs only ruff, which the root env pins to the package's version. A new file
+starts at zero, so new code must stay under both thresholds.
+
 ## An artifact upload retry must use a DIFFERENT artifact name
 
 `actions/upload-artifact` treats the artifact service's `FinalizeArtifact` 403
