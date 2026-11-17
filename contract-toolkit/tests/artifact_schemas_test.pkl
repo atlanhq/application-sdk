@@ -18,6 +18,8 @@
 amends "pkl:test"
 
 import "pkl:json"
+import "pkl:reflect"
+import "../src/SdkNames.pkl"
 import "../examples/artifact-schemas/app.pkl" as artifactSchemasApp
 import "../examples/minimal/app.pkl" as minimalApp
 import "../src/App.pkl" as App
@@ -278,7 +280,30 @@ local function withSchema(key: String, schemaFields: Listing<App.ArtifactField>)
 local function f(fieldName: String, fieldType: String) =
   new App.ArtifactField { name = fieldName; type = fieldType; description = "d" }
 
+// The string literals a vocabulary typealias accepts, through nested aliases.
+local function literals(t: reflect.Type): Set<String> =
+  if (t is reflect.UnionType) t.members.fold(Set(), (acc: Set<String>, m) -> acc + literals(m))
+  else if (t is reflect.StringLiteralType) Set(t.value)
+  else if (t is reflect.DeclaredType && t.referent is reflect.TypeAlias)
+    literals((t.referent as reflect.TypeAlias).referent)
+  else throw("unexpected member \(t) in an artifact vocabulary typealias")
+
 facts {
+  // ── Vocabulary: the typealiases accept exactly SdkNames.pkl's sets ──────────
+  // scripts/test-sdk-import.py compares those sets with the SDK's
+  // ARTIFACT_FIELD_TYPES / ARTIFACT_FIELD_TYPES_EXTENDED / ARTIFACT_FORMATS, so
+  // together the two checks pin each typealias to the SDK's vocabulary.
+  ["ArtifactFieldType accepts exactly SdkNames.artifactFieldTypes"] {
+    literals(reflect.TypeAlias(App.ArtifactFieldType).referent) == SdkNames.artifactFieldTypes
+  }
+  ["ArtifactFieldTypeExtended accepts exactly SdkNames.artifactFieldTypesExtended"] {
+    literals(reflect.TypeAlias(App.ArtifactFieldTypeExtended).referent)
+      == SdkNames.artifactFieldTypesExtended
+  }
+  ["ArtifactFormat accepts exactly SdkNames.artifactFormats"] {
+    literals(reflect.TypeAlias(App.ArtifactFormat).referent) == SdkNames.artifactFormats
+  }
+
   // ── Opt-in: no declaration, no artifact ────────────────────────────────────
   ["an app that declares nothing emits no artifact_schemas.json"] {
     !noSchemasApp.output.files.containsKey("app/generated/artifact_schemas.json")

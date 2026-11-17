@@ -539,6 +539,11 @@ typealias ArtifactFieldTypeExtended =
 Field declarations use `ArtifactFieldTypeExtended`. The vocabulary is *logical*, not
 physical — one member covers several physical encodings.
 
+The SDK owns this vocabulary (`application_sdk.validation.artifacts`). `src/SdkNames.pkl`
+copies its members and those of `ArtifactFormat`; `tests/artifact_schemas_test.pkl` checks
+each typealias accepts exactly its copy, and `scripts/test-sdk-import.py` checks each copy
+equals the SDK's constant.
+
 | Logical | parquet / arrow | NDJSON / JSON |
 |---|---|---|
 | `string` | `string`, `large_string` | JSON string |
@@ -743,6 +748,8 @@ These fields are emitted into `app/generated/_e2e_base.py` and are required by `
 | `appServiceUrl` | String | `"http://{name}.{name}-app.svc.cluster.local"` | In-cluster Dapr service URL forwarded to by the e2e harness. Override when the app's Kubernetes service name deviates from the standard `{name}-app` pattern. |
 
 A system app (`type = "system"`) gets a base that extends `SystemAppE2ETest` instead. That class submits straight to Automation Engine on the system-app tenant pool, so the base carries only `connector_short_name` (plus `connection_type` / `connection_category` when a `connector` is declared): no `argo_*` names and no `app_service_url`, because no Heracles envelope is sent. A bundle entrypoint of a system app is generated the same way and keeps its `manifest_path` and `entrypoint`. When the app generates no `manifest.json`, the base carries a comment telling the suite to set `manifest_path` to a fixture DAG copied from a calling connector's manifest, and to set `required_dag_nodes`.
+
+The class attributes a generated base may assign are listed in `SdkNames.e2eBaseAttributes`, and `App.pkl` refuses to emit any other. `scripts/test-sdk-import.py` checks each listed name is declared on `BaseE2ETest`, and that every name a generated example's base assigns is declared on its SDK base class, so an SDK rename fails CI instead of leaving a dead attribute in every connector. `connection_category` is left out when it equals the SDK default (`SdkNames.e2eConnectionCategoryDefault`, `"warehouse"`). A generated `_e2e_substitutions.py` never redeclares a field its SDK parent declares (`SdkNames.mustacheSubstitutionFields` / `sqlMustacheSubstitutionFields`, checked equal to the SDK models' fields).
 
 #### Credential bodies in `_e2e_credential.py` — direct + agent (both always emitted)
 

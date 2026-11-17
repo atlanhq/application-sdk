@@ -206,6 +206,9 @@ jobs:
               # .github/scripts/tests/test_sdk_gate_filter_coverage.py.
               - 'application_sdk/testing/e2e/**'
               - 'application_sdk/observability/logger_adaptor.py'
+              # test-sdk-import.py compares src/SdkNames.pkl's artifact
+              # vocabulary with this module's constants (FND-4934).
+              - 'application_sdk/validation/artifacts.py'
               - '.github/workflows/contract-toolkit-*.yml'
               - '.github/workflows/contract-toolkit-*.yaml'
             # Conformance RULE detection (C/E/P/O). Deliberately NOT triggered by

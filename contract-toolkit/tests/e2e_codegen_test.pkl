@@ -2,6 +2,7 @@ amends "pkl:test"
 
 import "../src/App.pkl" as App
 import "../src/Connectors.pkl"
+import "../src/SdkNames.pkl"
 import "../examples/full/app.pkl" as fullExampleApp
 
 // ── Fixture helpers ────────────────────────────────────────────────────────────
@@ -582,6 +583,20 @@ local selfNamedBase: String = selfNamedApp.output.files["app/generated/_e2e_base
 local overrideBase: String = overrideApp.output.files["app/generated/_e2e_base.py"].text
 local widgetSubs: String = widgetApp.output.files["app/generated/_e2e_substitutions.py"].text
 
+// Every generated e2e base in this file: single-entrypoint and bundle, SQL and
+// not, with and without overrides.
+local allE2EBases: List<String> = List(
+  apiBase, postgresBase, warehouseBase, selfNamedBase, overrideBase,
+  bundleCrawlerBase, bundleMinerBase, suffixCrawlerBase, suffixMinerBase,
+  apiBundleBase, explicitCrawlerBase, explicitMinerBase,
+  ovrCloudBase, ovrSelfhostedBase, plainSelfhostedBase
+)
+
+// Class attributes a generated base assigns (`    name = ...` in the class body).
+local assignedE2EAttrs: Set<String> = allE2EBases
+  .flatMap((text) -> Regex(#"(?m)^    ([a-z_]+) = "#).findMatchesIn(text).map((m) -> m.groups[1]!!.value))
+  .toSet()
+
 // Substitution fields too long for one line, in each layout ruff gives them.
 // Every expected string below is what ruff 0.17.3 (default settings) leaves
 // unchanged when run on this app's generated file.
@@ -694,7 +709,20 @@ facts {
   }
 
   ["connection_category omitted when category is warehouse (SDK default)"] {
+    SdkNames.e2eConnectionCategoryDefault == "warehouse"
     !warehouseBase.contains("connection_category =")
+  }
+
+  // ── _e2e_base.py: every assigned attribute comes from SdkNames ───────────────
+  // scripts/test-sdk-import.py checks each SdkNames.e2eBaseAttributes name is
+  // declared on BaseE2ETest, so a base may assign only listed names.
+
+  ["a generated e2e base assigns only SdkNames.e2eBaseAttributes"] {
+    assignedE2EAttrs.difference(SdkNames.e2eBaseAttributes).isEmpty
+  }
+
+  ["every SdkNames.e2eBaseAttributes name is assigned by some generated base"] {
+    SdkNames.e2eBaseAttributes.difference(assignedE2EAttrs).isEmpty
   }
 
   // ── _e2e_base.py: pascalCase name → class name ───────────────────────────────
