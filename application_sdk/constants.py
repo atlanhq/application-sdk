@@ -1009,6 +1009,15 @@ VALIDATE_ASSETS_ON_UPLOAD: bool = env_bool("ATLAN_VALIDATE_ASSETS_ON_UPLOAD", Tr
 VALIDATE_ASSETS_TIMEOUT_SECONDS: float = env_float(
     "ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS", 600.0
 )
+#: Resident-memory budget, in MiB, for the asset-validation child process. The
+#: scan checks its own RSS as it reads; past this it stops and reports the records
+#: it read, marked ``validation_truncated``, instead of growing toward the pod's
+#: limit. The scan stops on its own at 90% of
+#: ``ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS`` in the same way, so a slow batch also
+#: reports partial counts rather than nothing. ``0`` turns the memory check off.
+VALIDATE_ASSETS_MAX_RSS_MB: int = env_int(
+    "ATLAN_VALIDATE_ASSETS_MAX_RSS_MB", 1024, minimum=0
+)
 #: ADR-0020 step 7: when True, the activity interceptor validates every
 #: ``FileReference`` artifact against its declared artifact schema on both sides
 #: of a task — at ingest (after materialise) and at hand-off (before persist).

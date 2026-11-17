@@ -988,6 +988,12 @@ auto-stamped and each row joins to the workflow outcome by run id:
 - Batch context rides alongside: `assets_upload_kind`, `assets_parts_validated`,
   `assets_parts_not_local` and `assets_referential_check`, so an orphan count can be read against
   how the hand-off was assembled and whether the orphan pass ran at all.
+- The scan's child process works to a fixed memory budget. Its report keeps counts plus at most
+  25 sampled failures and 25 sampled orphans (every row the matrix and the WARNING list), so it is
+  the same few KB whether one record failed or every record did. Past
+  `ATLAN_VALIDATE_ASSETS_MAX_RSS_MB` (default 1024) of resident memory, or 90% of
+  `ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS`, the scan stops and reports the records it read; the row
+  then carries `validation_truncated` and `assets_referential_check=skipped_budget`.
 
 Uploads with nothing to validate emit nothing at all: when `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=false`
 or when the path is not a `transformed/` subtree (e.g. a raw upload), no outcome event is produced.

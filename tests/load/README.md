@@ -49,3 +49,19 @@ volume with ≥ 120 GB free.
   `tests/unit/storage/test_ops.py::TestResumableChunkedDownload::test_50gb_equivalent_chunk_count_mechanics`
   (3200 chunks — 50 GiB at the production 16 MiB chunk size — with
   interrupt + resume).
+
+## Asset-validation budget (`test_asset_validation_budget_load.py`)
+
+Checks that the upload-time asset scan stays inside its memory budget on a
+batch where every record fails and two in five name a parent the batch never
+emits: the scan's child process at or under 1 GiB of RSS, the report it pickles
+back under 1 MB, and the activity side that unpickles it flat. It runs two
+sizes, `ATLAN_LOAD_TEST_ASSET_RECORDS` (default 1,000,000) and a fifth of it, so
+the scaling is visible, and prints both.
+
+```bash
+uv run pytest tests/load/test_asset_validation_budget_load.py -m load -s --timeout=0
+
+# The 5M-record / 2M-missing-parent case (~2.6 GB of disk, a few minutes)
+ATLAN_LOAD_TEST_ASSET_RECORDS=5000000 uv run pytest tests/load/test_asset_validation_budget_load.py -m load -s --timeout=0
+```

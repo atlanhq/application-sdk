@@ -263,6 +263,7 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "assets_upload_kind",
         "assets_parts_validated",
         "assets_parts_not_local",
+        "validation_truncated",
         # ── Artifact validation posture row: transformed-asset switch ────
         ASSET_VALIDATION_ON_UPLOAD_KEY,
         # ── Generic artifact validation outcome event (ADR-0020) ─────────

@@ -43,14 +43,27 @@ Design constraints worth preserving if you edit this file:
   referenced-target set to disk via
   :class:`~application_sdk.common.spillable_dict.SpillableDict`, so a
   multi-million-asset batch never blows the heap.
+* **A fixed-size report.** The upload-time cell keeps at most
+  ``ASSET_VALIDATION_MAX_ITEMS_PER_AXIS`` failures and orphans as objects and
+  counts the rest, tallying the per-rule summary as it walks. Every consumer
+  lists no more rows than that, so nothing it reads changes, while the report
+  the scan's child pickles back stays a few KB on a batch where every record
+  fails. One object per failure would grow with the failure count three times
+  over: in the child, in the pickle and in the parent that unpickles it.
+* **The walk polices its own budget.** Every ``_BUDGET_CHECK_EVERY`` records it
+  checks its RSS and its clock, and past either budget it stops and reports what
+  it read, marked ``truncated``, so the outer timeout is a backstop rather than
+  the usual way a slow scan ends.
 """
 
 from __future__ import annotations
 
 import ast
-import collections
+import contextlib
 import functools
 import re
+import sys
+import time
 import typing
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -146,8 +159,20 @@ class ReferentialFailure:
 REFERENTIAL_CHECK_RAN: Final = "ran"
 REFERENTIAL_CHECK_NOT_REQUESTED: Final = "not_requested"
 REFERENTIAL_CHECK_SKIPPED_UNAVAILABLE: Final = "skipped_unavailable"
+#: The scan stopped at its memory or wall budget before the orphan pass finished.
+#: Stopped during the record walk, the present-set is incomplete, so no orphan is
+#: reported; stopped during the orphan pass, the orphans reported are real but
+#: there may be more.
+REFERENTIAL_CHECK_SKIPPED_BUDGET: Final = "skipped_budget"
 #: A report not produced by the walk (e.g. built by hand) cannot say.
 REFERENTIAL_CHECK_UNKNOWN: Final = "unknown"
+
+#: :attr:`AssetValidationReport.truncated` values: which budget stopped the scan.
+TRUNCATED_RSS_BUDGET: Final = "rss_budget"
+TRUNCATED_WALL_BUDGET: Final = "wall_budget"
+
+_SummaryKey: typing.TypeAlias = tuple[str, str, str]
+"""``(kind, type_name, detail)`` — one ``asset_validation_summary`` row."""
 
 
 @dataclass
@@ -161,23 +186,47 @@ class AssetValidationReport:
     undeserializable: int = 0
     """Records that could not be decoded into a pyatlan_v9 asset."""
     failures: list[AssetValidationFailure] = field(default_factory=list)
-    """Per-asset validation failures (includes deserialize failures)."""
+    """Per-asset validation failures (includes deserialize failures), in batch
+    order. The first ``max_samples`` only when the walk was given a cap; the rest
+    are counted in :attr:`failures_omitted`."""
     orphans: list[ReferentialFailure] = field(default_factory=list)
-    """Referential-integrity failures from the second pass."""
+    """Referential-integrity failures from the second pass, in key order. Capped
+    like :attr:`failures`; the rest are counted in :attr:`orphans_omitted`."""
     referential_check: str = REFERENTIAL_CHECK_UNKNOWN
     """Whether the orphan pass ran: ``ran``, ``not_requested`` (the caller turned
-    it off, e.g. an incomplete fan-in batch) or ``skipped_unavailable`` (no spill
-    store). Zero orphans means "none found" only when this is ``ran``."""
+    it off, e.g. an incomplete fan-in batch), ``skipped_unavailable`` (no spill
+    store) or ``skipped_budget`` (the scan stopped at a budget first). Zero orphans
+    means "none found" only when this is ``ran``."""
+    failures_omitted: int = 0
+    """Failures counted but not kept in :attr:`failures`, past the sample cap."""
+    orphans_omitted: int = 0
+    """Orphans counted but not kept in :attr:`orphans`, past the sample cap."""
+    truncated: str = ""
+    """Empty when every record was read. Otherwise the budget that stopped the scan
+    (:data:`TRUNCATED_RSS_BUDGET` or :data:`TRUNCATED_WALL_BUDGET`), and every count
+    covers only the records read before it."""
+    summary_counts: dict[_SummaryKey, int] | None = None
+    """Per-``(kind, type_name, detail)`` failure counts over the whole batch, tallied
+    by the walk so ``asset_validation_summary`` stays exact when the lists are
+    capped. ``None`` on a report not built by the walk, whose lists are then the
+    record the summary is derived from."""
+    summary_references: dict[_SummaryKey, int] | None = None
+    """Per-orphan-group reference totals, tallied alongside :attr:`summary_counts`."""
 
     @property
     def ok(self) -> bool:
         """True when nothing failed on any axis."""
-        return not self.failures and not self.orphans and self.undeserializable == 0
+        return self.failed == 0 and self.orphaned == 0 and self.undeserializable == 0
 
     @property
     def failed(self) -> int:
-        """Count of per-asset validation failures."""
-        return len(self.failures)
+        """Count of per-asset validation failures (includes undeserializable)."""
+        return len(self.failures) + self.failures_omitted
+
+    @property
+    def orphaned(self) -> int:
+        """Count of referenced targets absent from the batch."""
+        return len(self.orphans) + self.orphans_omitted
 
     def format_report(
         self, *, max_items: int = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
@@ -196,9 +245,14 @@ class AssetValidationReport:
         invalid = self.failed - self.undeserializable
         lines = [
             f"Asset validation: {self.passed}/{self.total} passed, "
-            f"{invalid} invalid, {len(self.orphans)} orphaned, "
+            f"{invalid} invalid, {self.orphaned} orphaned, "
             f"{self.undeserializable} undeserializable"
         ]
+        if self.truncated:
+            lines.append(
+                f"  scan stopped at its {_TRUNCATED_LABELS.get(self.truncated, self.truncated)} "
+                f"after {self.total} records; the counts cover those records only"
+            )
         for failure in self.failures[:max_items]:
             loc = _location(failure.file, failure.line)
             if failure.deserialize_error:
@@ -217,6 +271,13 @@ class AssetValidationReport:
         remaining = self.failures[max_items:]
         extra_invalid = sum(1 for f in remaining if not f.deserialize_error)
         extra_undeser = sum(1 for f in remaining if f.deserialize_error)
+        if self.failures_omitted:
+            # The samples are the head of the batch; the counters cover the tail.
+            undeser_omitted = self.undeserializable - sum(
+                1 for f in self.failures if f.deserialize_error
+            )
+            extra_undeser += undeser_omitted
+            extra_invalid += self.failures_omitted - undeser_omitted
         if extra_invalid > 0:
             lines.append(f"  ... and {extra_invalid} more invalid assets")
         if extra_undeser > 0:
@@ -230,10 +291,16 @@ class AssetValidationReport:
                 f"[{orphan.type_name}] {orphan.qualified_name}{loc} "
                 f"via '{orphan.relationship}'"
             )
-        extra_orphans = len(self.orphans) - max_items
+        extra_orphans = self.orphaned - len(self.orphans[:max_items])
         if extra_orphans > 0:
             lines.append(f"  ... and {extra_orphans} more orphans")
         return "\n".join(lines)
+
+
+_TRUNCATED_LABELS: Final = {
+    TRUNCATED_RSS_BUDGET: "rss budget",
+    TRUNCATED_WALL_BUDGET: "wall budget",
+}
 
 
 def _location(file: str, line: int) -> str:
@@ -504,6 +571,107 @@ def _decode_reason(exc: BaseException) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Memory and wall budgets
+# ---------------------------------------------------------------------------
+
+_BUDGET_CHECK_EVERY: Final = 1024
+"""Records (or orphan-pass keys) between two budget checks. A check is one clock
+read and one small ``/proc`` read, so this keeps its cost out of the profile while
+reacting within a fraction of a second."""
+
+_WALL_BUDGET_SHARE: Final = 0.9
+"""Share of ``ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS`` the scan may spend before it
+stops itself. The rest covers what the outer timeout also counts — the child's
+spawn and imports, and returning the report — so a slow batch ends in partial
+counts instead of being killed with none."""
+
+_MIB: Final = 1024 * 1024
+
+_monotonic = time.monotonic
+
+
+@dataclass(frozen=True)
+class ScanBudget:
+    """Where :func:`validate_transformed_dir` stops on its own.
+
+    A stopped scan returns the counts for the records it read, with
+    :attr:`AssetValidationReport.truncated` naming the budget. ``None`` leaves an
+    axis unbounded.
+    """
+
+    max_rss_bytes: int | None = None
+    """Stop once this process's resident memory exceeds this many bytes."""
+    wall_seconds: float | None = None
+    """Stop once the scan has run this long."""
+
+    @classmethod
+    def from_deployment(cls) -> ScanBudget:
+        """The budgets the upload-time scan runs under, from the deployment's env:
+        ``ATLAN_VALIDATE_ASSETS_MAX_RSS_MB`` (``0`` = no memory check) and 90% of
+        ``ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS``."""
+        from application_sdk import (  # noqa: PLC0415 — read at call time so a deployment (or a test) can retune them
+            constants,
+        )
+
+        rss_mb = constants.VALIDATE_ASSETS_MAX_RSS_MB
+        return cls(
+            max_rss_bytes=rss_mb * _MIB if rss_mb > 0 else None,
+            wall_seconds=constants.VALIDATE_ASSETS_TIMEOUT_SECONDS * _WALL_BUDGET_SHARE,
+        )
+
+
+def _current_rss_bytes() -> int | None:
+    """This process's resident memory now, its peak where "now" is not readable, or
+    ``None`` where neither is (Windows, which then runs without the memory check).
+
+    Linux (every deployed worker) reads ``/proc/self/statm``. Elsewhere the peak
+    from ``getrusage`` stands in: it never under-reads, so the budget can only trip
+    early, never late.
+    """
+    try:
+        import resource  # noqa: PLC0415 — POSIX-only module; absent on Windows
+    except ImportError:  # conformance: ignore[E009] Windows has no cheap RSS read; the documented answer is "unknown", and the wall budget still applies
+        return None
+    try:
+        with open("/proc/self/statm", "rb") as handle:  # noqa: ASYNC230 — runs in the scan's own child process, not on an event loop
+            return int(handle.read().split()[1]) * resource.getpagesize()
+    except (
+        OSError,
+        ValueError,
+        IndexError,
+    ):  # conformance: ignore[E009] no /proc off Linux; the peak below is the documented stand-in
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # ru_maxrss is bytes on macOS and KiB on Linux and the BSDs.
+        return peak if sys.platform == "darwin" else peak * 1024
+
+
+class _BudgetClock:
+    """Answers "has the scan used up a budget?" once every ``_BUDGET_CHECK_EVERY`` ticks."""
+
+    __slots__ = ("_budget", "_deadline", "_ticks")
+
+    def __init__(self, budget: ScanBudget) -> None:
+        self._budget = budget
+        self._deadline = (
+            None if budget.wall_seconds is None else _monotonic() + budget.wall_seconds
+        )
+        self._ticks = 0
+
+    def tick(self) -> str:
+        """Call before each unit of work. Returns ``""`` to go on, or the name of the
+        exhausted budget — checked once every ``_BUDGET_CHECK_EVERY`` units, so a
+        stop always lands after a whole number of them."""
+        if self._ticks and not self._ticks % _BUDGET_CHECK_EVERY:
+            if self._deadline is not None and _monotonic() >= self._deadline:
+                return TRUNCATED_WALL_BUDGET
+            limit = self._budget.max_rss_bytes
+            if limit is not None and (_current_rss_bytes() or 0) > limit:
+                return TRUNCATED_RSS_BUDGET
+        self._ticks += 1
+        return ""
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -546,6 +714,8 @@ def validate_transformed_dir(
     for_creation: bool = True,
     check_referential_integrity: bool = True,
     creation_rules: frozenset[AssetCreationRules] = frozenset(),
+    max_samples: int | None = None,
+    budget: ScanBudget | None = None,
 ) -> AssetValidationReport:
     """Validate every transformed-output asset under ``path``.
 
@@ -583,11 +753,33 @@ def validate_transformed_dir(
         check_referential_integrity: Run the referential second pass.
         creation_rules: Extra create-time checks, passed through to
             :func:`validate_asset`.
+        max_samples: Keep at most this many failures and this many orphans as
+            objects on the report; count the rest. The counts, and the per-rule
+            summary the walk tallies, still cover every record. ``None`` (default)
+            keeps every one. Must be at least 1.
+        budget: Stop early at a memory or wall budget (see :class:`ScanBudget`),
+            returning the counts for the records read so far. ``None`` (default)
+            reads the whole batch whatever it costs.
 
     Returns:
         An :class:`AssetValidationReport` aggregating all axes of failure.
     """
-    report = AssetValidationReport()
+    if max_samples is not None and max_samples < 1:
+        raise ValueError(f"max_samples must be at least 1, got {max_samples}")
+    summary_counts: dict[_SummaryKey, int] = {}
+    summary_references: dict[_SummaryKey, int] = {}
+    report = AssetValidationReport(
+        summary_counts=summary_counts, summary_references=summary_references
+    )
+    clock = _BudgetClock(budget or ScanBudget())
+
+    def keep_failure(failure: AssetValidationFailure) -> None:
+        _tally_failure(summary_counts, failure)
+        if max_samples is None or len(report.failures) < max_samples:
+            report.failures.append(failure)
+        else:
+            report.failures_omitted += 1
+
     referential = check_referential_integrity
     present: SpillableDict | None = None
     referenced: SpillableDict | None = None
@@ -629,106 +821,36 @@ def validate_transformed_dir(
         )
 
     try:
-        for file_path, line_no, raw in iter_ndjson_lines(path):
-            report.total += 1
-            try:
-                asset = _deserialize(raw)
-            except Exception as exc:  # noqa: BLE001 — any decode failure is a data defect, not a crash
-                report.undeserializable += 1
-                report.failures.append(
-                    AssetValidationFailure(
-                        file=file_path,
-                        line=line_no,
-                        type_name=_probe_type_name(raw),
-                        qualified_name="",
-                        errors=[f"could not deserialize as an Atlan asset: {exc}"],
-                        deserialize_error=True,
-                        decode_reason=_decode_reason(exc),
-                    )
-                )
-                continue
-
-            type_name = _usable_str(getattr(asset, "type_name", None)) or ""
-            qualified_name = _usable_str(getattr(asset, "qualified_name", None)) or ""
-            connection_qn = (
-                _usable_str(getattr(asset, "connection_qualified_name", None)) or ""
+        with contextlib.closing(iter_ndjson_lines(path)) as lines:
+            report.truncated = _validate_records(
+                lines,
+                report,
+                keep_failure,
+                clock,
+                present=present if referential else None,
+                referenced=referenced if referential else None,
+                for_creation=for_creation,
+                creation_rules=creation_rules,
             )
-            refs = tuple(_iter_relationship_refs(asset))
-
-            errors = validate_asset(
-                asset, for_creation=for_creation, creation_rules=creation_rules
-            )
-            errors += _connection_prefix_errors(
-                qualified_name, connection_qn, type_name, refs
-            )
-            if errors:
-                report.failures.append(
-                    AssetValidationFailure(
-                        file=file_path,
-                        line=line_no,
-                        type_name=type_name,
-                        qualified_name=qualified_name,
-                        errors=errors,
-                    )
-                )
-            else:
-                report.passed += 1
-
-            if referential and present is not None and referenced is not None:
-                if type_name and qualified_name:
-                    present[_compound_key(type_name, qualified_name)] = True
-                # Record every relationship target, deduped by target key: keep a
-                # representative referencing asset and count the references so a
-                # single missing parent is reported once, not once per child.
-                for rel_name, target_tn, target_qn in refs:
-                    if not _is_same_connection(target_qn, connection_qn):
-                        continue
-                    target_key = _compound_key(target_tn, target_qn)
-                    existing = referenced.get(target_key)
-                    if existing is None:
-                        referenced[target_key] = (
-                            target_tn,
-                            target_qn,
-                            1,
-                            file_path,
-                            line_no,
-                            type_name,
-                            qualified_name,
-                            rel_name,
-                        )
-                    else:
-                        referenced[target_key] = (
-                            existing[:2] + (existing[2] + 1,) + existing[3:]
-                        )
 
         # Pass 2: the present-set is complete, so cross-validate every referenced
-        # target against it regardless of emit order within the batch.
-        if referential and present is not None and referenced is not None:
-            for target_key in referenced.keys():
-                if target_key in present:
-                    continue
-                (
-                    target_tn,
-                    target_qn,
-                    count,
-                    file_path,
-                    line_no,
-                    type_name,
-                    qualified_name,
-                    rel_name,
-                ) = referenced[target_key]
-                report.orphans.append(
-                    ReferentialFailure(
-                        missing_type_name=target_tn,
-                        missing_qualified_name=target_qn,
-                        reference_count=count,
-                        file=file_path,
-                        line=line_no,
-                        type_name=type_name,
-                        qualified_name=qualified_name,
-                        relationship=rel_name,
-                    )
-                )
+        # target against it regardless of emit order within the batch. Skipped when
+        # the walk stopped early: against a partial present-set every parent in the
+        # unread tail would read as missing.
+        if report.truncated and referential:
+            report.referential_check = REFERENTIAL_CHECK_SKIPPED_BUDGET
+        elif referential and present is not None and referenced is not None:
+            report.truncated = _find_orphans(
+                report,
+                present,
+                referenced,
+                clock,
+                summary_counts=summary_counts,
+                summary_references=summary_references,
+                max_samples=max_samples,
+            )
+            if report.truncated:
+                report.referential_check = REFERENTIAL_CHECK_SKIPPED_BUDGET
     finally:
         if referenced is not None:
             referenced.close()
@@ -736,6 +858,147 @@ def validate_transformed_dir(
             present.close()
 
     return report
+
+
+def _validate_records(
+    lines: Iterator[tuple[str, int, bytes]],
+    report: AssetValidationReport,
+    keep_failure: typing.Callable[[AssetValidationFailure], None],
+    clock: _BudgetClock,
+    *,
+    present: SpillableDict | None,
+    referenced: SpillableDict | None,
+    for_creation: bool,
+    creation_rules: frozenset[AssetCreationRules],
+) -> str:
+    """Pass 1: decode and check each record, and fill the two referential maps.
+
+    Returns ``""`` after the last record, or the name of the budget that stopped
+    the walk first.
+    """
+    for file_path, line_no, raw in lines:
+        if exhausted := clock.tick():
+            return exhausted
+        report.total += 1
+        try:
+            asset = _deserialize(raw)
+        except Exception as exc:  # noqa: BLE001 — any decode failure is a data defect, not a crash
+            report.undeserializable += 1
+            keep_failure(
+                AssetValidationFailure(
+                    file=file_path,
+                    line=line_no,
+                    type_name=_probe_type_name(raw),
+                    qualified_name="",
+                    errors=[f"could not deserialize as an Atlan asset: {exc}"],
+                    deserialize_error=True,
+                    decode_reason=_decode_reason(exc),
+                )
+            )
+            continue
+
+        type_name = _usable_str(getattr(asset, "type_name", None)) or ""
+        qualified_name = _usable_str(getattr(asset, "qualified_name", None)) or ""
+        connection_qn = (
+            _usable_str(getattr(asset, "connection_qualified_name", None)) or ""
+        )
+        refs = tuple(_iter_relationship_refs(asset))
+
+        errors = validate_asset(
+            asset, for_creation=for_creation, creation_rules=creation_rules
+        )
+        errors += _connection_prefix_errors(
+            qualified_name, connection_qn, type_name, refs
+        )
+        if errors:
+            keep_failure(
+                AssetValidationFailure(
+                    file=file_path,
+                    line=line_no,
+                    type_name=type_name,
+                    qualified_name=qualified_name,
+                    errors=errors,
+                )
+            )
+        else:
+            report.passed += 1
+
+        if present is not None and referenced is not None:
+            if type_name and qualified_name:
+                present[_compound_key(type_name, qualified_name)] = True
+            # Record every relationship target, deduped by target key: keep a
+            # representative referencing asset and count the references so a
+            # single missing parent is reported once, not once per child.
+            for rel_name, target_tn, target_qn in refs:
+                if not _is_same_connection(target_qn, connection_qn):
+                    continue
+                target_key = _compound_key(target_tn, target_qn)
+                existing = referenced.get(target_key)
+                if existing is None:
+                    referenced[target_key] = (
+                        target_tn,
+                        target_qn,
+                        1,
+                        file_path,
+                        line_no,
+                        type_name,
+                        qualified_name,
+                        rel_name,
+                    )
+                else:
+                    referenced[target_key] = (
+                        existing[:2] + (existing[2] + 1,) + existing[3:]
+                    )
+    return ""
+
+
+def _find_orphans(
+    report: AssetValidationReport,
+    present: SpillableDict,
+    referenced: SpillableDict,
+    clock: _BudgetClock,
+    *,
+    summary_counts: dict[_SummaryKey, int],
+    summary_references: dict[_SummaryKey, int],
+    max_samples: int | None,
+) -> str:
+    """Pass 2: every referenced target absent from the present-set is an orphan.
+
+    Streams ``referenced`` in key order. Each orphan is tallied into the summary;
+    only the first ``max_samples`` become objects on the report. Returns ``""``
+    when every key was checked, or the name of the budget that stopped it first.
+    """
+    for target_key in referenced.keys():
+        if exhausted := clock.tick():
+            return exhausted
+        if target_key in present:
+            continue
+        (
+            target_tn,
+            target_qn,
+            count,
+            file_path,
+            line_no,
+            type_name,
+            qualified_name,
+            rel_name,
+        ) = referenced[target_key]
+        orphan = ReferentialFailure(
+            missing_type_name=target_tn,
+            missing_qualified_name=target_qn,
+            reference_count=count,
+            file=file_path,
+            line=line_no,
+            type_name=type_name,
+            qualified_name=qualified_name,
+            relationship=rel_name,
+        )
+        _tally_orphan(summary_counts, summary_references, orphan)
+        if max_samples is None or len(report.orphans) < max_samples:
+            report.orphans.append(orphan)
+        else:
+            report.orphans_omitted += 1
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -853,6 +1116,7 @@ def validate_assets_as_artifact(
     for_creation: bool = True,
     check_referential_integrity: bool = True,
     creation_rules: frozenset[AssetCreationRules] = frozenset(),
+    budget: ScanBudget | None = None,
 ) -> AssetArtifactReport:
     """The NDJSON x ``ModelSource`` cell: :func:`validate_transformed_dir`, reported
     in the shared shape.
@@ -878,6 +1142,18 @@ def validate_assets_as_artifact(
             accurate.
         creation_rules: Extra create-time checks, passed through to
             :func:`validate_transformed_dir`.
+        budget: Where the scan stops early. ``None`` (default) takes the
+            deployment's, :meth:`ScanBudget.from_deployment` — the upload hook
+            reaches this cell through the wrapper, which carries no options, so the
+            cell reads them itself.
+
+    The report is constant-size: at most
+    :data:`~application_sdk.constants.ASSET_VALIDATION_MAX_ITEMS_PER_AXIS` failures
+    and as many orphans are kept as objects, which is every row any consumer lists
+    (the event matrix and both ``format_report`` bodies stop there). The counts, the
+    per-rule summary and the shared report's per-kind counts still cover the whole
+    batch. That is what keeps the report the scan's child process pickles back to
+    the activity the same size whether one record failed or every record did.
 
     Returns:
         An :class:`AssetArtifactReport`. ``absent`` when the scan found no records at
@@ -904,6 +1180,8 @@ def validate_assets_as_artifact(
         for_creation=for_creation,
         check_referential_integrity=check_referential_integrity,
         creation_rules=creation_rules,
+        max_samples=ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
+        budget=budget if budget is not None else ScanBudget.from_deployment(),
     )
 
     if assets.total == 0:
@@ -913,6 +1191,9 @@ def validate_assets_as_artifact(
             assets=assets,
         )
 
+    # The samples keep the shared list's order — every kept failure, then every
+    # kept orphan — so its first ``max_items`` rows are the same rows the
+    # unbounded list would have started with.
     return AssetArtifactReport(
         total=assets.total,
         passed=assets.passed,
@@ -920,7 +1201,28 @@ def validate_assets_as_artifact(
             [_as_record_failure(f) for f in assets.failures]
             + [_as_reference_failure(o) for o in assets.orphans]
         ),
+        failure_counts=(
+            {
+                "invalid": assets.failed - assets.undeserializable,
+                "undecodable": assets.undeserializable,
+                "missing": assets.orphaned,
+            }
+            if assets.failures_omitted or assets.orphans_omitted
+            else None
+        ),
+        reason=_truncation_reason(assets),
         assets=assets,
+    )
+
+
+def _truncation_reason(assets: AssetValidationReport) -> str:
+    """The shared report's ``reason`` for a scan that stopped at a budget."""
+    if not assets.truncated:
+        return ""
+    label = _TRUNCATED_LABELS.get(assets.truncated, assets.truncated)
+    return (
+        f"scan stopped at its {label} after {assets.total} records; the counts "
+        f"cover those records only"
     )
 
 
@@ -1061,6 +1363,37 @@ def _validation_rules(error: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(rules))
 
 
+def _tally_failure(
+    counts: dict[_SummaryKey, int], failure: AssetValidationFailure
+) -> None:
+    """Add one per-asset failure to the summary counts.
+
+    The walk calls this as it goes and :func:`asset_validation_summary_json` calls
+    it over a hand-built report's list — one definition, so the two cannot count a
+    failure differently.
+    """
+    if failure.deserialize_error:
+        reason = failure.decode_reason or "unknown"
+        key = ("undeserializable", failure.type_name, f"decode:{reason}")
+        counts[key] = counts.get(key, 0) + 1
+        return
+    rules = {rule for error in failure.errors for rule in _validation_rules(error)}
+    for rule in rules or (_RULE_OTHER,):
+        key = ("invalid", failure.type_name, rule)
+        counts[key] = counts.get(key, 0) + 1
+
+
+def _tally_orphan(
+    counts: dict[_SummaryKey, int],
+    references: dict[_SummaryKey, int],
+    orphan: ReferentialFailure,
+) -> None:
+    """Add one orphan, and the references to it, to the summary counts."""
+    key = ("orphan", orphan.missing_type_name, orphan.relationship)
+    counts[key] = counts.get(key, 0) + 1
+    references[key] = references.get(key, 0) + orphan.reference_count
+
+
 def asset_validation_summary_json(
     report: AssetValidationReport,
     *,
@@ -1090,20 +1423,16 @@ def asset_validation_summary_json(
     so both totals survive the cap. Like the matrix, this is not internally guarded; the emitting
     hook's ``try/except`` owns that.
     """
-    counts: collections.Counter[tuple[str, str, str]] = collections.Counter()
-    references: collections.Counter[tuple[str, str, str]] = collections.Counter()
-    for failure in report.failures:
-        if failure.deserialize_error:
-            reason = failure.decode_reason or "unknown"
-            counts["undeserializable", failure.type_name, f"decode:{reason}"] += 1
-            continue
-        rules = {rule for error in failure.errors for rule in _validation_rules(error)}
-        for rule in rules or (_RULE_OTHER,):
-            counts["invalid", failure.type_name, rule] += 1
-    for orphan in report.orphans:
-        key = ("orphan", orphan.missing_type_name, orphan.relationship)
-        counts[key] += 1
-        references[key] += orphan.reference_count
+    if report.summary_counts is not None:
+        counts = report.summary_counts
+        references = report.summary_references or {}
+    else:
+        counts = {}
+        references = {}
+        for failure in report.failures:
+            _tally_failure(counts, failure)
+        for orphan in report.orphans:
+            _tally_orphan(counts, references, orphan)
 
     ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     rows: list[dict[str, object]] = []
@@ -1115,7 +1444,7 @@ def asset_validation_summary_json(
             "count": count,
         }
         if kind == "orphan":
-            row["references"] = references[kind, type_name, detail]
+            row["references"] = references.get((kind, type_name, detail), 0)
         rows.append(row)
     if dropped := ordered[max_rows:]:
         rows.append(
@@ -1127,7 +1456,7 @@ def asset_validation_summary_json(
                 # Orphan groups past the cap still carry references; without this
                 # the batch's reference total would be under-reported.
                 "references": sum(
-                    references[key] for key, _ in dropped if key[0] == "orphan"
+                    references.get(key, 0) for key, _ in dropped if key[0] == "orphan"
                 ),
             }
         )
@@ -1202,7 +1531,7 @@ def asset_validation_event_fields(
         "assets_total": report.total,
         "assets_passed": report.passed,
         "assets_invalid": report.failed - report.undeserializable,
-        "assets_orphaned": len(report.orphans),
+        "assets_orphaned": report.orphaned,
         "assets_undeserializable": report.undeserializable,
         ASSET_VALIDATION_MATRIX_KEY: asset_validation_matrix_json(
             report, max_items=max_items
@@ -1218,4 +1547,7 @@ def asset_validation_event_fields(
                 "assets_parts_not_local": scope.parts_not_local,
             }
         ),
+        # Present only on a scan that stopped at a budget, so the row of every
+        # complete scan is exactly what it was before the budgets existed.
+        **({"validation_truncated": report.truncated} if report.truncated else {}),
     }

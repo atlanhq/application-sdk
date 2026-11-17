@@ -491,10 +491,11 @@ attributes are allowlisted and reach OTLP:
 | `assets_undeserializable` | records that could not be decoded |
 | `asset_validation_matrix` | compact JSON array of per-failure detail (bounded rows per axis), `JSONExtract`-able |
 | `asset_validation_summary` | JSON array of complete counts per `{kind, type_name, detail}` over the whole batch (see below) |
-| `assets_referential_check` | whether the orphan pass ran: `ran`, `not_requested` (an incomplete fan-in turned it off) or `skipped_unavailable` (no spill store). `assets_orphaned = 0` means "none found" only when this is `ran` |
+| `assets_referential_check` | whether the orphan pass ran: `ran`, `not_requested` (an incomplete fan-in turned it off), `skipped_unavailable` (no spill store) or `skipped_budget` (the scan stopped at its memory or wall budget before the orphan pass finished). `assets_orphaned = 0` means "none found" only when this is `ran` |
 | `assets_upload_kind` | `upload` (one path) or `upload_refs` (every declared part of a fan-in, validated as one batch) |
 | `assets_parts_validated` | local paths validated together |
 | `assets_parts_not_local` | declared transformed parts not on this pod; non-zero turns the orphan pass off |
+| `validation_truncated` | present only when the scan stopped early: `rss_budget` (past `ATLAN_VALIDATE_ASSETS_MAX_RSS_MB`) or `wall_budget` (past 90% of `ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS`). Every count then covers only the records read before the stop |
 
 Emitting `outcome="clean"` too gives a denominator, so a dashboard can rank connectors by
 flag-rate rather than only seeing failures.

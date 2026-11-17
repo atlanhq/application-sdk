@@ -34,6 +34,7 @@ process) rather than every validator re-deciding it.
 
 from __future__ import annotations
 
+import collections
 import dataclasses
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -614,7 +615,8 @@ class ArtifactValidationReport:
     passed: int = 0
     """Units with no failure."""
     failures: list[ArtifactValidationFailure] = dataclasses.field(default_factory=list)
-    """Every failing unit. Unbounded: only the *output* surfaces are capped."""
+    """Every failing unit, unless :attr:`failure_counts` is set — then a sample from
+    the head of the list, and the counts carry the totals."""
     boundary: bool = False
     """Whether this hand-off sits on an entrypoint's public interface."""
     validator_broken: bool = False
@@ -632,6 +634,10 @@ class ArtifactValidationReport:
     """Short explanation, chiefly for the non-scan outcomes."""
     verdict: ArtifactValidationOutcome | None = None
     """Pinned non-scan outcome. ``None`` means "a scan ran; derive it"."""
+    failure_counts: dict[str, int] | None = None
+    """Exact failures per ``kind``, for a cell that keeps only a sample in
+    :attr:`failures` so its report stays a fixed size. ``None`` when
+    :attr:`failures` is the whole list, which is then counted directly."""
 
     # -- derived ---------------------------------------------------------
 
@@ -721,7 +727,13 @@ class ArtifactValidationReport:
         Derived from the failure list rather than tracked alongside it, so the two
         cannot disagree.
         """
-        return sum(1 for f in self.failures if f.kind == "undecodable")
+        return self._kind_counts().get("undecodable", 0)
+
+    def _kind_counts(self) -> collections.Counter[str]:
+        """Failures per kind over the whole artifact, sampled list or not."""
+        if self.failure_counts is not None:
+            return +collections.Counter(self.failure_counts)
+        return collections.Counter(f.kind for f in self.failures)
 
     # -- non-scan constructors -------------------------------------------
 
@@ -802,13 +814,13 @@ class ArtifactValidationReport:
             f"{self.passed}/{self.total} {unit}s passed, {self.failed} failed, "
             f"{self.undecodable} undecodable, {self.fields_declared} field(s) declared"
         ]
-        lines.extend(f"  {_failure_line(f)}" for f in self.failures[:max_items])
+        shown = self.failures[:max_items]
+        lines.extend(f"  {_failure_line(f)}" for f in shown)
         # Split the overflow by kind so a tail of undecodable records is never
         # miscounted as type mismatches — matching the disjoint headline.
-        remaining = self.failures[max_items:]
-        for kind in sorted({f.kind for f in remaining}):
-            count = sum(1 for f in remaining if f.kind == kind)
-            lines.append(f"  ... and {count} more {kind}")
+        remaining = self._kind_counts() - collections.Counter(f.kind for f in shown)
+        for kind in sorted(remaining):
+            lines.append(f"  ... and {remaining[kind]} more {kind}")
         return "\n".join(lines)
 
 

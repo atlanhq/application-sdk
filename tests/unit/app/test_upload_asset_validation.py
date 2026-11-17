@@ -80,6 +80,37 @@ def _hang(path, source, **kwargs):
     time.sleep(3600)
 
 
+def _stopped_at_the_wall(path, source, **kwargs):
+    # The real scan, in the real child, given a wall budget it has already used up:
+    # what the hook receives when a batch outlasts 90% of the scan timeout.
+    from application_sdk.validation.assets import (
+        ScanBudget,
+        validate_assets_as_artifact,
+    )
+
+    return validate_assets_as_artifact(path, budget=ScanBudget(wall_seconds=0.0))
+
+
+def _failing_columns(base: Path, count: int) -> None:
+    """``count`` Columns that each fail ``.validate()`` (no ``order``) and each name
+    their own absent parent Table — every record a failure and an orphan."""
+    _write_transformed(
+        base,
+        "Column",
+        [
+            Column.creator(
+                name=f"C{i}",
+                parent_type=Table,
+                parent_qualified_name=f"{SCHEMA_QN}/MISSING{i}",
+                order=1,
+            )
+            for i in range(count)
+        ],
+    )
+    out = base / "transformed" / "Column" / "entities.json"
+    out.write_bytes(out.read_bytes().replace(b'"order":1,', b""))
+
+
 def _absent_report(path, source, **kwargs):
     # What the wrapper returns when a plug-in seam breaks: a report, never a raise.
     from application_sdk.validation import ArtifactValidationReport
@@ -457,6 +488,45 @@ class TestWarnOnInvalidTransformedAssets:
             logger.info.assert_not_called()
             logger.warning.assert_called_once()
             assert "produced no counts" in logger.warning.call_args.args[0]
+
+    async def test_a_batch_where_every_record_fails_emits_exact_counts(
+        self, tmp_path: Path
+    ) -> None:
+        # The child keeps a capped sample and counts the rest, so the event's
+        # counts are the whole batch's while the matrix stays at the cap per axis.
+        records = 300
+        _failing_columns(tmp_path, records)
+        with patch.object(base_module, "_task_logger") as logger:
+            await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
+            ev = _outcome_event(logger)
+        assert ev["assets_total"] == records
+        assert ev["assets_invalid"] == records
+        assert ev["assets_orphaned"] == records
+        assert "validation_truncated" not in ev
+        matrix = json.loads(ev[ASSET_VALIDATION_MATRIX_KEY])
+        assert len([r for r in matrix if r["kind"] == "invalid"]) == 25
+        assert len([r for r in matrix if r["kind"] == "orphan"]) == 25
+        summary = json.loads(ev[ASSET_VALIDATION_SUMMARY_KEY])
+        orphan_rows = [r for r in summary if r["kind"] == "orphan"]
+        assert sum(r["count"] for r in orphan_rows) == records
+
+    async def test_a_scan_that_outlasts_its_wall_budget_still_emits_counts(
+        self, tmp_path: Path
+    ) -> None:
+        # Past its wall budget the child stops and returns what it read, rather
+        # than being killed at the timeout with no row at all.
+        _failing_columns(tmp_path, 1100)
+        with patch.object(base_module, "_task_logger") as logger:
+            with patch(
+                "application_sdk.validation.validate_artifact", _stopped_at_the_wall
+            ):
+                await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
+            ev = _outcome_event(logger)
+            warnings = [c.args[0] for c in logger.warning.call_args_list]
+        assert ev["validation_truncated"] == "wall_budget"
+        assert ev["assets_referential_check"] == "skipped_budget"
+        assert ev["assets_total"] == ev["assets_invalid"] == 1024
+        assert any("stopped at its" in message for message in warnings)
 
     async def test_native_crash_warns_and_continues(self, tmp_path: Path) -> None:
         # CNCT-85: a segfault in the decode path (e.g. a native msgspec bug) is
