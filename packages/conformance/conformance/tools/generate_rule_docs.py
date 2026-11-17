@@ -812,7 +812,7 @@ def main(argv: list[str] | None = None) -> None:
         if stale:
             print(
                 f"\n{len(stale)} file(s) are stale, missing or orphaned. "
-                "Run `uv run poe generate-rule-docs` to update.",
+                "Run `uv run atlan-application-sdk-conformance gen-rule-docs` to update.",
                 file=sys.stderr,
             )
             sys.exit(1)
