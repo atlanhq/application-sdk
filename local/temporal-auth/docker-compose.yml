@@ -1,0 +1,85 @@
+# Temporal frontend that enforces RS256 JWT auth, for
+# tests/integration/test_temporal_docker_auth.py.
+#
+# Prerequisite: bash local/temporal-auth/scripts/gen_keys.sh (writes the
+# gitignored private.pem and .well-known/jwks.json).
+#
+#   docker compose -f local/temporal-auth/docker-compose.yml up -d --wait
+#
+# Images are pinned by tag AND digest so a re-pushed tag cannot change what the
+# nightly job runs. Update tag and digest together.
+
+services:
+  # Serves the RSA public key (JWKS) so Temporal can verify tokens.
+  jwks-server:
+    image: nginx:1.27.5-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+    volumes:
+      - ./.well-known:/usr/share/nginx/html/.well-known:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost/.well-known/jwks.json"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    networks:
+      - temporal-network
+
+  # Temporal persistence. No host port: only the temporal container talks to it.
+  postgresql:
+    image: postgres:16.10@sha256:21f6013073bc6b92830a2129570e2f5ec42a6c734b5a985a41e83aa58f54c3c1
+    environment:
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_USER: temporal
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "temporal"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks:
+      - temporal-network
+
+  # Temporal server with JWT auth enforced and no allow-no-auth fallback.
+  temporal:
+    image: temporalio/auto-setup:1.27.2@sha256:b44cbfeb43dbeae42db113b44fb8414c3452f05643b3d6b1592f955277d73526
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      jwks-server:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=postgresql
+      # JWT auth: env vars recognised by temporalio/auto-setup.
+      - TEMPORAL_JWT_KEY_SOURCE1=http://jwks-server/.well-known/jwks.json
+      - TEMPORAL_AUTH_AUTHORIZER=default
+      - TEMPORAL_AUTH_CLAIM_MAPPER=default
+      # An internal, unauthenticated frontend for intra-service calls, so the
+      # history/matching/worker services reach the frontend without a token.
+      # Without it the worker service crashes on startup with "Request unauthorized."
+      - USE_INTERNAL_FRONTEND=1
+      - SERVICES=frontend:history:matching:worker:internal-frontend
+      # Bind on all interfaces so auth is enforced however the connection arrives
+      # (Docker's userland proxy, Colima's loopback forwarding, the bridge IP).
+      - BIND_ON_IP=0.0.0.0
+      # auto-setup registers the `default` namespace with the temporal CLI, which
+      # carries no token: aim it at the internal frontend. That port is not
+      # published, so the host can only reach the authenticated 7233.
+      - TEMPORAL_ADDRESS=127.0.0.1:7236
+    # Healthy only once `default` exists, so `up --wait` returns a stack the
+    # tests can use (or fails) instead of a server still registering it.
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "namespace", "describe", "-n", "default", "--address", "127.0.0.1:7236"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+      start_period: 10s
+    networks:
+      - temporal-network
+    ports:
+      - 7233:7233
+
+networks:
+  temporal-network:
+    driver: bridge

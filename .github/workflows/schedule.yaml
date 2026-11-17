@@ -3,6 +3,9 @@ name: Scheduled Checks
 on:
   schedule:
     - cron: 0 0 * * * # daily at 00:00
+  # Lets a maintainer re-run the nightly tiers on demand (for example right
+  # after changing one) instead of waiting for the next 00:00 run.
+  workflow_dispatch:
 
 permissions:
   issues: write
@@ -34,9 +37,10 @@ jobs:
           debug-only: 'true'
 
   # Nightly real-cloud storage integration tests against main (no PR context →
-  # no label gate). Same suites as the label-gated job in pull_request.yaml;
-  # conftest skips any cloud whose creds aren't set, so this stays green until
-  # all nine secrets are registered.
+  # no label gate). Same suites as the PR job in pull_request.yaml.
+  # STORAGE_CLOUD_REQUIRED=1 makes conftest fail, not skip, a cloud whose
+  # variables are unset, so a dropped repo variable turns this job red instead
+  # of green with nothing run (FND-4290).
   storage-integration:
     name: Storage Integration Tests — nightly (S3 / Azure / GCS)
     runs-on: ubuntu-latest
@@ -94,7 +98,43 @@ jobs:
           AZURE_FEDERATED_TOKEN_FILE: ${{ runner.temp }}/azure-federated-token
           GCS_BUCKET: ${{ vars.GCS_INTEG_BUCKET }}
           GCS_PROJECT_ID: ${{ vars.GCS_INTEG_PROJECT_ID }}
+          STORAGE_CLOUD_REQUIRED: "1"
         run: |
           uv run pytest tests/integration/storage/ \
             -m "s3_integration or azure_integration or gcs_integration" \
             -v --timeout=60
+
+  # Nightly TemporalAuthManager token-refresh tests against a real Temporal
+  # frontend that enforces RS256 JWT auth (local/temporal-auth/). They include
+  # the reproducer of the production worker crash on token expiry. Too slow for
+  # a PR (~4 min of real token expiry and grace periods) and need Docker, so
+  # they only skip in the PR integration job.
+  temporal-docker-auth:
+    name: Temporal Docker JWT-auth tests — nightly
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: "./.github/actions/setup-deps"
+        with:
+          checkout: "false"
+      # Fresh key pair per run (gitignored; never stored as a secret).
+      - name: Generate the JWT signing key and JWKS
+        run: bash local/temporal-auth/scripts/gen_keys.sh
+      # --wait returns once Temporal's healthcheck sees the `default` namespace,
+      # and fails the step if any container never becomes healthy.
+      - name: Start the JWT-auth Temporal stack
+        run: docker compose -f local/temporal-auth/docker-compose.yml up -d --wait --wait-timeout 300
+      # TEMPORAL_DOCKER_AUTH_REQUIRED=1: a missing key or unreachable stack fails
+      # the tests instead of skipping them, so this job cannot pass on skips.
+      - name: Run Temporal Docker-auth tests
+        env:
+          TEMPORAL_DOCKER_AUTH_REQUIRED: "1"
+        run: uv run pytest tests/integration/test_temporal_docker_auth.py -m integration -v --timeout=180
+      - name: Temporal stack logs
+        if: failure()
+        run: docker compose -f local/temporal-auth/docker-compose.yml logs --no-color --tail=300

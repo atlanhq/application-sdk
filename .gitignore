@@ -167,8 +167,10 @@ docstring-cov.md
 # vscode settings
 .vscode
 
-# local
-local/
+# local (local/temporal-auth/ is the tracked Docker JWT-auth Temporal stack;
+# its keys stay ignored by its own .gitignore)
+local/*
+!local/temporal-auth/
 temporal.db
 
 # Claude Code worktrees

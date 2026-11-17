@@ -10,24 +10,28 @@ Prerequisites
 1. Generate keys (one-time; gitignored):
        bash local/temporal-auth/scripts/gen_keys.sh
 
-2. Start the Docker stack:
-       docker-compose -f local/temporal-auth/docker-compose.yml up
-
-3. Register the default namespace (once per fresh stack):
-       bash local/temporal-auth/scripts/setup_namespace.sh
+2. Start the Docker stack (healthy once the ``default`` namespace exists):
+       docker compose -f local/temporal-auth/docker-compose.yml up -d --wait
 
 Run
 ---
     uv run pytest tests/integration/test_temporal_docker_auth.py -m integration -s -v
+
+Without the stack these tests skip. The nightly job in ``schedule.yaml`` starts
+the stack and sets ``TEMPORAL_DOCKER_AUTH_REQUIRED=1``, which turns a missing
+key or an unreachable stack into a failure, so it cannot pass with nothing run.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NoReturn
 
 import jwt
 import pytest
@@ -55,9 +59,19 @@ _PRIVATE_KEY_PATH = (
 )
 _KID = "temporal-local-dev"
 
+# Set by the nightly job, which provisioned the stack: a missing key or an
+# unreachable frontend there is a broken job, not a developer without Docker.
+_STACK_REQUIRED = os.environ.get("TEMPORAL_DOCKER_AUTH_REQUIRED") == "1"
+
 # Token lifetimes used by the mock service
 _INITIAL_TOKEN_TTL_SECONDS = 5
 _REFRESH_TOKEN_TTL_SECONDS = 300
+
+# SDK retry constants (from sdk-core/crates/client/src/retry.rs):
+#   LONG_POLL_FATAL_GRACE = 60s  — PermissionDenied on a task poll is retried
+#                                   for 60 s before becoming fatal.
+#   task_poll_retry_policy: initial=200ms, multiplier=2, max_interval=10s
+_LONG_POLL_FATAL_GRACE_SECONDS = 60
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +121,9 @@ class _Rs256MockTokenService:
         self._private_key = private_key
         self._call_count = 0
         self.current_expires_at: datetime | None = None
+        # Read by TemporalAuthManager._calculate_sleep_seconds. Tokens are
+        # minted locally, so the server-local clock offset is zero.
+        self.clock_offset_seconds = 0.0
 
     async def get_token(self, *, force_refresh: bool = False) -> str:
         self._call_count += 1
@@ -153,11 +170,18 @@ class _DockerAuthNoopWorkflow:
 # ---------------------------------------------------------------------------
 
 
+def _stack_unavailable(reason: str) -> NoReturn:
+    """Fail when ``TEMPORAL_DOCKER_AUTH_REQUIRED=1`` (nightly CI), otherwise skip."""
+    if _STACK_REQUIRED:
+        pytest.fail(f"{reason} (TEMPORAL_DOCKER_AUTH_REQUIRED=1)", pytrace=False)
+    pytest.skip(reason)
+
+
 @pytest.fixture
 async def private_key() -> bytes:
-    """Yield the RSA private key; skip test if Docker stack is unavailable."""
+    """Yield the RSA private key; skip (or fail) if the Docker stack is unavailable."""
     if not _PRIVATE_KEY_PATH.exists():
-        pytest.skip(
+        _stack_unavailable(
             f"RSA private key not found at {_PRIVATE_KEY_PATH}. "
             "Run: bash local/temporal-auth/scripts/gen_keys.sh"
         )
@@ -172,10 +196,9 @@ async def private_key() -> bytes:
             DescribeNamespaceRequest(namespace=_NAMESPACE)
         )
     except Exception as exc:
-        pytest.skip(
+        _stack_unavailable(
             f"Docker Temporal not available at {_TEMPORAL_HOST}: {exc}. "
-            "Run: docker-compose -f local/temporal-auth/docker-compose.yml up && "
-            "bash local/temporal-auth/scripts/setup_namespace.sh"
+            "Run: docker compose -f local/temporal-auth/docker-compose.yml up -d --wait"
         )
 
     return pk
@@ -184,6 +207,48 @@ async def private_key() -> bytes:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+def _assert_outcome(
+    call: Callable[[], object], expected: type[BaseException], match: str
+) -> None:
+    """Assert *call* ends the test with *expected* (catching skip and fail alike)."""
+    with pytest.raises(BaseException, match=match) as exc_info:
+        call()
+    assert exc_info.type is expected, (
+        f"expected {expected.__name__}, got {exc_info.type.__name__}: {exc_info.value}"
+    )
+
+
+def test_required_mode_fails_when_stack_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under TEMPORAL_DOCKER_AUTH_REQUIRED=1 a missing stack fails, never skips.
+
+    Needs no Docker: with the stack up, no other test reaches this branch, so a
+    regression back to skipping would otherwise go unnoticed.
+    """
+    monkeypatch.setattr(
+        "tests.integration.test_temporal_docker_auth._STACK_REQUIRED", True
+    )
+    _assert_outcome(
+        lambda: _stack_unavailable("Docker Temporal not available"),
+        pytest.fail.Exception,
+        "TEMPORAL_DOCKER_AUTH_REQUIRED=1",
+    )
+
+
+def test_local_mode_skips_when_stack_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "tests.integration.test_temporal_docker_auth._STACK_REQUIRED", False
+    )
+    _assert_outcome(
+        lambda: _stack_unavailable("Docker Temporal not available"),
+        pytest.skip.Exception,
+        "Docker Temporal not available",
+    )
 
 
 async def test_expired_token_is_rejected(private_key: bytes) -> None:
@@ -437,8 +502,11 @@ async def test_api_key_assignment_propagates_to_worker_polls(
             task_queue=task_queue,
         )
 
-        # Give the SDK up to 15 s to start a new poll with the corrupted key.
-        deadline = asyncio.get_event_loop().time() + 15.0
+        # A rejected poll is retried for the full fatal grace before the
+        # worker crashes, so wait the grace plus a buffer.
+        deadline = (
+            asyncio.get_event_loop().time() + _LONG_POLL_FATAL_GRACE_SECONDS + 15.0
+        )
         while asyncio.get_event_loop().time() < deadline:
             if worker_task.done():
                 break
@@ -656,15 +724,9 @@ async def test_real_manager_timing_with_short_lived_token(
 # Exact production error reproducer
 # ---------------------------------------------------------------------------
 
-# SDK retry constants (from sdk-core/crates/client/src/retry.rs):
-#   LONG_POLL_FATAL_GRACE = 60s  — PermissionDenied on a task poll is retried
-#                                   for 60 s before becoming fatal.
-#   task_poll_retry_policy: initial=200ms, multiplier=2, max_interval=10s
-#
-# Timeline: token expires → first PermissionDenied → ~60 s of retries →
-#           RuntimeError propagates → worker crashes.
+# Timeline: token expires → first PermissionDenied → ~60 s of retries
+# (_LONG_POLL_FATAL_GRACE_SECONDS) → RuntimeError propagates → worker crashes.
 # Total test runtime: _INITIAL_TOKEN_TTL_SECONDS + ~60 s ≈ 70 s.
-_LONG_POLL_FATAL_GRACE_SECONDS = 60
 
 
 async def test_worker_crashes_with_exact_production_error(
