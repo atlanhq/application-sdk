@@ -11,6 +11,7 @@
 /// class-shaped name a generated example's `_input.py` imports must be in
 /// `inputModuleNames`. A stale field set fails CI instead of letting a generated
 /// field shadow an SDK one.
+@ModuleInfo { minPklVersion = "0.33.0" }
 module com.atlan.app.contract.SdkNames
 
 /// Fields `application_sdk.contracts.base.Input` declares: a system app's

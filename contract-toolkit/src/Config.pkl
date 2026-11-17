@@ -23,7 +23,7 @@
 /// | preview | | (Optional) Whether the package should be labeled as an early preview in the UI (true) or not (false). | `false` |
 /// | connectorType | | (Optional) If the package needs to configure a connector, specify its type here. | |
 /// | category | | Name of the pill under which the package should be categorized in the marketplace in the UI. | `custom` |
-@ModuleInfo { minPklVersion = "0.25.1" }
+@ModuleInfo { minPklVersion = "0.33.0" }
 open module com.atlan.app.contract.Config
 
 import "pkl:semver"
@@ -183,6 +183,10 @@ class UIConfig {
   )
 }
 
+/// Returns [inputs] unchanged: an identity fold that nothing in the toolkit calls.
+@Deprecated {
+  message = "An identity fold with no callers; use the mapping directly. Will be removed in a future release."
+}
 const function resolveInputs(inputs: Mapping<String, UIElement>): Mapping<String, UIElement> = inputs.fold(new Mapping {}, (acc: Mapping<String, UIElement>, inputKey, input) ->
   (acc) {
     [inputKey] = input

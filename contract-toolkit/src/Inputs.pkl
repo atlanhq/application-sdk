@@ -23,6 +23,7 @@
 ///
 /// A scalar field that reaches step 4 is refused: it has no natural empty
 /// value, and inventing one (`""`, `0`) would hide a missing argument.
+@ModuleInfo { minPklVersion = "0.33.0" }
 module com.atlan.app.contract.Inputs
 
 /// Python keywords that fit `FieldName` or `ClassName`. Either would render
