@@ -109,6 +109,8 @@ class LineageReason:
     expected: ClassVar[bool] = False
     description: ClassVar[str] = ""
     customer_message: ClassVar[str | None] = None
+    funnel: ClassVar[str | None] = None
+    """Overrides the category's lineage-funnel bucket (see ``funnel.py``)."""
 
     def __new__(cls, *args: object, **kwargs: object) -> LineageReason:
         raise TypeError(

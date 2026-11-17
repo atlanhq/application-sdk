@@ -17,6 +17,7 @@ from typing import Any
 from application_sdk.observability.lineage.taxonomy import (
     GapCategory,
     LineageReason,
+    NonSqlSource,
     UninstrumentedPath,
     UpstreamAmbiguous,
     UpstreamNotInAtlan,
@@ -41,6 +42,9 @@ class RefOutcome(StrEnum):
     MISSED = "MISSED"
     AMBIGUOUS = "AMBIGUOUS"
     """More than one candidate; the lookup picked one."""
+    NOT_EXPECTED = "NOT_EXPECTED"
+    """The producer marked the ref as not expected to resolve (a file source,
+    say). The lookup may still report it as missed; settle ignores it."""
 
 
 @dataclass(frozen=True)
@@ -98,11 +102,18 @@ def settle(assessment: Assessment, outcomes: Sequence[RefOutcome | None]) -> Ass
 
     An asset stays PENDING until every ref it emitted has an outcome (``None``
     means not reported yet). Anything that is not PENDING is returned as is.
+    Refs marked ``NOT_EXPECTED`` don't count; an asset whose refs are all
+    ``NOT_EXPECTED`` expects no lineage.
     """
     if assessment.verdict is not Verdict.PENDING or not outcomes:
         return assessment
     if any(outcome is None for outcome in outcomes):
         return assessment
+    outcomes = [
+        outcome for outcome in outcomes if outcome is not RefOutcome.NOT_EXPECTED
+    ]
+    if not outcomes:
+        return Assessment(Verdict.VALID_NONE, NonSqlSource, basis="lookup")
     counts = Counter(outcomes)
     matched = counts[RefOutcome.MATCHED] + counts[RefOutcome.AMBIGUOUS]
     if matched == 0:
