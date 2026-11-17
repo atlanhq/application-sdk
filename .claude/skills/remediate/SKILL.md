@@ -530,6 +530,7 @@ The full program is in `remediation/programs/`. For Reactor-ready execution:
 
 ```bash
 # Install (dev-only — never a SDK runtime dep):
+# Into your own project: the SDK pins and ships no npm packages.
 npm i -D @openprose/reactor @openprose/reactor-cli @openprose/reactor-devtools
 
 # Scaffold state (first time):

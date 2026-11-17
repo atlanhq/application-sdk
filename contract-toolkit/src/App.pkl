@@ -4401,6 +4401,14 @@ local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
   else if (u is Widgets.NumericInput)
     let (d = (u as Widgets.NumericInput).default)
     fmtSubsField(pyName, "int", "default=\(if (d != null) d!!.toInt() else 0)", k)
+  // DateInput and FileUploader must match `widgetInputField`: the harness
+  // substitutes the dumped default into the DAG arg, which the app's
+  // `_input.py` then validates. The `str` fallback below would submit `""`,
+  // which neither `int` nor `FileReference | None` accepts.
+  else if (u is Widgets.DateInput)
+    fmtSubsField(pyName, "int", "default=0", k)
+  else if (u is Widgets.FileUploader)
+    fmtSubsField(pyName, "dict[str, Any] | None", "default=None", k)
   else if (u is Widgets.TagsInput || u is Widgets.InputRepeater)
     fmtSubsField(pyName, "list[str]", "default_factory=list", k)
   else if (u is Widgets.Radio)

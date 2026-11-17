@@ -1413,8 +1413,8 @@ metadata: the released conformance wheel still declares a plain
 therefore also re-resolves `packages/conformance/uv.lock`.
 
 **One commit, not one per lock.** Every push to the branch re-fires the PR's
-entire required-check suite, so the bound rewrites both uv locks and the npm lock
-in a single commit.
+entire required-check suite, so the bound rewrites both uv locks in a single
+commit.
 
 The workflow pushes with a minted App token, not `GITHUB_TOKEN`: a `GITHUB_TOKEN`
 push does not re-trigger the PR's required checks, which would leave the PR green
@@ -1458,64 +1458,9 @@ branch, which the gate then withholds on. Measured: the lane read `success` on
 Clearing the commands removes a signal that can only ever be false here; the
 bound itself is not lost, because the workflow above applies it instead.
 
-### The npm lock is bounded differently: all-or-nothing on the whole file
-
-The lane rewrites a fourth file, `packages/conformance/conformance/package-lock.json`
-— dev-only devDependencies for the remediation programs, never bundled in the
-published wheel. It gets its own driver, `renovate_npm_lock_bounded` (FND-380),
-because **npm can express none of the per-package retention ceilings the uv bound
-depends on, and has no forward-only mode at all.** Measured on npm 11.19.0 against
-this project:
-
-| command | versus `main` |
-| --- | --- |
-| `npm install --package-lock-only` (lock present) | byte-identical, no-op |
-| `npm install --package-lock-only --before=X` (lock present) | **no-op** |
-| `npm install --package-lock-only --before=X` (no lock) | 4 rolled **back** |
-| `npm update --package-lock-only --before=X` (lock present) | the same 4 rolled **back** |
-
-Two of those rows are traps. The second is the silent one: leaving the committed
-lock in place and adding `--before` exits clean and changes nothing, so a bound
-written that way reports success, bounds nothing, and is indistinguishable from a
-lane with nothing to do. **The lock must be deleted before the resolve for the
-date bound to reach the tree at all.** The third and fourth are the mass-rollback
-failure FND-359 corrected before merge — the four were `fast-uri`, `hono`, `jose`
-and `negotiator`, all adopted by `main` before this bound existed.
-
-So the mechanism gates the file as a unit:
-
-1. re-resolve from `package.json` alone with `--before` set to the window,
-2. compare against the lock `main` ships, on the newest version each package
-   *name* is pinned at — by name and not by install path, so a package moving
-   between a hoisted and a nested position is not read as one entry vanishing and
-   another appearing,
-3. any name whose newest version went down, restore `main`'s lock **verbatim**;
-   otherwise take the bounded resolve.
-
-It cannot roll anything back, structurally rather than as a policy: the only two
-things it can ever write are a resolve that regressed nothing and the exact bytes
-it compared against. **A decline is exit 0, not an error.** Nothing in CI installs
-this lock — there is no `npm ci` anywhere in the repo — so unlike the uv side
-there is no required check a red could hold the branch on, and the state a decline
-leaves is the safe one. Non-zero is reserved for the cases with no safe outcome at
-all: npm unavailable, an unparseable lock, or a `package.json` that has moved away
-from the baseline the fallback was resolved against.
-
-The cost is the coupling, and it is real: one package `main` adopted inside the
-window holds the entire npm lock until it ages out. It is not permanent — under
-this bound `main` only ever takes versions that were already `--window` old, so
-the pre-bound adoptions age past the window and the file starts moving again.
-
-Do not reuse `packaging.Version` for the comparison, tempting as it is: PEP 440
-reads `1.0.0-1` as `1.0.0.post1` and ranks it **above** `1.0.0`, so a rollback
-from a release to one of its own prereleases would read as an upgrade, and it
-rejects `7.0.0-next.5` outright — an ordinary npm channel — which the uv driver
-treats as "cannot compare" and therefore as a regression, wedging the file into
-declining every run.
-
 ### What `checks/dep-cooldown` still reports, and why that is not a bug here
 
-The bound runs at `P3D` on both halves, matching the fleet's policy. The
+The bound runs at `P3D` on both uv projects, matching the fleet's policy. The
 `checks/dep-cooldown` check run enforces **7 days** — measured 2026-08-24 on
 \#3365, which it failed on a 3-day-old release. So an adoption aged between 3 and 7
 days is bounded correctly by policy and still reported by the check. Measured

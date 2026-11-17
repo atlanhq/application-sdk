@@ -184,7 +184,7 @@ facts {
       "from __future__ import annotations\n\n" +
       "from typing import Annotated, Any, ClassVar\n\n" +
       "import orjson\n" +
-      "from application_sdk.contracts.types import MaxItems\n" +
+      "from application_sdk.contracts.types import FileReference, MaxItems\n" +
       "from application_sdk.credentials.ref import CredentialRef\n" +
       "from application_sdk.observability.logger_adaptor import get_logger\n" +
       "from application_sdk.templates.contracts import ExtractionInput\n" +
@@ -194,7 +194,8 @@ facts {
     )
     !fullInputPy.contains("import json\n")
     !fullInputPy.contains("ConnectionRef")
-    !fullInputPy.contains("FileReference")
+    // The full example's FileUploader is what imports FileReference.
+    fullInputPy.contains("    mapping_file: FileReference | None = None\n")
   }
 
   ["JSON-object-string coercion uses orjson and logs its fallback"] {

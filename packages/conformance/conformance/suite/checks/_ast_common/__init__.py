@@ -9,6 +9,14 @@ consume it without reaching into one another's private surface.
 
 from __future__ import annotations
 
+from ._bindings import (
+    UNTRUSTED,
+    ImportClassifier,
+    NameResolver,
+    attribute_root,
+    scope_bindings,
+    scoped_calls,
+)
 from ._cli import TOOL_VERSION, make_cli_main
 from ._directives import _IgnoreDirective, _parse_directives, parse_ignore_directive
 from ._discovery import EXCLUDE_DIRS, discover
@@ -49,9 +57,15 @@ from ._toml_suppress import (
 from ._yaml import strip_yaml_comment, yaml_comment_start
 
 __all__ = [
+    "UNTRUSTED",
+    "ImportClassifier",
+    "NameResolver",
+    "attribute_root",
     "base_names",
     "leaf_name",
     "pascal_to_kebab",
+    "scope_bindings",
+    "scoped_calls",
     "strip_yaml_comment",
     "yaml_comment_start",
     "merge_alias_targets",

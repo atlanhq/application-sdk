@@ -84,7 +84,8 @@ from renovate_pkl_sync import regenerate_tree  # noqa: E402
 
 # Everything a contract can emit, relative to the repo root, as git pathspecs.
 # Mirrors the cleanup/stage list in contract-toolkit/scripts/regenerate-all.sh
-# and renovate_pkl_sync.py.
+# (which removes the examples' whole contract/generated/, since they keep
+# nothing else there) and renovate_pkl_sync.py.
 # CALLER_NODE_PATHSPEC names a system app's caller nodes only (FND-3563): the
 # rest of contract/generated/ is the app's.
 OUTPUT_PATHS = [GENERATED_DIR, CALLER_NODE_PATHSPEC, *ROOT_FILES]

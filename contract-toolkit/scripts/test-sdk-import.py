@@ -1,7 +1,9 @@
 """Validate generated Python against the SDK.
 
-Every generated _input.py and _e2e_*.py must import cleanly, and the SDK names
-``src/SdkNames.pkl`` copies by hand must match the installed SDK.
+Every generated _input.py and _e2e_*.py must import cleanly, the SDK names
+``src/SdkNames.pkl`` copies by hand must match the installed SDK, and every
+default in a generated ``_e2e_substitutions.py`` must pass the matching field
+of the ``_input.py`` generated beside it.
 
 Requires: pip install git+https://github.com/atlanhq/application-sdk.git@main
 """
@@ -114,6 +116,89 @@ def test_e2e(path: Path) -> bool:
     return True
 
 
+def _generated_class(mod: object, suffix: str) -> type | None:
+    """The most-specific public class in ``mod`` whose name ends in ``suffix``."""
+    matches = sorted(
+        (n for n in dir(mod) if n.endswith(suffix) and not n.startswith("_")),
+        key=len,
+        reverse=True,
+    )
+    return getattr(mod, matches[0]) if matches else None
+
+
+# Known substitution/input disagreements, each tracked by an issue. An entry
+# that stops failing is reported too, so the exemption is removed with the fix.
+_KNOWN_DISAGREEMENTS: dict[tuple[str, str], str] = {
+    # SqlTree: substitution `dict[str, Any] | None = None` vs input `dict[str, str]`.
+    ("examples/full/app/generated/_e2e_substitutions.py", "schemas"): "FND-5019",
+}
+
+
+def check_substitution_round_trip(subs_path: Path) -> list[str]:
+    """Validate each substitution default against the generated input field.
+
+    App.pkl types a widget twice: ``widgetInputField`` for ``_input.py`` and
+    ``getSubsFieldLine`` for ``_e2e_substitutions.py``. The e2e harness
+    substitutes the dumped substitution default into the DAG arg, which the
+    app then validates with its input contract, so a default the input field
+    rejects fails every default e2e run. Only fields the generated subclass
+    declares are checked; inherited SDK fields are not generated here.
+    """
+    from pydantic import BaseModel, TypeAdapter, ValidationError
+
+    input_path = subs_path.with_name("_input.py")
+    if not input_path.exists():
+        return []
+    subs_mod, err = _load_module(subs_path)
+    input_mod, input_err = _load_module(input_path)
+    if subs_mod is None or input_mod is None:
+        return [f"{subs_path}: cannot load for round-trip ({err or input_err})"]
+    subs_cls = _generated_class(subs_mod, "MustacheSubstitutions")
+    input_cls = getattr(input_mod, "AppInputContract", None)
+    if subs_cls is None or input_cls is None:
+        return [f"{subs_path}: substitutions or AppInputContract class not found"]
+
+    inherited: set[str] = set()
+    for base in subs_cls.__mro__[1:]:
+        if isinstance(base, type) and issubclass(base, BaseModel):
+            inherited |= set(base.model_fields)
+
+    rel = subs_path.relative_to(REPO_ROOT).as_posix()
+    errors: list[str] = []
+    for name, field in subs_cls.model_fields.items():
+        if name in inherited:
+            continue
+        # Both files are generated from the same uiConfig key, so a substitution
+        # with no input field (SDK base-class fields count) means the generators
+        # diverged on the field's name or inclusion.
+        if name not in input_cls.model_fields:
+            errors.append(
+                f"{rel}: substitution field '{name}' has no AppInputContract field"
+            )
+            continue
+        default = field.get_default(call_default_factory=True)
+        dumped = TypeAdapter(field.annotation).dump_python(default, mode="json")
+        mine = []
+        try:
+            input_cls.model_validate({name: dumped})
+        except ValidationError as exc:
+            # Other required input fields are absent by construction; only
+            # an error on this field is a ladder disagreement.
+            mine = [e for e in exc.errors() if e["loc"][:1] == (name,)]
+        issue = _KNOWN_DISAGREEMENTS.get((rel, name))
+        if mine and issue is None:
+            errors.append(
+                f"{rel}: default {dumped!r} for '{name}' fails "
+                f"AppInputContract: {mine[0]['msg']}"
+            )
+        elif not mine and issue is not None:
+            errors.append(
+                f"{rel}: '{name}' now passes; remove its _KNOWN_DISAGREEMENTS "
+                f"entry ({issue})"
+            )
+    return errors
+
+
 def _imported_class_names(path: Path) -> set[str]:
     """Class-shaped names a generated module imports at module level."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -208,6 +293,19 @@ def main() -> int:
             if not test_e2e(path):
                 failed += 1
 
+    subs_files = [p for p in e2e_files if p.stem == "_e2e_substitutions"]
+    logger.info(
+        ":: Validating %d _e2e_substitutions.py defaults against _input.py...",
+        len(subs_files),
+    )
+    round_trip_errors: list[str] = []
+    for path in subs_files:
+        round_trip_errors += check_substitution_round_trip(path)
+    for err in round_trip_errors:
+        logger.error("FAIL: %s", err)
+    if not round_trip_errors:
+        logger.info("  OK: every substitution default passes its input field")
+
     logger.info(":: Comparing SdkNames.pkl with the SDK...")
     name_errors = check_sdk_names(input_files)
     for err in name_errors:
@@ -216,12 +314,14 @@ def main() -> int:
         logger.info("  OK: SdkNames.pkl matches the SDK")
 
     total = len(input_files) + len(e2e_files)
-    if failed or name_errors:
+    if failed or name_errors or round_trip_errors:
         logger.error(
-            "%d/%d files failed import test; %d SdkNames.pkl mismatch(es).",
+            "%d/%d files failed import test; %d SdkNames.pkl mismatch(es); "
+            "%d substitution default(s) rejected by _input.py.",
             failed,
             total,
             len(name_errors),
+            len(round_trip_errors),
         )
         return 1
 
