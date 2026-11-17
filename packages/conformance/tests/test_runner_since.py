@@ -200,6 +200,113 @@ def test_the_base_worktree_is_removed(repo: Path) -> None:
     assert len(listed.strip().splitlines()) == 1
 
 
+def test_a_plain_mv_is_followed_and_the_index_is_left_alone(repo: Path) -> None:
+    """``mv`` leaves the destination untracked; ``git mv`` is not required.
+
+    The rename is found by staging into a throwaway index, so nothing the user
+    has (or has not) staged may change.
+    """
+    (repo / "app" / "old.py").rename(repo / "app" / "moved.py")
+    before = subprocess.run(  # noqa: S603
+        ["git", "-C", str(repo), "status", "--porcelain"],  # noqa: S607
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert _run(repo, "--since", "main") == 0
+    after = subprocess.run(  # noqa: S603
+        ["git", "-C", str(repo), "status", "--porcelain"],  # noqa: S607
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert after == before
+    assert "?? app/moved.py" in after
+
+
+def test_the_change_is_judged_against_the_merge_base_not_the_ref_tip(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``main`` moved on after the fork and gained a finding in the same file
+    the change adds one to. Compared with the tip of ``main``, that later
+    finding would pay for the change's own; compared with the merge-base, it
+    cannot."""
+    _git(repo, "checkout", "-q", "main")
+    (repo / "app" / "shared.py").write_text(_SWALLOW.format(name="on_main"))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "main moves on")
+    _git(repo, "checkout", "-q", "change")
+    (repo / "app" / "shared.py").write_text(_SWALLOW.format(name="on_change"))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "the change")
+
+    assert _run(repo, "--since", "main") == 1
+    out = capsys.readouterr().out
+    assert "1 blocking introduced by this change, 1 inherited" in out
+    assert "[E002] [INTRODUCED] app/shared.py" in out
+
+
+def test_a_subdirectory_repo_is_compared_with_the_same_subdirectory(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--repo`` names an app inside a larger checkout. A finding elsewhere in
+    the checkout is neither the app's backlog nor its baseline."""
+    root = tmp_path / "mono"
+    app = root / "apps" / "connector"
+    (app / "app").mkdir(parents=True)
+    (app / "pyproject.toml").write_text(
+        '[project]\nname = "atlan-demo-app"\nversion = "0.1.0"\n'
+    )
+    (app / "app" / "old.py").write_text(_SWALLOW.format(name="old"))
+    (root / "elsewhere").mkdir()
+    (root / "elsewhere" / "noise.py").write_text(_SWALLOW.format(name="noise"))
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "base")
+    _git(root, "checkout", "-q", "-b", "change")
+
+    out_file = tmp_path / "out.sarif"
+    argv = ["--repo", str(app), "--series", "E", "--output", str(out_file)]
+    assert runner.main([*argv, "--since", "main"]) == 0
+    assert "0 blocking introduced by this change, 1 inherited" in (
+        capsys.readouterr().out
+    )
+
+    (app / "app" / "new.py").write_text(_SWALLOW.format(name="new"))
+    assert runner.main([*argv, "--since", "main"]) == 1
+    out = capsys.readouterr().out
+    assert "1 blocking introduced by this change, 1 inherited" in out
+    assert "[E002] [INTRODUCED] app/new.py" in out
+
+
+def test_an_unparseable_file_still_fails_and_still_annotates_as_an_error(
+    repo: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing blocking was introduced, but a file went unanalysed. The run
+    fails, so its annotations must not be downgraded to warnings as they are
+    when --since turns an inherited-only failure into a pass."""
+    (repo / "app" / "broken.py").write_text("def broken(:\n")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    assert _run(repo, "--since", "main") == 1
+    out = capsys.readouterr().out
+    assert "0 blocking introduced by this change" in out
+    assert "::error" in out
+
+
+def test_an_inherited_only_pass_annotates_as_a_warning(
+    repo: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    assert _run(repo, "--since", "main") == 0
+    out = capsys.readouterr().out
+    assert "::error" not in out
+    assert "::warning" in out
+
+
 # -- introduced(): the counting rule on its own --------------------------------
 
 
@@ -235,3 +342,10 @@ def test_a_base_finding_follows_its_file_through_a_rename() -> None:
     base = [_f("E002", "old/a.py", 3)]
     assert introduced(head, base, {"old/a.py": "new/a.py"}) == []
     assert len(introduced(head, base)) == 1
+
+
+def test_a_dotfile_and_its_undotted_namesake_are_different_files() -> None:
+    """Only an exact leading ``./`` is normalised away."""
+    head = [_f("E002", "foo.py", 3)]
+    assert len(introduced(head, [_f("E002", ".foo.py", 3)])) == 1
+    assert introduced(head, [_f("E002", "./foo.py", 3)]) == []

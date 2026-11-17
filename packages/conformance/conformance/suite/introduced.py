@@ -39,6 +39,7 @@ only make the gate stricter, never greener.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -59,8 +60,11 @@ class BaseUnavailable(Exception):
     """The base tree could not be resolved, checked out, or scanned."""
 
 
-def _git(root: Path, *args: str) -> str:
-    """Run ``git`` in *root* and return stdout; raise ``BaseUnavailable``."""
+def _git(root: Path, *args: str, env: dict[str, str] | None = None) -> str:
+    """Run ``git`` in *root* and return stdout; raise ``BaseUnavailable``.
+
+    *env* is laid over the process environment for this one call.
+    """
     if shutil.which("git") is None:
         raise BaseUnavailable("git is not installed")
     try:
@@ -70,6 +74,7 @@ def _git(root: Path, *args: str) -> str:
             text=True,
             timeout=_GIT_TIMEOUT_SECONDS,
             check=False,
+            env={**os.environ, **env} if env else None,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise BaseUnavailable(f"git {args[0]} did not run: {exc}") from exc
@@ -84,13 +89,49 @@ def resolve_base(root: Path, since: str) -> str:
     return _git(root, "merge-base", since, "HEAD").strip()
 
 
+def repo_prefix(root: Path) -> str:
+    """Return *root*'s path inside its checkout: ``""`` at the top level.
+
+    ``--repo`` may name a subdirectory of a checkout (an app inside a
+    monorepo). The base worktree is the whole checkout, so the same
+    subdirectory of it is what has to be scanned.
+    """
+    return _git(root, "rev-parse", "--show-prefix").strip()
+
+
 def renamed_paths(root: Path, base_sha: str) -> dict[str, str]:
     """Return ``{path at base: path in the working tree}`` for renamed files.
 
     Compared against the working tree, not ``HEAD``, so a rename that is not
-    committed yet (a local pre-PR run) is still followed.
+    committed yet (a local pre-PR run) is still followed. A plain ``mv`` leaves
+    the destination untracked, and ``git diff`` does not pair an untracked file
+    with a deletion, so the working tree is staged into a THROWAWAY copy of the
+    index first: the real index, and whatever the user has staged, is never
+    touched. Paths are relative to *root* (``--relative``), matching the paths
+    findings carry when ``--repo`` is a subdirectory.
     """
-    out = _git(root, "diff", "--name-status", "-M", "--diff-filter=R", base_sha)
+    index = Path(_git(root, "rev-parse", "--git-path", "index").strip())
+    if not index.is_absolute():
+        index = root / index
+    scratch = Path(tempfile.mkdtemp(prefix="conformance-index-"))
+    try:
+        env = {"GIT_INDEX_FILE": str(scratch / "index")}
+        if index.is_file():
+            shutil.copyfile(index, scratch / "index")
+        _git(root, "add", "--all", "--", ".", env=env)
+        out = _git(
+            root,
+            "diff",
+            "--cached",
+            "--relative",
+            "--name-status",
+            "-M",
+            "--diff-filter=R",
+            base_sha,
+            env=env,
+        )
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
     renames: dict[str, str] = {}
     for line in out.splitlines():
         fields = line.split("\t")
@@ -120,7 +161,9 @@ def base_tree(root: Path, base_sha: str) -> Iterator[Path]:
 
 
 def _key(finding: Finding, renames: dict[str, str] | None = None) -> Key:
-    path = finding.file.lstrip("./")
+    # Exactly one leading ``./``. ``lstrip("./")`` strips any run of dots
+    # and slashes, which would file ``.foo.py`` and ``foo.py`` under one key.
+    path = finding.file.removeprefix("./")
     if renames:
         path = renames.get(path, path)
     return (finding.rule_id, path, finding.discriminator)
@@ -168,9 +211,15 @@ def introduced_since(
     if not head:
         return [], base_sha
     renames = renamed_paths(root, base_sha)
+    prefix = repo_prefix(root)
     with base_tree(root, base_sha) as tree:
+        target = tree / prefix if prefix else tree
+        if not target.is_dir():
+            # The scanned directory did not exist at the base: nothing there
+            # could have been inherited.
+            return list(head), base_sha
         try:
-            base = scan(tree)
+            base = scan(target)
         except Exception as exc:  # noqa: BLE001 - any scan crash fails strict
             raise BaseUnavailable(f"the base tree could not be scanned: {exc}") from exc
     return introduced(head, base, renames), base_sha

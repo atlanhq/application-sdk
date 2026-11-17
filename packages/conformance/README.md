@@ -65,8 +65,13 @@ CONFORMANCE_SINCE=origin/main uv run atlan-application-sdk-conformance detect --
 - Findings the base already carries are still printed and still written to the
   SARIF, which stays the whole-repository result. They do not fail the run.
 - Warnings never fail the run, with or without `--since`.
+- A file that cannot be parsed still fails the run, exactly as without
+  `--since`: it is not compared with the base, because a clean verdict must
+  mean every discovered file was scanned.
 - The working tree is compared, so an uncommitted change is judged the same as
-  a committed one.
+  a committed one, including a file moved with a plain `mv`.
+- `--repo` may be a subdirectory of the checkout; the same subdirectory of the
+  base is what it is compared with.
 - Findings are counted per rule, file and discriminator rather than matched
   line by line, so moving or rewording an existing violation does not count as
   adding one. A change that fixes one violation and adds another of the same
@@ -74,7 +79,9 @@ CONFORMANCE_SINCE=origin/main uv run atlan-application-sdk-conformance detect --
 - The base is only scanned when the working tree has blocking findings, and
   then only for the rules that fired, in a temporary `git worktree`.
 - If the base cannot be compared (a shallow clone, an unknown ref, no git), the
-  run falls back to the whole-repository verdict: stricter, never laxer.
+  run says `falling back to the whole-repository verdict` and does exactly
+  that: stricter, never laxer. No `[INTRODUCED]` line is printed then, so a
+  failure after that message is about the missing base, not about the change.
 - `--exit-zero` still forces exit 0.
 
 `conformance-reusable.yaml` sets `CONFORMANCE_SINCE` to the base commit on

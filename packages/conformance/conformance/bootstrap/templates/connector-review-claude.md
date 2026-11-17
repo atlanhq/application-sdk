@@ -21,9 +21,17 @@ CONFORMANCE_SINCE=origin/main uv run atlan-application-sdk-conformance detect \
 ```
 
 - Exit 0: nothing blocking was introduced. Open the pull request.
-- Exit 1: every line marked `[INTRODUCED]` is a blocking finding your change
+- Exit 1 with `[INTRODUCED]` lines: each is a blocking finding your change
   added. Fix the code and re-run until it exits 0. The rule's guidance is in
   the output and in `/tmp/conformance.sarif`.
+- Exit 1 with `falling back to the whole-repository verdict` and no
+  `[INTRODUCED]` line: the base could not be compared, so the run graded the
+  whole repository. Do not start fixing findings you did not add. Fix the
+  cause the message names (usually `git fetch origin main`, or a shallow
+  clone: `git fetch --unshallow`) and re-run. If it still cannot compare,
+  stop and say so in the pull request.
+- Exit 1 with a `[PARSE]` line: a file could not be parsed. That fails the
+  run whoever broke it; fix it if your change did.
 - Do not silence a finding with `# conformance: ignore[...]`, an exclude
   path, or a test or threshold change. If you believe the rule is wrong for
   this code, stop and say so in the pull request instead of suppressing it.

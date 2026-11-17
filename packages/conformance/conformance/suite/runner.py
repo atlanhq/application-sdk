@@ -726,8 +726,10 @@ def main(argv: list[str] | None = None) -> int:
             "blocking findings the working tree has over the merge-base of REF "
             "and HEAD (e.g. 'origin/main'). Findings the base already carries "
             "are still reported, and still written to the SARIF, but do not "
-            "fail the run. Warnings never fail it. If the base cannot be "
-            f"compared, every blocking finding fails. Default: ${SINCE_ENV}."
+            "fail the run. Warnings never fail it. A file that cannot be "
+            "parsed still fails it, as without --since. If the base cannot "
+            "be compared, every blocking finding fails. "
+            f"Default: ${SINCE_ENV}."
         ),
     )
     args = parser.parse_args(argv)
@@ -798,7 +800,12 @@ def main(argv: list[str] | None = None) -> int:
             active_scope=active_scope,
             excluded_prefixes=excluded_prefixes,
         )
-    inherited_only = change_adds is not None and not change_adds
+    # An unanalysed file fails the run whatever the change added: a clean
+    # verdict must mean every discovered file was scanned. Parse failures
+    # are not compared with the base.
+    unanalysed = bool(parse_failures) and parse_failures_gate
+    # True only when --since turns a whole-repo failure into a pass.
+    inherited_only = change_adds is not None and not change_adds and not unanalysed
 
     if os.getenv("GITHUB_ACTIONS") == "true":
         _emit_github_summary_annotations(
@@ -836,9 +843,7 @@ def main(argv: list[str] | None = None) -> int:
     if change_adds is None:
         return sarif_exit_code
     # The SARIF above keeps the whole-repo result; only the process exit code
-    # answers the narrower question. An unanalysed file still fails: a clean
-    # verdict must mean every discovered file was scanned.
-    unanalysed = bool(parse_failures) and parse_failures_gate
+    # answers the narrower question.
     return 1 if change_adds or unanalysed else 0
 
 
