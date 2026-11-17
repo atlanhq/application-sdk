@@ -40,9 +40,13 @@ agent does and checks what it can:
 * **SDK modules.**  A dotted ``application_sdk.x.y`` must import from this
   repo's tree, and an attribute after it must occur in that module.
 
+* **Absences.**  A reference that names a path, symbol or module *as absent*
+  ("none of the three has a tests/sdr/") is listed in :data:`NAMED_ABSENT`,
+  and the claim is inverted: it fails the day the thing appears.
+
 A backticked path is a literal (a ``.gitignore`` entry, a dialect string), not
-a file to open, and is not checked as one.  A reference that names a path or
-symbol *as absent* ("none of the three has a tests/sdr/") goes in
+a file to open, and is not checked as one.  A token that is neither present
+nor claimed absent (runtime output, a toolkit type) goes in
 :data:`NOT_CHECKED` with the reason.
 """
 
@@ -61,25 +65,42 @@ from pathlib import Path
 REFERENCE_APPS = ("atlan-openapi-app", "atlan-mysql-app", "atlan-metabase-app")
 SDK = "application_sdk"
 
-#: Tokens a reference names on purpose although they are not there — the
-#: reference says the repo does *not* have them, or they are runtime output —
-#: keyed by ``(rule_id, token)`` with the reason.  Every entry is a claim this
-#: tool stops checking, so keep each one tied to the sentence that needs it.
+#: Tokens a reference names that are neither in the repo nor claimed absent
+#: from it — runtime output, a name from another package — keyed by
+#: ``(rule_id, token)`` with the reason.  Every entry is a claim this tool
+#: stops checking, so keep each one tied to the sentence that needs it.
 NOT_CHECKED: Mapping[tuple[str, str], str] = {
     ("E003", "residual/failures.jsonl"): "runtime output the app writes",
     ("K017", "openapi_metadata.json"): "runtime output the transform writes",
     ("K007", "data/toolkit_baseline.json"): "conformance package data, not the app",
-    ("T013", "tests/sdr/"): "named as absent",
-    ("T013", "tests/full_dag/"): "named as absent",
-    ("D012", "uv.toml"): "named as absent",
-    ("K001", "NativeApp.pkl"): "named as absent",
-    ("K001", "NativeAppBundle.pkl"): "named as absent",
     ("K002", "Connectors.Type"): "a toolkit type App.pkl uses, not app source",
-    ("L015", "logging"): "named as absent",
-    ("P055", "metabase_questions"): "named as never populated",
-    ("P059", "json.dumps"): "named as absent",
-    ("B009", "application_sdk.test_utils"): "named as removed from the SDK",
     ("D003", "sqlalchemy.dialects"): "an entry-point group, not a name in source",
+}
+
+
+@dataclass(frozen=True)
+class Absent:
+    """A token the reference says is *not* there, so its claim is inverted."""
+
+    reason: str
+    repos: tuple[str, ...] = ()
+    """For a path, the repos it must be absent from; empty means the repo the
+    reference attributes it to.  A symbol must be absent from every file the
+    reference cites; a module, from the SDK."""
+
+
+#: Tokens a reference names *as absent*, keyed by ``(rule_id, token)``.  The
+#: tool fails when one appears, because the sentence naming it is then false.
+NAMED_ABSENT: Mapping[tuple[str, str], Absent] = {
+    ("T013", "tests/sdr/"): Absent("none of the three has one", REFERENCE_APPS),
+    ("T013", "tests/full_dag/"): Absent("none of the three has one", REFERENCE_APPS),
+    ("D012", "uv.toml"): Absent("the index is declared in pyproject.toml instead"),
+    ("K001", "NativeApp.pkl"): Absent("no app contract uses it", REFERENCE_APPS),
+    ("K001", "NativeAppBundle.pkl"): Absent("no app contract uses it", REFERENCE_APPS),
+    ("L015", "logging"): Absent("run_dev.py imports no logging"),
+    ("P055", "metabase_questions"): Absent("the mapper never populates it"),
+    ("P059", "json.dumps"): Absent("no field holds a json.dumps string"),
+    ("B009", "application_sdk.test_utils"): Absent("removed from the SDK"),
 }
 
 _FILE_EXT = r"(?:py|pkl|ya?ml|json|jsonl|toml|sql|lock|cfg|txt|md|sh)"
@@ -193,11 +214,15 @@ def _is_skipped(token: str, leads: bool) -> bool:
 
 def _resolve(root: Path, token: str, dirs: Sequence[Path]) -> Path | None:
     rel = token.rstrip("/")
-    for base in (root, *dirs):
+    # A bare filename after a cited directory (``tests/unit/ — …
+    # (test_client.py)``) means the file in that directory: a homonym at the
+    # root or elsewhere must not answer for one the directory lost.
+    bases = dirs if "/" not in rel and dirs else (root, *dirs)
+    for base in bases:
         candidate = base / rel
         if candidate.exists():
             return candidate
-    if "/" not in rel:
+    if "/" not in rel and not dirs:
         for hit in sorted(root.rglob(rel)):
             if ".git" not in hit.relative_to(root).parts:
                 return hit
@@ -222,6 +247,20 @@ def _read(path: Path) -> str:
         return ""
 
 
+def _contains_literal(paths: Iterable[Path], symbol: str) -> bool:
+    """True if *symbol* occurs as written (``json.dumps`` but not ``orjson.dumps``)."""
+    pattern = re.compile(r"(?<![\w.])" + re.escape(symbol) + r"\b")
+    return any(pattern.search(_read(f)) for f in _files_under(paths))
+
+
+def _files_under(paths: Iterable[Path]) -> Iterator[Path]:
+    for path in paths:
+        if path.is_file():
+            yield path
+        else:
+            yield from sorted(p for p in path.rglob("*") if p.is_file())
+
+
 def _contains_symbol(paths: Iterable[Path], symbol: str) -> bool:
     """True if *symbol* occurs in a cited file.
 
@@ -229,17 +268,8 @@ def _contains_symbol(paths: Iterable[Path], symbol: str) -> bool:
     ``CredentialRef.resolve``), or its leaf alone: ``BaseE2ETest.entrypoint``
     is cited from a subclass that never spells the base's name.
     """
-    words = symbol.split(".")
-    leaf = re.compile(r"\b" + re.escape(words[-1]) + r"\b")
-    for path in paths:
-        files = (
-            [path]
-            if path.is_file()
-            else sorted(p for p in path.rglob("*") if p.is_file())
-        )
-        if any(leaf.search(_read(f)) for f in files):
-            return True
-    return False
+    leaf = re.compile(r"\b" + re.escape(symbol.split(".")[-1]) + r"\b")
+    return any(leaf.search(_read(f)) for f in _files_under(paths))
 
 
 @dataclass
@@ -273,8 +303,20 @@ class _ReferenceCheck:
                 # not a claim about any checkout; test_catalog requires the
                 # repo name.
                 repo = SDK if sdk_rel is not None else seg.repo
-                if repo is not None:
+                absent = NAMED_ABSENT.get((self.rule_id, token))
+                if absent is not None and repo is not None:
+                    self._absent_path(token, absent.repos or (repo,))
+                elif repo is not None:
                     self._path(repo, sdk_rel or token, m.group("start"), m.group("end"))
+
+    def _absent_path(self, token: str, repos: Iterable[str]) -> None:
+        for repo in repos:
+            claim = self._claim(repo, "absent-path", token)
+            root = self.roots.get(repo)
+            if root is None:
+                self._fail(claim, "no checkout supplied")
+            elif _resolve(root, token, ()) is not None:
+                self._fail(claim, "now exists; the reference says it does not")
 
     def _path(self, repo: str, token: str, start: str | None, end: str | None) -> None:
         claim = self._claim(repo, "path", token)
@@ -305,8 +347,13 @@ class _ReferenceCheck:
         for dotted in dict.fromkeys(_SDK_MODULE_RE.findall(reference)):
             if (self.rule_id, dotted) in NOT_CHECKED:
                 continue
-            claim = self._claim(SDK, "module", dotted)
             hit = _resolve_module(sdk_root, dotted) if sdk_root else None
+            if (self.rule_id, dotted) in NAMED_ABSENT:
+                claim = self._claim(SDK, "absent-module", dotted)
+                if hit is not None and not hit[1]:
+                    self._fail(claim, "now exists; the reference says it was removed")
+                continue
+            claim = self._claim(SDK, "module", dotted)
             if hit is None:
                 self._fail(claim, "no such module")
                 continue
@@ -319,15 +366,21 @@ class _ReferenceCheck:
     def symbols(self, reference: str) -> None:
         # Checked against everything the reference cited, across repos:
         # "`X` in app/a.py, as app/b.py does" names X in either file.
+        # With nothing cited there is nowhere to look for a symbol, and the
+        # failed path claim already says so; an absence still gets its claim.
         cited = [*self.files, *(d for ds in self.dirs.values() for d in ds)]
-        if not cited:
-            return
-        repos = "+".join(sorted(_repos_of(cited, self.roots)))
+        repos = "+".join(sorted(_repos_of(cited, self.roots))) or "?"
         spans = (
             _CALL_SUFFIX_RE.sub("", s.strip()) for s in _BACKTICK_RE.findall(reference)
         )
         for raw in dict.fromkeys(spans):
-            if self._is_symbol(raw):
+            if (self.rule_id, raw) in NAMED_ABSENT:
+                claim = self._claim(repos, "absent-symbol", raw)
+                if _contains_literal(cited, raw):
+                    self._fail(
+                        claim, "now in a cited file; the reference says it is not"
+                    )
+            elif cited and self._is_symbol(raw):
                 claim = self._claim(repos, "symbol", raw)
                 if not _contains_symbol(cited, raw):
                     self._fail(claim, "not found in any file the reference cites")
@@ -336,6 +389,7 @@ class _ReferenceCheck:
         return not (
             raw in _NOT_SYMBOLS
             or (self.rule_id, raw) in NOT_CHECKED
+            or (self.rule_id, raw) in NAMED_ABSENT
             or not _SYMBOL_RE.match(raw)
             or _PATH_RE.fullmatch(raw)
             or _SDK_MODULE_RE.fullmatch(raw)

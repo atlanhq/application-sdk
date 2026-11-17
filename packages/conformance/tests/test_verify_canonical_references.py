@@ -99,6 +99,18 @@ def test_file_resolves_under_a_directory_the_reference_cited(
     assert _failures(ref, roots) == []
 
 
+def test_bare_filename_after_a_cited_directory_must_be_in_it(
+    roots: dict[str, Path],
+) -> None:
+    mysql = roots["atlan-mysql-app"]
+    ref = "atlan-mysql-app tests/unit/ — the client tests (test_client.py)."
+    assert _failures(ref, roots) == []
+    # The directory loses the file; a root-level homonym must not answer for it.
+    (mysql / "tests/unit/test_client.py").unlink()
+    _write(mysql, "test_client.py", "def test_x():\n    assert 1\n")
+    assert _failures(ref, roots) == ["path:test_client.py"]
+
+
 def test_bare_filename_resolves_anywhere_in_the_repo(roots: dict[str, Path]) -> None:
     assert _failures("atlan-mysql-app — see test_client.py.", roots) == []
     assert _failures("atlan-mysql-app — see test_gone.py.", roots) == [
@@ -228,24 +240,74 @@ def test_sdk_module_and_attribute(roots: dict[str, Path]) -> None:
     assert _failures("`application_sdk.__file__`", roots) == []
 
 
-# ── NOT_CHECKED ──────────────────────────────────────────────────────────────
+# ── NOT_CHECKED / NAMED_ABSENT ────────────────────────────────────────────────
 
 
 def test_not_checked_skips_only_for_its_own_rule(roots: dict[str, Path]) -> None:
-    ref = "atlan-mysql-app pyproject.toml — declared here rather than a uv.toml."
-    assert _failures(ref, roots, rule_id="D012") == []
-    assert _failures(ref, roots, rule_id="D013") == ["path:uv.toml"]
+    ref = "atlan-openapi-app app/connector.py — writes openapi_metadata.json."
+    _write(roots["atlan-openapi-app"], "app/connector.py")
+    assert _failures(ref, roots, rule_id="K017") == []
+    assert _failures(ref, roots, rule_id="K018") == ["path:openapi_metadata.json"]
 
 
-def test_every_not_checked_entry_names_a_token_its_rule_still_cites() -> None:
+@pytest.mark.parametrize(
+    "key", [*vcr.NOT_CHECKED, *vcr.NAMED_ABSENT], ids=lambda k: f"{k[0]}:{k[1]}"
+)
+def test_every_exemption_names_a_token_its_rule_still_cites(
+    key: tuple[str, str],
+) -> None:
     """An entry whose rule no longer says the token is a dead exemption."""
     references = {r.id: r.canonical_reference for r in load_catalog()}
-    stale = [
-        key
-        for key in vcr.NOT_CHECKED
-        if key[0] not in references or key[1] not in references[key[0]]
+    assert key[1] in references.get(key[0], ""), f"{key} is no longer cited"
+
+
+def test_every_named_absence_is_checked() -> None:
+    """Each NAMED_ABSENT entry turns into an inverted claim, not a skip."""
+    roots = {name: Path("/nonexistent") for name in (*vcr.REFERENCE_APPS, vcr.SDK)}
+    references = dict(vcr._catalog_references())
+    for rule_id, token in vcr.NAMED_ABSENT:
+        claims, _ = vcr.verify_reference(rule_id, references[rule_id], roots)
+        kinds = {c.kind for c in claims if c.value == token}
+        assert kinds and all(k.startswith("absent-") for k in kinds), (rule_id, token)
+
+
+def test_absent_path_fails_once_it_appears(roots: dict[str, Path]) -> None:
+    # T013 says none of the three has a tests/sdr/; metabase gaining one makes
+    # the sentence false wherever the reference attributes it.
+    ref = (
+        "atlan-metabase-app tests/ — everything sits under unit/. None of the "
+        "three reference apps has a tests/sdr/ or a tests/full_dag/."
+    )
+    _write(roots["atlan-metabase-app"], "tests/unit/test_x.py")
+    assert _failures(ref, roots, rule_id="T013") == []
+    _write(roots["atlan-mysql-app"], "tests/sdr/test_y.py")
+    assert _failures(ref, roots, rule_id="T013") == ["absent-path:tests/sdr/"]
+
+
+def test_absent_path_defaults_to_the_attributed_repo(roots: dict[str, Path]) -> None:
+    ref = "atlan-mysql-app pyproject.toml — declared here rather than a uv.toml."
+    _write(roots["atlan-openapi-app"], "uv.toml")
+    assert _failures(ref, roots, rule_id="D012") == []
+    _write(roots["atlan-mysql-app"], "uv.toml")
+    assert _failures(ref, roots, rule_id="D012") == ["absent-path:uv.toml"]
+
+
+def test_absent_symbol_fails_once_a_cited_file_has_it(roots: dict[str, Path]) -> None:
+    ref = "atlan-metabase-app app/contracts.py — no field holds a `json.dumps` string."
+    _write(roots["atlan-metabase-app"], "app/contracts.py", "orjson.dumps(x)\n")
+    assert _failures(ref, roots, rule_id="P059") == []
+    _write(roots["atlan-metabase-app"], "app/contracts.py", "json.dumps(x)\n")
+    assert _failures(ref, roots, rule_id="P059") == ["absent-symbol:json.dumps"]
+
+
+def test_absent_module_fails_once_it_is_restored(roots: dict[str, Path]) -> None:
+    ref = "atlan-openapi-app pyproject.toml — never imports application_sdk.test_utils."
+    _write(roots["atlan-openapi-app"], "pyproject.toml")
+    assert _failures(ref, roots, rule_id="B009") == []
+    _write(roots[vcr.SDK], "application_sdk/test_utils/__init__.py")
+    assert _failures(ref, roots, rule_id="B009") == [
+        "absent-module:application_sdk.test_utils"
     ]
-    assert not stale, f"NOT_CHECKED entries no longer cited: {stale}"
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
