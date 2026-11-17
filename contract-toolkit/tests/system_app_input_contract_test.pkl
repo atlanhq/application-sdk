@@ -104,11 +104,13 @@ facts {
     (systemApp) { inputContractPath = "pkl/input.pkl" }.output.files.containsKey("pkl/input.pkl")
   }
 
-  ["By default the node imports the toolkit from its synced home, src/system/"] {
+  ["By default the node imports the toolkit as ../App.pkl and claims no sync"] {
     let (text = (systemApp) { inputContractToolkitImport = (App) { name = "x"; icon = "i" }.inputContractToolkitImport }
       .output.files["contract/generated/input.pkl"].text)
     text.contains("\nimport \"../App.pkl\" as App\n")
-      && text.contains("// Synced into app-contract-toolkit as `system/system-app.pkl`.")
+      && text.contains("\n// A caller adds `new SystemAppNode { ... }` to its contract's `extraNodes`.\n")
+      && !text.contains("Synced into")
+      && !text.contains("@app-contract-toolkit/system/")
   }
 
   ["Input names map to camelCase properties, quoting Pkl keywords"] {
