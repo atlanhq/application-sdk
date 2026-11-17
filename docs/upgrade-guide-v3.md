@@ -1387,6 +1387,21 @@ The SDK no longer reads these constants: the run mode comes from `ATLAN_APP_MODE
 
 ---
 
+## Hypothesis strategies: orphaned modules and a duplicate (deprecated, removed in v4.0.0)
+
+Three strategy modules had no importer anywhere in the SDK or its tests. Every public name in them is deprecated and removed in v4.0.0. `strategies.sql_client` duplicated `strategies.clients.sql`; its strategies moved there, and the old module serves them with a warning until v4.0.0. B001 flags each import.
+
+| Deprecated | Replacement |
+|---|---|
+| `testing.hypothesis.strategies.sql_client.*` | the same name in `testing.hypothesis.strategies.clients.sql` |
+| `testing.hypothesis.strategies.handlers.sql.sql_metadata.*` | none; build strategies from your app's own metadata rows in its tests |
+| `testing.hypothesis.strategies.handlers.sql.sql_preflight.*` | none; build strategies from your app's typed preflight `Input` contract |
+| `testing.hypothesis.strategies.outputs.statestore.*` | none; build strategies from your app's own credential and config models |
+
+Every integer the remaining strategies draw is now bounded. `sqlalchemy_connect_args_strategy`, `sql_engine_config_strategy` and the logger strategies' `attempt` and timeouts draw no negative sizes, counts or timeouts (`pool_recycle` keeps SQLAlchemy's `-1`, "never recycle"), and every one has an upper bound. `sql_data_strategy` and `sql_query_strategy` draw within the 64-bit signed range. A property test that relied on drawing a negative timeout or an arbitrarily large integer from these strategies no longer sees one.
+
+---
+
 ## Distributed locks (deprecated, removed in v4.0.0)
 
 `needs_lock` has no effect in v3. `create_worker` registers neither the lock interceptor nor the `acquire_distributed_lock` / `release_distributed_lock` activities, and it takes no extra activities, so a task decorated with `needs_lock` runs with no concurrency limit. Setting `IS_LOCKING_DISABLED=false` does not change that. `needs_lock` now emits a `DeprecationWarning`, and `create_worker` logs a warning naming each decorated task.

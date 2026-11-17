@@ -1992,6 +1992,285 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "database_entry_strategy is deprecated; use a strategy built from your app's own metadata rows \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata",
+      "removal_version": "4.0.0",
+      "symbol": "database_entry_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "database_list_strategy is deprecated; use a strategy built from your app's own metadata rows \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata",
+      "removal_version": "4.0.0",
+      "symbol": "database_list_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "database_name_strategy is deprecated; use a strategy built from your app's own metadata rows \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata",
+      "removal_version": "4.0.0",
+      "symbol": "database_name_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "metadata_entry_strategy is deprecated; use a strategy built from your app's own metadata rows \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata",
+      "removal_version": "4.0.0",
+      "symbol": "metadata_entry_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "metadata_list_strategy is deprecated; use a strategy built from your app's own metadata rows \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata",
+      "removal_version": "4.0.0",
+      "symbol": "metadata_list_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "schema_entry_strategy is deprecated; use a strategy built from your app's own metadata rows \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata",
+      "removal_version": "4.0.0",
+      "symbol": "schema_entry_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "schema_list_strategy is deprecated; use a strategy built from your app's own metadata rows \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata",
+      "removal_version": "4.0.0",
+      "symbol": "schema_list_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "schema_name_strategy is deprecated; use a strategy built from your app's own metadata rows \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata",
+      "removal_version": "4.0.0",
+      "symbol": "schema_name_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "sql_handler_config_strategy is deprecated; use a strategy built from your app's own metadata rows \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata",
+      "removal_version": "4.0.0",
+      "symbol": "sql_handler_config_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "sql_query_strategy is deprecated; use a strategy built from your app's own metadata rows \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata",
+      "removal_version": "4.0.0",
+      "symbol": "sql_query_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "database_name_strategy is deprecated; use a strategy built from your app's typed preflight Input contract \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight",
+      "removal_version": "4.0.0",
+      "symbol": "database_name_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "db_schema_mapping_strategy is deprecated; use a strategy built from your app's typed preflight Input contract \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight",
+      "removal_version": "4.0.0",
+      "symbol": "db_schema_mapping_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "metadata_entry_tuple_strategy is deprecated; use a strategy built from your app's typed preflight Input contract \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight",
+      "removal_version": "4.0.0",
+      "symbol": "metadata_entry_tuple_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "metadata_list_strategy is deprecated; use a strategy built from your app's typed preflight Input contract \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight",
+      "removal_version": "4.0.0",
+      "symbol": "metadata_list_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "mixed_mapping_strategy is deprecated; use a strategy built from your app's typed preflight Input contract \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight",
+      "removal_version": "4.0.0",
+      "symbol": "mixed_mapping_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "preflight_check_payload_strategy is deprecated; use a strategy built from your app's typed preflight Input contract \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight",
+      "removal_version": "4.0.0",
+      "symbol": "preflight_check_payload_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "regex_db_schema_mapping_strategy is deprecated; use a strategy built from your app's typed preflight Input contract \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight",
+      "removal_version": "4.0.0",
+      "symbol": "regex_db_schema_mapping_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "schema_list_strategy is deprecated; use a strategy built from your app's typed preflight Input contract \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight",
+      "removal_version": "4.0.0",
+      "symbol": "schema_list_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "schema_name_strategy is deprecated; use a strategy built from your app's typed preflight Input contract \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight",
+      "removal_version": "4.0.0",
+      "symbol": "schema_name_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "schema_selection_strategy is deprecated; use a strategy built from your app's typed preflight Input contract \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight",
+      "removal_version": "4.0.0",
+      "symbol": "schema_selection_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "version_comparison_strategy is deprecated; use a strategy built from your app's typed preflight Input contract \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight",
+      "removal_version": "4.0.0",
+      "symbol": "version_comparison_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "version_tuple_strategy is deprecated; use a strategy built from your app's typed preflight Input contract \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight",
+      "removal_version": "4.0.0",
+      "symbol": "version_tuple_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "wildcard_schema_strategy is deprecated; use a strategy built from your app's typed preflight Input contract \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight",
+      "removal_version": "4.0.0",
+      "symbol": "wildcard_schema_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "common_credential_keys is deprecated; use a strategy built from your app's own credential model \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.outputs.statestore",
+      "removal_version": "4.0.0",
+      "symbol": "common_credential_keys"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "configuration_strategy is deprecated; use a strategy built from your app's own config model instead \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.outputs.statestore",
+      "removal_version": "4.0.0",
+      "symbol": "configuration_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "credential_value_strategy is deprecated; use a strategy built from your app's own credential model \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.outputs.statestore",
+      "removal_version": "4.0.0",
+      "symbol": "credential_value_strategy"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "credentials_strategy is deprecated; use a strategy built from your app's own credential model instead \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.outputs.statestore",
+      "removal_version": "4.0.0",
+      "symbol": "credentials_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "safe_string_strategy is deprecated; use hypothesis.strategies.text() \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.outputs.statestore",
+      "removal_version": "4.0.0",
+      "symbol": "safe_string_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "state_store_entry_strategy is deprecated; use a strategy built from your app's own credential and config models \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.outputs.statestore",
+      "removal_version": "4.0.0",
+      "symbol": "state_store_entry_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "state_store_key_strategy is deprecated; use a strategy built from your app's own state-store keys \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.outputs.statestore",
+      "removal_version": "4.0.0",
+      "symbol": "state_store_key_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "uuid_strategy is deprecated; use hypothesis.strategies.uuids().map(str) \u2014 no SDK code or test uses this module. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.outputs.statestore",
+      "removal_version": "4.0.0",
+      "symbol": "uuid_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "auth_credentials_strategy is deprecated; use a strategy built from your app's own credential model \u2014 it generates the v2 server's credential dict. Will be removed in v4.0.",
       "migration_target": true,
       "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
@@ -2033,6 +2312,69 @@
       "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
       "removal_version": "4.0",
       "symbol": "workflow_event_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "mock_sql_batch_strategy is deprecated; use application_sdk.testing.hypothesis.strategies.clients.sql.mock_sql_batch_strategy \u2014 the SQL client strategies live in one module now. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.sql_client",
+      "removal_version": "4.0.0",
+      "symbol": "mock_sql_batch_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "mock_sql_column_description_strategy is deprecated; use application_sdk.testing.hypothesis.strategies.clients.sql.mock_sql_column_description_strategy \u2014 the SQL client strategies live in one module now. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.sql_client",
+      "removal_version": "4.0.0",
+      "symbol": "mock_sql_column_description_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "mock_sql_query_result_strategy is deprecated; use application_sdk.testing.hypothesis.strategies.clients.sql.mock_sql_query_result_strategy \u2014 the SQL client strategies live in one module now. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.sql_client",
+      "removal_version": "4.0.0",
+      "symbol": "mock_sql_query_result_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "mock_sql_row_strategy is deprecated; use application_sdk.testing.hypothesis.strategies.clients.sql.mock_sql_row_strategy \u2014 the SQL client strategies live in one module now. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.sql_client",
+      "removal_version": "4.0.0",
+      "symbol": "mock_sql_row_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "sql_connection_string_strategy is deprecated; use application_sdk.testing.hypothesis.strategies.clients.sql.sql_connection_string_strategy \u2014 the SQL client strategies live in one module now. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.sql_client",
+      "removal_version": "4.0.0",
+      "symbol": "sql_connection_string_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "sql_engine_config_strategy is deprecated; use application_sdk.testing.hypothesis.strategies.clients.sql.sql_engine_config_strategy \u2014 the SQL client strategies live in one module now. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.sql_client",
+      "removal_version": "4.0.0",
+      "symbol": "sql_engine_config_strategy"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "sql_error_strategy is deprecated; use application_sdk.testing.hypothesis.strategies.clients.sql.sql_error_strategy \u2014 the SQL client strategies live in one module now. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.hypothesis.strategies.sql_client",
+      "removal_version": "4.0.0",
+      "symbol": "sql_error_strategy"
     },
     {
       "kind": "constant",

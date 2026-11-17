@@ -5,6 +5,12 @@ from unittest import mock
 from hypothesis import strategies as st
 from hypothesis.strategies import DrawFn
 
+#: Temporal attempts start at 1; the bound keeps them a plausible int32.
+_attempts = st.integers(min_value=1, max_value=2**31 - 1)
+
+#: Activity timeouts, in whole seconds: up to one day.
+_timeout_seconds = st.integers(min_value=0, max_value=86_400)
+
 
 @st.composite
 def workflow_info_strategy(draw: DrawFn) -> mock.Mock:
@@ -22,7 +28,7 @@ def workflow_info_strategy(draw: DrawFn) -> mock.Mock:
         workflow_type=draw(st.text()),
         namespace=draw(st.text()),
         task_queue=draw(st.text()),
-        attempt=draw(st.integers()),
+        attempt=draw(_attempts),
     )
 
 
@@ -42,7 +48,7 @@ def activity_info_strategy(draw: DrawFn) -> mock.Mock:
         activity_id=draw(st.text()),
         activity_type=draw(st.text()),
         task_queue=draw(st.text()),
-        attempt=draw(st.integers()),
-        schedule_to_close_timeout=f"{draw(st.integers())}s",
-        start_to_close_timeout=f"{draw(st.integers())}s",
+        attempt=draw(_attempts),
+        schedule_to_close_timeout=f"{draw(_timeout_seconds)}s",
+        start_to_close_timeout=f"{draw(_timeout_seconds)}s",
     )

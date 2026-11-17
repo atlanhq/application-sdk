@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from httpx import Headers
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 
 from application_sdk.clients.base import BaseClient
 from application_sdk.clients.sql_errors import AbstractClientLoadError
@@ -352,9 +352,6 @@ class TestBaseClient:
         assert "verify" not in call_kwargs
 
     @given(credentials=sql_credentials_strategy)
-    @settings(
-        max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture]
-    )
     def test_initialization_with_various_credentials(self, credentials: dict[str, Any]):
         """Property-based test for initialization with various credentials."""
         client = BaseClient(credentials=credentials)

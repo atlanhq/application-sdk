@@ -1,4 +1,4 @@
-"""The deprecated test surfaces keep serving their names, with a warning, until v4.0.0 (FND-4659, FND-4911).
+"""The deprecated test surfaces keep serving their names, with a warning, until v4.0.0 (FND-4659, FND-4911, FND-4292).
 
 ``testing.full_dag`` has no consumer, and the ``BaseIntegrationTest`` HTTP
 scenario framework is superseded by the in-process fixture kit. None of them can be deleted in the release that deprecates them:
@@ -32,6 +32,10 @@ _ALIAS_MODULES = {
     # the runner's three entry points (FND-4659), and the 46 names of the six
     # modules that exist only to serve it (FND-4911).
     "application_sdk.testing.integration": "",
+    # The duplicate SQL client strategy module, merged into clients.sql (FND-4292).
+    "application_sdk.testing.hypothesis.strategies.sql_client": (
+        "application_sdk.testing.hypothesis.strategies.clients.sql"
+    ),
 }
 
 
@@ -89,6 +93,8 @@ def test_each_old_name_warns_and_is_the_same_object(
         "application_sdk.testing.integration.validation:get_normalised_dataframe",
         "application_sdk.testing.integration.validation:get_schema_file_paths",
         "application_sdk.testing.integration.client:IntegrationTestClient",
+        "application_sdk.testing.hypothesis.strategies.outputs.statestore:credentials_strategy",
+        "application_sdk.testing.hypothesis.strategies.outputs.statestore:configuration_strategy",
     ],
 )
 def test_definitions_carry_a_gate_visible_marker(decorated: str) -> None:
@@ -180,3 +186,46 @@ def test_star_import_still_binds_the_served_full_dag_names() -> None:
 
     assert namespace["logger"] is module._logger  # type: ignore[attr-defined]
     assert namespace["get_logger"] is module._get_logger  # type: ignore[attr-defined]
+
+
+#: Strategy modules nothing imports, deprecated whole (FND-4292). Each old name
+#: is served from the module's own underscore-prefixed binding.
+_ORPHANED_STRATEGY_MODULES = [
+    "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata",
+    "application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight",
+    "application_sdk.testing.hypothesis.strategies.outputs.statestore",
+]
+
+
+def _orphan_cases() -> list[tuple[str, str]]:
+    return [
+        (module_name, name)
+        for module_name in _ORPHANED_STRATEGY_MODULES
+        for name in importlib.import_module(module_name)._DEPRECATED_CONSTANTS  # type: ignore[attr-defined]
+    ]
+
+
+@pytest.mark.parametrize(("module_name", "name"), _orphan_cases())
+def test_each_orphaned_strategy_warns_and_is_the_same_object(
+    module_name: str, name: str
+) -> None:
+    module = importlib.import_module(module_name)
+
+    with pytest.warns(DeprecationWarning, match=rf"{name} is deprecated.*v4\.0\.0"):
+        served = getattr(module, name)
+
+    assert served is getattr(module, f"_{name}")
+
+
+@pytest.mark.parametrize("name", ["credentials_strategy", "configuration_strategy"])
+def test_deprecated_statestore_composites_still_draw(name: str) -> None:
+    """The decorated wrappers warn, then hand back a working strategy."""
+    from hypothesis import find
+
+    from application_sdk.testing.hypothesis.strategies.outputs import statestore
+
+    with pytest.warns(DeprecationWarning, match=rf"{name} is deprecated.*v4\.0\.0"):
+        strategy = getattr(statestore, name)()
+
+    drawn = find(strategy, lambda value: True)
+    assert {"username", "password"} <= drawn.keys()
