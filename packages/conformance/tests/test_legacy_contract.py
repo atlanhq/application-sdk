@@ -20,6 +20,7 @@ from textwrap import dedent
 
 from conformance.suite.checks.legacy_contract import discover, scan_path
 from conformance.suite.rules import get_rule
+from conformance.suite.schema.catalog import rule_help_uri
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
 # ---------------------------------------------------------------------------
@@ -531,8 +532,7 @@ def test_k001_rule_metadata() -> None:
     assert rule.scope == RuleScope.APP
     assert rule.autofixable is False
     assert rule.orthogonal_gate == "pkl-eval"
-    assert rule.help_uri is not None
-    assert "#k001" in rule.help_uri
+    assert rule.help_uri == rule_help_uri("K001")
 
 
 def test_k002_rule_metadata() -> None:
@@ -543,5 +543,4 @@ def test_k002_rule_metadata() -> None:
     assert rule.scope == RuleScope.APP
     assert rule.autofixable is False
     assert rule.orthogonal_gate == "pkl-eval"
-    assert rule.help_uri is not None
-    assert "#k002" in rule.help_uri
+    assert rule.help_uri == rule_help_uri("K002")

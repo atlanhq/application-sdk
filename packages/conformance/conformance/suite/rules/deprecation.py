@@ -39,11 +39,6 @@ from conformance.suite.schema.disposition import (
     RuleScope,
 )
 
-_HELP_BASE = (
-    "https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/"
-    "conformance/docs/rules/deprecation.md"
-)
-
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="B001",
@@ -102,7 +97,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "known false-positive risk); re-export aliasing can produce false\n"
             "negatives.  All are suppressible with ``# conformance: ignore[B001]``.\n"
         ),
-        help_uri=f"{_HELP_BASE}#b001",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-deprecated-symbols",
@@ -144,7 +138,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "checked (decorator, or a class emitting ``DeprecationWarning`` from\n"
             "``__init__`` / ``__init_subclass__``).\n"
         ),
-        help_uri=f"{_HELP_BASE}#b002",
     ),
     RuleDefinition(
         id="B003",
@@ -175,7 +168,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "to residue in the remediation loop.  When the SDK version cannot be\n"
             "determined the check is skipped (overdue-ness is undecidable).\n"
         ),
-        help_uri=f"{_HELP_BASE}#b003",
     ),
     RuleDefinition(
         id="B004",
@@ -210,7 +202,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Scoped to real symbol docstrings (not, e.g., a field literally named\n"
             "``deprecated``), biased toward low false positives at WARN.\n"
         ),
-        help_uri=f"{_HELP_BASE}#b004",
     ),
     RuleDefinition(
         id="B005",
@@ -387,7 +378,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "not the in-place\n"
             "``Any`` replacement P001 mandates, which keeps the outer shape.\n"
         ),
-        help_uri=f"{_HELP_BASE}#b005",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/deprecation.prose.md",
@@ -481,7 +471,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Only appropriate when the contract is pre-deployment (no consumers) and\n"
             "the ledger will be regenerated before the first deploy.\n"
         ),
-        help_uri=f"{_HELP_BASE}#b006",
         remediation_reference=RemediationReference(
             kind=RemediationKind.COMMAND,
             target="uvx atlan-application-sdk-conformance==<version> gen-contract-ledger",
@@ -562,7 +551,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "accepted at WARN.  Suppress with ``# conformance: ignore[B007]\n"
             "<reason>`` where the receiver is genuinely not an SDK reader frame.\n"
         ),
-        help_uri=f"{_HELP_BASE}#b007",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-off-daft",
@@ -657,7 +645,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "object returned by a factory — is not matched, biased toward zero\n"
             "false positives.\n"
         ),
-        help_uri=f"{_HELP_BASE}#b008",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-deprecated-symbols",
@@ -728,7 +715,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "or delete it: it has not run since the module was removed, so check\n"
             "whether a newer file already covers it before porting.\n"
         ),
-        help_uri=f"{_HELP_BASE}#b009",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/deprecation.prose.md",

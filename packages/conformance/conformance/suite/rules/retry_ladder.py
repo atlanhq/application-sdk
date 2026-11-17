@@ -90,9 +90,5 @@ RULES: tuple[RuleDefinition, ...] = (
             "``try`` only guards a log call, say) with a justification:\n"
             "``# conformance: ignore[P060] <reason>``.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/"
-            "conformance/docs/rules/prescriptions.md#p060"
-        ),
     ),
 )

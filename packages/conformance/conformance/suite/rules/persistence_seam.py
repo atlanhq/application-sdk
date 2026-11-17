@@ -182,7 +182,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "justified ``# conformance: ignore[P048] <reason>``, which stays visible in\n"
             "SARIF and turns a silent fork into a reviewed decision.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p048",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -284,7 +283,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "stricter contract is still expressible with a justified\n"
             "``# conformance: ignore[P049] <reason>``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p049",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",

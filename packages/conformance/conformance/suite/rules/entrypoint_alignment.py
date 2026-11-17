@@ -163,10 +163,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "<reason>`` on the decorator line (or the comment-only line directly above"
             " it) records the exception and stays visible in SARIF.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p016"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",

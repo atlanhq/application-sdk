@@ -123,9 +123,5 @@ RULES: tuple[RuleDefinition, ...] = (
             "Suppress a reviewed exception with a justification:\n"
             "``# conformance: ignore[P046] <reason>``.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/"
-            "conformance/docs/rules/prescriptions.md#p046"
-        ),
     ),
 )

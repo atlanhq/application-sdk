@@ -112,7 +112,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Land as ``WARN``: a justified inline ``# conformance: ignore[P066]\n"
             "<reason>`` records a deliberate exception and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p066",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",

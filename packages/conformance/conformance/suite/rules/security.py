@@ -88,10 +88,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "suppressed inline with a justification:\n"
             "``# conformance: ignore[S001] <reason>`` (BLDX-1419).\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/"
-            "conformance/docs/rules/security.md#s001"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/security.prose.md",
@@ -165,10 +161,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Not auto-applied: moving a read onto the seam changes where a production\n"
             "secret comes from, and no gate proves the store holds it under that name. The\n"
             "remediation lane routes S002 findings to a person (``security.prose.md``).\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/"
-            "conformance/docs/rules/security.md#s002"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,

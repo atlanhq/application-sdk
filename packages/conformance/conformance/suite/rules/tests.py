@@ -271,10 +271,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "auto-marking ``conftest.py`` hook precisely to avoid non-obvious hidden "
             "behaviour."
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t001"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/tests.prose.md",
@@ -345,10 +341,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "    class TestMyAppSDR(BaseSDRIntegrationTest):\n"
             "        manifest_path = 'app/generated/manifest.json'\n"
             "        workflow_type = 'extraction'\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t002"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -456,10 +448,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "* Before deleting, move each scenario where the rationale puts it: auth, preflight and credential resolution to the handler unit tests; the full DAG to the generated E2E base (``tests/e2e/``), which the reference apps extend.\n\n"
             "* Update anything under ``tests/`` or the docs that points at the deleted path.\n\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t003"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/tests.prose.md",
@@ -541,10 +529,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "judgment call (a workflow or stress test may launch it, or an explicit\n"
             "``ATLAN_APP_MODULE`` default may already make it safe). The remediation lane\n"
             "routes T004 findings to a person (``tests.prose.md``).\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t004"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
@@ -632,10 +616,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "the outcome (the resource is released, the state is reset) when there is\n"
             "one to assert.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t005"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/tests.prose.md",
@@ -680,10 +660,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Suppress with ``# conformance: ignore[T006] <reason>`` on the ``def``\n"
             "line only for an intentionally-empty test used purely to assert\n"
             "collection/import succeeds (rare).\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t006"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -741,10 +717,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "marker in a larger test body that also contains real assertions\n"
             "elsewhere (in which case T007 shouldn't fire in the first place — file\n"
             "a correction if it does).\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t007"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -804,10 +776,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Not auto-applied: a helper or mixin module with no ``test_`` functions is not\n"
             "a collectable, and renaming it makes pytest import it twice. A person decides\n"
             "which files are real test modules (``tests.prose.md``).\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t008"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
@@ -871,10 +839,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "call's line when the file is intentionally, permanently disabled pending\n"
             "removal in a tracked follow-up.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t009"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/tests.prose.md",
@@ -926,10 +890,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``tests/unit/test_connector.py``), and real outcome assertions\n"
             "(record counts, on-disk side effects, error paths via\n"
             "``pytest.raises``).\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t010"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -993,10 +953,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "instance instead with ``# conformance: ignore[T011] <reason>`` on the\n"
             "first line of ``pyproject.toml``.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t011"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/tests.prose.md",
@@ -1055,10 +1011,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "State the reason in a comment above the table. Suppress a single\n"
             "instance instead with ``# conformance: ignore[T012] <reason>`` on the\n"
             "first line of ``pyproject.toml``.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t012"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -1120,10 +1072,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Not auto-applied: a repo-declared tier such as ``tests/parity`` needs a\n"
             "decision, and moving files must keep their ``conftest.py`` and fixtures. The\n"
             "remediation lane routes T013 findings to a person (``tests.prose.md``).\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t013"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
@@ -1220,10 +1168,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "caller under ``.github/`` (``unit-coverage-fail-under``), which a person sets;\n"
             "``fail_under`` in ``pyproject.toml`` alone does not gate CI (``tests.prose.md``).\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t014"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/tests.prose.md",
@@ -1292,10 +1236,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Not auto-applied: removing an omit without tests drops coverage below the\n"
             "floor and fails the unit tier, and vendored third-party code may stay omitted\n"
             "with a reason. A person applies it (``tests.prose.md``).\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t015"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
@@ -1368,10 +1308,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Suppress with ``# conformance: ignore[T016] <reason>`` on the assignment\n"
             "line only when the overlay is intentionally single-queue (never fans out\n"
             "across matrix legs) and the hard-coded name is deliberate.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t016"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -1458,10 +1394,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``def agent_spec`` line only when the hard-coded queue is deliberate\n"
             "(e.g. a single-leg suite that never fans out and whose overlay also\n"
             "hard-codes the same un-suffixed value).\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t017"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -1564,10 +1496,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "line only when the deselection is deliberate and the deselected tests\n"
             "are run by some other explicitly-configured CI job (rare — prefer the\n"
             "directory + runtime-skip pattern above).\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t018"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -1683,10 +1611,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "deliberate — e.g. every async fixture is loop-agnostic and no test\n"
             "drives fixture-owned work in-body — and state that reason.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t019"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/tests.prose.md",
@@ -1769,10 +1693,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "reusable — its own header documents this — and legitimately keep a\n"
             "bespoke workflow. Suppress with ``# conformance: ignore[T020] <reason>``\n"
             "on the ``uses:`` line and state which native dependency forces it.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t020"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -1859,10 +1779,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "deliberately local-only — e.g. a manual scale harness that must never\n"
             "run in CI — and say so.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t021"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/tests.prose.md",
@@ -1937,10 +1853,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "missing — that failure is the rule working. Suppress with\n"
             "``# conformance: ignore[T022] <reason>`` only for an app whose extract\n"
             "genuinely produces no artifacts to bridge.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t022"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -2035,10 +1947,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "uses with the same defaults, and a test rule must never change published\n"
             "contract values. A person applies it and runs one e2e leg (``tests.prose.md``).\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t023"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/tests.prose.md",
@@ -2110,10 +2018,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Suppress with ``# conformance: ignore[T024] <reason>`` on the ``class``\n"
             "line when the mode is set dynamically (e.g. parametrised from an env\n"
             "var) rather than as a class attribute.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t024"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -2249,10 +2153,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "finding carries its entrypoint as a fingerprint discriminator, so\n"
             "per-entrypoint findings never share a SARIF fingerprint.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t025"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/tests.prose.md",
@@ -2347,10 +2247,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "Suppress with ``# conformance: ignore[T026] <reason>`` on the ``class``\n"
             "line.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/tests.md#t026"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,

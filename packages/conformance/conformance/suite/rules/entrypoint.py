@@ -92,7 +92,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P017] <reason>`` records any unavoidable\n"
             "exception outside that exemption and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p017",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-orchestration",
@@ -140,7 +139,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P018] <reason>`` records any unavoidable\n"
             "exception and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p018",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-orchestration",

@@ -102,10 +102,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "suppression: ``# conformance: ignore[I001] <reason>`` on the line "
             "before the FROM instruction."
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dockerfile.md#i001"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/dockerfile.prose.md",
@@ -154,10 +150,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "any environment where daprd is required.  Inline suppression: "
             "``# conformance: ignore[I002] <reason>`` on the line before "
             "the offending instruction."
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dockerfile.md#i002"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -210,10 +202,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[I003] <reason>`` to the first line of "
             "the Dockerfile."
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dockerfile.md#i003"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/dockerfile.prose.md",
@@ -259,10 +247,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "hardcoding it here.  Inline suppression: "
             "``# conformance: ignore[I004] <reason>`` on the line before "
             "the offending ENV instruction."
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dockerfile.md#i004"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -310,10 +294,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "user matters for the runtime container.  Inline suppression: "
             "``# conformance: ignore[I005] <reason>`` on the line before the "
             "offending USER instruction."
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/dockerfile.md#i005"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
