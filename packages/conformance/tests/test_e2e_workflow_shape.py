@@ -19,6 +19,7 @@ from pathlib import Path
 from conformance.suite.checks.e2e_workflow_shape import discover, scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
+from tests._helpers import active_ids
 
 # The canonical thin caller (atlan-mysql-app/.github/workflows/tests.yaml).
 _CANONICAL_CALLER = """\
@@ -91,10 +92,6 @@ def _repo(
 
 def _scan(root: Path) -> list:
     return scan_all(discover(root), root)
-
-
-def _ids(findings: list) -> list[str]:
-    return [f.rule_id for f in findings if not f.suppressed]
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +173,7 @@ def test_t020_clean_on_canonical_caller_only(tmp_path: Path) -> None:
         workflows={"tests.yaml": _CANONICAL_CALLER},
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T020" not in _ids(_scan(root))
+    assert "T020" not in active_ids(_scan(root))
 
 
 def test_t020_ignores_sdr_e2e_inside_the_caller_itself(tmp_path: Path) -> None:
@@ -192,7 +189,7 @@ def test_t020_ignores_sdr_e2e_inside_the_caller_itself(tmp_path: Path) -> None:
         workflows={"tests.yaml": mixed},
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T020" not in _ids(_scan(root))
+    assert "T020" not in active_ids(_scan(root))
 
 
 def test_t020_suppressed_inline(tmp_path: Path) -> None:
@@ -236,7 +233,7 @@ def test_t021_silent_when_a_bespoke_workflow_runs_the_suite(tmp_path: Path) -> N
         workflows={"sdr-full-dag.yaml": _BESPOKE_WORKFLOW},
         e2e_suites={"test_hive_full_dag.py": _E2E_SUITE},
     )
-    ids = _ids(_scan(root))
+    ids = active_ids(_scan(root))
     assert "T020" in ids
     assert "T021" not in ids
 
@@ -258,7 +255,7 @@ jobs:
         workflows={"tests.yaml": caller},
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T021" not in _ids(_scan(root))
+    assert "T021" not in active_ids(_scan(root))
 
 
 def test_t021_fires_on_enable_e2e_false(tmp_path: Path) -> None:
@@ -303,7 +300,7 @@ jobs:
         workflows={"e2e-tests-feature.yaml": legacy},
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T021" not in _ids(_scan(root))
+    assert "T021" not in active_ids(_scan(root))
 
 
 def test_t021_clean_on_canonical_caller(tmp_path: Path) -> None:
@@ -312,13 +309,13 @@ def test_t021_clean_on_canonical_caller(tmp_path: Path) -> None:
         workflows={"tests.yaml": _CANONICAL_CALLER},
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T021" not in _ids(_scan(root))
+    assert "T021" not in active_ids(_scan(root))
 
 
 def test_t021_silent_without_e2e_suites(tmp_path: Path) -> None:
     """No suites to run means nothing to be unreachable."""
     root = _repo(tmp_path, workflows={"sdr-full-dag.yaml": _BESPOKE_WORKFLOW})
-    assert "T021" not in _ids(_scan(root))
+    assert "T021" not in active_ids(_scan(root))
 
 
 def test_t021_ignores_uncollectable_e2e_files(tmp_path: Path) -> None:
@@ -327,7 +324,7 @@ def test_t021_ignores_uncollectable_e2e_files(tmp_path: Path) -> None:
         workflows={},
         e2e_suites={"__init__.py": "", "helpers.py": "X = 1"},
     )
-    assert "T021" not in _ids(_scan(root))
+    assert "T021" not in active_ids(_scan(root))
 
 
 def test_t021_anchors_on_the_misconfigured_caller(tmp_path: Path) -> None:
@@ -378,7 +375,7 @@ def test_t022_clean_when_two_store_set(tmp_path: Path) -> None:
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
         atlan_yaml=_SDR_ATLAN_YAML,
     )
-    assert "T022" not in _ids(_scan(root))
+    assert "T022" not in active_ids(_scan(root))
 
 
 def test_t022_silent_for_non_sdr_app(tmp_path: Path) -> None:
@@ -389,7 +386,7 @@ def test_t022_silent_for_non_sdr_app(tmp_path: Path) -> None:
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
         atlan_yaml=_NON_SDR_ATLAN_YAML,
     )
-    assert "T022" not in _ids(_scan(root))
+    assert "T022" not in active_ids(_scan(root))
 
 
 def test_t022_silent_without_atlan_yaml(tmp_path: Path) -> None:
@@ -399,7 +396,7 @@ def test_t022_silent_without_atlan_yaml(tmp_path: Path) -> None:
         workflows={"tests.yaml": caller},
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T022" not in _ids(_scan(root))
+    assert "T022" not in active_ids(_scan(root))
 
 
 def test_t022_suppressed_inline(tmp_path: Path) -> None:
@@ -446,8 +443,8 @@ jobs:
         atlan_yaml=_SDR_ATLAN_YAML,
     )
     # two-store belongs to the *other* job, so T022 must still fire.
-    assert "T022" in _ids(_scan(root))
-    assert "T021" not in _ids(_scan(root))
+    assert "T022" in active_ids(_scan(root))
+    assert "T021" not in active_ids(_scan(root))
 
 
 def test_commented_two_store_does_not_count(tmp_path: Path) -> None:
@@ -460,7 +457,7 @@ def test_commented_two_store_does_not_count(tmp_path: Path) -> None:
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
         atlan_yaml=_SDR_ATLAN_YAML,
     )
-    assert "T022" in _ids(_scan(root))
+    assert "T022" in active_ids(_scan(root))
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +498,7 @@ def test_t021_not_silenced_by_a_comment_mentioning_tests_e2e(tmp_path: Path) -> 
         },
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T021" in _ids(_scan(root))
+    assert "T021" in active_ids(_scan(root))
 
 
 def test_t021_not_silenced_by_a_trigger_paths_filter(tmp_path: Path) -> None:
@@ -519,7 +516,7 @@ def test_t021_not_silenced_by_a_trigger_paths_filter(tmp_path: Path) -> None:
         },
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T021" in _ids(_scan(root))
+    assert "T021" in active_ids(_scan(root))
 
 
 def test_t021_not_silenced_by_an_artifact_path(tmp_path: Path) -> None:
@@ -535,7 +532,7 @@ def test_t021_not_silenced_by_an_artifact_path(tmp_path: Path) -> None:
         },
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T021" in _ids(_scan(root))
+    assert "T021" in active_ids(_scan(root))
 
 
 def test_t021_silent_when_a_run_step_actually_invokes_the_suites(
@@ -554,7 +551,7 @@ def test_t021_silent_when_a_run_step_actually_invokes_the_suites(
         },
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T021" not in _ids(_scan(root))
+    assert "T021" not in active_ids(_scan(root))
 
 
 def test_t021_fires_when_enable_e2e_is_yaml_no(tmp_path: Path) -> None:
@@ -567,7 +564,7 @@ def test_t021_fires_when_enable_e2e_is_yaml_no(tmp_path: Path) -> None:
         workflows={"tests.yaml": caller},
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T021" in _ids(_scan(root))
+    assert "T021" in active_ids(_scan(root))
 
 
 def test_t022_silent_when_two_store_is_yaml_yes(tmp_path: Path) -> None:
@@ -579,7 +576,7 @@ def test_t022_silent_when_two_store_is_yaml_yes(tmp_path: Path) -> None:
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
         atlan_yaml="self_deployed_runtime: true\n",
     )
-    assert "T022" not in _ids(_scan(root))
+    assert "T022" not in active_ids(_scan(root))
 
 
 def test_t020_fires_on_a_legacy_job_beside_a_correct_caller(tmp_path: Path) -> None:
@@ -643,7 +640,7 @@ def test_t021_silent_on_env_indirection_to_a_run_step(tmp_path: Path) -> None:
         },
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T021" not in _ids(_scan(root))
+    assert "T021" not in active_ids(_scan(root))
 
 
 def test_t021_silent_on_underscore_test_path_input(tmp_path: Path) -> None:
@@ -660,7 +657,7 @@ def test_t021_silent_on_underscore_test_path_input(tmp_path: Path) -> None:
         },
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T021" not in _ids(_scan(root))
+    assert "T021" not in active_ids(_scan(root))
 
 
 def test_t021_fires_when_only_a_step_name_mentions_the_suite(tmp_path: Path) -> None:
@@ -677,7 +674,7 @@ def test_t021_fires_when_only_a_step_name_mentions_the_suite(tmp_path: Path) -> 
         },
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T021" in _ids(_scan(root))
+    assert "T021" in active_ids(_scan(root))
 
 
 def test_t021_fires_when_only_an_artifact_path_mentions_the_suite(
@@ -703,7 +700,7 @@ def test_t021_fires_when_only_an_artifact_path_mentions_the_suite(
         },
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T021" in _ids(_scan(root))
+    assert "T021" in active_ids(_scan(root))
 
 
 def test_t021_fires_when_only_run_name_mentions_the_suite(tmp_path: Path) -> None:
@@ -721,7 +718,7 @@ def test_t021_fires_when_only_run_name_mentions_the_suite(tmp_path: Path) -> Non
         },
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T021" in _ids(_scan(root))
+    assert "T021" in active_ids(_scan(root))
 
 
 def test_t021_fires_when_only_a_cache_path_mentions_the_suite(
@@ -743,4 +740,4 @@ def test_t021_fires_when_only_a_cache_path_mentions_the_suite(
         },
         e2e_suites={"test_thing_full_dag.py": _E2E_SUITE},
     )
-    assert "T021" in _ids(_scan(root))
+    assert "T021" in active_ids(_scan(root))

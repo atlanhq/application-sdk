@@ -25,21 +25,12 @@ from conformance.suite.checks._ast_common._safe_swap import (
 from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.orchestration import SERIES, discover, scan_all, scan_text
 from conformance.suite.schema.extensions import SafeSwap
+from tests._helpers import scan_files
 
 
 def _rule(src: str, rule_id: str, file: str = "app/x.py") -> list:
     """Findings of a single rule from a per-file scan of *src* at path *file*."""
     return [f for f in scan_text(src, file) if f.rule_id == rule_id]
-
-
-def _scan_files(tmp_path: Path, files: dict[str, str]) -> list:
-    paths: list[Path] = []
-    for name, src in files.items():
-        path = tmp_path / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(src)
-        paths.append(path)
-    return scan_all(paths, tmp_path)
 
 
 def test_series_letter() -> None:
@@ -445,7 +436,7 @@ def test_p006_suppressed_inline() -> None:
 
 
 def _p007(tmp_path: Path, files: dict[str, str]) -> list:
-    return [f for f in _scan_files(tmp_path, files) if f.rule_id == "P007"]
+    return [f for f in scan_files(scan_all, tmp_path, files) if f.rule_id == "P007"]
 
 
 # ── P007 RawTemporalInPublicSurface (sdk) ───────────────────────────────────
@@ -543,7 +534,9 @@ def test_conftest_violations_are_caught(tmp_path: Path) -> None:
         "    client = await Client.connect('localhost:7233')\n"
         "    create_worker(client, task_queue='q')\n"
     )
-    findings = _scan_files(tmp_path, {"tests/integration/conftest.py": conftest})
+    findings = scan_files(
+        scan_all, tmp_path, {"tests/integration/conftest.py": conftest}
+    )
     ids = sorted(f.rule_id for f in findings)
     assert ids == ["P004", "P005"], ids
 

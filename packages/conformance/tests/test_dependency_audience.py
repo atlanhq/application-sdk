@@ -12,6 +12,7 @@ from conformance.suite.checks.error_handling import scan_path, scan_text
 from conformance.suite.checks.error_handling._dependency_category import (
     SDK_DEPENDENCY_UNAVAILABLE_CLASSES,
 )
+from tests._helpers import sdk_root
 
 _HEADER = """\
 from dataclasses import dataclass
@@ -297,13 +298,6 @@ def test_inline_suppression() -> None:
 _SDK_PACKAGE_RELPATH = ("application_sdk", "errors", "leaves.py")
 
 
-def _find_sdk_root() -> Path | None:
-    for parent in Path(__file__).resolve().parents:
-        if parent.joinpath(*_SDK_PACKAGE_RELPATH).is_file():
-            return parent
-    return None
-
-
 def _base_name(base: ast.expr) -> str | None:
     if isinstance(base, ast.Name):
         return base.id
@@ -365,11 +359,7 @@ def _sdk_dependency_unavailable_classes(sdk_root: Path) -> set[str]:
 
 
 def test_sdk_allowlist_matches_sdk_source() -> None:
-    sdk_root = _find_sdk_root()
-    if sdk_root is None:
-        pytest.skip("SDK source not on disk — allowlist drift cannot be checked here.")
-
-    expected = _sdk_dependency_unavailable_classes(sdk_root)
+    expected = _sdk_dependency_unavailable_classes(sdk_root())
 
     assert set(SDK_DEPENDENCY_UNAVAILABLE_CLASSES) == expected, (
         "SDK_DEPENDENCY_UNAVAILABLE_CLASSES is stale. Missing: "

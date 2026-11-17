@@ -20,6 +20,9 @@
       (Snowflake, Databricks, Tableau, DBT and their minors); optional elsewhere
     - Test files should mirror the source structure
     - Test file names should start with `test_`
+    - `packages/conformance/tests/` shares helpers through `tests/_helpers.py`
+      (`ids`, `active_ids`, `write_py`, `scan_files`, `uv_lock`, `extract_node`,
+      `sdk_root`); import from it rather than defining a local copy
 
 - **Connector-App Testing Tiers (Agreed Architecture)**
 

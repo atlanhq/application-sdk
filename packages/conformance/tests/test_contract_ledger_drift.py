@@ -31,26 +31,14 @@ from conformance.suite.checks.deprecation._ledger_schema import (
     serialize,
 )
 from conformance.tools.generate_contract_ledger import build_ledger
+from tests._helpers import sdk_root
 
 _LEDGER_NAME = "contract_schema.lock.json"
 
 
-def _find_sdk_root() -> Path | None:
-    """The SDK checkout holding this test: ``application_sdk/`` beside ``packages/conformance/``."""
-    for parent in Path(__file__).resolve().parents:
-        if (parent / "application_sdk").is_dir() and (
-            parent / "packages" / "conformance" / "pyproject.toml"
-        ).is_file():
-            return parent
-    return None
-
-
-@pytest.fixture
-def sdk_root() -> Path:
-    root = _find_sdk_root()
-    if root is None:
-        pytest.skip("SDK source not on disk — the SDK ledger cannot be checked here.")
-    return root
+@pytest.fixture(name="sdk_root")
+def _sdk_root_fixture() -> Path:
+    return sdk_root()
 
 
 def test_root_ledger_is_committed(sdk_root: Path) -> None:

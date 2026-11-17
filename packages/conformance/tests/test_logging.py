@@ -21,6 +21,7 @@ from conformance.suite.checks.logging._constants import (
 from conformance.suite.rules import get_rule
 from conformance.suite.schema import SarifReport, derive_disposition, validate_sarif
 from conformance.suite.schema.disposition import Disposition, EnforcementTier
+from tests._helpers import scan_files
 
 # Smoke-check that the constants are tuples (guards against silent import errors)
 assert isinstance(CREDENTIAL_VALUE_SUFFIXES, tuple)
@@ -46,17 +47,6 @@ def _scan_one(tmp_path: Path, src: str) -> list:
     p = tmp_path / "m.py"
     p.write_text(src)
     return scan_all([p], tmp_path)
-
-
-def _scan_files(tmp_path: Path, files: dict[str, str]) -> list:
-    """Write each entry in *files* and run the cross-file scanner."""
-    paths: list[Path] = []
-    for name, src in files.items():
-        path = tmp_path / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(src)
-        paths.append(path)
-    return scan_all(paths, tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -1689,7 +1679,7 @@ def test_l016_fires_for_two_calls_across_files(tmp_path: Path) -> None:
         "a.py": "import logging\nlogging.basicConfig(level=logging.INFO)\n",
         "b.py": "import logging\nlogging.basicConfig(format='%(message)s')\n",
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     l016 = [f for f in findings if f.rule_id == "L016"]
     assert len(l016) == 1  # only the 2nd call is flagged
 
@@ -1990,13 +1980,13 @@ _SDK_LOGGER = (
 
 def test_l002_silent_sdk_adapter(tmp_path: Path) -> None:
     files = {"a.py": _SDK_LOGGER, "b.py": _SDK_LOGGER}
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert not any(f.rule_id == "L002" for f in findings)
 
 
 def test_l002_fires_stdlib_getlogger(tmp_path: Path) -> None:
     src = "import logging\nlogger = logging.getLogger(__name__)\n"
-    findings = _scan_files(tmp_path, {"a.py": src})
+    findings = scan_files(scan_all, tmp_path, {"a.py": src})
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert l002
     assert "stdlib" in l002[0].message
@@ -2004,13 +1994,13 @@ def test_l002_fires_stdlib_getlogger(tmp_path: Path) -> None:
 
 def test_l002_fires_structlog(tmp_path: Path) -> None:
     src = "import structlog\nlogger = structlog.get_logger()\n"
-    findings = _scan_files(tmp_path, {"a.py": src})
+    findings = scan_files(scan_all, tmp_path, {"a.py": src})
     assert any(f.rule_id == "L002" for f in findings)
 
 
 def test_l002_fires_loguru_direct(tmp_path: Path) -> None:
     src = "from loguru import logger\n"
-    findings = _scan_files(tmp_path, {"a.py": src})
+    findings = scan_files(scan_all, tmp_path, {"a.py": src})
     assert any(f.rule_id == "L002" for f in findings)
 
 
@@ -2021,7 +2011,7 @@ def test_l002_silent_adapter_definition_file(tmp_path: Path) -> None:
         "def get_logger(name: str):\n"
         "    return logger.bind(name=name)\n"
     )
-    findings = _scan_files(tmp_path, {"logger_adaptor.py": src})
+    findings = scan_files(scan_all, tmp_path, {"logger_adaptor.py": src})
     assert not any(f.rule_id == "L002" for f in findings)
 
 
@@ -2032,7 +2022,7 @@ def test_l002_fires_mixed_only_non_sdk_flagged(tmp_path: Path) -> None:
         "b.py": _SDK_LOGGER,
         "c.py": "import logging\nlogger = logging.getLogger(__name__)\n",
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert len(l002) == 1
     assert "c.py" in l002[0].file
@@ -2044,7 +2034,7 @@ def test_l002_suppression_directive(tmp_path: Path) -> None:
         "import logging\n"
         "logger = logging.getLogger(__name__)\n"
     )
-    findings = _scan_files(tmp_path, {"legacy.py": src})
+    findings = scan_files(scan_all, tmp_path, {"legacy.py": src})
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert all(f.suppressed for f in l002)
 
@@ -2079,7 +2069,7 @@ def test_l002_suppression_after_shebang_or_coding_header(
         "import logging\n"
         "logger = logging.getLogger(__name__)\n"
     )
-    findings = _scan_files(tmp_path, {"tool.py": src})
+    findings = scan_files(scan_all, tmp_path, {"tool.py": src})
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert len(l002) == 1
     assert l002[0].line == line
@@ -2096,7 +2086,7 @@ def test_l002_line_1_directive_before_coding_line_still_suppresses(
         "import logging\n"
         "logger = logging.getLogger(__name__)\n"
     )
-    findings = _scan_files(tmp_path, {"legacy.py": src})
+    findings = scan_files(scan_all, tmp_path, {"legacy.py": src})
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert len(l002) == 1
     assert l002[0].line == 1
@@ -2105,7 +2095,7 @@ def test_l002_line_1_directive_before_coding_line_still_suppresses(
 
 def test_l002_stays_on_line_1_for_comment_without_coding_line(tmp_path: Path) -> None:
     src = "# generated\nimport logging\nlogger = logging.getLogger(__name__)\n"
-    findings = _scan_files(tmp_path, {"a.py": src})
+    findings = scan_files(scan_all, tmp_path, {"a.py": src})
     assert [f.line for f in findings if f.rule_id == "L002"] == [1]
 
 
@@ -2113,7 +2103,7 @@ def test_l002_fires_after_shebang_without_directive(tmp_path: Path) -> None:
     src = (
         "#!/usr/bin/env python3\nimport logging\nlogger = logging.getLogger(__name__)\n"
     )
-    findings = _scan_files(tmp_path, {"tool.py": src})
+    findings = scan_files(scan_all, tmp_path, {"tool.py": src})
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert len(l002) == 1
     assert l002[0].line == 2
@@ -2122,7 +2112,7 @@ def test_l002_fires_after_shebang_without_directive(tmp_path: Path) -> None:
 
 def test_l002_reported_at_line_1_without_header(tmp_path: Path) -> None:
     src = "import logging\nlogger = logging.getLogger(__name__)\n"
-    findings = _scan_files(tmp_path, {"a.py": src})
+    findings = scan_files(scan_all, tmp_path, {"a.py": src})
     assert [f.line for f in findings if f.rule_id == "L002"] == [1]
 
 
@@ -2138,7 +2128,9 @@ def test_l002_block_disposition_failing(tmp_path: Path) -> None:
     from conformance.suite.schema.findings import findings_to_report
 
     src = "import logging\nlogger = logging.getLogger(__name__)\n"
-    findings = [f for f in _scan_files(tmp_path, {"prod.py": src}) if not f.suppressed]
+    findings = [
+        f for f in scan_files(scan_all, tmp_path, {"prod.py": src}) if not f.suppressed
+    ]
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert l002
 
@@ -2154,28 +2146,28 @@ def test_l002_block_disposition_failing(tmp_path: Path) -> None:
 def test_l002_silent_scripts_dir(tmp_path: Path) -> None:
     """Files under scripts/ are dev harnesses — exempt from L002."""
     src = "import logging\nlogger = logging.getLogger(__name__)\n"
-    findings = _scan_files(tmp_path, {"scripts/seed_store.py": src})
+    findings = scan_files(scan_all, tmp_path, {"scripts/seed_store.py": src})
     assert not any(f.rule_id == "L002" for f in findings)
 
 
 def test_l002_silent_run_dev_harness(tmp_path: Path) -> None:
     """run_dev*.py files are dev harnesses — exempt from L002."""
     src = "from loguru import logger\n"
-    findings = _scan_files(tmp_path, {"run_dev_combined.py": src})
+    findings = scan_files(scan_all, tmp_path, {"run_dev_combined.py": src})
     assert not any(f.rule_id == "L002" for f in findings)
 
 
 def test_l002_silent_nested_scripts_dir(tmp_path: Path) -> None:
     """A ``scripts/`` segment at any path depth is exempt, not just top-level."""
     src = "import logging\nlogger = logging.getLogger(__name__)\n"
-    findings = _scan_files(tmp_path, {"app/scripts/db_helper.py": src})
+    findings = scan_files(scan_all, tmp_path, {"app/scripts/db_helper.py": src})
     assert not any(f.rule_id == "L002" for f in findings)
 
 
 def test_l002_silent_nested_run_dev_harness(tmp_path: Path) -> None:
     """``run_dev*.py`` is matched by basename at any depth (e.g. ``app/run_dev.py``)."""
     src = "from loguru import logger\n"
-    findings = _scan_files(tmp_path, {"app/run_dev.py": src})
+    findings = scan_files(scan_all, tmp_path, {"app/run_dev.py": src})
     assert not any(f.rule_id == "L002" for f in findings)
 
 
@@ -2187,7 +2179,7 @@ def test_l002_harness_exemption_does_not_leak_to_prod(tmp_path: Path) -> None:
         "run_dev.py": src,
         "app/auth.py": src,
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert len(l002) == 1
     assert "app/auth.py" in l002[0].file

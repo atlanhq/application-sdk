@@ -7,7 +7,7 @@ base/mixin — must be keyed in that entry point's committed
 
 Test helpers
 ------------
-``_write_py``: writes ``{relative_path: source_text}`` under ``tmp_path``.
+``write_py``: writes ``{relative_path: source_text}`` under ``tmp_path``.
 ``_write_manifest``: writes the ``manifest.json`` whose presence and placement
 tell :func:`scan_contract` whether the tree is ``single`` or ``multi``.
 ``_write_schemas``: writes an ``artifact_schemas.json`` declaring the given
@@ -37,6 +37,7 @@ from conformance.suite.schema.disposition import (
     RuleMechanism,
     RuleScope,
 )
+from tests._helpers import write_py
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -58,16 +59,6 @@ def monkeypatched_sdk_template(class_name: str, fields: tuple[SdkField, ...]):
         yield
     finally:
         del SDK_TEMPLATE_CONTRACT_FIELDS[class_name]
-
-
-def _write_py(tmp_path: Path, py_files: dict[str, str]) -> list[Path]:
-    paths: list[Path] = []
-    for name, src in py_files.items():
-        p = tmp_path / name
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(src, encoding="utf-8")
-        paths.append(p)
-    return paths
 
 
 def _write_manifest(path: Path) -> None:
@@ -124,7 +115,7 @@ class MyApp(App):
 
 
 def _run(tmp_path: Path, py_files: dict[str, str]) -> list:
-    paths = _write_py(tmp_path, py_files)
+    paths = write_py(tmp_path, py_files)
     return scan_all(paths, tmp_path)
 
 

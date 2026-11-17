@@ -35,38 +35,16 @@ from pathlib import Path
 from conformance.suite.checks.manifest_contract import scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
+from tests._helpers import extract_node, write_py
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _write_py(tmp_path: Path, py_files: dict[str, str]) -> list[Path]:
-    paths: list[Path] = []
-    for name, src in py_files.items():
-        p = tmp_path / name
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(src, encoding="utf-8")
-        paths.append(p)
-    return paths
-
-
 def _write_manifest(path: Path, dag: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"dag": dag}), encoding="utf-8")
-
-
-def _extract_node(args: dict) -> dict:
-    return {
-        "activity_name": "execute_workflow",
-        "app_name": "myapp",
-        "inputs": {
-            "workflow_type": "MyWorkflow",
-            "app_name": "myapp",
-            "task_queue": "q",
-            "args": args,
-        },
-    }
 
 
 def _only(findings: list, rule_id: str) -> list:
@@ -107,10 +85,10 @@ def _app_src(input_body: str, *, bases: str = "(Input)") -> str:
 
 def _run(tmp_path: Path, src: str, *, args: dict | None = None) -> list:
     """Write the app + a minimal single-mode manifest, then scan."""
-    paths = _write_py(tmp_path, {"app.py": src})
+    paths = write_py(tmp_path, {"app.py": src})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(args if args is not None else {})},
+        {"extract": extract_node(args if args is not None else {})},
     )
     return scan_all(paths, tmp_path)
 
@@ -325,7 +303,7 @@ def test_k021_silent_when_non_dict_filter_field(tmp_path: Path) -> None:
 
 def test_k021_noop_when_generated_dir_absent(tmp_path: Path) -> None:
     """No ``app/generated/`` → not a contract-toolkit app → stay silent."""
-    paths = _write_py(
+    paths = write_py(
         tmp_path, {"app.py": _app_src("    include_filter: dict[str, Any]\n")}
     )
     assert _only(scan_all(paths, tmp_path), "K021") == []

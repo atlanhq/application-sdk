@@ -11,7 +11,7 @@ so the "unresolvable shape" cases below are the load-bearing half of this file.
 
 Test helpers
 ------------
-``_write_py``: writes ``{relative_path: source_text}`` under ``tmp_path``.
+``write_py``: writes ``{relative_path: source_text}`` under ``tmp_path``.
 ``_write_schemas``: writes an ``artifact_schemas.json`` shaped like the toolkit's
 real output, from ``{field: (format, [field names])}``.
 ``_run``: writes the Python, calls :func:`scan_all`, returns its findings.
@@ -32,20 +32,11 @@ from conformance.suite.schema.disposition import (
     RuleMechanism,
     RuleScope,
 )
+from tests._helpers import write_py
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _write_py(tmp_path: Path, py_files: dict[str, str]) -> list[Path]:
-    paths: list[Path] = []
-    for name, src in py_files.items():
-        p = tmp_path / name
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(src, encoding="utf-8")
-        paths.append(p)
-    return paths
 
 
 def _write_schemas(path: Path, schemas: dict[str, tuple[str, list[str]]]) -> None:
@@ -78,7 +69,7 @@ def _write_schemas(path: Path, schemas: dict[str, tuple[str, list[str]]]) -> Non
 
 
 def _run(tmp_path: Path, py_files: dict[str, str]) -> list:
-    paths = _write_py(tmp_path, py_files)
+    paths = write_py(tmp_path, py_files)
     return scan_all(paths, tmp_path)
 
 

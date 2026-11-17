@@ -42,10 +42,6 @@ def _run(tmp_path: Path) -> list:
     return scan_all(paths, tmp_path)
 
 
-def _ids(findings: list) -> list[str]:
-    return [f.rule_id for f in findings]
-
-
 # ── Rule metadata ────────────────────────────────────────────────────────────
 
 
