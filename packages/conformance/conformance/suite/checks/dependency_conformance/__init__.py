@@ -420,10 +420,4 @@ main = make_cli_main(
     discover=discover,
     default_scan_paths=(".",),
 )
-
-
-"""CLI entry point for the D-series check."""
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+"""CLI entry point for the D-series check (``python -m`` runs it via ``__main__``)."""

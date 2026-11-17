@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -1555,6 +1557,30 @@ def test_main_exit_1_on_blocking_violation(tmp_path: Path) -> None:
     )
     code = main(["--root", str(tmp_path), str(tmp_path / "pyproject.toml")])
     assert code == 1
+
+
+def test_python_dash_m_runs_the_cli(tmp_path: Path) -> None:
+    """``python -m conformance.suite.checks.dependency_conformance`` still runs the
+    CLI now that the check is a package (its ``__init__`` never runs as main)."""
+    _scratch_pyproject(
+        tmp_path,
+        '[project]\nname = "x"\nversion = "0"\ndependencies = ["rich>=13,<14"]\n',
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "conformance.suite.checks.dependency_conformance",
+            "--root",
+            str(tmp_path),
+            str(tmp_path / "pyproject.toml"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 1, proc.stderr
+    assert "D001" in proc.stdout + proc.stderr
 
 
 def test_main_exit_0_when_clean(tmp_path: Path) -> None:
