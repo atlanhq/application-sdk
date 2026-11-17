@@ -106,7 +106,8 @@ runs, all read-only.
 | Outcome row | Lands in ClickHouse once per run, with the allowlisted keys; 3 days of scheduled runs |
 | Time and memory at 1M assets | Within run-to-run noise of the in-app build |
 
-A second app was mapped the same way. Power BI's 26 outcome codes became subclasses of the SDK's
+A second app was mapped the same way (atlan-powerbi-app branch `owen/lineage-coverage-sdk`, tag
+`lineage-coverage/pbi-spike-1`). Power BI's 26 outcome codes became subclasses of the SDK's
 reasons; over its golden corpus (2,199 recorded outcomes, 6 codes) and a live run (1 more code),
 every outcome maps to an SDK category and its verdict agrees with Power BI's own. One gap: Power
 BI counts expected skips but records no code for them, so those assets can't carry a reason yet.
