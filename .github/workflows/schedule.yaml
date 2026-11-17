@@ -3,9 +3,6 @@ name: Scheduled Checks
 on:
   schedule:
     - cron: 0 0 * * * # daily at 00:00
-  # Lets a maintainer re-run the nightly tiers on demand (for example right
-  # after changing one) instead of waiting for the next 00:00 run.
-  workflow_dispatch:
 
 permissions:
   issues: write

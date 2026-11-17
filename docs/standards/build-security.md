@@ -128,7 +128,7 @@ The real-cloud storage jobs (`storage-integration` in `pull_request.yaml` and `s
 
 ## CI test images (Temporal JWT-auth stack)
 
-The nightly `temporal-docker-auth` job in `schedule.yaml` runs `tests/integration/test_temporal_docker_auth.py` against `local/temporal-auth/docker-compose.yml`: Temporal (`temporalio/auto-setup`), PostgreSQL, and an nginx container that serves the JWKS. All three are public images pinned as `tag@digest` in the compose file. The nginx pin is the same reference as `NGINX_IMAGE`. Update the tag and the digest together.
+The nightly `temporal-docker-auth` job in `schedule.yaml` runs `tests/integration/test_temporal_docker_auth.py` against `local/temporal-auth/docker-compose.yml`: Temporal (`temporalio/auto-setup`), PostgreSQL, and an nginx container that serves the JWKS. All three are public images pinned as `tag@digest` in the compose file. The nginx pin uses the same digest as `NGINX_IMAGE`, under the patch tag `1.27.5-alpine` rather than `1.27-alpine`. Update the tag and the digest together.
 
 - **Keys:** the job runs `local/temporal-auth/scripts/gen_keys.sh` to make a fresh RSA key pair and JWKS each run. They are test-only and gitignored. Nothing is stored as a secret.
 - **Readiness:** `docker compose up --wait` returns once Temporal's healthcheck finds the `default` namespace, and fails the step if it never does.
