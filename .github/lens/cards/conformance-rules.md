@@ -7,5 +7,5 @@
 - Flag: a `canonical_reference` the detector never reads; vague BLOCK "Customer impact:"; wrong scope; `exclude-paths-*` widened in `.github/workflows/sdk-gate.yaml` to get green.
 - Flag: rule docs not regenerated (`gen-rule-docs --check`, not in CI); secrets in SARIF; real secrets or customer names in fixtures.
 - Don't flag (tests enforce): duplicate/malformed IDs, missing rationale/scope, non-reference-app `canonical_reference`, autofixable-vs-prose contradictions, a `canonical_reference` path or backticked symbol missing from the reference app (`canonical-reference-check.yaml` runs on rule PRs).
-- Flag: a `NOT_CHECKED` entry added to `conformance/tools/verify_canonical_references.py` for a token the reference claims is present or absent — present tokens get re-pointed, absent ones go in `NAMED_ABSENT`.
+- Flag: a `NOT_CHECKED` entry added to `packages/conformance/conformance/tools/verify_canonical_references.py` for a token the reference claims is present or absent — present tokens get re-pointed, absent ones go in `NAMED_ABSENT`.
 - Severity: critical if a secret reaches SARIF; high if a rule misfires, reds the fleet or breaks the SDK gate; medium otherwise.
