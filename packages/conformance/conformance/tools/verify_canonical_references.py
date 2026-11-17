@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import argparse
 import keyword
+import os
 import re
 import sys
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -74,6 +75,8 @@ NOT_CHECKED: Mapping[tuple[str, str], str] = {
     ("K017", "openapi_metadata.json"): "runtime output the transform writes",
     ("K007", "data/toolkit_baseline.json"): "conformance package data, not the app",
     ("K002", "Connectors.Type"): "a toolkit type App.pkl uses, not app source",
+    ("K001", "App.pkl"): "the toolkit module the contract amends, not an app file",
+    ("K002", "App.pkl"): "the toolkit module the contract amends, not an app file",
     ("D003", "sqlalchemy.dialects"): "an entry-point group, not a name in source",
 }
 
@@ -220,13 +223,31 @@ def _resolve(root: Path, token: str, dirs: Sequence[Path]) -> Path | None:
     bases = dirs if "/" not in rel and dirs else (root, *dirs)
     for base in bases:
         candidate = base / rel
-        if candidate.exists():
+        if _exists_exact(base, rel):
             return candidate
     if "/" not in rel and not dirs:
-        for hit in sorted(root.rglob(rel)):
-            if ".git" not in hit.relative_to(root).parts:
-                return hit
+        for dirpath, dirnames, filenames in sorted(os.walk(root)):
+            dirnames[:] = [d for d in dirnames if d != ".git"]
+            if rel in filenames or rel in dirnames:
+                return Path(dirpath) / rel
     return None
+
+
+def _exists_exact(base: Path, rel: str) -> bool:
+    """``(base / rel).exists()``, but case-sensitive on every filesystem.
+
+    A macOS checkout would otherwise let ``App.pkl`` answer for
+    ``contract/app.pkl`` and pass a claim the Linux CI run fails.
+    """
+    current = base
+    for part in Path(rel).parts:
+        try:
+            if part not in os.listdir(current):
+                return False
+        except OSError:
+            return False
+        current = current / part
+    return True
 
 
 def _resolve_module(sdk_root: Path, dotted: str) -> tuple[Path, list[str]] | None:

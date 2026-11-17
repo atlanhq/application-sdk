@@ -111,6 +111,17 @@ def test_bare_filename_after_a_cited_directory_must_be_in_it(
     assert _failures(ref, roots) == ["path:test_client.py"]
 
 
+@pytest.mark.parametrize(
+    "token", ["App/handler.py", "app/Handler.py", "Pyproject.toml"]
+)
+def test_resolution_is_case_sensitive(token: str, roots: dict[str, Path]) -> None:
+    # On a case-insensitive filesystem (macOS) these would resolve to
+    # app/handler.py and pass locally while failing on Linux CI.
+    assert _failures(f"atlan-mysql-app {token} — the handler.", roots) == [
+        f"path:{token}"
+    ]
+
+
 def test_bare_filename_resolves_anywhere_in_the_repo(roots: dict[str, Path]) -> None:
     assert _failures("atlan-mysql-app — see test_client.py.", roots) == []
     assert _failures("atlan-mysql-app — see test_gone.py.", roots) == [
