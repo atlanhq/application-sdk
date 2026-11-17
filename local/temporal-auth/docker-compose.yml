@@ -39,7 +39,7 @@ services:
 
   # Temporal server with JWT auth enforced and no allow-no-auth fallback.
   temporal:
-    image: temporalio/auto-setup:1.27.2@sha256:b44cbfeb43dbeae42db113b44fb8414c3452f05643b3d6b1592f955277d73526
+    image: temporalio/auto-setup:1.29.7@sha256:f14912b699cf73015ad5c4fc18d522d4b014db90e794039214dfb7c022c2644f
     depends_on:
       postgresql:
         condition: service_healthy
