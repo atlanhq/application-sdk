@@ -114,3 +114,13 @@ repos:
         language: system
         files: ^(\.github/scripts/.*\.py|\.github/scripts/pyright_baseline\.json|pyproject\.toml|uv\.lock)$
         pass_filenames: false
+      # C901 / PLR0915 are not in packages/conformance's ruff `select` (~190
+      # existing functions exceed them); they are held to a per-file baseline
+      # that only shrinks (FND-4668, docs/standards/ci.md). Needs only ruff,
+      # which the root env pins to the same version as the package.
+      - id: conformance-complexity-baseline
+        name: conformance complexity baseline
+        entry: uv run --frozen python packages/conformance/tests/test_complexity_baseline.py
+        language: system
+        files: ^packages/conformance/(conformance/.*\.py|ruff_complexity_baseline\.json|pyproject\.toml)$
+        pass_filenames: false

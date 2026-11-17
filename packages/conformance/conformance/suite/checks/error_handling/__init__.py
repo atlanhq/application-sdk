@@ -20,7 +20,7 @@ Package layout
 --------------
 Rule implementations are split by category:
 
-* ``silent_swallow``     — E001–E011, E014 (swallowing without logging/re-raising)
+* ``silent_swallow/``    — E001–E011, E014 (swallowing without logging/re-raising), one module per rule
 * ``untyped_raise``      — E012, E013, E018 (untyped or legacy raise sites)
 * ``exception_chaining`` — E015, E016, E019 (chaining and message hygiene)
 * ``security``           — E017 (secrets in error evidence fields)

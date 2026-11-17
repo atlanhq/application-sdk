@@ -110,18 +110,18 @@ def test_is_self_check_matches_shared_helper(name: str, is_sdk: bool) -> None:
     (hyphen-anchored, not just the constant) cannot drift between the D-series
     self-exemption and the runner-side scope detection.
     """
-    from conformance.suite.checks import dependency_conformance
     from conformance.suite.checks._ast_common import is_sdk_package_name
+    from conformance.suite.checks.dependency_conformance import _common
 
     assert is_sdk_package_name(name) is is_sdk
-    assert dependency_conformance._is_self_check(name) is is_sdk
+    assert _common._is_self_check(name) is is_sdk
 
 
 def test_is_self_check_handles_none() -> None:
     """`_is_self_check(None)` stays False (the original None-guard is preserved)."""
-    from conformance.suite.checks import dependency_conformance
+    from conformance.suite.checks.dependency_conformance import _common
 
-    assert dependency_conformance._is_self_check(None) is False
+    assert _common._is_self_check(None) is False
 
 
 # ---------------------------------------------------------------------------

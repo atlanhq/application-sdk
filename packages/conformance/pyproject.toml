@@ -100,6 +100,16 @@ extend-select = [
     "LOG009",  # logger.warn() is deprecated — use .warning()
 ]
 
+# Function size and complexity (FND-4668). The thresholds are ruff's defaults,
+# spelled out because tests/test_complexity_baseline.py measures C901 and
+# PLR0915 at them. Neither rule is in `select`: ~190 existing functions exceed
+# them, so they are held to ruff_complexity_baseline.json, which only shrinks.
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-statements = 50
+
 [tool.ruff.format]
 # *.md: same reason as the root pyproject (ruff 0.17 formats Markdown code blocks).
 exclude = ["conformance/bootstrap/templates/renovate.json", "*.md"]
@@ -109,6 +119,8 @@ exclude = ["conformance/bootstrap/templates/renovate.json", "*.md"]
 # preview mode makes F841 stricter on tuple unpacking. Only codes that fire
 # are listed; an exemption nobody needs is dead config.
 "tests/**" = ["PLC0415", "F841"]
+# Also a CLI (pre-commit and CI run it as a script): its report is the output.
+"tests/test_complexity_baseline.py" = ["T201"]
 # CLI entry points: stdout is the product (SARIF, scorecard JSON, generated
 # files, help text) and diagnostics go to stderr. The package has no logger.
 # cli.py dispatches each subcommand through an inline import so one
