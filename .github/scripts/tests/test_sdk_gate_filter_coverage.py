@@ -7,7 +7,7 @@ only as good as the filter that gates its job: if the filter lists where the
 test lives but not what it reads, a PR that edits only the input merges with
 the guard never run, and the drift surfaces on some later, unrelated PR.
 
-This module checks the three such reads the audit found, each derived from
+This module checks the cross-area reads the audits found, each derived from
 the source rather than restated, so a new read is covered or fails here:
 
 * the canonical sources of ``MANAGED_ACTION_FILES`` (parsed from
@@ -17,7 +17,9 @@ the source rather than restated, so a new read is covered or fails here:
 * every ``application_sdk`` module a generated toolkit example imports must
   run the toolkit suite, whose ``test-sdk-import.py`` imports those examples;
 * so must every ``application_sdk`` module ``test-sdk-import.py`` imports
-  itself to compare ``src/SdkNames.pkl`` with the SDK (FND-4934).
+  itself to compare ``src/SdkNames.pkl`` with the SDK (FND-4934);
+* and ``uv.lock``, which pins the pyatlan it compares ``src/Connectors.pkl``
+  with (FND-4933).
 """
 
 from __future__ import annotations
@@ -362,4 +364,35 @@ def test_sdk_modules_imported_by_the_sdk_import_test_run_the_toolkit_suite() -> 
         f"contract-toolkit/scripts/test-sdk-import.py imports {missing}, but no "
         "`toolkit` filter in sdk-gate.yaml matches the module, so a change there "
         "skips the SdkNames.pkl comparison on the PR. Add the path."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guard 5: the locked pyatlan test-sdk-import.py compares Connectors.pkl with
+# ---------------------------------------------------------------------------
+
+
+def _third_party_roots_imported_by(py: Path) -> set[str]:
+    """Top-level package names ``py`` imports, at any depth."""
+    roots: set[str] = set()
+    for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            roots.add(node.module.split(".")[0])
+        elif isinstance(node, ast.Import):
+            roots.update(a.name.split(".")[0] for a in node.names)
+    return roots
+
+
+def test_locked_pyatlan_runs_the_toolkit_suite() -> None:
+    """``check_connectors`` diffs ``src/Connectors.pkl`` against pyatlan.
+
+    The installed pyatlan is the one ``uv.lock`` pins: without a ``toolkit``
+    filter entry for it, a pyatlan bump that adds a connector type merges with
+    the comparison never run, and the drift surfaces on a later toolkit PR.
+    """
+    assert "pyatlan" in _third_party_roots_imported_by(SDK_IMPORT_TEST)
+    assert _covering("uv.lock", TOOLKIT_TESTS), (
+        "contract-toolkit/scripts/test-sdk-import.py compares Connectors.pkl with "
+        "the locked pyatlan, but no `toolkit` filter in sdk-gate.yaml matches "
+        "uv.lock, so a pyatlan bump skips the comparison on the PR. Add it."
     )

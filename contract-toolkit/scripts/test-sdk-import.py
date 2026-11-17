@@ -4,7 +4,8 @@ Every generated _input.py and _e2e_*.py must import cleanly and sit in a
 package (an ``__init__.py`` beside it), the SDK names ``src/SdkNames.pkl``
 copies by hand must match the installed SDK, and every default in a generated
 ``_e2e_substitutions.py`` must pass the matching field of the ``_input.py``
-generated beside it.
+generated beside it. The connector constants ``src/Connectors.pkl`` copies by
+hand must match pyatlan's ``AtlanConnectorType``.
 
 Importing ``_input.py`` also proves it is valid Python and that the SDK's
 payload-safety check accepts it: ``Input.__init_subclass__`` refuses an
@@ -32,6 +33,7 @@ logger = get_logger(__name__)
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES_DIR = REPO_ROOT / "examples"
 SDK_NAMES_PKL = REPO_ROOT / "src" / "SdkNames.pkl"
+CONNECTORS_PKL = REPO_ROOT / "src" / "Connectors.pkl"
 
 # Inputs.pkl's ClassName: the only names a nested ObjectField class can take.
 _CLASS_NAME_RE = re.compile(r"[A-Z][A-Za-z0-9]*")
@@ -422,6 +424,128 @@ def _check_artifact_names(names: _SdkNames) -> list[str]:
     return errors
 
 
+# Lists Connectors.pkl's `Type` constants (they are `hidden`, so a plain
+# `pkl eval` renders none) and the members of `AtlanConnectionCategory`.
+_CONNECTORS_EXPR = (
+    'let (r = import("pkl:reflect").Module(module)) '
+    "new JsonRenderer {}.renderValue(new Dynamic { "
+    "connectors = new Mapping { for (n, _ in r.moduleClass.properties) { "
+    "when (module.getProperty(n) is Type) { [n] = module.getProperty(n) } } }; "
+    'categories = r.typeAliases["AtlanConnectionCategory"].referent.members'
+    ".toList().map((t) -> t.value) })"
+)
+
+# Connectors.pkl constants pyatlan has no member for, by name.
+_PKL_ONLY_CONNECTORS = {
+    # A toolkit placeholder for a connector Atlan does not register.
+    "UNKNOWN_CUSTOM",
+    # Registered by the toolkit ahead of pyatlan (#3615).
+    "QLIKSENSE_ENTERPRISE_WINDOWS",
+}
+
+# (name, Connectors.pkl category, pyatlan category). The category picks a
+# contract's generated e2e base class and its `connection_category`, so
+# correcting one changes every contract that uses the constant.
+_KNOWN_CATEGORY_MISMATCHES = {
+    ("SAP_ECC", "warehouse", "erp"),
+}
+
+
+class _PklConnector(TypedDict):
+    value: str
+    category: str
+
+
+class _PklConnectors(TypedDict):
+    connectors: dict[str, _PklConnector]
+    categories: list[str]
+
+
+def check_connectors() -> list[str]:
+    """Compare Connectors.pkl's hand-copied registry with pyatlan's.
+
+    Nothing else fails when pyatlan adds a connector type or category: an app
+    cannot write ``connector = Connectors.X`` until the toolkit copies it, and
+    cannot construct a ``Type`` in a category the typealias lacks.
+    """
+    from pyatlan.model.enums import AtlanConnectionCategory, AtlanConnectorType
+
+    result = subprocess.run(
+        ["pkl", "eval", "-x", _CONNECTORS_EXPR, str(CONNECTORS_PKL)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return [f"pkl eval {CONNECTORS_PKL} failed: {result.stderr.strip()}"]
+    pkl: _PklConnectors = json.loads(result.stdout)
+    return _diff_connectors(
+        pkl,
+        {t.name: (t.value, t.category.value) for t in AtlanConnectorType},
+        {c.value for c in AtlanConnectionCategory},
+    )
+
+
+def _diff_connectors(
+    pkl: _PklConnectors,
+    sdk: dict[str, tuple[str, str]],
+    sdk_categories: set[str],
+) -> list[str]:
+    """Connectors.pkl vs pyatlan, as ``{name: (value, category)}`` and categories."""
+    errors: list[str] = []
+    connectors = pkl["connectors"]
+    if missing := sorted(set(sdk) - set(connectors)):
+        errors.append(
+            f"Connectors.pkl: pyatlan's AtlanConnectorType has {missing}, "
+            "Connectors.pkl does not"
+        )
+    extra = set(connectors) - set(sdk)
+    if unlisted := sorted(extra - _PKL_ONLY_CONNECTORS):
+        errors.append(
+            f"Connectors.pkl: {unlisted} are not in pyatlan's AtlanConnectorType"
+        )
+    if stale := sorted(_PKL_ONLY_CONNECTORS - extra):
+        errors.append(
+            f"_PKL_ONLY_CONNECTORS: {stale} are no longer Connectors.pkl-only; "
+            "remove them"
+        )
+    seen: set[tuple[str, str, str]] = set()
+    for name in sorted(set(sdk) & set(connectors)):
+        value, category = sdk[name]
+        mine = connectors[name]
+        if mine["value"] != value:
+            errors.append(
+                f"Connectors.pkl: {name}.value is {mine['value']!r}, "
+                f"pyatlan says {value!r}"
+            )
+        if mine["category"] != category:
+            key = (name, mine["category"], category)
+            if key in _KNOWN_CATEGORY_MISMATCHES:
+                seen.add(key)
+            else:
+                errors.append(
+                    f"Connectors.pkl: {name}.category is {mine['category']!r}, "
+                    f"pyatlan says {category!r}"
+                )
+    if stale_mismatch := sorted(_KNOWN_CATEGORY_MISMATCHES - seen):
+        errors.append(
+            f"_KNOWN_CATEGORY_MISMATCHES: {stale_mismatch} no longer differ; "
+            "remove them"
+        )
+    categories = set(pkl["categories"])
+    if missing_cat := sorted(sdk_categories - categories):
+        errors.append(
+            f"AtlanConnectionCategory: pyatlan has {missing_cat}, "
+            "the Connectors.pkl typealias does not"
+        )
+    if extra_cat := sorted(categories - sdk_categories):
+        errors.append(
+            f"AtlanConnectionCategory: Connectors.pkl accepts {extra_cat}, "
+            "pyatlan does not"
+        )
+    return errors
+
+
 def main() -> int:
     failed = 0
 
@@ -468,17 +592,26 @@ def main() -> int:
     if not name_errors:
         logger.info("  OK: SdkNames.pkl matches the SDK")
 
+    logger.info(":: Comparing Connectors.pkl with pyatlan...")
+    connector_errors = check_connectors()
+    for err in connector_errors:
+        logger.error("FAIL: %s", err)
+    if not connector_errors:
+        logger.info("  OK: Connectors.pkl matches pyatlan")
+
     total = len(input_files) + len(e2e_files)
-    if failed or init_errors or name_errors or round_trip_errors:
+    if failed or init_errors or name_errors or round_trip_errors or connector_errors:
         logger.error(
             "%d/%d files failed import test; %d missing __init__.py; "
             "%d SdkNames.pkl mismatch(es); "
-            "%d substitution default(s) rejected by _input.py.",
+            "%d substitution default(s) rejected by _input.py; "
+            "%d Connectors.pkl mismatch(es).",
             failed,
             total,
             len(init_errors),
             len(name_errors),
             len(round_trip_errors),
+            len(connector_errors),
         )
         return 1
 

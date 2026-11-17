@@ -2474,7 +2474,20 @@ the frontend renderer shape.
 
 ## Connectors.pkl — Connector Registry
 
-90+ connector constants. Each has `value` (string identifier) and `category`.
+162 connector constants. Each has `value` (string identifier) and `category`.
+
+The registry is a hand copy of pyatlan's `AtlanConnectorType`. In CI,
+`scripts/test-sdk-import.py` compares it with the pyatlan the SDK locks: every
+pyatlan connector must have a constant of the same name, value and category,
+and the `AtlanConnectionCategory` typealias must accept exactly pyatlan's
+`AtlanConnectionCategory` values. When pyatlan adds a connector type or
+category, add it here. Two constants have no pyatlan member: `UNKNOWN_CUSTOM`
+(a placeholder) and `QLIKSENSE_ENTERPRISE_WINDOWS`. One category differs on
+purpose: `SAP_ECC` is `warehouse` here and `erp` in pyatlan. The category picks
+the generated e2e base class (`warehouse`, `database`, `lake` and `queryengine`
+generate `SQLAppE2ETest`; any other generates `BaseE2ETest`) and is emitted as
+`connection_category`, so correcting it would change the generated e2e code of
+every contract that uses `SAP_ECC`.
 
 ```pkl
 class Type {
@@ -2485,7 +2498,8 @@ class Type {
 typealias AtlanConnectionCategory =
   "warehouse"|"bi"|"custom"|"ObjectStore"|"SaaS"|"lake"|
   "queryengine"|"elt"|"database"|"API"|"eventbus"|
-  "data-quality"|"schema-registry"|"app"
+  "data-quality"|"schema-registry"|"app"|
+  "ai"|"erp"|"data-processing"
 ```
 
 Common connectors:
@@ -2508,8 +2522,11 @@ Common connectors:
 | `MSSQL` | `"mssql"` | warehouse |
 | `MYSQL` | `"mysql"` | warehouse |
 | `ORACLE` | `"oracle"` | warehouse |
-| `SAP_S4_HANA` | `"sap-s4-hana"` | erp |
-| `SAP_ECC` | `"sap-ecc"` | erp |
+| `SAP_S4_HANA` | `"sap-s4-hana"` | warehouse |
+| `SAP_ECC` | `"sap-ecc"` | warehouse |
+| `SAP_S4` | `"sap-s4"` | erp |
+| `GENERIC_OPENLINEAGE` | `"generic-openlineage"` | data-processing |
+| `AI` | `"ai"` | ai |
 
 ---
 
