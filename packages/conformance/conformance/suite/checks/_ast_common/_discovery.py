@@ -73,13 +73,16 @@ def discover_tree(root: Path, *subdir: str) -> list[Path]:
     """Every ``*.py`` under ``root/<subdir…>``, skipping ``__pycache__``.
 
     No other exclusion applies: a check that walks a fixed tree (``tests/``,
-    ``tests/e2e/``) wants every file in it.  Returns ``[]`` when the tree is
-    absent.
+    ``tests/e2e/``) wants every file in it.  ``__pycache__`` is matched relative
+    to the walked tree, so a checkout under a ``__pycache__`` directory is still
+    scanned.  Returns ``[]`` when the tree is absent.
     """
     base = root.joinpath(*subdir)
     if not base.is_dir():
         return []
-    return sorted(p for p in base.rglob("*.py") if "__pycache__" not in p.parts)
+    return sorted(
+        p for p in base.rglob("*.py") if "__pycache__" not in p.relative_to(base).parts
+    )
 
 
 def discover_root_file(root: Path, name: str) -> list[Path]:

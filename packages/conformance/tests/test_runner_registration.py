@@ -1,7 +1,8 @@
 """Every check module under ``conformance/suite/checks`` is registered with the runner.
 
-A check module is one that assigns ``SERIES`` at module level, in its own file or
-in a private submodule of its package.  Forgetting to add it to
+A check module is one that assigns ``SERIES`` at module level: a flat module,
+a package (``SERIES`` in its ``__init__`` or a private ``_``-prefixed submodule
+it re-exports), or a public submodule of a package, which is its own check.  Forgetting to add it to
 ``runner._CHECK_MODULES`` yields a rule that is documented and unit-tested but
 never runs, so this test pins the two sets equal.
 """
@@ -34,21 +35,47 @@ def _assigns_series(path: Path) -> bool:
     return False
 
 
-def _top_level_name(path: Path) -> str:
-    first = path.relative_to(_CHECKS_ROOT).parts[0]
-    return first.removesuffix(".py")
+def _check_module_name(path: Path, checks_root: Path) -> str:
+    """Dotted name, relative to *checks_root*, of the check module *path* belongs to.
+
+    A package's ``__init__.py`` is the package.  A private (``_``-prefixed)
+    submodule belongs to its package, which re-exports its ``SERIES`` (e.g.
+    ``error_handling/_constants.py``).  Any other file is its own check module,
+    so a public ``pkg/new_check.py`` that assigns ``SERIES`` must be registered
+    itself, not hidden behind an already-registered ``pkg``.
+    """
+    parts = list(path.relative_to(checks_root).with_suffix("").parts)
+    if parts[-1] == "__init__" or parts[-1].startswith("_"):
+        parts.pop()
+    return ".".join(parts)
 
 
-def _check_modules_on_disk() -> set[str]:
+def _check_modules_on_disk(checks_root: Path = _CHECKS_ROOT) -> set[str]:
     return {
-        _top_level_name(path)
-        for path in _CHECKS_ROOT.rglob("*.py")
-        if "__pycache__" not in path.parts and _assigns_series(path)
+        _check_module_name(path, checks_root)
+        for path in checks_root.rglob("*.py")
+        if "__pycache__" not in path.relative_to(checks_root).parts
+        and _assigns_series(path)
     }
 
 
 def _registered() -> set[str]:
-    return {module.__name__.rsplit(".", 1)[-1] for module in _CHECK_MODULES}
+    prefix = "conformance.suite.checks."
+    return {module.__name__.removeprefix(prefix) for module in _CHECK_MODULES}
+
+
+def test_guard_sees_a_public_check_module_inside_a_registered_package(
+    tmp_path: Path,
+) -> None:
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text('SERIES = "Z"\n')
+    (pkg / "_constants.py").write_text('SERIES = "Z"\n')
+    (pkg / "new_check.py").write_text('SERIES = "Y"\n')
+    (tmp_path / "flat.py").write_text('SERIES: str = "X"\n')
+    (tmp_path / "helper.py").write_text("x = 1\n")
+
+    assert _check_modules_on_disk(tmp_path) == {"pkg", "pkg.new_check", "flat"}
 
 
 def test_every_check_module_is_registered() -> None:

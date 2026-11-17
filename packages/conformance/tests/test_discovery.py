@@ -118,3 +118,10 @@ def test_discover_contract_repo(tmp_path: pathlib.Path) -> None:
     assert discover_contract_repo(tmp_path) == []
     (tmp_path / "contract").mkdir()
     assert discover_contract_repo(tmp_path) == [tmp_path]
+
+
+def test_discover_tree_under_a_pycache_root(tmp_path: pathlib.Path) -> None:
+    root = tmp_path / "__pycache__" / "repo"
+    test_file = _touch(root / "tests" / "test_a.py")
+
+    assert discover_tree(root, "tests") == [test_file]
