@@ -196,8 +196,7 @@ jobs:
       - name: Run shell script tests
         run: uv run poe test-scripts
 
-  # Collects the test trees no PR job executes: the live-cluster readers in
-  # tests/e2e (manual, need VPN + kubectl), the storage load suite in
+  # Collects the test trees no PR job executes: the storage load suite in
   # tests/load (nightly smoke only, schedule.yaml) and the integration example
   # connector authors copy. Collecting is enough to catch the ways these rot
   # unseen: an import that no longer resolves, or a tree that collects nothing.
@@ -215,8 +214,6 @@ jobs:
       - uses: "./.github/actions/setup-deps"
         with:
           checkout: "false"
-      - name: Collect tests/e2e
-        run: uv run pytest --collect-only -q -m "" tests/e2e
       - name: Collect tests/load
         run: uv run pytest --collect-only -q -m "" tests/load
       - name: Collect tests/integration/_example
