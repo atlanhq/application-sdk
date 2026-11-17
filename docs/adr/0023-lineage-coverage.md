@@ -52,9 +52,55 @@ every ref has an outcome.
 | Some missed | `INVALID` / `UPSTREAM_NOT_IN_ATLAN` |
 | None matched | `MISSING` / `UPSTREAM_NOT_IN_ATLAN` |
 | Matched, but at least one was ambiguous | `INVALID` / `UPSTREAM_AMBIGUOUS` |
+| A ref the app marked as not expected to resolve (`NOT_EXPECTED`, e.g. a file source) | Ignored; all of them: `VALID_NONE` |
 
 The coverage rate is `VALID / (VALID + INVALID + MISSING)`. `PENDING` and `VALID_NONE` stay out of
 the denominator.
+
+`NOT_EXPECTED` matters in practice: on one tenant's replay, 63% of the refs the lookup couldn't
+match were file sources or refs the app should never have emitted, so without it a lookup miss
+mostly measures app noise.
+
+### Ref outcomes from the lookup (stage 2)
+
+The lookup reports one row per ref; the app's rows join it on `(processQualifiedName,
+componentsHash)`:
+
+| Field | Meaning |
+| --- | --- |
+| `processQualifiedName`, `componentsHash` | Join key (identity v2) |
+| `outcome` | `MATCHED`, `MISSED` or `AMBIGUOUS` |
+| `candidateCount` | Catalog candidates the ref matched; `AMBIGUOUS` when more than 1 |
+| `resolvedQualifiedName`, `connector` | What the lookup picked |
+| `missReason` | Why it missed, when the lookup knows (absent, filtered, no searchable connector) |
+
+Publish already computes the outcome per ref (its edge resolve keeps the best candidate per ref and
+leaves unmatched refs with no resolved name); it doesn't export it, and the candidate count is lost
+when it keeps the best. The shared resolver being built for lineage lookups returns a hit with its
+candidates or a miss with a reason, and plans to export failures as rows by connector and reason.
+That export is the natural source for this table; the SDK only defines the shape and `settle`.
+
+### Funnel buckets
+
+`funnel.funnel_bucket(assessment)` maps a verdict onto the support `lineage-funnel` labels (one per
+closed lineage ticket), so run-time counts can be compared with closed tickets. The bucket comes
+from the reason category; a reason can override it. `VALID` and `PENDING` have none; `VALID_NONE`
+is a product expectation; a lookup miss that left other upstreams in place has none, because the
+funnel's lookup bucket means no source table resolved.
+
+| Category | Bucket |
+| --- | --- |
+| `PARSER_FAILURE` | Parse error |
+| `ASSET_NOT_FOUND` | Assets and query history not extracted |
+| `CACHE_MISS` (nothing resolved) | Failure to lookup all source tables |
+| `MISSING_METADATA`, `NO_UPSTREAM_DATA`, `UNSUPPORTED_SOURCE_FEATURE`, `NO_SEARCHABLE_DIALECT` | Source-specific lineage derivation |
+| `PROCESS_MAPPING_FAILURE` | Lineage process not created |
+| `CONNECTOR_LIMITATION` | Product expectation mismatch |
+| `RELATIONSHIP_FALLBACK`, `OBSERVABILITY_DISABLED`, `UNINSTRUMENTED_PATH` | none |
+
+The funnel has no bucket for a partial lookup miss or a wrong pick among several candidates. Its
+SQL-only buckets (temporary-table chain, outdated DDL, not delivered to QI, target-table lookup)
+don't arise for BI apps.
 
 ### Ref identity v2
 
@@ -102,7 +148,9 @@ runs, all read-only.
 | Rows and lineage output, in-app vs SDK | Identical in all 11 comparisons: asset rows, ref rows and Process files |
 | Classifier branches reached by real data | 8 of 10; built-but-partial and inherited-at-row-level only in unit tests |
 | Ref hash | Equal to the stored hash on 377 of 377 refs |
-| `settle` vs a query-side settle | Same verdict on 51 of 51 pending assets, including 10 seeded cases with known answers |
+| `settle` vs a query-side settle | Same verdict on 51 of 51 pending assets, including 10 seeded cases with known answers. Both sides are our rules, so this is agreement, not a test against publish |
+| The settle rule vs publish's own lookup | Publish's edge resolve replayed locally on two tenants' runs and caches, read-only: same outcome on 6,843 of 6,845 and 4,041 of 4,041 refs. Publish's picks match the live graph on 2,645 of 2,696 and 878 of 878 refs |
+| A ticket with an engineer-confirmed cause | The pre-fix rows flagged every datasource the fix later recovered (27 of 27, nothing else), including 7 failures that logged no warning; publish's lookup then matched the 2 of 4 tables the engineer predicted |
 | Outcome row | Lands in ClickHouse once per run, with the allowlisted keys; 3 days of scheduled runs |
 | Time and memory at 1M assets | Within run-to-run noise of the in-app build |
 
@@ -131,7 +179,10 @@ can restate an SDK reason under its code to keep its own wording (5 Tableau code
 
 1. Should the SDK ship generic reasons? This reverses #2204's rule.
 2. `UPSTREAM_AMBIGUOUS` is counted as `INVALID`, but the lookup's pick may be right. Should it be
-   `VALID` with a flag instead?
+   `VALID` with a flag instead? Data point: on one tenant, 775 refs had 2 candidates (the same tables
+   crawled through two connections); publish broke every Redshift tie (749) towards the newer
+   connection. Neither the app's extract (no server host) nor the catalog (one connection has no
+   host) records enough to say whether that's right.
 3. `CACHE_MISS` means "lookup miss" under ARS. Rename it now, while the set is unreleased?
 4. Fold this into #2204, or open a new PR?
 5. Restating an SDK reason by subclassing it under the same code: the right shape, or should
@@ -144,9 +195,11 @@ can restate an SDK reason under its code to keep its own wording (5 Tableau code
    unit people act on. Per-field settle (keeping the refs, at a memory cost) can come later.
 8. A whole phase failing (Power BI's report-definition step catches one exception for all of it)
    would surface as `UNINSTRUMENTED_PATH`. A reason for that, or a run-level flag?
+9. The funnel mapping names support's Linear labels. Keep it in the SDK, next to the categories it
+   must cover (a test enforces that), or move it to the consumer that reads the rows?
 
 ## Not in this spike
 
-The generic tracker, the artifact writer, the publish-side outcome hook, and an
-`adopt-lineage-coverage` skill modelled on `typed-failures`. The Tableau port lives on an app test
+The generic tracker, the artifact writer, the lookup-side outcome export (proven feasible by the
+local replay, not built), and an `adopt-lineage-coverage` skill modelled on `typed-failures`. The Tableau port lives on an app test
 branch, not here.
