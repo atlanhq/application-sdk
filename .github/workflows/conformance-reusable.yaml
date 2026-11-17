@@ -394,6 +394,22 @@ jobs:
     # SDK and the larger connectors in 2026-11; 30 leaves room for a cold
     # cache without a stuck run holding a runner for the 6-hour default.
     timeout-minutes: 30
+    # A pull request, and its merge-queue entry, is graded on what it CHANGES:
+    # `detect` reads this as its `--since` default and exits non-zero only for
+    # blocking findings the checkout has over the merge-base, so a finding the
+    # base branch already carries cannot fail somebody else's PR. Set once on
+    # the job so every per-series step inherits it, with no change to the
+    # composite action vendored into each caller. Empty on every other event
+    # (push, schedule, dispatch), where the run grades the whole repository;
+    # the SARIF is the whole-repository result on every event either way. A
+    # `detect` too old to know the variable ignores it and behaves as before.
+    # The full-history checkout below is what makes the base readable; if it
+    # is not, `detect` falls back to the whole-repository verdict.
+    env:
+      CONFORMANCE_SINCE: >-
+        ${{ (github.event_name == 'pull_request' && github.event.pull_request.base.sha)
+        || (github.event_name == 'merge_group' && github.event.merge_group.base_sha)
+        || '' }}
     steps:
       # Full history only where the ledger guard runs (it diffs against
       # origin/main); push-to-main skips the guard, so it keeps the shallow

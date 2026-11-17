@@ -118,4 +118,6 @@ jobs:
           python3 .github/scripts/release_gate.py \
             --head-ref "$HEAD_REF" \
             --labels "$LABELS" \
-            --gate-check-state-file gate-check-state.txt
+            --gate-check-state-file gate-check-state.txt \
+            --lock-file uv.lock \
+            --pyproject pyproject.toml

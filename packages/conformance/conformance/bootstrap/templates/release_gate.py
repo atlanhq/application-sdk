@@ -44,6 +44,23 @@ FAILS on it. That is the opposite of the connector-review gate, and
 deliberate: a release that skips its gate is worse than a re-run of a
 two-minute check.
 
+A release PR is also refused, whatever its ``gate-check`` state, while the
+app is pinned to an UNRELEASED Application SDK. That is any of:
+
+* ``uv.lock`` resolves an ``atlan-application-sdk*`` package from anywhere
+  but a package index (a git ref, a local path, a URL);
+* the version it locks is a pre-release (``rc``, ``a``, ``b``, ``.dev``);
+* ``pyproject.toml`` routes one through ``[tool.uv.sources]`` to anything
+  but a named index.
+
+Pinning an SDK branch is how an SDK change is tried on one app before the
+SDK releases it. It is fine on a feature branch and wrong in a release:
+the image would ship SDK code that no SDK release contains and no other
+app has run. The check reads the two files the caller checked out, never
+the network, and runs before the status is read so the author learns of
+the pin without paying for a ``/gate-check``. A ``uv.lock`` that cannot be
+parsed fails the gate; a repo with no ``uv.lock`` has nothing to check.
+
 ``bootstrap`` vendors this file into every consumer repo and overwrites
 it on every run, so a consumer cannot fix it locally - the next
 bootstrap reverts the fix. It therefore has to be lint-clean under the
@@ -55,11 +72,20 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import re
 import sys
+import tomllib
 
 RELEASE_LABEL = "release"
 BUMP_BRANCH_PREFIX = "bump-version"
 VERDICT_CREATOR = "github-actions[bot]"
+
+# Every distribution the SDK repo publishes starts with this.
+SDK_PREFIX = "atlan-application-sdk"
+# A final release, optionally a post-release: 3.57.0, 3.57.0.post1.
+RELEASED_VERSION = re.compile(r"\d+(\.\d+)*(\.post\d+)?")
+PIN_HINT = "Pin a released SDK version, re-lock, then /gate-check."
+LOCK_UNREADABLE = "uv.lock could not be parsed, so the SDK pin is unknown."
 
 # Kept at module level so each line fits inside the tightest wrap in the
 # fleet and `ruff format` is a no-op at every width (see FND-445).
@@ -107,13 +133,99 @@ def is_release_pr(head_ref: str, labels: list[str]) -> bool:
     return head_ref.startswith(BUMP_BRANCH_PREFIX) or RELEASE_LABEL in labels
 
 
-def decide(head_ref: str, labels: list[str], state: str) -> tuple[bool, str]:
+def _read_toml(path: str) -> dict | None:
+    """Return the parsed TOML file, ``{}`` if absent, ``None`` if unreadable."""
+    file = pathlib.Path(path)
+    if not path or not file.is_file():
+        return {}
+    try:
+        return tomllib.loads(file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+
+
+def _is_sdk(name: object) -> bool:
+    """Return whether ``name`` is a distribution the SDK repo publishes."""
+    return isinstance(name, str) and name.lower().startswith(SDK_PREFIX)
+
+
+def _locked_pins(lock: dict) -> list[str]:
+    """Return one finding per SDK package ``uv.lock`` pins unreleased."""
+    found = []
+    packages = lock.get("package", [])
+    for package in packages if isinstance(packages, list) else []:
+        if not isinstance(package, dict) or not _is_sdk(package.get("name")):
+            continue
+        name = package["name"]
+        source = package.get("source")
+        if not isinstance(source, dict) or "registry" not in source:
+            kind = "/".join(sorted(source)) if isinstance(source, dict) else "?"
+            found.append(f"{name} is locked from a {kind} source")
+            continue
+        version = str(package.get("version", ""))
+        if not RELEASED_VERSION.fullmatch(version):
+            found.append(f"{name} is locked to pre-release {version}")
+    return found
+
+
+def _is_named_index(source: object) -> bool:
+    """Return whether ``source`` only names an index, optionally per marker."""
+    return isinstance(source, dict) and set(source) <= {"index", "marker"}
+
+
+def _source_pins(pyproject: dict) -> list[str]:
+    """Return one finding per SDK package ``[tool.uv.sources]`` redirects.
+
+    A source that only names an index - a single table or uv's
+    marker-specific array of them - resolves from a registry, so it is not
+    a redirect.
+    """
+    tool = pyproject.get("tool")
+    uv = tool.get("uv") if isinstance(tool, dict) else None
+    sources = uv.get("sources") if isinstance(uv, dict) else None
+    found = []
+    for name, source in sources.items() if isinstance(sources, dict) else []:
+        if not _is_sdk(name):
+            continue
+        entries = source if isinstance(source, list) else [source]
+        if entries and all(_is_named_index(entry) for entry in entries):
+            continue
+        found.append(f"{name} is redirected by [tool.uv.sources]")
+    return found
+
+
+def unreleased_sdk_pins(lock_path: str, pyproject_path: str) -> list[str]:
+    """Return why this checkout is pinned to an unreleased SDK, else ``[]``.
+
+    The SDK repo itself (a project named ``atlan-application-sdk*``) locks
+    its own packages from the workspace, so it is never a finding.
+    """
+    pyproject = _read_toml(pyproject_path) or {}
+    project = pyproject.get("project")
+    if isinstance(project, dict) and _is_sdk(project.get("name")):
+        return []
+    lock = _read_toml(lock_path)
+    if lock is None:
+        return [LOCK_UNREADABLE]
+    return _locked_pins(lock) + _source_pins(pyproject)
+
+
+def decide(
+    head_ref: str,
+    labels: list[str],
+    state: str,
+    pins: list[str] | None = None,
+) -> tuple[bool, str]:
     """Return (passes, message) for the head commit's ``gate-check`` state.
 
     ``state`` is ``""`` when there is no status or it could not be read.
+    ``pins`` are the findings of ``unreleased_sdk_pins``; any of them fails
+    a release PR before the state is looked at.
     """
     if not is_release_pr(head_ref, labels):
         return True, "Not a release PR - gate passes."
+    if pins:
+        return False, f"Unreleased SDK pin: {'; '.join(pins)}. {PIN_HINT}"
     if state == "success":
         return True, PASSED
     if state == "pending":
@@ -137,6 +249,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="file holding the head commit's `gate-check` status state",
     )
+    parser.add_argument("--lock-file", default="", help="the app's uv.lock")
+    parser.add_argument("--pyproject", default="", help="the app's pyproject")
     return parser
 
 
@@ -147,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
         args.head_ref,
         parse_labels(args.labels),
         read_state(args.gate_check_state_file),
+        unreleased_sdk_pins(args.lock_file, args.pyproject),
     )
     if passes:
         print(message)  # noqa: T201
