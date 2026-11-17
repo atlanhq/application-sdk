@@ -108,8 +108,7 @@ RULES: tuple[RuleDefinition, ...] = (
         since="0.40.0",
         rule_interactions=(
             "P037 (SdrAgentJsonNotConsumed) predates this rule and names "
-            "`CredentialRef.resolve` as its agent-aware fix, citing a hand-rolled "
-            "`build_credential_ref` as its reference. On an SDK below 3.40.0 that is "
+            "`CredentialRef.resolve` as its agent-aware fix. On an SDK below 3.40.0 that is "
             "still the right fix and this rule is silent; from 3.40.0 this rule "
             "flags that call and P037 also accepts `route_credentials` as "
             "agent-aware, so migrating onto the seam clears both rather than trading "

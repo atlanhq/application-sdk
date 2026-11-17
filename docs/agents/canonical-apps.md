@@ -2,6 +2,8 @@
 
 Three public repos are the reference implementations for apps built on this SDK. When you need to know how something *should* look in a consumer app — test layout, contract shape, entrypoint wiring, credential handling — read one of these rather than generalising from an arbitrary `atlan-*-app`. They are also the only apps a conformance rule's `canonical_reference` may name (alongside this SDK, for rules whose fix is an SDK seam). Every auto-fixable app-facing rule cites a file in one of them, except the few with no such site anywhere in the three — each listed with its reason in `_SDK_ONLY_REFERENCE_EXEMPT` in `packages/conformance/tests/test_catalog.py`.
 
+Those references are checked nightly against the three apps' `main` by `.github/workflows/canonical-reference-check.yaml` (`python -m conformance.tools.verify_canonical_references`): every cited path, `path:N` line span and backticked symbol must still exist. When a refactor here turns it red, re-point the citing rule's `canonical_reference` in `packages/conformance/conformance/suite/rules/` and run `gen-rule-docs`.
+
 | Repo | Why it's the reference |
 |---|---|
 | [`atlan-openapi-app`](https://github.com/atlanhq/atlan-openapi-app) | Non-SQL, public source — no credential config (`hasCredentialConfig = false`). Shows the shape when there is nothing to authenticate against. |

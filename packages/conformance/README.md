@@ -121,5 +121,16 @@ uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
 # No inputs required — the published PyPI package is used by default.
 ```
 
+Each rule's `canonical_reference` names a file in one of the three reference
+apps. `.github/workflows/canonical-reference-check.yaml` checks them nightly
+against the apps' `main` — every cited path, `path:N` line span and backticked
+symbol must exist:
+
+```bash
+python -m conformance.tools.verify_canonical_references --sdk-root ../.. \
+  --app atlan-openapi-app=<checkout> --app atlan-mysql-app=<checkout> \
+  --app atlan-metabase-app=<checkout>
+```
+
 See `conformance/programs/conformance-remediation.prose.md` for the
 `/remediate` skill entry contract.

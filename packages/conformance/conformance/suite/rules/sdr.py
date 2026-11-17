@@ -399,10 +399,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P037",
         canonical_reference=(
-            "atlan-metabase-app app/credentials.py — `build_credential_ref` routes through "
-            "`CredentialRef.resolve`, which covers direct (credential_guid) and agent "
-            "(agent_json) modes from one call. Resolving by credential_guid alone works in "
-            "direct mode and silently ignores agent_json in SDR mode."
+            "atlan-metabase-app app/connector.py — `extract_metadata` calls the SDK's "
+            "`route_credentials(input)` once, which goes through `CredentialRef.resolve` "
+            "and so covers direct (credential_guid) and agent (agent_json) modes from one "
+            "call. Resolving by credential_guid alone works in direct mode and silently "
+            "ignores agent_json in SDR mode."
         ),
         scope=RuleScope.APP,
         name="SdrAgentJsonNotConsumed",

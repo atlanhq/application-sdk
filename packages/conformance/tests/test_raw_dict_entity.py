@@ -3,14 +3,14 @@
 Exercised through the P-series ``scan_text`` so the real wiring (scope gate,
 suppression handling) is covered, not just the detector.  The positive and
 negative fixtures are the shapes real apps use: the Dataplex aspect-type
-catalog as it was before it moved to pyatlan_v9, and the raw-dict sites in the
-openapi and metabase reference apps that are not emitted entities.
+catalog as it was before it moved to pyatlan_v9, the compliant shape the
+openapi reference app has, and the raw-dict sites in the openapi and metabase
+reference apps that are not emitted entities.
 """
 
 from __future__ import annotations
 
 import textwrap
-from pathlib import Path
 
 import pytest
 
@@ -146,41 +146,60 @@ def test_entity_bytes_kwarg_through_a_local_name() -> None:
     assert [f.line for f in _p058(src)] == [3]
 
 
-# ── Canonical reference: atlan-openapi-app ──────────────────────────────────────
+# ── Canonical reference shape: atlan-openapi-app ────────────────────────────────
 
-#: Verbatim copies of the files P058's ``canonical_reference`` cites, taken
-#: from atlan-openapi-app at c11dcaefa230e689d096ee618b02ddc58dccaaf6.  Refresh
-#: them from the app's ``main`` when the reference changes.
-_CANONICAL = Path(__file__).parent / "fixtures" / "p058_openapi"
-
-
-def _canonical(name: str) -> str:
-    return (_CANONICAL / f"{name}.txt").read_text(encoding="utf-8")
-
-
-@pytest.mark.parametrize("name", ["asset_mapper.py", "connector.py"])
-def test_silent_on_canonical_reference(name: str) -> None:
-    findings = [
-        f for f in p_scan(_canonical(name), f"app/{name}") if f.rule_id == "P058"
-    ]
-    assert findings == []
+#: The shape P058's ``canonical_reference`` cites in atlan-openapi-app, reduced
+#: to the parts the rule reads: a mapper that builds its entity with a
+#: ``pyatlan_v9`` creator, a transform that writes each one through
+#: ``entity_bytes``, and the one ``typeName``/``attributes`` dict the app does
+#: build — a ref validated into ``ConnectionRef``, which is not an emit.
+#:
+#: Synthetic rather than a copy of the app: a copy is a snapshot that stays
+#: clean whatever the app later does.  That the cited files still exist and
+#: still name these symbols is checked against a live checkout by
+#: ``conformance.tools.verify_canonical_references`` (FND-4665).
+_CANONICAL_SHAPE = """
+    from application_sdk.common.asset_serialization import entity_bytes
+    from application_sdk.contracts.types import ConnectionRef
+    from pyatlan_v9.model.assets import APISpec
 
 
-def test_canonical_reference_regressed_to_a_raw_dict_fires() -> None:
-    # Guards the fixture: the cited mapper building a dict must be flagged.
-    creator = (
-        "asset = APISpec.creator(name=record.title, "
-        "connection_qualified_name=connection_qn)"
+    def map_api_spec(record, connection_qn):
+        asset = APISpec.creator(name=record.title, connection_qualified_name=connection_qn)
+        if record.spec_url:
+            asset.source_url = record.spec_url
+        return asset
+
+
+    def resolve_connection(input, conn_qn):
+        if input.reuse:
+            return ConnectionRef.model_validate(
+                {"typeName": "Connection", "attributes": {"qualifiedName": conn_qn}}
+            )
+        return input.connection
+
+
+    def transform(records, conn_qn, out_f):
+        for record in records:
+            asset = map_api_spec(record, conn_qn)
+            out_f.write(entity_bytes(asset, entity_type="api_spec") + b"\\n")
+"""
+
+_CREATOR = "asset = APISpec.creator(name=record.title, connection_qualified_name=connection_qn)"
+
+
+def test_silent_on_canonical_reference_shape() -> None:
+    assert _p058(_CANONICAL_SHAPE, "app/asset_mapper.py") == []
+
+
+def test_canonical_reference_shape_regressed_to_a_raw_dict_fires() -> None:
+    # Guards the fixture: the mapper building a dict instead must be flagged.
+    assert _CANONICAL_SHAPE.count(_CREATOR) == 1
+    regressed = _CANONICAL_SHAPE.replace(
+        _CREATOR,
+        'asset = {"typeName": "APISpec", "attributes": {"name": record.title}}',
     )
-    source = _canonical("asset_mapper.py")
-    assert source.count(creator) == 1
-    regressed = source.replace(
-        creator, 'asset = {"typeName": "APISpec", "attributes": {"name": record.title}}'
-    )
-    findings = [
-        f for f in p_scan(regressed, "app/asset_mapper.py") if f.rule_id == "P058"
-    ]
-    assert len(findings) == 1
+    assert len(_p058(regressed, "app/asset_mapper.py")) == 1
 
 
 # ── Negative: the same shape where it is not an emitted entity ─────────────────
