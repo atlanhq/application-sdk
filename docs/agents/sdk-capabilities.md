@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.57.0
-source-sha:    7624e746ac9409c96b005b948f242deb68e85929
-source-date:   2026-11-13T20:32:35Z
+sdk-version:   3.58.0
+source-sha:    9fb87168c708438a32e9b967d8e3937796376acf
+source-date:   2026-11-18T01:22:47+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 459 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 461 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 85 |
 
 ## Subpackage Details
@@ -5847,6 +5847,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Compare actual extracted metadata against an expected baseline.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
 
+#### `configuration_strategy`
+
+- **Import:** `from application_sdk.testing.hypothesis.strategies.outputs.statestore import configuration_strategy`
+- **Signature:** `configuration_strategy(draw) -> Dict[str, Any]`
+- **Summary:** Deprecated: build a strategy from your app's own config model.
+- **Defined in:** `application_sdk/testing/hypothesis/strategies/outputs/statestore.py`
+
 #### `connection_delete_task_queue`
 
 - **Import:** `from application_sdk.testing.harness.teardown import connection_delete_task_queue`
@@ -5909,6 +5916,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `create_connection(client: AsyncAtlanClient, *, ...)`
 - **Summary:** Create a Connection at an exact qualified name, and return that name.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `credentials_strategy`
+
+- **Import:** `from application_sdk.testing.hypothesis.strategies.outputs.statestore import credentials_strategy`
+- **Signature:** `credentials_strategy(draw) -> Dict[str, Any]`
+- **Summary:** Deprecated: build a strategy from your app's own credential model.
+- **Defined in:** `application_sdk/testing/hypothesis/strategies/outputs/statestore.py`
 
 #### `cursor_page`
 

@@ -113,7 +113,7 @@ def _configuration_strategy(draw) -> Dict[str, Any]:
 )
 @composite
 def credentials_strategy(draw) -> Dict[str, Any]:
-    """Generate a dictionary of credentials with common keys.
+    """Deprecated: build a strategy from your app's own credential model.
 
     .. deprecated:: 3.59.0
         Build a strategy from your app's own credential model. Will be removed
@@ -129,7 +129,7 @@ def credentials_strategy(draw) -> Dict[str, Any]:
 )
 @composite
 def configuration_strategy(draw) -> Dict[str, Any]:
-    """Generate a configuration dictionary that might include nested structures.
+    """Deprecated: build a strategy from your app's own config model.
 
     .. deprecated:: 3.59.0
         Build a strategy from your app's own config model. Will be removed in
