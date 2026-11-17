@@ -81,7 +81,7 @@ def findings_to_report(
     ``notifications`` pass through to :meth:`ReportBuilder.build` as the
     invocation's ``toolExecutionNotifications``.
     """
-    from conformance.suite.rules import load_catalog
+    from conformance.suite.rules import load_catalog  # noqa: PLC0415 — circular: suite.rules imports suite.schema
 
     catalog = load_catalog()
     if rule_ids is not None:

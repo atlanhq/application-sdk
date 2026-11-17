@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from conformance.scorecard.schema import Scorecard
 from conformance.suite.schema.validate import validate_against_schema
 
 _SCHEMA_PATH = Path(__file__).parent / "scorecard-schema-1.0.json"
@@ -23,8 +24,6 @@ def scorecard_json_schema() -> dict[str, Any]:
 
     This is the authoritative definition; the vendored file is a snapshot of it.
     """
-    from conformance.scorecard.schema import Scorecard
-
     return Scorecard.model_json_schema(by_alias=True)
 
 

@@ -49,6 +49,7 @@ Blocking-reason mirrors renovate-auto-approve-reusable.yml conditions:
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -645,7 +646,6 @@ def classify(pr: RenovatePR) -> RenovatePR:
     br = blocking_reason(pr, cat, age, now)
 
     # dataclass is frozen=True; use replace pattern.
-    import dataclasses
 
     return dataclasses.replace(
         pr,

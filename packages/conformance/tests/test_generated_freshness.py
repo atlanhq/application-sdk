@@ -893,3 +893,20 @@ def test_k009_is_block_tier() -> None:
     assert rule.scope == RuleScope.APP
     assert rule.tier == EnforcementTier.BLOCK
     assert rule.rationale
+
+
+def test_module_compiles_without_syntax_warning() -> None:
+    """The module source has no invalid escape sequences (FND-4670).
+
+    An invalid escape such as ``\\s`` in a non-raw docstring is a
+    SyntaxWarning today and a SyntaxError in a future Python, which would turn
+    every scan that imports this check into an import failure.
+    """
+    import warnings
+
+    import conformance.suite.checks.generated_freshness as module
+
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", SyntaxWarning)
+        compile(source, module.__file__, "exec")

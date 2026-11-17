@@ -847,7 +847,7 @@ def scan(reg: Registry) -> list[Finding]:
         checker.handler(src, func)
     for src in reg.sources:
         checker.inputs(src)
-    from ._error_flow import scan as scan_error_flow
+    from ._error_flow import scan as scan_error_flow  # noqa: PLC0415 — circular: _error_flow imports _contracts
 
     scan_error_flow(checker)
     return checker.findings

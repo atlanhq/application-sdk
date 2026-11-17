@@ -47,7 +47,7 @@ def validate_against_schema(
         If the document does not conform to the schema.
     """
     try:
-        import jsonschema
+        import jsonschema  # noqa: PLC0415 — deliberately lazy; see the comment above _SCHEMA_PATH
     except ImportError as exc:
         raise ImportError(missing_dependency_hint) from exc
 

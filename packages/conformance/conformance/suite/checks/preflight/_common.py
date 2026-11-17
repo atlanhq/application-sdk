@@ -16,6 +16,7 @@ from conformance.suite.checks._ast_common import (
     _IgnoreDirective,
     _parse_directives,
     collect_module_alias_targets,
+    make_finding,
     register_alias_records,
 )
 from conformance.suite.checks._sdk_contract_mixins import SDK_TEMPLATE_CONTRACT_FIELDS
@@ -249,7 +250,7 @@ def find_preflight_check_sites(
     annotated ``PreflightInput`` — either signal alone is a near-unambiguous marker.
     """
     sites: list[tuple[Source, ast.AsyncFunctionDef]] = []
-    from ._contracts import _Checker, _qualified
+    from ._contracts import _Checker, _qualified  # noqa: PLC0415 — circular: _contracts imports _common
 
     resolver = _Checker(reg)
 
@@ -402,7 +403,7 @@ def iter_function_nodes(func: ast.AST):
 
 def reachable_preflight_sites(reg: Registry):
     """Follow resolved module helpers and self methods across app sources."""
-    from ._contracts import _Checker
+    from ._contracts import _Checker  # noqa: PLC0415 — circular: _contracts imports _common
 
     resolver = _Checker(reg)
     pending = list(find_preflight_check_sites(reg))
@@ -468,7 +469,6 @@ def contracts_for_site(reg: Registry, src: Source) -> frozenset[str]:
 
 def coverage_findings(reg: Registry):
     """Report syntactically declared hooks and contracts that cannot be analyzed."""
-    from conformance.suite.checks._ast_common import make_finding
 
     findings = [
         make_finding(
