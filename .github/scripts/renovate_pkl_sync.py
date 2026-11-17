@@ -99,7 +99,9 @@ from pkl_contract_layout import (  # noqa: E402
 LOCK_PATH = "contract/PklProject.deps.json"
 
 # Everything a contract can emit, relative to the repo root, as git pathspecs.
-# Mirrors the cleanup list in contract-toolkit/scripts/regenerate-all.sh.
+# Mirrors the cleanup list in contract-toolkit/scripts/regenerate-all.sh
+# (which removes the examples' whole contract/generated/, since they keep
+# nothing else there).
 # CALLER_NODE_PATHSPEC names a system app's caller nodes only (FND-3563): the
 # rest of contract/generated/ is the app's.
 OUTPUT_PATHS = [GENERATED_DIR, CALLER_NODE_PATHSPEC, *ROOT_FILES]
