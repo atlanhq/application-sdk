@@ -57,11 +57,13 @@ def test_help_uri_resolves_to_the_rules_own_page(rule: RuleDefinition) -> None:
 
 def test_a_hand_written_help_uri_is_rejected() -> None:
     with pytest.raises(ValidationError, match="help_uri is derived from the rule id"):
-        RuleDefinition(
-            id="Z999",
-            name="Example",
-            tier="warn",
-            scope="app",
-            category="example",
-            help_uri="https://example.invalid/rules.md#z999",
+        RuleDefinition.model_validate(
+            {
+                "id": "Z999",
+                "name": "Example",
+                "tier": "warn",
+                "scope": "app",
+                "category": "example",
+                "help_uri": "https://example.invalid/rules.md#z999",
+            }
         )
