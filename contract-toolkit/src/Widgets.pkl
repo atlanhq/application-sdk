@@ -9,7 +9,7 @@
 ///
 /// Sourced from the widget portion of `Config.pkl`; the legacy CSA amend-target
 /// plumbing (`packageId`, `containerImage`, `output =` block, etc.) is excluded.
-@ModuleInfo { minPklVersion = "0.25.1" }
+@ModuleInfo { minPklVersion = "0.33.0" }
 module com.atlan.app.contract.Widgets
 
 /// Visual style variants supported by the workflows v2 InfoBanner component.
@@ -70,6 +70,10 @@ class UIConfig {
   )
 }
 
+/// Returns [inputs] unchanged: an identity fold that nothing in the toolkit calls.
+@Deprecated {
+  message = "An identity fold with no callers; use the mapping directly. Will be removed in a future release."
+}
 const function resolveInputs(inputs: Mapping<String, UIElement>): Mapping<String, UIElement> = inputs.fold(new Mapping {}, (acc: Mapping<String, UIElement>, inputKey, input) ->
   (acc) {
     [inputKey] = input

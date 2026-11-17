@@ -20,6 +20,7 @@
 ///   exact `{{param}}` placeholder), the values callers pass at run time.
 /// - Args the app does not declare, and raw `args` entries for args it does,
 ///   are refused, so every value goes through its typed property.
+@ModuleInfo { minPklVersion = "0.33.0" }
 module com.atlan.app.contract.InputContract
 
 import "Inputs.pkl" as InputsPkg

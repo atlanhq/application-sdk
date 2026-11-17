@@ -25,7 +25,7 @@
 /// **Multi-entrypoint apps**: set `entrypoints` with `contract` references on
 /// each `Entrypoint`. The bundle-level file owns `atlan.yaml`/`app.yaml` and
 /// re-exports per-entrypoint artifacts into `app/generated/{name}/`.
-@ModuleInfo { minPklVersion = "0.25.1" }
+@ModuleInfo { minPklVersion = "0.33.0" }
 open module com.atlan.app.contract.App
 
 import "Connectors.pkl" as ConnectorsPkg
@@ -2635,7 +2635,14 @@ local function renderAnyField(f: CredentialFieldEntry): Any =
   else if (f is NamedProperty) (f as NamedProperty).property
   else renderField(f as FieldSpec)
 
-local function renderAuthOption(opt: AuthOption): Mapping<String, Any> = new Mapping {
+/// Render one `AuthOption` as a nested credential pane, rendering each field with
+/// [renderEntry]. The plain credential form passes [renderAnyField]; the
+/// `AdvancedJDBCUrlGroup` panes pass [renderAnyFieldStripped], which drops `ui`
+/// keys that only restate frontend defaults.
+local function renderAuthOptionWith(
+  opt: AuthOption,
+  renderEntry: (CredentialFieldEntry) -> Any
+): Mapping<String, Any> = new Mapping {
   ["type"] = "object"
   ["ui"] = new Mapping {
     ["widget"] = "nested"
@@ -2649,7 +2656,7 @@ local function renderAuthOption(opt: AuthOption): Mapping<String, Any> = new Map
   when (!opt.fields.isEmpty || !opt.extraFields.isEmpty || !opt.postExtraFields.isEmpty) {
     ["properties"] = new Mapping {
       for (f in opt.fields) {
-        [f.name] = renderAnyField(f)
+        [f.name] = renderEntry.apply(f)
       }
       when (!opt.extraFields.isEmpty) {
         ["extra"] = new Mapping {
@@ -2662,17 +2669,20 @@ local function renderAuthOption(opt: AuthOption): Mapping<String, Any> = new Map
           }
           ["properties"] = new Mapping {
             for (f in opt.extraFields) {
-              [f.name] = renderAnyField(f)
+              [f.name] = renderEntry.apply(f)
             }
           }
         }
       }
       for (f in opt.postExtraFields) {
-        [f.name] = renderAnyField(f)
+        [f.name] = renderEntry.apply(f)
       }
     }
   }
 }
+
+local function renderAuthOption(opt: AuthOption): Mapping<String, Any> =
+  renderAuthOptionWith(opt, (f) -> renderAnyField(f))
 
 // ── AdvancedJDBCUrlGroup renderer ─────────────────────────────────────────────
 
@@ -2696,44 +2706,8 @@ local function renderAnyFieldStripped(f: CredentialFieldEntry): Any =
   else if (f is NamedProperty) (f as NamedProperty).property
   else renderFieldStripped(f as FieldSpec)
 
-local function renderJdbcAuthOption(opt: AuthOption): Mapping<String, Any> = new Mapping {
-  ["type"] = "object"
-  ["ui"] = new Mapping {
-    ["widget"] = "nested"
-    ["label"] = opt.nestedLabel
-    when (opt.nestedPlaceholder != null) { ["placeholder"] = opt.nestedPlaceholder }
-    ["hidden"] = opt.nestedHidden
-    when (opt.nestedHelp != null) { ["help"] = opt.nestedHelp }
-    when (opt.nestedWidth != null) { ["grid"] = opt.nestedWidth }
-    ["nestedValue"] = false
-  }
-  when (!opt.fields.isEmpty || !opt.extraFields.isEmpty || !opt.postExtraFields.isEmpty) {
-    ["properties"] = new Mapping {
-      for (f in opt.fields) {
-        [f.name] = renderAnyFieldStripped(f)
-      }
-      when (!opt.extraFields.isEmpty) {
-        ["extra"] = new Mapping {
-          ["type"] = "object"
-          ["ui"] = new Mapping {
-            ["widget"] = "nested"
-            ["label"] = opt.nestedExtraLabel
-            when (opt.nestedExtraHeader != null) { ["header"] = opt.nestedExtraHeader }
-            ["hidden"] = false
-          }
-          ["properties"] = new Mapping {
-            for (f in opt.extraFields) {
-              [f.name] = renderAnyFieldStripped(f)
-            }
-          }
-        }
-      }
-      for (f in opt.postExtraFields) {
-        [f.name] = renderAnyFieldStripped(f)
-      }
-    }
-  }
-}
+local function renderJdbcAuthOption(opt: AuthOption): Mapping<String, Any> =
+  renderAuthOptionWith(opt, (f) -> renderAnyFieldStripped(f))
 
 local function renderJdbcAuthMergeTargetOption(opt: AuthOption): Mapping<String, Any> =
   let (auth = renderJdbcAuthOption(opt).toMap())

@@ -5,7 +5,9 @@ Every generated _input.py and _e2e_*.py must import cleanly, the SDK names
 default in a generated ``_e2e_substitutions.py`` must pass the matching field
 of the ``_input.py`` generated beside it.
 
-Requires: pip install git+https://github.com/atlanhq/application-sdk.git@main
+Runs against the SDK in this repository. From the repo root::
+
+    uv run --extra workflows python contract-toolkit/scripts/test-sdk-import.py
 """
 
 import ast

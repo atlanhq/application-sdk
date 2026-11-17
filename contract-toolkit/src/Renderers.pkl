@@ -2,7 +2,7 @@
    Copyright 2024 Atlan Pte. Ltd. */
 
 /// Module for rendering the outputs for a custom package's configuration in Atlan.
-@ModuleInfo { minPklVersion = "0.25.1" }
+@ModuleInfo { minPklVersion = "0.33.0" }
 module com.atlan.app.contract.Renderers
 
 import "Config.pkl"
