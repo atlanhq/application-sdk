@@ -19,6 +19,7 @@ from pathlib import Path
 from conformance.suite.checks.e2e_generated_harness import discover, scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
+from tests._helpers import active_ids
 
 # What the toolkit emits for atlan-mysql-app.
 _GENERATED_BASE = """\
@@ -101,10 +102,6 @@ def _repo(
 
 def _scan(root: Path) -> list:
     return scan_all(discover(root), root)
-
-
-def _ids(findings: list) -> list[str]:
-    return [f.rule_id for f in findings if not f.suppressed]
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +257,7 @@ class CustomCredential(Body):
     pass
 """
     root = _repo(tmp_path, tests={"e2e/things.py": base, "e2e/test_cred.py": leaf})
-    assert "T023" not in _ids(_scan(root))
+    assert "T023" not in active_ids(_scan(root))
 
 
 def test_t023_clean_on_canonical_generated_shape(tmp_path: Path) -> None:
@@ -269,7 +266,7 @@ def test_t023_clean_on_canonical_generated_shape(tmp_path: Path) -> None:
         tests={"e2e/test_mysql_full_dag.py": _CANONICAL_TEST},
         generated={"_e2e_base.py": _GENERATED_BASE},
     )
-    assert "T023" not in _ids(_scan(root))
+    assert "T023" not in active_ids(_scan(root))
 
 
 def test_t023_ignores_non_harness_classes(tmp_path: Path) -> None:
@@ -280,7 +277,7 @@ class Config:
     app_service_url = "http://x"
 """
     root = _repo(tmp_path, tests={"unit/test_helper.py": helper})
-    assert "T023" not in _ids(_scan(root))
+    assert "T023" not in active_ids(_scan(root))
 
 
 def test_t023_fires_through_an_in_repo_intermediate_base(tmp_path: Path) -> None:
@@ -379,7 +376,7 @@ def test_t024_clean_when_mode_declared_agent(tmp_path: Path) -> None:
         tests={"e2e/test_mysql_full_dag.py": _CANONICAL_TEST},
         generated={"_e2e_base.py": _GENERATED_BASE},
     )
-    assert "T024" not in _ids(_scan(root))
+    assert "T024" not in active_ids(_scan(root))
 
 
 def test_t024_clean_when_mode_declared_direct(tmp_path: Path) -> None:
@@ -392,7 +389,7 @@ class TestThingDirect(SQLAppE2ETest):
     mode = RunMode.DIRECT
 """
     root = _repo(tmp_path, tests={"e2e/test_thing.py": test_src})
-    assert "T024" not in _ids(_scan(root))
+    assert "T024" not in active_ids(_scan(root))
 
 
 def test_t024_clean_when_an_in_repo_base_declares_mode(tmp_path: Path) -> None:
@@ -411,7 +408,7 @@ class TestThingFullDAG(BaseFullDAGE2ETest):
     expected_min_asset_counts = {"Table": 1}
 """
     root = _repo(tmp_path, tests={"e2e/base.py": shared, "e2e/test_thing.py": leaf})
-    assert "T024" not in _ids(_scan(root))
+    assert "T024" not in active_ids(_scan(root))
 
 
 def test_t024_ignores_non_collectable_harness_bases(tmp_path: Path) -> None:
@@ -424,7 +421,7 @@ class SharedHarness(BaseE2ETest):
     connection_name_prefix = "e2e"
 """
     root = _repo(tmp_path, tests={"e2e/base.py": shared})
-    assert "T024" not in _ids(_scan(root))
+    assert "T024" not in active_ids(_scan(root))
 
 
 def test_t024_ignores_a_mode_local_to_a_method(tmp_path: Path) -> None:
@@ -438,7 +435,7 @@ class TestThingFullDAG(SQLAppE2ETest):
         assert mode
 """
     root = _repo(tmp_path, tests={"e2e/test_thing.py": test_src})
-    assert "T024" in _ids(_scan(root))
+    assert "T024" in active_ids(_scan(root))
 
 
 def test_t024_suppressed_inline(tmp_path: Path) -> None:
@@ -469,7 +466,7 @@ def test_scan_survives_non_utf8_test_file(tmp_path: Path) -> None:
         tests={"e2e/test_full_dag.py": _CANONICAL_TEST},
     )
     (root / "tests" / "e2e" / "test_bin.py").write_bytes(b"\xff\xfe class X: pass\n")
-    assert _ids(_scan(root)) == []
+    assert active_ids(_scan(root)) == []
 
 
 def test_t024_not_silenced_by_an_unrelated_same_named_class(tmp_path: Path) -> None:
@@ -494,7 +491,7 @@ class TestFullDag(MysqlGeneratedE2EBase):
             "e2e/test_full_dag.py": genuine,
         },
     )
-    assert "T024" in _ids(_scan(root))
+    assert "T024" in active_ids(_scan(root))
 
 
 def test_t024_not_flagged_in_a_file_pytest_never_collects(tmp_path: Path) -> None:
@@ -515,7 +512,7 @@ class TestSharedBase(MysqlGeneratedE2EBase):
         generated={"_e2e_base.py": _GENERATED_BASE},
         tests={"e2e/helpers.py": helper},
     )
-    assert "T024" not in _ids(_scan(root))
+    assert "T024" not in active_ids(_scan(root))
 
 
 def test_t023_anchors_in_the_file_it_reports(tmp_path: Path) -> None:
@@ -567,7 +564,7 @@ def test_t024_not_fired_by_ambiguity_among_non_harness_classes(
             ),
         },
     )
-    assert _ids(_scan(root)) == []
+    assert active_ids(_scan(root)) == []
 
 
 def test_t024_still_fires_when_an_ambiguous_candidate_could_be_a_harness(
@@ -593,7 +590,7 @@ def test_t024_still_fires_when_an_ambiguous_candidate_could_be_a_harness(
             ),
         },
     )
-    assert "T024" in _ids(_scan(root))
+    assert "T024" in active_ids(_scan(root))
 
 
 def test_t024_silent_when_the_ambiguous_ancestor_declares_mode(
@@ -622,4 +619,4 @@ def test_t024_silent_when_the_ambiguous_ancestor_declares_mode(
             ),
         },
     )
-    assert "T024" not in _ids(_scan(root))
+    assert "T024" not in active_ids(_scan(root))

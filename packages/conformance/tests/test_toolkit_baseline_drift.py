@@ -14,25 +14,13 @@ regenerated in the same PR:
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
 from conformance.suite.checks._toolkit_baseline import (
     BASELINE_PATH,
-    TOOLKIT_PKLPROJECT_RELPATH,
     build_baseline,
     load_baseline,
     serialize,
 )
-
-
-def _find_sdk_root() -> Path | None:
-    """Locate the repo root containing contract-toolkit/src/PklProject."""
-    for parent in Path(__file__).resolve().parents:
-        if parent.joinpath(*TOOLKIT_PKLPROJECT_RELPATH).is_file():
-            return parent
-    return None
+from tests._helpers import sdk_root
 
 
 def test_baseline_is_committed() -> None:
@@ -53,11 +41,7 @@ def test_committed_baseline_matches_fresh_read() -> None:
     If this fails, the toolkit's version or baseUri changed but the baseline was
     not regenerated. Run ``gen-toolkit-baseline`` and commit the result.
     """
-    sdk_root = _find_sdk_root()
-    if sdk_root is None:
-        pytest.skip("contract-toolkit/src/PklProject not found alongside the package")
-
-    fresh = build_baseline(sdk_root)
+    fresh = build_baseline(sdk_root())
     on_disk = BASELINE_PATH.read_text(encoding="utf-8")
     assert on_disk == serialize(fresh), (
         "toolkit_baseline.json is stale — regenerate with "

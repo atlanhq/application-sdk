@@ -22,11 +22,10 @@ hand-stitch their own file-based durability management.
 from __future__ import annotations
 
 import importlib
-from pathlib import Path
 
 import pytest
 
-from conformance.suite.checks.prescriptions import scan_all, scan_text
+from conformance.suite.checks.prescriptions import scan_text
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
@@ -34,16 +33,6 @@ from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 def _rule(src: str, rule_id: str, file: str = "app/x.py") -> list:
     """Findings of a single rule from a per-file scan of *src* at path *file*."""
     return [f for f in scan_text(src, file) if f.rule_id == rule_id]
-
-
-def _scan_files(tmp_path: Path, files: dict[str, str]) -> list:
-    paths: list[Path] = []
-    for name, src in files.items():
-        path = tmp_path / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(src)
-        paths.append(path)
-    return scan_all(paths, tmp_path)
 
 
 # ── Catalog invariants ──────────────────────────────────────────────────────

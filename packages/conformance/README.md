@@ -31,6 +31,11 @@ uv run atlan-application-sdk-conformance gen-rule-docs
 because the suite runs in consumer repos where that source is not available.
 Never hand-edit them: regenerate in the same PR as the SDK change, and each
 drift test under `tests/` fails until you do. Every generator takes `--check`.
+The drift tests for `deprecated_symbols.json`, `public_errors.json`,
+`sdk_type_aliases.json` and `toolkit_baseline.json` (plus the contract-ledger,
+dependency-audience and removed-imports guards) find the monorepo root with
+`tests/_helpers.py:sdk_root()`, which fails under `CI` rather than skipping.
+The `sdk_contract_fields.json` drift test does not use it yet and can still skip.
 
 | Table | Command |
 |---|---|

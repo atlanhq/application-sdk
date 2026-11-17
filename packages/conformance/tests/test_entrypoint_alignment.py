@@ -30,6 +30,7 @@ import pytest
 from conformance.suite.checks.entrypoint_alignment import scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
+from tests._helpers import write_py
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -54,17 +55,6 @@ def _write_generated(tmp_path: Path, shape: GeneratedShape) -> None:
         (ep_dir / "manifest.json").write_text('{"dag": {}}')
 
 
-def _write_py(tmp_path: Path, py_files: dict[str, str]) -> list[Path]:
-    """Write Python source files under *tmp_path*, return the Path list."""
-    paths: list[Path] = []
-    for name, src in py_files.items():
-        p = tmp_path / name
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(src)
-        paths.append(p)
-    return paths
-
-
 def _run(
     tmp_path: Path,
     py_files: dict[str, str],
@@ -72,7 +62,7 @@ def _run(
 ) -> list:
     """Set up a temp app tree and run the P016 scanner."""
     _write_generated(tmp_path, generated)
-    paths = _write_py(tmp_path, py_files)
+    paths = write_py(tmp_path, py_files)
     return scan_all(paths, tmp_path)
 
 
@@ -644,7 +634,7 @@ def test_p016_single_mode_route_declared_secondary_entrypoint_ok(
         tmp_path,
         ["app:extract-metadata", "app:extract-lineage", "PublishWorkflow"],
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": dedent("""\
@@ -664,7 +654,7 @@ def test_p016_single_mode_route_declared_secondary_entrypoint_ok(
 def test_p016_single_mode_unrouted_code_entrypoint_flags(tmp_path: Path) -> None:
     """A code @entrypoint that the DAG never routes to is still flagged."""
     _write_single_manifest_with_routes(tmp_path, ["app:extract-metadata"])
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": dedent("""\
@@ -686,7 +676,7 @@ def test_p016_single_mode_legacy_no_routes_still_enforces_max_one(
     tmp_path: Path,
 ) -> None:
     """Legacy single manifest with no '<app>:<wire>' routes → max-1 fallback holds."""
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": dedent("""\
@@ -710,7 +700,7 @@ def test_p016_single_mode_duplicate_wire_name_fires(tmp_path: Path) -> None:
     duplicate check — single mode now hosts >1 entry point, so the duplicate
     detection must run in single mode too, not only in multi mode."""
     _write_single_manifest_with_routes(tmp_path, ["app:extract-metadata"])
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": dedent("""\
@@ -743,7 +733,7 @@ def test_p016_single_mode_workflow_type_outside_dag_ignored(tmp_path: Path) -> N
         "other": {"workflow_type": "app:rogue"},
     }
     (gen / "manifest.json").write_text(json.dumps(manifest))
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": dedent("""\
@@ -778,7 +768,7 @@ def test_p016_declared_alias_is_recognised_as_a_route(tmp_path: Path) -> None:
         ["app:extract-metadata", "KeifuWorkflow"],
         aliases=[("KeifuWorkflow", "keifu")],
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": dedent("""\
@@ -804,7 +794,7 @@ def test_p016_alias_absent_from_manifest_still_flags(tmp_path: Path) -> None:
         ["app:extract-metadata", "SomeOtherWorkflow"],
         aliases=[("KeifuWorkflow", "keifu")],
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": dedent("""\
@@ -833,7 +823,7 @@ def test_p016_alias_declared_only_in_code_does_not_route(tmp_path: Path) -> None
     _write_single_manifest_with_routes(
         tmp_path, ["app:extract-metadata", "KeifuWorkflow"]
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": dedent("""\
@@ -860,7 +850,7 @@ def test_p016_foreign_bare_node_does_not_rescue_an_unrelated_entrypoint(
     _write_single_manifest_with_routes(
         tmp_path, ["app:extract-metadata", "PublishWorkflow"]
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": dedent("""\
@@ -952,7 +942,7 @@ def test_p016_declared_alias_routes_when_node_identity_does_not_contradict(
     _write_two_node_manifest(
         tmp_path, aliased_node, aliases=[("OverrideWorkflow", "keifu")]
     )
-    paths = _write_py(tmp_path, {"app/connector.py": _ALIASED_APP_SOURCE})
+    paths = write_py(tmp_path, {"app/connector.py": _ALIASED_APP_SOURCE})
     findings = scan_all(paths, tmp_path)
     assert _p016_ids(findings) == []
 
@@ -971,7 +961,7 @@ def test_p016_declared_alias_naming_a_foreign_node_does_not_launder(
         },
         aliases=[("OverrideWorkflow", "keifu")],
     )
-    paths = _write_py(tmp_path, {"app/connector.py": _ALIASED_APP_SOURCE})
+    paths = write_py(tmp_path, {"app/connector.py": _ALIASED_APP_SOURCE})
     findings = scan_all(paths, tmp_path)
     msgs = [f.message for f in findings if f.rule_id == "P016"]
     assert len(msgs) == 1 and "keifu" in msgs[0]
@@ -1022,7 +1012,7 @@ def test_p016_alias_routes_on_a_generated_shape_manifest(tmp_path: Path) -> None
         {"workflow_type": "OverrideWorkflow", "inputs": {"app_name": "app"}},
         aliases=[("OverrideWorkflow", "keifu")],
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": dedent("""\
@@ -1055,7 +1045,7 @@ def test_p016_generated_shape_still_refuses_a_foreign_node(tmp_path: Path) -> No
         {"workflow_type": "OverrideWorkflow", "inputs": {"app_name": "platform"}},
         aliases=[("OverrideWorkflow", "keifu")],
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": dedent("""\
@@ -1105,7 +1095,7 @@ def test_p016_foreign_colon_prefix_does_not_widen_identity(tmp_path: Path) -> No
         **_alias_block([("OverrideWorkflow", "keifu")]),
     }
     (gen / "manifest.json").write_text(json.dumps(manifest))
-    paths = _write_py(tmp_path, {"app/connector.py": _ALIASED_APP_SOURCE})
+    paths = write_py(tmp_path, {"app/connector.py": _ALIASED_APP_SOURCE})
     findings = scan_all(paths, tmp_path)
     msgs = [f.message for f in findings if f.rule_id == "P016"]
     assert any("Entry point 'keifu'" in m for m in msgs)
@@ -1139,7 +1129,7 @@ def test_p016_no_own_node_and_disagreeing_prefixes_stay_conservative(
         **_alias_block([("OverrideWorkflow", "keifu")]),
     }
     (gen / "manifest.json").write_text(json.dumps(manifest))
-    paths = _write_py(tmp_path, {"app/connector.py": _ALIASED_APP_SOURCE})
+    paths = write_py(tmp_path, {"app/connector.py": _ALIASED_APP_SOURCE})
     findings = scan_all(paths, tmp_path)
     msgs = [f.message for f in findings if f.rule_id == "P016"]
     assert any("Entry point 'keifu'" in m for m in msgs)
@@ -1162,7 +1152,7 @@ def test_p016_a_second_app_class_does_not_launder_a_foreign_node(
         },
         aliases=[("OverrideWorkflow", "keifu")],
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": _ALIASED_APP_SOURCE,
@@ -1199,7 +1189,7 @@ def test_p016_undeclared_bare_node_on_shared_queue_does_not_route(
         }
     }
     (gen / "manifest.json").write_text(json.dumps(manifest))
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": dedent("""\
@@ -1230,7 +1220,7 @@ def test_p016_ignores_a_non_literal_alias_declaration(tmp_path: Path) -> None:
         ["app:extract-metadata", "KeifuWorkflow"],
         aliases=[("KeifuWorkflow", "keifu")],
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": dedent("""\
