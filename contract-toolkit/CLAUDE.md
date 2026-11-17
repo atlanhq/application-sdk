@@ -44,7 +44,6 @@ Contracts generate — from one `pkl eval --project-dir contract -m . contract/a
 
 ```bash
 ./scripts/regenerate-all.sh
-./scripts/check-invariants.sh
 pkl test tests/*.pkl
 python scripts/test-sdk-import.py
 uv run python scripts/check-ruff-stable.py
@@ -123,6 +122,11 @@ over a raw `DAGNode` in `extraNodes`.
 - Legacy modules (`NativeApp.pkl`, `Config.pkl`, etc.) are frozen reference material.
 - If `src/` changes, update `README.md` and `docs/reference.md`.
 - Add or update an example when adding behavior.
+- Test an eval-time refusal (a `throw` or a type constraint) with a `module.catch`
+  fact in `tests/*_test.pkl`, forcing every output file the way `pkl eval -m` does:
+  `module.catch(() -> m.output.files.toMap().mapValues((_, f) -> f.text)).contains("<message>")`.
+  Assert the message, not just that eval failed, and keep a control fact showing the
+  same contract minus the offending value generates.
 - Commit regenerated example outputs with the source change.
 - Toolkit repo skills live at the SDK repo root. Mirror changes between
   `.agents/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md`, and do
@@ -175,7 +179,6 @@ Before opening a PR that touches `src/`:
 
 ```bash
 ./scripts/regenerate-all.sh
-./scripts/check-invariants.sh
 pkl test tests/*.pkl
 python scripts/test-sdk-import.py
 uv run python scripts/check-ruff-stable.py

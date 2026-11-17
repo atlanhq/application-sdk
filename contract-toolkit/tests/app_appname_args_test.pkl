@@ -14,6 +14,10 @@ import "pkl:json"
 import "fixtures/popularity_default.pkl" as appFixture
 import "fixtures/app_appname_collision_publish.pkl" as collisionPublishFixture
 import "fixtures/app_appname_collision_generic.pkl" as collisionGenericFixture
+import "../src/App.pkl" as App
+import "../src/NativeApp.pkl" as NativeApp
+import "../src/Config.pkl"
+import "../src/Connectors.pkl"
 
 local dag =
   let (text = appFixture.output.files["app/generated/manifest.json"].text)
@@ -32,6 +36,28 @@ local collisionPublishDag =
 local collisionGenericDag =
   let (text = collisionGenericFixture.output.files["app/generated/manifest.json"].text)
     new json.Parser { useMapping = true }.parse(text)["dag"]
+
+// Renders every output file, as `pkl eval -m` does, and returns the refusal message.
+local function err(m: Module): String =
+  module.catch(() -> m.output.files.toMap().mapValues((_, f) -> f.text))
+
+local function render(m: Module) = m.output.files.toMap().mapValues((_, f) -> f.text)
+
+// A contract whose only uiConfig property is `key`.
+local function withProperty(key: String) = (App) {
+  name = "reserved-appname-app"
+  displayName = "Reserved App Name"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs { [key] = new App.TextInput { title = "App Name"; placeholderText = "x" } }
+      }
+    }
+  }
+}
 
 facts {
   // Extract node (generateExtractNode) — baked from the contract `name`.
@@ -96,12 +122,51 @@ facts {
   }
 
   // Extract node: the contract `name` is authoritative and a tenant-facing form
-  // field may never supply it. The rejection itself is a generation error, which
-  // `pkl test` facts cannot express — `scripts/check-invariants.sh` asserts that
-  // a colliding uiConfig property fails to generate, on both modules. This pins
-  // the other half: what the extract node emits when there is no collision.
+  // field may never supply it. The facts below pin the rejection on both modules;
+  // this one pins the other half: what the extract node emits with no collision.
   ["extract node app_name is the contract name, not an author value"] {
     collisionPublishDag["extract"]["inputs"]["args"]["app_name"] == "appname-collision-publish"
     collisionPublishDag["extract"]["inputs"]["args"]["app_name"] == collisionPublishDag["extract"]["app_name"]
+  }
+
+  // `app_name` is a reserved uiConfig property name. The arg loops and codegen skip
+  // it, so a form field named so would be a live widget wired to nothing — and,
+  // before the codegen skip, shadowed the base Input.app_name. Generation refuses.
+  ["a uiConfig property named app_name is refused"] {
+    err(withProperty("app_name")).contains("uses the reserved name")
+  }
+
+  // toPyName normalises `app-name` to the same Python name.
+  ["the kebab-case spelling app-name is refused too"] {
+    err(withProperty("app-name")).contains("uses the reserved name")
+  }
+
+  // The check is forced from `output`, not from the extract node, so opting out of
+  // extract must not let a collision through.
+  ["the refusal still fires with pipeline { extract = null }"] {
+    err((withProperty("app_name")) { pipeline { extract = null } }).contains("uses the reserved name")
+  }
+
+  // Control: without it, a contract that fails for any other reason would pass the
+  // three refusals above and prove nothing about the reserved name.
+  ["a non-reserved property name still generates (control)"] {
+    render(withProperty("source-app-name")).containsKey("app/generated/manifest.json")
+  }
+
+  // NativeApp.pkl must not drift from App.pkl on this rule.
+  ["NativeApp.pkl refuses the reserved name too"] {
+    err((NativeApp) {
+      name = "reserved-appname-native"
+      connector = Connectors.POSTGRES
+      icon = "https://example.com/icon.svg"
+      workflowType = "PostgresWorkflow"
+      uiConfig = new Config.UIConfig {
+        tasks {
+          ["Configuration"] {
+            inputs { ["app-name"] = new Config.TextInput { title = "App Name"; placeholderText = "x" } }
+          }
+        }
+      }
+    }).contains("uses the reserved name")
   }
 }

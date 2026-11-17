@@ -6,6 +6,10 @@ import "../examples/full/app.pkl" as fullExampleApp
 
 // ── Fixture helpers ────────────────────────────────────────────────────────────
 
+// Renders every output file, as `pkl eval -m` does, and returns the refusal message.
+local function err(m: Module): String =
+  module.catch(() -> m.output.files.toMap().mapValues((_, f) -> f.text))
+
 // Minimal uiConfig used by fixtures that only need the base file (no custom subs).
 local minimalUiConfig = new App.UIConfig {
   tasks {
@@ -14,6 +18,18 @@ local minimalUiConfig = new App.UIConfig {
         ["connection"] = new App.ConnectionCreator { placeholderText = "Connection" }
       }
     }
+  }
+}
+
+// A contract whose only uiConfig property is the given DropDown.
+local function withScopeDropDown(dd: App.DropDown) = (App) {
+  name = "dropdown-default-app"
+  displayName = "DropDown Default"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = new App.UIConfig {
+    tasks { ["Configuration"] { inputs { ["asset_scope"] = dd } } }
   }
 }
 
@@ -1139,4 +1155,45 @@ facts {
     !bundleMinerBase.contains("connection_category = \"warehouse\"")
   }
 
+  // ── multiSelect DropDown `default` is generated from `defaultSelection` ──────
+  // Hand-writing the JSON-stringified `default` is refused: an unescaped quote in it
+  // used to emit invalid Python into _e2e_substitutions.py (FND-1980). The control
+  // is "defaultSelection renders the JSON-stringified array into the workflow config".
+  ["a hand-written multiSelect DropDown default is refused"] {
+    err(withScopeDropDown(new App.DropDown {
+      title = "Asset scope"
+      possibleValues { ["S3Bucket"] = "Bucket"; ["S3Object"] = "Object" }
+      default = "[\"S3Bucket\",\"S3Object\"]"
+      multiSelect = true
+    })).contains("cannot be set by hand")
+  }
+
+  // Without a guard the hand-written value overrides the generated one and
+  // `defaultSelection` is ignored in silence — the case a `default == null` check misses.
+  ["a hand-written default alongside defaultSelection is refused"] {
+    err(withScopeDropDown(new App.DropDown {
+      title = "Asset scope"
+      possibleValues { ["S3Bucket"] = "Bucket"; ["S3Object"] = "Object" }
+      defaultSelection { "S3Bucket"; "S3Object" }
+      default = "SILENTLY-WINS"
+      multiSelect = true
+    })).contains("generated from `defaultSelection`")
+  }
+
+  ["defaultSelection on a single-select DropDown is refused"] {
+    err(withScopeDropDown(new App.DropDown {
+      title = "Asset scope"
+      possibleValues { ["S3Bucket"] = "Bucket"; ["S3Object"] = "Object" }
+      defaultSelection { "S3Bucket" }
+    })).contains("multi-select only")
+  }
+
+  ["defaultSelection with a key absent from possibleValues is refused"] {
+    err(withScopeDropDown(new App.DropDown {
+      title = "Asset scope"
+      possibleValues { ["S3Bucket"] = "Bucket"; ["S3Object"] = "Object" }
+      defaultSelection { "S3Bucket"; "S3Nonsense" }
+      multiSelect = true
+    })).contains("Unknown: S3Nonsense")
+  }
 }
