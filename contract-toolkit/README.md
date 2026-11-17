@@ -260,7 +260,7 @@ See the [Widget Types](#widget-types) reference below.
 
 ### `Connectors.pkl` — Connector Registry
 
-90+ connector type constants:
+162 connector type constants, copied from pyatlan's `AtlanConnectorType`. CI (`scripts/test-sdk-import.py`) fails when pyatlan has a connector type or category this module lacks, or when a shared constant's value or category differs. When pyatlan adds one, add it here. `SAP_ECC` stays `warehouse` (pyatlan says `erp`) so contracts using it keep their generated e2e base class.
 
 ```pkl
 import "@app-contract-toolkit/Connectors.pkl"

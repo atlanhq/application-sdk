@@ -209,6 +209,10 @@ jobs:
               # test-sdk-import.py compares src/SdkNames.pkl's artifact
               # vocabulary with this module's constants (FND-4934).
               - 'application_sdk/validation/artifacts.py'
+              # test-sdk-import.py compares src/Connectors.pkl with the locked
+              # pyatlan's AtlanConnectorType (FND-4933), so a pyatlan bump must
+              # run it. Enforced by test_sdk_gate_filter_coverage.py.
+              - 'uv.lock'
               - '.github/workflows/contract-toolkit-*.yml'
               - '.github/workflows/contract-toolkit-*.yaml'
             # Conformance RULE detection (C/E/P/O). Deliberately NOT triggered by
