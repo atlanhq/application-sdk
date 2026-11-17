@@ -168,8 +168,18 @@ def _locked_pins(lock: dict) -> list[str]:
     return found
 
 
+def _is_named_index(source: object) -> bool:
+    """Return whether ``source`` only names an index, optionally per marker."""
+    return isinstance(source, dict) and set(source) <= {"index", "marker"}
+
+
 def _source_pins(pyproject: dict) -> list[str]:
-    """Return one finding per SDK package ``[tool.uv.sources]`` redirects."""
+    """Return one finding per SDK package ``[tool.uv.sources]`` redirects.
+
+    A source that only names an index - a single table or uv's
+    marker-specific array of them - resolves from a registry, so it is not
+    a redirect.
+    """
     tool = pyproject.get("tool")
     uv = tool.get("uv") if isinstance(tool, dict) else None
     sources = uv.get("sources") if isinstance(uv, dict) else None
@@ -177,7 +187,8 @@ def _source_pins(pyproject: dict) -> list[str]:
     for name, source in sources.items() if isinstance(sources, dict) else []:
         if not _is_sdk(name):
             continue
-        if isinstance(source, dict) and set(source) <= {"index", "marker"}:
+        entries = source if isinstance(source, list) else [source]
+        if entries and all(_is_named_index(entry) for entry in entries):
             continue
         found.append(f"{name} is redirected by [tool.uv.sources]")
     return found

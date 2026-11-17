@@ -409,6 +409,35 @@ def test_a_named_index_or_a_commented_source_is_not_a_pin(
     assert _pins(gate, tmp_path, lock, pyproject) == []
 
 
+def test_a_marker_specific_array_of_named_indexes_is_not_a_pin(
+    gate: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    pyproject = (
+        '[project]\nname = "example-app"\n\n[tool.uv.sources]\n'
+        "atlan-application-sdk = [\n"
+        '  { index = "internal", marker = "sys_platform == \'linux\'" },\n'
+        '  { index = "pypi", marker = "sys_platform != \'linux\'" },\n'
+        "]\n"
+    )
+    lock = _lock("atlan-application-sdk", "3.57.0", _REGISTRY)
+    assert _pins(gate, tmp_path, lock, pyproject) == []
+
+
+def test_a_marker_specific_array_with_a_redirect_is_a_pin(
+    gate: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    pyproject = (
+        '[project]\nname = "example-app"\n\n[tool.uv.sources]\n'
+        "atlan-application-sdk = [\n"
+        '  { index = "internal", marker = "sys_platform == \'linux\'" },\n'
+        '  { path = "../sdk", marker = "sys_platform != \'linux\'" },\n'
+        "]\n"
+    )
+    lock = _lock("atlan-application-sdk", "3.57.0", _REGISTRY)
+    found = _pins(gate, tmp_path, lock, pyproject)
+    assert found == ["atlan-application-sdk is redirected by [tool.uv.sources]"]
+
+
 def test_the_sdk_repo_itself_is_never_a_finding(
     gate: types.ModuleType, tmp_path: pathlib.Path
 ) -> None:
