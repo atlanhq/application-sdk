@@ -3,6 +3,7 @@ generators share (FND-4946)."""
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -97,3 +98,25 @@ def test_no_sdk_root_option_without_a_marker(tmp_path: Path) -> None:
         run_generator(spec, ["--sdk-root", str(tmp_path)])
     run_generator(spec, [])
     assert out.read_text(encoding="utf-8") == "None\n"
+
+
+def test_accepts_sdk_root_widens_an_explicit_root(tmp_path: Path) -> None:
+    """``gen-deprecations`` accepts any root holding ``application_sdk/``,
+    with or without ``__init__.py``, as it did before the shared CLI."""
+    root = tmp_path / "sdk"
+    (root / "pkg").mkdir(parents=True)
+    out = tmp_path / "t.json"
+    spec = dataclasses.replace(
+        _spec(out), accepts_sdk_root=lambda r: (r / "pkg").is_dir()
+    )
+    run_generator(spec, ["--sdk-root", str(root)])
+    assert out.read_text(encoding="utf-8") == "data\n"
+
+
+def test_gen_deprecations_accepts_a_root_without_init(tmp_path: Path) -> None:
+    from conformance.tools.generate_deprecations import SPEC
+
+    assert SPEC.accepts_sdk_root is not None
+    (tmp_path / "application_sdk").mkdir()
+    assert SPEC.accepts_sdk_root(tmp_path)
+    assert not SPEC.accepts_sdk_root(tmp_path / "missing")

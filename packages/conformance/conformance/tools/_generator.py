@@ -59,6 +59,11 @@ class GeneratorSpec:
     sdk_marker_label: str = ""
     """How :attr:`sdk_marker` is named in ``--help`` and the not-found error."""
 
+    accepts_sdk_root: Callable[[Path], bool] | None = None
+    """Decides whether an explicit ``--sdk-root`` is usable. Defaults to
+    "holds :attr:`sdk_marker`". A generator sets it when it accepts a wider
+    root than the marker auto-detection looks for."""
+
 
 def _find_sdk_root(marker: tuple[str, ...]) -> Path | None:
     """Return the first ancestor of the working directory, then of this file,
@@ -107,8 +112,12 @@ def run_generator(spec: GeneratorSpec, argv: list[str] | None = None) -> None:
 
     sdk_root: Path | None = None
     if spec.sdk_marker is not None:
-        sdk_root = args.sdk_root or _find_sdk_root(spec.sdk_marker)
-        if sdk_root is None or not sdk_root.joinpath(*spec.sdk_marker).is_file():
+        marker = spec.sdk_marker
+        accepts = spec.accepts_sdk_root or (
+            lambda root: root.joinpath(*marker).is_file()
+        )
+        sdk_root = args.sdk_root or _find_sdk_root(marker)
+        if sdk_root is None or not accepts(sdk_root):
             print(
                 f"error: could not locate {spec.sdk_marker_label} — pass --sdk-root DIR.",
                 file=sys.stderr,

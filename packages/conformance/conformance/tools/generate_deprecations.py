@@ -54,6 +54,9 @@ SPEC = GeneratorSpec(
     build=_build,
     sdk_marker=(SDK_IMPORT_ROOT, "__init__.py"),
     sdk_marker_label="application_sdk/",
+    # build_manifest scans the directory's .py files and needs no
+    # __init__.py, so an explicit root only has to hold the directory.
+    accepts_sdk_root=lambda root: (root / SDK_IMPORT_ROOT).is_dir(),
 )
 
 
