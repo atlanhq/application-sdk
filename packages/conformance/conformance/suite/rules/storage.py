@@ -41,7 +41,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -58,7 +57,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="FrameworkTransferInsideTask",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -136,7 +134,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="ManualObjectStoreConstruction",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -185,7 +182,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="ManualFileReferenceConstruction",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -232,7 +228,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="RawBytesInContract",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -280,7 +275,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="FilePathStringInContract",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -330,7 +324,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="DirectStoragePrefixTransfer",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",

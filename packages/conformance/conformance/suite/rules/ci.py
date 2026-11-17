@@ -10,7 +10,6 @@ from conformance.suite.schema.catalog import (
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -28,7 +27,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="UnpinnedActionReference",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="supply-chain",
         autofixable=True,
         orthogonal_gate="skip",
@@ -70,7 +68,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="BootstrapWorkflowDrift",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="ci-consistency",
         autofixable=True,
         orthogonal_gate="skip",
@@ -168,7 +165,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="GitignoreMissingEntry",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="ci-consistency",
         # False rather than a per-finding-shape split: this ID covers two
         # cases with different remediability (see full_description) — the
@@ -221,7 +217,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="UnretriedToolDownload",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="ci-reliability",
         # Not autofixable: the right remediation differs per site — wrap in
         # with-retry.sh, add curl/wget retry flags, or (best) stop downloading

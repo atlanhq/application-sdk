@@ -42,7 +42,6 @@ from conformance.suite.schema.catalog import (
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -60,7 +59,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="DockerfileWrongBaseImage",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="dockerfile-base",
         autofixable=True,
         orthogonal_gate="docker-build",
@@ -124,7 +122,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="DockerfileEntrypointOverride",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="dockerfile-entrypoint",
         autofixable=True,
         orthogonal_gate="docker-build",
@@ -183,7 +180,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="DockerfileAppModuleMissing",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="dockerfile-env",
         autofixable=True,
         orthogonal_gate="docker-build",
@@ -235,7 +231,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="DockerfileAppModeHardcoded",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="dockerfile-env",
         autofixable=True,
         orthogonal_gate="docker-build",
@@ -285,7 +280,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="DockerfileRootUser",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="dockerfile-security",
         autofixable=True,
         orthogonal_gate="docker-build",

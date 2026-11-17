@@ -52,7 +52,6 @@ __all__ = [
     "discover",
     "main",
     "scan_all",
-    "scan_path",
 ]
 
 # ``secretstore = false`` anywhere on a pkl line, including the one-line form
@@ -203,11 +202,6 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     if not paths or not app_uses_credentials(root):
         return []
     return _contract_findings(root) or _atlan_yaml_findings(root)
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: K030 is cross-artifact; use :func:`scan_all`."""
-    return []
 
 
 main = make_cli_main(

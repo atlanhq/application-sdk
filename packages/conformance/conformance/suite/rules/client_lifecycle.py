@@ -87,7 +87,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -109,7 +108,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="UnclosedBaseClient",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="client-lifecycle",
         autofixable=True,
         orthogonal_gate="tests",
@@ -196,7 +194,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="CloseOverrideSkipsSuper",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="client-lifecycle",
         autofixable=True,
         orthogonal_gate="tests",

@@ -23,7 +23,7 @@ drops any K finding on the SDK regardless).
 
 This is a cross-artifact check — it reads two fixed root-level files
 (``atlan.yaml``, ``pyproject.toml``), not a discovered per-file set — so it
-implements ``scan_all`` and a no-op ``scan_path``, mirroring K006
+implements only ``scan_all``, mirroring K006
 (``manifest_contract``).
 """
 
@@ -35,6 +35,7 @@ import tomllib
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
+    discover_contract_repo,
     make_cli_main,
     make_toml_finding,
     parse_toml_suppressions,
@@ -44,7 +45,7 @@ from conformance.suite.schema.findings import Finding
 
 SERIES = "K"
 
-__all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
+__all__ = ["SERIES", "discover", "main", "scan_all"]
 
 # Top-level ``app_id:`` key in atlan.yaml. A top-level YAML key starts in
 # column 0 (no leading whitespace), so ``^`` under re.MULTILINE anchors it; a
@@ -85,7 +86,7 @@ def discover(root: Path) -> list[Path]:
     use; the SDK has none, so the check no-ops there. The root (not a file
     set) is returned because the check reads two fixed root-level artifacts.
     """
-    return [root] if (root / "contract").is_dir() else []
+    return discover_contract_repo(root)
 
 
 def _line_of(text: str, pattern: re.Pattern[str], default: int = 1) -> int:
@@ -265,11 +266,6 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             )
 
     return findings
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: K011/K012/K014 are cross-artifact; use :func:`scan_all`."""
-    return []
 
 
 main = make_cli_main(

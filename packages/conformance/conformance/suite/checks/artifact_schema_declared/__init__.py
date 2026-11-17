@@ -18,28 +18,21 @@ reports it in review instead, before a worker is ever built.
 This is a **cross-file + cross-artifact** check: it scans all Python files to
 build the entrypoint -> contract map, then reads the committed
 ``app/generated/`` tree.  Per-file scanning has no meaning here, so
-``scan_path`` is a no-op and ``scan_all`` does all the work — mirrors K006
+the module defines only ``scan_all`` — mirrors K006
 (``manifest_contract``), the check whose shape this one follows.
 """
 
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 from conformance.suite.checks._ast_common import discover, make_cli_main
-from conformance.suite.schema.findings import Finding
 
 from ._check import scan_all
 
 SERIES = "K"
 
-__all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: K016 requires cross-file + cross-artifact analysis; use :func:`scan_all`."""
-    return []
+__all__ = ["SERIES", "discover", "main", "scan_all"]
 
 
 main = make_cli_main(

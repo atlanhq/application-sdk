@@ -27,6 +27,21 @@ def test_catalog_loads_without_error() -> None:
     assert len(rules) > 0
 
 
+def test_mechanism_defaults_to_static_and_still_reaches_sarif() -> None:
+    """A rule that leaves ``mechanism`` unset is ``static``, and the SARIF
+    descriptor still carries ``atlan/mechanism`` — the default changes no output."""
+    rule = RuleDefinition(
+        id="Z999",
+        name="DefaultMechanism",
+        tier=EnforcementTier.WARN,
+        scope=RuleScope.APP,
+        category="test",
+        rationale="r",
+    )
+    assert rule.mechanism is RuleMechanism.STATIC
+    assert rule.to_reporting_descriptor().properties["atlan/mechanism"] == "static"
+
+
 def test_catalog_no_duplicate_ids() -> None:
     """Every rule ID in the catalog is unique."""
     rules = load_catalog()

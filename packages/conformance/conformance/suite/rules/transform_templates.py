@@ -34,7 +34,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -52,7 +51,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="TransformTemplateReservedKeyword",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="transform-templates",
         autofixable=False,
         orthogonal_gate="tests",

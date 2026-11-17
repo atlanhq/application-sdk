@@ -102,7 +102,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -118,7 +117,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="AppDerivedPersistentArtifactPrefix",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="persistence-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -203,7 +201,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="StrictConnectionQualifiedNameParse",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="persistence-seam",
         autofixable=False,
         orthogonal_gate="tests",

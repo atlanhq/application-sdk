@@ -45,7 +45,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -64,7 +63,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="UncancellableOffloadedCursorStatement",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="async-correctness",
         autofixable=False,
         orthogonal_gate="tests",
@@ -146,7 +144,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="BatchedResultsIteratedOnLoop",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="async-correctness",
         autofixable=False,
         orthogonal_gate="tests",

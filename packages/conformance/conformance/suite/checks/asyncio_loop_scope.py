@@ -74,6 +74,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
+    discover_root_file,
     is_test_class,
     is_test_function,
     leaf_name,
@@ -318,8 +319,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
 def discover(root: Path) -> list[Path]:
     """Discover the repo-root ``pyproject.toml`` (``[]`` when absent → no-op)."""
-    pyproject = root / "pyproject.toml"
-    return [pyproject] if pyproject.is_file() else []
+    return discover_root_file(root, "pyproject.toml")
 
 
 main = make_cli_main(

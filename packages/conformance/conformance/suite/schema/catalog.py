@@ -98,8 +98,9 @@ class RuleDefinition(BaseModel):
     tier: EnforcementTier
     """``warn`` or ``block``."""
 
-    mechanism: RuleMechanism
-    """``static`` or ``test``."""
+    mechanism: RuleMechanism = RuleMechanism.STATIC
+    """``static`` or ``test``.  Every rule is ``static`` (see
+    :class:`~.disposition.RuleMechanism`), so a definition leaves it unset."""
 
     scope: RuleScope
     """Where the rule applies — ``sdk``, ``app``, or ``both``.  Required (no

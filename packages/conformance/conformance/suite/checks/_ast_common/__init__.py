@@ -19,7 +19,14 @@ from ._bindings import (
 )
 from ._cli import TOOL_VERSION, make_cli_main
 from ._directives import _IgnoreDirective, _parse_directives, parse_ignore_directive
-from ._discovery import EXCLUDE_DIRS, discover
+from ._discovery import (
+    EXCLUDE_DIRS,
+    discover,
+    discover_contract_repo,
+    discover_root_file,
+    discover_tree,
+    discover_with_tests,
+)
 from ._exc_info import has_exc_info_traceback
 from ._findings import make_finding
 from ._imports import (
@@ -89,6 +96,10 @@ __all__ = [
     "detect_scope",
     "has_exc_info_traceback",
     "discover",
+    "discover_contract_repo",
+    "discover_root_file",
+    "discover_tree",
+    "discover_with_tests",
     "is_collectable_test_file",
     "is_sdk_package_name",
     "is_test_class",

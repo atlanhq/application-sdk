@@ -203,7 +203,7 @@ _WITH_ENTRY_RE = re.compile(
     r"^(?P<indent>\s*)(?P<key>[A-Za-z0-9_-]+)\s*:\s*(?P<val>.*?)\s*$"
 )
 
-__all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
+__all__ = ["SERIES", "discover", "main", "scan_all"]
 
 
 # ---------------------------------------------------------------------------
@@ -496,11 +496,6 @@ def _t022_message() -> str:
 # ---------------------------------------------------------------------------
 # Scan
 # ---------------------------------------------------------------------------
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: T020–T022 need repo-level context; the runner calls scan_all."""
-    return []
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

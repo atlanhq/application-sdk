@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from conformance.suite.checks.artifact_schema_writer import scan_all, scan_path
+from conformance.suite.checks.artifact_schema_writer import scan_all
 from conformance.suite.checks.artifact_schema_writer._declarations import (
     read_declarations,
 )
@@ -155,11 +155,6 @@ def test_k017_rule_metadata_matches_the_designed_disposition() -> None:
     assert rule.mechanism is RuleMechanism.STATIC
     assert rule.orthogonal_gate == "pkl-eval"
     assert rule.autofixable is False
-
-
-def test_scan_path_is_a_no_op(tmp_path: Path) -> None:
-    """Per-file scanning has no meaning for a cross-artifact rule."""
-    assert scan_path(tmp_path / "app" / "main.py", tmp_path) == []
 
 
 # ---------------------------------------------------------------------------

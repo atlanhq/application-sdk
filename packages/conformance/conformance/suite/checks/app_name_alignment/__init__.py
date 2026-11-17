@@ -8,7 +8,7 @@ code and the name declared in the committed contract artifacts (``atlan.yaml`` /
 This is a **cross-artifact** check: it scans all Python files to collect the
 App-family leaf class and its derived name, then reads ``atlan.yaml`` and
 ``.env.example`` from the repo root.  Per-file scanning has no meaning here, so
-``scan_path`` is a no-op and ``scan_all`` does all the work.
+the module defines only ``scan_all``.
 
 Currently implemented:
 
@@ -43,12 +43,7 @@ from ._contract_app_name import scan_contract
 
 SERIES = "P"
 
-__all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: P025 requires cross-file + cross-artifact analysis; use :func:`scan_all`."""
-    return []
+__all__ = ["SERIES", "discover", "main", "scan_all"]
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

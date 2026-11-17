@@ -27,7 +27,6 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -37,7 +36,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.SDK,
         name="HandRolledRetryLadder",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="retry-policy",
         autofixable=False,
         orthogonal_gate="tests",

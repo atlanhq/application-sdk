@@ -33,7 +33,7 @@
 
 Both are **cross-file + cross-artifact** checks: they scan all Python files, then
 read the committed ``app/generated/`` tree. Per-file scanning has no meaning
-here, so ``scan_path`` is a no-op and ``scan_all`` does all the work — mirrors
+here, so the module defines only ``scan_all`` — mirrors
 P016 (``entrypoint_alignment``), the closest existing cross-artifact check.
 """
 
@@ -55,12 +55,7 @@ from ._nested_envelope import scan_all as _scan_nested_envelope
 
 SERIES = "K"
 
-__all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: these rules need cross-file + cross-artifact analysis; use :func:`scan_all`."""
-    return []
+__all__ = ["SERIES", "discover", "main", "scan_all"]
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

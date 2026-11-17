@@ -946,15 +946,6 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     return findings
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Single-path shim so the registration satisfies ``CheckRegistration``.
-
-    K003/K004/K005 are inherently repo-level; scanning a lone file routes through
-    :func:`scan_all` with that one path.
-    """
-    return scan_all([path], root)
-
-
 def discover(root: Path) -> list[Path]:
     """Return the contract source + generated artifacts under *root*.
 

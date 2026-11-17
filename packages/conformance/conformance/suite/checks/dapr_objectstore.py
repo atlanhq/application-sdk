@@ -14,8 +14,8 @@ The rule reports the setting once per app, where the fix belongs:
   the whole ``dapr`` block as soon as any other component was enabled.
 
 APP-scoped and gated on a ``contract/`` directory, like the sibling K checks.
-It reads fixed artifacts across the repo, so it implements ``scan_all`` and a
-no-op ``scan_path``, mirroring ``release_contract``.
+It reads fixed artifacts across the repo, so it implements only ``scan_all``,
+mirroring ``release_contract``.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
+    discover_contract_repo,
     make_cli_main,
     make_toml_finding,
     parse_toml_suppressions,
@@ -49,7 +50,6 @@ __all__ = [
     "main",
     "pkl_code_lines",
     "scan_all",
-    "scan_path",
 ]
 
 # ``objectstore = false`` anywhere on a pkl line, including the one-line form
@@ -75,7 +75,7 @@ _FIX = (
 
 def discover(root: Path) -> list[Path]:
     """Return ``[root]`` for a pkl-contract-driven app repo, else ``[]``."""
-    return [root] if (root / "contract").is_dir() else []
+    return discover_contract_repo(root)
 
 
 def pkl_code_lines(text: str) -> list[str]:
@@ -253,11 +253,6 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     if not paths:
         return []
     return _contract_findings(root) or _atlan_yaml_findings(root)
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: K029 is cross-artifact; use :func:`scan_all`."""
-    return []
 
 
 main = make_cli_main(

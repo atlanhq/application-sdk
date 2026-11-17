@@ -15,7 +15,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -31,7 +30,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="OrjsonOverStdlibJson",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="canonical-dependency",
         autofixable=True,
         orthogonal_gate="tests",
@@ -137,7 +135,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="LegacyAssetSerialization",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="asset-mapper",
         autofixable=False,
         orthogonal_gate="tests",
@@ -192,7 +189,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="UntypedAssetMapperReturn",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="asset-mapper",
         autofixable=False,
         orthogonal_gate="tests",
@@ -240,7 +236,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="LegacyPyatlanAssetImport",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="asset-mapper",
         autofixable=False,
         orthogonal_gate="tests",
@@ -300,7 +295,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="DirectRocksdictImport",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="canonical-dependency",
         autofixable=False,
         orthogonal_gate="tests",
@@ -372,7 +366,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="UnresolvedAppNamePlaceholder",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="dag-write-path",
         autofixable=True,
         orthogonal_gate="tests",
