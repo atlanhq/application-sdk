@@ -300,3 +300,151 @@ def test_status_context_matches_the_command_that_writes_it() -> None:
     match = re.search(r'^GATE_CHECK_CONTEXT = "([^"]+)"$', script.read_text(), re.M)
     assert match is not None
     assert f'select(.context == "{match.group(1)}")' in _fetch_step()["run"]
+
+
+# -- Unreleased SDK pin ------------------------------------------------------
+
+_REGISTRY = '{ registry = "https://pypi.org/simple" }'
+_GIT = '{ git = "https://github.com/example/sdk?rev=abc#abc" }'
+
+
+def _lock(name: str, version: str, source: str) -> str:
+    return (
+        "version = 1\n\n"
+        '[[package]]\nname = "example-app"\nversion = "1.0.0"\n'
+        'source = { virtual = "." }\n\n'
+        f'[[package]]\nname = "{name}"\nversion = "{version}"\n'
+        f"source = {source}\n"
+    )
+
+
+def _pins(
+    gate: types.ModuleType,
+    tmp_path: pathlib.Path,
+    lock: str | None,
+    pyproject: str | None = None,
+) -> list[str]:
+    lock_file = tmp_path / "uv.lock"
+    project_file = tmp_path / "pyproject.toml"
+    if lock is not None:
+        lock_file.write_text(lock)
+    if pyproject is not None:
+        project_file.write_text(pyproject)
+    return gate.unreleased_sdk_pins(str(lock_file), str(project_file))
+
+
+def test_a_released_sdk_from_an_index_is_not_a_pin(
+    gate: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    lock = _lock("atlan-application-sdk", "3.57.0", _REGISTRY)
+    assert _pins(gate, tmp_path, lock) == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [_GIT, '{ path = "../application-sdk" }', '{ editable = "../sdk" }'],
+)
+def test_an_sdk_locked_off_an_index_is_a_pin(
+    gate: types.ModuleType, tmp_path: pathlib.Path, source: str
+) -> None:
+    found = _pins(gate, tmp_path, _lock("atlan-application-sdk", "3.57.0", source))
+    assert len(found) == 1
+    assert "atlan-application-sdk is locked from a" in found[0]
+
+
+@pytest.mark.parametrize(
+    "version", ["3.58.0rc1", "0.1.1rc62", "4.0.0a2", "3.58.0.dev4"]
+)
+def test_a_prerelease_sdk_is_a_pin(
+    gate: types.ModuleType, tmp_path: pathlib.Path, version: str
+) -> None:
+    found = _pins(gate, tmp_path, _lock("atlan-application-sdk", version, _REGISTRY))
+    assert found == [f"atlan-application-sdk is locked to pre-release {version}"]
+
+
+def test_a_post_release_is_released(
+    gate: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    lock = _lock("atlan-application-sdk", "3.57.0.post1", _REGISTRY)
+    assert _pins(gate, tmp_path, lock) == []
+
+
+@pytest.mark.parametrize(
+    "name", ["atlan-application-sdk-conformance", "atlan-application-sdk-api"]
+)
+def test_every_sdk_distribution_is_covered(
+    gate: types.ModuleType, tmp_path: pathlib.Path, name: str
+) -> None:
+    assert len(_pins(gate, tmp_path, _lock(name, "1.0.0", _GIT))) == 1
+
+
+def test_another_package_from_git_is_not_this_gates_business(
+    gate: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """Scoped to the SDK: an app may ship a git-tagged helper library."""
+    assert _pins(gate, tmp_path, _lock("query-redaction", "0.1.0rc1", _GIT)) == []
+
+
+def test_a_uv_sources_redirect_is_a_pin(
+    gate: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    pyproject = (
+        '[project]\nname = "example-app"\n\n[tool.uv.sources]\n'
+        'atlan-application-sdk = { git = "https://github.com/example/sdk" }\n'
+    )
+    lock = _lock("atlan-application-sdk", "3.57.0", _REGISTRY)
+    found = _pins(gate, tmp_path, lock, pyproject)
+    assert found == ["atlan-application-sdk is redirected by [tool.uv.sources]"]
+
+
+def test_a_named_index_or_a_commented_source_is_not_a_pin(
+    gate: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    pyproject = (
+        '[project]\nname = "example-app"\n\n[tool.uv.sources]\n'
+        'atlan-application-sdk = { index = "internal" }\n'
+        '# atlan-application-sdk-api = { path = "../application-sdk" }\n'
+    )
+    lock = _lock("atlan-application-sdk", "3.57.0", _REGISTRY)
+    assert _pins(gate, tmp_path, lock, pyproject) == []
+
+
+def test_the_sdk_repo_itself_is_never_a_finding(
+    gate: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    pyproject = '[project]\nname = "atlan-application-sdk"\n'
+    lock = _lock("atlan-application-sdk", "3.58.0", '{ editable = "." }')
+    assert _pins(gate, tmp_path, lock, pyproject) == []
+
+
+def test_no_lock_has_nothing_to_check_but_a_broken_one_fails(
+    gate: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    assert _pins(gate, tmp_path, None) == []
+    assert _pins(gate, tmp_path, "this is [not toml") == [gate.LOCK_UNREADABLE]
+
+
+def test_a_pin_fails_a_release_pr_even_with_a_passed_gate(
+    gate: types.ModuleType,
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The verdict says the tests passed, not that the SDK under them shipped."""
+    lock_file = tmp_path / "uv.lock"
+    lock_file.write_text(_lock("atlan-application-sdk", "3.57.0", _GIT))
+    state_file = tmp_path / "gate-check-state.txt"
+    state_file.write_text(f"success {_BOT}\n")
+    argv = ["--gate-check-state-file", str(state_file), "--lock-file", str(lock_file)]
+
+    assert gate.main(["--head-ref", _BUMP, *argv]) == 1
+    out = capsys.readouterr().out
+    assert "Unreleased SDK pin" in out and "/gate-check" in out
+
+    assert gate.main(["--head-ref", "feat/try-sdk-branch", *argv]) == 0
+
+
+def test_the_workflow_hands_the_gate_both_files() -> None:
+    steps = yaml.safe_load(render("release-gate.yaml"))["jobs"]["release-gate"]["steps"]
+    verify = next(s for s in steps if s.get("name") == "Verify release readiness")
+    assert "--lock-file uv.lock" in verify["run"]
+    assert "--pyproject pyproject.toml" in verify["run"]
