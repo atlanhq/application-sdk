@@ -82,6 +82,7 @@ from conformance.suite.checks._ast_common import (
     detect_scope,
     parse_failure,
 )
+from conformance.suite.introduced import BaseUnavailable, introduced_since
 from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 from conformance.suite.schema.findings import Finding, findings_to_report
@@ -95,6 +96,10 @@ from conformance.suite.schema.sarif import (
 
 # reportingDescriptorReference id on the notification for an unparseable file.
 PARSE_FAILURE_ID = "conformance/parse-failure"
+
+# Default for ``--since``. CI sets it once on the job, so every per-series
+# ``detect`` step in that job gates on the change without each one passing it.
+SINCE_ENV = "CONFORMANCE_SINCE"
 
 # Per-file parse-failure annotations emitted before the aggregate one stands in
 # for the rest. GitHub keeps at most 10 annotations of each level per step and
@@ -721,6 +726,140 @@ def _to_notification(failure: ParseFailure, *, gating: bool = True) -> Notificat
     )
 
 
+def _checks_for_rules(rule_ids: set[str]) -> list[CheckRegistration]:
+    """Return the registered checks that can emit any of *rule_ids*."""
+    from conformance.suite.rules.preflight import RULES as PREFLIGHT_RULES
+
+    series = {rid[0] for rid in rule_ids}
+    active = [c for c in _CHECKS if c.series in series]
+    if rule_ids <= {rule.id for rule in PREFLIGHT_RULES}:
+        active = [c for c in active if c.scan_all is preflight.scan_all]
+    return active
+
+
+def _collect(
+    root: Path,
+    active: list[CheckRegistration],
+    *,
+    active_scope: RuleScope | None,
+    excluded_prefixes: tuple[str, ...],
+    rule_ids: set[str] | None,
+    series: set[str] | None,
+) -> tuple[list[Finding], set[Path]]:
+    """Run *active* over *root*; return (in-scope findings, Python files seen).
+
+    One tree, one pass. ``main`` calls it for the working tree, and ``--since``
+    calls it again for the base tree with the rules that fired.
+    """
+    all_findings: list[Finding] = []
+    py_paths: set[Path] = set()
+    for check in active:
+        # Skip a whole check when none of its series' rules could be in scope
+        # (e.g. the all-APP D-series when scanning the SDK itself).
+        if not _series_in_scope(check.series, active_scope):
+            continue
+        paths = _drop_excluded(check.discover(root), root, excluded_prefixes)
+        py_paths |= _python_files(paths)
+        if check.scan_all is not None:
+            all_findings.extend(check.scan_all(paths, root))
+        else:
+            for p in paths:
+                all_findings.extend(check.scan_path(p, root))
+
+    # --exclude also applies at the finding level: a check that discovers the
+    # repo root (e.g. K029) reads files beneath it that _drop_excluded never
+    # saw, so filtering paths alone would not keep the "all checks" promise.
+    all_findings = [
+        f for f in all_findings if not _is_excluded(f.file, excluded_prefixes)
+    ]
+
+    selected_rules = {
+        rid
+        for rid, rule in CATALOG.items()
+        if _rule_in_scope(rule.scope, active_scope)
+        and (rule_ids is None or rid in rule_ids)
+        and (series is None or rid[0] in series)
+    }
+    if "F015" in selected_rules:
+        from conformance.suite.checks.preflight._lifetime import scan_removed_config
+
+        all_findings.extend(
+            finding
+            for finding in scan_removed_config(root)
+            if not _is_excluded(finding.file, excluded_prefixes)
+        )
+    # Drop findings for rules outside the active scope.  This is the
+    # finding-level counterpart to the series-level skip above: it covers
+    # mixed-scope series (e.g. C, where C001 is 'both' but C002/C003 are 'app')
+    # so the SARIF report, counts, and exit code reflect only in-scope rules.
+    all_findings = [
+        f
+        for f in all_findings
+        if _rule_in_scope(get_rule(f.rule_id).scope, active_scope)
+    ]
+
+    # --rule: keep exactly the requested rules. The series module may have
+    # scanned siblings in the same pass; they are out of this run's contract.
+    if rule_ids is not None:
+        all_findings = [f for f in all_findings if f.rule_id in rule_ids]
+    return all_findings, py_paths
+
+
+def _blocking(findings: list[Finding]) -> list[Finding]:
+    """Return the unsuppressed BLOCK-tier findings: the ones that gate."""
+    return [
+        f for f in findings if not f.suppressed and _tier(f) == EnforcementTier.BLOCK
+    ]
+
+
+def _introduced_blocking(
+    root: Path,
+    since: str,
+    findings: list[Finding],
+    *,
+    active_scope: RuleScope | None,
+    excluded_prefixes: tuple[str, ...],
+) -> list[Finding] | None:
+    """Return the blocking findings the change since *since* adds.
+
+    ``None`` when the base cannot be compared: the caller then keeps the
+    whole-repo verdict, so an error only ever makes the gate stricter. See
+    :mod:`conformance.suite.introduced` for how "adds" is decided.
+    """
+    head = _blocking(findings)
+    fired = {f.rule_id for f in head}
+
+    def scan_base(tree: Path) -> list[Finding]:
+        base, _ = _collect(
+            tree,
+            _checks_for_rules(fired),
+            active_scope=active_scope,
+            excluded_prefixes=excluded_prefixes,
+            rule_ids=fired,
+            series=None,
+        )
+        return _blocking(base)
+
+    try:
+        adds, base_sha = introduced_since(root, since, head, scan_base)
+    except BaseUnavailable as exc:
+        print(
+            f"conformance (--since {since}): {exc}; "
+            "falling back to the whole-repository verdict.\n"
+        )
+        return None
+    inherited = len(head) - len(adds)
+    print(
+        f"conformance (--since {since}, base {base_sha[:12]}): "
+        f"{len(adds)} blocking introduced by this change, "
+        f"{inherited} inherited from the base (reported, not gating)."
+    )
+    for f in adds:
+        print(f"  [{f.rule_id}] [INTRODUCED] {f.file}:{f.line}:{f.column}")
+    print()
+    return adds
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Atlan conformance suite runner.")
     parser.add_argument("--repo", default=".", metavar="DIR")
@@ -784,8 +923,22 @@ def main(argv: list[str] | None = None) -> int:
             "observed and tracked but must not block merges."
         ),
     )
+    parser.add_argument(
+        "--since",
+        metavar="REF",
+        default=os.getenv(SINCE_ENV, ""),
+        help=(
+            "Gate on the change, not the repository: exit non-zero only for "
+            "blocking findings the working tree has over the merge-base of REF "
+            "and HEAD (e.g. 'origin/main'). Findings the base already carries "
+            "are still reported, and still written to the SARIF, but do not "
+            "fail the run. Warnings never fail it. If the base cannot be "
+            f"compared, every blocking finding fails. Default: ${SINCE_ENV}."
+        ),
+    )
     args = parser.parse_args(argv)
 
+    requested: set[str] = set()
     rule_ids: set[str] | None = None
     if args.rule:
         if args.series:
@@ -793,12 +946,7 @@ def main(argv: list[str] | None = None) -> int:
                 "--rule and --series are mutually exclusive (--rule implies its series)"
             )
         rule_ids = parse_rule_ids(args.rule)
-        requested = {rid[0] for rid in rule_ids}
-        active = [c for c in _CHECKS if c.series in requested]
-        from conformance.suite.rules.preflight import RULES as PREFLIGHT_RULES
-
-        if rule_ids <= {rule.id for rule in PREFLIGHT_RULES}:
-            active = [c for c in active if c.scan_all is preflight.scan_all]
+        active = _checks_for_rules(rule_ids)
     elif args.series:
         requested = {s.strip().upper() for s in args.series.split(",")}
         active = [c for c in _CHECKS if c.series in requested]
@@ -819,57 +967,14 @@ def main(argv: list[str] | None = None) -> int:
     # from the repo under scan.  ``None`` means "scope unknown — run everything".
     active_scope = RuleScope(args.scope) if args.scope else detect_scope(root)
 
-    all_findings: list[Finding] = []
-    py_paths: set[Path] = set()
-    for check in active:
-        # Skip a whole check when none of its series' rules could be in scope
-        # (e.g. the all-APP D-series when scanning the SDK itself).
-        if not _series_in_scope(check.series, active_scope):
-            continue
-        paths = _drop_excluded(check.discover(root), root, excluded_prefixes)
-        py_paths |= _python_files(paths)
-        if check.scan_all is not None:
-            all_findings.extend(check.scan_all(paths, root))
-        else:
-            for p in paths:
-                all_findings.extend(check.scan_path(p, root))
-
-    # --exclude also applies at the finding level: a check that discovers the
-    # repo root (e.g. K029) reads files beneath it that _drop_excluded never
-    # saw, so filtering paths alone would not keep the "all checks" promise.
-    all_findings = [
-        f for f in all_findings if not _is_excluded(f.file, excluded_prefixes)
-    ]
-
-    selected_rules = {
-        rid
-        for rid, rule in CATALOG.items()
-        if _rule_in_scope(rule.scope, active_scope)
-        and (rule_ids is None or rid in rule_ids)
-        and (not args.series or rid[0] in requested)
-    }
-    if "F015" in selected_rules:
-        from conformance.suite.checks.preflight._lifetime import scan_removed_config
-
-        all_findings.extend(
-            finding
-            for finding in scan_removed_config(root)
-            if not _is_excluded(finding.file, excluded_prefixes)
-        )
-    # Drop findings for rules outside the active scope.  This is the
-    # finding-level counterpart to the series-level skip above: it covers
-    # mixed-scope series (e.g. C, where C001 is 'both' but C002/C003 are 'app')
-    # so the SARIF report, counts, and exit code reflect only in-scope rules.
-    all_findings = [
-        f
-        for f in all_findings
-        if _rule_in_scope(get_rule(f.rule_id).scope, active_scope)
-    ]
-
-    # --rule: keep exactly the requested rules. The series module may have
-    # scanned siblings in the same pass; they are out of this run's contract.
-    if rule_ids is not None:
-        all_findings = [f for f in all_findings if f.rule_id in rule_ids]
+    all_findings, py_paths = _collect(
+        root,
+        active,
+        active_scope=active_scope,
+        excluded_prefixes=excluded_prefixes,
+        rule_ids=rule_ids,
+        series=requested if args.series else None,
+    )
 
     parse_failures = _parse_failures(py_paths, root)
     # A --rule run's exit code is scoped to exactly the requested rules, but
@@ -887,12 +992,27 @@ def main(argv: list[str] | None = None) -> int:
         parse_failures_gate=parse_failures_gate,
     )
 
+    # --since: which blocking findings did this change add? ``None`` means the
+    # question was not asked (or could not be answered), and the whole-repo
+    # verdict stands.
+    change_adds: list[Finding] | None = None
+    if args.since:
+        change_adds = _introduced_blocking(
+            root,
+            args.since,
+            all_findings,
+            active_scope=active_scope,
+            excluded_prefixes=excluded_prefixes,
+        )
+    inherited_only = change_adds is not None and not change_adds
+
     if os.getenv("GITHUB_ACTIONS") == "true":
         _emit_github_summary_annotations(
             all_findings,
             args.rule or args.series,
             excluded_prefixes,
-            exit_zero=args.exit_zero,
+            # Inherited findings annotate as warnings: they do not fail the run.
+            exit_zero=args.exit_zero or inherited_only,
             parse_failures=parse_failures,
             parse_failures_gate=parse_failures_gate,
         )
@@ -917,7 +1037,15 @@ def main(argv: list[str] | None = None) -> int:
         print(payload)
 
     sarif_exit_code: int = report.runs[0].invocations[0].exit_code  # type: ignore[assignment]
-    return 0 if args.exit_zero else sarif_exit_code
+    if args.exit_zero:
+        return 0
+    if change_adds is None:
+        return sarif_exit_code
+    # The SARIF above keeps the whole-repo result; only the process exit code
+    # answers the narrower question. An unanalysed file still fails: a clean
+    # verdict must mean every discovered file was scanned.
+    unanalysed = bool(parse_failures) and parse_failures_gate
+    return 1 if change_adds or unanalysed else 0
 
 
 if __name__ == "__main__":
