@@ -12,7 +12,7 @@
 services:
   # Serves the RSA public key (JWKS) so Temporal can verify tokens.
   jwks-server:
-    image: nginx:1.27.5-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+    image: nginx:1.31.8-alpine@sha256:fed7e14be83cbd2661a75cdc5b872d936cf155d46c327084d30b8df19ae88d72
     volumes:
       - ./.well-known:/usr/share/nginx/html/.well-known:ro
     healthcheck:
