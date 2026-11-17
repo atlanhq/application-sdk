@@ -9,6 +9,14 @@ consume it without reaching into one another's private surface.
 
 from __future__ import annotations
 
+from ._bindings import (
+    UNTRUSTED,
+    ImportClassifier,
+    NameResolver,
+    attribute_root,
+    scope_bindings,
+    scoped_calls,
+)
 from ._cli import TOOL_VERSION, make_cli_main
 from ._directives import _IgnoreDirective, _parse_directives, parse_ignore_directive
 from ._discovery import EXCLUDE_DIRS, discover
@@ -47,6 +55,12 @@ from ._toml_suppress import (
 )
 
 __all__ = [
+    "UNTRUSTED",
+    "ImportClassifier",
+    "NameResolver",
+    "attribute_root",
+    "scope_bindings",
+    "scoped_calls",
     "merge_alias_targets",
     "qualified_class_key",
     "qualified_rebound_imports",
