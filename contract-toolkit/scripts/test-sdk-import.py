@@ -1,9 +1,14 @@
 """Validate generated Python against the SDK.
 
-Every generated _input.py and _e2e_*.py must import cleanly, the SDK names
-``src/SdkNames.pkl`` copies by hand must match the installed SDK, and every
-default in a generated ``_e2e_substitutions.py`` must pass the matching field
-of the ``_input.py`` generated beside it.
+Every generated _input.py and _e2e_*.py must import cleanly and sit in a
+package (an ``__init__.py`` beside it), the SDK names ``src/SdkNames.pkl``
+copies by hand must match the installed SDK, and every default in a generated
+``_e2e_substitutions.py`` must pass the matching field of the ``_input.py``
+generated beside it.
+
+Importing ``_input.py`` also proves it is valid Python and that the SDK's
+payload-safety check accepts it: ``Input.__init_subclass__`` refuses an
+unbounded field such as ``dict[str, Any]`` unless the class opts out.
 
 Runs against the SDK in this repository. From the repo root::
 
@@ -201,6 +206,20 @@ def check_substitution_round_trip(subs_path: Path) -> list[str]:
     return errors
 
 
+def check_init_files(input_files: list[Path]) -> list[str]:
+    """Every generated ``_input.py`` needs an ``__init__.py`` beside it.
+
+    The import test loads each file by path, which works without one; an app
+    imports ``app.generated._input`` as a package and does not.
+    """
+    return [
+        f"{path.relative_to(REPO_ROOT)}: no __init__.py beside it "
+        "(required for Python imports)"
+        for path in input_files
+        if not (path.parent / "__init__.py").is_file()
+    ]
+
+
 def _imported_class_names(path: Path) -> set[str]:
     """Class-shaped names a generated module imports at module level."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -288,6 +307,13 @@ def main() -> int:
         if not test_input(path):
             failed += 1
 
+    logger.info(":: Checking __init__.py beside every _input.py...")
+    init_errors = check_init_files(input_files)
+    for err in init_errors:
+        logger.error("FAIL: %s", err)
+    if not init_errors:
+        logger.info("  OK: every _input.py is in a package")
+
     e2e_files = sorted(p for p in EXAMPLES_DIR.rglob("_e2e_*.py"))
     if e2e_files:
         logger.info(":: Testing %d _e2e_*.py files against SDK...", len(e2e_files))
@@ -316,12 +342,14 @@ def main() -> int:
         logger.info("  OK: SdkNames.pkl matches the SDK")
 
     total = len(input_files) + len(e2e_files)
-    if failed or name_errors or round_trip_errors:
+    if failed or init_errors or name_errors or round_trip_errors:
         logger.error(
-            "%d/%d files failed import test; %d SdkNames.pkl mismatch(es); "
+            "%d/%d files failed import test; %d missing __init__.py; "
+            "%d SdkNames.pkl mismatch(es); "
             "%d substitution default(s) rejected by _input.py.",
             failed,
             total,
+            len(init_errors),
             len(name_errors),
             len(round_trip_errors),
         )

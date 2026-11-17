@@ -115,7 +115,7 @@ local appNoStreamCfg = appCfg(appNoStreaming)
 
 // These two fixtures carry empty UI tasks because they pin render shape only.
 // NativeApp's refusals and its `batch-key` collision have their own fixtures in
-// the "NativeApp: …" facts below, and eval-failure cases in check-invariants.sh.
+// the "NativeApp: …" facts below.
 local nativeStreamingRealtime = (NativeApp) {
   streamingWorkflowType = "native-app:cdc-stream"
   name = "native-streaming-realtime"
@@ -251,9 +251,32 @@ facts {
     appNoStreamCfg.containsKey("max_retries")
   }
 
-  // The bundle-root refusal is pinned as an eval failure in check-invariants.sh
-  // ("streaming on a bundle root is refused"), alongside the toolkit's other
-  // bundle-root refusals, rather than as a fact here.
+  // A bundle root renders no manifest of its own, so a streaming declaration on one
+  // would be dropped without a word.
+  ["a streaming workflow type on a bundle root is refused"] {
+    module.catch(() -> forceOutput((App) {
+      name = "stream-root"
+      displayName = "Stream Root"
+      icon = "https://example.com/icon.svg"
+      hasCredentialConfig = false
+      streamingWorkflowType = "stream-root:stream"
+      entrypoints {
+        new App.Entrypoint {
+          name = "child"
+          displayName = "Child"
+          source = "api"
+          sourceCategory = "api"
+          contract = (App) {
+            name = "stream-child"
+            displayName = "Stream Child"
+            icon = "https://example.com/icon.svg"
+            hasCredentialConfig = false
+            pipeline { publish = null }
+          }
+        }
+      }
+    })).contains("multi-entrypoint bundle root")
+  }
 
   // The gap this closes, found end-to-end on a tenant: streaming was on, the DAG
   // still dispatched the batch workflow type with no events in its arguments, and

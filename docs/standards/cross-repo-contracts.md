@@ -508,7 +508,7 @@ produces the event shape an app's DAG reads through paths the toolkit renders.
 | **Key (toolkit → AE)** | `streaming_enabled`, `ack_paths`; `max_retries` is deliberately **not** rendered under streaming |
 | **Key (AE → app)** | Exactly four: `batch_key` (always set), `batch` (the events inline, or `null` above AE's inline cap), `event_count`, `topic` |
 | **Read by** | The Automation Engine, which registers the trigger and picks a dispatch shell from `streaming_enabled`; every streaming consumer app, whose extract-node args resolve `$.event.batch` / `$.event.batch_key` |
-| **Pinned by** | `contract-toolkit/tests/streaming_trigger_config_test.pkl` (render shape, both schemas, and every refusal) and the streaming section of `contract-toolkit/scripts/check-invariants.sh` (the eval-failure cases facts cannot express) |
+| **Pinned by** | `contract-toolkit/tests/streaming_trigger_config_test.pkl` (render shape, both schemas, and every eval-time refusal, asserted with `module.catch`) |
 | **Owner (AE side)** | Anurag Badoni — change `event_context` or the `TriggerConfig` keys through this entry |
 | **Design record** | DISTR-973 |
 

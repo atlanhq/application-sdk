@@ -505,7 +505,6 @@ gh pr checks "$PR_NUMBER" --repo "$REPO" --json name,bucket \
 
 ```bash
 contract-toolkit/scripts/regenerate-all.sh     # ↔ Verify generated output
-contract-toolkit/scripts/check-invariants.sh   # ↔ PKL tests and invariants
 (cd contract-toolkit && pkl test tests/*.pkl)  # ↔ PKL tests and invariants
 uv run --extra workflows python contract-toolkit/scripts/test-sdk-import.py  # ↔ Generated Python lint and SDK imports
 git diff --check

@@ -809,7 +809,6 @@ After modifying any PKL module, regenerate all examples and verify no breakage:
 
 ```bash
 ./scripts/regenerate-all.sh            # regenerates every example under examples/
-./scripts/check-invariants.sh          # invariant checks on generated output
 pkl test tests/*.pkl                   # Pkl behavior tests
 python scripts/test-sdk-import.py      # imports every generated _input.py against SDK deps
 uv run python scripts/check-ruff-stable.py  # ruff (default settings) changes no generated .py
@@ -850,7 +849,7 @@ Releases are **automatic** — no manual trigger required.
   the CI workflows use with `python -m application_sdk.dev.pkl path`, check the one on
   your `PATH` with `python -m application_sdk.dev.pkl check`, or `brew install pkl` for
   exploration only.
-- Python 3 for invariant checks and SDK import validation
+- Python 3 for SDK import validation
 - `uv` (the SDK's locked ruff) for `scripts/check-ruff-stable.py`
 - Application SDK import dependencies for `python scripts/test-sdk-import.py`
 - Atlan CLI for consuming app workflows (`atlan app contract validate`, `atlan app contract generate`, `atlan app run -p .`)
