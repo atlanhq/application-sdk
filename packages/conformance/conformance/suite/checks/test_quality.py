@@ -95,6 +95,7 @@ from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     _parse_directives,
+    discover_tree,
     is_collectable_test_file,
     is_test_class,
     is_test_function,
@@ -139,15 +140,7 @@ def discover(root: Path) -> list[Path]:
     uncollectable-file defects can occur under any tier directory. Returns
     ``[]`` when ``tests/`` is absent.
     """
-    base = root / "tests"
-    if not base.is_dir():
-        return []
-    paths: list[Path] = []
-    for path in base.rglob("*.py"):
-        if "__pycache__" in path.parts:
-            continue
-        paths.append(path)
-    return sorted(paths)
+    return discover_tree(root, "tests")
 
 
 # ---------------------------------------------------------------------------

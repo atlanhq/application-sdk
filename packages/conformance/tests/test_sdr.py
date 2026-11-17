@@ -39,7 +39,7 @@ from pathlib import Path
 
 import pytest
 
-from conformance.suite.checks.sdr import discover, scan_all, scan_path
+from conformance.suite.checks.sdr import discover, scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
@@ -1331,15 +1331,6 @@ def test_p039_silent_on_non_sdr_app(tmp_path: Path) -> None:
         },
     )
     assert not _run(tmp_path)
-
-
-# ── scan_path no-op ──────────────────────────────────────────────────────────
-
-
-def test_scan_path_is_noop(tmp_path: Path) -> None:
-    f = tmp_path / "app.py"
-    f.write_text("pass\n")
-    assert scan_path(f, tmp_path) == []
 
 
 # ── P030: upload-bridge shapes (fleet-sweep hardening) ───────────────────────

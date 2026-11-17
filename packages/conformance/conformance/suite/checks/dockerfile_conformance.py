@@ -68,7 +68,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import make_cli_main
+from conformance.suite.checks._ast_common import discover_root_file, make_cli_main
 from conformance.suite.schema.findings import Finding
 
 SERIES = "I"
@@ -717,8 +717,7 @@ def discover(root: Path) -> list[Path]:
     Returns an empty list when no ``Dockerfile`` is present, so the I-series
     simply no-ops on repos that have not yet added a Dockerfile.
     """
-    df = root / "Dockerfile"
-    return [df] if df.is_file() else []
+    return discover_root_file(root, "Dockerfile")
 
 
 # ---------------------------------------------------------------------------

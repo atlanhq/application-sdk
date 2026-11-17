@@ -56,7 +56,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -75,7 +74,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="RawHttpToAtlan",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="client-seam",
         autofixable=True,
         orthogonal_gate="tests",

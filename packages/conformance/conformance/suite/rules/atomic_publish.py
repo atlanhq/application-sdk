@@ -43,7 +43,6 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -53,7 +52,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.SDK,
         name="NonAtomicDestinationWrite",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="storage-atomicity",
         autofixable=False,
         orthogonal_gate="tests",

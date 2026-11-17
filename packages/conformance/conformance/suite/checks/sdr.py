@@ -84,8 +84,8 @@ AppStateAsCrossTaskChannel, ManualQualifiedNameFString — PR #2417).
 All are APP-scoped: the SDK itself never declares ``self_deployed_runtime``
 and is always skipped.
 
-``scan_path`` is a no-op — SDR checks are cross-artifact and require the full
-path list plus the repo root.  The runner must call ``scan_all``.
+The module defines only ``scan_all`` — SDR checks are cross-artifact and
+require the full path list plus the repo root.
 """
 
 from __future__ import annotations
@@ -127,7 +127,7 @@ _SDR_FLAG_RE = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 
-__all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
+__all__ = ["SERIES", "discover", "main", "scan_all"]
 
 
 def _is_sdr_app(root: Path) -> bool:
@@ -1389,11 +1389,6 @@ def _check_p051(root: Path) -> list[Finding]:
             ),
         )
     ]
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: the SDR checks require cross-artifact analysis; use scan_all."""
-    return []
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

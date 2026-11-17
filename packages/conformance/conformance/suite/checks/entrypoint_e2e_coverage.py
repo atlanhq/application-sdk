@@ -75,6 +75,7 @@ from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     base_names,
+    discover_tree,
     is_collectable_test_file,
     is_test_class,
     make_cli_main,
@@ -93,7 +94,7 @@ RULE_T025 = "T025"
 # speak of should not then be asked for one suite per entrypoint.
 _E2E_TIER = "e2e"
 
-__all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
+__all__ = ["SERIES", "discover", "main", "scan_all"]
 
 
 # ---------------------------------------------------------------------------
@@ -109,10 +110,7 @@ def discover(root: Path) -> list[Path]:
     covered entrypoint would make this rule wrong; the flat-layout requirement is
     a separate concern with its own signal.
     """
-    base = root / "tests" / "e2e"
-    if not base.is_dir():
-        return []
-    return sorted(p for p in base.rglob("*.py") if "__pycache__" not in p.parts)
+    return discover_tree(root, "tests", "e2e")
 
 
 # ---------------------------------------------------------------------------
@@ -257,11 +255,6 @@ def _message(entrypoint: str, all_names: frozenset[str], covered: set[str]) -> s
 # ---------------------------------------------------------------------------
 # Scan API
 # ---------------------------------------------------------------------------
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: T025 compares the contract against the whole tier; use scan_all."""
-    return []
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

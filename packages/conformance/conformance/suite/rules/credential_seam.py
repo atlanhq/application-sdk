@@ -83,7 +83,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -103,7 +102,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="LocalCredentialRouting",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="credential-seam",
         autofixable=False,
         orthogonal_gate="tests",

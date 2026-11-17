@@ -32,7 +32,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -53,7 +52,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="HttpxTransportWithoutProxy",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="client-seam",
         autofixable=False,
         orthogonal_gate="tests",
