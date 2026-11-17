@@ -12,7 +12,8 @@ directly and times out with no HTTP response.
 The detector flags a call to ``httpx.AsyncHTTPTransport`` or
 ``httpx.HTTPTransport`` (through ``import httpx [as x]`` or
 ``from httpx import AsyncHTTPTransport [as y]``) that passes no ``proxy=``
-keyword.  Any explicit ``proxy=`` — including ``proxy=None`` for a transport
+keyword, resolving each name in the call's own scope (a parameter or local
+that shadows the import is not httpx).  Any explicit ``proxy=`` — including ``proxy=None`` for a transport
 that only ever reaches localhost — is a deliberate decision and stays silent,
 as does a call that splats ``**kwargs`` (the proxy may be in it).  Subclasses
 of the transport, and ``httpx.MockTransport``, are not matched.
@@ -22,7 +23,13 @@ from __future__ import annotations
 
 import ast
 
-from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.checks._ast_common import (
+    UNTRUSTED,
+    NameResolver,
+    _IgnoreDirective,
+    make_finding,
+    scoped_calls,
+)
 from conformance.suite.schema.findings import Finding
 
 RULE_ID = "P066"
@@ -39,36 +46,55 @@ _MESSAGE = (
 )
 
 
-def _collect_imports(tree: ast.AST) -> tuple[set[str], dict[str, str]]:
-    """Return ``(httpx module aliases, {local name: transport ctor})``."""
-    modules: set[str] = set()
-    ctors: dict[str, str] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name == "httpx":
-                    modules.add(alias.asname or "httpx")
-        elif isinstance(node, ast.ImportFrom) and node.module == "httpx":
-            for alias in node.names:
-                if alias.name in _TRANSPORT_CTORS:
-                    ctors[alias.asname or alias.name] = alias.name
-    return modules, ctors
+#: Binding kind of a name that is the ``httpx`` module itself.
+_HTTPX_MODULE = "httpx-module"
 
 
-def _transport_ctor(
-    call: ast.Call, modules: set[str], ctors: dict[str, str]
-) -> str | None:
-    """The httpx transport class *call* constructs, or ``None``."""
+def _classify_import(node: ast.Import | ast.ImportFrom) -> dict[str, str]:
+    """Map each name *node* binds to ``httpx-module``, a transport ctor, or other."""
+    bound: dict[str, str] = {}
+    if isinstance(node, ast.ImportFrom):
+        from_httpx = node.level == 0 and node.module == "httpx"
+        for alias in node.names:
+            name = alias.asname or alias.name
+            if from_httpx and alias.name in _TRANSPORT_CTORS:
+                bound[name] = f"httpx.{alias.name}"
+            else:
+                bound[name] = UNTRUSTED
+    else:
+        for alias in node.names:
+            if alias.asname is not None:
+                is_httpx = alias.name == "httpx"
+                bound[alias.asname] = _HTTPX_MODULE if is_httpx else UNTRUSTED
+            else:
+                # ``import httpx.x`` binds ``httpx`` to the package itself.
+                root = alias.name.split(".")[0]
+                bound[root] = _HTTPX_MODULE if root == "httpx" else UNTRUSTED
+    return bound
+
+
+def _transport_ctor(call: ast.Call, resolve: NameResolver) -> str | None:
+    """The httpx transport class *call* constructs in its own scope, or ``None``.
+
+    Names resolve the way Python resolves them, so after ``import httpx as h``
+    a function's own ``h`` parameter is not the httpx module.
+    """
     func = call.func
     if (
         isinstance(func, ast.Attribute)
         and func.attr in _TRANSPORT_CTORS
         and isinstance(func.value, ast.Name)
-        and func.value.id in modules
+        and resolve(func.value.id) == _HTTPX_MODULE
     ):
         return f"httpx.{func.attr}"
-    if isinstance(func, ast.Name) and func.id in ctors:
-        return f"httpx.{ctors[func.id]}"
+    if isinstance(func, ast.Name):
+        kind = resolve(func.id)
+        if (
+            kind is not None
+            and kind.startswith("httpx.")
+            and kind[6:] in _TRANSPORT_CTORS
+        ):
+            return kind
     return None
 
 
@@ -81,15 +107,9 @@ def check_p066(
     tree: ast.AST, filename: str, directives: dict[int, _IgnoreDirective]
 ) -> list[Finding]:
     """Flag httpx transport constructions that pass no ``proxy=``."""
-    modules, ctors = _collect_imports(tree)
-    if not modules and not ctors:
-        return []
     findings: list[Finding] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        name = _transport_ctor(node, modules, ctors)
-        if name is None or _sets_proxy(node):
+    for node, name in scoped_calls(tree, _classify_import, _transport_ctor):
+        if _sets_proxy(node):
             continue
         findings.append(
             make_finding(

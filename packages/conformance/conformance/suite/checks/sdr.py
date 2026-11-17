@@ -96,7 +96,14 @@ import re
 import sys
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import discover, make_cli_main
+from conformance.suite.checks._ast_common import (
+    UNTRUSTED,
+    NameResolver,
+    attribute_root,
+    discover,
+    make_cli_main,
+    scoped_calls,
+)
 from conformance.suite.checks._version import (
     SDK_DISTRIBUTION,
     locked_sdk_version,
@@ -834,11 +841,6 @@ _ROUTE_CREDENTIALS = "route_credentials"
 
 _SDK_CALLABLE = "sdk-callable"
 _SDK_MODULE = "sdk-module"
-_OTHER = "other"
-
-_ScopeNode = (
-    ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda | ast.ClassDef
-)
 
 
 def _import_binding(node: ast.Import | ast.ImportFrom) -> dict[str, str]:
@@ -853,7 +855,7 @@ def _import_binding(node: ast.Import | ast.ImportFrom) -> dict[str, str]:
         for alias in node.names:
             name = alias.asname or alias.name
             if not from_sdk:
-                bound[name] = _OTHER
+                bound[name] = UNTRUSTED
             elif alias.name == _ROUTE_CREDENTIALS:
                 bound[name] = _SDK_CALLABLE
             else:
@@ -862,131 +864,31 @@ def _import_binding(node: ast.Import | ast.ImportFrom) -> dict[str, str]:
         for alias in node.names:
             name = alias.asname or alias.name.split(".")[0]
             is_sdk = alias.name.split(".")[0] == "application_sdk"
-            bound[name] = _SDK_MODULE if is_sdk else _OTHER
+            bound[name] = _SDK_MODULE if is_sdk else UNTRUSTED
     return bound
 
 
-def _default_exprs(args: ast.arguments) -> list[ast.expr]:
-    """The default expressions of *args*.
+def _is_router_call(call: ast.Call, resolve: NameResolver) -> bool | None:
+    """True if *call* reaches the SDK's ``route_credentials`` in its scope.
 
-    ``kw_defaults`` holds ``None`` for each required keyword-only parameter
-    (``def f(*, x)``); those are not expressions and are skipped.
+    So ``from application_sdk.credentials import route_credentials as route``
+    does not make a helper's own ``route`` parameter the SDK router.
     """
-    return [*args.defaults, *(d for d in args.kw_defaults if d is not None)]
-
-
-def _scope_bindings(scope: _ScopeNode) -> dict[str, str]:
-    """Every name *scope* binds itself, classified for the SDK router.
-
-    Parameters, assignments, loop / ``with`` / ``except`` targets, nested
-    ``def`` / ``class`` names and imports all bind in the scope that contains
-    them (a nested function's *body* is its own scope and is not walked).  A
-    name bound both by an SDK import and by anything else in the same scope is
-    not trusted: statically it may be either at the call.  ``global`` /
-    ``nonlocal`` names bind nothing here.
-    """
-    bindings: dict[str, str] = {}
-    declared_outer: set[str] = set()
-
-    def bind(name: str, kind: str) -> None:
-        previous = bindings.get(name)
-        bindings[name] = kind if previous in (None, kind) else _OTHER
-
-    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-        args = scope.args
-        for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
-            bind(arg.arg, _OTHER)
-        for arg in (args.vararg, args.kwarg):
-            if arg is not None:
-                bind(arg.arg, _OTHER)
-    roots: list[ast.AST] = (
-        [scope.body] if isinstance(scope, ast.Lambda) else list(scope.body)
-    )
-    stack = list(roots)
-    while stack:
-        node = stack.pop()
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            bind(node.name, _OTHER)
-            # Decorators and defaults evaluate in this scope; the body does not.
-            stack.extend(node.decorator_list)
-            if not isinstance(node, ast.ClassDef):
-                stack.extend(_default_exprs(node.args))
-            continue
-        if isinstance(node, ast.Lambda):
-            stack.extend(_default_exprs(node.args))
-            continue
-        if isinstance(node, (ast.Global, ast.Nonlocal)):
-            declared_outer.update(node.names)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            for name, kind in _import_binding(node).items():
-                bind(name, kind)
-        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
-            bind(node.id, _OTHER)
-        elif isinstance(node, ast.ExceptHandler) and node.name:
-            bind(node.name, _OTHER)
-        stack.extend(child for child in ast.iter_child_nodes(node) if child is not None)
-    for name in declared_outer:
-        bindings.pop(name, None)
-    return bindings
-
-
-class _RouterCallFinder(ast.NodeVisitor):
-    """Collect the calls that reach the SDK's ``route_credentials``.
-
-    A name is resolved the way Python resolves it: innermost function scope
-    outward to the module, skipping class bodies for anything nested inside
-    them.  So ``from application_sdk.credentials import route_credentials as
-    route`` does not make a helper's own ``route`` parameter the SDK router.
-    """
-
-    def __init__(self) -> None:
-        self._stack: list[tuple[dict[str, str], bool]] = []
-        self.calls: set[int] = set()
-
-    def _resolve(self, name: str) -> str | None:
-        innermost = True
-        for bindings, is_class in reversed(self._stack):
-            if is_class and not innermost:
-                continue
-            if name in bindings:
-                return bindings[name]
-            innermost = False
-        return None
-
-    def _visit_scope(self, node: _ScopeNode) -> None:
-        self._stack.append((_scope_bindings(node), isinstance(node, ast.ClassDef)))
-        self.generic_visit(node)
-        self._stack.pop()
-
-    visit_Module = _visit_scope
-    visit_FunctionDef = _visit_scope
-    visit_AsyncFunctionDef = _visit_scope
-    visit_Lambda = _visit_scope
-    visit_ClassDef = _visit_scope
-
-    def visit_Call(self, node: ast.Call) -> None:
-        func = node.func
-        if isinstance(func, ast.Name):
-            if self._resolve(func.id) == _SDK_CALLABLE:
-                self.calls.add(id(node))
-        elif isinstance(func, ast.Attribute) and func.attr == _ROUTE_CREDENTIALS:
-            root = _attribute_root(func.value)
-            if root is not None and self._resolve(root) == _SDK_MODULE:
-                self.calls.add(id(node))
-        self.generic_visit(node)
+    func = call.func
+    if isinstance(func, ast.Name):
+        return True if resolve(func.id) == _SDK_CALLABLE else None
+    if isinstance(func, ast.Attribute) and func.attr == _ROUTE_CREDENTIALS:
+        root = attribute_root(func.value)
+        if root is not None and resolve(root) == _SDK_MODULE:
+            return True
+    return None
 
 
 def _sdk_router_calls(tree: ast.AST) -> set[int]:
     """``id()`` of every call in *tree* that is the SDK's ``route_credentials``."""
-    finder = _RouterCallFinder()
-    finder.visit(tree)
-    return finder.calls
-
-
-def _attribute_root(node: ast.expr) -> str | None:
-    while isinstance(node, ast.Attribute):
-        node = node.value
-    return node.id if isinstance(node, ast.Name) else None
+    return {
+        id(call) for call, _ in scoped_calls(tree, _import_binding, _is_router_call)
+    }
 
 
 def _classify_credential_calls(tree: ast.AST) -> tuple[tuple[int, str] | None, bool]:
@@ -1015,7 +917,7 @@ def _classify_credential_calls(tree: ast.AST) -> tuple[tuple[int, str] | None, b
         func = node.func
         # The SDK's credential seam, reached through a name that — in the
         # scope of the call — is bound to the SDK import (bare, aliased, or a
-        # module-qualified attribute); see _RouterCallFinder.
+        # module-qualified attribute); see _is_router_call.
         if id(node) in router_calls:
             agent_aware = True
         # Direct constructor: CredentialRef(...)

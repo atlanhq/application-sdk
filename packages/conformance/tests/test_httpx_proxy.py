@@ -122,6 +122,50 @@ def test_silent_on_same_name_from_other_library() -> None:
     assert _rule(src) == []
 
 
+def test_silent_when_parameter_shadows_module_alias() -> None:
+    """Bindings are scope-local: a parameter named like the alias is not httpx."""
+    src = "import httpx as h\ndef f(h):\n    return h.AsyncHTTPTransport()\n"
+    assert _rule(src) == []
+
+
+def test_silent_when_parameter_shadows_imported_ctor() -> None:
+    src = (
+        "from httpx import AsyncHTTPTransport\n"
+        "def f(AsyncHTTPTransport):\n"
+        "    return AsyncHTTPTransport()\n"
+    )
+    assert _rule(src) == []
+
+
+def test_silent_when_local_assignment_shadows_module() -> None:
+    src = (
+        "import httpx\n"
+        "def f():\n"
+        "    httpx = other_lib\n"
+        "    return httpx.AsyncHTTPTransport()\n"
+    )
+    assert _rule(src) == []
+
+
+def test_fires_in_nested_function_that_does_not_shadow() -> None:
+    """Shadowing in one function does not hide the module from its siblings."""
+    src = (
+        "import httpx as h\n"
+        "def shadowed(h):\n"
+        "    return h.AsyncHTTPTransport()\n"
+        "def real():\n"
+        "    def inner():\n"
+        "        return h.AsyncHTTPTransport()\n"
+        "    return inner()\n"
+    )
+    assert [f.line for f in _rule(src)] == [6]
+
+
+def test_fires_on_function_local_import() -> None:
+    src = "def f():\n    import httpx\n    return httpx.HTTPTransport()\n"
+    assert [f.line for f in _rule(src)] == [3]
+
+
 def test_silent_without_httpx_import() -> None:
     src = "t = httpx.AsyncHTTPTransport()\n"
     assert _rule(src) == []
