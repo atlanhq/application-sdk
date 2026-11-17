@@ -300,7 +300,8 @@ stop-deps.shell = "lsof -ti:3000,3500,7233,8233,50001 | xargs kill -9 2>/dev/nul
 # `temporal server start-dev` or daprd needed. Set TEMPORAL_HOST to point at
 # an already-running server instead.
 test-integration = "pytest tests/integration/ -m integration -v --timeout=120"
-# Opt-in large-file storage load tests (real bytes, LocalStore, no CI).
+# Opt-in large-file storage load tests (real bytes, LocalStore). CI runs them
+# only as a 64 MiB nightly smoke (schedule.yaml); volume runs are manual.
 # Size via ATLAN_LOAD_TEST_SIZE_MIB (default 1024; 51200 = 50 GiB). See tests/load/README.md.
 load-test-storage = "pytest tests/load -m load -v -s --timeout=0"
 test-scripts = "bats .github/scripts/tests"  # requires: bats-core (apt-get install -y bats)
@@ -497,7 +498,7 @@ pythonpath = ["."]
 addopts = "-m 'not integration and not e2e and not s3_integration and not azure_integration and not gcs_integration and not storage_emulator and not load and not perf' --dist loadgroup --strict-markers"
 markers = [
     "perf: throughput comparisons and large-scale probes (≥10s each); excluded from the unit matrix, run once in the `Unit Perf Tests` job via `pytest tests/unit -m perf`",
-    "load: opt-in large-file storage load tests — real bytes at ATLAN_LOAD_TEST_SIZE_MIB (50 GiB-class); run via `poe load-test-storage`, never in CI",
+    "load: opt-in large-file storage load tests — real bytes at ATLAN_LOAD_TEST_SIZE_MIB (50 GiB-class); run via `poe load-test-storage`; CI runs them only as a 64 MiB nightly smoke (schedule.yaml)",
     "integration: tests requiring local Temporal server",
     "e2e: tests requiring a live K8s cluster",
     "s3_integration: tests requiring keyless AWS access (S3_BUCKET + ambient AWS credentials, e.g. OIDC role)",

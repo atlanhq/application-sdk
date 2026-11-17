@@ -16,7 +16,13 @@ misplaced byte fails the run.
 
 ## Running
 
-Excluded from every default and CI suite (marker `load`).
+Excluded from every default and PR/merge-queue suite (marker `load`). A
+nightly smoke run in `.github/workflows/schedule.yaml` runs every scenario at
+64 MiB, which keeps the suite from rotting without spending CI minutes on
+real volume. 64 MiB is the smallest size that still splits into several
+16 MiB chunks; at or below one chunk the chunked download hands off to the
+single-stream path and the resume scenario has nothing to resume. Volume runs
+(1 GiB and up) stay manual.
 
 ```bash
 # 1 GiB default — minutes on a laptop
