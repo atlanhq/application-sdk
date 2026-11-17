@@ -1398,7 +1398,7 @@ Three strategy modules had no importer anywhere in the SDK or its tests. Every p
 | `testing.hypothesis.strategies.handlers.sql.sql_preflight.*` | none; build strategies from your app's typed preflight `Input` contract |
 | `testing.hypothesis.strategies.outputs.statestore.*` | none; build strategies from your app's own credential and config models |
 
-Every integer the remaining strategies draw is now bounded. `sqlalchemy_connect_args_strategy`, `sql_engine_config_strategy` and the logger strategies' `attempt` and timeouts draw no negative sizes, counts or timeouts (`pool_recycle` keeps SQLAlchemy's `-1`, "never recycle"), and every one has an upper bound. `sql_data_strategy` and `sql_query_strategy` draw within the 64-bit signed range. A property test that relied on drawing a negative timeout or an arbitrarily large integer from these strategies no longer sees one.
+Every integer the SQL client and logger strategies draw is now bounded; `outputs.json_output` still draws unbounded `chunk_size` and row counts until FND-4286 bounds them. `sqlalchemy_connect_args_strategy`, `sql_engine_config_strategy` and the logger strategies' `attempt` and timeouts draw no negative sizes, counts or timeouts (`pool_recycle` keeps SQLAlchemy's `-1`, "never recycle"), and every one has an upper bound. `sql_data_strategy` and `sql_query_strategy` draw within the 64-bit signed range. A property test that relied on drawing a negative timeout or an arbitrarily large integer from these strategies no longer sees one.
 
 ---
 

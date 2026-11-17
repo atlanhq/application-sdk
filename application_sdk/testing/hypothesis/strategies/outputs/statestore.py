@@ -181,6 +181,11 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
     ),
 }
 
+#: A star import reads ``__all__`` and resolves each name through ``__getattr__``,
+#: so ``import *`` keeps binding every old name, with the warning. Without it,
+#: Python would enumerate only the module's real globals and skip them all.
+__all__ = [*_DEPRECATED_CONSTANTS, "credentials_strategy", "configuration_strategy"]
+
 
 def _deprecated_constant_value(name: str) -> object:
     return globals()[f"_{name}"]

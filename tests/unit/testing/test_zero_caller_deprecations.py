@@ -229,3 +229,29 @@ def test_deprecated_statestore_composites_still_draw(name: str) -> None:
 
     drawn = find(strategy, lambda value: True)
     assert {"username", "password"} <= drawn.keys()
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        *_ORPHANED_STRATEGY_MODULES,
+        "application_sdk.testing.hypothesis.strategies.sql_client",
+    ],
+)
+def test_star_import_still_binds_every_deprecated_strategy(module_name: str) -> None:
+    """``import *`` reads ``__all__`` and resolves each name through ``__getattr__``.
+
+    These names were plain globals before FND-4292, so a star import bound them.
+    Without ``__all__`` it would enumerate only the real globals and drop them.
+    """
+    module = importlib.import_module(module_name)
+    namespace: dict[str, object] = {}
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", DeprecationWarning)
+        exec(f"from {module_name} import *", namespace)  # noqa: S102
+
+    expected = set(module._DEPRECATED_CONSTANTS)  # type: ignore[attr-defined]
+    assert expected <= namespace.keys()
+    warned = {str(w.message).split(" ", 1)[0] for w in caught}
+    assert expected <= warned

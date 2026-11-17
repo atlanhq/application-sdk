@@ -28,6 +28,11 @@ _TESTS = _REPO / "tests"
 #: writer tests they break. Remove the entry when that lands.
 _UNBOUNDED_INTEGERS_PENDING = {"outputs/json_output.py"}
 
+#: The one module allowed to load a profile at import: it registers and loads
+#: the ``unit`` profile every unit test runs under. Any other conftest doing the
+#: same would replace it for the whole worker, so only this path is exempt.
+_PROFILE_LOADER = _TESTS / "unit" / "conftest.py"
+
 
 def _strategy_modules() -> list[Path]:
     return sorted(p for p in _STRATEGIES.rglob("*.py") if p.stat().st_size > 0)
@@ -64,14 +69,38 @@ def _test_trees() -> tuple[tuple[Path, ast.Module], ...]:
 
 
 def _is_deprecated(tree: ast.Module) -> bool:
-    return any(
+    """A non-empty ``_DEPRECATED_CONSTANTS`` dict literal and a module ``__getattr__``.
+
+    The mapping alone serves nothing, and an empty one deprecates nothing, so a
+    module showing either would pass the orphan check without warning anyone.
+    """
+    has_mapping = any(
         isinstance(node, ast.AnnAssign | ast.Assign)
         and any(
             isinstance(t, ast.Name) and t.id == "_DEPRECATED_CONSTANTS"
             for t in (node.targets if isinstance(node, ast.Assign) else [node.target])
         )
+        and isinstance(node.value, ast.Dict)
+        and bool(node.value.keys)
         for node in tree.body
     )
+    has_getattr = any(
+        isinstance(node, ast.FunctionDef) and node.name == "__getattr__"
+        for node in tree.body
+    )
+    return has_mapping and has_getattr
+
+
+def test_the_deprecation_scan_needs_a_served_non_empty_mapping() -> None:
+    served = (
+        "_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {'a': ('b', 'c')}\n"
+        "def __getattr__(name): ...\n"
+    )
+    assert _is_deprecated(ast.parse(served))
+    assert not _is_deprecated(
+        ast.parse("_DEPRECATED_CONSTANTS = {}\ndef __getattr__(n): ...\n")
+    )
+    assert not _is_deprecated(ast.parse("_DEPRECATED_CONSTANTS = {'a': 'b'}\n"))
 
 
 def test_the_scan_sees_the_strategy_modules() -> None:
@@ -156,7 +185,7 @@ def test_no_test_module_loads_a_hypothesis_profile_at_module_level() -> None:
     offenders = {
         path.relative_to(_REPO).as_posix(): lines
         for path, tree in _test_trees()
-        if path.name != "conftest.py" and (lines := _module_level_profile_loads(tree))
+        if path != _PROFILE_LOADER and (lines := _module_level_profile_loads(tree))
     }
     assert not offenders, (
         "module-level settings.load_profile replaces the unit profile for the "
