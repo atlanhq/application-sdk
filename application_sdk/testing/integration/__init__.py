@@ -94,8 +94,9 @@ For detailed documentation, see:
     docs/guides/integration-testing.md
 """
 
-import warnings
 from typing import TYPE_CHECKING
+
+from application_sdk import _deprecation
 
 # The ``lazy`` submodule is loaded eagerly, unlike every other submodule,
 # because ``lazy`` is both an exported function and the name of the submodule
@@ -511,20 +512,15 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Import the submodule owning *name* on first access (PEP 562)."""
+def _deprecated_export(name: str) -> object:
     from importlib import import_module  # noqa: PLC0415
 
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is not None:
-        replacement, note = entry
-        warnings.warn(
-            f"{name} is deprecated; use {replacement} instead — {note}. "
-            "Will be removed in v4.0.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return getattr(import_module(_LAZY_EXPORTS[name], __name__), name)
+    return getattr(import_module(_LAZY_EXPORTS[name], __name__), name)
+
+
+def _lazy_export(name: str) -> object:
+    """Import the submodule owning *name* on first access."""
+    from importlib import import_module  # noqa: PLC0415
 
     # Exports are checked before the submodule shortcut so that a name shared
     # by a submodule and one of its functions resolves to the function — the
@@ -539,6 +535,17 @@ def __getattr__(name: str) -> object:
     # Cache on the module so repeat access skips this path entirely.
     globals()[name] = value
     return value
+
+
+#: PEP 562: a deprecated name warns on every access and is never cached; any
+#: other name is a lazy export, imported once and cached.
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=_deprecated_export,
+    fallback=_lazy_export,
+)
 
 
 def __dir__() -> list[str]:

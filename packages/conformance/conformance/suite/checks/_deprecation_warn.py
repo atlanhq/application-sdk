@@ -38,16 +38,67 @@ def _static_str(node: ast.expr | None) -> str:
     return ""
 
 
-def _is_deprecation_warn_call(node: ast.AST) -> str | None:
-    """If *node* is ``warnings.warn(<msg>, DeprecationWarning, …)``, return msg.
+#: The SDK's notice helper (``application_sdk._deprecation.warn_deprecated``).
+WARN_DEPRECATED_NAME = "warn_deprecated"
+_WARN_DEPRECATED_PARAMS = ("name", "replacement", "remove_in")
 
-    Recognises both ``warnings.warn(...)`` and a bare ``warn(...)`` (from
-    ``from warnings import warn``).  ``DeprecationWarning`` may be the second
+
+def _call_arg(call: ast.Call, position: int, keyword: str) -> ast.expr | None:
+    if len(call.args) > position:
+        return call.args[position]
+    return next((kw.value for kw in call.keywords if kw.arg == keyword), None)
+
+
+def warn_deprecated_message(node: ast.AST) -> str | None:
+    """If *node* is a ``warn_deprecated(...)`` call, return the notice it emits.
+
+    The helper formats ``name``, ``replacement``, ``remove_in`` and ``note``
+    into one fixed sentence, so the notice is rebuilt here from the literal
+    arguments in that same format (``application_sdk._deprecation.
+    deprecation_message``). An argument that is not a literal comes back
+    empty, which leaves the removal version unreadable, as it would be for a
+    ``warnings.warn`` given a variable.
+    """
+    if not isinstance(node, ast.Call):
+        return None
+    func = node.func
+    called = (
+        func.id
+        if isinstance(func, ast.Name)
+        else func.attr
+        if isinstance(func, ast.Attribute)
+        else None
+    )
+    if called != WARN_DEPRECATED_NAME:
+        return None
+    name, replacement, remove_in = (
+        _static_str(_call_arg(node, i, kw))
+        for i, kw in enumerate(_WARN_DEPRECATED_PARAMS)
+    )
+    note_arg = next((kw.value for kw in node.keywords if kw.arg == "note"), None)
+    note = _static_str(note_arg).rstrip(" .")
+    why = f" — {note}" if note else ""
+    version = f"v{remove_in}" if remove_in else ""
+    return (
+        f"{name} is deprecated; use {replacement} instead{why}. "
+        f"Will be removed in {version}."
+    )
+
+
+def _is_deprecation_warn_call(node: ast.AST) -> str | None:
+    """If *node* emits a ``DeprecationWarning``, return its message.
+
+    Recognises ``warnings.warn(<msg>, DeprecationWarning, …)``, a bare
+    ``warn(...)`` (from ``from warnings import warn``), and the SDK's
+    ``warn_deprecated(...)`` helper.  ``DeprecationWarning`` may be the second
     positional argument or the ``category=`` keyword.  Returns ``None`` when the
     call is not a ``DeprecationWarning`` emission.
     """
     if not isinstance(node, ast.Call):
         return None
+    helper_message = warn_deprecated_message(node)
+    if helper_message is not None:
+        return helper_message
     func = node.func
     is_warn = (isinstance(func, ast.Attribute) and func.attr == "warn") or (
         isinstance(func, ast.Name) and func.id == "warn"

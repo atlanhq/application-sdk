@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.58.0
-source-sha:    0c4a111d4e3f5316891c55df309fc173edd1133b
-source-date:   2026-11-18T21:56:10+05:30
+source-sha:    30e449958e8e8ead4860cb094b1455fb9e408c89
+source-date:   2026-11-18T23:40:35+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -122,8 +122,8 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app import NonRetryableError`
 - **Also importable from:** `application_sdk.app.base`
-- **Signature:** `class NonRetryableError`
-- **Summary:** Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.
+- **Signature:** `class NonRetryableError(message: str, ...)`
+- **Summary:** Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.0.
 - **Defined in:** `application_sdk/app/base.py`
 
 #### `Output`
@@ -151,8 +151,8 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app import RetryableError`
 - **Also importable from:** `application_sdk.app.base`
-- **Signature:** `class RetryableError`
-- **Summary:** Deprecated: use a typed ``AppError`` subclass with ``default_retryable = True`` — removed in v4.0.
+- **Signature:** `class RetryableError(message: str, ...)`
+- **Summary:** Deprecated: use a typed ``AppError`` subclass with ``default_retryable = True`` — removed in v4.0.0.
 - **Defined in:** `application_sdk/app/base.py`
 
 #### `RetryPolicy`

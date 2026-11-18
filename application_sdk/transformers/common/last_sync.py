@@ -24,9 +24,7 @@ than a second one.
 
 from __future__ import annotations
 
-import warnings
-
-from application_sdk.common import last_sync as _last_sync
+from application_sdk import _deprecation
 
 #: name -> (replacement, why). The shared sentence and the removal version live
 #: in ``__getattr__`` below.
@@ -50,16 +48,6 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the re-homed names once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"application_sdk.transformers.common.last_sync.{name} is deprecated; "
-        f"use {replacement} instead — {note}. Will be removed in v4.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return getattr(_last_sync, name)
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)

@@ -5,11 +5,11 @@ A histogram bucket cannot give you ``peak_per_input_byte`` per execution.
 from __future__ import annotations
 
 import threading
-import warnings
 from dataclasses import asdict
 from time import time
 from typing import Any
 
+from application_sdk import _deprecation
 from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
@@ -171,20 +171,14 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the removed constants once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
+def _former_default(name: str) -> object:
     from application_sdk.constants import (  # noqa: PLC0415 — only reached on a deprecated access
         _DEPRECATED_CONSTANT_VALUES,
     )
 
     return _DEPRECATED_CONSTANT_VALUES[name]
+
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0", resolve=_former_default
+)

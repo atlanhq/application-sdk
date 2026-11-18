@@ -118,6 +118,24 @@
       "symbol": "AppError"
     },
     {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "NonRetryableError is deprecated; use a typed application_sdk.errors.AppError subclass with default_retryable = False instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.base",
+      "removal_version": "4.0.0",
+      "symbol": "NonRetryableError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "RetryableError is deprecated; use a typed application_sdk.errors.AppError subclass with default_retryable = True instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.base",
+      "removal_version": "4.0.0",
+      "symbol": "RetryableError"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "BUILD_IDENTITY_CONFIGMAP_ID is deprecated; use application_sdk.common.build_identity.BUILD_IDENTITY_CONFIGMAP_ID \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
@@ -157,7 +175,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "ChildAppContext is deprecated; read correlation_id and run_id from the parent AppContext directly \u2014 nothing in the SDK creates one. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.app.context",
       "removal_version": "4.0.0",
       "symbol": "ChildAppContext"
@@ -174,28 +192,28 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "AppAlreadyRegisteredError is deprecated; use application_sdk.app.registry.AppVersionAlreadyRegisteredError \u2014 will be removed in v4.0",
+      "message": "AppAlreadyRegisteredError is deprecated; use application_sdk.app.registry.AppVersionAlreadyRegisteredError instead. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.app.registry",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "AppAlreadyRegisteredError"
     },
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "AppNotFoundError is deprecated; use application_sdk.app.registry.AppNotRegisteredError \u2014 will be removed in v4.0",
+      "message": "AppNotFoundError is deprecated; use application_sdk.app.registry.AppNotRegisteredError instead. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.app.registry",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "AppNotFoundError"
     },
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "TaskNotFoundError is deprecated; use application_sdk.app.registry.TaskNotRegisteredError \u2014 will be removed in v4.0",
+      "message": "TaskNotFoundError is deprecated; use application_sdk.app.registry.TaskNotRegisteredError instead. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.app.registry",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "TaskNotFoundError"
     },
     {
@@ -220,7 +238,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.clients.azure.azure_errors.AzureConnectionError is deprecated and will be removed in v4.0.0: nothing in the SDK raises it. To keep its wire code, raise an app-owned DependencyUnavailableError subclass that sets code = \"DEPENDENCY_UNAVAILABLE_AZURE\"; plain DependencyUnavailableError drops the Azure-specific code.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.clients.azure.azure_errors",
       "removal_version": "4.0.0",
       "symbol": "AzureConnectionError"
@@ -229,7 +247,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.clients.azure.azure_errors.AzureServiceError is deprecated and will be removed in v4.0.0: nothing in the SDK raises it. To keep its wire code, raise an app-owned DependencyUnavailableError subclass that sets code = \"DEPENDENCY_UNAVAILABLE_AZURE_SERVICE\"; plain DependencyUnavailableError drops the Azure-specific code.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.clients.azure.azure_errors",
       "removal_version": "4.0.0",
       "symbol": "AzureServiceError"
@@ -274,7 +292,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.clients.redis_errors.RedisConfigError is deprecated and will be removed in v4.0.0 with the deprecated RedisClient / RedisClientAsync that raise it. Catch the application_sdk.errors category leaf it subclasses.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.clients.redis_errors",
       "removal_version": "4.0.0",
       "symbol": "RedisConfigError"
@@ -283,7 +301,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.clients.redis_errors.RedisConnectionError is deprecated and will be removed in v4.0.0 with the deprecated RedisClient / RedisClientAsync that raise it. Catch the application_sdk.errors category leaf it subclasses.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.clients.redis_errors",
       "removal_version": "4.0.0",
       "symbol": "RedisConnectionError"
@@ -292,7 +310,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.clients.redis_errors.RedisProtocolError is deprecated and will be removed in v4.0.0 with the deprecated RedisClient / RedisClientAsync that raise it. Catch the application_sdk.errors category leaf it subclasses.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.clients.redis_errors",
       "removal_version": "4.0.0",
       "symbol": "RedisProtocolError"
@@ -301,7 +319,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.clients.redis_errors.RedisTimeoutError is deprecated and will be removed in v4.0.0 with the deprecated RedisClient / RedisClientAsync that raise it. Catch the application_sdk.errors category leaf it subclasses.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.clients.redis_errors",
       "removal_version": "4.0.0",
       "symbol": "RedisTimeoutError"
@@ -435,10 +453,10 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "file_converter_registry is deprecated; use pyarrow.json.read_json and pyarrow.parquet.write_table \u2014 the file_converter module has no callers and hides conversion errors. Will be removed in v4.0.",
+      "message": "file_converter_registry is deprecated; use pyarrow.json.read_json and pyarrow.parquet.write_table \u2014 the file_converter module has no callers and hides conversion errors. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.common.file_converter",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "file_converter_registry"
     },
     {
@@ -570,8 +588,8 @@
     {
       "kind": "function",
       "marker_via": "decorator",
-      "message": "cleanup_previous_state is deprecated; previous state now lives in the run-scoped RunStateDirs.previous_state, which goes with the run's output \u2014 will be removed in v4.0.0.",
-      "migration_target": false,
+      "message": "cleanup_previous_state is deprecated; drop the call \u2014 previous state now lives in the run-scoped RunStateDirs.previous_state, which goes with the run's output \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
       "module": "application_sdk.common.incremental.state.state_writer",
       "removal_version": "4.0.0",
       "symbol": "cleanup_previous_state"
@@ -588,8 +606,8 @@
     {
       "kind": "function",
       "marker_via": "decorator",
-      "message": "prepare_current_state_directory is deprecated; create_current_state_snapshot resets its own build directory \u2014 will be removed in v4.0.0.",
-      "migration_target": false,
+      "message": "prepare_current_state_directory is deprecated; drop the call \u2014 create_current_state_snapshot resets its own build directory \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
       "module": "application_sdk.common.incremental.state.state_writer",
       "removal_version": "4.0.0",
       "symbol": "prepare_current_state_directory"
@@ -633,10 +651,10 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "FileUploadResponse is deprecated; use application_sdk.handler.contracts.FileUploadResponse \u2014 this module only ever re-exported the v2 application_sdk.server.fastapi.models.FileUploadResponse, which is itself deprecated. Will be removed in v4.0.",
+      "message": "FileUploadResponse is deprecated; use application_sdk.handler.contracts.FileUploadResponse \u2014 this module only ever re-exported the v2 application_sdk.server.fastapi.models.FileUploadResponse, which is itself deprecated. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.common.utils",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "FileUploadResponse"
     },
     {
@@ -679,7 +697,7 @@
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "LOCK_METADATA_KEY is deprecated and has no effect: needs_lock does nothing in v3 because create_worker registers no lock interceptor. Remove the import; it will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.constants",
       "removal_version": "4.0.0",
       "symbol": "LOCK_METADATA_KEY"
@@ -688,7 +706,7 @@
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "LOCK_RETRY_INTERVAL_SECONDS is deprecated and has no effect: the lock interceptor that reads it is never registered by create_worker. Remove the import; it will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.constants",
       "removal_version": "4.0.0",
       "symbol": "LOCK_RETRY_INTERVAL_SECONDS"
@@ -868,7 +886,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal._lock_errors.LockAcquisitionError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution._temporal._lock_errors",
       "removal_version": "4.0.0",
       "symbol": "LockAcquisitionError"
@@ -877,7 +895,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal._lock_errors.MaxLocksInvalidError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution._temporal._lock_errors",
       "removal_version": "4.0.0",
       "symbol": "MaxLocksInvalidError"
@@ -886,7 +904,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal._lock_errors.MissingScheduleToCloseTimeoutError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution._temporal._lock_errors",
       "removal_version": "4.0.0",
       "symbol": "MissingScheduleToCloseTimeoutError"
@@ -895,7 +913,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal._lock_errors.RedisLockError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution._temporal._lock_errors",
       "removal_version": "4.0.0",
       "symbol": "RedisLockError"
@@ -922,7 +940,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal.interceptors.lock.RedisLockInterceptor has no effect: create_worker never registers it, nor the lock activities it schedules, so needs_lock does nothing in v3. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution._temporal.interceptors.lock",
       "removal_version": "4.0.0",
       "symbol": "RedisLockInterceptor"
@@ -931,7 +949,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal.interceptors.lock.RedisLockOutboundInterceptor has no effect: create_worker never registers it, nor the lock activities it schedules, so needs_lock does nothing in v3. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution._temporal.interceptors.lock",
       "removal_version": "4.0.0",
       "symbol": "RedisLockOutboundInterceptor"
@@ -958,7 +976,7 @@
       "kind": "function",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal.lock_activities.acquire_distributed_lock has no effect: create_worker never registers it, so it never runs in v3. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution._temporal.lock_activities",
       "removal_version": "4.0.0",
       "symbol": "acquire_distributed_lock"
@@ -967,7 +985,7 @@
       "kind": "function",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal.lock_activities.release_distributed_lock has no effect: create_worker never registers it, so it never runs in v3. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution._temporal.lock_activities",
       "removal_version": "4.0.0",
       "symbol": "release_distributed_lock"
@@ -1066,7 +1084,7 @@
       "kind": "function",
       "marker_via": "decorator",
       "message": "needs_lock has no effect: create_worker registers neither the lock interceptor nor the lock activities, so a decorated task runs with no concurrency limit. Remove the decorator; it will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution.decorators",
       "removal_version": "4.0.0",
       "symbol": "needs_lock"
@@ -1108,6 +1126,15 @@
       "symbol": "S3ObjectStore"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "run_app_handler_service is deprecated; use server_sdk.build_asgi_app with your own uvicorn.run instead \u2014 the consolidated host owns the run loop. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.handler.service",
+      "removal_version": "4.0.0",
+      "symbol": "run_app_handler_service"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "MessageHandler is deprecated; use SubscriptionConfig.handler in application_sdk.handler.contracts \u2014 it typed PubSub.subscribe handlers, which DaprPubSub never called. Will be removed in v4.0.0.",
@@ -1138,7 +1165,7 @@
       "kind": "function",
       "marker_via": "decorator",
       "message": "create_dapr_secret_store is deprecated; construct DaprSecretStore(client, store_name=...) directly. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.infrastructure._dapr.client",
       "removal_version": "4.0.0",
       "symbol": "create_dapr_secret_store"
@@ -1174,7 +1201,7 @@
       "kind": "function",
       "marker_via": "decorator",
       "message": "create_dapr_credential_vault is deprecated; construct DaprCredentialVault(client, ...) directly. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.infrastructure._dapr.credential_vault",
       "removal_version": "4.0.0",
       "symbol": "create_dapr_credential_vault"
@@ -1372,7 +1399,7 @@
       "kind": "function",
       "marker_via": "decorator",
       "message": "memory_fraction is deprecated; call memory_usage_bytes() and memory_limit_bytes(), treat the fraction as unknown when either returns None or the limit is not positive, and otherwise divide usage by limit \u2014 it has no caller in the SDK. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.observability.cgroup",
       "removal_version": "4.0.0",
       "symbol": "memory_fraction"
@@ -1633,7 +1660,7 @@
       "kind": "function",
       "marker_via": "decorator",
       "message": "run_health_server is deprecated; construct WorkerHealthServer (or call build_worker_health_server) and start it with `async with` \u2014 will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.server.health",
       "removal_version": "4.0.0",
       "symbol": "run_health_server"
@@ -2379,46 +2406,46 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "auth_credentials_strategy is deprecated; use a strategy built from your app's own credential model \u2014 it generates the v2 server's credential dict. Will be removed in v4.0.",
+      "message": "auth_credentials_strategy is deprecated; use a strategy built from your app's own credential model \u2014 it generates the v2 server's credential dict. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "auth_credentials_strategy"
     },
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "event_data_strategy is deprecated; use a strategy built from application_sdk.handler.contracts.CloudEventEnvelope \u2014 it generates the v2 server's Dapr event payload. Will be removed in v4.0.",
+      "message": "event_data_strategy is deprecated; use a strategy built from application_sdk.handler.contracts.CloudEventEnvelope \u2014 it generates the v2 server's Dapr event payload. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "event_data_strategy"
     },
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "metadata_strategy is deprecated; use a strategy built from your app's own metadata model \u2014 it generates the v2 server's include/exclude-filter dict. Will be removed in v4.0.",
+      "message": "metadata_strategy is deprecated; use a strategy built from your app's own metadata model \u2014 it generates the v2 server's include/exclude-filter dict. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "metadata_strategy"
     },
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "payload_strategy is deprecated; use a strategy built from your app's typed Input contract \u2014 it generates the v2 server's credentials+metadata payload. Will be removed in v4.0.",
+      "message": "payload_strategy is deprecated; use a strategy built from your app's typed Input contract \u2014 it generates the v2 server's credentials+metadata payload. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "payload_strategy"
     },
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "workflow_event_strategy is deprecated; use a strategy built from your app's own event model \u2014 it generates the v2 server's workflow-start Event. Will be removed in v4.0.",
+      "message": "workflow_event_strategy is deprecated; use a strategy built from your app's own event model \u2014 it generates the v2 server's workflow-start Event. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "workflow_event_strategy"
     },
     {
@@ -3495,37 +3522,37 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "LastSyncDetails is deprecated; use application_sdk.common.last_sync.LastSyncDetails \u2014 the same class, re-homed out of the deprecated transformers package. Will be removed in v4.0.",
+      "message": "LastSyncDetails is deprecated; use application_sdk.common.last_sync.LastSyncDetails \u2014 the same class, re-homed out of the deprecated transformers package. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.transformers.common.last_sync",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "LastSyncDetails"
     },
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "resolve_last_sync_details is deprecated; use application_sdk.common.last_sync.resolve_last_sync_details \u2014 the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.",
+      "message": "resolve_last_sync_details is deprecated; use application_sdk.common.last_sync.resolve_last_sync_details \u2014 the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.transformers.common.last_sync",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "resolve_last_sync_details"
     },
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "set_last_sync_details_on_asset is deprecated; use application_sdk.common.last_sync.set_last_sync_details_on_asset \u2014 the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.",
+      "message": "set_last_sync_details_on_asset is deprecated; use application_sdk.common.last_sync.set_last_sync_details_on_asset \u2014 the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.transformers.common.last_sync",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "set_last_sync_details_on_asset"
     },
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "set_last_sync_details_on_assets_bulk is deprecated; use application_sdk.common.last_sync.set_last_sync_details_on_assets_bulk \u2014 the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.",
+      "message": "set_last_sync_details_on_assets_bulk is deprecated; use application_sdk.common.last_sync.set_last_sync_details_on_assets_bulk \u2014 the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.transformers.common.last_sync",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "set_last_sync_details_on_assets_bulk"
     },
     {

@@ -10,6 +10,7 @@ from typing import Literal, overload
 
 import orjson
 
+from application_sdk import _deprecation
 from application_sdk._context_errors import ObjectStoreNotConfiguredError
 from application_sdk._install import api_only_install, worker_only_missing
 from application_sdk._logging import get_logger
@@ -254,14 +255,14 @@ async def resolve_credential_file(
             the file propagate too, with their own types.
     """
     if raise_on_error is None:
-        warnings.warn(
-            "resolve_credential_file() without raise_on_error is deprecated: "
-            "it returns None for a failed resolution as well as an empty "
-            "value. Pass raise_on_error=True for a typed error, or "
-            "raise_on_error=False to keep None — the default flips to True "
-            "in v4.0.",
-            DeprecationWarning,
-            stacklevel=2,
+        _deprecation.warn_deprecated(
+            "resolve_credential_file() without raise_on_error",
+            "raise_on_error=True for a typed error (or raise_on_error=False to "
+            "keep None)",
+            "4.0.0",
+            note="it returns None for a failed resolution as well as an empty "
+            "value; the None default goes and raise_on_error=True becomes the "
+            "default",
         )
     if dest_dir is not None and not isinstance(dest_dir, CredentialDir):
         warnings.warn(
@@ -269,7 +270,7 @@ async def resolve_credential_file(
             "deprecated: the file goes into a new private directory inside "
             "it, not into dest_dir itself. Omit dest_dir, or pass a "
             "credential_dir() to put several files in one directory — "
-            "plain strings are rejected in v4.0.",
+            "plain strings are rejected in v4.0.0.",
             DeprecationWarning,
             stacklevel=2,
         )

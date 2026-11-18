@@ -49,6 +49,8 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import TimeoutType
 from typing_extensions import deprecated
 
+from application_sdk import _deprecation
+
 with workflow.unsafe.imports_passed_through():
     from application_sdk.constants import (
         APP_ID,
@@ -1631,11 +1633,11 @@ def _deprecated_fail_open_leaf(exc: BaseException) -> AppError | None:
 def _warn_deprecated_fail_open(app_name: str, leaf: str, code: str) -> None:
     message = (
         f"{app_name}: preflight_check raised {leaf} ({code}). Raising this category "
-        "is deprecated until application-sdk "
-        f"{DEPRECATED_FAIL_OPEN_REMOVED_IN}; raise a retryable SourceUnavailableError "
+        "is deprecated; raise a retryable SourceUnavailableError "
         "leaf instead, which the gate reports as an unverifiable source and a "
         "hard gate retries, blocking only if it persists to the final attempt. "
-        f"From {DEPRECATED_FAIL_OPEN_REMOVED_IN} this raise "
+        "Its fail-open treatment is removed in "
+        f"v{DEPRECATED_FAIL_OPEN_REMOVED_IN}: from then this raise "
         "is reported as an unverifiable source; it never blocks a hard gate."
     )
     warnings.warn(message, DeprecationWarning, stacklevel=2)
@@ -3099,16 +3101,9 @@ if TYPE_CHECKING:
     UNVERIFIABLE_CHECK_NAME: str
 
 
-def __getattr__(name: str) -> object:
-    """Serve the removed constants once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v3.40.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _deprecated_constant_value(name)
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="3.40.0",
+    resolve=_deprecated_constant_value,
+)

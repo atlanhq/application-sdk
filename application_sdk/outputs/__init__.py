@@ -28,8 +28,8 @@ Architecture:
 """
 
 import contextvars
-import warnings
 
+from application_sdk import _deprecation
 from application_sdk.outputs.collector import OutputCollector
 from application_sdk.outputs.models import Artifact, Metric
 from application_sdk.outputs.skipped import (
@@ -80,19 +80,9 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the renamed ContextVar once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return current_outputs
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)
 
 
 __all__ = [
