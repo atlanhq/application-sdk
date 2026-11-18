@@ -14,6 +14,7 @@ from opentelemetry._logs import LogRecord, SeverityNumber
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.trace.span import TraceFlags
+from typing_extensions import deprecated
 
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -853,6 +854,22 @@ SEVERITY_MAPPING = {
 }
 
 
+def _stdlib_level_method(level: int) -> str:
+    """Name of the level method that serves stdlib integer *level*.
+
+    ``log(level, ...)`` on both the adapter and its lazy proxy routes through
+    this, so the two cannot bucket a level differently. ``CRITICAL`` maps to
+    ``error`` as it always has.
+    """
+    if level >= logging.ERROR:
+        return "error"
+    if level >= logging.WARNING:
+        return "warning"
+    if level >= logging.INFO:
+        return "info"
+    return "debug"
+
+
 class _LazyLoggerProxy:
     """Returned by AtlanLoggerAdapter.opt(); context is pre-bound, loguru handles lazy eval."""
 
@@ -861,47 +878,30 @@ class _LazyLoggerProxy:
     def __init__(self, bound_opt_logger: Any) -> None:
         self._logger = bound_opt_logger
 
-    def debug(self, msg: str, **kwargs: Any) -> None:
+    def _emit(self, level_name: str, msg: str, kwargs: dict[str, Any]) -> None:
         try:
-            self._logger.debug(msg, **kwargs)
+            self._logger.log(level_name, msg, **kwargs)
         except Exception:
-            logging.error("Error in lazy debug logging", exc_info=True)
+            logging.error("Error in lazy %s logging", level_name.lower(), exc_info=True)
+
+    def debug(self, msg: str, **kwargs: Any) -> None:
+        self._emit("DEBUG", msg, kwargs)
 
     def info(self, msg: str, **kwargs: Any) -> None:
-        try:
-            self._logger.info(msg, **kwargs)
-        except Exception:
-            logging.error("Error in lazy info logging", exc_info=True)
+        self._emit("INFO", msg, kwargs)
 
     def warning(self, msg: str, **kwargs: Any) -> None:
-        try:
-            self._logger.warning(msg, **kwargs)
-        except Exception:
-            logging.error("Error in lazy warning logging", exc_info=True)
+        self._emit("WARNING", msg, kwargs)
 
     def error(self, msg: str, **kwargs: Any) -> None:
-        try:
-            self._logger.error(msg, **kwargs)
-        except Exception:
-            logging.error("Error in lazy error logging", exc_info=True)
+        self._emit("ERROR", msg, kwargs)
 
     def critical(self, msg: str, **kwargs: Any) -> None:
-        try:
-            # conformance: ignore[L007] this *is* the proxy's own .critical() definition (loguru's bound-opt logger natively supports it), not a deprecated call site — downgrading to .error() would change emitted severity
-            self._logger.critical(msg, **kwargs)
-        except Exception:
-            logging.error("Error in lazy critical logging", exc_info=True)
+        self._emit("CRITICAL", msg, kwargs)
 
     def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
         """Dispatch to the named level method matching stdlib integer *level*."""
-        if level >= logging.ERROR:
-            self.error(msg, *args, **kwargs)
-        elif level >= logging.WARNING:
-            self.warning(msg, *args, **kwargs)
-        elif level >= logging.INFO:
-            self.info(msg, *args, **kwargs)
-        else:
-            self.debug(msg, *args, **kwargs)
+        getattr(self, _stdlib_level_method(level))(msg, *args, **kwargs)
 
 
 class AtlanLoggerAdapter(AtlanObservability[Any]):
@@ -1304,153 +1304,81 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             # conformance: ignore[E007] fail-open level guard on the hot per-log path; logging the benign loguru-internals TypeError here would recurse, so it defaults to enabled
             return True
 
-    def debug(self, msg: str, *args: Any, **kwargs: Any):
-        """Log a debug level message.
+    def _emit(
+        self,
+        level_name: str,
+        msg: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        *,
+        log_type: str | None = None,
+        flush: bool = False,
+    ) -> None:
+        """Emit one record at *level_name*; every public level method lands here.
+
+        Never raises: a failure anywhere in formatting, enrichment or the
+        loguru call is logged through stdlib ``logging`` and swallowed, so a
+        bad format string cannot take down the caller.
 
         Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
+            level_name: A loguru level name, also a key of ``SEVERITY_MAPPING``.
+            msg: The message, %-style when *args* is non-empty.
+            args: Positional %-format arguments.
+            kwargs: Context fields to bind. ``exc_info`` is popped and attaches
+                the exception (``True`` for the current one, or an exception
+                or ``sys.exc_info()`` tuple).
+            log_type: Stamped as the ``log_type`` field when given.
+            flush: Force a buffer flush after the record is emitted.
         """
         if self._suppress_replay_log():
             return
-        if not self._is_enabled(SEVERITY_MAPPING["DEBUG"]):
+        if not self._is_enabled(SEVERITY_MAPPING[level_name]):
             return
         try:
             msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
+            if log_type is not None:
+                kwargs["log_type"] = log_type
             msg, kwargs = self.process(msg, kwargs)
             bound_logger = self.logger.bind(**kwargs)
             if exc_info:
-                bound_logger.opt(exception=exc_info).debug(msg, *args)
-            else:
-                bound_logger.debug(msg, *args)
+                bound_logger = bound_logger.opt(exception=exc_info)
+            bound_logger.log(level_name, msg, *args)
+            if flush:
+                self._sync_flush()
         except Exception:
-            logging.error("Error in debug logging", exc_info=True)
+            logging.error("Error in %s logging", level_name.lower(), exc_info=True)
             self._sync_flush()
 
-    def info(self, msg: str, *args: Any, **kwargs: Any):
-        """Log an info level message.
+    def debug(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log a debug level message; *kwargs* are bound as context fields."""
+        self._emit("DEBUG", msg, args, kwargs)
 
-        Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
-        """
-        if self._suppress_replay_log():
-            return
-        if not self._is_enabled(SEVERITY_MAPPING["INFO"]):
-            return
-        try:
-            msg, args = _format_printf_args(msg, args)
-            exc_info = kwargs.pop("exc_info", False)
-            msg, kwargs = self.process(msg, kwargs)
-            bound_logger = self.logger.bind(**kwargs)
-            if exc_info:
-                bound_logger.opt(exception=exc_info).info(msg, *args)
-            else:
-                bound_logger.info(msg, *args)
-        except Exception:
-            logging.error("Error in info logging", exc_info=True)
-            self._sync_flush()
+    def info(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log an info level message; *kwargs* are bound as context fields."""
+        self._emit("INFO", msg, args, kwargs)
 
-    def warning(self, msg: str, *args: Any, **kwargs: Any):
-        """Log a warning level message.
+    def warning(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log a warning level message; *kwargs* are bound as context fields."""
+        self._emit("WARNING", msg, args, kwargs)
 
-        Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
-        """
-        if self._suppress_replay_log():
-            return
-        if not self._is_enabled(SEVERITY_MAPPING["WARNING"]):
-            return
-        try:
-            msg, args = _format_printf_args(msg, args)
-            exc_info = kwargs.pop("exc_info", False)
-            msg, kwargs = self.process(msg, kwargs)
-            bound_logger = self.logger.bind(**kwargs)
-            if exc_info:
-                bound_logger.opt(exception=exc_info).warning(msg, *args)
-            else:
-                bound_logger.warning(msg, *args)
-        except Exception:
-            logging.error("Error in warning logging", exc_info=True)
-            self._sync_flush()
+    def error(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log an error level message and force a flush."""
+        self._emit("ERROR", msg, args, kwargs, flush=True)
 
-    def error(self, msg: str, *args: Any, **kwargs: Any):
-        """Log an error level message.
-
-        Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
-
-        Note: Forces an immediate flush of logs when called.
-        """
-        if self._suppress_replay_log():
-            return
-        if not self._is_enabled(SEVERITY_MAPPING["ERROR"]):
-            return
-        try:
-            msg, args = _format_printf_args(msg, args)
-            exc_info = kwargs.pop("exc_info", False)
-            msg, kwargs = self.process(msg, kwargs)
-            bound_logger = self.logger.bind(**kwargs)
-            if exc_info:
-                bound_logger.opt(exception=exc_info).error(msg, *args)
-            else:
-                bound_logger.error(msg, *args)
-            # Force flush on error logs
-            self._sync_flush()
-        except Exception:
-            logging.error("Error in error logging", exc_info=True)
-            self._sync_flush()
-
-    def exception(self, msg: str, *args: Any, **kwargs: Any):
+    def exception(self, msg: str, *args: Any, **kwargs: Any) -> None:
         """Log an error level message with the current exception traceback.
 
         Equivalent to error() with exc_info=True. Matches the interface of
         logging.Logger.exception() so that callers such as the Temporal SDK
         (activity.logger.exception(...)) work correctly.
-
-        Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
         """
         kwargs.setdefault("exc_info", True)
         self.error(msg, *args, **kwargs)
 
-    def critical(self, msg: str, *args: Any, **kwargs: Any):
-        """Log a critical level message.
-
-        Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
-
-        Note: Forces an immediate flush of logs when called.
-        """
-        if self._suppress_replay_log():
-            return
-        if not self._is_enabled(SEVERITY_MAPPING["CRITICAL"]):
-            return
-        try:
-            msg, args = _format_printf_args(msg, args)
-            exc_info = kwargs.pop("exc_info", False)
-            msg, kwargs = self.process(msg, kwargs)
-            bound_logger = self.logger.bind(**kwargs)
-            if exc_info:
-                bound_logger.opt(exception=exc_info).critical(msg, *args)
-            else:
-                bound_logger.critical(msg, *args)
-            # Force flush on critical logs
-            self._sync_flush()
-        except Exception:
-            logging.error("Error in critical logging", exc_info=True)
-            self._sync_flush()
+    def critical(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log a critical level message and force a flush."""
+        self._emit("CRITICAL", msg, args, kwargs, flush=True)
 
     def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
         """Dispatch to the named level method matching stdlib integer *level*.
@@ -1460,14 +1388,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         can vary the level at runtime without building a dispatch table
         themselves.
         """
-        if level >= logging.ERROR:
-            self.error(msg, *args, **kwargs)
-        elif level >= logging.WARNING:
-            self.warning(msg, *args, **kwargs)
-        elif level >= logging.INFO:
-            self.info(msg, *args, **kwargs)
-        else:
-            self.debug(msg, *args, **kwargs)
+        getattr(self, _stdlib_level_method(level))(msg, *args, **kwargs)
 
     def opt(
         self, *, lazy: bool = False, **loguru_opt_kwargs: Any
@@ -1486,53 +1407,22 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         bound = self.logger.bind(**ctx_kwargs).opt(lazy=lazy, **loguru_opt_kwargs)
         return _LazyLoggerProxy(bound)
 
-    def activity(self, msg: str, *args: Any, **kwargs: Any):
-        """Log an activity-specific message with activity context.
+    @deprecated(
+        "AtlanLoggerAdapter.activity is deprecated; use AtlanLoggerAdapter.info "
+        "and pass log_type='activity' if a reader needs the tag — it has no "
+        "caller in the SDK. Will be removed in v4.0.0."
+    )
+    def activity(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log at the custom ACTIVITY level (INFO severity), tagged ``log_type=activity``.
 
-        Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
-
-        This method adds activity-specific context to the log message.
+        .. deprecated:: 3.59
+            Use :meth:`info`. Will be removed in v4.0.0.
         """
-        if self._suppress_replay_log():
-            return
-        if not self._is_enabled(SEVERITY_MAPPING["ACTIVITY"]):
-            return
-        try:
-            msg, args = _format_printf_args(msg, args)
-            local_kwargs = kwargs.copy()
-            local_kwargs["log_type"] = "activity"
-            processed_msg, processed_kwargs = self.process(msg, local_kwargs)
-            self.logger.bind(**processed_kwargs).log("ACTIVITY", processed_msg, *args)
-        except Exception:
-            logging.error("Error in activity logging", exc_info=True)
-            self._sync_flush()
+        self._emit("ACTIVITY", msg, args, kwargs, log_type="activity")
 
-    def metric(self, msg: str, *args: Any, **kwargs: Any):
-        """Log a metric-specific message with metric context.
-
-        Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
-
-        This method adds metric-specific context to the log message.
-        """
-        if self._suppress_replay_log():
-            return
-        if not self._is_enabled(SEVERITY_MAPPING["METRIC"]):
-            return
-        try:
-            msg, args = _format_printf_args(msg, args)
-            local_kwargs = kwargs.copy()
-            local_kwargs["log_type"] = "metric"
-            processed_msg, processed_kwargs = self.process(msg, local_kwargs)
-            self.logger.bind(**processed_kwargs).log("METRIC", processed_msg, *args)
-        except Exception:
-            logging.error("Error in metric logging", exc_info=True)
-            self._sync_flush()
+    def metric(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log at the custom METRIC level (DEBUG severity), tagged ``log_type=metric``."""
+        self._emit("METRIC", msg, args, kwargs, log_type="metric")
 
     def _send_to_otel(self, record: dict[str, Any]):
         """Send log record to OpenTelemetry.
@@ -1601,25 +1491,9 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         except Exception:
             logging.error("Error during sync flush", exc_info=True)
 
-    def tracing(self, msg: str, *args: Any, **kwargs: Any):
-        """Log a trace-specific message with trace context.
-
-        Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
-
-        This method adds trace-specific context to the log message.
-        """
-        if self._suppress_replay_log():
-            return
-        if not self._is_enabled(SEVERITY_MAPPING["TRACING"]):
-            return
-        msg, args = _format_printf_args(msg, args)
-        local_kwargs = kwargs.copy()
-        local_kwargs["log_type"] = "trace"
-        processed_msg, processed_kwargs = self.process(msg, local_kwargs)
-        self.logger.bind(**processed_kwargs).log("TRACING", processed_msg, *args)
+    def tracing(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log at the custom TRACING level (DEBUG severity), tagged ``log_type=trace``."""
+        self._emit("TRACING", msg, args, kwargs, log_type="trace")
 
     def _log_sink(self, message: Any) -> None:
         """Unified loguru sink: build the log-record dict once and fan out to active targets.
@@ -1653,20 +1527,19 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         except Exception:
             logging.error("Error in log sink", exc_info=True)
 
+    @deprecated(
+        "AtlanLoggerAdapter.objectstore_sink is deprecated; use "
+        "AtlanLoggerAdapter.add_record — the SDK registers no sink by this "
+        "name, so a record routed here skips the path production uses. Will "
+        "be removed in v4.0.0."
+    )
     async def objectstore_sink(self, message: Any) -> None:
-        """Buffer a log message for object-store upload.
+        """Buffer a loguru message for object-store upload.
 
-        Builds a log-record dict from *message* and appends it to the in-memory
-        buffer for periodic flush to gzip-compressed NDJSON files in the object
-        store.
-
-        .. note::
-            This method is not registered as a loguru sink directly — the unified
-            :meth:`_log_sink` handles dispatch.  It is kept as a public method so
-            tests can call it in isolation without triggering OTLP side-effects.
-
-        Args:
-            message: Loguru message object (must have a ``.record`` dict attribute).
+        .. deprecated:: 3.59
+            No sink by this name is registered; the SDK's one sink is the
+            private ``_log_sink``. Use :meth:`add_record`. Will be removed in
+            v4.0.0.
         """
         try:
             log_record = _make_log_record_dict(message)
@@ -1674,19 +1547,18 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         except Exception:
             logging.error("Error buffering log", exc_info=True)
 
+    @deprecated(
+        "AtlanLoggerAdapter.otlp_sink is deprecated; use "
+        "AtlanLoggerAdapter.add_record for the object store, and leave OTLP "
+        "export to the SDK — no sink by this name is registered. Will be "
+        "removed in v4.0.0."
+    )
     def otlp_sink(self, message: Any) -> None:
-        """Emit a log message to the configured OTLP exporter.
+        """Emit a loguru message to the configured OTLP exporter.
 
-        Builds a log-record dict from *message* and forwards it to the
-        OpenTelemetry logger provider.
-
-        .. note::
-            This method is not registered as a loguru sink directly — the unified
-            :meth:`_log_sink` handles dispatch.  It is kept as a public method so
-            tests can exercise the OTLP path in isolation.
-
-        Args:
-            message: Loguru message object (must have a ``.record`` dict attribute).
+        .. deprecated:: 3.59
+            No sink by this name is registered; the SDK's one sink is the
+            private ``_log_sink``. Will be removed in v4.0.0.
         """
         try:
             log_record = _make_log_record_dict(message)

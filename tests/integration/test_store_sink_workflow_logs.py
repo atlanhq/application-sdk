@@ -83,13 +83,19 @@ def written_messages(monkeypatch) -> Iterator[list[str]]:
         finally:
             os.unlink(local_path)
 
+    # The sink reads the flag in its own module; the flush path reads it in
+    # observability's. Both must be on for a record to reach the upload step.
     monkeypatch.setattr(
         "application_sdk.observability.observability.ENABLE_OBSERVABILITY_STORE_SINK",
         True,
     )
+    monkeypatch.setattr(
+        "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
+        True,
+    )
     monkeypatch.setattr(sink, "_batch_size", 1)
     monkeypatch.setattr(sink, "_upload_and_delete", _capture)
-    handler_id = sink.logger.add(sink.objectstore_sink)
+    handler_id = sink.logger.add(sink._log_sink)
     try:
         yield written
     finally:

@@ -1387,6 +1387,33 @@
       "symbol": "LOG_RETENTION_DAYS"
     },
     {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "AtlanLoggerAdapter.activity is deprecated; use AtlanLoggerAdapter.info and pass log_type='activity' if a reader needs the tag \u2014 it has no caller in the SDK. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.logger_adaptor",
+      "removal_version": "4.0.0",
+      "symbol": "activity"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "AtlanLoggerAdapter.objectstore_sink is deprecated; use AtlanLoggerAdapter.add_record \u2014 the SDK registers no sink by this name, so a record routed here skips the path production uses. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.logger_adaptor",
+      "removal_version": "4.0.0",
+      "symbol": "objectstore_sink"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "AtlanLoggerAdapter.otlp_sink is deprecated; use AtlanLoggerAdapter.add_record for the object store, and leave OTLP export to the SDK \u2014 no sink by this name is registered. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.logger_adaptor",
+      "removal_version": "4.0.0",
+      "symbol": "otlp_sink"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "METRICS_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported metric files. Will be removed in v4.0.0.",
