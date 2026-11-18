@@ -1,3 +1,4 @@
+# conformance: ignore[L002] loguru is imported to add a capture sink that reads records, never to log; logging goes through get_logger
 """Reading the preflight gate's outcome row from a test.
 
 The gate *activity* emits exactly one ``Preflight gate outcome`` row per
@@ -191,9 +192,7 @@ def capture_preflight_outcomes(
     finally:
         try:
             loguru_logger.remove(sink_id)
-        except ValueError:
-            # An adapter initialised mid-test removes every loguru handler,
-            # this one included; there is nothing left to take out.
+        except ValueError:  # conformance: ignore[E002] the sink was already removed by an adapter initialised mid-test; nothing left to take out
             pass
 
 
