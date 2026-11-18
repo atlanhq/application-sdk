@@ -1042,7 +1042,7 @@ class PublishInputMixin(BaseModel):
                     run_id=_wf.info().run_id,
                 )
             # conformance: ignore[E002,E008] api-only install has no Temporal (any missing module here meant "not a workflow context" before the split too, via the broad swallow below); output_path stays empty by design
-            except ModuleNotFoundError:  # noqa: S110 — see above
+            except ModuleNotFoundError:  # see above
                 # The api distribution ships no Temporal: never a workflow
                 # context, so output_path stays empty -- the same outcome as the
                 # broad swallow below, which caught this before the split.
@@ -1050,7 +1050,7 @@ class PublishInputMixin(BaseModel):
                 # worker-only imports above as guarded.)
                 pass
             # conformance: ignore[E002,E004] probe to detect Temporal workflow context; swallow is intentional, output_path stays empty by design
-            except Exception:  # noqa: S110 — not in a Temporal workflow context; output_path stays empty by design
+            except Exception:  # noqa: S110, BLE001 — not in a Temporal workflow context; output_path stays empty by design
                 pass
 
         # Derive transformed_data_prefix from output_path

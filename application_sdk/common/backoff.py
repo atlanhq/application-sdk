@@ -139,9 +139,11 @@ class Backoff:
         """The jittered delay before retry number *retry* (1-based)."""
         nominal = self.nominal(retry)
         if self.jitter is Jitter.FULL:
-            return random.uniform(0.0, nominal)  # noqa: S311 — backoff spread, not crypto
+            return random.uniform(0.0, nominal)  # backoff spread, not crypto
         if self.jitter is Jitter.SPREAD:
-            return nominal * random.uniform(*SPREAD_BOUNDS)  # noqa: S311 — backoff spread, not crypto
+            return nominal * random.uniform(
+                *SPREAD_BOUNDS
+            )  # backoff spread, not crypto
         return nominal
 
 

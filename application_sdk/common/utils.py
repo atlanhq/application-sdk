@@ -61,7 +61,7 @@ async def download_file_from_upload_response(
             raise ResponseTypeError(
                 message=f"Unsupported response type: {type(response).__name__}"
             )
-        key = getattr(response, "key")  # noqa: B009 — BaseModel declares no ``key``; checked above
+        key = getattr(response, "key")  # BaseModel declares no ``key``; checked above
         # handler.contracts.FileUploadResponse defaults ``key`` to "": an unset
         # key is a missing key, not a request to download the temp directory.
         if not key:

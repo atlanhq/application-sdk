@@ -325,7 +325,7 @@ def _attributed_message(link: BaseException) -> str:
         return ""
     try:
         return FailureDetails.model_validate(details[0]).message
-    except Exception:
+    except Exception:  # noqa: BLE001 — workflow-frame reader that must never raise; an unreadable details[0] degrades to no message on the row the caller emits
         return ""
 
 
@@ -369,7 +369,7 @@ def _gate_failure_evidence(
             return None
         try:
             primary = FailureDetails.model_validate(details[0])
-        except Exception:
+        except Exception:  # noqa: BLE001 — workflow-frame reader that must never raise; no evidence makes the caller emit the GATE_BROKEN row with the stack trace
             return None
         envelope = details[1] if len(details) > 1 else None
         return primary, _readable_checks(envelope)
@@ -386,7 +386,7 @@ def _readable_checks(envelope: object) -> list[PreflightCheck]:
 def _readable_check(raw: object) -> PreflightCheck | None:
     try:
         return PreflightCheck.model_validate(raw)
-    except Exception:
+    except Exception:  # noqa: BLE001 — workflow-frame reader that must never raise; a handler-authored check that does not parse is dropped from the row, not the verdict
         return None
 
 
@@ -472,8 +472,7 @@ def _plumbing_evidence(exc: BaseException | None) -> FailureDetails | None:
             continue
         try:
             return FailureDetails.model_validate(details[0])
-        # conformance: ignore[E004] best-effort read of another link's envelope on a path that must never raise
-        except Exception:  # noqa: S112 — an unreadable envelope on one link is not a reason to stop reading the chain; the row simply has no sentence
+        except Exception:  # noqa: S112, BLE001 — an unreadable envelope on one link is not a reason to stop reading the chain; the row simply has no sentence; best-effort read of another link's envelope on a path that must never raise
             continue
     return None
 
@@ -774,7 +773,9 @@ class PreflightGateInput(BaseModel):
             try:
                 snapshot = input_data.model_dump(mode="json")
             except Exception:  # never raise — the gate must fail open before dispatch
-                logger.debug(
+                # WARNING, not DEBUG: the gate then runs without the form config
+                # the app's checks read, which changes what it can verify.
+                logger.warning(
                     "Could not snapshot extraction input; gate proceeds without form config",
                     exc_info=True,
                 )
@@ -1509,6 +1510,7 @@ def _activity_info() -> activity.Info | None:
         return activity.info()
     except RuntimeError:
         return None
+    # conformance: ignore[E004] telemetry read that must never break a run; the traceback is kept at DEBUG
     except Exception:
         logger.debug("Could not read activity.info()", exc_info=True)
         return None
@@ -1963,6 +1965,7 @@ async def _append_storage_checks(
                     app_owner=False,
                 )
             )
+        # conformance: ignore[E004] the storage-checker failure was already logged at WARNING above; only the advisory row is lost
         except Exception:
             logger.debug("Could not append the unverified-storage row", exc_info=True)
         return False
@@ -2420,6 +2423,7 @@ def build_preflight_gate_activity(
                 credentials, credentials_by_name = await asyncio.wait_for(
                     _resolve_gate_credentials(input), timeout=resolution_deadline
                 )
+            # conformance: ignore[E004] every path either returns the typed NO_VERDICT result or re-raises chained as a plumbing error
             except Exception as e:
                 # Resolution is gate plumbing, so the default here is the opposite of
                 # the handler path below: only a *provable* credential absence is a
@@ -2503,6 +2507,7 @@ def build_preflight_gate_activity(
                             lambda f: None if f.cancelled() else f.exception()
                         )
                         timed_out = True
+            # conformance: ignore[E004] every path either re-raises the block or returns the typed NO_VERDICT result
             except Exception as e:
                 # A handler that raises the deliberate block itself already carries a
                 # verdict and its own emitted row; pass it straight through rather
@@ -2780,7 +2785,7 @@ def build_preflight_warmup_activity(
                 observation=WarmupObservation(state=WarmupState.WARMING),
                 error=unverifiable_preflight_result(e.cause, app_name).checks[0].error,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — the failure is returned as the poll's typed error
             return WarmupPoll(
                 observation=WarmupObservation(state=WarmupState.WARMING),
                 error=unverifiable_preflight_result(e, app_name).checks[0].error,

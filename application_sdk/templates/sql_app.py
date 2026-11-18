@@ -681,8 +681,7 @@ class SqlApp(App):
                 await client.get_results("SELECT 1")
             finally:
                 await client.close()
-        # conformance: ignore[E004] exc_info=True would embed the SQLAlchemy connection string (incl. password) in structured logs; safe_traceback with secrets redacted is logged instead
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — exc_info=True would embed the SQLAlchemy connection string (incl. password) in structured logs; safe_traceback with secrets redacted is logged instead
             duration_ms = (time.perf_counter() - start) * 1000.0
             # Report the ROOT cause, not whatever wrapper reached this
             # clause. ``BaseSQLClient.get_results`` rewraps every driver

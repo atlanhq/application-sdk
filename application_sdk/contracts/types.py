@@ -33,7 +33,7 @@ from typing_extensions import TypeAliasType
 
 from application_sdk._install import worker_only_missing
 from application_sdk.common._listing import safe_list_directory
-from application_sdk.contracts.base import (  # noqa: F401 — re-exported; defined with the contract base
+from application_sdk.contracts.base import (  # re-exported; defined with the contract base
     MaxItems,
 )
 from application_sdk.contracts.types_errors import RunPrefixRequiredError

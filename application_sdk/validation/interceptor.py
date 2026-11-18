@@ -172,7 +172,8 @@ def _app_metadata(app_name: str) -> "AppMetadata | None":
         )
 
         return AppRegistry.get_instance().get(app_name)
-    except Exception:  # noqa: BLE001 — advisory wiring must never break worker build
+    # conformance: ignore[E004] advisory wiring must never break worker build; the fallback is logged with its traceback
+    except Exception:
         logger.debug(
             "Artifact validation: no registered app '%s' at worker build; hand-offs "
             "will report boundary=False and read the flat declaration file",
@@ -492,7 +493,9 @@ async def validate_artifacts(
 
     try:
         named = list(_unique(_walk(data)))
-    except Exception:  # noqa: BLE001 — the walk is our own plumbing, so it fails open in either posture
+    except (
+        Exception
+    ):  # the walk is our own plumbing, so it fails open in either posture
         logger.warning(
             "Artifact validation: could not walk the %s payload; skipping it "
             "(the hand-off continues)",
@@ -506,7 +509,7 @@ async def validate_artifacts(
         boundary = item.owner is not None and item.owner in boundary_contracts
         try:
             report = await _report_for(item, entrypoint=entrypoint, boundary=boundary)
-        except Exception:  # noqa: BLE001 — the scaffold may not break the hand-off
+        except Exception:  # the scaffold may not break the hand-off
             logger.warning(
                 "Artifact validation: the %s check for field '%s' raised; "
                 "reporting it as absent (the hand-off continues)",
@@ -859,7 +862,7 @@ def _emit(
                 artifact_field or "<unnamed reference>",
                 report.format_report(),
             )
-    except Exception:  # noqa: BLE001 — the scaffold may not break the hand-off
+    except Exception:  # the scaffold may not break the hand-off
         logger.warning(
             "Artifact validation: could not emit the %s outcome for field '%s' "
             "(the hand-off continues)",

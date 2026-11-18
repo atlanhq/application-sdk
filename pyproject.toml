@@ -598,6 +598,8 @@ extend-select = [
     "S110",    # try-except-pass detected
     "S112",    # try-except-continue detected
     "LOG009",  # logger.warn() is deprecated — use .warning()
+    "BLE001",  # blind `except Exception` / `except BaseException` (FND-4294)
+    "RUF100",  # unused `noqa` — keeps every suppression live (FND-4294)
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -608,13 +610,16 @@ extend-select = [
 # collection, which would corrupt the captured value. Same exemption as main.py
 # and application_sdk/tools/**.
 "application_sdk/dev/pkl.py" = ["T201"]
-".github/**" = ["G004", "T201"]
+# BLE001/RUF100 under .github/** and tests/**: tests catch broadly to assert on
+# failures, and CI scripts were out of FND-4294's scope; their dead noqa are
+# left for a follow-up (FND-4294 baseline, only shrinks).
+".github/**" = ["G004", "T201", "BLE001", "RUF100"]
 # tests and tools exempted from PLC0415: production runtime risk does
 # not apply, and tests sometimes use inline imports for fixture isolation.
 # F841 is also exempted in tests because enabling `preview = true` (required
 # for PLC0415) made F841 stricter on tuple unpacking and codemod tests
 # routinely capture-and-discard return values for assertion staging.
-"tests/**" = ["G004", "PLC0415", "F841"]
+"tests/**" = ["G004", "PLC0415", "F841", "BLE001", "RUF100"]
 "tools/**" = ["T201", "PLC0415"]
 "application_sdk/tools/**" = ["T201", "PLC0415"]
 "contract-toolkit/scripts/**" = ["T201", "PLC0415"]
@@ -624,6 +629,19 @@ extend-select = [
 # sys.path bootstrap required so the test module can import the sibling script it tests.
 ".github/scripts/tests/test_fetch_dataforge_source.py" = ["E402"]
 ".github/scripts/tests/test_resolve_e2e_source.py" = ["E402"]
+
+# Baseline (FND-4294). BLE001 and RUF100 were enabled with existing hits in
+# the files below. The list only shrinks: narrow a file's broad catches (or
+# give each a `# noqa: BLE001 — <reason>`), drop its dead noqa, and delete its
+# entry. Do not add files here; new code satisfies both rules.
+".claude/skills/capability-manifest/references/extractor.py" = ["BLE001"]
+"application_sdk/testing/_setup_routes.py" = ["RUF100"]
+"application_sdk/testing/full_dag/**" = ["RUF100"]
+"application_sdk/testing/integration/__init__.py" = ["RUF100"]
+"application_sdk/testing/parity/__main__.py" = ["RUF100"]
+"application_sdk/testing/preflight.py" = ["RUF100"]
+"application_sdk/testing/scale_data_generator/**" = ["RUF100"]
+"application_sdk/testing/setup_routes.py" = ["RUF100"]
 
 [tool.uv]
 default-groups = ["dev", "migrate-v3", "test"]

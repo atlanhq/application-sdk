@@ -137,8 +137,7 @@ def _failure_suffix(exc: BaseException | None, attrs: dict[str, Any]) -> str:
                 f" — at {posixpath.basename(str(last.filename))}"
                 f":{last.lineno} in {last.name}"
             )
-    # conformance: ignore[E004] best-effort message enrichment; a broken traceback must never block the ended log
-    except Exception:  # noqa: S110 — degrade to code+message, never drop the log
+    except Exception:  # noqa: S110, BLE001 — degrade to code+message, never drop the log; best-effort message enrichment; a broken traceback must never block the ended log
         pass
     return f"FAILED ({code}): {msg}{frame}" if msg else f"FAILED ({code}){frame}"
 
@@ -554,8 +553,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 "workflow.started", str(identity["temporal.workflow.type"])
             )
             logger.info(started_msg, **identity)
-        # conformance: ignore[E004] best-effort observability guard; logging failure must never block workflow execution
-        except Exception:  # noqa: S110 — best-effort observability; never block the workflow on logging
+        except Exception:  # noqa: S110, BLE001 — best-effort observability; never block the workflow on logging; best-effort observability guard; logging failure must never block workflow execution
             pass
 
         start_ns = time.monotonic_ns()
@@ -599,8 +597,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                         "workflow.ended", f"{wf_type} OK ({duration_ms}ms)"
                     )
                     logger.info(ok_msg, **ended_attrs)
-            # conformance: ignore[E004] best-effort observability guard in finally; logging failure must never block workflow completion
-            except Exception:  # noqa: S110 — best-effort observability; never block the workflow on logging
+            except Exception:  # noqa: S110, BLE001 — best-effort observability; never block the workflow on logging; best-effort observability guard in finally; logging failure must never block workflow completion
                 pass
 
 
@@ -709,8 +706,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                 "activity.started", str(identity["temporal.activity.type"])
             )
             logger.info(started_msg, **identity)
-        # conformance: ignore[E004] best-effort observability guard; logging failure must never block activity execution
-        except Exception:  # noqa: S110 — best-effort observability; never block the activity on logging
+        except Exception:  # noqa: S110, BLE001 — best-effort observability; never block the activity on logging; best-effort observability guard; logging failure must never block activity execution
             pass
 
         start_ns = time.monotonic_ns()
@@ -754,8 +750,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                         "activity.ended", f"{act_type} OK ({duration_ms}ms)"
                     )
                     logger.info(ok_msg, **ended_attrs)
-            # conformance: ignore[E004] best-effort observability guard in finally; logging failure must never block activity completion
-            except Exception:  # noqa: S110 — best-effort observability; never block the activity on logging
+            except Exception:  # noqa: S110, BLE001 — best-effort observability; never block the activity on logging; best-effort observability guard in finally; logging failure must never block activity completion
                 pass
 
 

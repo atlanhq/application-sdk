@@ -901,6 +901,15 @@ def _leaf_details(exc: BaseException) -> FailureDetails | None:
     try:
         return exc.to_failure_details()
     except Exception:
+        # The caller falls back to an InternalError built from the sanitized
+        # cause, so the run still reports; this line says why the leaf's own
+        # typed details were lost.
+        logger.warning(
+            "%s could not build its FailureDetails; reporting it as an "
+            "unverifiable internal error",
+            type(exc).__name__,
+            exc_info=True,
+        )
         return None
 
 

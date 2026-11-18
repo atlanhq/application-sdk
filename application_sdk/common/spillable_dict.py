@@ -281,7 +281,7 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
         # rocksdict's Rdict.__iter__ has different semantics than .keys()
         # and triggers KeyError mid-iteration. Use .keys() explicitly so
         # this delegates to RdictKeysIter — not the default __iter__.
-        return sum(1 for _ in self._db.keys())  # noqa: SIM118
+        return sum(1 for _ in self._db.keys())
 
     def approximate_size(self) -> int:
         """RocksDB's estimated key count — O(1), may be inaccurate.

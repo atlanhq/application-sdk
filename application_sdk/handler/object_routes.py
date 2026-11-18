@@ -465,6 +465,7 @@ class S3ObjectStore:
         def _get() -> bytes | None:
             try:
                 response = self._client.get_object(Bucket=self._bucket, Key=key)
+            # conformance: ignore[E004] only the not-found codes return None (the absent-object answer); everything else is re-raised
             except Exception as exc:
                 code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
                 if code in ("NoSuchKey", "404"):
@@ -544,7 +545,7 @@ class HostObjectStore:
                 kind,
             )
             return None
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — logged at WARNING with the exception type only; its message can quote the store credential
             # Only the exception's type: obstore's message can quote the config
             # it rejected, and that config carries the store's credential.
             # conformance: ignore[L004] exc_info would log that message, and the credential with it.

@@ -938,7 +938,7 @@ def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
                 raise RequestContractError(missing_fields_error(missing))
         except RequestContractError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — a crashing validator is logged and answered as a sanitized 500
             # A validator that crashes instead of raising ValueError is the
             # contract's bug, not the caller's: a sanitized 500.
             source.log().error(
