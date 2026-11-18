@@ -9,6 +9,7 @@ endpoint in ``tests/integration/test_activity_slots_limit_scrape.py``. See
 
 from __future__ import annotations
 
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -101,30 +102,35 @@ def test_a_client_without_a_runtime_publishes_on_the_default_runtime() -> None:
     )
 
 
-def test_a_failing_meter_does_not_stop_the_worker() -> None:
+def test_a_failing_meter_does_not_stop_the_worker(
+    loguru_capture: list[dict[str, Any]],
+) -> None:
     client = mock.MagicMock()
     client.service_client.config.runtime.metric_meter.with_additional_attributes.side_effect = RuntimeError(
         "meter unavailable"
     )
-    with mock.patch("application_sdk.execution._temporal.worker.logger") as log:
-        _publish_activity_slots_limit(client, "q", 16)
-    log.warning.assert_called_once()
+    _publish_activity_slots_limit(client, "q", 16)
+    warnings = [
+        r
+        for r in loguru_capture
+        if r["extra"].get("logger_name") == "application_sdk.execution._temporal.worker"
+        and r["level"].name == "WARNING"
+    ]
+    assert len(warnings) == 1
 
 
 class TestCreateWorkerPublishesTheLimit:
     """create_worker publishes the slot count it runs with, whatever its source."""
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
+    @pytest.fixture(autouse=True)
+    def _gauge_app(
+        self, clean_app_registry: AppRegistry, clean_task_registry: TaskRegistry
+    ) -> None:
+        """Register one app on the shared, freshly reset registries."""
 
         class _GaugeApp(App):
             async def run(self, input: _GaugeInput) -> _GaugeOutput:
                 return _GaugeOutput()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def _published_and_configured(self, **kwargs: int) -> tuple[int, int]:
         runtime, buffer = _buffered_runtime()

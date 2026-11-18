@@ -158,13 +158,59 @@ class TestMockLoggerHelpers:
 
 
 class TestFixture:
-    def test_fixture_installs_the_capture_on_the_gate_logger(
+    """The fixture reads the real sink: nothing is patched, the adapter runs."""
+
+    def test_fixture_leaves_the_gate_logger_in_place(
+        self, capture_preflight_outcomes: PreflightOutcomeCapture
+    ) -> None:
+        from application_sdk.execution._temporal import preflight_gate as pg
+        from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter
+
+        assert isinstance(pg.logger, AtlanLoggerAdapter)
+
+    @pytest.mark.parametrize("level", OUTCOME_LEVELS)
+    def test_captures_the_row_the_sink_receives_at_every_level(
+        self, level: str, capture_preflight_outcomes: PreflightOutcomeCapture
+    ) -> None:
+        from application_sdk.execution._temporal import preflight_gate as pg
+
+        getattr(pg.logger, level)(PREFLIGHT_OUTCOME_EVENT, outcome="blocked")
+
+        assert capture_preflight_outcomes.one["outcome"] == "blocked"
+        assert capture_preflight_outcomes.level == level
+
+    def test_ignores_other_messages_and_other_loggers(
+        self, capture_preflight_outcomes: PreflightOutcomeCapture
+    ) -> None:
+        from application_sdk.execution._temporal import preflight_gate as pg
+        from application_sdk.observability.logger_adaptor import get_logger
+
+        pg.logger.error("Preflight gate posture", outcome="blocked")
+        get_logger("tests.unit.testing.elsewhere").error(
+            PREFLIGHT_OUTCOME_EVENT, outcome="blocked"
+        )
+
+        assert capture_preflight_outcomes.rows == []
+
+    def test_rows_carry_the_adapter_stamped_context(
+        self, capture_preflight_outcomes: PreflightOutcomeCapture
+    ) -> None:
+        """What a stand-in logger cannot show: the fields the sink actually got."""
+        from application_sdk.execution._temporal import preflight_gate as pg
+
+        pg.logger.info(PREFLIGHT_OUTCOME_EVENT, outcome="proceeded")
+
+        row = capture_preflight_outcomes.one
+        assert row["outcome"] == "proceeded"
+        assert row["source"] == "sdk"
+        assert "logger_name" not in row
+
+    def test_exc_info_surfaces_as_the_records_exception(
         self, capture_preflight_outcomes: PreflightOutcomeCapture
     ) -> None:
         from application_sdk.execution._temporal import preflight_gate as pg
 
-        assert pg.logger is capture_preflight_outcomes
+        err = RuntimeError("blocked by credentialScopes")
+        pg.logger.error(PREFLIGHT_OUTCOME_EVENT, outcome="blocked", exc_info=err)
 
-        pg.logger.error(PREFLIGHT_OUTCOME_EVENT, outcome="blocked")
-        assert capture_preflight_outcomes.one == {"outcome": "blocked"}
-        assert capture_preflight_outcomes.level == "error"
+        assert capture_preflight_outcomes.one["exc_info"] is err

@@ -101,15 +101,46 @@ async def test_block_names_the_failing_check(capture_preflight_outcomes):
     assert capture_preflight_outcomes.matrix[0]["name"] == "credentialScopes"
 ```
 
+The capture patches nothing: it adds a loguru sink for the test and records the
+outcome rows the gate's real logger delivers to it. A passing assertion
+therefore proves the row reached a sink at that level with those bound fields,
+which a stand-in logger cannot — the adapter runs exactly as in production, so
+each row also carries the context it stamps (`app_name`, `source`, …).
+
 Suites that patch the logger with a `MagicMock` themselves can use
-`outcome_rows` / `outcome_level` / `single_outcome` over the mock instead. Both
-paths assert *exactly one* row, because returning the first match hides a double
-emission.
+`outcome_rows` / `outcome_level` / `single_outcome` over the mock instead; prefer
+the fixture. Both paths assert *exactly one* row, because returning the first
+match hides a double emission.
 
 Boundary: the capture covers rows the gate **activity** emits. The workflow
 wrapper's `skipped` / `no_verdict` rows go through Temporal's `workflow.logger`
-(`app/base.py`), which the capture does not patch — pin those paths against
+(`app/base.py`), which the capture does not read — pin those paths against
 `workflow.logger` directly.
+
+## Asserting Other Log Lines
+
+Assert a log line from the record a real sink received, not from a patched
+module logger. A `MagicMock` logger proves a method of that name was called; it
+cannot prove the record reached a sink at that level, rendered, with the bound
+fields that survive export. Two of these tests hid real export defects while
+they read a mock, and now pin them as strict `xfail`s.
+
+- `loguru_capture` (`tests/unit/conftest.py`) yields every raw loguru record
+  emitted during the test; filter on `record["extra"]["logger_name"]` and
+  `record["level"].name`.
+- `gate_records` (`tests/unit/execution/conftest.py`) is that filter for the
+  preflight gate's non-outcome lines: `gate_records("WARNING")`.
+- To check what is exported, run the record's `extra` through
+  `_build_extra_dict` — the allowlist the OTLP and NDJSON sinks apply.
+
+## Registry Isolation
+
+`AppRegistry` / `TaskRegistry` resets have one definition:
+`clean_app_registry` and `clean_task_registry` in
+`application_sdk.testing.fixtures`. The unit and integration conftests apply
+them to every test through an autouse fixture, so a test needs no reset of its
+own. Request them by name only where ordering matters — a fixture that
+registers an app must run after the reset.
 
 ## What SDK Review Checks for Tests
 
