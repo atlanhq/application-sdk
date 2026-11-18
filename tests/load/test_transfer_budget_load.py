@@ -25,7 +25,6 @@ Run (excluded from every default/CI suite; see tests/load/README.md):
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -41,23 +40,29 @@ _BUDGET = 256 * _MIB
 _RUNTIME_ALLOWANCE = 64 * _MIB
 _FILE_BYTES = max(LOAD_SIZE_BYTES // 16, 32 * _MIB)
 _PHASE_SCRIPT = Path(__file__).with_name("_budget_handoff_phase.py")
-#: The phase script's result line (its ``RESULT_TAG``). Its stdout also carries
-#: the SDK's console log, in any order, so the result is found by its tag.
-_RESULT_LINE = re.compile(r"^peak_rss_growth_bytes=(\d+)$", re.MULTILINE)
 
 
 def _run_phase(phase: str, root: Path, budget: int) -> int:
     env = {**os.environ, "ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES": str(budget)}
-    done = subprocess.run(
-        [sys.executable, str(_PHASE_SCRIPT), phase, str(root), str(_FILE_BYTES)],
+    # The result comes back through a file, not stdout: the phase's stdout also
+    # carries the SDK's console log, written from another thread.
+    result_file = root / f"{phase}.peak_rss_growth"
+    result_file.unlink(missing_ok=True)
+    subprocess.run(
+        [
+            sys.executable,
+            str(_PHASE_SCRIPT),
+            phase,
+            str(root),
+            str(_FILE_BYTES),
+            str(result_file),
+        ],
         env=env,
         capture_output=True,
         text=True,
         check=True,
     )
-    results = _RESULT_LINE.findall(done.stdout)
-    assert len(results) == 1, f"expected one result line from {phase}: {done.stdout!r}"
-    return int(results[0])
+    return int(result_file.read_text())
 
 
 def _handoff(root: Path, budget: int) -> tuple[int, int]:

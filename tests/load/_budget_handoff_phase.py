@@ -6,12 +6,12 @@ allocator keeps buffers a phase has freed: measured in one process, the
 download phase would sit on top of the upload phase's retained memory and be
 charged for it.
 
-Usage: ``python _budget_handoff_phase.py {persist|materialize} ROOT FILE_BYTES``.
-Prints the phase's peak-RSS growth in bytes on a line of its own, as
-``peak_rss_growth_bytes=<n>``. The SDK's console log sink writes to the same
-stdout from its own thread, so the line is tagged and written in one call: a
-bare ``print(growth)`` has had a log line land after it, and between the
-number and its newline.
+Usage:
+``python _budget_handoff_phase.py {persist|materialize} ROOT FILE_BYTES RESULT_FILE``.
+Writes the phase's peak-RSS growth in bytes, as a bare integer, to
+``RESULT_FILE``. Not to stdout: the SDK's console log sink writes there from its
+own thread, with no lock shared with this script, and a printed result has had
+a log line land after it and between the number and its newline.
 """
 
 from __future__ import annotations
@@ -34,9 +34,6 @@ from application_sdk.storage.file_ref_sync import (
 )
 
 _FILES_PER_REF = 4
-
-#: Prefix of the result line; ``test_transfer_budget_load.py`` searches for it.
-RESULT_TAG = "peak_rss_growth_bytes="
 
 
 class FourRefs(Input):
@@ -94,14 +91,12 @@ async def _materialize(root: Path) -> int:
 
 def main() -> None:
     phase, root, file_bytes = sys.argv[1], Path(sys.argv[2]), int(sys.argv[3])
+    result_file = Path(sys.argv[4])
     if phase == "persist":
         growth = asyncio.run(_persist(root, file_bytes))
     else:
         growth = asyncio.run(_materialize(root))
-    # One write, on a fresh line: a log line from the sink thread cannot land
-    # inside it, and one written before it cannot share its line.
-    sys.stdout.write(f"\n{RESULT_TAG}{growth}\n")
-    sys.stdout.flush()
+    result_file.write_text(str(growth))
 
 
 if __name__ == "__main__":
