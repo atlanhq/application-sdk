@@ -165,9 +165,6 @@ def _reap(runs: dict[str, _ProbeRun]) -> None:
             run.process.wait()
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32", reason="asyncio has no signal handlers on Windows"
-)
 def _misbehaviour(
     probe: _Probe, returncode: int, stdout: str, stderr: str
 ) -> list[str]:
@@ -191,6 +188,9 @@ def _misbehaviour(
     return [problem for ok, problem in checks if not ok]
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="asyncio has no signal handlers on Windows"
+)
 def test_a_stalled_shutdown_exits_and_nothing_else_is_killed(tmp_path: Path) -> None:
     """Each scenario in ``_PROBES``, run side by side and reported by name.
 
