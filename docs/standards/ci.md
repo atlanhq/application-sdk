@@ -195,6 +195,13 @@ counts, printed as a `::warning::` for the reviewer. A rule the base left at
 pyright's default stays strict (it may already have been an error there). An
 unreadable base `pyproject.toml` fails the check.
 
+A PR that introduces a baseline (no baseline file at its base) is compared with
+pyright's findings on the base revision's own tree instead, checked out in a
+temporary `git worktree` and analysed under the PR's rule levels (the base's
+own `enableTypeIgnoreComments` / `reportUnnecessaryTypeIgnoreComment`, since its
+comments were written for them). So even the PR that adds a baseline cannot
+add a finding to it.
+
 `# type: ignore` is off (`enableTypeIgnoreComments = false`): it silenced every
 rule on its line, and the mypy codes in its brackets mean nothing to pyright.
 Suppress with `# pyright: ignore[<rule>]`. `reportUnnecessaryTypeIgnoreComment`

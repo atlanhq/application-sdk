@@ -49,7 +49,10 @@ cases are handled explicitly rather than refused:
   ``pyright_version``) may raise counts, because a new pyright finds new things
   in unchanged code. The increases are printed as warnings for the reviewer.
 
-A base revision with no baseline file is the PR that introduces this check.
+A base revision with no baseline file is the PR that introduces one. Its
+baseline is compared instead with pyright's findings on the base revision's
+own tree (a temporary ``git worktree``), under this PR's rule levels, so the
+introducing PR cannot bake a finding it adds into the baseline it adds.
 Every other failure to read the base (no SHA, a failed fetch) fails the check.
 
 A run in which pyright analyses zero files fails rather than passes: that is
@@ -340,14 +343,31 @@ def parse_report(
 
 
 def run_pyright(
-    repo_root: Path, runner: Runner = _run, scope: Scope = SCOPES["scripts"]
+    repo_root: Path,
+    runner: Runner = _run,
+    scope: Scope = SCOPES["scripts"],
+    tree_root: Path | None = None,
+    overrides: Mapping[str, object] | None = None,
 ) -> Counts:
+    """Count pyright's findings in ``tree_root`` (default: ``repo_root``).
+
+    The settings and the venv always come from ``repo_root``'s pyproject;
+    ``overrides`` replaces individual settings (a ``None`` value drops one, so
+    pyright's default applies). A different ``tree_root`` is how the base
+    revision's code is analysed under this PR's rules.
+    """
+    tree = repo_root if tree_root is None else tree_root
     config = build_config(repo_root / "pyproject.toml", repo_root, scope)
+    for key, value in (overrides or {}).items():
+        if value is None:
+            config.pop(key, None)
+        else:
+            config[key] = value
     # A dot-file, so neither scope's pyright run analyses or lists it.
     fd, name = tempfile.mkstemp(
         prefix=f".pyright-{scope.name}-",
         suffix=".json",
-        dir=repo_root / scope.config_dir,
+        dir=tree / scope.config_dir,
     )
     config_path = Path(name)
     try:
@@ -360,7 +380,7 @@ def run_pyright(
         raise PyrightRunError(
             f"pyright exited {result.returncode}: {result.stderr.strip() or result.stdout[:2000]}"
         )
-    counts, files_analysed = parse_report(result.stdout, repo_root, scope.severities)
+    counts, files_analysed = parse_report(result.stdout, tree, scope.severities)
     if files_analysed == 0:
         raise PyrightRunError(
             f"pyright analysed 0 files in {scope.label}; the scope is broken, "
@@ -635,7 +655,8 @@ def main(
         failed = True
     if base_sha is not None:
         failed = (
-            _check_base(base_sha, head, baseline_path, repo_root, git, scope) or failed
+            _check_base(base_sha, head, baseline_path, repo_root, git, scope, runner)
+            or failed
         )
     _write_summary(actual, baseline, scope)
     regressions, stale = compare(baseline, actual)
@@ -662,6 +683,41 @@ def main(
     return 1 if regressions or stale or failed else 0
 
 
+#: Settings that decide how a tree's own suppression comments are read. When
+#: the base tree is analysed under this PR's rules, these follow the BASE's
+#: config: its comments were written for it (FND-4295 turned `# type: ignore`
+#: off in the same change that converted every one of them).
+_COMMENT_SETTINGS = ("enableTypeIgnoreComments", "reportUnnecessaryTypeIgnoreComment")
+
+
+def base_tree_counts(
+    base_sha: str,
+    repo_root: Path,
+    runner: Runner,
+    scope: Scope,
+    git: Runner = _git,
+) -> Counts:
+    """pyright's findings on the base revision's code, under this PR's rules.
+
+    What the base baseline would have held, for a base that has none: the PR
+    that introduces a baseline is held to the findings its base really had,
+    so it cannot grandfather a finding it adds itself (lens F-3a899a).
+    """
+    base_settings = read_base_pyright_settings(base_sha, git)
+    overrides = {key: base_settings.get(key) for key in _COMMENT_SETTINGS}
+    with tempfile.TemporaryDirectory(prefix="pyright-base-") as tmp:
+        tree = Path(tmp) / "base"
+        add = git(["worktree", "add", "--detach", str(tree), base_sha])
+        if add.returncode != 0:
+            raise BaseRevisionError(
+                f"could not check out base {base_sha}: {add.stderr.strip()}"
+            )
+        try:
+            return run_pyright(repo_root, runner, scope, tree, overrides)
+        finally:
+            git(["worktree", "remove", "--force", str(tree)])
+
+
 def _check_base(
     base_sha: str,
     head: Baseline,
@@ -669,21 +725,33 @@ def _check_base(
     repo_root: Path,
     git: Runner,
     scope: Scope,
+    runner: Runner = _run,
 ) -> bool:
     """Print and return whether the PR's baseline rises above the base's."""
     baseline_rel = baseline_path.relative_to(repo_root).as_posix()
     try:
         base_doc = read_base_baseline(base_sha, baseline_rel, git)
+        promoted: set[str] = set()
+        base_source = f"the base revision's {baseline_rel}"
         if base_doc is None:
-            print(f"No {baseline_rel} at base {base_sha}: this PR introduces it.")
-            return False
+            base_source = "pyright's findings on the base revision's tree"
+            # Counted under this PR's rules, so nothing is a promotion.
+            print(
+                f"No {baseline_rel} at base {base_sha}: this PR introduces it. "
+                "Comparing it with pyright's findings on the base tree."
+            )
+            base_doc = Baseline(
+                head.pyright_version,
+                base_tree_counts(base_sha, repo_root, runner, scope, git),
+            )
+        else:
+            promoted = promoted_rules(
+                read_base_pyright_settings(base_sha, git),
+                pyright_settings(repo_root / "pyproject.toml"),
+                scope.severities,
+            )
         renames = renamed_paths(base_sha, git, scope.rename_root)
-        promoted = promoted_rules(
-            read_base_pyright_settings(base_sha, git),
-            pyright_settings(repo_root / "pyproject.toml"),
-            scope.severities,
-        )
-    except BaseRevisionError as exc:
+    except (BaseRevisionError, PyrightRunError) as exc:
         print(f"::error::{exc}")
         return True
     all_increases = raised_since_base(base_doc.files, head.files, renames)
@@ -708,8 +776,8 @@ def _check_base(
             print(f"  ! {line}")
         return False
     print(
-        f"::error::{len(increases)} baseline count(s) rose above the base revision's "
-        f"{baseline_rel}. The baseline may only shrink: fix the findings instead."
+        f"::error::{len(increases)} baseline count(s) rose above {base_source}. "
+        "The baseline may only shrink: fix the findings instead."
     )
     for line in increases:
         print(f"  + {line}")

@@ -375,6 +375,30 @@ class TestMain:
         assert re.search(r"\| error \| 0 \| 0 \|", summary.read_text())
 
 
+class _TreeStub:
+    """Stand-in for pyright that answers per analysed tree: ``head`` findings
+    (``{relative path: count}``, rule ``x``) when the config sits in ``repo``,
+    ``base`` findings for any other tree (the base revision's checkout)."""
+
+    def __init__(self, repo: Path, head: dict[str, int], base: dict[str, int]) -> None:
+        self.repo, self.head, self.base = repo, head, base
+        self.configs: list[tuple[Path, dict[str, object]]] = []
+
+    def __call__(self, cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        config_path = Path(cmd[cmd.index("--project") + 1])
+        self.configs.append(
+            (config_path, json.loads(config_path.read_text(encoding="utf-8")))
+        )
+        tree = config_path.parent
+        findings = self.head if tree == self.repo else self.base
+        diags = [
+            _diag(tree / rel, "error", "x")
+            for rel, n in findings.items()
+            for _ in range(n)
+        ]
+        return subprocess.CompletedProcess(list(cmd), 1, _report(diags), "")
+
+
 def _git_in(cwd: Path) -> cpb.Runner:
     def run(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -443,15 +467,56 @@ class TestBaseRevision:
             git=git,
         )
 
-    def test_base_without_baseline_is_the_introducing_pr(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def _introduce_sdk_baseline(
+        self, tmp_path: Path, base_findings: int, head_findings: int
+    ) -> tuple[int, _TreeStub, Path]:
+        """A PR that adds the sdk baseline, holding ``head_findings`` of rule
+        ``x`` in pkg/a.py, on a base whose tree really has ``base_findings``."""
         repo, git = self._init(tmp_path)
         base = self._commit(repo, git, None)
-        head = {".github/scripts/a.py": {"error:x": 1}}
-        self._commit(repo, git, head)
-        assert self._main(repo, git, head, base) == 0
+        sdk = cpb.SCOPES["sdk"]
+        head = {"pkg/a.py": {"error:x": head_findings}} if head_findings else {}
+        (repo / sdk.baseline_rel).write_text(
+            cpb.render_baseline(head, "1.2.3", sdk), encoding="utf-8"
+        )
+        self._commit(repo, git, None)
+        stub = _TreeStub(repo, {"pkg/a.py": head_findings}, {"pkg/a.py": base_findings})
+        rc = cpb.main(
+            ["--scope", "sdk", "--base-sha", base], runner=stub, repo_root=repo, git=git
+        )
+        return rc, stub, repo
+
+    def test_introducing_pr_matching_the_base_tree_passes(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rc, stub, repo = self._introduce_sdk_baseline(tmp_path, 1, 1)
+        assert rc == 0
         assert "this PR introduces it" in capsys.readouterr().out
+        # The base tree was a real checkout of the base, and it is gone again.
+        (base_config,) = [c for c in stub.configs if c[0].parent != repo]
+        assert base_config[0].parent.name == "base"
+        assert not base_config[0].parent.exists()
+
+    def test_introducing_pr_cannot_grandfather_its_own_finding(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # lens F-3a899a: with no base baseline, a PR could add a finding and
+        # bake it into the baseline it introduces. The base tree has none.
+        rc, _, _ = self._introduce_sdk_baseline(tmp_path, 0, 1)
+        assert rc == 1
+        assert "pkg/a.py: x 0 -> 1" in capsys.readouterr().out
+
+    def test_base_tree_reads_its_comments_by_the_base_config(
+        self, tmp_path: Path
+    ) -> None:
+        # The base's `# type: ignore` comments were written for the base's
+        # settings: those two follow the base, every rule level the head.
+        _, stub, repo = self._introduce_sdk_baseline(tmp_path, 1, 1)
+        (head_cfg,) = [c for p, c in stub.configs if p.parent == repo]
+        (base_cfg,) = [c for p, c in stub.configs if p.parent != repo]
+        for key in ("enableTypeIgnoreComments", "reportUnnecessaryTypeIgnoreComment"):
+            assert key not in base_cfg
+        assert base_cfg["reportArgumentType"] == head_cfg["reportArgumentType"]
 
     def test_raising_the_baseline_with_the_finding_fails(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
