@@ -25,6 +25,7 @@ Run (excluded from every default/CI suite; see tests/load/README.md):
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -40,6 +41,9 @@ _BUDGET = 256 * _MIB
 _RUNTIME_ALLOWANCE = 64 * _MIB
 _FILE_BYTES = max(LOAD_SIZE_BYTES // 16, 32 * _MIB)
 _PHASE_SCRIPT = Path(__file__).with_name("_budget_handoff_phase.py")
+#: The phase script's result line (its ``RESULT_TAG``). Its stdout also carries
+#: the SDK's console log, in any order, so the result is found by its tag.
+_RESULT_LINE = re.compile(r"^peak_rss_growth_bytes=(\d+)$", re.MULTILINE)
 
 
 def _run_phase(phase: str, root: Path, budget: int) -> int:
@@ -51,7 +55,9 @@ def _run_phase(phase: str, root: Path, budget: int) -> int:
         text=True,
         check=True,
     )
-    return int(done.stdout.strip().splitlines()[-1])
+    results = _RESULT_LINE.findall(done.stdout)
+    assert len(results) == 1, f"expected one result line from {phase}: {done.stdout!r}"
+    return int(results[0])
 
 
 def _handoff(root: Path, budget: int) -> tuple[int, int]:

@@ -1,18 +1,23 @@
 """One phase of the four-directory-ref hand-off, run in its own process.
 
 Driven by ``test_transfer_budget_load.py``. Each phase runs in a fresh
-interpreter because peak RSS (``ru_maxrss``) only ever rises, and because the
+interpreter because peak RSS only ever rises, and because the
 allocator keeps buffers a phase has freed: measured in one process, the
 download phase would sit on top of the upload phase's retained memory and be
 charged for it.
 
 Usage: ``python _budget_handoff_phase.py {persist|materialize} ROOT FILE_BYTES``.
-Prints one line: the phase's peak-RSS growth in bytes.
+Prints the phase's peak-RSS growth in bytes on a line of its own, as
+``peak_rss_growth_bytes=<n>``. The SDK's console log sink writes to the same
+stdout from its own thread, so the line is tagged and written in one call: a
+bare ``print(growth)`` has had a log line land after it, and between the
+number and its newline.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 import resource
 import shutil
 import sys
@@ -30,6 +35,9 @@ from application_sdk.storage.file_ref_sync import (
 
 _FILES_PER_REF = 4
 
+#: Prefix of the result line; ``test_transfer_budget_load.py`` searches for it.
+RESULT_TAG = "peak_rss_growth_bytes="
+
 
 class FourRefs(Input):
     a: FileReference
@@ -39,6 +47,21 @@ class FourRefs(Input):
 
 
 def _peak_rss_bytes() -> int:
+    """Peak RSS of this process alone.
+
+    On Linux that is ``VmHWM``, not ``ru_maxrss``: the kernel carries the
+    spawning process's peak across ``exec``, so ``ru_maxrss`` starts at the
+    peak of the pytest session that launched the phase. After earlier load
+    tests had taken that session to about 360 MiB, a phase reported no growth
+    until it passed 360 MiB itself: the budgeted arm read 0 MiB and passed
+    whatever it used, and the control arm read 177 MiB and failed.
+    """
+    if sys.platform == "linux":
+        status = Path("/proc/self/status").read_text()
+        match = re.search(r"^VmHWM:\s+(\d+) kB$", status, re.MULTILINE)
+        if match is None:
+            raise RuntimeError("no VmHWM line in /proc/self/status")
+        return int(match[1]) * 1024
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return peak if sys.platform == "darwin" else peak * 1024
 
@@ -75,7 +98,10 @@ def main() -> None:
         growth = asyncio.run(_persist(root, file_bytes))
     else:
         growth = asyncio.run(_materialize(root))
-    print(growth)  # noqa: T201 — the parent test reads this line
+    # One write, on a fresh line: a log line from the sink thread cannot land
+    # inside it, and one written before it cannot share its line.
+    sys.stdout.write(f"\n{RESULT_TAG}{growth}\n")
+    sys.stdout.flush()
 
 
 if __name__ == "__main__":
