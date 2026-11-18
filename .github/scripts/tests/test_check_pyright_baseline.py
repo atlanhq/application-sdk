@@ -477,6 +477,84 @@ class TestBaseRevision:
         self._commit(repo, git, head)
         assert self._main(repo, git, head, base) == 0
 
+    def _sdk_promotion(self, tmp_path: Path, base_level_line: str, rule: str) -> int:
+        """Base: ``rule`` untracked by the errors-only sdk baseline. Head: it
+        is an error, and its two pre-existing findings enter the baseline."""
+        repo, git = self._init(tmp_path)
+        pyproject = repo / "pyproject.toml"
+        sdk = cpb.SCOPES["sdk"]
+        baseline = repo / sdk.baseline_rel
+        pyproject.write_text(_PYPROJECT + base_level_line, encoding="utf-8")
+        baseline.write_text(cpb.render_baseline({}, "1.2.3", sdk), encoding="utf-8")
+        base = self._commit(repo, git, None)
+        pyproject.write_text(_PYPROJECT + f'{rule} = "error"\n', encoding="utf-8")
+        head = {"pkg/a.py": {f"error:{rule}": 2}}
+        baseline.write_text(cpb.render_baseline(head, "1.2.3", sdk), encoding="utf-8")
+        self._commit(repo, git, None)
+        return cpb.main(
+            ["--scope", "sdk", "--base-sha", base],
+            runner=_Stub(_report([_diag(repo / "pkg/a.py", "error", rule)] * 2)),
+            repo_root=repo,
+            git=git,
+        )
+
+    def test_sdk_promotion_from_an_explicit_warning_is_not_a_new_finding(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # F-61b341: the sdk baseline drops warnings, so the base has no entry
+        # for a rule promoted from warning; its findings are new keys only.
+        rc = self._sdk_promotion(
+            tmp_path, 'reportUnknownMemberType = "warning"\n', "reportUnknownMemberType"
+        )
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "::warning::this PR promotes reportUnknownMemberType" in out
+        assert "pkg/a.py: reportUnknownMemberType 0 -> 2" in out
+
+    def test_sdk_rule_at_pyright_default_on_base_stays_strict(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Unset on the base, the rule may already have been an error there
+        # (reportCallIssue is, in standard mode): not a promotion.
+        rc = self._sdk_promotion(tmp_path, "", "reportCallIssue")
+        assert rc == 1
+        assert "rose above the base revision" in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        ("base", "head", "expected"),
+        [
+            ({"reportX": "warning"}, {"reportX": "error"}, {"reportX"}),
+            ({"reportX": False}, {"reportX": True}, {"reportX"}),
+            ({}, {"reportX": "error"}, set()),
+            ({"reportX": "error"}, {"reportX": "error"}, set()),
+            ({"reportX": "warning"}, {"reportX": "warning"}, set()),
+            ({"typeCheckingMode": "basic"}, {"typeCheckingMode": "error"}, set()),
+        ],
+    )
+    def test_promoted_rules(
+        self,
+        base: dict[str, object],
+        head: dict[str, object],
+        expected: set[str],
+    ) -> None:
+        assert cpb.promoted_rules(base, head, ("error",)) == expected
+
+    def test_unreadable_base_pyproject_fails_closed(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo, git = self._init(tmp_path)
+        base = self._commit(repo, git, {".github/scripts/a.py": {"error:x": 1}})
+        head = {".github/scripts/a.py": {"error:x": 1}}
+        self._commit(repo, git, head)
+
+        def no_pyproject(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+            if list(cmd) == ["show", f"{base}:pyproject.toml"]:
+                return subprocess.CompletedProcess(list(cmd), 128, "", "fatal")
+            return git(cmd)
+
+        assert self._main(repo, no_pyproject, head, base) == 1
+        assert "could not read pyproject.toml" in capsys.readouterr().out
+
     def _main_env(self, repo: Path, git: cpb.Runner, n: int) -> int:
         a = repo / ".github/scripts/a.py"
         return cpb.main(

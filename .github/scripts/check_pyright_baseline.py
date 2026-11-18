@@ -78,7 +78,7 @@ import tomllib
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping, Sequence, cast
+from typing import AbstractSet, Callable, Mapping, Sequence, cast
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = ".github/scripts"
@@ -143,11 +143,45 @@ SCOPES: dict[str, Scope] = {
         label="the SDK tree",
         baseline_rel="pyright_baseline.json",
         config_dir=".",
+        # Errors only, so the base baseline has no entry for a rule that was a
+        # warning there: promoting one would read as new findings. The base
+        # comparison asks `promoted_rules` instead (F-61b341).
         severities=("error",),
         keep_scope=True,
         rename_root=".",
     ),
 }
+
+
+def promoted_rules(
+    base_settings: Mapping[str, object],
+    head_settings: Mapping[str, object],
+    severities: Sequence[str],
+) -> set[str]:
+    """Rules this PR's ``[tool.pyright]`` moves INTO the tracked severities.
+
+    The base baseline cannot hold a rule its scope did not track, so a
+    promoted rule's findings are new keys, not new findings. Only a rule the
+    base config sets explicitly to an untracked level counts: one it leaves at
+    pyright's default may already have been tracked there, so it stays strict.
+    """
+    return {
+        rule
+        for rule, level in head_settings.items()
+        if rule.startswith("report")
+        and _level(level) in severities
+        and rule in base_settings
+        and _level(base_settings[rule]) not in severities
+    }
+
+
+def _level(value: object) -> str:
+    """A rule's configured level; pyright reads ``true``/``false`` as error/none."""
+    if value is True:
+        return "error"
+    if value is False:
+        return "none"
+    return str(value)
 
 
 class PyrightRunError(RuntimeError):
@@ -189,6 +223,33 @@ def _git(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
         )
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(["git", *cmd], 124, "", "timed out")
+
+
+def pyright_settings(pyproject: Path) -> dict[str, object]:
+    """``[tool.pyright]`` from a pyproject on disk (empty when it has none)."""
+    return _pyright_table(pyproject.read_text(encoding="utf-8"))
+
+
+def _pyright_table(text: str) -> dict[str, object]:
+    doc: dict[str, object] = tomllib.loads(text)
+    tool = doc.get("tool")
+    if not isinstance(tool, dict):
+        return {}
+    table = cast("dict[str, object]", tool).get("pyright")
+    return dict(cast("dict[str, object]", table)) if isinstance(table, dict) else {}
+
+
+def read_base_pyright_settings(base_sha: str, git: Runner = _git) -> dict[str, object]:
+    """The base revision's ``[tool.pyright]``; fails closed if unreadable."""
+    show = git(["show", f"{base_sha}:pyproject.toml"])
+    if show.returncode != 0:
+        raise BaseRevisionError(f"could not read pyproject.toml at {base_sha}")
+    try:
+        return _pyright_table(show.stdout)
+    except tomllib.TOMLDecodeError as exc:
+        raise BaseRevisionError(
+            f"pyproject.toml at {base_sha} is not TOML: {exc}"
+        ) from exc
 
 
 def pyright_pin(pyproject: Path) -> str:
@@ -460,8 +521,11 @@ def raised_since_base(
     base: Mapping[str, Mapping[str, int]],
     head: Mapping[str, Mapping[str, int]],
     renames: Mapping[str, str],
+    exempt_rules: AbstractSet[str] = frozenset(),
 ) -> list[str]:
     """(file, rule) counts the PR's baseline raises above the base's.
+
+    Rules in ``exempt_rules`` (see ``promoted_rules``) are left out.
 
     Compared per rule, not per ``severity:rule``: a PR that promotes a rule
     from warning to error in ``[tool.pyright]`` moves its findings from one key
@@ -471,17 +535,23 @@ def raised_since_base(
     carried: dict[str, Counter[str]] = {}
     for file, per_rule in base.items():
         carried.setdefault(renames.get(file, file), Counter()).update(
-            _by_rule(per_rule)
+            _by_rule(per_rule, exempt_rules)
         )
-    head_by_rule = {file: _by_rule(per_rule) for file, per_rule in head.items()}
+    head_by_rule = {
+        file: _by_rule(per_rule, exempt_rules) for file, per_rule in head.items()
+    }
     increases, _ = compare(carried, head_by_rule)
     return increases
 
 
-def _by_rule(per_key: Mapping[str, int]) -> Counter[str]:
+def _by_rule(
+    per_key: Mapping[str, int], exempt_rules: AbstractSet[str] = frozenset()
+) -> Counter[str]:
     """``{"severity:rule": n}`` -> ``{"rule": n}``, summed over severities."""
     out: Counter[str] = Counter()
     for key, n in per_key.items():
+        if key.split(":", 1)[-1] in exempt_rules:
+            continue
         out[key.split(":", 1)[-1]] += n
     return out
 
@@ -608,10 +678,25 @@ def _check_base(
             print(f"No {baseline_rel} at base {base_sha}: this PR introduces it.")
             return False
         renames = renamed_paths(base_sha, git, scope.rename_root)
+        promoted = promoted_rules(
+            read_base_pyright_settings(base_sha, git),
+            pyright_settings(repo_root / "pyproject.toml"),
+            scope.severities,
+        )
     except BaseRevisionError as exc:
         print(f"::error::{exc}")
         return True
-    increases = raised_since_base(base_doc.files, head.files, renames)
+    all_increases = raised_since_base(base_doc.files, head.files, renames)
+    increases = raised_since_base(base_doc.files, head.files, renames, promoted)
+    from_promotion = [line for line in all_increases if line not in increases]
+    if from_promotion:
+        print(
+            f"::warning::this PR promotes {', '.join(sorted(promoted))} into the "
+            f"tracked severities; {len(from_promotion)} baseline count(s) rose with "
+            "it. Review them:"
+        )
+        for line in from_promotion:
+            print(f"  ! {line}")
     if not increases:
         return False
     if base_doc.pyright_version != head.pyright_version:

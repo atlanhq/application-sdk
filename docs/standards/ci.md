@@ -188,8 +188,12 @@ uv run --frozen --all-extras --all-groups python .github/scripts/check_pyright_b
 
 The base comparison is per rule, summed over severities, so promoting a rule
 from warning to error moves its findings to a new key without reading as new
-ones. Promoting a rule the SDK baseline does not track yet (a warning there is
-not counted) does raise its counts: say so in the PR.
+ones. The SDK baseline never held the warnings, so for it the check also reads
+the base revision's `[tool.pyright]`: a rule the base set explicitly to
+`warning`/`information`/`none` and this PR sets to `error` may raise its
+counts, printed as a `::warning::` for the reviewer. A rule the base left at
+pyright's default stays strict (it may already have been an error there). An
+unreadable base `pyproject.toml` fails the check.
 
 `# type: ignore` is off (`enableTypeIgnoreComments = false`): it silenced every
 rule on its line, and the mypy codes in its brackets mean nothing to pyright.
