@@ -2,12 +2,13 @@
 
 import os
 import types
-import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar
 
 from typing_extensions import deprecated
+
+from application_sdk import _deprecation
 
 if TYPE_CHECKING:
     from application_sdk.app.entrypoint import EntryPointMetadata
@@ -95,11 +96,10 @@ class AppNotFoundError(InvalidInputError):
         *,
         error_code: ErrorCode | None = None,
     ) -> None:
-        warnings.warn(
-            "AppNotFoundError is deprecated; use application_sdk.app.registry.AppNotRegisteredError "
-            "— will be removed in v4.0",
-            DeprecationWarning,
-            stacklevel=2,
+        _deprecation.warn_deprecated(
+            "AppNotFoundError",
+            "application_sdk.app.registry.AppNotRegisteredError",
+            "4.0.0",
         )
         msg = (
             f"App '{name}' version '{version}' not found"
@@ -156,11 +156,10 @@ class AppAlreadyRegisteredError(InvalidInputError):
     def __init__(
         self, name: str, version: str, *, error_code: ErrorCode | None = None
     ) -> None:
-        warnings.warn(
-            "AppAlreadyRegisteredError is deprecated; use application_sdk.app.registry.AppVersionAlreadyRegisteredError "
-            "— will be removed in v4.0",
-            DeprecationWarning,
-            stacklevel=2,
+        _deprecation.warn_deprecated(
+            "AppAlreadyRegisteredError",
+            "application_sdk.app.registry.AppVersionAlreadyRegisteredError",
+            "4.0.0",
         )
         InvalidInputError.__init__(
             self, message=f"App '{name}' version '{version}' is already registered"
@@ -458,11 +457,10 @@ class TaskNotFoundError(InvalidInputError):
     def __init__(
         self, app_name: str, task_name: str, *, error_code: ErrorCode | None = None
     ) -> None:
-        warnings.warn(
-            "TaskNotFoundError is deprecated; use application_sdk.app.registry.TaskNotRegisteredError "
-            "— will be removed in v4.0",
-            DeprecationWarning,
-            stacklevel=2,
+        _deprecation.warn_deprecated(
+            "TaskNotFoundError",
+            "application_sdk.app.registry.TaskNotRegisteredError",
+            "4.0.0",
         )
         InvalidInputError.__init__(
             self, message=f"Task '{task_name}' not found in app '{app_name}'"

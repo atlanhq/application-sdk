@@ -2213,7 +2213,9 @@ def run_handler_mode(config: AppConfig) -> None:
     )
     from application_sdk.handler import (  # noqa: PLC0415 — cold path: only loaded in handler mode
         DefaultHandler,
-        run_app_handler_service,
+    )
+    from application_sdk.handler.service import (  # noqa: PLC0415 — cold path: only loaded in handler mode
+        _run_app_handler_service,
     )
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         set_infrastructure,
@@ -2256,7 +2258,7 @@ def run_handler_mode(config: AppConfig) -> None:
     handler = handler_class()
     data_converter = create_data_converter_for_app(app_class)
 
-    run_app_handler_service(
+    _run_app_handler_service(
         handler,
         host=config.handler_host,
         port=config.handler_port,

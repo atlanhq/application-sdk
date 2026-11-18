@@ -13,7 +13,6 @@ collection.
 
 from __future__ import annotations
 
-import warnings
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry.sdk.metrics import (
@@ -33,6 +32,7 @@ from opentelemetry.sdk.metrics.export import Gauge as GaugeData
 from opentelemetry.sdk.metrics.export import Histogram as HistogramData
 from opentelemetry.sdk.metrics.export import Sum as SumData
 
+from application_sdk import _deprecation
 from application_sdk.constants import ENABLE_OBSERVABILITY_STORE_SINK
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import _write_and_upload_batch
@@ -80,23 +80,9 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the names this module no longer binds, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated here; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    if name == "OBSERVABILITY_S3_PREFIX_MAP":
-        from application_sdk.observability import observability as _source  # noqa: PLC0415
-    else:
-        from application_sdk import constants as _source  # noqa: PLC0415
-    return getattr(_source, name)
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)
 
 
 def _resource_attrs(resource: Resource) -> dict[str, str]:

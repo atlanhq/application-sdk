@@ -2241,7 +2241,9 @@ class TestRunHandlerMode:
                 "application_sdk.handler.DefaultHandler",
                 return_value=MagicMock(),
             ) as mock_default,
-            patch("application_sdk.handler.run_app_handler_service") as mock_run_svc,
+            patch(
+                "application_sdk.handler.service._run_app_handler_service"
+            ) as mock_run_svc,
             patch(
                 "application_sdk.main._flush_observability",
                 new_callable=AsyncMock,
@@ -2274,7 +2276,7 @@ class TestRunHandlerMode:
                 "application_sdk.main.load_handler_class",
                 return_value=custom_cls,
             ),
-            patch("application_sdk.handler.run_app_handler_service"),
+            patch("application_sdk.handler.service._run_app_handler_service"),
             patch(
                 "application_sdk.main._flush_observability",
                 new_callable=AsyncMock,
@@ -2298,7 +2300,7 @@ class TestRunHandlerMode:
             patch("application_sdk.main.validate_app_class") as mock_validate,
             patch("application_sdk.main.load_handler_class", return_value=None),
             patch("application_sdk.handler.DefaultHandler"),
-            patch("application_sdk.handler.run_app_handler_service"),
+            patch("application_sdk.handler.service._run_app_handler_service"),
             patch(
                 "application_sdk.main._flush_observability",
                 new_callable=AsyncMock,
@@ -2320,7 +2322,7 @@ class TestRunHandlerMode:
             p_validate,
             patch("application_sdk.main.load_handler_class", return_value=None),
             patch("application_sdk.handler.DefaultHandler"),
-            patch("application_sdk.handler.run_app_handler_service"),
+            patch("application_sdk.handler.service._run_app_handler_service"),
             patch(
                 "application_sdk.infrastructure.context.close_infrastructure",
                 new_callable=AsyncMock,
@@ -2796,7 +2798,7 @@ class TestInlineImportSymbols:
             ("application_sdk.execution._temporal.auth", "TemporalAuthConfig"),
             ("application_sdk.execution._temporal.auth", "TemporalAuthManager"),
             ("application_sdk.handler", "DefaultHandler"),
-            ("application_sdk.handler", "run_app_handler_service"),
+            ("application_sdk.handler.service", "_run_app_handler_service"),
             ("application_sdk.handler", "create_app_handler_service"),
             ("application_sdk.infrastructure.context", "InfrastructureContext"),
             ("application_sdk.infrastructure.context", "set_infrastructure"),

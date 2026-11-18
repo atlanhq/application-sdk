@@ -23,6 +23,12 @@ logging is not configured yet. A caller that runs after logging is up passes
 ``report`` to route the message to its logger instead;
 :mod:`application_sdk.common._env` does that for SDK modules that can import the
 logger.
+
+A warning alone would bypass OTel, and Python shows each one once per process.
+So every default-path message is also handed to the SDK logger: the logger
+module installs itself with :func:`set_log_sink` once it exists, and the
+messages from before that (``constants``' import-time reads) are held until
+then and logged in order.
 """
 
 from __future__ import annotations
@@ -50,6 +56,40 @@ def _raw(key: str) -> str | None:
     return stripped or None
 
 
+#: Default-path messages from before :func:`set_log_sink` ran, oldest first.
+_pending: list[str] = []
+_log_sink: Reporter | None = None
+
+
+def set_log_sink(sink: Reporter) -> None:
+    """Log every default-path rejection through *sink*, starting with the held ones.
+
+    Called once by the SDK logger module when it is imported, so a malformed
+    value read while ``constants`` was importing still reaches the logs.
+    """
+    global _log_sink
+    _log_sink = sink
+    while _pending:
+        sink(_pending.pop(0))
+
+
+def _to_log(message: str) -> None:
+    if _log_sink is None:
+        _pending.append(message)
+    else:
+        _log_sink(message)
+
+
+def warn_rejected(message: str, category: type[Warning] = RuntimeWarning) -> None:
+    """Report a rejected setting the way the ``env_*`` readers do.
+
+    For a module that parses a value itself: warns at the caller's caller (as
+    ``warnings.warn(stacklevel=2)`` from the caller would) and logs it.
+    """
+    warnings.warn(message, category, stacklevel=3)
+    _to_log(message)
+
+
 def _reject(message: str, report: Reporter | None) -> None:
     if report is not None:
         report(message)
@@ -57,6 +97,7 @@ def _reject(message: str, report: Reporter | None) -> None:
     # stacklevel 3: point at the line that called env_int/env_float/..., not
     # at this helper or the env_* function itself.
     warnings.warn(message, RuntimeWarning, stacklevel=3)
+    _to_log(message)
 
 
 def env_int(

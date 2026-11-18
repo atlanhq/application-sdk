@@ -8,6 +8,7 @@ import httpx
 import orjson
 from typing_extensions import deprecated
 
+from application_sdk import _deprecation
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 from application_sdk.infrastructure.bindings import (
     BindingError,  # noqa: F401 — deprecated names kept importable from this module (shipped surface); removed with the class in v4.0
@@ -44,19 +45,12 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the deprecated ``MessageHandler`` alias with a warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _MessageHandler
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda _name: _MessageHandler,
+)
 
 
 @deprecated(

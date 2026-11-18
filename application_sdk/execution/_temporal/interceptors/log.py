@@ -23,7 +23,6 @@ import dataclasses
 import posixpath
 import time
 import traceback as tb_module
-import warnings
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -42,6 +41,7 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
+from application_sdk import _deprecation
 from application_sdk.errors.base import AppError, redact_secrets
 from application_sdk.errors.wire import FailureDetails
 from application_sdk.execution._temporal.preflight_gate import (
@@ -814,20 +814,6 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def _deprecated_constant_value(name: str) -> object:
-    """The live value behind a deprecated constant alias.
-
-    Imported here rather than at module scope: a module-level re-export would
-    resolve before ``__getattr__`` ever ran, handing the name back silently and
-    leaving the caller with no migration signal at all. Keeping it lazy also
-    means this module no longer depends on ``constants`` for its own work,
-    which is the point of the change that removed the attributes.
-    """
-    from application_sdk import constants  # noqa: PLC0415 — see docstring
-
-    return getattr(constants, name)
-
-
 if TYPE_CHECKING:
     # PEP 562's ``__getattr__`` can only be typed ``-> object``, which is all a
     # type checker infers for every name it serves. Declaring the names here
@@ -838,16 +824,6 @@ if TYPE_CHECKING:
     COMMIT_SHA: str
 
 
-def __getattr__(name: str) -> object:
-    """Serve the removed re-exports once more, with a warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v3.41.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _deprecated_constant_value(name)
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="3.41.0"
+)

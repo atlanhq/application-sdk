@@ -5,7 +5,6 @@ import sys
 import threading
 import time
 import traceback as tb_module
-import warnings
 from typing import Any, Callable, ClassVar
 
 from loguru import logger
@@ -15,6 +14,7 @@ from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.trace.span import TraceFlags
 
+from application_sdk import _deprecation, _env
 from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
@@ -1836,6 +1836,12 @@ def get_logger(name: str | None = None) -> AtlanLoggerAdapter:
 # Initialize the default logger
 default_logger = get_logger()  # Use a different name instead of redefining 'logger'
 
+# A malformed env value is reported through ``warnings`` (see ``_env``), which
+# never reaches OTel and is shown once per process; log each one as well,
+# starting with those rejected while ``constants`` was importing.
+_settings_logger = get_logger("application_sdk.settings")
+_env.set_log_sink(lambda message: _settings_logger.warning("%s", message))
+
 
 #: Retention-sweep constants this module used to re-export from
 #: ``application_sdk.constants``; served once more by ``__getattr__`` (PEP 562).
@@ -1851,20 +1857,14 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the removed constants once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
+def _former_default(name: str) -> object:
     from application_sdk.constants import (  # noqa: PLC0415 — only reached on a deprecated access
         _DEPRECATED_CONSTANT_VALUES,
     )
 
     return _DEPRECATED_CONSTANT_VALUES[name]
+
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0", resolve=_former_default
+)

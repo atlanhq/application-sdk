@@ -6,12 +6,13 @@
     app's own credential and config models in its tests instead.
 """
 
-import warnings
 from typing import Any, Dict
 
 from hypothesis import strategies as st
 from hypothesis.strategies import composite
 from typing_extensions import deprecated
+
+from application_sdk import _deprecation
 
 #: Upper bound for config integers (timeouts, retries, sizes).
 _MAX_CONFIG_INT = 86_400
@@ -191,16 +192,9 @@ def _deprecated_constant_value(name: str) -> object:
     return globals()[f"_{name}"]
 
 
-def __getattr__(name: str) -> object:
-    """Serve the deprecated strategies with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _deprecated_constant_value(name)
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=_deprecated_constant_value,
+)

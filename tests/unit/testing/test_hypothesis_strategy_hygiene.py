@@ -81,7 +81,13 @@ def _is_deprecated(tree: ast.Module) -> bool:
         for node in tree.body
     )
     has_getattr = any(
-        isinstance(node, ast.FunctionDef) and node.name == "__getattr__"
+        (isinstance(node, ast.FunctionDef) and node.name == "__getattr__")
+        or (
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(t, ast.Name) and t.id == "__getattr__" for t in node.targets
+            )
+        )
         for node in tree.body
     )
     return has_mapping and has_getattr
@@ -93,6 +99,12 @@ def test_the_deprecation_scan_needs_a_served_non_empty_mapping() -> None:
         "def __getattr__(name): ...\n"
     )
     assert _is_deprecated(ast.parse(served))
+    factory = (
+        "_DEPRECATED_CONSTANTS = {'a': ('b', 'c')}\n"
+        "__getattr__ = _deprecation.deprecated_module_getattr("
+        "__name__, _DEPRECATED_CONSTANTS, remove_in='4.0.0')\n"
+    )
+    assert _is_deprecated(ast.parse(factory))
     assert not _is_deprecated(
         ast.parse("_DEPRECATED_CONSTANTS = {}\ndef __getattr__(n): ...\n")
     )

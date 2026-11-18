@@ -1,9 +1,10 @@
 """Secrets management abstraction."""
 
 import os
-import warnings
 from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol
+
+from application_sdk import _deprecation
 
 # Defined in the api distribution's light module so the handler can raise it on
 # the API host; re-exported here, the same class.
@@ -62,14 +63,13 @@ async def get_deployment_secret(key: str, *, raise_on_error: bool | None = None)
             rejected the request; ``cause`` carries the underlying error.
     """
     if raise_on_error is None:
-        warnings.warn(
-            "get_deployment_secret() without raise_on_error is deprecated: it "
-            "returns None for a store failure as well as a missing key. Pass "
+        _deprecation.warn_deprecated(
+            "get_deployment_secret() without raise_on_error",
             "raise_on_error=True for a typed SecretStoreError with cold-start "
-            "retry, or raise_on_error=False to keep None — the default flips "
-            "to True in v4.0.",
-            DeprecationWarning,
-            stacklevel=2,
+            "retry (or raise_on_error=False to keep None)",
+            "4.0.0",
+            note="it returns None for a store failure as well as a missing key; "
+            "the None default goes and raise_on_error=True becomes the default",
         )
 
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on secret resolution

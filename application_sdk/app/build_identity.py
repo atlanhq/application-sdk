@@ -12,7 +12,7 @@ as its ``common`` counterpart, with a ``DeprecationWarning`` on access.
 
 from __future__ import annotations
 
-import warnings
+from application_sdk import _deprecation
 
 #: name -> (replacement, why). Served by ``__getattr__`` below (PEP 562), which
 #: returns the ``common`` object itself so a patch or an identity check sees one
@@ -43,18 +43,6 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 __all__ = list(_DEPRECATED_CONSTANTS)  # pyright: ignore[reportUnsupportedDunderAll] — names are served by __getattr__
 
 
-def __getattr__(name: str) -> object:
-    """Serve the moved names once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated here; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    from application_sdk.common import build_identity as _target  # noqa: PLC0415
-
-    return getattr(_target, name)
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)

@@ -497,7 +497,7 @@ class TestDeprecatedModuleAliases:
 
         exporter_mod = importlib.import_module(_EXPORTER_MOD)
         source_mod = importlib.import_module(source)
-        with pytest.warns(DeprecationWarning, match=f"{name} is deprecated here"):
+        with pytest.warns(DeprecationWarning, match=f"{name} is deprecated; use "):
             value = getattr(exporter_mod, name)
         assert value is getattr(source_mod, name)
 

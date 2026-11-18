@@ -59,6 +59,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from typing_extensions import deprecated
 
+from application_sdk import _deprecation
 from application_sdk.observability.logger_adaptor import get_logger as _get_logger
 from application_sdk.testing.full_dag._errors import (
     HarnessMethodNotImplementedError,
@@ -1028,16 +1029,6 @@ _SERVED: dict[str, object] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the deprecated names once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _SERVED[name]
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0", resolve=_SERVED.__getitem__
+)
