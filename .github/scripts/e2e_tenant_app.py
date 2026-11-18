@@ -2940,10 +2940,17 @@ def _await_pod_off_build(
         time.sleep(_POD_POLL_SECONDS)
 
 
-def _serves_build(client: TenantClient, build: str) -> bool:
-    """True only when the pod answers and names ``build``. One read, no wait."""
+def _pod_names_another_build(client: TenantClient, build: str) -> PodIdentity | None:
+    """The pod's identity when it answers with a build id OTHER than ``build``.
+
+    One read, no wait. ``None`` for every other answer — silence, a rejection,
+    an empty build id, or ``build`` itself — because none of those shows the
+    pod has left ``build``, and an unreadable pod can still be serving it.
+    """
     pod = read_pod_build_identity(client)
-    return pod.reachable and bool(build) and pod.build_id == build
+    if pod.reachable and pod.build_id and pod.build_id != build:
+        return pod
+    return None
 
 
 def restore(args: argparse.Namespace) -> str:
@@ -2972,15 +2979,21 @@ def restore(args: argparse.Namespace) -> str:
     publish_client, read_client = _clients(base_url)
 
     if installed_version_id(_app_info(read_client, app_id)) == version_id:
-        if not _serves_build(read_client, rolled_back_from):
+        # The no-op needs positive evidence the pod has left the build under
+        # test. Anything weaker — including a pod that cannot answer — force-
+        # installs anyway: re-installing the version the record already names is
+        # harmless, while skipping it can leave a broken build serving.
+        other = _pod_names_another_build(read_client, rolled_back_from)
+        if other is not None:
             print(
                 f"tenant already runs {args.expected} ({version_id}) and the pod "
-                f"does not report {rolled_back_from}; nothing to restore"
+                f"reports build {other.build_id}, not {rolled_back_from}; "
+                "nothing to restore"
             )
             return args.expected
         print(
-            f"::warning::LM's install record already names {version_id}, but the "
-            f"pod still reports {rolled_back_from}; force-installing anyway"
+            f"LM's install record already names {version_id}, but the pod did "
+            f"not show it has left {rolled_back_from}; force-installing anyway"
         )
 
     print(f"restoring {args.expected} (version_id={version_id})")

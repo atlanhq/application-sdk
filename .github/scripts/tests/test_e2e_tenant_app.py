@@ -4102,10 +4102,59 @@ def test_restore_is_a_noop_when_the_tenant_already_runs_it(
 ) -> None:
     transport = _wire(
         monkeypatch,
-        StubTransport(routes=[StubRoute("GET", "/info", _installed(_PREVIOUS_ID))]),
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _installed(_PREVIOUS_ID)),
+                StubRoute(
+                    "GET",
+                    f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}",
+                    _pod_identity("1.0.0"),
+                ),
+            ]
+        ),
     )
     assert app.restore(_restore_args()) == "1.0.0"
     assert transport.paths("POST") == []
+
+
+@pytest.mark.parametrize(
+    "pod",
+    [
+        # The default 404: an SDK that predates the route, or a route that failed.
+        None,
+        # Silence: nothing answered at all.
+        Response(status=503, body={"detail": "unavailable"}),
+        # Answered, but without a build id to compare.
+        _pod_identity(""),
+    ],
+    ids=["rejected", "transient", "no-build-id"],
+)
+def test_restore_noop_needs_the_pod_to_name_another_build(
+    monkeypatch: pytest.MonkeyPatch, pod: Response | None
+) -> None:
+    """F-e4e33a: an unreadable pod is not evidence it left the build under test.
+
+    The record already names the prior UUID, but the pod may still be serving
+    the broken build while its identity read fails, so restore force-installs.
+    """
+    routes = [
+        StubRoute("GET", "/info", _installed(_PREVIOUS_ID)),
+        StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+        StubRoute("GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})),
+        StubRoute("GET", "/info", _installed(_PREVIOUS_ID)),
+    ]
+    # Sticky: the pod gives the same answer before and after the force-install.
+    sticky = (
+        [StubRoute("GET", f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}", pod)]
+        if pod is not None
+        else []
+    )
+    transport = _wire(monkeypatch, StubTransport(routes=routes, sticky=sticky))
+    assert app.restore(_restore_args(pod_wait_seconds=0)) == "1.0.0"
+    assert any("/install" in p for p in transport.paths("POST")), (
+        "a record naming the prior UUID must not short-circuit unless the pod "
+        "positively reports a different build"
+    )
 
 
 def test_restore_fails_when_the_install_record_does_not_move(
