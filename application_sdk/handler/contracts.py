@@ -900,15 +900,19 @@ def _leaf_details(exc: BaseException) -> FailureDetails | None:
         return None
     try:
         return exc.to_failure_details()
-    except Exception:
+    except Exception as conversion_error:  # noqa: BLE001 — falls back to an InternalError from the sanitized cause; logged by type only
         # The caller falls back to an InternalError built from the sanitized
         # cause, so the run still reports; this line says why the leaf's own
-        # typed details were lost.
+        # typed details were lost. Type names only: the conversion error is
+        # typically FailureDetails' own ValidationError, whose text quotes the
+        # rejected input — including a secret-named evidence value the
+        # denylist refused — so neither its message nor exc_info is logged.
+        # conformance: ignore[E005,L004] exc_info would render the rejected (possibly secret) input verbatim
         logger.warning(
-            "%s could not build its FailureDetails; reporting it as an "
+            "%s could not build its FailureDetails (%s); reporting it as an "
             "unverifiable internal error",
             type(exc).__name__,
-            exc_info=True,
+            type(conversion_error).__name__,
         )
         return None
 

@@ -786,3 +786,47 @@ class TestEntrypointRefAlias:
         )
         assert inp.entrypoint == "asset-export-advanced"
         assert inp.entrypoint_ref == "csa-uber-asset-export-advanced"
+
+
+def test_unbuildable_leaf_details_log_carries_no_rejected_secret() -> None:
+    """A leaf whose evidence the FailureDetails denylist rejects falls back to an
+    InternalError, and the WARNING says so by type only (FND-4294).
+
+    The ValidationError's text quotes the rejected input, so neither its
+    message nor ``exc_info`` may reach the log.
+    """
+    from unittest import mock
+
+    from application_sdk.handler.contracts import unverifiable_preflight_result
+
+    secret = "bearer abc123-do-not-log"
+    try:
+        FailureDetails(
+            category=FailureCategory.AUTH,
+            code="AUTH",
+            retryable=False,
+            audience=Audience.USER,
+            message="x",
+            evidence={"token": secret},
+        )
+    except ValidationError as rejected:
+        conversion_error = rejected
+    else:  # pragma: no cover — the denylist must reject a secret-named key
+        pytest.fail("FailureDetails accepted a secret-named evidence key")
+    assert secret in str(conversion_error)  # the hazard this test guards
+
+    leaf = AuthError(message="auth failed")
+    with (
+        mock.patch.object(
+            AuthError, "to_failure_details", side_effect=conversion_error
+        ),
+        mock.patch("application_sdk.handler.contracts.logger") as log,
+    ):
+        result = unverifiable_preflight_result(leaf, "demo-app")
+
+    assert result.checks[0].error is not None
+    log.warning.assert_called_once()
+    args, kwargs = log.warning.call_args
+    assert "exc_info" not in kwargs
+    assert all(secret not in str(arg) for arg in args)
+    assert "ValidationError" in args
