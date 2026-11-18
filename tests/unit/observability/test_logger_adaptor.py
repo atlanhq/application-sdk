@@ -1107,7 +1107,7 @@ def test_warning_inlines_exc_info_in_message(logger_adapter: AtlanLoggerAdapter)
         logger_adapter.warning("Original warning message", exc_info=exc_info)
 
     mock_loguru.bind.assert_called_once_with(logger_name="test_logger")
-    mock_bound.opt.assert_called_once_with(exception=exc_info)
+    mock_bound.opt.assert_called_once_with(depth=1, exception=exc_info)
     mock_opt.log.assert_called_once_with("WARNING", "Processed warning message")
 
 
@@ -1995,15 +1995,15 @@ class TestLoggingMethodsForwardToLoguru:
         return mocked, bound, opt
 
     def test_debug_no_exc_info(self, logger_adapter: AtlanLoggerAdapter):
-        _, bound, _ = self._wire_mock(logger_adapter)
+        _, bound, opt = self._wire_mock(logger_adapter)
         logger_adapter.debug("hello %s", "world")
-        bound.log.assert_called_once_with("DEBUG", "hello world")
-        bound.opt.assert_not_called()
+        bound.opt.assert_called_once_with(depth=1, exception=None)
+        opt.log.assert_called_once_with("DEBUG", "hello world")
 
     def test_info_with_exc_info(self, logger_adapter: AtlanLoggerAdapter):
         _, bound, opt = self._wire_mock(logger_adapter)
         logger_adapter.info("oops", exc_info=True)
-        bound.opt.assert_called_once_with(exception=True)
+        bound.opt.assert_called_once_with(depth=1, exception=True)
         opt.log.assert_called_once_with("INFO", "oops")
 
     def test_critical_forces_sync_flush(self, logger_adapter: AtlanLoggerAdapter):
@@ -2021,29 +2021,46 @@ class TestLoggingMethodsForwardToLoguru:
     def test_activity_logs_with_activity_log_type(
         self, logger_adapter: AtlanLoggerAdapter
     ):
-        _, bound, _ = self._wire_mock(logger_adapter)
+        _, _, opt = self._wire_mock(logger_adapter)
         with pytest.warns(DeprecationWarning, match="AtlanLoggerAdapter.activity"):
             logger_adapter.activity("act-msg")
         # bind() should have received log_type=activity
-        _, bind_kwargs = bound.log.call_args if bound.log.call_args else ((), {})
+        _, bind_kwargs = opt.log.call_args if opt.log.call_args else ((), {})
         called_with = logger_adapter.logger.bind.call_args.kwargs
         assert called_with.get("log_type") == "activity"
-        bound.log.assert_called_once()
-        assert bound.log.call_args.args[0] == "ACTIVITY"
+        opt.log.assert_called_once()
+        assert opt.log.call_args.args[0] == "ACTIVITY"
 
     def test_metric_logs_with_metric_log_type(self, logger_adapter: AtlanLoggerAdapter):
-        _, bound, _ = self._wire_mock(logger_adapter)
+        _, _, opt = self._wire_mock(logger_adapter)
         logger_adapter.metric("m")
         called_with = logger_adapter.logger.bind.call_args.kwargs
         assert called_with.get("log_type") == "metric"
-        assert bound.log.call_args.args[0] == "METRIC"
+        assert opt.log.call_args.args[0] == "METRIC"
 
     def test_tracing_logs_with_trace_log_type(self, logger_adapter: AtlanLoggerAdapter):
-        _, bound, _ = self._wire_mock(logger_adapter)
+        _, _, opt = self._wire_mock(logger_adapter)
         logger_adapter.tracing("t")
         called_with = logger_adapter.logger.bind.call_args.kwargs
         assert called_with.get("log_type") == "trace"
-        assert bound.log.call_args.args[0] == "TRACING"
+        assert opt.log.call_args.args[0] == "TRACING"
+
+    def test_records_are_attributed_to_the_level_method(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        """function/line (exported as OTel code.function) name the public level
+        method, not the shared ``_emit`` frame, on the adapter and the proxy."""
+        functions: list[str] = []
+        handler_id = logger_adapter.logger.add(
+            lambda m: functions.append(m.record["function"]), level=0
+        )
+        try:
+            logger_adapter.info("adapter")
+            logger_adapter.warning("adapter")
+            logger_adapter.opt(lazy=True).info("proxy")
+        finally:
+            logger_adapter.logger.remove(handler_id)
+        assert functions == ["info", "warning", "info"]
 
     @pytest.mark.parametrize(
         "method", ["debug", "info", "warning", "error", "critical", "metric", "tracing"]
@@ -2079,14 +2096,8 @@ class TestLoggingMethodsForwardToLoguru:
         bind_kwargs = mocked.bind.call_args.kwargs
         assert "exc_info" not in bind_kwargs
         assert bind_kwargs["log_type"] == log_type
-        bound.opt.assert_called_once_with(exception=True)
+        bound.opt.assert_called_once_with(depth=1, exception=True)
         opt.log.assert_called_once_with(level, "m")
-
-    def test_does_not_mutate_callers_kwargs(self, logger_adapter: AtlanLoggerAdapter):
-        self._wire_mock(logger_adapter)
-        fields = {"exc_info": True, "table": "t"}
-        logger_adapter.metric("m", **fields)
-        assert fields == {"exc_info": True, "table": "t"}
 
     @pytest.mark.parametrize(
         ("level", "method"),

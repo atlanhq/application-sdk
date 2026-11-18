@@ -1340,10 +1340,12 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             if log_type is not None:
                 kwargs["log_type"] = log_type
             msg, kwargs = self.process(msg, kwargs)
-            bound_logger = self.logger.bind(**kwargs)
-            if exc_info:
-                bound_logger = bound_logger.opt(exception=exc_info)
-            bound_logger.log(level_name, msg, *args)
+            # depth=1 attributes the record (loguru's function/line, exported
+            # as OTel code.function/code.lineno) to the public level method
+            # that called here, as it was before the methods shared a body.
+            self.logger.bind(**kwargs).opt(depth=1, exception=exc_info or None).log(
+                level_name, msg, *args
+            )
             if flush:
                 self._sync_flush()
         except Exception:
@@ -1404,7 +1406,12 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         format (not %-style) when passing lazy kwargs.
         """
         _, ctx_kwargs = self.process("", {})
-        bound = self.logger.bind(**ctx_kwargs).opt(lazy=lazy, **loguru_opt_kwargs)
+        # +1 for the proxy's shared ``_emit`` frame, so records stay attributed
+        # to the proxy's level method (or to wherever a caller's depth points).
+        depth = loguru_opt_kwargs.pop("depth", 0) + 1
+        bound = self.logger.bind(**ctx_kwargs).opt(
+            lazy=lazy, depth=depth, **loguru_opt_kwargs
+        )
         return _LazyLoggerProxy(bound)
 
     @deprecated(
