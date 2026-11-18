@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import datetime
 import http.client
+import http.server
 import ipaddress
 import json
 import socket
@@ -43,6 +44,7 @@ from application_sdk.testing.fake_source import (
     HttpFakeSourceFactory,
     cursor_page,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 pytestmark = pytest.mark.allow_hosts(["127.0.0.1"])
 
@@ -229,6 +231,10 @@ def _start_on_a_probed_port(**kwargs: Any) -> tuple[HttpFakeSource, int]:
     return HttpFakeSource(port=chosen, **kwargs).start(), chosen
 
 
+def _refuse_lookup(name: str = "") -> str:
+    raise AssertionError(f"fake source resolved {name!r} while binding")
+
+
 class TestLifecycle:
     def test_binds_loopback_on_ephemeral_port(self, fake: HttpFakeSource) -> None:
         assert fake.base_url.startswith("http://127.0.0.1:")
@@ -284,6 +290,20 @@ class TestLifecycle:
             assert source.base_url == f"http://127.0.0.1:{source.port}"
             with urllib.request.urlopen(f"{source.base_url}/ping", timeout=5) as resp:
                 assert json.loads(resp.read()) == {"ok": True}
+
+    @pytest.mark.parametrize("bind_host", ["127.0.0.1", "0.0.0.0"])  # noqa: S104 — the wildcard case is under test
+    def test_starting_never_resolves_the_bound_address(self, bind_host: str) -> None:
+        """No reverse-DNS lookup on start: it cost 35-70 s per bind on macOS CI.
+
+        ``HTTPServer.server_bind`` calls ``socket.getfqdn`` on the bound address.
+        A resolver that times out makes every fake start wait for it, so the
+        fake binds without it; http.server's view of ``getfqdn`` raises here to
+        prove nothing reaches it.
+        """
+        with private_stdlib(http.server, "socket") as local_socket:
+            local_socket.getfqdn = _refuse_lookup  # type: ignore[attr-defined]
+            with HttpFakeSource(bind_host=bind_host) as source:
+                assert source.base_url == f"http://127.0.0.1:{source.port}"
 
     def test_serves_tls_when_given_an_ssl_context(self, tmp_path: Path) -> None:
         """A TLS fake is reachable over https and says so in base_url.
