@@ -1730,6 +1730,196 @@ def test_l017_silent_for_error_method() -> None:
 
 
 # ---------------------------------------------------------------------------
+# L022 HandledFailureLoggedAtError
+# ---------------------------------------------------------------------------
+
+
+def _l022(body: str, prefix: str = "") -> list[str]:
+    """L022 findings for *body* as the handler of ``try: work()``."""
+    src = (
+        "from application_sdk.observability import get_logger\n"
+        "logger = get_logger(__name__)\n"
+        f"{prefix}"
+        "async def f(items):\n"
+        "    try:\n"
+        "        work()\n"
+        f"{body}"
+    )
+    return [rule_id for rule_id in _ids(src) if rule_id == "L022"]
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        "    except Exception:\n        logger.error('close failed', exc_info=True)\n",
+        (
+            "    except Exception:\n"
+            "        logger.error('lookup failed', exc_info=True)\n"
+            "        return None\n"
+        ),
+        (
+            "    except Exception:\n"
+            "        logger.error('validation failed', exc_info=True)\n"
+            "        return False\n"
+        ),
+        (
+            "    except Exception:\n"
+            "        logger.error('bad filter', exc_info=True)\n"
+            "        return empty_default\n"
+        ),
+        # 4xx: the client's mistake, answered — the service did not fail.
+        (
+            "    except ValueError:\n"
+            "        logger.error('bad request', exc_info=True)\n"
+            "        return JSONResponse(content={}, status_code=400)\n"
+        ),
+        # A raise inside a nested scope does not run in the handler.
+        (
+            "    except Exception:\n"
+            "        def cb():\n"
+            "            raise RuntimeError('later')\n"
+            "        logger.error('deferred', exc_info=True)\n"
+            "        register(cb)\n"
+        ),
+    ],
+    ids=[
+        "bare",
+        "return-none",
+        "return-false",
+        "return-default",
+        "4xx",
+        "nested-raise",
+    ],
+)
+def test_l022_fires_when_the_handler_absorbs_the_failure(handler: str) -> None:
+    assert _l022(handler) == ["L022"]
+
+
+def test_l022_fires_on_stdlib_logging_error() -> None:
+    src = (
+        "import logging\n"
+        "def f():\n"
+        "    try:\n"
+        "        work()\n"
+        "    except Exception:\n"
+        "        logging.error('exporter failed', exc_info=True)\n"
+    )
+    assert "L022" in _ids(src)
+
+
+def test_l022_fires_per_item_in_a_loop() -> None:
+    src = (
+        "from application_sdk.observability import get_logger\n"
+        "logger = get_logger(__name__)\n"
+        "def f(rows):\n"
+        "    for row in rows:\n"
+        "        try:\n"
+        "            transform(row)\n"
+        "        except Exception:\n"
+        "            logger.error('row failed', exc_info=True)\n"
+        "            continue\n"
+    )
+    assert "L022" in _ids(src)
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        "    except Exception:\n        logger.error('failed', exc_info=True)\n        raise\n",
+        (
+            "    except Exception as exc:\n"
+            "        logger.error('failed', exc_info=True)\n"
+            "        if fatal(exc):\n"
+            "            raise\n"
+        ),
+        (
+            "    except Exception:\n"
+            "        logger.error('fatal', exc_info=True)\n"
+            "        sys.exit(1)\n"
+        ),
+        (
+            "    except Exception:\n"
+            "        logger.error('fatal', exc_info=True)\n"
+            "        os._exit(1)\n"
+        ),
+        (
+            "    except Exception:\n"
+            "        logger.error('request failed', exc_info=True)\n"
+            "        return {'success': False, 'error': 'boom'}\n"
+        ),
+        (
+            "    except Exception:\n"
+            "        logger.error('start failed', exc_info=True)\n"
+            "        return JSONResponse(content={'status': 'RETRY'}, status_code=500)\n"
+        ),
+        (
+            "    except Exception:\n"
+            "        logger.error('prime failed', exc_info=True)\n"
+            "        return PrimeOutput(success=False)\n"
+        ),
+        # Built from atlan-mysql-app app/handler.py `test_auth`.
+        (
+            "    except Exception as e:\n"
+            "        logger.error('MySQL auth test failed: %s', safe_traceback(e))\n"
+            "        err = transient_failure(e) or PreflightAuthError(cause=e)\n"
+            "        return AuthOutput(status=AuthStatus.FAILED, error=err.to_failure_details())\n"
+        ),
+        # Built from atlan-openapi-app app/api_client.py `_parse_zip`.
+        (
+            "    except Exception:\n"
+            "        logger.warning('skipping file in ZIP file=%s', name, exc_info=True)\n"
+        ),
+    ],
+    ids=[
+        "bare-raise",
+        "conditional-raise",
+        "sys-exit",
+        "os-exit",
+        "dict-success-false",
+        "http-5xx",
+        "call-success-false",
+        "mysql-test-auth",
+        "openapi-parse-zip-warning",
+    ],
+)
+def test_l022_silent_when_the_failure_propagates_or_is_a_warning(handler: str) -> None:
+    assert _l022(handler) == []
+
+
+def test_l022_silent_outside_an_except_block() -> None:
+    src = (
+        "from application_sdk.observability import get_logger\n"
+        "logger = get_logger(__name__)\n"
+        "def f(typename):\n"
+        "    logger.error('Unknown typename: %s', typename)\n"
+        "    return None\n"
+    )
+    assert "L022" not in _ids(src)
+
+
+def test_l022_judges_the_innermost_handler() -> None:
+    # The outer handler raises; the inner one, which holds the call, does not.
+    handler = (
+        "    except Exception:\n"
+        "        try:\n"
+        "            cleanup()\n"
+        "        except Exception:\n"
+        "            logger.error('cleanup failed', exc_info=True)\n"
+        "        raise\n"
+    )
+    assert _l022(handler) == ["L022"]
+
+
+def test_l022_respects_an_inline_suppression() -> None:
+    handler = (
+        "    except Exception:\n"
+        "        # conformance: ignore[L022] fatal: collected and raised after the other targets\n"
+        "        logger.error('upload failed', exc_info=True)\n"
+    )
+    assert _l022(handler) == []
+
+
+# ---------------------------------------------------------------------------
 # L018 KwargsInApplicationLogCalls
 # ---------------------------------------------------------------------------
 

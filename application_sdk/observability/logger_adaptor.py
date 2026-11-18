@@ -66,6 +66,7 @@ from application_sdk.observability.utils import (
     get_observability_dir,
     get_workflow_context,
     in_temporal_workflow,
+    self_failure_logger,
 )
 from application_sdk.version import __version__ as _SDK_VERSION
 
@@ -865,32 +866,32 @@ class _LazyLoggerProxy:
         try:
             self._logger.debug(msg, **kwargs)
         except Exception:
-            logging.error("Error in lazy debug logging", exc_info=True)
+            self_failure_logger.warning("Error in lazy debug logging", exc_info=True)
 
     def info(self, msg: str, **kwargs: Any) -> None:
         try:
             self._logger.info(msg, **kwargs)
         except Exception:
-            logging.error("Error in lazy info logging", exc_info=True)
+            self_failure_logger.warning("Error in lazy info logging", exc_info=True)
 
     def warning(self, msg: str, **kwargs: Any) -> None:
         try:
             self._logger.warning(msg, **kwargs)
         except Exception:
-            logging.error("Error in lazy warning logging", exc_info=True)
+            self_failure_logger.warning("Error in lazy warning logging", exc_info=True)
 
     def error(self, msg: str, **kwargs: Any) -> None:
         try:
             self._logger.error(msg, **kwargs)
         except Exception:
-            logging.error("Error in lazy error logging", exc_info=True)
+            self_failure_logger.warning("Error in lazy error logging", exc_info=True)
 
     def critical(self, msg: str, **kwargs: Any) -> None:
         try:
             # conformance: ignore[L007] this *is* the proxy's own .critical() definition (loguru's bound-opt logger natively supports it), not a deprecated call site — downgrading to .error() would change emitted severity
             self._logger.critical(msg, **kwargs)
         except Exception:
-            logging.error("Error in lazy critical logging", exc_info=True)
+            self_failure_logger.warning("Error in lazy critical logging", exc_info=True)
 
     def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
         """Dispatch to the named level method matching stdlib integer *level*."""
@@ -1139,7 +1140,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 atexit.register(shutdown_otlp_logs)
 
         except Exception:
-            logging.error("Failed to setup OTLP logging", exc_info=True)
+            self_failure_logger.warning("Failed to setup OTLP logging", exc_info=True)
 
         # Register a single unified loguru sink that builds the log-record dict once
         # and fans it out to all active targets.  When both the object-store sink and
@@ -1326,7 +1327,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             else:
                 bound_logger.debug(msg, *args)
         except Exception:
-            logging.error("Error in debug logging", exc_info=True)
+            self_failure_logger.warning("Error in debug logging", exc_info=True)
             self._sync_flush()
 
     def info(self, msg: str, *args: Any, **kwargs: Any):
@@ -1351,7 +1352,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             else:
                 bound_logger.info(msg, *args)
         except Exception:
-            logging.error("Error in info logging", exc_info=True)
+            self_failure_logger.warning("Error in info logging", exc_info=True)
             self._sync_flush()
 
     def warning(self, msg: str, *args: Any, **kwargs: Any):
@@ -1376,7 +1377,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             else:
                 bound_logger.warning(msg, *args)
         except Exception:
-            logging.error("Error in warning logging", exc_info=True)
+            self_failure_logger.warning("Error in warning logging", exc_info=True)
             self._sync_flush()
 
     def error(self, msg: str, *args: Any, **kwargs: Any):
@@ -1405,7 +1406,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             # Force flush on error logs
             self._sync_flush()
         except Exception:
-            logging.error("Error in error logging", exc_info=True)
+            self_failure_logger.warning("Error in error logging", exc_info=True)
             self._sync_flush()
 
     def exception(self, msg: str, *args: Any, **kwargs: Any):
@@ -1449,7 +1450,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             # Force flush on critical logs
             self._sync_flush()
         except Exception:
-            logging.error("Error in critical logging", exc_info=True)
+            self_failure_logger.warning("Error in critical logging", exc_info=True)
             self._sync_flush()
 
     def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
@@ -1507,7 +1508,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             processed_msg, processed_kwargs = self.process(msg, local_kwargs)
             self.logger.bind(**processed_kwargs).log("ACTIVITY", processed_msg, *args)
         except Exception:
-            logging.error("Error in activity logging", exc_info=True)
+            self_failure_logger.warning("Error in activity logging", exc_info=True)
             self._sync_flush()
 
     def metric(self, msg: str, *args: Any, **kwargs: Any):
@@ -1531,7 +1532,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             processed_msg, processed_kwargs = self.process(msg, local_kwargs)
             self.logger.bind(**processed_kwargs).log("METRIC", processed_msg, *args)
         except Exception:
-            logging.error("Error in metric logging", exc_info=True)
+            self_failure_logger.warning("Error in metric logging", exc_info=True)
             self._sync_flush()
 
     def _send_to_otel(self, record: dict[str, Any]):
@@ -1552,7 +1553,9 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             otel_logger = self.logger_provider.get_logger(SERVICE_NAME)
             otel_logger.emit(otel_record)
         except Exception:
-            logging.error("Error sending log to OpenTelemetry", exc_info=True)
+            self_failure_logger.warning(
+                "Error sending log to OpenTelemetry", exc_info=True
+            )
 
     def _sync_flush(self):
         """Flush the log buffer, dispatching appropriately for the current context.
@@ -1599,7 +1602,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 # waiting would stall the loop, which is what FND-4075 removed.
                 flush_console_logs(_CONSOLE_FLUSH_TIMEOUT_SECONDS)
         except Exception:
-            logging.error("Error during sync flush", exc_info=True)
+            self_failure_logger.warning("Error during sync flush", exc_info=True)
 
     def tracing(self, msg: str, *args: Any, **kwargs: Any):
         """Log a trace-specific message with trace context.
@@ -1651,7 +1654,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             ):
                 self._send_to_otel(log_record)
         except Exception:
-            logging.error("Error in log sink", exc_info=True)
+            self_failure_logger.warning("Error in log sink", exc_info=True)
 
     async def objectstore_sink(self, message: Any) -> None:
         """Buffer a log message for object-store upload.
@@ -1672,7 +1675,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             log_record = _make_log_record_dict(message)
             self.add_record(log_record)
         except Exception:
-            logging.error("Error buffering log", exc_info=True)
+            self_failure_logger.warning("Error buffering log", exc_info=True)
 
     def otlp_sink(self, message: Any) -> None:
         """Emit a log message to the configured OTLP exporter.
@@ -1692,7 +1695,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             log_record = _make_log_record_dict(message)
             self._send_to_otel(log_record)
         except Exception:
-            logging.error("Error processing log record", exc_info=True)
+            self_failure_logger.warning("Error processing log record", exc_info=True)
 
 
 # Create a singleton instance of the logger

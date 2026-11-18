@@ -51,7 +51,7 @@ class Checker(
 ):
     """Walk a module AST and emit L-series findings.
 
-    Per-file checks only (L001–L009, L010–L015, L017–L020).
+    Per-file checks only (L001–L009, L010–L015, L017–L020, L022).
     L002 and L016 are cross-file and run in ``scan_all`` (``__init__.py``).
     """
 
@@ -166,6 +166,7 @@ class Checker(
         self._check_l006(node)
         self._check_l007(node)
         self._check_l017(node)
+        self._check_l022(node)
         # Security
         self._check_l010(node)
         # Performance

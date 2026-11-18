@@ -278,6 +278,20 @@ def _reset_sizing_sink() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _reset_self_failure_rate_limit() -> Iterator[None]:
+    """Forget which observability self-failures were logged around every test.
+
+    The limiter is process-wide: without the reset, a test that triggers a
+    self-failure silences the same message in every later test on the worker.
+    """
+    from application_sdk.observability import utils
+
+    utils._self_failure_rate_limit.reset()
+    yield
+    utils._self_failure_rate_limit.reset()
+
+
+@pytest.fixture(autouse=True)
 def restore_psycopg2_encodings() -> Iterator[None]:
     """Undo any process-global rewrite of psycopg2's encodings map.
 

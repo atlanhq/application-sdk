@@ -588,6 +588,10 @@ server = 83
 exclude = ["*.md"]
 
 [tool.ruff.lint]
+# Imported loggers ruff should treat as loggers (BLE001 accepts a handler that
+# logs through one with exc_info=True). Module-local `logger = ...` bindings
+# are recognised by name already; an imported one needs naming here.
+logger-objects = ["application_sdk.observability.utils.self_failure_logger"]
 # explicit-preview-rules: only the preview rules listed in extend-select are
 # enabled — other preview rules remain off. This lets us opt into PLC0415
 # without inheriting every other preview rule's churn.

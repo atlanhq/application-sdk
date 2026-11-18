@@ -173,7 +173,7 @@ def _convert_json_to_parquet(file_path: str) -> str | None:
         )
         return parquet_file_path
     except Exception:
-        logger.error("Error converting file to parquet: %s", file_path, exc_info=True)
+        logger.warning("Error converting file to parquet: %s", file_path, exc_info=True)
         return None
 
 
@@ -187,7 +187,7 @@ def _convert_parquet_to_json(file_path: str) -> str | None:
         df.to_json(json_file_path, orient="records", lines=True)
         return json_file_path
     except Exception:
-        logger.error("Error converting file to json: %s", file_path, exc_info=True)
+        logger.warning("Error converting file to json: %s", file_path, exc_info=True)
         return None
 
 

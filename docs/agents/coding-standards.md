@@ -16,6 +16,15 @@
 7. **Conventional commits** - Commit messages must follow conventional format (e.g., `fix:`, `feat:`, `chore:`)
 7. **No customer names** - Never reference customer names, tenant names, run IDs, or any customer-identifiable information in code, comments, docstrings, commit messages, or PR descriptions. Use generic language: "a production incident", "a prior RCA".
 
+## Log Levels: WARNING Handled, ERROR Failed
+
+The customer-facing log view filters at ERROR, so an ERROR record reads as a
+failed run. Use ERROR only when the operation failed: the handler raises,
+exits, or returns a failure result. A failure the code caught and recovered
+from (a fallback, a best-effort close, a skipped item) is a WARNING with
+`exc_info=True`. Conformance L022 reports `logger.error()` in an `except` that
+does none of those. The full level table is in `docs/standards/logging.md`.
+
 ## Serialization & Type Systems
 
 Use the right type system for each zone:

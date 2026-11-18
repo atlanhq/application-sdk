@@ -464,7 +464,7 @@ def test_record_metric_with_optional_metadata_uses_real_otel_meter():
         metrics_adapter.meter = MeterProvider().get_meter("test_optional_metadata")
 
         with mock.patch(
-            "application_sdk.observability.metrics_adaptor.logging.error"
+            "application_sdk.observability.metrics_adaptor.self_failure_logger.warning"
         ) as mock_error:
             metrics_adapter.record_metric(
                 name="optional_metadata_counter",
@@ -753,7 +753,7 @@ class TestPrometheusMetrics:
                 side_effect=RuntimeError("reader boom"),
             ),
             mock.patch(
-                "application_sdk.observability.metrics_adaptor.logging.error"
+                "application_sdk.observability.metrics_adaptor.logging.warning"
             ) as mock_error,
         ):
             adapter = AtlanMetricsAdapter()
@@ -766,8 +766,12 @@ class TestPrometheusMetrics:
                 labels={},
             )
 
-        assert mock_error.call_count == 1
-        assert mock_error.call_args.args[0] == "Failed to setup OTel meter provider"
+        setup_failures = [
+            call
+            for call in mock_error.call_args_list
+            if call.args[0] == "Failed to setup OTel meter provider"
+        ]
+        assert len(setup_failures) == 1
 
 
 # ---------------------------------------------------------------------------

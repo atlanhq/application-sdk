@@ -37,7 +37,10 @@ from application_sdk.observability.background_loop import (
     observability_loop,
     register_after_fork,
 )
-from application_sdk.observability.utils import in_temporal_workflow
+from application_sdk.observability.utils import (
+    in_temporal_workflow,
+    self_failure_logger,
+)
 
 
 def _has_running_loop() -> bool:
@@ -589,7 +592,7 @@ class AtlanObservability(Generic[T], ABC):
                 # new batch flushes; wait for those too.
                 await instance._await_flush_tasks()
             except Exception:
-                logging.error("Error flushing instance", exc_info=True)
+                self_failure_logger.warning("Error flushing instance", exc_info=True)
 
     async def _await_flush_tasks(self) -> None:
         """Wait for in-flight ``add_record`` flushes owned by the running loop.
@@ -1049,7 +1052,7 @@ class AtlanObservability(Generic[T], ABC):
                                     prev_writer.remote_key,
                                 )
                             except Exception:
-                                logging.error(
+                                self_failure_logger.warning(
                                     "Error finalizing observability partition",
                                     exc_info=True,
                                 )
@@ -1069,7 +1072,9 @@ class AtlanObservability(Generic[T], ABC):
                     current_writer.file.write(orjson.dumps(record) + b"\n")
 
                 except Exception:
-                    logging.error("Error writing observability record", exc_info=True)
+                    self_failure_logger.warning(
+                        "Error writing observability record", exc_info=True
+                    )
 
             # Finalize the last open partition.
             if current_writer is not None:
@@ -1083,7 +1088,7 @@ class AtlanObservability(Generic[T], ABC):
                     current_writer = None
 
         except Exception:
-            logging.error("Error flushing records batch", exc_info=True)
+            self_failure_logger.warning("Error flushing records batch", exc_info=True)
 
         finally:
             # Defensive: if an unexpected exception left the writer open, close its
@@ -1150,7 +1155,7 @@ class AtlanObservability(Generic[T], ABC):
             self.export_record(record)
 
         except Exception:
-            logging.error("Error adding record", exc_info=True)
+            self_failure_logger.warning("Error adding record", exc_info=True)
 
 
 def _reset_store_state_lock_after_fork() -> None:

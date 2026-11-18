@@ -336,7 +336,7 @@ def validate_with_pandera(
             )
         except Exception as e:
             result["error"] = str(e)
-            logger.error("Validation failed for %s: %s", entity, e, exc_info=True)
+            logger.warning("Validation failed for %s: %s", entity, e, exc_info=True)
 
         results.append(result)
 

@@ -724,6 +724,7 @@ def test_catalog_l_series_present() -> None:
         "L019",
         "L020",
         "L021",
+        "L022",
     }
     missing = expected - l_ids
     assert not missing, f"Missing L-series rules: {missing}"
