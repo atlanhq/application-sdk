@@ -43,7 +43,6 @@ from application_sdk.constants import (
 # observability package would otherwise import this module mid-boot and deadlock
 # on the module lock (_DeadlockError at startup when the log level is DEBUG).
 from application_sdk.errors.base import redact_secrets
-from application_sdk.observability.background_loop import BackgroundTask
 from application_sdk.observability.console_sink import (
     console_writer,
     flush_console_logs,
@@ -913,8 +912,6 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
     - Temporal workflow and activity context integration
     """
 
-    _flush_task_started: ClassVar[bool] = False
-    _flush_task: ClassVar[BackgroundTask | None] = None
     _initialized: ClassVar[bool] = False
     # The adapter whose bound ``_log_sink`` loguru calls. The sink is
     # registered once, so this adapter's buffer is the only one records land
@@ -927,14 +924,16 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         Public test hook: any new ClassVar or module-level cache associated
         with logger initialization MUST be reset here so test isolation
-        stays correct. Currently resets ``_initialized``, ``_flush_task_started``,
-        ``_sink_owner``, and clears the module-level ``_logger_instances`` cache.
+        stays correct. Currently stops the periodic flush (discarding its
+        sink's unflushed records), resets ``_initialized`` and
+        ``_sink_owner``, and clears the module-level ``_logger_instances``
+        cache.
 
         This method should only be used in tests to allow fresh sink setup
         for each test case.
         """
+        cls._stop_periodic_flush_for_testing()
         cls._initialized = False
-        cls._flush_task_started = False
         cls._sink_owner = None
         _logger_instances.clear()
         _otlp_shutdown_done.clear()
@@ -1148,15 +1147,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             self.logger.add(self._log_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
             AtlanLoggerAdapter._sink_owner = self
             # Start the periodic flush task only when the object-store sink is active.
-            if (
-                ENABLE_OBSERVABILITY_STORE_SINK
-                and not AtlanLoggerAdapter._flush_task_started
-            ):
-                try:
-                    AtlanLoggerAdapter._flush_task = self._start_periodic_flush()
-                    AtlanLoggerAdapter._flush_task_started = True
-                except Exception:
-                    logging.error("Failed to start flush task", exc_info=True)
+            if ENABLE_OBSERVABILITY_STORE_SINK:
+                self._ensure_periodic_flush()
 
         # Mark initialization complete only after all sinks are successfully added
         AtlanLoggerAdapter._initialized = True
@@ -1698,25 +1690,6 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             self._send_to_otel(log_record)
         except Exception:
             logging.error("Error processing log record", exc_info=True)
-
-    def __del__(self):
-        """Cancel the periodic flush task when the logger is destroyed.
-
-        Guarded against interpreter teardown: during shutdown Python rebinds
-        module globals — including the ``AtlanLoggerAdapter`` class name this
-        references — to ``None``, so the attribute access raises
-        ``AttributeError`` ("'NoneType' object has no attribute '_flush_task'").
-        The event loop may likewise already be closed, making ``cancel()``
-        raise. Both are benign during GC/shutdown (there is nothing left to
-        flush) and cannot be logged (the logging stack may be gone), so they
-        are swallowed.
-        """
-        try:
-            task = AtlanLoggerAdapter._flush_task
-            if task is not None and not task.done():
-                task.cancel()
-        except Exception:  # noqa: S110, BLE001 — teardown-only; see docstring
-            pass
 
 
 # Create a singleton instance of the logger

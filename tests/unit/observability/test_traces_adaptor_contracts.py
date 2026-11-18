@@ -76,12 +76,7 @@ class TestNothingKeptForLater:
     loop that built it. Nothing read those files; the adapter now only emits."""
 
     def test_construction_starts_no_flush_task(self) -> None:
-        # The once-per-process guard the old flush kept, cleared so a flush
-        # would start here if construction still started one.
         with (
-            mock.patch.object(
-                AtlanTracesAdapter, "_flush_task_started", False, create=True
-            ),
             mock.patch(
                 "application_sdk.observability.observability.observability_loop"
             ) as shared_loop,

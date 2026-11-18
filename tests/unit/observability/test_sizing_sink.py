@@ -25,6 +25,12 @@ from application_sdk.observability.sizing_sink import (
 )
 
 
+def _flush_handle():
+    """The running sizing flush's handle, or ``None`` if none started."""
+    owner = AtlanObservability._periodic_flush_owners.get(SizingObservabilitySink)
+    return None if owner is None else owner._periodic_flush_task
+
+
 def _observation(**overrides) -> SizingObservation:
     base = {
         "activity_type": "automation-engine:merge",
@@ -310,7 +316,7 @@ class TestTheFlushActuallyHappens:
             ),
         ):
             sizing_sink.get_sink()
-            task = SizingObservabilitySink._flush_task
+            task = _flush_handle()
             assert task is not None, "no periodic flush was started"
             # It runs on the shared observability loop, not this one.
             assert task.wait(timeout=5)
@@ -397,7 +403,7 @@ class TestResetLeavesNothingToFlushLater:
             sizing_sink, "get_observability_dir", return_value=str(tmp_path)
         ):
             sizing_sink.get_sink()
-        task = SizingObservabilitySink._flush_task
+        task = _flush_handle()
         assert task is not None, "the sink should start its periodic flush"
         assert not task.done(), "the periodic flush ended on its own: vacuous"
 
@@ -432,7 +438,7 @@ class TestResetLeavesNothingToFlushLater:
         sink = sizing_sink._sink
         assert sink is not None, "the racing build never ran: vacuous"
         assert sink in AtlanObservability._instances, "_sink is a stopped sink"
-        assert SizingObservabilitySink._flush_task_started
+        assert SizingObservabilitySink in AtlanObservability._periodic_flush_owners
 
     async def test_a_flush_after_the_session_restores_env_writes_nothing(
         self, tmp_path, monkeypatch

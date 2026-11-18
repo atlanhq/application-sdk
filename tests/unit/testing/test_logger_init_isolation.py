@@ -160,34 +160,35 @@ def test_flag_was_not_stamped_back_down():
     pytester.runpytest("-p", "no:randomly").assert_outcomes(passed=2)
 
 
-def test_guard_restores_both_flags(pytester: pytest.Pytester) -> None:
-    """Not just ``_initialized`` — ``_flush_task_started`` gates thread spawning.
+def test_guard_restores_the_flag_and_the_reset_releases_the_flush(
+    pytester: pytest.Pytester,
+) -> None:
+    """The latch covers ``_initialized``; the periodic flush needs none.
 
-    Leaving that one down lets a later real init spawn a second flush thread. The
-    assertion is the latch, not the snapshot: a flag that was up before the test
-    is up again after it, whatever the test did to it in between.
+    The reset stops the logger's periodic flush and releases its class, so a
+    later init starts one flush in its place rather than a second beside it.
+    The assertion on the flag is the latch, not the snapshot: a flag that was up
+    before the test is up again after it, whatever the test did to it.
     """
     pytester.makeconftest(WITH_GUARD)
     pytester.makepyfile(
         test_flags="""
 from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter
+from application_sdk.observability.observability import AtlanObservability
 
 BEFORE = {}
 
 
 def test_capture_then_reset():
     BEFORE["initialized"] = AtlanLoggerAdapter._initialized
-    BEFORE["flush"] = AtlanLoggerAdapter._flush_task_started
     AtlanLoggerAdapter._reset_for_testing()
     assert AtlanLoggerAdapter._initialized is False
-    assert AtlanLoggerAdapter._flush_task_started is False
+    assert AtlanLoggerAdapter not in AtlanObservability._periodic_flush_owners
 
 
-def test_flags_that_were_up_are_up_again():
+def test_flag_that_was_up_is_up_again():
     if BEFORE["initialized"]:
         assert AtlanLoggerAdapter._initialized is True
-    if BEFORE["flush"]:
-        assert AtlanLoggerAdapter._flush_task_started is True
 """
     )
 

@@ -126,7 +126,7 @@ def restore_logger_init_flags() -> Generator[None, None, None]:
     ``logger.remove(sink_id)`` for a sink that is already gone, attributed to a
     test that did nothing wrong.
 
-    Both flags are treated as **latches: this fixture only ever restores one
+    The flag is treated as a **latch: this fixture only ever restores it
     upward, and never writes False.** Writing a snapshot back verbatim would
     re-arm the very hazard it exists to close — a test that *starts* with the
     flag down and then constructs an adapter has installed live sinks by the
@@ -142,9 +142,8 @@ def restore_logger_init_flags() -> Generator[None, None, None]:
     imports ``logger_adaptor``, whose import binds ``default_logger`` and so has
     already run a full init.
 
-    ``_flush_task_started`` gets the same treatment for the same reason in
-    reverse — it gates thread spawning, so restoring it *down* after a test
-    started a flush task would let a later init spawn a second one.
+    The periodic flush needs no latch: ``_reset_for_testing`` stops it, so the
+    flush a later init starts replaces it rather than running beside it.
 
     Under ``-n auto --dist load`` xdist hands items out as workers free up, so
     which pair collides is a function of relative test speed rather than of
@@ -152,14 +151,11 @@ def restore_logger_init_flags() -> Generator[None, None, None]:
     rerun could turn green — the same shape as FND-961. See FND-976.
     """
     initialized = AtlanLoggerAdapter._initialized
-    flush_task_started = AtlanLoggerAdapter._flush_task_started
     try:
         yield
     finally:
         if initialized:
             AtlanLoggerAdapter._initialized = True
-        if flush_task_started:
-            AtlanLoggerAdapter._flush_task_started = True
 
 
 def _redirect_temporary_path(patcher: pytest.MonkeyPatch, path: str) -> None:

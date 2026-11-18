@@ -32,7 +32,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import ExitStack
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -40,7 +40,6 @@ import pytest
 from application_sdk.constants import LOG_FILE_NAME, METRICS_FILE_NAME, TRACES_FILE_NAME
 from application_sdk.observability import observability as obs_module
 from application_sdk.observability.background_loop import (
-    BackgroundTask,
     ObservabilityLoop,
 )
 from application_sdk.observability.observability import AtlanObservability
@@ -858,9 +857,6 @@ class TestResetStopsDroppedSinks:
         clears that guard, so the next adaptor of the class starts a flush."""
 
         class _Adaptor(_ConcreteObs):
-            _flush_task_started: ClassVar[bool] = False
-            _flush_task: ClassVar[BackgroundTask | None] = None
-
             def __init__(self, data_dir: str) -> None:
                 super().__init__(
                     batch_size=1000,
@@ -868,17 +864,14 @@ class TestResetStopsDroppedSinks:
                     data_dir=data_dir,
                     file_name=METRICS_FILE_NAME,
                 )
-                # The shape every adaptor's constructor has.
-                if not _Adaptor._flush_task_started:
-                    _Adaptor._flush_task = self._start_periodic_flush()
-                    _Adaptor._flush_task_started = True
+                self._ensure_periodic_flush()
 
         AtlanObservability._reset_for_testing()
         own_loop.shutdown(timeout=5)
-        _Adaptor(str(tmp_path / "late"))
-        assert _Adaptor._flush_task is None
-        assert _Adaptor._flush_task_started
+        adaptor = _Adaptor(str(tmp_path / "late"))
+        assert adaptor._periodic_flush_task is None
+        assert AtlanObservability._periodic_flush_owners.get(_Adaptor) is adaptor
 
         AtlanObservability._reset_for_testing()
 
-        assert not _Adaptor._flush_task_started
+        assert _Adaptor not in AtlanObservability._periodic_flush_owners
