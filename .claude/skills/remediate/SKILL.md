@@ -33,7 +33,8 @@ inputs:
 
       This is what makes one-rule-per-run possible, and it is also the only way
       to express "blocking tier first": tier is a **per-rule** property (D001
-      and D009 are BLOCK inside an otherwise-WARN series), so it cannot be
+      and D009 are BLOCK inside an otherwise-WARN series, as are B002 and B004),
+      so it cannot be
       selected through the area/series axis at all.
     required: false
     default: ""

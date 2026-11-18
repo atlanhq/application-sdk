@@ -70,7 +70,7 @@ from application_sdk.errors.wire import FailureDetails
 
 
 @dataclass(frozen=True)
-class ErrorCode:
+class ErrorCode:  # conformance: ignore[B004] the AAF-* constants below build it at import; a runtime marker would warn every importer
     """Structured error code for monitoring and alerting.
 
     Deprecated: use ``FailureCategory`` + typed ``AppError`` subclasses.

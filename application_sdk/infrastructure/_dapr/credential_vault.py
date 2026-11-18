@@ -7,13 +7,13 @@ references via the Dapr secret store.
 import asyncio
 import copy
 import re
-import warnings
 from enum import Enum
 from typing import Any
 
 import orjson
 from typing_extensions import deprecated
 
+from application_sdk import _deprecation
 from application_sdk.errors.leaves import (  # noqa: F401 — DaprSidecarUnreachableError is a re-export kept for importers of this module (shipped surface)
     ColdStartRaceError,
     DaprSidecarUnreachableError,
@@ -591,20 +591,6 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the removed re-export once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated here; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    from application_sdk.infrastructure._dapr.http import (  # noqa: PLC0415 — resolved on access only
-        DAPR_SECRET_STORE_COMPONENT,
-    )
-
-    return DAPR_SECRET_STORE_COMPONENT
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)

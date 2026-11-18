@@ -85,6 +85,11 @@ with the conformance package, which every app's CI already runs. So a correctly
 marked deprecation turns into a fleet-wide **B001** nudge with zero per-app work
 — carrying your own migration text.
 
+`application_sdk._deprecation` holds the SDK's helpers for all of them:
+`deprecated` (re-exported from `typing_extensions`), `deprecated_module_getattr`
+and `warn_deprecated`. Write removal versions as a full `X.Y.Z` (`4.0.0`, not
+`4.0`).
+
 ### A function, method or class → `@deprecated`
 
 ```python
@@ -129,82 +134,88 @@ class DataframeType(str, Enum):
 The dunder name keeps `EnumMeta` from reading the mapping as a member. See
 `application_sdk/common/types.py`.
 
-### A module-level constant → `_DEPRECATED_CONSTANTS` + PEP 562 `__getattr__`
+### A module-level constant → `_DEPRECATED_CONSTANTS` + `deprecated_module_getattr`
 
 A constant can carry neither marker above, so the vehicle is a module
-`__getattr__`. It fires on *access*, so an app that never touches the name pays
-nothing, and the warning names the caller's own line rather than this module's
-import.
+`__getattr__` (PEP 562). It fires on *access*, so an app that never touches the
+name pays nothing, and the warning names the caller's own line rather than this
+module's import. Build it with the shared factory in
+`application_sdk._deprecation`; do not hand-write one.
 
 ```python
-import warnings
+from typing import TYPE_CHECKING
 
-#: name -> (replacement, why). The shared sentence and the removal version
-#: live in __getattr__ below; both halves are glued back together when the
-#: notice is graded.
+from application_sdk import _deprecation
+
+#: name -> (replacement, why). The factory formats each entry into one notice:
+#: "<name> is deprecated; use <replacement> instead — <why>. Will be removed
+#: in v<remove_in>."
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
-    "CLASSIFICATION_VERDICT": (
-        "PreflightClassification.VERDICT",
-        "the enum member carrying the same wire value",
+    "UNVERIFIABLE_CHECK_NAME": (
+        "application_sdk.handler.contracts.UNVERIFIABLE_CHECK_NAME",
+        "the same constant, at the module that now owns it",
     ),
 }
 
+if TYPE_CHECKING:
+    # __getattr__ can only be typed -> object; this restores the real type for
+    # type checkers without binding the name at runtime.
+    UNVERIFIABLE_CHECK_NAME: str
 
-def _deprecated_constant_value(name: str) -> object:
-    if name == "CLASSIFICATION_VERDICT":
-        return PreflightClassification.VERDICT.value
-    raise AssertionError(name)
-
-
-def __getattr__(name: str) -> object:
-    """Serve the removed constants once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v3.40.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _deprecated_constant_value(name)
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)
 ```
 
-**Build the notice inline in the `warn` call, as above — do not pass a
-variable.** It reads like a pointless restriction and it is not. B002/B003
-grade notices through a separate extractor that walks `warnings.warn` calls, and
-`_static_str` can only read a literal or an f-string: hand it a name and it sees
-an empty string, so a correctly authored deprecation is reported as naming
-neither a replacement nor a removal version. Measured on the two shapes:
+By default the value is imported from the replacement's dotted path, which fits
+a name that moved. Pass `resolve=` when it does not: a function from the name to
+its value, `_deprecation.lazy_resolver(_LAZY)` for a `_LAZY` map of
+`(module, attribute)`, or a lambda returning a private binding. A module whose
+`__getattr__` also serves lazy exports passes them as `fallback=`; a name in the
+table warns, and any other name goes to the fallback without a warning. A table
+value may also be a complete notice string, for a name with nothing to replace
+it; it is emitted qualified by the module name.
 
-| shim shape | site extraction | `scan_authoring` |
-|---|---|---|
-| f-string inline in `warn(...)` | target ✅, removal ✅ | clean |
-| `notice = ...` then `warn(notice, ...)` | target ✅, removal ✅ | **spurious B002** |
-
-The site side reads the mapping and is fine either way; only the notice side
-trips. Until `_static_str` learns to resolve a simple name binding, the inline
-form is the one that grades clean — and it is also what
-[#3843](https://github.com/atlanhq/application-sdk/pull/3843) ships, so it is
-precedent rather than invention.
-
-Three constraints make this readable by the tooling, and all three matter:
+Four constraints make this readable by the tooling, and all four matter:
 
 - The mapping must be named **`_DEPRECATED_CONSTANTS`** and be a dict literal at
   module level. Both the surface gate and `gen-deprecations` read its keys
   statically.
-- The module must define **`__getattr__`**. The mapping alone serves nothing;
-  recording its keys without the shim would tell apps a name is importable when
-  accessing it raises `AttributeError`.
+- **`__getattr__ = …deprecated_module_getattr(…)`** must be a plain module-level
+  assignment. The mapping alone serves nothing; recording its keys without the
+  shim would tell apps a name is importable when accessing it raises
+  `AttributeError`.
+- **`remove_in` is a string literal** and a full `X.Y.Z`. B002/B003 read the
+  removal version from it, and the factory rejects `"4.0"`.
 - Do **not** also re-export the old name at module scope. A real binding resolves
   before `__getattr__` ever runs, so the alias never fires and the consumer gets
   no migration signal at all.
 
-A value may also be a single notice string rather than a `(replacement, note)`
-tuple; the extractor accepts both and appends the `__getattr__` tail either way.
-The tuple form is shown above because it keeps the shared sentence in one place
-instead of repeating it per entry.
+`tests/unit/test_deprecation.py` fails if a module next to a
+`_DEPRECATED_CONSTANTS` table defines `def __getattr__` itself.
+
+### A deprecated parameter, default or mode → `warn_deprecated`
+
+A way of calling something is not a symbol, so no marker above applies. Warn
+where the deprecated path runs, through the same helper the factory uses:
+
+```python
+from application_sdk import _deprecation
+
+if raise_on_error is None:
+    _deprecation.warn_deprecated(
+        "get_deployment_secret() without raise_on_error",
+        "raise_on_error=True for a typed SecretStoreError",
+        "4.0.0",
+        note="it returns None for a store failure as well as a missing key",
+    )
+```
+
+Its `stacklevel` means what it means to `warnings.warn` called from the same
+place. B002/B003 rebuild the notice from the literal arguments, so pass them as
+literals. A hand-written `warnings.warn(..., DeprecationWarning)` is still graded,
+including a message held in a local variable or built from a module-level string
+constant, but the helper cannot get the format wrong.
 
 ---
 

@@ -34,6 +34,7 @@ from temporalio import activity, workflow
 from temporalio.exceptions import ActivityError, FailureError
 from temporalio.exceptions import ApplicationError as _TemporalApplicationError
 
+from application_sdk import _deprecation
 from application_sdk._context_errors import (  # re-exported; defined in the api distribution
     AppContextError,
 )
@@ -612,7 +613,7 @@ class AppError(_NewAppError):
 
 
 class NonRetryableError(AppError):
-    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.
+    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.0.
 
     Use this for failures that are deterministic and will never succeed on retry:
     - Authentication failures (invalid credentials)
@@ -634,9 +635,32 @@ class NonRetryableError(AppError):
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_NON_RETRYABLE
     default_retryable: ClassVar[bool] = False
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        app_name: str | None = None,
+        run_id: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        # Warns when an error is raised, not when a subclass is defined, so
+        # importing an app that subclasses this never warns. Replaces the
+        # generic AppError notice with one naming this class.
+        _deprecation.warn_deprecated(
+            "NonRetryableError",
+            "a typed application_sdk.errors.AppError subclass with "
+            "default_retryable = False",
+            "4.0.0",
+        )
+        _NewAppError.__init__(
+            self, message=message, cause=cause, app_name=app_name, run_id=run_id
+        )
+        self._legacy_error_code = error_code
+
 
 class RetryableError(AppError):
-    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = True`` — removed in v4.0.
+    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = True`` — removed in v4.0.0.
 
     Extend this when raising an error directly from an ``@entrypoint`` method
     that signals a *transient* failure — one where retrying the entire workflow
@@ -666,6 +690,29 @@ class RetryableError(AppError):
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
     default_retryable: ClassVar[bool] = True
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        app_name: str | None = None,
+        run_id: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        # Warns when an error is raised, not when a subclass is defined, so
+        # importing an app that subclasses this never warns. Replaces the
+        # generic AppError notice with one naming this class.
+        _deprecation.warn_deprecated(
+            "RetryableError",
+            "a typed application_sdk.errors.AppError subclass with "
+            "default_retryable = True",
+            "4.0.0",
+        )
+        _NewAppError.__init__(
+            self, message=message, cause=cause, app_name=app_name, run_id=run_id
+        )
+        self._legacy_error_code = error_code
 
 
 # =============================================================================

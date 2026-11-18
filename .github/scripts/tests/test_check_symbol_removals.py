@@ -170,6 +170,50 @@ def test_pep562_constant_alias_clears_the_finding():
     assert mod.compare(base, head) == []
 
 
+def test_factory_built_getattr_alias_clears_the_finding():
+    """`__getattr__ = deprecated_module_getattr(...)` is the shared shim (FND-4300)."""
+    base = snap("CLASSIFICATION_VERDICT = 'verdict'")
+    head = snap(
+        "from application_sdk import _deprecation\n"
+        "_DEPRECATED_CONSTANTS = {'CLASSIFICATION_VERDICT': ('X.VERDICT', 'note')}\n"
+        "__getattr__ = _deprecation.deprecated_module_getattr(\n"
+        "    __name__, _DEPRECATED_CONSTANTS, remove_in='4.0.0'\n"
+        ")\n"
+    )
+    assert mod.compare(base, head) == []
+
+
+def test_an_unrelated_callable_assigned_to_getattr_serves_no_alias():
+    """Only the shared factory is known to serve its table."""
+    base = snap("OLD = 1")
+    head = snap(
+        "_DEPRECATED_CONSTANTS = {'OLD': ('NEW', 'moved')}\n"
+        "__getattr__ = make_getter()\n"
+    )
+    assert blocking(mod.compare(base, head)) == {"application_sdk.thing:OLD"}
+
+
+def test_factory_fallback_helper_serves_its_allowlist():
+    """A factory getter handed `fallback=_lazy` serves what `_lazy` reads."""
+    base = snap("from application_sdk.thing.service import create_service")
+    head = snap(
+        "if TYPE_CHECKING:\n"
+        "    from application_sdk.thing.service import create_service\n"
+        "_SERVICE_NAMES = frozenset({'create_service'})\n"
+        "_DEPRECATED_CONSTANTS = {'OLD': ('X', 'y')}\n"
+        "def _lazy(name):\n"
+        "    if name in _SERVICE_NAMES:\n"
+        "        from application_sdk.thing import service\n"
+        "        return getattr(service, name)\n"
+        "    raise AttributeError(name)\n"
+        "__getattr__ = _deprecation.deprecated_module_getattr(\n"
+        "    __name__, _DEPRECATED_CONSTANTS, remove_in='4.0.0', fallback=_lazy\n"
+        ")\n"
+        "__all__ = ['create_service']\n"
+    )
+    assert mod.compare(base, head) == []
+
+
 def test_alias_mapping_without_getattr_serves_nothing():
     """The dict alone is inert — without the shim the name is really gone."""
     base = snap("CLASSIFICATION_VERDICT = 'verdict'")

@@ -13,9 +13,10 @@ script of your own instead. The implementation lives in
 
 from __future__ import annotations
 
-import importlib
 import warnings
 from typing import TYPE_CHECKING
+
+from application_sdk import _deprecation
 
 # The supported library API, re-exported eagerly and NOT deprecated. Serving
 # these through the alias below would put them in the deprecated-symbol manifest
@@ -80,20 +81,12 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str) -> object:
-    """Serve the moved names once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    module, attr = _LAZY[name]
-    return getattr(importlib.import_module(module), attr)
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=_deprecation.lazy_resolver(_LAZY),
+)
 
 
 if __name__ == "__main__":

@@ -345,6 +345,49 @@ def _signature(
     return tuple(names), tuple(required), tuple(kinds)
 
 
+def _module_getattr(tree: ast.Module) -> ast.AST | None:
+    """The module's PEP 562 ``__getattr__``, or ``None`` without one.
+
+    Either a ``def __getattr__`` or ``__getattr__ = deprecated_module_getattr(...)``
+    (``application_sdk._deprecation``'s factory). For the factory the call is
+    returned, so a walk over it sees the tables it was handed.
+    """
+    for node in tree.body:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "__getattr__"
+        ):
+            return node
+        if (
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(t, ast.Name) and t.id == "__getattr__" for t in node.targets
+            )
+            and _is_getattr_factory(node.value)
+        ):
+            return node.value
+    return None
+
+
+def _is_getattr_factory(node: ast.expr) -> bool:
+    """``deprecated_module_getattr(...)`` or ``_deprecation.deprecated_module_getattr(...)``.
+
+    Only the shared factory is known to serve the table it is handed; any other
+    callable assigned to ``__getattr__`` might raise for every name.
+    """
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    name = (
+        func.id
+        if isinstance(func, ast.Name)
+        else func.attr
+        if isinstance(func, ast.Attribute)
+        else None
+    )
+    return name == "deprecated_module_getattr"
+
+
 def _alias_names(tree: ast.Module) -> set[str]:
     """Names served by the module's PEP 562 deprecation shim.
 
@@ -353,12 +396,7 @@ def _alias_names(tree: ast.Module) -> set[str]:
     serves nothing, and a module that has the shim without the mapping is
     serving names this gate cannot enumerate (reported by the caller).
     """
-    has_getattr = any(
-        isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and n.name == "__getattr__"
-        for n in tree.body
-    )
-    if not has_getattr:
+    if _module_getattr(tree) is None:
         return set()
     names: set[str] = set()
     for node in tree.body:
@@ -391,11 +429,7 @@ def _lazy_names(tree: ast.Module) -> dict[str, tuple[str, str]]:
     at package-import time, so the name is surface exactly like an eager
     re-export.
     """
-    if not any(
-        isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and n.name == "__getattr__"
-        for n in tree.body
-    ):
+    if _module_getattr(tree) is None:
         return {}
     served: dict[str, tuple[str, str]] = {}
     for node in tree.body:
@@ -559,18 +593,18 @@ def _getattr_served(tree: ast.Module) -> frozenset[str] | None:
     allowlist is checkable; a static scan cannot run the getter. The runtime
     backstop is a test that every ``__all__`` name of such a module resolves.
     """
-    getter = next(
-        (
-            n
-            for n in tree.body
-            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and n.name == "__getattr__"
-        ),
-        None,
-    )
+    getter = _module_getattr(tree)
     if getter is None:
         return None
     read = {n.id for n in ast.walk(getter) if isinstance(n, ast.Name)}
+    # A factory-built getter is handed its helpers by name
+    # (``fallback=_lazy_export``); the allowlists they read are the getter's.
+    for node in tree.body:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name in read
+        ):
+            read |= {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
     served: set[str] = set()
     for node in tree.body:
         targets: Sequence[ast.expr]

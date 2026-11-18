@@ -344,9 +344,9 @@ async def upload_current_state(
 
 
 @deprecated(
-    "cleanup_previous_state is deprecated; previous state now lives in the "
-    "run-scoped RunStateDirs.previous_state, which goes with the run's output "
-    "— will be removed in v4.0.0."
+    "cleanup_previous_state is deprecated; drop the call — previous state now "
+    "lives in the run-scoped RunStateDirs.previous_state, which goes with the "
+    "run's output — will be removed in v4.0.0."
 )
 def cleanup_previous_state(previous_state_dir: Path | None) -> None:
     """Clean up temporary previous state directory.
@@ -379,8 +379,9 @@ def cleanup_previous_state(previous_state_dir: Path | None) -> None:
 
 
 @deprecated(
-    "prepare_current_state_directory is deprecated; create_current_state_snapshot "
-    "resets its own build directory — will be removed in v4.0.0."
+    "prepare_current_state_directory is deprecated; drop the call — "
+    "create_current_state_snapshot resets its own build directory — will be "
+    "removed in v4.0.0."
 )
 def prepare_current_state_directory(current_state_dir: Path) -> None:
     """Clear and recreate current-state directory.

@@ -13,6 +13,7 @@ from httpx._types import (
     RequestFiles,
 )
 
+from application_sdk import _deprecation
 from application_sdk._logging import get_logger
 from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.http_errors import HttpClientSourceUnavailableError
@@ -607,12 +608,13 @@ def _warn_if_raise_on_error_unset(
 ) -> None:
     """Warn a caller still relying on the deprecated ``None``-on-failure default."""
     if raise_on_error is None:
-        warnings.warn(
-            f"BaseClient.{method_name} returns None when a request fails unless "
-            "raise_on_error=True is passed, which raises SourceUnavailableError "
-            "instead. The default becomes raise_on_error=True in v4.0; pass "
-            "raise_on_error=True (or False to keep None) explicitly.",
-            DeprecationWarning,
+        _deprecation.warn_deprecated(
+            f"BaseClient.{method_name} without raise_on_error",
+            "raise_on_error=True, which raises SourceUnavailableError when a "
+            "request fails (or raise_on_error=False to keep None)",
+            "4.0.0",
+            note="it returns None when a request fails; the None default goes "
+            "and raise_on_error=True becomes the default",
             stacklevel=3,
         )
 

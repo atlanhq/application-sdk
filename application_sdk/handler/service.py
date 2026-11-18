@@ -50,6 +50,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ValidationError
 from temporalio.client import WorkflowFailureError
 
+from application_sdk import _deprecation
 from application_sdk._runtime.offload import (  # noqa: F401 — re-exported (served here before object_routes)
     run_in_thread,
 )
@@ -2244,6 +2245,11 @@ def create_app_handler_service(
     return app
 
 
+@_deprecation.deprecated(
+    "run_app_handler_service is deprecated; use server_sdk.build_asgi_app with "
+    "your own uvicorn.run instead — the consolidated host owns the run loop. "
+    "Will be removed in v4.0.0."
+)
 def run_app_handler_service(
     handler: Handler,
     *,
@@ -2257,7 +2263,7 @@ def run_app_handler_service(
     .. deprecated:: 3.37
         Use :func:`server_sdk.build_asgi_app` with your own ``uvicorn.run``. The
         consolidated host owns the run loop, so ``atlan-application-sdk-server``
-        ships no blocking entry point. Removed in v4.0.
+        ships no blocking entry point. Removed in v4.0.0.
 
     Convenience wrapper around ``create_app_handler_service()`` that blocks
     until the server is stopped. All keyword arguments are forwarded to
@@ -2270,6 +2276,24 @@ def run_app_handler_service(
         log_level: Uvicorn log level (default: "info").
         **kwargs: Additional keyword arguments forwarded to
             ``create_app_handler_service()``.
+    """
+    _run_app_handler_service(
+        handler, host=host, port=port, log_level=log_level, **kwargs
+    )
+
+
+def _run_app_handler_service(
+    handler: Handler,
+    *,
+    host: str = "0.0.0.0",
+    port: int = 8000,
+    log_level: str = "info",
+    **kwargs: Any,
+) -> None:
+    """The SDK's own handler-mode run loop (``application_sdk.main``).
+
+    The body of the deprecated :func:`run_app_handler_service`, kept apart so
+    starting handler mode does not warn about a deprecation the app cannot act on.
     """
     import uvicorn  # noqa: PLC0415 — cold path: uvicorn only when starting standalone server
 
