@@ -168,32 +168,49 @@ def _reap(runs: dict[str, _ProbeRun]) -> None:
 @pytest.mark.skipif(
     sys.platform == "win32", reason="asyncio has no signal handlers on Windows"
 )
-def test_a_stalled_shutdown_exits_and_nothing_else_is_killed(
-    subtests: pytest.Subtests, tmp_path: Path
-) -> None:
+def _misbehaviour(
+    probe: _Probe, returncode: int, stdout: str, stderr: str
+) -> list[str]:
+    """What this child did that its scenario forbids; empty when it behaved."""
+    if probe.culprit is not None:
+        checks = [
+            (returncode == 1, f"exit code {returncode}, expected 1"),
+            (_TIMER_HEADER in stderr, f"no {_TIMER_HEADER!r} in stderr"),
+            (
+                f"in {probe.culprit}" in stderr,
+                f"stack dump does not name {probe.culprit}",
+            ),
+            ("probe exited cleanly" not in stdout, "process exited cleanly"),
+        ]
+    else:
+        checks = [
+            (returncode == 0, f"exit code {returncode}, expected 0"),
+            ("Timeout (" not in stderr, "the watchdog fired"),
+            ("probe exited cleanly" in stdout, "no clean-exit line"),
+        ]
+    return [problem for ok, problem in checks if not ok]
+
+
+def test_a_stalled_shutdown_exits_and_nothing_else_is_killed(tmp_path: Path) -> None:
     """Each scenario in ``_PROBES``, run side by side and reported by name.
 
     One test rather than seven: the children run concurrently, so the set costs
-    about one scenario's wall-clock instead of the sum. A failing scenario is
-    reported as its own subtest.
+    about one scenario's wall-clock instead of the sum. Every scenario is checked
+    before the test fails, and the failure names each one that misbehaved with
+    its stderr, so one bad scenario never hides another.
     """
     runs = _start_probes(tmp_path)
+    failures: list[str] = []
     try:
         for name, run in runs.items():
-            culprit = _PROBES[name].culprit
             returncode, stdout, stderr = run.collect()
-            with subtests.test(msg=name):
-                if culprit is not None:
-                    assert returncode == 1, stderr
-                    assert _TIMER_HEADER in stderr
-                    assert f"in {culprit}" in stderr
-                    assert "probe exited cleanly" not in stdout
-                else:
-                    assert returncode == 0, stderr
-                    assert "Timeout (" not in stderr
-                    assert "probe exited cleanly" in stdout
+            problems = _misbehaviour(_PROBES[name], returncode, stdout, stderr)
+            if problems:
+                failures.append(f"{name}: {'; '.join(problems)}\n{stderr}")
     finally:
         _reap(runs)
+
+    assert not failures, "\n\n".join(failures)
 
 
 @pytest.fixture
