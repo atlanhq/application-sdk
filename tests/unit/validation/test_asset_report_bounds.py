@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import pickle
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import patch
 
@@ -155,9 +156,10 @@ def test_every_surface_matches_the_unbounded_walk(
     matrix and event map, for the single-path, multi-part and wrapper routes.
 
     The golden file was written by the unbounded walk (every failure held as an
-    object) over the same synthetic batches; the batches overflow the cap on both axes, sit under it,
-    and are clean, so the overflow arithmetic, the failures-then-orphans ordering of
-    the shared list and the clean row are all covered.
+    object) over the same synthetic batches. The batches overflow the cap on both
+    axes, sit under it, and are clean, so the overflow arithmetic, the
+    failures-then-orphans ordering of the shared list and the clean row are all
+    covered.
     """
     expected = json.loads(GOLDEN.read_text())[batch]
     root = tmp_path / batch
@@ -179,7 +181,7 @@ EVERY = assets_module._BUDGET_CHECK_EVERY
 _GIB = 1024**3
 
 
-def _rss_readings(start: int, then: int):  # type: ignore[no-untyped-def]
+def _rss_readings(start: int, then: int) -> Callable[[], int]:
     """A stand-in RSS reader: ``start`` for the reading taken as the scan begins,
     ``then`` for every check after it."""
     readings = iter([start])

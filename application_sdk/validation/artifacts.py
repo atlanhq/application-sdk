@@ -628,9 +628,10 @@ class ArtifactValidationReport:
     One boolean rather than a stored classification, so :attr:`classification`
     stays derived and "reported broken" and "actually broke" cannot come apart —
     the same reason :attr:`outcome` derives from :attr:`verdict` and the failure
-    list. Set only by the wrapper's own guard rails; a format validator never sets
-    it, because a validator reporting on itself is the one report that has to come
-    from outside it."""
+    list. Set by the wrapper's own guard rails, and by a cell that stopped at its
+    own memory or wall budget before reading the whole artifact — an SDK limit, not
+    a finding against the artifact. A validator never sets it to excuse a failure
+    it found."""
     reason: str = ""
     """Short explanation, chiefly for the non-scan outcomes."""
     verdict: ArtifactValidationOutcome | None = None

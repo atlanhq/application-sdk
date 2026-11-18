@@ -49,8 +49,9 @@ Design constraints worth preserving if you edit this file:
   consumer lists no more rows than that, so nothing it reads changes, while the
   report the scan's child pickles back stays a few KB on a batch where every
   record fails. The summary tallies grow only with distinct
-  ``(kind, typeName, rule)`` keys, which the type model bounds for real output. One object per failure would grow with the failure count three times
-  over: in the child, in the pickle and in the parent that unpickles it.
+  ``(kind, typeName, rule)`` keys, which the type model bounds for real output.
+  One object per failure would grow with the failure count three times over: in
+  the child, in the pickle and in the parent that unpickles it.
 * **The walk polices its own budget.** Every ``_BUDGET_CHECK_EVERY`` records it
   checks how far its RSS has grown and how long it has run, and past either
   budget it stops and reports what it read, marked ``truncated``. The wall
@@ -607,7 +608,8 @@ class ScanBudget:
     """Stop once this process's resident memory has grown by more than this many
     bytes since the scan started. Growth rather than the absolute figure, so memory
     the process already held — its imports, or what a reused pool child kept from
-    an earlier task — never cuts a scan short that has itself used little."""
+    an earlier task — never cuts a scan short that has itself used little. The
+    process's total can therefore exceed this by whatever it held at the start."""
     wall_seconds: float | None = None
     """Stop once the scan has run this long."""
 
@@ -1165,7 +1167,8 @@ def validate_assets_as_artifact(
         max_samples: Failures, and orphans, kept as objects (see below). ``None``
             keeps every one, for a caller that reads the whole list in-process.
 
-    The report is constant-size: at most
+    With the default ``max_samples`` the report does not grow with the failure
+    count: at most
     :data:`~application_sdk.constants.ASSET_VALIDATION_MAX_ITEMS_PER_AXIS` failures
     and as many orphans are kept as objects, which is every row any consumer lists
     (the event matrix and both ``format_report`` bodies stop there). The counts, the
