@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.58.0
-source-sha:    3512054124351dd65c9ae408ae7063373b7bb23d
-source-date:   2026-11-18T19:05:29+05:30
+source-sha:    ce179b60c7833f058ad2249e1f71be467ec6ea2a
+source-date:   2026-11-18T21:02:31+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -8288,12 +8288,12 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import AuthInput`
 - **Summary:** Input for the test_auth handler operation.
 - **Fields:**
-  - `credentials: list[HandlerCredential]` `= []` — Credentials to authenticate with.
-  - `connection_id: str` `= ''` — Optional connection ID for context.
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
-  - `timeout_seconds: int` `= 30` — Maximum seconds to wait for auth response.
   - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
+  - `credentials: list[HandlerCredential]` `= []` — Credentials to authenticate with.
+  - `connection_id: str` `= ''` — Optional connection ID for context.
+  - `timeout_seconds: int` `= 30` — Maximum seconds to wait for auth response.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `AuthOutput`
@@ -8406,16 +8406,16 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import MetadataInput`
 - **Summary:** Input for the fetch_metadata handler operation.
 - **Fields:**
-  - `credentials: list[HandlerCredential]` `= []` — Credentials to use for metadata discovery.
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
+  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
+  - `credentials: list[HandlerCredential]` `= []` — Credentials to use for metadata discovery.
   - `metadata_template_key: str` `= Field(default='', validation_alias=(AliasChoices('metadata_template_key', 'metadataTemplateKey', 'type')))` — Metadata source routing key for multi-source metadata widgets (e.g.
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration.
   - `object_filter: str` `= ''` — Filter pattern (e.g., 'public.*', 'mydb.myschema.*').
   - `include_fields: bool` `= True` — Whether to include field/column details.
   - `max_objects: int` `= 1000` — Maximum number of objects to return.
   - `timeout_seconds: int` `= 120` — Maximum seconds to wait for metadata fetch.
-  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `MetadataOutput`
@@ -8446,13 +8446,13 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import PreflightInput`
 - **Summary:** Input for the preflight_check handler operation.
 - **Fields:**
-  - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
-  - `credentials_by_name: dict[str, list[HandlerCredential]]` `= Field(default_factory=dict)` — Resolved credentials grouped by ref name for multi-credential apps.
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
+  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
+  - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
+  - `credentials_by_name: dict[str, list[HandlerCredential]]` `= Field(default_factory=dict)` — Resolved credentials grouped by ref name for multi-credential apps.
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration (host, port, database, etc.).
   - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
-  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
   - `checks_to_run: list[str]` `= []` — Specific checks to run (empty = run all).
   - `tiers: frozenset[CheckTier]` `= ALL_CHECK_TIERS` — Run only the checks in these tiers. The default, every tier, is for
   - `timeout_seconds: int` `= 60` — Maximum seconds the handler has to run all checks.
@@ -8509,13 +8509,13 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import WarmupInput`
 - **Summary:** Input for the optional ``Handler.warmup`` probe: ``/check``'s body, plus
 - **Fields:**
-  - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
-  - `credentials_by_name: dict[str, list[HandlerCredential]]` `= Field(default_factory=dict)` — Resolved credentials grouped by ref name for multi-credential apps.
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
+  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
+  - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
+  - `credentials_by_name: dict[str, list[HandlerCredential]]` `= Field(default_factory=dict)` — Resolved credentials grouped by ref name for multi-credential apps.
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration (host, port, database, etc.).
   - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
-  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
   - `probe_timeout_seconds: int` `= 10` — How long this probe may wait for the source to answer — the app's
 - **Defined in:** `application_sdk/handler/contracts.py`
 

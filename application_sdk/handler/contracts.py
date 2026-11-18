@@ -357,7 +357,7 @@ _AUTH_STATUS_HTTP_CODES: dict[AuthStatus, int] = {
 AUTH_STATUS_HTTP_CODES = _AUTH_STATUS_HTTP_CODES
 
 
-class _HandlerRequestBase(BaseModel):
+class _HandlerRequestInput(BaseModel):
     """The entry-point routing and agent-credential fields every handler
     request takes — shared by :class:`AuthInput`, :class:`PreflightInput`,
     :class:`WarmupInput` and :class:`MetadataInput` so an alias or doc change
@@ -399,7 +399,7 @@ class _HandlerRequestBase(BaseModel):
     Backward-compatible: absent ⇒ behavior is unchanged."""
 
 
-class AuthInput(_HandlerRequestBase):
+class AuthInput(_HandlerRequestInput):
     """Input for the test_auth handler operation."""
 
     credentials: list[HandlerCredential] = []
@@ -652,7 +652,7 @@ class PreflightCheck(BaseModel):
         return dumped
 
 
-class _SourceRequestInput(_HandlerRequestBase):
+class _SourceRequestInput(_HandlerRequestInput):
     """The fields every source-probing handler operation takes — ``/check``'s
     body, shared by :class:`PreflightInput` and :class:`WarmupInput` so the UI
     sends one payload to both routes."""
@@ -937,7 +937,7 @@ ApiMetadataObject.model_rebuild()
 # ---------------------------------------------------------------------------
 
 
-class MetadataInput(_HandlerRequestBase):
+class MetadataInput(_HandlerRequestInput):
     """Input for the fetch_metadata handler operation."""
 
     credentials: list[HandlerCredential] = []
