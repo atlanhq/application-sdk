@@ -2,12 +2,24 @@
 
 import os
 import re
+import sys
 
 # Disable the Dapr observability sink globally for all unit tests.
 # Without this, metrics flushing tries to connect to the Dapr sidecar
 # (http://127.0.0.1:3500), which isn't running in unit test environments
 # and causes 60-second timeouts per test.
 os.environ.setdefault("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "false")
+
+# Windows unit legs run under pytest-socket's --disable-socket like every other
+# OS. ProactorEventLoop's self-pipe is an emulated loopback socketpair() that
+# the guard would refuse, so build it from the socket class captured now, before
+# any test is guarded. See tests/socket_guard.py (FND-4287).
+if sys.platform == "win32":
+    import socket
+
+    from tests.socket_guard import loopback_socketpair
+
+    socket.socketpair = loopback_socketpair
 
 # Import pyatlan eagerly, at session start, before any `pytest.Pytester` fixture
 # exists. Pytester snapshots `sys.modules` when it starts and restores it on

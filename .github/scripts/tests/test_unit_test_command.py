@@ -45,23 +45,26 @@ def test_the_coverage_leg_measures_and_enforces_the_floor() -> None:
     assert "--cov-fail-under=85" in argv
 
 
-@pytest.mark.parametrize("runner_os", ["Linux", "macOS"])
-def test_posix_legs_guard_sockets_and_interrupt_hangs_with_sigalrm(
-    runner_os: str,
-) -> None:
+@pytest.mark.parametrize("runner_os", ["Linux", "macOS", "Windows"])
+def test_every_leg_guards_sockets(runner_os: str) -> None:
+    """Windows included: --allow-hosts guards connect() only, which asyncio's
+    ConnectEx and UDP sendto bypass (FND-4287). tests/conftest.py keeps the
+    Proactor self-pipe working under the guard."""
     argv = _build(runner_os=runner_os)
     assert "--disable-socket" in argv
     assert "--allow-unix-socket" in argv
+    assert not any(arg.startswith("--allow-hosts") for arg in argv)
+
+
+@pytest.mark.parametrize("runner_os", ["Linux", "macOS"])
+def test_posix_legs_interrupt_hangs_with_sigalrm(runner_os: str) -> None:
+    argv = _build(runner_os=runner_os)
     assert "--timeout=120" in argv
     assert "--timeout-method=signal" in argv
 
 
-def test_windows_guards_connect_to_loopback_and_has_no_sigalrm() -> None:
+def test_windows_has_no_sigalrm() -> None:
     argv = _build(runner_os="Windows")
-    # --disable-socket blocks socket creation, and Proactor's self-pipe needs
-    # an AF_INET socket pair; --allow-hosts guards connect() only.
-    assert "--disable-socket" not in argv
-    assert "--allow-hosts=127.0.0.1,::1" in argv
     assert "--timeout=120" in argv
     assert "--timeout-method=thread" in argv
 

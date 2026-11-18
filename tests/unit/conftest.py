@@ -422,7 +422,13 @@ def intercept_dapr_sidecar(module: ModuleType | str) -> Iterator[ModuleType]:
             **kwargs: Any,
         ) -> None:
             super().__init__(
-                *args, transport=transport or _SidecarInterceptingTransport(), **kwargs
+                *args,
+                transport=(
+                    transport
+                    if transport is not None
+                    else _SidecarInterceptingTransport()
+                ),
+                **kwargs,
             )
 
     with private_stdlib(target, "httpx") as local_httpx:
@@ -435,10 +441,10 @@ def intercept_dapr_sidecar(module: ModuleType | str) -> Iterator[ModuleType]:
 def _intercept_dapr_sidecar() -> Iterator[None]:
     """Refuse every unmocked request to the Dapr sidecar (FND-4287).
 
-    POSIX legs run under ``--disable-socket``, but Windows legs only block
-    non-loopback hosts (``--allow-hosts``: Proactor's self-pipe is a loopback
-    socket pair), so ``localhost:3500`` would be reachable there. This makes
-    an unmocked Dapr call fail the same way on every OS and locally.
+    CI legs run under ``--disable-socket``, but a local ``pytest`` run does
+    not, and there a stray call would reach a real sidecar on
+    ``localhost:3500`` if one is up. This makes an unmocked Dapr call fail
+    the same way in CI and locally, with an error that names the request.
     """
     with intercept_dapr_sidecar("application_sdk.infrastructure._dapr.http"):
         yield
