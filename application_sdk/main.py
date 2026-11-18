@@ -1080,7 +1080,7 @@ def _install_excepthook() -> None:
         try:
             asyncio.run(_flush_observability())
         # conformance: ignore[E002,E004] best-effort flush in unhandled-exception hook; must never mask the original crash
-        except Exception:  # noqa: S110 — best-effort flush; must never mask the original crash
+        except Exception:  # noqa: S110, BLE001 — best-effort flush; must never mask the original crash
             pass
         _orig(exc_type, exc_value, exc_traceback)
 
@@ -3068,14 +3068,14 @@ def main() -> NoReturn:
             try:
                 asyncio.run(_flush_observability())
             # conformance: ignore[E002,E004] best-effort flush on fatal exit; fatal error already logged above
-            except Exception:  # noqa: S110 — best-effort flush on fatal exit; error already logged above
+            except Exception:  # noqa: S110, BLE001 — best-effort flush on fatal exit; error already logged above
                 pass
             sys.exit(1)
         logger.error("Fatal error", exc_info=True)
         try:
             asyncio.run(_flush_observability())
         # conformance: ignore[E002,E004] best-effort flush on fatal exit; fatal error already logged above
-        except Exception:  # noqa: S110 — best-effort flush on fatal exit; error already logged above
+        except Exception:  # noqa: S110, BLE001 — best-effort flush on fatal exit; error already logged above
             pass
         sys.exit(1)
 

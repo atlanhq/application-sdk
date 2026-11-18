@@ -206,8 +206,8 @@ def dapr_error_detail(exc: Exception) -> str | None:
         return None
     try:
         body = orjson.loads(text)
-    except Exception:
-        body = None
+    except orjson.JSONDecodeError:
+        body = None  # a non-JSON body is returned verbatim below
     if isinstance(body, dict) and (body.get("errorCode") or body.get("message")):
         code = body.get("errorCode") or "unknown"
         message = body.get("message") or ""

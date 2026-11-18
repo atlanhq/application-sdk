@@ -142,8 +142,7 @@ def _load_transfer_state(state_path: Path) -> dict | None:
         ):
             return None
         return state
-    # conformance: ignore[E004] absent/corrupt checkpoint is an expected condition; falling back to a fresh download is always correct
-    except Exception:
+    except Exception:  # noqa: BLE001 — absent/corrupt checkpoint is an expected condition; falling back to a fresh download is always correct
         return None
 
 
@@ -950,8 +949,7 @@ async def _download_chunked_locked(
         ]
         try:
             await asyncio.gather(*chunk_tasks)
-        # conformance: ignore[E004] chunked-download error handler; cancels siblings, closes fd, checkpoints or cleans up, emits the terminal event/metric, then re-raises via StorageError chain
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — chunked-download error handler; cancels siblings, closes fd, checkpoints or cleans up, emits the terminal event/metric, then re-raises via StorageError chain
             # gather() does NOT cancel sibling tasks on first failure — without
             # this drain, orphaned chunk coroutines would keep running and write
             # into the fd after it is closed below (and, if the fd number were

@@ -347,7 +347,9 @@ async def _probe_store_structured(
 
         put_attributes = _resolve_put_attributes(store)  # type: ignore[arg-type]
     except Exception:
-        logger.debug(
+        # Probing without them can certify a write path real uploads do not
+        # take (a different storage class), so this is not DEBUG detail.
+        logger.warning(
             "Could not resolve put attributes for the %s store probe; "
             "probing without them",
             label,
@@ -360,7 +362,7 @@ async def _probe_store_structured(
         await obstore.put_async(
             store, probe_key, _PREFLIGHT_PAYLOAD, attributes=put_attributes
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — logged at WARNING with a sanitized cause; exc_info would render a presigned URL verbatim
         # The frames are worth keeping — a TLS or driver-level failure is only
         # diagnosable from them — but exc_info=True renders the cause verbatim
         # into both exception.stacktrace and exception.message, and the logger
@@ -393,7 +395,7 @@ async def _probe_store_structured(
     # no cleanup is needed and delete permission is never required.
     try:
         await obstore.head_async(store, probe_key)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — logged at WARNING with a sanitized cause and safe traceback
         logger.warning(
             "SDR preflight: read/head probe failed for %s store (binding: %s): %s\n%s",
             label,
@@ -427,7 +429,7 @@ async def _probe_store_structured(
                 chunk_size=_MULTIPART_PROBE_CHUNK_SIZE,
                 attributes=put_attributes,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — logged at WARNING with a sanitized cause and safe traceback
             logger.warning(
                 "Storage preflight: multipart write probe failed for %s store "
                 "(binding: %s): %s\n%s",

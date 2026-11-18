@@ -925,8 +925,14 @@ class TestTokenRefreshEventPollStateGate:
 
         mock_publish.assert_called_once()
 
-    async def test_gate_failure_fails_open(self) -> None:
-        """If the gate cannot be read at all, publish — never mute on doubt."""
+    async def test_gate_failure_fails_closed(self) -> None:
+        """If the gate cannot be read at all, withhold the event (FND-4294).
+
+        Reversed from the original fail-open posture: publishing on an
+        unreadable gate let a worker advertise health it could not vouch for,
+        which is how a parked worker keeps looking alive. A withheld event only
+        delays the next one, which resumes once the gate reads again.
+        """
         manager = _make_manager()
 
         with (
@@ -940,4 +946,4 @@ class TestTokenRefreshEventPollStateGate:
             mock_publish.return_value = None
             await manager._emit_token_refresh_event(None)
 
-        mock_publish.assert_called_once()
+        mock_publish.assert_not_called()

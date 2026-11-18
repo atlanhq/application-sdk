@@ -115,7 +115,7 @@ class _EnvProxyHTTPTransport(httpx.AsyncHTTPTransport):
         for transport in proxied:
             try:
                 await transport.aclose()
-            except BaseException as exc:  # includes CancelledError; re-raised by caller
+            except BaseException as exc:  # noqa: BLE001 — includes CancelledError; the first close error is returned to __aexit__, which re-raises it
                 if first_error is None:
                     first_error = exc
         return first_error
@@ -456,7 +456,7 @@ class BaseClient(ClientInterface):
                     auth=auth if auth is not None else httpx.USE_CLIENT_DEFAULT,
                 )
                 return response
-            except Exception as exc:  # conformance: ignore[E004] _request_failed logs with exc_info or raises typed
+            except Exception as exc:  # noqa: BLE001 — _request_failed logs with exc_info or raises typed
                 # conformance: ignore[E007] deprecated None-on-failure contract until v4.0
                 return _request_failed("GET", url, exc, raise_on_error)
 
@@ -597,7 +597,7 @@ class BaseClient(ClientInterface):
                     follow_redirects=follow_redirects,
                 )
                 return response
-            except Exception as exc:  # conformance: ignore[E004] _request_failed logs with exc_info or raises typed
+            except Exception as exc:  # noqa: BLE001 — _request_failed logs with exc_info or raises typed
                 # conformance: ignore[E007] deprecated None-on-failure contract until v4.0
                 return _request_failed("POST", url, exc, raise_on_error)
 

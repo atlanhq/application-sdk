@@ -2724,8 +2724,7 @@ class BaseE2ETest:
                     exc_info=True,
                 )
                 raise
-            # conformance: ignore[E004] the probe is a suite-supplied write and can raise anything; narrowing it would let one connector's exception type escape the retry the loop exists to perform
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 — the probe is a suite-supplied write and can raise anything; narrowing it would let one connector's exception type escape the retry the loop exists to perform
                 # conformance: ignore[E007] the refusal IS the reading — carried out as _SeedProbeReading(error=...) and re-raised by the caller when the wait never settles, so nothing is hidden; a fresh connection 403s child writes until its policies are live, which is the normal case here
                 return _SeedProbeReading(error=error)
             return _SeedProbeReading()

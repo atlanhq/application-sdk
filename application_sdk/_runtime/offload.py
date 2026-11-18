@@ -762,7 +762,11 @@ def _ensure_stranded_gauge() -> None:
             _INSTRUMENTS["stranded"] = None
         except Exception:
             _INSTRUMENTS["stranded"] = None
-            logger.debug("Could not register offload.stranded_threads", exc_info=True)
+            logger.warning(
+                "Could not register offload.stranded_threads; stranded "
+                "run_in_thread calls will be logged but not gauged",
+                exc_info=True,
+            )
 
 
 def _on_offload_done(slot: _OffloadSlot) -> None:
@@ -1686,7 +1690,7 @@ async def run_best_effort(
             timeout,
             exc_info=True,
         )
-    except Exception:  # noqa: BLE001 — best-effort work must never break the caller
+    except Exception:  # best-effort work must never break the caller
         logger.warning("%s skipped due to an unexpected error", label, exc_info=True)
     return None
 

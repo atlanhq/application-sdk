@@ -154,8 +154,7 @@ def _stamp_start_correlation(input_data: Any, context: "AppContext") -> str:
     try:
         input_data.correlation_id = correlation_id
         input_data._correlation_id = correlation_id
-    # conformance: ignore[E004] best-effort stamp; dict/frozen inputs still get the memo channel
-    except Exception:  # noqa: S110 — attribute stamps are best-effort; the memo is the reliable channel
+    except Exception:  # noqa: S110, BLE001 — attribute stamps are best-effort; the memo is the reliable channel; best-effort stamp; dict/frozen inputs still get the memo channel
         pass
     return correlation_id
 

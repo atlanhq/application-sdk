@@ -410,7 +410,7 @@ def _context_app_name() -> str:
     try:
         ctx = get_execution_context()
         return ctx.app_name if ctx and ctx.app_name else ""
-    except Exception:
+    except Exception:  # noqa: BLE001 — runs inside log-record formatting, where logging the failure would recurse; the record just carries no app name
         return ""
 
 
@@ -798,8 +798,7 @@ class _CloudflareTimeoutFilter(logging.Filter):
                     )
                 return False
             return True
-        # conformance: ignore[E004] filter infra; any failure safely defaults to emitting the record
-        except Exception:
+        except Exception:  # noqa: BLE001 — filter infra; any failure safely defaults to emitting the record
             return True  # conformance: ignore[E007] logging adapter; log call would recurse; returning default is correct fallback
 
 
@@ -1239,8 +1238,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 otel_trace_id = span_context.trace_id
                 otel_span_id = span_context.span_id
                 otel_trace_flags = TraceFlags(span_context.trace_flags)
-        # conformance: ignore[E004] best-effort trace enrichment; a broken span context must never block log emission
-        except Exception:  # noqa: S110 — degrade to untraced record, never drop the log
+        except Exception:  # noqa: S110, BLE001 — degrade to untraced record, never drop the log; best-effort trace enrichment; a broken span context must never block log emission
             pass
 
         return LogRecord(
@@ -1766,8 +1764,7 @@ def flush_otlp_logs(timeout_millis: int = 5000) -> None:
         for provider in providers:
             try:
                 provider.force_flush(timeout_millis=timeout_millis)
-            # conformance: ignore[E004] best-effort shutdown drain; a failed flush must never break shutdown
-            except Exception:  # noqa: S110 — teardown-only; losing the tail beats crashing shutdown
+            except Exception:  # noqa: S110, BLE001 — teardown-only; losing the tail beats crashing shutdown; best-effort shutdown drain; a failed flush must never break shutdown
                 pass
 
     def _current_or_new() -> tuple[threading.Thread, bool]:
@@ -1813,8 +1810,7 @@ def shutdown_otlp_logs() -> None:
             continue
         try:
             provider.shutdown()
-        # conformance: ignore[E004] best-effort shutdown drain; a failed flush must never break shutdown
-        except Exception:  # noqa: S110 — teardown-only; losing the tail beats crashing shutdown
+        except Exception:  # noqa: S110, BLE001 — teardown-only; losing the tail beats crashing shutdown; best-effort shutdown drain; a failed flush must never break shutdown
             pass
 
 

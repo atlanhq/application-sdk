@@ -470,7 +470,7 @@ async def _probe_endpoint(
     for position, (base, probe) in enumerate(chain):
         try:
             row = await probe(endpoint, state, timeouts, policy)
-        except Exception:  # noqa: BLE001 — our defect: fail open, never a row
+        except Exception:  # our defect: fail open, never a row
             logger.warning(
                 "Source probe %s raised; reported as broken, not as a source failure",
                 base,

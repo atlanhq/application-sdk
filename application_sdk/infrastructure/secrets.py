@@ -7,10 +7,10 @@ from typing import Any, ClassVar, Protocol
 
 # Defined in the api distribution's light module so the handler can raise it on
 # the API host; re-exported here, the same class.
-from application_sdk._context_errors import SecretStoreNotConfiguredError  # noqa: F401
+from application_sdk._context_errors import SecretStoreNotConfiguredError
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
 from application_sdk.errors.categories import Audience
-from application_sdk.errors.leaves import (  # noqa: F401 — PreconditionError re-exported for existing importers
+from application_sdk.errors.leaves import (  # PreconditionError re-exported for existing importers
     ColdStartRaceError,
     DaprSidecarUnreachableError,
     DependencyUnavailableError,

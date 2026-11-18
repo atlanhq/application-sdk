@@ -143,13 +143,13 @@ from application_sdk.handler.contracts import (  # noqa: E402
     normalize_credentials as _contracts_normalize_credentials,
 )
 from application_sdk.handler.request_contract import ModelT  # noqa: E402,F401
-from application_sdk.handler.request_contract import (  # noqa: E402,F401 — re-exported
+from application_sdk.handler.request_contract import (  # noqa: E402 — re-exported
     RequestContractError as _RequestContractError,
 )
 from application_sdk.handler.request_contract import (  # noqa: E402
     read_json_object as _read_json_object,
 )
-from application_sdk.handler.request_contract import (  # noqa: E402,F401 — re-exported
+from application_sdk.handler.request_contract import (  # noqa: E402 — re-exported
     validate_request as _validate_request,
 )
 from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported for existing importers

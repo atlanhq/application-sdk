@@ -206,7 +206,7 @@ def _download_daprd(target: Path) -> None:
 def _daprd_runs(binary: Path) -> bool:
     """True when *binary* executes and reports the pinned version."""
     try:
-        result = subprocess.run(  # noqa: S603 — fixed argv, our own cached binary
+        result = subprocess.run(  # fixed argv, our own cached binary
             [str(binary), "--version"],
             capture_output=True,
             text=True,

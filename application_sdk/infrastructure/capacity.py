@@ -109,9 +109,9 @@ class LocalCapacityPool:
         pool_name: str,
         requested: int,
         *,
-        min_useful: int = 1,  # noqa: ARG002
-        holder_id: str = "",  # noqa: ARG002
-        ttl_seconds: int = 120,  # noqa: ARG002
+        min_useful: int = 1,
+        holder_id: str = "",
+        ttl_seconds: int = 120,
     ) -> int:
         """Always grants the full requested amount."""
         logger.debug(
@@ -130,7 +130,7 @@ class LocalCapacityPool:
 
     async def renew(
         self, pool_name: str, holder_id: str, ttl_seconds: int = 120
-    ) -> bool:  # noqa: ARG002
+    ) -> bool:
         """No-op for local pool, always returns True."""
         return True
 

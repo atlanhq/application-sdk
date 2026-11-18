@@ -139,8 +139,7 @@ def _log_push_failure(error: HTTPError, request_body: bytes) -> None:
         resp = ""
         try:
             resp = error.read().decode("utf-8", errors="replace")[:2000]
-        # conformance: ignore[E004] diagnostic-only inner read; failure to decode response body must not replace the outer HTTPError
-        except Exception:  # noqa: S110 — diagnostic-only
+        except Exception:  # noqa: S110, BLE001 — diagnostic-only; diagnostic-only inner read; failure to decode response body must not replace the outer HTTPError
             pass
         msg = (
             f"Pushgateway PUT {error.url} returned {error.code}: {resp or error.reason}"
@@ -241,8 +240,7 @@ class PushGatewayClient:
             self._task.cancel()
             try:
                 await self._task
-            # conformance: ignore[E004] shutdown cleanup; task cancellation swallows all exceptions by design
-            except (asyncio.CancelledError, Exception):  # noqa: S110 — task cancellation is the goal; surface nothing on shutdown
+            except (asyncio.CancelledError, Exception):  # noqa: S110, BLE001 — task cancellation is the goal; surface nothing on shutdown; shutdown cleanup; task cancellation swallows all exceptions by design
                 pass
             self._task = None
 

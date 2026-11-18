@@ -203,8 +203,7 @@ def _begin_share(now_ns: int) -> resource_sampler.ShareMark | None:
     # conformance: ignore[E004] best-effort observability; a sampling failure must never fail the activity it measures
     try:
         return resource_sampler.ACTIVITY_SHARES.begin(now_ns / 1_000_000_000)
-    # conformance: ignore[E004] best-effort observability; a sampling failure must never fail the activity it measures
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort observability; a sampling failure must never fail the activity it measures
         return None
 
 
@@ -217,8 +216,7 @@ def _end_share(
     # conformance: ignore[E004] best-effort observability; a sampling failure must never fail the activity it measures
     try:
         return resource_sampler.ACTIVITY_SHARES.end(mark, now_ns / 1_000_000_000)
-    # conformance: ignore[E004] best-effort observability; a sampling failure must never fail the activity it measures
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort observability; a sampling failure must never fail the activity it measures
         return None
 
 
@@ -254,8 +252,7 @@ class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                         1,
                         {**attrs, **classified},
                     )
-            # conformance: ignore[E004] best-effort observability; metric emission must never block or raise in a workflow finally block
-            except Exception:  # noqa: S110 — best-effort observability; never block the workflow on metric emission
+            except Exception:  # noqa: S110, BLE001 — best-effort observability; never block the workflow on metric emission; best-effort observability; metric emission must never block or raise in a workflow finally block
                 pass
 
 
@@ -300,8 +297,7 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
                     cpu_s, mem_gib_s = shares
                     _activity_cpu_seconds().record(cpu_s, tagged)
                     _activity_mem_gib_seconds().record(mem_gib_s, tagged)
-            # conformance: ignore[E004] best-effort observability; metric emission must never block or raise in an activity finally block
-            except Exception:  # noqa: S110 — best-effort observability; never block the activity on metric emission
+            except Exception:  # noqa: S110, BLE001 — best-effort observability; never block the activity on metric emission; best-effort observability; metric emission must never block or raise in an activity finally block
                 pass
 
 

@@ -100,7 +100,9 @@ logger = get_logger(__name__)
 T = TypeVar("T")
 
 _LOOPBACK = "127.0.0.1"
-_WILDCARD_HOSTS = frozenset({"0.0.0.0", ""})  # noqa: S104 — compared against, never bound by default. "::" is omitted: ThreadingHTTPServer is AF_INET, so bind_host="::" cannot start.
+_WILDCARD_HOSTS = frozenset(
+    {"0.0.0.0", ""}
+)  # compared against, never bound by default. "::" is omitted: ThreadingHTTPServer is AF_INET, so bind_host="::" cannot start.
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 _CONNECTION_TIMEOUT_SECONDS = 5.0
 _JOIN_GRACE_SECONDS = 5.0
@@ -1086,7 +1088,7 @@ def _decode_with(decode: Callable[[str], int], cursor: str | None) -> int | None
         return 0
     try:
         return decode(cursor)
-    except Exception:  # noqa: BLE001 — the caller turns any decode failure into a terminal page
+    except Exception:  # the caller turns any decode failure into a terminal page
         logger.warning(
             "cursor_page could not decode cursor token %r; serving a terminal "
             "first page so a client loop re-sending it cannot spin forever",

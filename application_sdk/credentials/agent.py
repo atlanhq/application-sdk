@@ -279,7 +279,7 @@ async def _fetch_declared_refs(
             raise CredentialNotFoundError(
                 f"secret {label} declared for field '{fields}'"
             ) from None
-        except Exception as exc:  # conformance: ignore[E004] scrubbed traceback logged here; a hash-labelled, cause-free SecretStoreError is raised
+        except Exception as exc:  # noqa: BLE001 — scrubbed traceback logged here; a hash-labelled, cause-free SecretStoreError is raised
             logger.warning(  # conformance: ignore[L009,L004] the raise below drops the raw exception (`from None`), so this scrubbed dump is the only record of the cause; exc_info would re-log it unscrubbed
                 "declared secret lookup for %s (field '%s') failed — secret "
                 "store error:\n%s",
@@ -405,7 +405,7 @@ async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str
         )
     except SecretNotFoundError as exc:
         raise CredentialNotFoundError(secret_path) from exc
-    except Exception as exc:  # conformance: ignore[E004] scrubbed traceback logged here at the boundary; a clean-message SecretStoreError is raised for the caller/UI
+    except Exception as exc:  # noqa: BLE001 — scrubbed traceback logged here at the boundary; a clean-message SecretStoreError is raised for the caller/UI
         # The secret store failed or is unreachable (distinct from a missing
         # bundle, handled above). Log the scrubbed underlying cause for
         # diagnosis, then raise a clean-message error WITHOUT chaining the raw

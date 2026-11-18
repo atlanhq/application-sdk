@@ -285,8 +285,11 @@ class TemporalAuthManager:
     def _should_emit_health_event() -> bool:
         """True unless the poll-state observer has confirmed this worker parked.
 
-        Fail-open: any failure to read the gate publishes as normal, because a
-        missing reading is not evidence that the worker is dead.
+        Fails closed: when the gate itself cannot be read, the worker cannot
+        vouch for its own health, so it withholds the event and logs why. A
+        health advertisement the worker cannot back up is exactly what lets a
+        zombie look alive (ARUN-1127); a missed refresh event only delays the
+        next one, which resumes once the gate reads again.
         """
         try:
             from application_sdk.execution._temporal.poll_state import (  # noqa: PLC0415 — deferred like this module's other intra-package imports
@@ -295,7 +298,12 @@ class TemporalAuthManager:
 
             return worker_poll_state.should_emit_health_event()
         except Exception:
-            return True
+            logger.warning(
+                "Could not read the worker poll-state gate; withholding the "
+                "token_refresh health event",
+                exc_info=True,
+            )
+            return False
 
     async def _emit_token_refresh_event(self, expires_at: datetime | None) -> None:
         """Emit a token_refresh lifecycle event via the event binding (best-effort).

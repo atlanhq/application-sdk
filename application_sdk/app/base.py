@@ -34,7 +34,7 @@ from temporalio import activity, workflow
 from temporalio.exceptions import ActivityError, FailureError
 from temporalio.exceptions import ApplicationError as _TemporalApplicationError
 
-from application_sdk._context_errors import (  # noqa: F401 — re-exported; defined in the api distribution
+from application_sdk._context_errors import (  # re-exported; defined in the api distribution
     AppContextError,
 )
 from application_sdk._runtime.offload import run_best_effort, run_in_thread
@@ -394,7 +394,7 @@ async def _warn_on_invalid_transformed_assets(
                 "(handoff continues): %s",
                 assets.format_report(max_items=_VALIDATION_MATRIX_MAX_ROWS),
             )
-    except Exception:  # noqa: BLE001 — defense-in-depth must never break the upload
+    except Exception:  # defense-in-depth must never break the upload
         _task_logger.warning(
             "Transformed-asset validation outcome emission failed (handoff continues)",
             exc_info=True,
@@ -483,8 +483,7 @@ def _run_started_at_epoch() -> float:
     """
     try:
         start_time = workflow.info().start_time
-    # conformance: ignore[E004] probe for Temporal workflow context; the value only feeds an observability signal, so any failure degrades to "unknown run start"
-    except Exception:
+    except Exception:  # noqa: BLE001 — probe for Temporal workflow context; the value only feeds an observability signal, so any failure degrades to "unknown run start"
         return 0.0  # conformance: ignore[E007] workflow-context probe; "no run to measure" is the answer, and a log line here would fire per dispatch on every local run
     return start_time.timestamp() if start_time is not None else 0.0
 
@@ -2740,8 +2739,7 @@ class App(ABC):
             async def _local_cleanup() -> None:
                 try:
                     await self.cleanup_files(CleanupInput())
-                # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-                except Exception:
+                except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
                     _safe_log(
                         "warning",
                         "cleanup_files task failed during on_complete",
@@ -2751,8 +2749,7 @@ class App(ABC):
             async def _storage_cleanup() -> None:
                 try:
                     await self.cleanup_storage(StorageCleanupInput())
-                # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-                except Exception:
+                except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
                     _safe_log(
                         "warning",
                         "cleanup_storage task failed during on_complete",
@@ -2773,8 +2770,7 @@ class App(ABC):
         # tests, and any subclass that calls super() outside a workflow).
         try:
             await AtlanObservability.flush_all()
-        # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-        except Exception:
+        except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
             _safe_log("warning", "flush_all() failed during on_complete", exc_info=True)
 
 
@@ -2823,7 +2819,7 @@ def _validate_interaction_signature(
     try:
         hints: dict[str, Any] = get_type_hints(fn)
     # conformance: ignore[E004,E009] get_type_hints probe; broad catch intentional — falls back to __annotations__ when forward refs are unresolvable
-    except Exception:
+    except Exception:  # noqa: BLE001 — get_type_hints probe; falls back to __annotations__ (see directive above)
         hints = getattr(fn, "__annotations__", {})
 
     if kind == "signal":
@@ -3046,8 +3042,7 @@ async def _merge_skipped_records(app_instance: "App") -> None:
                 skipped_count=skipped, unpersisted_count=unpersisted
             )
         )
-    # conformance: ignore[E004] fail-open by design (FND-4881): logged via _safe_log with exc_info=True and counted in skipped-records-unpersisted
-    except Exception:
+    except Exception:  # noqa: BLE001 — fail-open by design (FND-4881): logged via _safe_log with exc_info=True and counted in skipped-records-unpersisted
         _safe_log(
             "error",
             "Failed to merge skipped-record parts; the run has no "
@@ -3378,7 +3373,7 @@ async def _run_preflight_gate(
         start_to_close, schedule_to_close = gate_timeouts(budget, max_attempts)
         heartbeat_timeout, _ = gate_heartbeat_timings(start_to_close.total_seconds())
         gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — _no_verdict emits the NO_VERDICT row with exc_info and raises the block when the posture blocks
         _no_verdict(e, None, None)
         return
 
@@ -3401,7 +3396,7 @@ async def _run_preflight_gate(
     if not workflow.patched("preflight-gate-warmup"):
         try:
             await _dispatch_checks(None, None)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — _no_verdict emits the NO_VERDICT row with exc_info and raises the block when the posture blocks
             _no_verdict(e, None, None)
         return
 
@@ -3412,7 +3407,7 @@ async def _run_preflight_gate(
     first_poll: WarmupPoll | None = None
     try:
         first_poll = await _poll()
-    except Exception:
+    except Exception:  # noqa: BLE001 — _safe_log reports the probe failure at WARNING with exc_info; the gate fails open by design
         # The probe's own plumbing failed: run every tier, as before tiers, and
         # say so on that row. A broken probe must not cost the run its verdict.
         _safe_log(
@@ -3433,7 +3428,7 @@ async def _run_preflight_gate(
                 None,
                 None if seen is not None else WarmupWait(outcome=WarmupOutcome.BROKEN),
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — _no_verdict emits the NO_VERDICT row with exc_info and raises the block when the posture blocks
             _no_verdict(e, None, None)
         # Success: the activity already emitted the proceeded outcome event.
         return
@@ -3446,7 +3441,7 @@ async def _run_preflight_gate(
     )
     try:
         await _dispatch_checks(frozenset({CheckTier.PREFLIGHT}), first_wait)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — _no_verdict emits the NO_VERDICT row with exc_info and raises the block when the posture blocks
         _set_health_line("")
         _no_verdict(e, CheckTier.PREFLIGHT, first_wait)
         return
@@ -3480,7 +3475,7 @@ async def _run_preflight_gate(
             # started inside the ceiling can finish outside it, and a READY that
             # arrives late does not buy the WARMUP checks extra time.
             late_ready = seen.state is WarmupState.READY and workflow.now() >= deadline
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — _emit_row records the GATE_BROKEN row with exc_info; the gate fails open by design
         # The poll activity turns everything the probe does into a WarmupPoll,
         # so what reaches here is the gate's own plumbing: fail open.
         _set_health_line("")
@@ -3506,7 +3501,7 @@ async def _run_preflight_gate(
         ready = _wait(WarmupOutcome.READY)
         try:
             await _dispatch_checks(frozenset({CheckTier.WARMUP}), ready)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — _no_verdict emits the NO_VERDICT row with exc_info and raises the block when the posture blocks
             _no_verdict(e, CheckTier.WARMUP, ready)
         return
 
@@ -3559,8 +3554,7 @@ def _set_health_line(text: str) -> None:
     """
     try:
         workflow.set_current_details(text)
-    # conformance: ignore[E004] a status line must never fail the gate; logged at DEBUG with exc_info=True
-    except Exception:
+    except Exception:  # noqa: BLE001 — a status line must never fail the gate; logged at DEBUG with exc_info=True
         _safe_log("debug", "Could not set the gate's health line", exc_info=True)
 
 
@@ -3864,8 +3858,7 @@ def generate_workflow_class(
 
             _corr_ctx = get_correlation_context()
             correlation_id = _corr_ctx.correlation_id if _corr_ctx else run_id
-        # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-        except Exception:
+        except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
             _safe_log(
                 "warning",
                 "Failed to read correlation context, falling back to run_id",
@@ -3925,8 +3918,7 @@ def generate_workflow_class(
                         correlation_id=context.correlation_id,
                         input=input_summary,
                     )
-        # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-        except Exception:
+        except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
             _safe_log("warning", "Failed to log input summary", exc_info=True)
 
         try:
@@ -4018,8 +4010,7 @@ def generate_workflow_class(
         finally:
             try:
                 await app_instance.on_complete()
-            # conformance: ignore[E004] finally-block cleanup handler; logged via _safe_log with exc_info=True; must not re-raise from finally
-            except Exception:
+            except Exception:  # noqa: BLE001 — finally-block cleanup handler; logged via _safe_log with exc_info=True; must not re-raise from finally
                 _safe_log(
                     "warning",
                     "on_complete() hook raised an unexpected exception",

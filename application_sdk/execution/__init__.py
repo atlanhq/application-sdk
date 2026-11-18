@@ -29,7 +29,7 @@ from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 # resolve; `heartbeat` now reaches `_runtime.progress` instead, which would have made
 # that attribute access an AttributeError. Explicit here so the access keeps working
 # without depending on another module's imports to arrange it.
-from application_sdk.execution import progress as progress  # noqa: F401 — re-export
+from application_sdk.execution import progress as progress  # re-export
 from application_sdk.execution._temporal.activity_utils import (
     build_output_path,
     get_object_store_prefix,
