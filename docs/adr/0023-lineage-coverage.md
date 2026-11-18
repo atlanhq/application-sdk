@@ -1,7 +1,9 @@
 # ADR-0023: Lineage Coverage, a Verdict and a Reason for Every Asset
 
 ## Status
-**Proposed** (spike). Builds on the draft in application-sdk#2204.
+**Proposed.** Builds on the draft in application-sdk#2204 and replaces it. Direction agreed with
+#2204's author and the AppErrors author (2026-11-18): the SDK ships generic reasons and
+sub-reasons, apps extend either, and this lands as a new PR that closes #2204.
 
 ## Context
 
@@ -27,8 +29,9 @@ subclass them.
 | `ReasonCategory` | SDK, closed | The 12 from #2204. The only reason-derived value allowed as a metric label. |
 | `GapCategory` | SDK, closed | `SOURCE` (the source gave too little), `PROCESSING` (the app couldn't build it), `ASSET_RESOLUTION` (the lookup couldn't match a ref) |
 | `Verdict` | SDK, closed | `VALID`, `INVALID` (partial or possibly wrong), `MISSING`, `VALID_NONE` (none expected), `PENDING` (waiting on the lookup) |
-| `LineageReason` leaves | SDK | One per `ReasonCategory`, plus 12 generic reasons (custom SQL parse failures, non-SQL source, generic connection type, upstream not in Atlan, and others) |
-| App reasons | App | Subclasses of a leaf or a generic reason, each with its own `code` |
+| Generic reasons | SDK | One `LineageReason` per `ReasonCategory` (`ParserFailure`, `CacheMiss`, and so on) |
+| Sub-reasons | SDK | 13 connector-agnostic refinements of a generic reason: custom SQL parse failures, non-SQL source, generic connection type, upstream not in Atlan, upstream under a type the ref didn't request, and others |
+| App reasons | App | Subclasses of a generic reason or a sub-reason, each with its own `code` |
 
 A reason is a class with ClassVars: `code`, `category`, `gap`, `expected`, `description` and
 `customer_message`. It is never instantiated. A subclass inherits `category`, `gap` and `expected`,
@@ -43,14 +46,15 @@ read back and for call sites that still pass strings. An unknown code resolves t
 ### Verdicts
 
 `assess(status, reason)` gives the app-side verdict. Then `settle(assessment, outcomes)` folds in
-the lookup's per-ref outcomes (`MATCHED`, `MISSED`, `AMBIGUOUS`). An asset stays `PENDING` until
-every ref has an outcome.
+the lookup's per-ref outcomes (`MATCHED`, `MISSED`, `AMBIGUOUS`, `TYPE_NOT_REQUESTED`). An asset
+stays `PENDING` until every ref has an outcome.
 
 | Ref outcomes | Settled verdict |
 | --- | --- |
 | All matched | `VALID`, or `INVALID` if the app already had a partial failure |
 | Some missed | `INVALID` / `UPSTREAM_NOT_IN_ATLAN` |
 | None matched | `MISSING` / `UPSTREAM_NOT_IN_ATLAN` |
+| Every miss is in Atlan under a type the ref didn't request (`matchTypeNames`) | `INVALID` or `MISSING` / `UPSTREAM_TYPE_NOT_REQUESTED`, gap `PROCESSING`: the fix is the app's type list, not a crawl |
 | Matched, but at least one was ambiguous | `INVALID` / `UPSTREAM_AMBIGUOUS` |
 | A ref the app marked as not expected to resolve (`NOT_EXPECTED`, e.g. a file source) | Ignored; all of them: `VALID_NONE` |
 
@@ -69,7 +73,7 @@ componentsHash)`:
 | Field | Meaning |
 | --- | --- |
 | `processQualifiedName`, `componentsHash` | Join key (identity v2) |
-| `outcome` | `MATCHED`, `MISSED` or `AMBIGUOUS` |
+| `outcome` | `MATCHED`, `MISSED`, `AMBIGUOUS` or `TYPE_NOT_REQUESTED` |
 | `candidateCount` | Catalog candidates the ref matched; `AMBIGUOUS` when more than 1 |
 | `resolvedQualifiedName`, `connector` | What the lookup picked |
 | `missReason` | Why it missed, when the lookup knows (absent, filtered, no searchable connector) |
@@ -82,8 +86,9 @@ That export is the natural source for this table; the SDK only defines the shape
 
 ### Funnel buckets
 
-`funnel.funnel_bucket(assessment)` maps a verdict onto the support `lineage-funnel` labels (one per
-closed lineage ticket), so run-time counts can be compared with closed tickets. The bucket comes
+`funnel_bucket(assessment)` maps a verdict onto the support `lineage-funnel` labels (one per
+closed lineage ticket), so run-time counts can be compared with closed tickets. `Assessment.to_row()`
+writes it as `funnelBucket`, so a reader never re-derives it and a reason's override shows. The bucket comes
 from the reason category; a reason can override it. `VALID` and `PENDING` have none; `VALID_NONE`
 is a product expectation; a lookup miss that left other upstreams in place has none, because the
 funnel's lookup bucket means no source table resolved.
@@ -122,13 +127,17 @@ ETL refs, not the refs a BI app emits.
 | Per-asset and per-ref rows | The tenant's store: run artifacts, and the app's own `apps.<app>` lakehouse namespace when the app declares `lakehouse: true` | Rows carry asset names; they stay in the tenant |
 | Run totals | One `Lineage coverage outcome` log row: counts per verdict as scalars, gap and category counts as one JSON string. Keys are allowlisted in `logger_adaptor`. | Lands in ClickHouse like the asset-validation outcome row (ADR-0020). An app can't add allowlisted keys itself, so this belongs in the SDK. |
 
-Reason codes never go to logs or metrics, only to the per-asset rows.
+Reason codes never go to logs or metrics, only to the per-asset rows. `Assessment.to_row()` gives
+each row `verdict`, `reasonCode`, `reasonCategory`, `gapCategory`, `expectedBasis`,
+`customerMessage` and `funnelBucket`; the app adds the asset's identity, including the display name
+a customer would use (the first consumer couldn't find assets without it). The run totals event and
+two ClickHouse queries are in `docs/concepts/monitoring.md`.
 
 ## Changes from #2204
 
 | #2204 | Here | Why |
 | --- | --- | --- |
-| The SDK ships no reason codes | The SDK ships generic reasons | The same parse failure in two apps should count as one reason |
+| The SDK ships no reason codes | The SDK ships generic reasons and sub-reasons | The same parse failure in two apps should count as one reason |
 | String codes in a dict registry | Reason classes; the registry is built from them | Same as AppErrors; duplicate and malformed codes fail at import |
 | Misses only | Every asset gets a row (the Tableau POC rolls fields up into their parent) | The denominator lives in the same table as the misses |
 | ARS-dependent assets left out of the denominator | `PENDING` is its own verdict, outside the rate until settled | It's visible, and doesn't drag the rate either way |
@@ -159,6 +168,26 @@ A second app was mapped the same way (atlan-powerbi-app branch `owen/lineage-cov
 reasons; over its golden corpus (2,199 recorded outcomes, 6 codes) and a live run (1 more code),
 every outcome maps to an SDK category and its verdict agrees with Power BI's own. One gap: Power
 BI counts expected skips but records no code for them, so those assets can't carry a reason yet.
+Its PowerQuery parser's own 19 failure codes were then mapped too, each by the parser's own
+definition: on one stored run, 637 of 718 recorded failures had no reason before and all do now.
+
+**Calibration against closed tickets.** Lineage tickets are closed with an engineer-set funnel
+label. Six closed BI tickets were scored with a rule written before scoring (the asset's row from
+the last run before the ticket, no judgment after the row is found): one match (seen before the
+rule, so not blind), one mismatch and four with no row. The mismatch was a ref whose table exists
+in Atlan under a type the ref didn't request; a two-step lookup check named that cause, which led
+to `UPSTREAM_TYPE_NOT_REQUESTED`. The four with no row are Power BI report, page and visual-field
+lineage, which records no outcome at all. Six is too few for a rate. What it showed is that the
+gaps are reach, not wrong verdicts: where an app records nothing for a stage, coverage has nothing
+to say. So each app's rollout starts with an instrumentation map (stage, what is recorded, which
+codes, which SDK reason, which branches are silent).
+
+**A first consumer.** A support script reads the rows for a ticket (run artifacts or the
+lakehouse tables) and states the verdict, reason, owning stage and next step. Writing it changed
+the row: `funnelBucket` is now written rather than re-derived; refs into warehouse system schemas
+(`INFORMATION_SCHEMA`, `pg_catalog`, `sys`) are marked `NOT_EXPECTED` like file sources, since
+Atlan never catalogs them and the miss otherwise reads as "crawl that source"; and rows need the
+asset's display name.
 
 Two things the tests changed in this design. Lookup outcomes join on `componentsHash`, because ref
 positions differ from Process input order and even between two runs of the same build. And an app
@@ -175,10 +204,14 @@ can restate an SDK reason under its code to keep its own wording (5 Tableau code
 * **An SDK lakehouse writer.** Deferred. pyiceberg would be a new SDK dependency. The Tableau POC's
   writer stays in the app until a second app needs one.
 
+## Decided in review
+
+* The SDK ships generic reasons and sub-reasons, and apps extend either (reverses #2204's rule).
+* A new PR replaces #2204 rather than folding into its branch.
+
 ## Open questions
 
-1. Should the SDK ship generic reasons? This reverses #2204's rule.
-2. `UPSTREAM_AMBIGUOUS` is counted as `INVALID`, but the lookup's pick may be right. Should it be
+1. `UPSTREAM_AMBIGUOUS` is counted as `INVALID`, but the lookup's pick may be right. Should it be
    `VALID` with a flag instead? Data point: on one tenant, 775 refs had 2 candidates (the same tables
    crawled through two connections); publish broke every Redshift tie (749) towards the newer
    connection. Neither the app's extract (no server host) nor the catalog (one connection has no
@@ -186,23 +219,24 @@ can restate an SDK reason under its code to keep its own wording (5 Tableau code
    refs and catalog, agrees with publish on 5,757 of 5,759 and 1,507 of 1,519 refs, but its
    default tie rule (lexically first) picks a different candidate on all 775 ties. A lookup that
    moves onto it without publish's newest-first rule would move those edges.
-3. `CACHE_MISS` means "lookup miss" under ARS. Rename it now, while the set is unreleased?
-4. Fold this into #2204, or open a new PR?
-5. Restating an SDK reason by subclassing it under the same code: the right shape, or should
+2. `CACHE_MISS` means "lookup miss" under ARS. Rename it now, while the set is unreleased?
+3. Restating an SDK reason by subclassing it under the same code: the right shape, or should
    customer wording live outside the reason class?
-6. A field that inherits its parent's verdict gets the parent's gap but keeps its own code. Decided
+4. A field that inherits its parent's verdict gets the parent's gap but keeps its own code. Decided
    for the Tableau port: its category also comes from the parent's reason, so category and gap
    name the same stage; the code stays its own and the row records `inheritedFrom`.
-7. Rolling fields up into their parent keeps field column refs only as counts, so stage 2 can't
+5. Rolling fields up into their parent keeps field column refs only as counts, so stage 2 can't
    settle them per field. For now fields settle from their parent's outcome: the parent is the
    unit people act on. Per-field settle (keeping the refs, at a memory cost) can come later.
-8. A whole phase failing (Power BI's report-definition step catches one exception for all of it)
+6. A whole phase failing (Power BI's report-definition step catches one exception for all of it)
    would surface as `UNINSTRUMENTED_PATH`. A reason for that, or a run-level flag?
-9. The funnel mapping names support's Linear labels. Keep it in the SDK, next to the categories it
+7. The funnel mapping names support's Linear labels. Keep it in the SDK, next to the categories it
    must cover (a test enforces that), or move it to the consumer that reads the rows?
 
 ## Not in this spike
 
 The generic tracker, the artifact writer, the lookup-side outcome export (proven feasible by the
-local replay, not built), and an `adopt-lineage-coverage` skill modelled on `typed-failures`. The Tableau port lives on an app test
-branch, not here.
+local replay, not built), and an `adopt-lineage-coverage` skill modelled on `typed-failures`.
+Sub-reasons for BI-internal lineage (report, page, visual and explore fields) come next, designed
+once across Power BI and a third BI app. The Tableau and Power BI ports live on app branches, not
+here.

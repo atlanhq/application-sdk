@@ -668,6 +668,81 @@ artifacts, or whose worker never runs one, emits no outcome row at all — so fr
 hard-mode app that has never blocked anything is indistinguishable from one that is not registered.
 This row is what makes adoption and posture drift measurable rather than a code-search artifact.
 
+### Lineage coverage outcome event
+
+An app that tracks lineage coverage ([ADR-0023](../adr/0023-lineage-coverage.md),
+`application_sdk.observability.lineage`) gives every asset it emits a verdict (`VALID`, `INVALID`,
+`MISSING`, `VALID_NONE`, `PENDING`) and, when lineage is missing or partial, a reason class. The
+per-asset rows carry asset names, so they stay in the tenant's store (run artifacts, or the app's
+own lakehouse tables). Only counts leave the run, as one `"Lineage coverage outcome"` row per run:
+
+```python
+from application_sdk.observability.lineage import CoverageCounts
+from application_sdk.observability.lineage.outcome import (
+    LINEAGE_COVERAGE_EVENT,
+    coverage_outcome_fields,
+)
+
+counts = CoverageCounts()
+counts.extend(assessments)
+logger.info(LINEAGE_COVERAGE_EVENT, **coverage_outcome_fields(counts, app_name))
+```
+
+| Attribute | Meaning |
+|-----------|---------|
+| `lineage_assets_total` | assets assessed in the run |
+| `lineage_valid`, `lineage_invalid`, `lineage_missing`, `lineage_valid_none`, `lineage_pending` | assets per verdict |
+| `lineage_coverage_rate` | `VALID / (VALID + INVALID + MISSING)`, 4 decimals; empty when nothing settled. `PENDING` and `VALID_NONE` stay out |
+| `lineage_coverage_summary` | JSON `{"gap": {<GapCategory>: n}, "category": {<ReasonCategory>: n}}` over `INVALID` and `MISSING` assets |
+
+Reason codes are per-app and high-cardinality, so they never appear here; only the closed
+`GapCategory` and `ReasonCategory` sets do. The same two ClickHouse rules as the asset-validation
+query apply: bound `Timestamp`, and re-aggregate in an outer query.
+
+Latest coverage per app and tenant:
+
+```sql
+SELECT app, tenant,
+       uniqExactMerge(runs_state) AS runs,
+       argMaxMerge(assets_state) AS latest_assets,
+       argMaxMerge(rate_state) AS latest_rate
+FROM (
+  SELECT LogAttributes['app_name'] AS app,
+         TenantName AS tenant,
+         uniqExactState(LogAttributes['workflow_run_id']) AS runs_state,
+         argMaxState(LogAttributes['lineage_assets_total'], Timestamp) AS assets_state,
+         argMaxState(LogAttributes['lineage_coverage_rate'], Timestamp) AS rate_state
+  FROM otel_logs.service_logs
+  WHERE Timestamp >= now() - INTERVAL 1 DAY
+    AND ServiceName LIKE 'atlan-%'
+    AND Body = 'Lineage coverage outcome'
+  GROUP BY app, tenant
+)
+GROUP BY app, tenant
+ORDER BY tenant, app
+```
+
+Missing or partial lineage by reason category:
+
+```sql
+SELECT app, category, sum(n) AS assets, uniqExactMerge(runs_state) AS runs
+FROM (
+  SELECT LogAttributes['app_name'] AS app,
+         kv.1 AS category,
+         sum(kv.2) AS n,
+         uniqExactState(LogAttributes['workflow_run_id']) AS runs_state
+  FROM otel_logs.service_logs
+  ARRAY JOIN JSONExtractKeysAndValues(
+      JSONExtractRaw(LogAttributes['lineage_coverage_summary'], 'category'), 'UInt64') AS kv
+  WHERE Timestamp >= now() - INTERVAL 1 DAY
+    AND ServiceName LIKE 'atlan-%'
+    AND Body = 'Lineage coverage outcome'
+  GROUP BY app, category
+)
+GROUP BY app, category
+ORDER BY assets DESC
+```
+
 ### Replay suppression
 
 `self.logger` suppresses log output during Temporal workflow replay by default, matching the behaviour of Temporal's native `workflow.logger`. This prevents duplicate bare lines (missing `workflow_id`/`run_id`) that would otherwise appear in Grafana when a worker replays history after a sticky-cache eviction.
