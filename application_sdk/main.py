@@ -2608,11 +2608,17 @@ async def run_combined_mode(
     logger.info("Combined mode stopped")
 
 
+#: Default for ``run_dev_combined(credential_stores=...)``. A sentinel rather
+#: than ``None`` so an explicit ``credential_stores=None`` also warns.
+_CREDENTIAL_STORES_UNSET = object()
+
+
 async def run_dev_combined(
     app_class: type[App],
     *,
     credential_stores: Mapping[str, SecretStore]
-    | None = None,  # deprecated — ignored, kept for back-compat
+    | None
+    | object = _CREDENTIAL_STORES_UNSET,  # deprecated — ignored, kept for back-compat
     credentials: dict[str, Any] | None = None,
     example_input: dict[str, Any] | None = None,
     host: str | None = None,
@@ -2647,7 +2653,8 @@ async def run_dev_combined(
 
     ``credential_stores`` is likewise accepted but ignored: secrets resolve
     through the embedded ``daprd``'s secret store, never through a store
-    passed here. Passing it emits a :class:`DeprecationWarning`; use
+    passed here. Passing it, even as ``None``, emits a
+    :class:`DeprecationWarning`; use
     ``credentials`` to provision a local credential instead.
 
     Args:
@@ -2705,7 +2712,7 @@ async def run_dev_combined(
             stacklevel=2,
         )
 
-    if credential_stores is not None:
+    if credential_stores is not _CREDENTIAL_STORES_UNSET:
         import warnings  # noqa: PLC0415 — cold path: deprecation warning only
 
         warnings.warn(

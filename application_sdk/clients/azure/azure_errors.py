@@ -61,8 +61,10 @@ class AzureInputValidationError(InvalidInputError):
 
 @deprecated(
     "application_sdk.clients.azure.azure_errors.AzureConnectionError is deprecated and will "
-    "be removed in v4.0.0: nothing in the SDK raises it. Raise or catch "
-    'DependencyUnavailableError (service="azure") instead.'
+    "be removed in v4.0.0: nothing in the SDK raises it. To keep its wire code, "
+    "raise an app-owned DependencyUnavailableError subclass that sets "
+    'code = "DEPENDENCY_UNAVAILABLE_AZURE"; plain DependencyUnavailableError '
+    "drops the Azure-specific code."
 )
 @dataclass(kw_only=True)
 class AzureConnectionError(DependencyUnavailableError):
@@ -75,8 +77,10 @@ class AzureConnectionError(DependencyUnavailableError):
 
 @deprecated(
     "application_sdk.clients.azure.azure_errors.AzureServiceError is deprecated and will "
-    "be removed in v4.0.0: nothing in the SDK raises it. Raise or catch "
-    'DependencyUnavailableError (service="azure") instead.'
+    "be removed in v4.0.0: nothing in the SDK raises it. To keep its wire code, "
+    "raise an app-owned DependencyUnavailableError subclass that sets "
+    'code = "DEPENDENCY_UNAVAILABLE_AZURE_SERVICE"; plain DependencyUnavailableError '
+    "drops the Azure-specific code."
 )
 @dataclass(kw_only=True)
 class AzureServiceError(DependencyUnavailableError):

@@ -2681,8 +2681,12 @@ class TestRunDevCombined:
 
     @pytest.mark.parametrize(
         ("kwargs", "warns"),
-        [({"credential_stores": {"default": MagicMock()}}, True), ({}, False)],
-        ids=["passed", "omitted"],
+        [
+            ({"credential_stores": {"default": MagicMock()}}, True),
+            ({"credential_stores": None}, True),
+            ({}, False),
+        ],
+        ids=["passed", "passed-none", "omitted"],
     )
     async def test_credential_stores_warns_and_is_not_used(
         self,

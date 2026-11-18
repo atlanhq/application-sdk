@@ -201,7 +201,7 @@
     {
       "kind": "method",
       "marker_via": "decorator",
-      "message": "AppRegistry.get_all_versions is deprecated; use AppRegistry.get(name), which returns the latest registered version \u2014 it has no caller in the SDK. Will be removed in v4.0.0.",
+      "message": "AppRegistry.get_all_versions is deprecated; use AppRegistry.get(name, version) for a known version or AppRegistry.get(name) for the latest. No replacement enumerates every version, and it has no caller in the SDK. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.app.registry",
       "removal_version": "4.0.0",
@@ -219,8 +219,8 @@
     {
       "kind": "class",
       "marker_via": "decorator",
-      "message": "application_sdk.clients.azure.azure_errors.AzureConnectionError is deprecated and will be removed in v4.0.0: nothing in the SDK raises it. Raise or catch DependencyUnavailableError (service=\"azure\") instead.",
-      "migration_target": true,
+      "message": "application_sdk.clients.azure.azure_errors.AzureConnectionError is deprecated and will be removed in v4.0.0: nothing in the SDK raises it. To keep its wire code, raise an app-owned DependencyUnavailableError subclass that sets code = \"DEPENDENCY_UNAVAILABLE_AZURE\"; plain DependencyUnavailableError drops the Azure-specific code.",
+      "migration_target": false,
       "module": "application_sdk.clients.azure.azure_errors",
       "removal_version": "4.0.0",
       "symbol": "AzureConnectionError"
@@ -228,8 +228,8 @@
     {
       "kind": "class",
       "marker_via": "decorator",
-      "message": "application_sdk.clients.azure.azure_errors.AzureServiceError is deprecated and will be removed in v4.0.0: nothing in the SDK raises it. Raise or catch DependencyUnavailableError (service=\"azure\") instead.",
-      "migration_target": true,
+      "message": "application_sdk.clients.azure.azure_errors.AzureServiceError is deprecated and will be removed in v4.0.0: nothing in the SDK raises it. To keep its wire code, raise an app-owned DependencyUnavailableError subclass that sets code = \"DEPENDENCY_UNAVAILABLE_AZURE_SERVICE\"; plain DependencyUnavailableError drops the Azure-specific code.",
+      "migration_target": false,
       "module": "application_sdk.clients.azure.azure_errors",
       "removal_version": "4.0.0",
       "symbol": "AzureServiceError"
@@ -1362,7 +1362,7 @@
     {
       "kind": "function",
       "marker_via": "decorator",
-      "message": "memory_fraction is deprecated; divide memory_usage_bytes() by memory_limit_bytes() \u2014 it has no caller in the SDK. Will be removed in v4.0.0.",
+      "message": "memory_fraction is deprecated; call memory_usage_bytes() and memory_limit_bytes(), treat the fraction as unknown when either returns None or the limit is not positive, and otherwise divide usage by limit \u2014 it has no caller in the SDK. Will be removed in v4.0.0.",
       "migration_target": false,
       "module": "application_sdk.observability.cgroup",
       "removal_version": "4.0.0",

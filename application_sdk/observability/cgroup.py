@@ -91,15 +91,18 @@ def memory_limit_bytes() -> int | None:
 
 
 @deprecated(
-    "memory_fraction is deprecated; divide memory_usage_bytes() by "
-    "memory_limit_bytes() — it has no caller in the SDK. Will be removed in v4.0.0."
+    "memory_fraction is deprecated; call memory_usage_bytes() and "
+    "memory_limit_bytes(), treat the fraction as unknown when either returns "
+    "None or the limit is not positive, and otherwise divide usage by limit — "
+    "it has no caller in the SDK. Will be removed in v4.0.0."
 )
 def memory_fraction() -> float | None:
     """Usage as a fraction of the limit, or ``None`` if either side is unknown.
 
     .. deprecated:: 3.59
-        Use ``memory_usage_bytes() / memory_limit_bytes()``. Will be removed
-        in v4.0.0.
+        Call :func:`memory_usage_bytes` and :func:`memory_limit_bytes`;
+        either can return ``None``, so guard before dividing. Will be
+        removed in v4.0.0.
     """
     limit = memory_limit_bytes()
     if not limit or limit <= 0:

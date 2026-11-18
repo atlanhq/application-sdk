@@ -320,15 +320,18 @@ class AppRegistry:
         return versions[latest_version]
 
     @deprecated(
-        "AppRegistry.get_all_versions is deprecated; use AppRegistry.get(name), "
-        "which returns the latest registered version — it has no caller in the "
+        "AppRegistry.get_all_versions is deprecated; use AppRegistry.get(name, "
+        "version) for a known version or AppRegistry.get(name) for the latest. "
+        "No replacement enumerates every version, and it has no caller in the "
         "SDK. Will be removed in v4.0.0."
     )
     def get_all_versions(self, name: str) -> list[AppMetadata]:
         """Get all versions of an App.
 
         .. deprecated:: 3.59
-            Use :meth:`get`. Will be removed in v4.0.0.
+            Use :meth:`get` with a version, or without one for the latest.
+            Nothing replaces enumerating every version. Will be removed in
+            v4.0.0.
 
         Args:
             name: App name.
