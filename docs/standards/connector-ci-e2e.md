@@ -1673,7 +1673,10 @@ class TestMyGlossaryReaderE2E(MyGeneratedE2EBase):
 ```
 
 The glossary gets a run-unique name (`e2e-<connector>-<suffix>`, from the run's
-minter). When the app filters glossaries by name, point that filter at
+minter). `seed_glossary()` returns only once search returns every created asset,
+because an app that finds terms through search would otherwise see fewer than
+were seeded; it raises `SeededAssetsNotSearchableError` if that does not happen
+within `atlas_poll_timeout_seconds`. When the app filters glossaries by name, point that filter at
 `self.glossary.name` so the run reads only its own terms on a shared tenant.
 
 Every GUID the seed creates is registered as soon as Atlas returns it, and

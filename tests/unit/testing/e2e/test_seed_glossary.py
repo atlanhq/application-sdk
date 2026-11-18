@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -28,10 +29,13 @@ from pyatlan.model.assets import AtlasGlossary, AtlasGlossaryTerm
 from pyatlan.model.enums import CertificateStatus
 
 from application_sdk.errors.leaves import InvalidInputError
+from application_sdk.testing.e2e._errors import SeededAssetsNotSearchableError
 from application_sdk.testing.e2e.base import BaseE2ETest
 from application_sdk.testing.e2e.payload import RunMode
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 from application_sdk.testing.harness import atlas
+from application_sdk.testing.harness.budgets import Budget
+from application_sdk.testing.harness.outcome import Indeterminate, Settled
 from application_sdk.testing.harness.teardown import purge_assets
 
 _GLOSSARY_GUID = "guid-glossary"
@@ -45,6 +49,9 @@ class _FakeAssetApi:
         save_errors: Save ordinal (1-based) -> exception to raise instead.
         purge_errors: GUID -> exception ``purge_by_guid`` raises for it.
         omit_assignment: When set, saves answer with no ``guidAssignments``.
+        search_counts: What successive searches report as ``count``; the last
+            one repeats. An exception in the list is raised instead. ``None``
+            reports every successful save as visible.
     """
 
     def __init__(
@@ -54,13 +61,30 @@ class _FakeAssetApi:
         save_errors: dict[int, BaseException] | None = None,
         purge_errors: dict[str, BaseException] | None = None,
         omit_assignment: bool = False,
+        search_counts: list[int | BaseException] | None = None,
     ) -> None:
         self._guids = list(guids or [])
         self._save_errors = save_errors or {}
         self._purge_errors = purge_errors or {}
         self._omit_assignment = omit_assignment
+        self._search_counts = search_counts
+        self._created = 0
         self.saved: list[Any] = []
         self.purged: list[Any] = []
+        self.searches: list[Any] = []
+
+    async def search(self, request: Any) -> Any:
+        self.searches.append(request)
+        if self._search_counts is None:
+            return SimpleNamespace(count=self._created)
+        answer = (
+            self._search_counts.pop(0)
+            if len(self._search_counts) > 1
+            else self._search_counts[0]
+        )
+        if isinstance(answer, BaseException):
+            raise answer
+        return SimpleNamespace(count=answer)
 
     async def save(self, asset: Any) -> Any:
         self.saved.append(asset)
@@ -69,6 +93,7 @@ class _FakeAssetApi:
             raise error
         if self._omit_assignment:
             return SimpleNamespace(guid_assignments=None)
+        self._created += 1
         return SimpleNamespace(guid_assignments={asset.guid: self._guids.pop(0)})
 
     async def purge_by_guid(self, guid: Any) -> None:
@@ -157,6 +182,22 @@ class TestCreateGlossaryTerm:
             await atlas.create_glossary_term(
                 client, glossary_guid=_GLOSSARY_GUID, term=_terms()[1]
             )
+
+
+class TestCountAssetsByGuid:
+    async def test_the_count_comes_from_one_guid_filtered_search(self) -> None:
+        client = _client(search_counts=[2])
+        reading = await atlas.count_assets_by_guid(client, ["g", "t1", "t2"])
+        assert isinstance(reading, Settled)
+        assert reading.value == 2
+        [request] = client.asset.searches
+        assert "t1" in str(request.dsl.query)
+        assert request.dsl.size == 0
+
+    async def test_an_unreadable_search_is_no_verdict_not_zero(self) -> None:
+        client = _client(search_counts=[RuntimeError("index down")])
+        reading = await atlas.count_assets_by_guid(client, ["g"])
+        assert isinstance(reading, Indeterminate)
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +295,15 @@ def _harness(
     harness._minter = SimpleNamespace(unique_suffix=lambda: "1787587123106596")
     monkeypatch.setattr(_GlossaryE2ETest, "_atlas_client", _atlas_client)
     monkeypatch.setattr(
+        _GlossaryE2ETest,
+        "_seed_readback_budget",
+        lambda _self: Budget(
+            timeout=timedelta(seconds=0.3),
+            poll_interval=timedelta(seconds=0.01),
+            heartbeat=None,
+        ),
+    )
+    monkeypatch.setattr(
         "application_sdk.testing.e2e.base.logger",
         SimpleNamespace(info=_ignore, warning=_record_warning, error=_record_warning),
     )
@@ -295,6 +345,47 @@ class TestSeedGlossary:
             harness.seed_glossary(terms)
         assert client.asset.saved == []
         assert harness._seeded_asset_guids == []
+
+
+class TestSeedGlossaryWaitsForSearch:
+    def test_it_returns_once_search_returns_every_seeded_asset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = _client(
+            guids=[_GLOSSARY_GUID, "guid-revenue", "guid-churn"],
+            search_counts=[0, 1, 3],
+        )
+        harness, _warnings = _harness(monkeypatch, client)
+        harness.seed_glossary(_terms())
+        assert len(client.asset.searches) == 3
+        assert all(
+            guid in str(client.asset.searches[0].dsl.query)
+            for guid in (_GLOSSARY_GUID, "guid-revenue", "guid-churn")
+        )
+
+    def test_an_unreadable_search_keeps_waiting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = _client(
+            guids=[_GLOSSARY_GUID, "guid-revenue", "guid-churn"],
+            search_counts=[RuntimeError("index down"), 3],
+        )
+        harness, _warnings = _harness(monkeypatch, client)
+        harness.seed_glossary(_terms())
+        assert len(client.asset.searches) == 2
+
+    def test_it_times_out_with_a_clear_error_and_teardown_still_purges(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = _client(
+            guids=[_GLOSSARY_GUID, "guid-revenue", "guid-churn"],
+            search_counts=[2],
+        )
+        harness, _warnings = _harness(monkeypatch, client)
+        with pytest.raises(SeededAssetsNotSearchableError, match="2 of 3"):
+            harness.seed_glossary(_terms())
+        harness.teardown_method(method=None)
+        assert client.asset.purged == ["guid-churn", "guid-revenue", _GLOSSARY_GUID]
 
 
 class TestTeardownPurgesTheSeededGlossary:
