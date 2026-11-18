@@ -103,6 +103,7 @@ from application_sdk.testing.harness.teardown._dag import (
 from application_sdk.testing.harness.teardown._purge import (
     PURGE_BATCH_SIZE,
     PurgeReport,
+    purge_assets,
     purge_connection,
 )
 
@@ -120,6 +121,7 @@ __all__ = [
     "build_connection_delete_dag",
     "connection_delete_task_queue",
     "delete_connection",
+    "purge_assets",
     "purge_connection",
 ]
 

@@ -62,6 +62,7 @@ __all__ = [
     "NoWorkerOnTaskQueueError",
     "ProgressWatchdogUnreachableError",
     "RequestDelivery",
+    "SeededAssetsNotSearchableError",
     "SeededConnectionNotSearchableError",
     "StoreAssertDisabledError",
     "StoreAssertQueueAmbiguousError",
@@ -250,6 +251,21 @@ class SeededConnectionNotSearchableError(PreconditionError):
 
     code: ClassVar[str] = "PRECONDITION_SEEDED_CONNECTION_NOT_SEARCHABLE"
     expected_state: str | None = "seeded connection searchable in Atlas"
+
+
+@dataclass(kw_only=True)
+class SeededAssetsNotSearchableError(PreconditionError):
+    """Seeded assets never all became searchable within the poll window.
+
+    :meth:`~application_sdk.testing.e2e.base.BaseE2ETest.seed_glossary` created
+    them, but the search index never returned every one. An app that finds them
+    through search would then see fewer than were seeded (a glossary reader sees
+    zero terms and fails), so this fails fast instead, naming the seed rather
+    than the app.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_SEEDED_ASSETS_NOT_SEARCHABLE"
+    expected_state: str | None = "every seeded asset returned by search"
 
 
 @dataclass(kw_only=True)
