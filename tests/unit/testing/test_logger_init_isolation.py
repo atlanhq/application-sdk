@@ -160,20 +160,27 @@ def test_flag_was_not_stamped_back_down():
     pytester.runpytest("-p", "no:randomly").assert_outcomes(passed=2)
 
 
-def test_guard_restores_the_flag_and_the_reset_releases_the_flush(
-    pytester: pytest.Pytester,
+def test_guard_restores_the_flag_with_a_live_flush(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The latch covers ``_initialized``; the periodic flush needs none.
+    """Restoring ``_initialized`` restores the flush and sink owner with it.
 
-    The reset stops the logger's periodic flush and releases its class, so a
-    later init starts one flush in its place rather than a second beside it.
-    The assertion on the flag is the latch, not the snapshot: a flag that was up
+    The reset stops the logger's periodic flush. With the flag back up no later
+    init starts another, yet the handlers the reset left in place still write
+    to the old sink's buffer: a log after the test would never be flushed. The
+    assertion on the flag is the latch, not the snapshot: a flag that was up
     before the test is up again after it, whatever the test did to it.
+
+    The logger starts its flush only with the object-store sink on, which the
+    test suite turns off and ``constants`` reads at import, so the inner run is
+    a fresh process with it on.
     """
+    monkeypatch.setenv("ATLAN_ENABLE_OBSERVABILITY_STORE_SINK", "true")
+    monkeypatch.setenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true")
     pytester.makeconftest(WITH_GUARD)
     pytester.makepyfile(
         test_flags="""
-from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter
+from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
 from application_sdk.observability.observability import AtlanObservability
 
 BEFORE = {}
@@ -181,15 +188,26 @@ BEFORE = {}
 
 def test_capture_then_reset():
     BEFORE["initialized"] = AtlanLoggerAdapter._initialized
+    BEFORE["sink_owner"] = AtlanLoggerAdapter._sink_owner
+    BEFORE["flush_owner"] = AtlanObservability._periodic_flush_owners.get(
+        AtlanLoggerAdapter
+    )
+    assert BEFORE["flush_owner"] is not None, "no logger flush before: vacuous"
     AtlanLoggerAdapter._reset_for_testing()
     assert AtlanLoggerAdapter._initialized is False
     assert AtlanLoggerAdapter not in AtlanObservability._periodic_flush_owners
 
 
-def test_flag_that_was_up_is_up_again():
-    if BEFORE["initialized"]:
-        assert AtlanLoggerAdapter._initialized is True
+def test_flag_that_was_up_is_up_again_with_a_live_flush():
+    assert BEFORE["initialized"], "the logger was not initialised before: vacuous"
+    assert AtlanLoggerAdapter._initialized is True
+    assert AtlanLoggerAdapter._sink_owner is BEFORE["sink_owner"]
+    owner = AtlanObservability._periodic_flush_owners.get(AtlanLoggerAdapter)
+    assert owner is BEFORE["flush_owner"], "nothing flushes the logger's buffer"
+    assert owner._periodic_flush_task is not None
+    assert not owner._periodic_flush_task.done()
+    get_logger("fnd4918.post_reset").info("logged after the reset")
 """
     )
 
-    pytester.runpytest("-p", "no:randomly").assert_outcomes(passed=2)
+    pytester.runpytest_subprocess("-p", "no:randomly").assert_outcomes(passed=2)

@@ -18,6 +18,9 @@ from application_sdk.constants import (
     SEGMENT_WRITE_KEY,
     SERVICE_NAME,
 )
+from application_sdk.observability.background_loop import (  # noqa: F401 — re-exported (named here before FND-4918)
+    BackgroundTask,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.models import MetricRecord, MetricType
 from application_sdk.observability.observability import AtlanObservability
@@ -52,7 +55,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     @classmethod
     def _reset_for_testing(cls) -> None:
         """Reset initialization state for test isolation."""
-        cls._stop_periodic_flush_for_testing()
+        cls._stop_class_flushes_for_testing()
         cls._otel_setup_failed_logged = False
 
     def __init__(self):

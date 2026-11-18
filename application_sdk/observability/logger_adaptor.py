@@ -43,6 +43,9 @@ from application_sdk.constants import (
 # observability package would otherwise import this module mid-boot and deadlock
 # on the module lock (_DeadlockError at startup when the log level is DEBUG).
 from application_sdk.errors.base import redact_secrets
+from application_sdk.observability.background_loop import (  # noqa: F401 — re-exported (named here before FND-4918)
+    BackgroundTask,
+)
 from application_sdk.observability.console_sink import (
     console_writer,
     flush_console_logs,
@@ -932,7 +935,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         This method should only be used in tests to allow fresh sink setup
         for each test case.
         """
-        cls._stop_periodic_flush_for_testing()
+        cls._stop_class_flushes_for_testing()
         cls._initialized = False
         cls._sink_owner = None
         _logger_instances.clear()

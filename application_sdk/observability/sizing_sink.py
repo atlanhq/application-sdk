@@ -17,6 +17,9 @@ from application_sdk.constants import (
     SIZING_FILE_NAME,
     SIZING_FLUSH_INTERVAL_SECONDS,
 )
+from application_sdk.observability.background_loop import (  # noqa: F401 — re-exported (named here before FND-4918)
+    BackgroundTask,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.sizing import SIZING_SCHEMA_VERSION
@@ -32,13 +35,12 @@ class SizingObservabilitySink(AtlanObservability[Any]):
 
     @classmethod
     def _reset_for_testing(cls) -> None:
-        """Stop the flush and drop every sizing sink's unflushed rows."""
+        """Stop every sizing sink's flushes, drop their unflushed rows, and
+        unregister them."""
+        cls._stop_class_flushes_for_testing()
         for instance in list(AtlanObservability._instances):
             if isinstance(instance, cls):
-                with instance._buffer_lock:
-                    instance._buffer = []
                 AtlanObservability._instances.remove(instance)
-        cls._stop_periodic_flush_for_testing()
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)

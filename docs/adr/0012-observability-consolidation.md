@@ -321,13 +321,16 @@ the metrics final flush drains the Segment queue through an HTTP client that
 is still open. A cancel that arrives before a task's first step is deferred
 until the task has started, so its final flush still runs.
 
-Each sink class runs one periodic flush, started by the first sink of the
-class through `AtlanObservability._ensure_periodic_flush()`. The "flush
-started" guard is one per-class registry on the base, and
-`_stop_periodic_flush_for_testing()` is the one test reset that cancels the
-flush and releases the class (FND-4918). The logs, metrics and sizing sinks
-used to copy this bookkeeping each, and the logs copy's reset cleared the
-guard without stopping the flush.
+The metrics and sizing sinks each run one periodic flush per class, and so
+does the logs sink when the object-store sink is on
+(`ATLAN_ENABLE_OBSERVABILITY_STORE_SINK`, default true). The first sink of the
+class starts it through `AtlanObservability._ensure_periodic_flush()`. The
+"flush started" guard is one per-class registry on the base, and
+`_stop_class_flushes_for_testing()` is the one test reset: it stops the
+periodic flush and every batch flush of every sink of the class, and releases
+the class (FND-4918). The logs, metrics and sizing sinks used to copy this
+bookkeeping each, and the logs copy's reset cleared the guard without stopping
+the flush.
 
 After `fork()`, the child replaces the loop's lock, forgets the parent's
 loop, drops each Segment client's worker, and restarts every sink's periodic

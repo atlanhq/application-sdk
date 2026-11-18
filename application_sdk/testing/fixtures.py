@@ -25,6 +25,7 @@ from application_sdk.app.context import AppContext
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.constants import LOCAL_WORKFLOW_ID
 from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter
+from application_sdk.observability.observability import AtlanObservability
 from application_sdk.testing.mocks import (
     MockBinding,
     MockCredentialStore,
@@ -142,8 +143,12 @@ def restore_logger_init_flags() -> Generator[None, None, None]:
     imports ``logger_adaptor``, whose import binds ``default_logger`` and so has
     already run a full init.
 
-    The periodic flush needs no latch: ``_reset_for_testing`` stops it, so the
-    flush a later init starts replaces it rather than running beside it.
+    Restoring the flag restores the state that goes with it. The reset also
+    stops the periodic flush and clears ``_sink_owner``, but the handlers it
+    left in place still write to the old sink's buffer, and with the flag back
+    up no later init would start a flush for it. So the finalizer puts the sink
+    owner back and restarts the flush on the sink that ran it. A test that
+    re-initialised has its own of both, and none of this runs.
 
     Under ``-n auto --dist load`` xdist hands items out as workers free up, so
     which pair collides is a function of relative test speed rather than of
@@ -151,11 +156,17 @@ def restore_logger_init_flags() -> Generator[None, None, None]:
     rerun could turn green — the same shape as FND-961. See FND-976.
     """
     initialized = AtlanLoggerAdapter._initialized
+    sink_owner = AtlanLoggerAdapter._sink_owner
+    flush_owner = AtlanObservability._periodic_flush_owners.get(AtlanLoggerAdapter)
     try:
         yield
     finally:
-        if initialized:
+        if initialized and not AtlanLoggerAdapter._initialized:
             AtlanLoggerAdapter._initialized = True
+            if AtlanLoggerAdapter._sink_owner is None:
+                AtlanLoggerAdapter._sink_owner = sink_owner
+            if flush_owner is not None:
+                flush_owner._ensure_periodic_flush()
 
 
 def _redirect_temporary_path(patcher: pytest.MonkeyPatch, path: str) -> None:

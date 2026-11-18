@@ -255,6 +255,29 @@ def test_reset_stops_the_flush():
         assert AtlanMetricsAdapter not in AtlanObservability._periodic_flush_owners
 
 
+def test_reset_stops_a_batch_flush_on_an_adapter_that_does_not_own_the_flush():
+    """A second adapter's in-flight batch flush is cancelled too, not only the
+    flush owner's: left running it uploads into a later test's patched store."""
+    with metrics_flush_owner(None):
+        with mock.patch(
+            "application_sdk.observability.observability.observability_loop"
+        ) as shared_loop:
+            owner = AtlanMetricsAdapter()
+            second = AtlanMetricsAdapter()
+        shared_loop.start.call_args.args[0].close()
+        assert AtlanObservability._periodic_flush_owners[AtlanMetricsAdapter] is owner
+        batch_flush = mock.MagicMock(name="second adapter's batch flush")
+        second._flush_tasks.add(batch_flush)
+
+        with mock.patch(
+            "application_sdk.observability.observability._cancel_flush_task_for_testing"
+        ) as cancel:
+            AtlanMetricsAdapter._reset_for_testing()
+
+        cancelled = [call.args[0] for call in cancel.call_args_list]
+        assert batch_flush in cancelled
+
+
 def test_create_metrics_adapter_starts_no_flusher_and_restores_registration():
     """The fixture must never start a real flusher, and must leave the
     class's flush registration as it found it."""

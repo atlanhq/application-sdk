@@ -842,20 +842,28 @@ class AtlanObservability(Generic[T], ABC):
             owners[type(self)] = self
 
     @classmethod
-    def _stop_periodic_flush_for_testing(cls) -> None:
-        """Stop *cls*'s periodic flush and discard its sink's unflushed records.
+    def _stop_class_flushes_for_testing(cls) -> None:
+        """Stop the flushes of every sink of *cls*, and release the class.
 
-        Test-only. Waits up to ``_RESET_STOP_TIMEOUT_SECONDS`` for the flush to
-        stop (see :meth:`_stop_flushes_for_testing`) and releases the class, so
-        the next sink of *cls* starts a fresh flush. Clearing only a "started"
-        guard left the old flush running on the shared loop beside the new
-        one, writing a dropped sink's rows later into whatever store a later
-        test had patched.
+        Test-only. Each sink's records are discarded and its flushes stopped
+        (see :meth:`_stop_flushes_for_testing`): the class's periodic flush,
+        and the batch flushes ``add_record`` started on any sink of the class,
+        owner or not. All within one ``_RESET_STOP_TIMEOUT_SECONDS``. The class
+        is released, so the next sink of *cls* starts a fresh flush. Clearing
+        only a "started" guard left the old flush running on the shared loop
+        beside the new one, writing a dropped sink's rows later into whatever
+        store a later test had patched.
         """
+        deadline = monotonic() + _RESET_STOP_TIMEOUT_SECONDS
         with _periodic_flush_lock:
             owner = AtlanObservability._periodic_flush_owners.pop(cls, None)
-        if owner is not None:
-            owner._stop_flushes_for_testing(monotonic() + _RESET_STOP_TIMEOUT_SECONDS)
+        sinks: list[AtlanObservability[Any]] = [
+            i for i in list(AtlanObservability._instances) if isinstance(i, cls)
+        ]
+        if owner is not None and owner not in sinks:
+            sinks.append(owner)
+        for sink in sinks:
+            sink._stop_flushes_for_testing(deadline)
 
     def _start_periodic_flush(self) -> BackgroundTask | None:
         """Start :meth:`_periodic_flush` on the shared observability loop.
