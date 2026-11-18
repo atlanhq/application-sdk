@@ -111,7 +111,7 @@ from application_sdk.common.sql_filters import (
     safe_substitute_placeholders,
     strip_sql_block_comments,
 )
-from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPLATE
+from application_sdk.constants import TEMPORARY_PATH, run_prefix
 from application_sdk.contracts.base import OutputStatus
 from application_sdk.contracts.storage import VerifyRefsInput
 from application_sdk.contracts.types import FileReference, StorageTier
@@ -1318,12 +1318,10 @@ class SqlApp(App):
             info = _temporal_workflow.info()
             resolved_base = os.path.join(
                 TEMPORARY_PATH,
-                WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
-                    application_name=AppRegistry.resolve_running_app_name(
-                        prefer=self._app_name
-                    ),
-                    workflow_id=info.workflow_id,
-                    run_id=info.run_id,
+                run_prefix(
+                    AppRegistry.resolve_running_app_name(prefer=self._app_name),
+                    info.workflow_id,
+                    info.run_id,
                 ),
             )
 
@@ -1577,11 +1575,14 @@ class SqlApp(App):
             raw_file=raw_file,
         )
 
-    @staticmethod
-    def _resolve_output_path(input: ExtractionTaskInput) -> str:
-        """Resolve output_path — auto-set from build_output_path() in activity context."""
+    def _resolve_output_path(self, input: ExtractionTaskInput) -> str:
+        """Resolve output_path — auto-set from build_output_path() in activity context.
+
+        Uses this App's name, as ``run()`` does when it derives the
+        ``transformed`` prefix, so extraction writes where publish reads.
+        """
         if not input.output_path:
-            resolved = build_output_path()
+            resolved = build_output_path(self._app_name)
             logger.info("Auto-resolved output_path: %s", resolved)
             return os.path.join(TEMPORARY_PATH, resolved)
         return input.output_path
@@ -2078,10 +2079,17 @@ class SqlApp(App):
 #: until FND-4691 switched it to the private GUID constructor, which left the
 #: name importable from here only by accident of that import. Served once more
 #: by ``__getattr__`` below (PEP 562) so the removal waits for v4.0.0.
+#: ``WORKFLOW_OUTPUT_PATH_TEMPLATE`` likewise, since FND-4921 composes the run
+#: prefix through ``application_sdk.constants.run_prefix``.
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
     "legacy_credential_ref": (
         "application_sdk.credentials.ref.legacy_credential_ref",
         "it was only ever re-exported here as a side effect of an import",
+    ),
+    "WORKFLOW_OUTPUT_PATH_TEMPLATE": (
+        "application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE",
+        "it was only ever re-exported here as a side effect of an import; "
+        "compose a run prefix with application_sdk.constants.run_prefix",
     ),
 }
 
@@ -2098,6 +2106,7 @@ def __getattr__(name: str) -> object:
         DeprecationWarning,
         stacklevel=2,
     )
-    from application_sdk.credentials import ref as _ref  # noqa: PLC0415
+    module_name, _, attr = replacement.rpartition(".")
+    from importlib import import_module  # noqa: PLC0415 — resolved on access only
 
-    return getattr(_ref, name)
+    return getattr(import_module(module_name), attr)

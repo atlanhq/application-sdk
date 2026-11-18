@@ -1015,13 +1015,13 @@ class PublishInputMixin(BaseModel):
                     AppRegistry,
                 )
                 from application_sdk.constants import (  # noqa: PLC0415 — co-located with temporalio import in same try block
-                    WORKFLOW_OUTPUT_PATH_TEMPLATE,
+                    run_prefix,
                 )
 
-                self.output_path = WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
-                    application_name=AppRegistry.resolve_running_app_name(),
-                    workflow_id=_wf.info().workflow_id,
-                    run_id=_wf.info().run_id,
+                self.output_path = run_prefix(
+                    AppRegistry.resolve_running_app_name(),
+                    _wf.info().workflow_id,
+                    _wf.info().run_id,
                 )
             # conformance: ignore[E002,E008] api-only install has no Temporal (any missing module here meant "not a workflow context" before the split too, via the broad swallow below); output_path stays empty by design
             except ModuleNotFoundError:  # see above

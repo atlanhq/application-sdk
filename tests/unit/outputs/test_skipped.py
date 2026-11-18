@@ -511,3 +511,34 @@ class TestMergeRunSkips:
         assert result.key is None
         assert uploads == {}
         assert not collector.has_data()
+
+
+class TestPartUsesTheStampedAppName:
+    """FND-4921: a part uploads under the run prefix of the App on the sink."""
+
+    async def test_part_key_uses_sink_app_name_not_env_name(self, collector, sink):
+        sink.app_name = "my-app"
+        await skip_record({}, SkipReason.BLANK_IDENTITY, record_id="x", entity_type="T")
+        with (
+            mock.patch(
+                "application_sdk.app.registry.AppRegistry.list_apps", return_value=[]
+            ),
+            mock.patch("application_sdk.constants.APPLICATION_NAME", "env-app"),
+            mock.patch(
+                "application_sdk.execution._temporal.activity_utils.get_workflow_id",
+                return_value="wf",
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.activity_utils.get_workflow_run_id",
+                return_value="run",
+            ),
+            mock.patch.object(
+                storage, "upload_file", new_callable=mock.AsyncMock
+            ) as up,
+        ):
+            await persist_activity_skips(sink)
+
+        up.assert_awaited_once_with(
+            "artifacts/apps/my-app/workflows/wf/run/skipped-records/parts/activity-1.ndjson",
+            sink.path,
+        )

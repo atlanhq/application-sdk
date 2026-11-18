@@ -2461,7 +2461,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `build_output_path`
 
 - **Import:** `from application_sdk.execution import build_output_path`
-- **Signature:** `build_output_path()`
+- **Signature:** `build_output_path(app_name: str = '')`
 - **Summary:** SDK-internal: compose the standardized output path for the current run.
 - **Defined in:** `application_sdk/execution/_temporal/activity_utils.py`
 

@@ -1,0 +1,54 @@
+"""FND-4921: one composition of the run prefix, with the caller's App name preferred."""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from unittest import mock
+
+import pytest
+
+from application_sdk.app.registry import AppRegistry
+from application_sdk.constants import WORKFLOW_OUTPUT_PATH_TEMPLATE, run_prefix
+from application_sdk.execution._temporal import activity_utils
+
+
+def test_run_prefix_fills_the_template() -> None:
+    assert run_prefix("my-app", "wf", "run") == "artifacts/apps/my-app/workflows/wf/run"
+    assert run_prefix("a", "b", "c") == WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
+        application_name="a", workflow_id="b", run_id="c"
+    )
+
+
+class TestBuildOutputPath:
+    @pytest.fixture(autouse=True)
+    def _run(self) -> Iterator[None]:
+        """No registered App, so the resolver's fallback is the env name."""
+        with (
+            mock.patch.object(AppRegistry, "list_apps", return_value=[]),
+            mock.patch("application_sdk.constants.APPLICATION_NAME", "env-app"),
+            mock.patch.object(activity_utils, "get_workflow_id", return_value="wf"),
+            mock.patch.object(
+                activity_utils, "get_workflow_run_id", return_value="run"
+            ),
+        ):
+            yield
+
+    def test_given_app_name_wins_over_the_env_name(self) -> None:
+        assert (
+            activity_utils.build_output_path("my-app")
+            == "artifacts/apps/my-app/workflows/wf/run"
+        )
+
+    def test_without_app_name_falls_back_to_the_resolver(self) -> None:
+        assert (
+            activity_utils.build_output_path()
+            == "artifacts/apps/env-app/workflows/wf/run"
+        )
+
+
+def test_template_reexport_is_a_deprecated_alias() -> None:
+    """The template is no longer imported here; the old import still works, warned."""
+    assert "WORKFLOW_OUTPUT_PATH_TEMPLATE" not in vars(activity_utils)
+    with pytest.warns(DeprecationWarning, match="WORKFLOW_OUTPUT_PATH_TEMPLATE"):
+        value = activity_utils.WORKFLOW_OUTPUT_PATH_TEMPLATE
+    assert value == WORKFLOW_OUTPUT_PATH_TEMPLATE

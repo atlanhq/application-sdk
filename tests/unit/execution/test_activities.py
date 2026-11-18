@@ -1051,3 +1051,90 @@ class TestRedactedCauseChain:
             link = link.__cause__
         assert depth == 2
         assert depth <= _MAX_CHAIN_DEPTH
+
+
+class TestRunPrefixUsesTheTaskApp:
+    """FND-4921: the task wrapper composes the run prefix from the task's own App.
+
+    With two Apps registered and ``ATLAN_APPLICATION_NAME`` naming neither, the
+    registry resolver falls back to the env name, while ``App.upload`` writes
+    under the App's own name. Ref persistence and skipped-record parts must use
+    the App's name too, or they land under a different prefix.
+    """
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _activity(self) -> object:
+        class _PrefixApp(App):
+            @task(timeout_seconds=60)
+            async def greet(self, input: _AfnIn) -> _AfnOut:
+                return _AfnOut(greeting="hi")
+
+            async def run(self, input: _AfnIn) -> _AfnOut:
+                return await self.greet(input)
+
+        class _OtherApp(App):
+            async def run(self, input: _AfnIn) -> _AfnOut:
+                return _AfnOut(greeting="")
+
+        assert len(AppRegistry.get_instance().list_apps()) == 2
+        tasks = TaskRegistry.get_instance().get_tasks_for_app("_prefix-app")
+        return create_activity_from_task(next(t for t in tasks if t.name == "greet"))
+
+    async def test_refs_and_skipped_parts_use_the_task_app_name(self) -> None:
+        from application_sdk.outputs.skipped import (
+            SkippedRecordSink,
+            current_skipped_records,
+        )
+
+        activity_fn = self._activity()
+        ctx = TaskContext(
+            app_name="_prefix-app",
+            task_name="greet",
+            run_id="run-1",
+            workflow_id="wf-1",
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+        )
+        infra = mock.MagicMock()
+        infra.upstream_storage = None
+        persist = mock.AsyncMock(side_effect=lambda store, result, **_: result)
+        sink = SkippedRecordSink(mock.MagicMock())
+        token = current_skipped_records.set(sink)
+        try:
+            with (
+                mock.patch.object(
+                    activities_module.activity,
+                    "info",
+                    return_value=mock.MagicMock(
+                        workflow_id="wf-1", workflow_run_id="run-1"
+                    ),
+                ),
+                mock.patch(
+                    "application_sdk.infrastructure.context.get_infrastructure",
+                    return_value=infra,
+                ),
+                mock.patch("application_sdk.constants.APPLICATION_NAME", "env-app"),
+                mock.patch(
+                    "application_sdk.storage.file_ref_sync.has_refs_to_persist",
+                    return_value=True,
+                ),
+                mock.patch(
+                    "application_sdk.storage.file_ref_sync.persist_file_refs", persist
+                ),
+            ):
+                await activity_fn(ctx, _AfnIn(name="x"))
+        finally:
+            current_skipped_records.reset(token)
+
+        assert (
+            persist.await_args.kwargs["output_path"]
+            == "artifacts/apps/_prefix-app/workflows/wf-1/run-1"
+        )
+        assert sink.app_name == "_prefix-app"

@@ -494,6 +494,17 @@ def create_activity_from_task(
 
         app_instance._context = app_context
 
+        # The output interceptor installed this activity's skipped-records sink
+        # before the wrapper ran, without knowing which App owns the task. Stamp
+        # it, so the part uploads under the run prefix merge_skipped_records lists.
+        from application_sdk.outputs.skipped import (  # noqa: PLC0415 — circular: execution imports app, which imports outputs
+            current_skipped_records,
+        )
+
+        skipped_sink = current_skipped_records.get()
+        if skipped_sink is not None:
+            skipped_sink.app_name = context.app_name
+
         # Create heartbeat controller based on configuration
         carried_details = tuple(context.evicted_heartbeat_details or ())
         if context.heartbeat_timeout_seconds is not None:
@@ -713,7 +724,7 @@ def create_activity_from_task(
                     )
 
                     try:
-                        output_path: str | None = build_output_path()
+                        output_path: str | None = build_output_path(context.app_name)
                     except Exception:
                         logger.warning(
                             "build_output_path() failed, proceeding without output path",

@@ -1883,6 +1883,42 @@ class TestRunOutputPrefixes:
         mock_bop.assert_not_called()
 
 
+class TestExtractionOutputPathUsesTheAppName:
+    """FND-4921: extraction writes under the prefix ``run()`` derives publish's from.
+
+    ``run()`` resolves the ``transformed`` prefix with this App's name; the
+    extraction tasks must not fall back to ``ATLAN_APPLICATION_NAME`` when the
+    registry cannot name a single App.
+    """
+
+    def test_auto_resolved_output_path_uses_the_app_name(self):
+        import os
+
+        from application_sdk.constants import TEMPORARY_PATH
+
+        app = SqlApp.__new__(SqlApp)
+        app._app_name = "test-app"
+        with (
+            patch(
+                "application_sdk.app.registry.AppRegistry.list_apps", return_value=[]
+            ),
+            patch("application_sdk.constants.APPLICATION_NAME", "env-app"),
+            patch(
+                "application_sdk.execution._temporal.activity_utils.get_workflow_id",
+                return_value="wf",
+            ),
+            patch(
+                "application_sdk.execution._temporal.activity_utils.get_workflow_run_id",
+                return_value="run",
+            ),
+        ):
+            resolved = app._resolve_output_path(_make_task_input(output_path=""))
+
+        assert resolved == os.path.join(
+            TEMPORARY_PATH, "artifacts/apps/test-app/workflows/wf/run"
+        )
+
+
 # ---------------------------------------------------------------------------
 # prime_sql_auth (BLDX-1295) — Argo parity: serial probe before parallel burst
 # ---------------------------------------------------------------------------
@@ -3635,3 +3671,14 @@ def test_legacy_credential_ref_reexport_is_a_deprecated_alias(module_name: str) 
     module = importlib.import_module(module_name)
     with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
         assert module.legacy_credential_ref is ref.legacy_credential_ref
+
+
+def test_output_template_reexport_is_a_deprecated_alias() -> None:
+    """FND-4921 dropped the import; the name stays importable, warning, until v4.0.0."""
+    from application_sdk import constants
+    from application_sdk.templates import sql_app
+
+    assert "WORKFLOW_OUTPUT_PATH_TEMPLATE" not in vars(sql_app)
+    with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+        value = sql_app.WORKFLOW_OUTPUT_PATH_TEMPLATE
+    assert value == constants.WORKFLOW_OUTPUT_PATH_TEMPLATE

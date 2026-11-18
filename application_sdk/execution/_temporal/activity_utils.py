@@ -41,7 +41,7 @@ from temporalio import activity
 
 from application_sdk import constants
 from application_sdk.app.registry import AppRegistry
-from application_sdk.constants import WORKFLOW_OUTPUT_PATH_TEMPLATE
+from application_sdk.constants import run_prefix
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -53,6 +53,11 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
     "TEMPORARY_PATH": (
         "application_sdk.constants.TEMPORARY_PATH",
         "it was only ever re-exported here as a side effect of an import",
+    ),
+    "WORKFLOW_OUTPUT_PATH_TEMPLATE": (
+        "application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE",
+        "it was only ever re-exported here as a side effect of an import; "
+        "compose a run prefix with application_sdk.constants.run_prefix",
     ),
 }
 
@@ -148,12 +153,18 @@ def get_workflow_run_id() -> str:
     return wf_run_id
 
 
-def build_output_path() -> str:
+def build_output_path(app_name: str = "") -> str:
     """SDK-internal: compose the standardized output path for the current run.
 
-    Returns the path under ``WORKFLOW_OUTPUT_PATH_TEMPLATE`` for the
+    Returns the :func:`~application_sdk.constants.run_prefix` of the
     workflow currently executing this activity (e.g.
     ``artifacts/apps/appName/workflows/wf-123/run-456``).
+
+    Args:
+        app_name: The name of the App that owns the run. Callers that know it
+            (an ``App`` method, the task wrapper) pass it; when empty it is
+            resolved by ``AppRegistry.resolve_running_app_name`` (the single
+            registered App, else ``ATLAN_APPLICATION_NAME``).
 
     .. note::
         **Apps and AI agents:** do not call this from app code. Compose
@@ -168,10 +179,10 @@ def build_output_path() -> str:
     that runs as a generic activity and has no ``Input`` parameter to
     read the workflow ID from.
     """
-    return WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
-        application_name=AppRegistry.resolve_running_app_name(),
-        workflow_id=get_workflow_id(),
-        run_id=get_workflow_run_id(),
+    return run_prefix(
+        AppRegistry.resolve_running_app_name(prefer=app_name),
+        get_workflow_id(),
+        get_workflow_run_id(),
     )
 
 
