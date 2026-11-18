@@ -93,8 +93,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "Coverage limits (intentional, low-false-positive at WARN): deprecated\n"
             "*parameters* / *modes* are out of scope; method matching is\n"
-            "attribute-name-anchored (a same-named method on an unrelated object is a\n"
-            "known false-positive risk); re-export aliasing can produce false\n"
+            "attribute-name-anchored, except that a call on a receiver proven to be\n"
+            "a module (bound only by ``import x``, or by ``from pkg import x`` where\n"
+            "``pkg/x.py`` is in the app) is never matched, since it runs a module\n"
+            "function.  A same-named method on any other unrelated object remains a\n"
+            "known false-positive risk; re-export aliasing can produce false\n"
             "negatives.  All are suppressible with ``# conformance: ignore[B001]``.\n"
         ),
         remediation_reference=RemediationReference(
