@@ -44,14 +44,25 @@ _PHASE_SCRIPT = Path(__file__).with_name("_budget_handoff_phase.py")
 
 def _run_phase(phase: str, root: Path, budget: int) -> int:
     env = {**os.environ, "ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES": str(budget)}
-    done = subprocess.run(
-        [sys.executable, str(_PHASE_SCRIPT), phase, str(root), str(_FILE_BYTES)],
+    # The result comes back through a file, not stdout: the phase's stdout also
+    # carries the SDK's console log, written from another thread.
+    result_file = root / f"{phase}.peak_rss_growth"
+    result_file.unlink(missing_ok=True)
+    subprocess.run(
+        [
+            sys.executable,
+            str(_PHASE_SCRIPT),
+            phase,
+            str(root),
+            str(_FILE_BYTES),
+            str(result_file),
+        ],
         env=env,
         capture_output=True,
         text=True,
         check=True,
     )
-    return int(done.stdout.strip().splitlines()[-1])
+    return int(result_file.read_text())
 
 
 def _handoff(root: Path, budget: int) -> tuple[int, int]:

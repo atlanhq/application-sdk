@@ -11,11 +11,13 @@ threads, no real loops beyond pytest-asyncio's default.
 from __future__ import annotations
 
 import asyncio
-import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from application_sdk.observability.decorators import observability_decorator
 from application_sdk.observability.decorators.observability_decorator import (
     FUNCTION_CALLS_METRIC,
     _record_error_observability,
@@ -23,11 +25,41 @@ from application_sdk.observability.decorators.observability_decorator import (
     observability,
 )
 from application_sdk.observability.metrics_adaptor import MetricType
+from tests.unit.private_stdlib import private_stdlib
 
 
 def _mock_components():
     """Build a triple of (logger, metrics, traces) mocks."""
     return MagicMock(name="logger"), MagicMock(name="metrics"), MagicMock(name="traces")
+
+
+class _HandClock:
+    """Stands in for ``time.time`` in the decorator; moves only when told to."""
+
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@contextmanager
+def _decorator_clock() -> Iterator[_HandClock]:
+    """Give the decorator module a clock the test advances by hand.
+
+    A real sleep measured against the real clock is not a lower bound on
+    Windows: the event loop runs a timer that is due within one tick of its
+    clock (15.6 ms there), so ``asyncio.sleep(0.02)`` has returned after 6 ms
+    in CI. The clock is patched on a private copy of ``time``, so the event
+    loop and every other thread keep the real one.
+    """
+    clock = _HandClock()
+    with private_stdlib(observability_decorator, "time") as local_time:
+        with patch.object(local_time, "time", clock):
+            yield clock
 
 
 # ---------------------------------------------------------------------------
@@ -108,24 +140,33 @@ class TestSyncWrapper:
     def test_duration_covers_the_call(self) -> None:
         logger, metrics, traces = _mock_components()
 
-        @observability(logger=logger, metrics=metrics, traces=traces)
-        def work() -> None:
-            time.sleep(0.02)
+        with _decorator_clock() as clock:
 
-        work()
+            @observability(logger=logger, metrics=metrics, traces=traces)
+            def work() -> None:
+                clock.advance(0.02)
 
-        assert traces.record_trace.call_args.kwargs["duration_ms"] >= 20.0
+            work()
+
+        duration_ms = traces.record_trace.call_args.kwargs["duration_ms"]
+        assert duration_ms == pytest.approx(20.0)
 
     async def test_async_duration_covers_the_awaited_body(self) -> None:
+        """The clock moves only after the body has suspended and resumed, so a
+        wrapper that timed creating the coroutine, not awaiting it, records 0."""
         logger, metrics, traces = _mock_components()
 
-        @observability(logger=logger, metrics=metrics, traces=traces)
-        async def work() -> None:
-            await asyncio.sleep(0.02)
+        with _decorator_clock() as clock:
 
-        await work()
+            @observability(logger=logger, metrics=metrics, traces=traces)
+            async def work() -> None:
+                await asyncio.sleep(0)
+                clock.advance(0.02)
 
-        assert traces.record_trace.call_args.kwargs["duration_ms"] >= 20.0
+            await work()
+
+        duration_ms = traces.record_trace.call_args.kwargs["duration_ms"]
+        assert duration_ms == pytest.approx(20.0)
 
     def test_one_metric_name_and_label_keys_across_functions_and_outcomes(
         self,
