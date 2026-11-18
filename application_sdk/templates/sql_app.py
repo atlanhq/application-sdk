@@ -88,7 +88,10 @@ from pydantic import ValidationError
 from temporalio import workflow as _temporal_workflow
 from typing_extensions import deprecated
 
-from application_sdk._runtime.offload import raise_if_offload_abandoned, run_in_thread
+from application_sdk._runtime.offload import (  # noqa: F401 — raise_if_offload_abandoned is importable from this module in released versions; kept so that import keeps working
+    raise_if_offload_abandoned,
+    run_in_thread,
+)
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
@@ -136,6 +139,7 @@ from application_sdk.errors.wire import secret_named_evidence_keys
 from application_sdk.execution import build_output_path, get_object_store_prefix
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage.streaming import iter_jsonl, write_records
 from application_sdk.templates._template_errors import (
     SqlTreeFilterInputUnsupportedError,
 )
@@ -1956,7 +1960,7 @@ class SqlApp(App):
         # per-record ``time.time()`` — what connectors hand-rolling this did —
         # gives every row in one crawl a different "last synced at".
         #
-        # Here, not inside ``_map_records``: the resolver reads the execution
+        # Here, not inside the per-record map: the resolver reads the execution
         # and correlation contextvars the Temporal interceptor populates.
         # ``run_in_thread`` does propagate them (it runs the callable under
         # ``contextvars.copy_context()``), so resolving in the thread would
@@ -1968,67 +1972,53 @@ class SqlApp(App):
         output_dir.mkdir(parents=True, exist_ok=True)
         output_file = output_dir / "entities.json"
 
-        def _map_records() -> int:
-            written = 0
-            with open(raw_file, "rb") as r, open(output_file, "wb") as w:
-                for line in r:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    record = orjson.loads(line)
-                    asset = mapper_fn(record, connection_qn)
-                    # One seam owns the framework-injected attributes —
-                    # connectionName (FND-2056) and lastSync* (FND-2097) —
-                    # the asset → wire-shape dispatch, and the envelope the
-                    # finished line takes (FND-2137), for every template that
-                    # runs the mapper pattern. A return value it does not
-                    # recognise raises rather than falling back to writing
-                    # ``record`` — that fallback published unmapped source rows
-                    # as entities under a SUCCESS status.
-                    #
-                    # ``decorate_entity`` is called per record because that is
-                    # its aperture: its inputs are the row and the stream, and
-                    # a connector that owes no decorations returns None from
-                    # the base implementation at the cost of one call.
-                    w.write(
-                        entity_bytes(
-                            asset,
-                            connection_name=connection_name,
-                            last_sync=last_sync,
-                            entity_type=entity_type,
-                            envelope=self.entity_envelope,
-                            decorations=self.decorate_entity(
-                                entity_type=entity_type, record=record
-                            ),
-                        )
-                    )
-                    w.write(b"\n")
-                    written += 1
-                    # Every 1,024 records: a cancelled transform stops here
-                    # instead of writing on into entities.json after the
-                    # activity has gone — where a retry on this pod reopens
-                    # and truncates the same file under it.
-                    if not written % 1024:
-                        raise_if_offload_abandoned()
-            return written
+        def _entity_line(record: dict[str, Any]) -> bytes:
+            asset = mapper_fn(record, connection_qn)
+            # One seam owns the framework-injected attributes — connectionName
+            # and lastSync* — the asset → wire-shape dispatch, and the envelope
+            # the finished line takes, for every template that runs the mapper
+            # pattern. A return value it does not recognise raises rather than
+            # falling back to writing ``record``, which would publish an
+            # unmapped source row as an entity under a SUCCESS status.
+            #
+            # ``decorate_entity`` is called per record because that is its
+            # aperture: its inputs are the row and the stream, and a connector
+            # that owes no decorations returns None from the base
+            # implementation at the cost of one call.
+            return entity_bytes(
+                asset,
+                connection_name=connection_name,
+                last_sync=last_sync,
+                entity_type=entity_type,
+                envelope=self.entity_envelope,
+                decorations=self.decorate_entity(
+                    entity_type=entity_type, record=record
+                ),
+            )
 
-        # Offloaded as one hop: this maps every raw record for the entity —
-        # JSON parse, the connector's mapper_fn (which builds pyatlan asset
-        # objects), serialise, write — with no await anywhere in the loop.
-        # A large table's records.json therefore holds the event loop for the
-        # whole transform, which stops the auto-heartbeat and gets a healthy
-        # activity killed on heartbeat_timeout. Every SQL connector inherits
-        # this method, so the fix applies fleet-wide (ADR-0010).
+        # Row to row: one raw record is parsed, mapped and written before the
+        # next is read, so memory does not grow with the table. The shared
+        # loop checks for an abandoned offload every 1,024 records, so a
+        # cancelled transform stops instead of writing on into entities.json
+        # after the activity has gone — where a retry on this pod reopens and
+        # truncates the same file under it.
         #
-        # No framework progress hook inside `_map_records`, deliberately
-        # (ADR-0018). The loop is line-by-line with no batch boundary to mark
-        # at, and the never-per-record rule forbids the only boundary it has.
-        # It does not need one: the whole map is a single `run_in_thread` hop,
-        # which FND-290 wraps in an unbounded auto-hold — so the stall watchdog
-        # is vouched for across the entire transform by mechanism 2 rather than
-        # mechanism 1. That leaves the 24h backstop as its only bound, which is
-        # the ADR's accepted residual for opaque offloaded work and is exactly
-        # what warn mode is meant to surface with an observed duration.
+        # Offloaded as one hop: the loop has no await, so inline it would hold
+        # the event loop — and the auto-heartbeat — for the whole transform
+        # and get a healthy activity killed on heartbeat_timeout (ADR-0010).
+        #
+        # No framework progress hook inside the loop, deliberately (ADR-0018).
+        # It is line-by-line with no batch boundary to mark at, and the
+        # never-per-record rule forbids the only boundary it has. It does not
+        # need one: the single `run_in_thread` hop carries an unbounded
+        # auto-hold, so the stall watchdog is vouched for across the whole
+        # transform by mechanism 2 rather than mechanism 1. That leaves the 24h
+        # backstop as its only bound, which is the ADR's accepted residual for
+        # opaque offloaded work.
+        def _map_records() -> int:
+            with open(output_file, "wb") as w:
+                return write_records(iter_jsonl(raw_file), w, _entity_line).written
+
         count = await run_in_thread(_map_records)
 
         logger.info("Transformed %s: %d records", entity_type, count)

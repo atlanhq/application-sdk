@@ -523,8 +523,10 @@ async def transform_users(self, inp: TransformInput) -> TransformOutput:
     ...
 ```
 
-For JSON inputs, swap `pd.read_parquet` for an `orjson.loads` loop over the
-file lines. `JsonFileReader` coerced values through pandas: an int column
+For JSON inputs, swap `pd.read_parquet` for
+`application_sdk.storage.streaming.iter_jsonl` (one record at a time), or map
+the file straight to its output with `map_jsonl` — see
+[Storage → Streaming records](../concepts/storage.md#streaming-records). `JsonFileReader` coerced values through pandas: an int column
 with a missing key came back as float (`3` → `3.0`), the missing key as
 `NaN`. The orjson loop returns the values in the file, so fix the callers
 that relied on the coercion rather than rebuilding a DataFrame:
