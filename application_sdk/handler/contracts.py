@@ -357,14 +357,11 @@ _AUTH_STATUS_HTTP_CODES: dict[AuthStatus, int] = {
 AUTH_STATUS_HTTP_CODES = _AUTH_STATUS_HTTP_CODES
 
 
-class AuthInput(BaseModel):
-    """Input for the test_auth handler operation."""
-
-    credentials: list[HandlerCredential] = []
-    """Credentials to authenticate with."""
-
-    connection_id: str = ""
-    """Optional connection ID for context."""
+class _HandlerRequestBase(BaseModel):
+    """The entry-point routing and agent-credential fields every handler
+    request takes — shared by :class:`AuthInput`, :class:`PreflightInput`,
+    :class:`WarmupInput` and :class:`MetadataInput` so an alias or doc change
+    is made once."""
 
     entrypoint: str = ""
     """Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
@@ -386,9 +383,6 @@ class AuthInput(BaseModel):
     :attr:`entrypoint` field; this is no longer parsed for dispatch. Retained
     for back-compat and for handlers that still read it."""
 
-    timeout_seconds: int = 30
-    """Maximum seconds to wait for auth response."""
-
     agent_json: AgentCredentialSpec | None = Field(
         default=None,
         validation_alias=AliasChoices("agent_json", "agentJson", "agent-json"),
@@ -403,6 +397,19 @@ class AuthInput(BaseModel):
     exactly as the injected preflight gate does. ``None`` on the HTTP / direct
     path, where :attr:`credentials` already carries resolved values.
     Backward-compatible: absent ⇒ behavior is unchanged."""
+
+
+class AuthInput(_HandlerRequestBase):
+    """Input for the test_auth handler operation."""
+
+    credentials: list[HandlerCredential] = []
+    """Credentials to authenticate with."""
+
+    connection_id: str = ""
+    """Optional connection ID for context."""
+
+    timeout_seconds: int = 30
+    """Maximum seconds to wait for auth response."""
 
 
 class AuthOutput(BaseModel):
@@ -645,7 +652,7 @@ class PreflightCheck(BaseModel):
         return dumped
 
 
-class _SourceRequestInput(BaseModel):
+class _SourceRequestInput(_HandlerRequestBase):
     """The fields every source-probing handler operation takes — ``/check``'s
     body, shared by :class:`PreflightInput` and :class:`WarmupInput` so the UI
     sends one payload to both routes."""
@@ -662,26 +669,6 @@ class _SourceRequestInput(BaseModel):
     each group has the same flat ``[{key, value}]`` shape as :attr:`credentials`.
     Populated only on the gate path for multi-credential apps; empty on the
     single-credential and HTTP/SDR paths, which use :attr:`credentials`."""
-
-    entrypoint: str = ""
-    """Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
-    when present. The orchestrator resolves it from the Global Marketplace app
-    catalog and sends it explicitly, so dispatch is an exact lookup with no
-    parsing of ``entrypoint_ref``. Empty for single-entrypoint apps and for
-    older orchestrators that send only ``entrypoint_ref`` (the transitional
-    suffix-match fallback)."""
-
-    entrypoint_ref: str = Field(
-        default="",
-        validation_alias=AliasChoices("entrypoint_ref", "connector"),
-        serialization_alias="connector",
-    )
-    """App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
-
-    Legacy connector wire value (bundle-prefixed), carried as the ``connector``
-    key. **Informational only** — per-entrypoint routing uses the exact
-    :attr:`entrypoint` field; this is no longer parsed for dispatch. Retained
-    for back-compat and for handlers that still read it."""
 
     connection_config: BaseConnectionConfig = Field(
         default_factory=BaseConnectionConfig
@@ -703,21 +690,6 @@ class _SourceRequestInput(BaseModel):
     Pass a :class:`BaseMetadataConfig` subclass for strong typing.  Raw dicts
     are accepted for backward compatibility via ``extra="allow"``.
     """
-
-    agent_json: AgentCredentialSpec | None = Field(
-        default=None,
-        validation_alias=AliasChoices("agent_json", "agentJson", "agent-json"),
-    )
-    """Optional agent-shape credential *reference* (SDR / customer-infra only).
-
-    SDR connectors receive their credential as an agent-json reference: the real
-    secret lives in the customer's Dapr / K8s secret store and only the worker
-    can dereference it (``secret-path``). When set, the SDR Temporal activity
-    resolves this reference to concrete :attr:`credentials` *before* the handler
-    runs (``AgentCredentialSpec`` → ``CredentialRef`` → ``CredentialResolver``),
-    exactly as the injected preflight gate does. ``None`` on the HTTP / direct
-    path, where :attr:`credentials` already carries resolved values.
-    Backward-compatible: absent ⇒ behavior is unchanged."""
 
 
 class PreflightInput(_SourceRequestInput):
@@ -965,31 +937,11 @@ ApiMetadataObject.model_rebuild()
 # ---------------------------------------------------------------------------
 
 
-class MetadataInput(BaseModel):
+class MetadataInput(_HandlerRequestBase):
     """Input for the fetch_metadata handler operation."""
 
     credentials: list[HandlerCredential] = []
     """Credentials to use for metadata discovery."""
-
-    entrypoint: str = ""
-    """Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
-    when present. The orchestrator resolves it from the Global Marketplace app
-    catalog and sends it explicitly, so dispatch is an exact lookup with no
-    parsing of ``entrypoint_ref``. Empty for single-entrypoint apps and for
-    older orchestrators that send only ``entrypoint_ref`` (the transitional
-    suffix-match fallback)."""
-
-    entrypoint_ref: str = Field(
-        default="",
-        validation_alias=AliasChoices("entrypoint_ref", "connector"),
-        serialization_alias="connector",
-    )
-    """App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
-
-    Legacy connector wire value (bundle-prefixed), carried as the ``connector``
-    key. **Informational only** — per-entrypoint routing uses the exact
-    :attr:`entrypoint` field; this is no longer parsed for dispatch. Retained
-    for back-compat and for handlers that still read it."""
 
     metadata_template_key: str = Field(
         default="",
@@ -1027,21 +979,6 @@ class MetadataInput(BaseModel):
 
     timeout_seconds: int = 120
     """Maximum seconds to wait for metadata fetch."""
-
-    agent_json: AgentCredentialSpec | None = Field(
-        default=None,
-        validation_alias=AliasChoices("agent_json", "agentJson", "agent-json"),
-    )
-    """Optional agent-shape credential *reference* (SDR / customer-infra only).
-
-    SDR connectors receive their credential as an agent-json reference: the real
-    secret lives in the customer's Dapr / K8s secret store and only the worker
-    can dereference it (``secret-path``). When set, the SDR Temporal activity
-    resolves this reference to concrete :attr:`credentials` *before* the handler
-    runs (``AgentCredentialSpec`` → ``CredentialRef`` → ``CredentialResolver``),
-    exactly as the injected preflight gate does. ``None`` on the HTTP / direct
-    path, where :attr:`credentials` already carries resolved values.
-    Backward-compatible: absent ⇒ behavior is unchanged."""
 
 
 class MetadataOutput(BaseModel):
