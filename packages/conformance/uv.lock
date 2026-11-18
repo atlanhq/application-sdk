@@ -104,7 +104,7 @@ requires-dist = [
     { name = "atlan-application-sdk", extras = ["sql"], marker = "extra == 'daft'" },
     { name = "atlan-application-sdk", extras = ["sql"], marker = "extra == 'incremental'" },
     { name = "atlan-application-sdk-api", editable = "../api" },
-    { name = "authlib", specifier = ">=1.9.6,<2" },
+    { name = "authlib", specifier = ">=1.9.9,<2" },
     { name = "azure-identity", specifier = ">=1.15.0" },
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.15.0" },
     { name = "boto3", specifier = ">=1.38.6,<2.0.0" },
@@ -209,7 +209,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "authlib", marker = "extra == 'pyatlan'", specifier = ">=1.9.6,<2" },
+    { name = "authlib", marker = "extra == 'pyatlan'", specifier = ">=1.9.9,<2" },
     { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.38.6,<2.0.0" },
     { name = "certifi", specifier = ">=2026.10.19" },
     { name = "fastapi", specifier = ">=0.163.0,<0.164.0" },
@@ -278,15 +278,15 @@ wheels = [
 
 [[package]]
 name = "authlib"
-version = "1.9.6"
+version = "1.9.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "joserfc" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/08/49/d174a1bcd2b62c261d68cd6dce10ef5f50a2bd4f8144bedeb5b6fa119ac2/authlib-1.9.6.tar.gz", hash = "sha256:1caa0791c0ea6bde6b4ef91b1731f720a97a0f00d3955878d4a493b4ce673247", size = 183687, upload-time = "2026-11-14T19:47:45.858Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/73/69/0215a1818edb1fb6b9dd59b8a3870601f11603b6db1f830ff3f3ea62612f/authlib-1.9.9.tar.gz", hash = "sha256:cca3dffa51c8d80d6df19aee2279e47219dc996f5a527c06ac2e39d0757c99ef", size = 184173, upload-time = "2026-11-17T20:35:21.058Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/eb/76/3c4315d5e0e64a5e7676a88e4ed4c55b365142581501dd8f5af9b3c09f80/authlib-1.9.6-py2.py3-none-any.whl", hash = "sha256:96564699a43281b9e3473717a135407a1170bdc850ebe21313539d672c2a6682", size = 267181, upload-time = "2026-11-14T19:47:44.074Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/a5/e79946bc081bfd2e8c0c6125b5a6ae90f8d1541bb224cd7f16ccbb8e71d8/authlib-1.9.9-py2.py3-none-any.whl", hash = "sha256:0199649865fefb4304fc57683eaebb15614523073e41e09d98c72f3268ce5cbc", size = 267584, upload-time = "2026-11-17T20:35:19.249Z" },
 ]
 
 [[package]]
