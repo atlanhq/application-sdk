@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import sys
 import tomllib
 from collections.abc import Sequence
@@ -143,6 +144,15 @@ def test_setup_deps_installs_every_group_on_every_python() -> None:
     text = _SETUP_DEPS.read_text(encoding="utf-8")
     assert "--no-group" not in text
     assert "PYTHON_MINOR" not in text
+    steps = yaml.safe_load(text)["runs"]["steps"]
+    (install,) = [s for s in steps if s.get("name") == "Install dependencies"]
+    # shlex: the quoted ``${{ github.action_path }}`` wrapper path is one word.
+    assert shlex.split(install["run"])[1:] == [
+        "uv",
+        "sync",
+        "--all-extras",
+        "--all-groups",
+    ]
 
 
 def test_the_action_passes_inputs_to_the_script_through_env_not_run() -> None:
