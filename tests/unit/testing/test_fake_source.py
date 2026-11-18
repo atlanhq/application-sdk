@@ -1165,11 +1165,7 @@ class TestHttpFakeSourceFactory:
             factory.stop_all()
 
     def test_forwards_ssl_context_and_serves_https(self, tmp_path: Path) -> None:
-        """A connector whose client forces https gets a factory-built TLS fake.
-
-        Without the forwarded context it would build the fake by hand and lose
-        the factory's per-test reset and session-end stop.
-        """
+        """A factory-built fake given an ssl_context serves https."""
         cert, key = _self_signed_cert(tmp_path, "127.0.0.1")
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(certfile=str(cert), keyfile=str(key))
