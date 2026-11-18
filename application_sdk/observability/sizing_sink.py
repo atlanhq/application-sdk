@@ -159,7 +159,7 @@ async def drain() -> None:
     if sink is None:
         return
     try:
-        await sink._flush_buffer(force=True)
+        await sink._flush_buffer()
     # conformance: ignore[E004] shutdown path; a failed drain must not block shutdown
     except Exception:
         logger.warning("sizing drain failed; buffered rows lost", exc_info=True)

@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 import threading
+import warnings
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -2677,6 +2678,48 @@ class TestRunDevCombined:
         out = capsys.readouterr().out
         assert "Dev server running" in out
         assert "/workflows/v1/start" in out
+
+    @pytest.mark.parametrize(
+        ("kwargs", "warns"),
+        [
+            ({"credential_stores": {"default": MagicMock()}}, True),
+            ({"credential_stores": None}, True),
+            ({}, False),
+        ],
+        ids=["passed", "passed-none", "omitted"],
+    )
+    async def test_credential_stores_warns_and_is_not_used(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        kwargs: dict[str, object],
+        warns: bool,
+    ) -> None:
+        """``credential_stores`` is ignored: passing it warns, and infra never sees it."""
+        monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
+        with (
+            patch(
+                "application_sdk.main._create_infrastructure",
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ) as create_infra,
+            patch("application_sdk.infrastructure.context.set_infrastructure"),
+            patch(
+                "application_sdk.main.run_combined_mode",
+                new_callable=AsyncMock,
+            ),
+            warnings.catch_warnings(record=True) as caught,
+        ):
+            warnings.simplefilter("always")
+            await run_dev_combined(_fake_app_class(), **kwargs)  # type: ignore[arg-type]
+
+        deprecations = [
+            w
+            for w in caught
+            if issubclass(w.category, DeprecationWarning)
+            and "credential_stores" in str(w.message)
+        ]
+        assert len(deprecations) == (1 if warns else 0)
+        create_infra.assert_awaited_once_with()
 
     async def test_example_input_is_rendered_in_banner(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

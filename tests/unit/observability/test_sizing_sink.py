@@ -463,7 +463,7 @@ class TestResetLeavesNothingToFlushLater:
         # What the old flush thread or a later ``flush_all`` would do.
         for instance in list(AtlanObservability._instances):
             if isinstance(instance, SizingObservabilitySink):
-                await instance._flush_buffer(force=True)
+                await instance._flush_buffer()
 
         leaked = [p for p in (checkout / "local").rglob("*") if p.is_file()]
         assert not leaked, "a row an earlier test buffered reached the checkout"

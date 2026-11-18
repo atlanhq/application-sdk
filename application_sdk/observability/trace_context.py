@@ -14,18 +14,28 @@ comes online, correlation between our logs and traces becomes automatic.
 from __future__ import annotations
 
 from opentelemetry import trace
+from typing_extensions import deprecated
 
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 
+@deprecated(
+    "get_trace_context is deprecated; use "
+    "opentelemetry.trace.get_current_span().get_span_context() directly — it "
+    "has no caller in the SDK. Will be removed in v4.0.0."
+)
 def get_trace_context() -> tuple[str, str]:
     """Return (trace_id, span_id) from the current OTel span context.
 
     Returns:
         Tuple of (trace_id_hex, span_id_hex). Both empty strings if no
         valid span context is active.
+
+    .. deprecated:: 3.59
+        Read ``opentelemetry.trace.get_current_span().get_span_context()``
+        directly. Will be removed in v4.0.0.
     """
     try:
         span = trace.get_current_span()

@@ -11,6 +11,7 @@ from uuid import uuid4
 # Low-level loguru import used only as the activity-context fallback below.
 from loguru import logger as _loguru_logger
 from temporalio import workflow as _workflow
+from typing_extensions import deprecated
 
 from application_sdk._runtime.offload import is_cancelled as _is_cancelled
 from application_sdk._runtime.offload import run_in_thread
@@ -532,11 +533,19 @@ class AppContext:
         self.logger.error(message, **kwargs)
 
 
+@deprecated(
+    "ChildAppContext is deprecated; read correlation_id and run_id from the "
+    "parent AppContext directly — nothing in the SDK creates one. Will be "
+    "removed in v4.0.0."
+)
 @dataclass
 class ChildAppContext:
     """Context for calling child Apps from within a parent App.
 
-    Created via AppContext.child() to maintain correlation.
+    .. deprecated:: 3.59
+        Nothing in the SDK creates one. Read ``correlation_id`` and
+        ``run_id`` from the parent :class:`AppContext`. Will be removed in
+        v4.0.0.
     """
 
     parent: AppContext

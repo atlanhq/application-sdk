@@ -153,8 +153,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 logging.error("Failed to setup OTel meter provider", exc_info=True)
                 AtlanMetricsAdapter._otel_setup_failed_logged = True
 
-    async def _flush_buffer(self, force=False):
-        await super()._flush_buffer(force=force)
+    async def _flush_buffer(self) -> None:
+        await super()._flush_buffer()
         await self.segment_client.flush()
 
     def process_record(self, record: Any) -> dict[str, Any]:

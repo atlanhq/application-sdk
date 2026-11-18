@@ -1555,15 +1555,16 @@ All blocking DB calls inside the loop must be wrapped in `self.run_in_thread()` 
 
 ### Seeding credentials for local dev
 
-For local testing with credentials, use `run_dev_combined()` with `MockSecretStore`:
+For local testing with credentials, pass them to `run_dev_combined()` as `credentials=`. The SDK provisions them through the dev local-vault route once the handler is up and injects the returned `credential_guid` into `example_input`:
 ```python
-from application_sdk.testing.mocks import MockSecretStore
-
-secrets = {"my-cred": json.dumps({"host": "...", "password": "..."})}
-credential_stores = {"default": MockSecretStore(secrets)}
-
-await run_dev_combined(MyApp, credential_stores=credential_stores)
+await run_dev_combined(
+    MyApp,
+    credentials={"host": "...", "port": "5432", "username": "...", "password": "..."},
+    example_input={"connection": {"connection_name": "dev"}},
+)
 ```
+
+Do not pass `credential_stores=`: it is deprecated and ignored, and was never read.
 
 ### Credential resolution — `CredentialRef.resolve(input)`, not raw `get_secret`
 

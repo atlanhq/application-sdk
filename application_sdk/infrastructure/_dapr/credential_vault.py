@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any
 
 import orjson
+from typing_extensions import deprecated
 
 from application_sdk.errors.leaves import (  # noqa: F401 — DaprSidecarUnreachableError is a re-export kept for importers of this module (shipped surface)
     ColdStartRaceError,
@@ -549,6 +550,10 @@ def _single_key_candidates(credential_config: dict[str, Any]) -> list[str]:
     return candidates
 
 
+@deprecated(
+    "create_dapr_credential_vault is deprecated; construct "
+    "DaprCredentialVault(client, ...) directly. Will be removed in v4.0.0."
+)
 def create_dapr_credential_vault(
     client: AsyncDaprClient,
     *,
