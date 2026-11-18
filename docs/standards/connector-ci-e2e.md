@@ -506,7 +506,10 @@ later step fails, *Restore the previous version* runs
 fails unless the tenant's install record names it again. The step is skipped
 when the app was not installed before, because uninstall is not reliable
 (DISTR-921). It has its own 15-minute timeout on top of the install budget,
-which is why the job allows 65 minutes and the lease TTL is 16800s.
+which is why the job allows 65 minutes and the lease TTL is 16800s. The install
+step has its own 45-minute timeout so that a hung install fails the step rather
+than timing out the job: `failure()` is false on a timed-out (cancelled) job, so
+the restore would otherwise be skipped.
 
 This was added after an ai-memory test build failed `prepare-tenant` and was
 left installed on two pool tenants. Its own `ClusterIP` Service clashed with the

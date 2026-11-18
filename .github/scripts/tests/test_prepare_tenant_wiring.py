@@ -1159,3 +1159,37 @@ def test_job_timeout_also_covers_the_restore(jobs: _Jobs) -> None:
         str(step["timeout-minutes"])
     )
     assert int(str(jobs["prepare-tenant"]["timeout-minutes"])) >= required
+
+
+#: Minutes the steps before the install (script fetch, lease check, tenant
+#: resolve, atlan.yaml and app_configs reads) may take before the install starts.
+_PRE_INSTALL_MINUTES = 5
+
+
+def test_install_step_timeout_leaves_room_for_the_restore(jobs: _Jobs) -> None:
+    """A hung install must fail its step, not time out the job.
+
+    A job timeout cancels the job, `failure()` is then false, and the restore
+    is skipped — on exactly the slow path most likely to strand a broken build.
+    So the install step carries its own timeout: above the script's own waits,
+    and low enough that the restore still fits inside the job after it.
+    """
+    install = next(s for s in _prepare_steps(jobs) if s.get("id") == "install")
+    assert "timeout-minutes" in install, (
+        "the install step needs its own timeout, or a hung install cancels the "
+        "job and the restore never runs"
+    )
+    install_minutes = int(str(install["timeout-minutes"]))
+    install_waits = (
+        app.DEFAULT_PUBLISH_RETRY_SECONDS
+        + app.DEFAULT_INSTALL_RETRY_SECONDS
+        + app.DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS
+        + app.DEFAULT_SETTLE_SECONDS
+    ) // 60
+    assert install_minutes > install_waits, (
+        "the install step's timeout must clear the script's own waits, or a slow "
+        "sync reads as a step timeout instead of the script's error"
+    )
+    restore_minutes = int(str(_restore_step(jobs)["timeout-minutes"]))
+    job_minutes = int(str(jobs["prepare-tenant"]["timeout-minutes"]))
+    assert _PRE_INSTALL_MINUTES + install_minutes + restore_minutes <= job_minutes

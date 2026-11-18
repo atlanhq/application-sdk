@@ -2610,8 +2610,16 @@ jobs:
       # --app-id is deliberately omitted: the script reads app_id from atlan.yaml
       # in the working directory (and validates the result either way), so the id
       # has one source rather than being threaded through a step output.
+      # Its own timeout, not just the job's: a job timeout cancels the job, and
+      # `failure()` is false on a cancelled job, so a hung install would skip
+      # "Restore the previous version" — the slow path is the one most likely to
+      # strand a broken build. A step timeout fails the step instead, so the
+      # restore still runs. 45 min clears the script's own ~25 min of waits, and
+      # 45 + the restore's 15 leaves 5 of the job's 65 for the steps above.
+      # test_install_step_timeout_leaves_room_for_the_restore holds both.
       - name: Install the app under test
         id: install
+        timeout-minutes: 45
         env:
           IMAGE: ${{ needs.merge-e2e-image.outputs.image }}
           VERSION: ${{ needs.merge-e2e-image.outputs.version }}
