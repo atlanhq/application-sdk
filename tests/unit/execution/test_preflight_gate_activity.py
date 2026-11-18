@@ -82,7 +82,7 @@ from application_sdk.observability.logger_adaptor import (
     PREFLIGHT_SURFACE_KEY,
     _extract_exception_attributes,
 )
-from application_sdk.testing.preflight import first_outcome_or_none, outcome_level
+from application_sdk.testing.preflight import PreflightOutcomeCapture
 
 _UNSET = object()
 
@@ -131,10 +131,14 @@ def _verdict_gate(
     )
 
 
-# The scan itself is shared: application_sdk.testing.preflight owns it so a
-# connector suite reads the row the same way, at every level it can arrive at.
-_outcome_event = first_outcome_or_none
-_outcome_level = outcome_level
+def _outcome_event(capture: PreflightOutcomeCapture) -> dict[str, Any] | None:
+    """The first outcome row the real sink received, or ``None`` if none was.
+
+    Reads the shared ``capture_preflight_outcomes`` fixture, so a connector
+    suite and this one read the row the same way, at every level it can arrive at.
+    """
+    rows = capture.rows
+    return rows[0] if rows else None
 
 
 def _outcome_record(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -143,8 +147,6 @@ def _outcome_record(records: list[dict[str, Any]]) -> dict[str, Any]:
     assert len(rows) == 1, rows
     return rows[0]
 
-
-_LOGGER = "application_sdk.execution._temporal.preflight_gate.logger"
 
 _GATE = "application_sdk.execution._temporal.preflight_gate"
 
@@ -509,7 +511,9 @@ class TestPreflightGateActivity:
             "object_store": "object_store_credential_guid",
         }
 
-    def test_from_extraction_input_warns_when_refs_declared_as_field(self) -> None:
+    def test_from_extraction_input_warns_when_refs_declared_as_field(
+        self, gate_records
+    ) -> None:
         # Misdeclaration guard: a multi-credential app that declares
         # preflight_credential_refs as a Pydantic *field* instead of a ClassVar
         # would silently fall back to the single-credential path (the class-level
@@ -520,15 +524,12 @@ class TestPreflightGateActivity:
         class _FieldDeclInput(BaseModel):
             preflight_credential_refs: dict[str, str] = {}
 
-        with mock.patch(
-            "application_sdk.execution._temporal.preflight_gate.logger"
-        ) as mock_logger:
-            gate_input = PreflightGateInput.from_extraction_input(
-                _FieldDeclInput(), "crawl"
-            )
+        gate_input = PreflightGateInput.from_extraction_input(
+            _FieldDeclInput(), "crawl"
+        )
 
         assert gate_input.credential_ref_fields == {}
-        mock_logger.warning.assert_called_once()
+        assert len(gate_records("WARNING")) == 1
 
     def test_from_extraction_input_degrades_on_unbuildable_metadata(self) -> None:
         # A custom input whose metadata can't fit the model must not raise —
@@ -758,24 +759,38 @@ class TestPreflightGateActivity:
 class TestPreflightGateOutcomeEvent:
     """The activity emits the queryable 'Preflight gate outcome' event (connector-pulse)."""
 
-    async def test_proceeded_ready(self) -> None:
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "The logger adapter overwrites a caller-supplied app_name kwarg with "
+            "its context app name (APPLICATION_NAME outside a run), so the row "
+            "the sink receives does not carry the gate's app_name. Hidden while "
+            "these tests read a mocked logger; turns green when fixed."
+        ),
+    )
+    async def test_row_carries_the_gates_app_name(
+        self, capture_preflight_outcomes
+    ) -> None:
+        out = PreflightOutput(status=PreflightStatus.READY, checks=[])
+        await _verdict_gate(out)(PreflightGateInput(entrypoint="crawl"))
+        assert capture_preflight_outcomes.one["app_name"] == "myapp"
+
+    async def test_proceeded_ready(self, capture_preflight_outcomes) -> None:
         out = PreflightOutput(
             status=PreflightStatus.READY,
             checks=[PreflightCheck(name="auth", passed=True)],
         )
-        with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out)(PreflightGateInput(entrypoint="crawl"))
-        ev = _outcome_event(ml)
+        await _verdict_gate(out)(PreflightGateInput(entrypoint="crawl"))
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev is not None
         assert ev["outcome"] == "proceeded"
         assert ev["reason"] == "ready"
-        assert ev["app_name"] == "myapp"
         assert ev["entrypoint"] == "crawl"
         assert ev["checks"] == 1
         # status/typed/error_type are collapsed into reason
         assert not ({"status", "typed", "error_type"} & ev.keys())
 
-    async def test_proceeded_partial(self) -> None:
+    async def test_proceeded_partial(self, capture_preflight_outcomes) -> None:
         out = PreflightOutput(
             status=PreflightStatus.PARTIAL,
             checks=[
@@ -783,9 +798,8 @@ class TestPreflightGateOutcomeEvent:
                 PreflightCheck(name="tables", passed=False, message="advisory"),
             ],
         )
-        with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(capture_preflight_outcomes)
         # The failed check has no typed error, so the reason is the same sentinel
         # an untyped block carries; a typed failure would carry its own code.
         assert ev["outcome"] == "proceeded"
@@ -793,9 +807,11 @@ class TestPreflightGateOutcomeEvent:
         assert ev["entrypoint"] == "<implicit>"
         # Advisory failure: WARNING is the one level semantically for it, and
         # F005 bans the handler from emitting it — so the gate must.
-        assert _outcome_level(ml) == "warning"
+        assert capture_preflight_outcomes.level == "warning"
 
-    async def test_ready_with_failed_advisory_check_warns(self) -> None:
+    async def test_ready_with_failed_advisory_check_warns(
+        self, capture_preflight_outcomes, gate_records
+    ) -> None:
         # Keyed on the checks, not PreflightStatus.PARTIAL: PARTIAL is
         # documented display-only, so READY with a failed advisory row is the
         # same advisory case and must not silently flatten to INFO.
@@ -806,34 +822,37 @@ class TestPreflightGateOutcomeEvent:
                 PreflightCheck(name="tables", passed=False, message="advisory"),
             ],
         )
-        with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out)(PreflightGateInput())
-        assert _outcome_level(ml) == "warning"
-        ml.error.assert_not_called()
+        await _verdict_gate(out)(PreflightGateInput())
+        assert capture_preflight_outcomes.level == "warning"
+        assert gate_records("ERROR") == []
 
-    async def test_blocked_typed_reason_is_error_code(self) -> None:
+    async def test_blocked_typed_reason_is_error_code(
+        self, capture_preflight_outcomes
+    ) -> None:
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[
                 PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput(entrypoint="crawl"))
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev["outcome"] == "blocked"
         # typed block → reason is the handler error's own code
         assert ev["reason"] == "AUTH"
         assert not ({"status", "typed", "error_type"} & ev.keys())
 
-    async def test_blocked_fallback_reason_is_sentinel(self) -> None:
+    async def test_blocked_fallback_reason_is_sentinel(
+        self, capture_preflight_outcomes
+    ) -> None:
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="auth", passed=False, message="bad creds")],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError) as excinfo:
+        with pytest.raises(ApplicationError) as excinfo:
             await _verdict_gate(out)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev["outcome"] == "blocked"
         # fallback block → reason is the sentinel code, distinguishing un-migrated
         assert ev["reason"] == "PREFLIGHT_CHECK_FAILED"
@@ -842,7 +861,9 @@ class TestPreflightGateOutcomeEvent:
         assert details.code == "PREFLIGHT_CHECK_FAILED"
         assert details.category is FailureCategory.PRECONDITION
 
-    async def test_soft_not_ready_returns_and_emits_would_block(self) -> None:
+    async def test_soft_not_ready_returns_and_emits_would_block(
+        self, capture_preflight_outcomes
+    ) -> None:
         # Soft gate: the verdict stays honest NOT_READY, the gate just doesn't
         # enforce it — no raise, the run proceeds, and the dodged block is the
         # queryable would_block row connector-pulse ranks smelly apps by.
@@ -857,13 +878,12 @@ class TestPreflightGateOutcomeEvent:
                 )
             ],
         )
-        with mock.patch(_LOGGER) as ml:
-            result = await _verdict_gate(out, mode=PreflightGateMode.SOFT)(
-                PreflightGateInput()
-            )
+        result = await _verdict_gate(out, mode=PreflightGateMode.SOFT)(
+            PreflightGateInput()
+        )
         assert result is out
         assert result.status is PreflightStatus.NOT_READY  # verdict untouched
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev["outcome"] == "would_block"
         assert ev[GATE_MODE_KEY] == "soft"
         # reason still carries the primary failure's code, same as a hard block
@@ -879,7 +899,9 @@ class TestPreflightGateOutcomeEvent:
             }
         ]
 
-    async def test_hard_block_logs_at_error_with_user_audience(self) -> None:
+    async def test_hard_block_logs_at_error_with_user_audience(
+        self, capture_preflight_outcomes, gate_records
+    ) -> None:
         # FND-901: a block aborts the customer's run, and the customer-facing log
         # view filters at ERROR — so the outcome row itself is the ERROR record,
         # stamped with who must act (the primary check's typed audience).
@@ -889,12 +911,12 @@ class TestPreflightGateOutcomeEvent:
                 PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
-        assert _outcome_level(ml) == "error"
-        ev = _outcome_event(ml)
+        assert capture_preflight_outcomes.level == "error"
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev[FAILURE_AUDIENCE_KEY] == "USER"
-        assert ml.error.call_count == 1
+        assert len(gate_records("ERROR")) == 1
 
     async def test_hard_block_error_row_shows_the_reason_without_frames(
         self, loguru_capture: list[dict[str, Any]]
@@ -920,18 +942,21 @@ class TestPreflightGateOutcomeEvent:
         assert attrs["exception.message"] == f"Preflight failed: {reason}"
         assert "Traceback" not in attrs["exception.stacktrace"]
 
-    async def test_soft_would_block_stays_info_with_audience(self) -> None:
+    async def test_soft_would_block_stays_info_with_audience(
+        self, capture_preflight_outcomes, gate_records
+    ) -> None:
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[
                 PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
             ],
         )
-        with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out, mode=PreflightGateMode.SOFT)(PreflightGateInput())
-        assert _outcome_level(ml) == "info"
-        assert _outcome_event(ml)[FAILURE_AUDIENCE_KEY] == "USER"
-        ml.error.assert_not_called()
+        await _verdict_gate(out, mode=PreflightGateMode.SOFT)(PreflightGateInput())
+        assert capture_preflight_outcomes.level == "info"
+        assert (
+            _outcome_event(capture_preflight_outcomes)[FAILURE_AUDIENCE_KEY] == "USER"
+        )
+        assert gate_records("ERROR") == []
 
     async def test_soft_would_block_row_carries_no_exception(
         self, loguru_capture: list[dict[str, Any]]
@@ -946,41 +971,46 @@ class TestPreflightGateOutcomeEvent:
         await _verdict_gate(out, mode=PreflightGateMode.SOFT)(PreflightGateInput())
         assert _outcome_record(loguru_capture)["exception"] is None
 
-    async def test_proceeded_stays_info_without_audience(self) -> None:
+    async def test_proceeded_stays_info_without_audience(
+        self, capture_preflight_outcomes, gate_records
+    ) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
-        with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out)(PreflightGateInput())
-        assert _outcome_level(ml) == "info"
-        assert FAILURE_AUDIENCE_KEY not in _outcome_event(ml)
-        ml.error.assert_not_called()
+        await _verdict_gate(out)(PreflightGateInput())
+        assert capture_preflight_outcomes.level == "info"
+        assert FAILURE_AUDIENCE_KEY not in _outcome_event(capture_preflight_outcomes)
+        assert gate_records("ERROR") == []
 
-    async def test_hard_block_emits_gate_mode_hard(self) -> None:
+    async def test_hard_block_emits_gate_mode_hard(
+        self, capture_preflight_outcomes
+    ) -> None:
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="auth", passed=False, message="bad creds")],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev["outcome"] == "blocked"
         assert ev[GATE_MODE_KEY] == "hard"
 
-    async def test_proceeded_carries_gate_mode_hard(self) -> None:
+    async def test_proceeded_carries_gate_mode_hard(
+        self, capture_preflight_outcomes
+    ) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
-        with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out)(PreflightGateInput())
-        assert _outcome_event(ml)[GATE_MODE_KEY] == "hard"
+        await _verdict_gate(out)(PreflightGateInput())
+        assert _outcome_event(capture_preflight_outcomes)[GATE_MODE_KEY] == "hard"
 
-    async def test_proceeded_carries_gate_mode_soft(self) -> None:
+    async def test_proceeded_carries_gate_mode_soft(
+        self, capture_preflight_outcomes
+    ) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
-        with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out, mode=PreflightGateMode.SOFT)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        await _verdict_gate(out, mode=PreflightGateMode.SOFT)(PreflightGateInput())
+        ev = _outcome_event(capture_preflight_outcomes)
         # a soft app's healthy runs proceed normally, still tagged soft
         assert ev["outcome"] == "proceeded"
         assert ev[GATE_MODE_KEY] == "soft"
 
-    async def test_check_matrix_on_proceed(self) -> None:
+    async def test_check_matrix_on_proceed(self, capture_preflight_outcomes) -> None:
         # The matrix is the pattern-analysis payload: small fixed fields only,
         # JSON-encoded so it lands as one LogAttributes value in ClickHouse.
         out = PreflightOutput(
@@ -995,9 +1025,8 @@ class TestPreflightGateOutcomeEvent:
                 PreflightCheck(name="tables", passed=True, duration_ms=95.0),
             ],
         )
-        with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(capture_preflight_outcomes)
         assert isinstance(ev[CHECK_MATRIX_KEY], str)
         assert json.loads(ev[CHECK_MATRIX_KEY]) == [
             {
@@ -1014,7 +1043,7 @@ class TestPreflightGateOutcomeEvent:
             },
         ]
 
-    async def test_check_matrix_on_block(self) -> None:
+    async def test_check_matrix_on_block(self, capture_preflight_outcomes) -> None:
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[
@@ -1026,9 +1055,11 @@ class TestPreflightGateOutcomeEvent:
                 )
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
-        matrix = json.loads(_outcome_event(ml)[CHECK_MATRIX_KEY])
+        matrix = json.loads(
+            _outcome_event(capture_preflight_outcomes)[CHECK_MATRIX_KEY]
+        )
         # Pin the full row on the block path too, so error_code/duration_ms drift
         # is caught here as well as on the proceed path.
         assert matrix == [
@@ -1040,7 +1071,9 @@ class TestPreflightGateOutcomeEvent:
             }
         ]
 
-    async def test_check_matrix_implausible_duration_coerced_to_sentinel(self) -> None:
+    async def test_check_matrix_implausible_duration_coerced_to_sentinel(
+        self, capture_preflight_outcomes
+    ) -> None:
         # nan/inf (orjson would emit null) and negatives collapse to the -1.0
         # "not measured" sentinel so the ClickHouse row stays numeric and
         # garbage never reads as a real duration; never raised (a raise here
@@ -1054,18 +1087,20 @@ class TestPreflightGateOutcomeEvent:
                 PreflightCheck(name="perms", passed=True),
             ],
         )
-        with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out)(PreflightGateInput())
-        matrix = json.loads(_outcome_event(ml)[CHECK_MATRIX_KEY])  # must parse
+        await _verdict_gate(out)(PreflightGateInput())
+        matrix = json.loads(
+            _outcome_event(capture_preflight_outcomes)[CHECK_MATRIX_KEY]
+        )  # must parse
         assert [row["duration_ms"] for row in matrix] == [-1.0, -1.0, -1.0, -1.0]
 
-    async def test_check_matrix_empty_checks(self) -> None:
+    async def test_check_matrix_empty_checks(self, capture_preflight_outcomes) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
-        with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out)(PreflightGateInput())
-        assert _outcome_event(ml)[CHECK_MATRIX_KEY] == "[]"
+        await _verdict_gate(out)(PreflightGateInput())
+        assert _outcome_event(capture_preflight_outcomes)[CHECK_MATRIX_KEY] == "[]"
 
-    async def test_check_matrix_carries_no_messages(self) -> None:
+    async def test_check_matrix_carries_no_messages(
+        self, capture_preflight_outcomes
+    ) -> None:
         # Messages/evidence stay in the Temporal activity result — the event row
         # must stay small and free of user-facing text.
         out = PreflightOutput(
@@ -1079,20 +1114,19 @@ class TestPreflightGateOutcomeEvent:
                 )
             ],
         )
-        with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out)(PreflightGateInput())
-        (row,) = json.loads(_outcome_event(ml)[CHECK_MATRIX_KEY])
+        await _verdict_gate(out)(PreflightGateInput())
+        (row,) = json.loads(
+            _outcome_event(capture_preflight_outcomes)[CHECK_MATRIX_KEY]
+        )
         assert set(row) == {"name", "passed", "error_code", "duration_ms"}
 
-    async def test_verdict_log_replaced_by_outcome_event(self) -> None:
+    async def test_verdict_log_replaced_by_outcome_event(
+        self, capture_preflight_outcomes, gate_records
+    ) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
-        with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out)(PreflightGateInput())
-        assert not any(
-            c.args and "Preflight gate verdict" in str(c.args[0])
-            for c in ml.info.call_args_list
-        )
-        assert _outcome_event(ml) is not None
+        await _verdict_gate(out)(PreflightGateInput())
+        assert not any("Preflight gate verdict" in r["message"] for r in gate_records())
+        assert _outcome_event(capture_preflight_outcomes) is not None
 
 
 class TestInputTypeSupportsGate:
@@ -1242,13 +1276,15 @@ class TestPreflightGateMultiCredential:
         assert excinfo.value.type == "DependencyUnavailableError"
         assert handler.preflight_input is None
 
-    async def test_absent_guids_skip_resolution_with_empty_groups(self) -> None:
+    async def test_absent_guids_skip_resolution_with_empty_groups(
+        self, gate_records
+    ) -> None:
         # Fields declared but NO guids in the snapshot (e.g. automation-trigger
         # empty metadata) — resolve nothing, hand the handler empty groups, and
         # log at debug, not warning: all-absent is the benign no-credential path.
         handler = _StubHandler()
         gate = _gate(handler)
-        with _infra_patches(None), mock.patch(f"{_GATE}.logger") as mock_logger:
+        with _infra_patches(None):
             await gate(
                 PreflightGateInput(
                     credential_ref_fields=self._FIELDS,
@@ -1258,17 +1294,19 @@ class TestPreflightGateMultiCredential:
         pi = handler.preflight_input
         assert pi is not None
         assert pi.credentials_by_name == {"api": [], "object_store": []}
-        mock_logger.warning.assert_not_called()
-        mock_logger.debug.assert_called_once()
+        assert gate_records("WARNING") == []
+        assert len(gate_records("DEBUG")) == 1
 
-    async def test_partial_missing_ref_warns_and_leaves_group_empty(self) -> None:
+    async def test_partial_missing_ref_warns_and_leaves_group_empty(
+        self, gate_records
+    ) -> None:
         # Some refs resolve and one guid field is absent — the likely-typo case:
         # warn (naming the missing field) and leave that group empty while the
         # resolved ref still populates. Fail-open behavior is unchanged.
         handler = _StubHandler()
         gate = _gate(handler)
         resolver = _resolver_by_guid({"guid-a": {"token": "t"}})
-        with _infra_patches(resolver), mock.patch(f"{_GATE}.logger") as mock_logger:
+        with _infra_patches(resolver):
             await gate(
                 PreflightGateInput(
                     credential_ref_fields=self._FIELDS,
@@ -1280,8 +1318,8 @@ class TestPreflightGateMultiCredential:
         assert pi is not None
         assert {c.key: c.value for c in pi.credentials_by_name["api"]} == {"token": "t"}
         assert pi.credentials_by_name["object_store"] == []
-        mock_logger.warning.assert_called_once()
-        assert mock_logger.warning.call_args.kwargs["missing_refs"] == {
+        (warning,) = gate_records("WARNING")
+        assert warning["extra"]["missing_refs"] == {
             "object_store": "object_store_credential_guid"
         }
 
@@ -1557,7 +1595,9 @@ class TestOrphanedAttemptEmission:
     passed — corrupting the series hard mode is decided from.
     """
 
-    async def test_attempt_past_its_deadline_emits_no_verdict_row(self) -> None:
+    async def test_attempt_past_its_deadline_emits_no_verdict_row(
+        self, capture_preflight_outcomes
+    ) -> None:
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="connectivity", passed=False)],
@@ -1573,10 +1613,9 @@ class TestOrphanedAttemptEmission:
         )
         with (
             mock.patch(f"{_GATE}.activity.info", return_value=dead_attempt),
-            mock.patch(_LOGGER) as m,
         ):
             await gate(PreflightGateInput())
-        assert _outcome_event(m) is None
+        assert _outcome_event(capture_preflight_outcomes) is None
 
 
 class TestHeartbeatCleanupCannotOutrankTheVerdict:
@@ -1634,7 +1673,9 @@ class TestLiveAttemptStillEmits:
     row; suppression is only for attempts Temporal has already abandoned.
     """
 
-    async def test_live_attempt_still_emits_verdict_row(self) -> None:
+    async def test_live_attempt_still_emits_verdict_row(
+        self, capture_preflight_outcomes
+    ) -> None:
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="connectivity", passed=False)],
@@ -1647,14 +1688,15 @@ class TestLiveAttemptStillEmits:
         )
         with (
             mock.patch(f"{_GATE}.activity.info", return_value=live_attempt),
-            mock.patch(_LOGGER) as m,
         ):
             await gate(PreflightGateInput())
-        event = _outcome_event(m)
+        event = _outcome_event(capture_preflight_outcomes)
         assert event is not None
         assert event["outcome"] == "would_block"
 
-    async def test_attempt_near_its_deadline_still_emits_verdict_row(self) -> None:
+    async def test_attempt_near_its_deadline_still_emits_verdict_row(
+        self, capture_preflight_outcomes
+    ) -> None:
         # Production geometry: the gate emits ~5s before the deadline (the
         # headroom GATE_ACTIVITY_HEADROOM_SECONDS reserves). A guard that
         # suppresses there is the over-suppression that would actually bite.
@@ -1670,10 +1712,9 @@ class TestLiveAttemptStillEmits:
         )
         with (
             mock.patch(f"{_GATE}.activity.info", return_value=near_deadline),
-            mock.patch(_LOGGER) as m,
         ):
             await gate(PreflightGateInput())
-        event = _outcome_event(m)
+        event = _outcome_event(capture_preflight_outcomes)
         assert event is not None
         assert event["outcome"] == "would_block"
 
@@ -1726,7 +1767,9 @@ class TestGateHeartbeat:
 class TestCancelledAttemptSuppression:
     """Cancellation is the primary liveness signal — no clocks involved."""
 
-    async def test_cancelled_attempt_emits_no_verdict_row(self) -> None:
+    async def test_cancelled_attempt_emits_no_verdict_row(
+        self, capture_preflight_outcomes
+    ) -> None:
         # Temporal delivers cancellation in heartbeat responses; a cancelled
         # attempt is abandoned even while still inside its deadline window.
         out = PreflightOutput(
@@ -1742,12 +1785,13 @@ class TestCancelledAttemptSuppression:
         with (
             mock.patch(f"{_GATE}.activity.info", return_value=inside_deadline),
             mock.patch(f"{_GATE}.activity.is_cancelled", return_value=True),
-            mock.patch(_LOGGER) as m,
         ):
             await gate(PreflightGateInput())
-        assert _outcome_event(m) is None
+        assert _outcome_event(capture_preflight_outcomes) is None
 
-    async def test_naive_started_time_live_and_expired(self) -> None:
+    async def test_naive_started_time_live_and_expired(
+        self, capture_preflight_outcomes
+    ) -> None:
         # temporalio stamps aware datetimes today; the naive branch is the
         # compatibility path and must judge liveness the same way.
         out = PreflightOutput(
@@ -1755,6 +1799,7 @@ class TestCancelledAttemptSuppression:
             checks=[PreflightCheck(name="connectivity", passed=False)],
         )
         for age_seconds, expect_row in ((0, True), (300, False)):
+            rows_before = len(capture_preflight_outcomes.rows)
             gate = _verdict_gate(out, mode=PreflightGateMode.SOFT)
             naive = SimpleNamespace(
                 attempt=1,
@@ -1762,14 +1807,14 @@ class TestCancelledAttemptSuppression:
                 started_time=datetime.now(timezone.utc).replace(tzinfo=None)
                 - timedelta(seconds=age_seconds),
             )
-            with (
-                mock.patch(f"{_GATE}.activity.info", return_value=naive),
-                mock.patch(_LOGGER) as m,
-            ):
+            with mock.patch(f"{_GATE}.activity.info", return_value=naive):
                 await gate(PreflightGateInput())
-            assert (_outcome_event(m) is not None) is expect_row
+            emitted = len(capture_preflight_outcomes.rows) > rows_before
+            assert emitted is expect_row
 
-    async def test_incident_geometry_is_suppressed(self) -> None:
+    async def test_incident_geometry_is_suppressed(
+        self, capture_preflight_outcomes
+    ) -> None:
         # The row that motivated gap 1 landed 3.2s past its deadline. The
         # 2s skew grace must not wave it through — a 5s grace did, which is
         # why the grace is tighter than the 5s emit headroom.
@@ -1785,10 +1830,9 @@ class TestCancelledAttemptSuppression:
         )
         with (
             mock.patch(f"{_GATE}.activity.info", return_value=incident),
-            mock.patch(_LOGGER) as m,
         ):
             await gate(PreflightGateInput())
-        assert _outcome_event(m) is None
+        assert _outcome_event(capture_preflight_outcomes) is None
 
 
 class TestAnAbandonedAttemptWritesNothingAnywhere:
@@ -1808,7 +1852,9 @@ class TestAnAbandonedAttemptWritesNothingAnywhere:
             checks=[PreflightCheck(name="connectivity", passed=False)],
         )
 
-    async def test_an_attempt_past_its_deadline_does_not_persist(self) -> None:
+    async def test_an_attempt_past_its_deadline_does_not_persist(
+        self, capture_preflight_outcomes
+    ) -> None:
         gate = _verdict_gate(self._not_ready(), mode=PreflightGateMode.SOFT)
         dead_attempt = SimpleNamespace(
             attempt=1,
@@ -1818,13 +1864,14 @@ class TestAnAbandonedAttemptWritesNothingAnywhere:
         with (
             mock.patch(f"{_GATE}.activity.info", return_value=dead_attempt),
             mock.patch(f"{_GATE}.persist_check_result") as persist,
-            mock.patch(_LOGGER) as m,
         ):
             await gate(PreflightGateInput())
-        assert _outcome_event(m) is None
+        assert _outcome_event(capture_preflight_outcomes) is None
         persist.assert_not_called()
 
-    async def test_a_cancelled_attempt_does_not_persist(self) -> None:
+    async def test_a_cancelled_attempt_does_not_persist(
+        self, capture_preflight_outcomes
+    ) -> None:
         gate = _verdict_gate(self._not_ready(), mode=PreflightGateMode.SOFT)
         inside_deadline = SimpleNamespace(
             attempt=1,
@@ -1835,13 +1882,14 @@ class TestAnAbandonedAttemptWritesNothingAnywhere:
             mock.patch(f"{_GATE}.activity.info", return_value=inside_deadline),
             mock.patch(f"{_GATE}.activity.is_cancelled", return_value=True),
             mock.patch(f"{_GATE}.persist_check_result") as persist,
-            mock.patch(_LOGGER) as m,
         ):
             await gate(PreflightGateInput())
-        assert _outcome_event(m) is None
+        assert _outcome_event(capture_preflight_outcomes) is None
         persist.assert_not_called()
 
-    async def test_an_abandoned_proceed_does_not_persist(self) -> None:
+    async def test_an_abandoned_proceed_does_not_persist(
+        self, capture_preflight_outcomes
+    ) -> None:
         # The READY path too: it reaches _emit_outcome by a different branch,
         # and a stale "this source is fine" row is the worse one to leave.
         gate = _verdict_gate(
@@ -1856,13 +1904,14 @@ class TestAnAbandonedAttemptWritesNothingAnywhere:
         with (
             mock.patch(f"{_GATE}.activity.info", return_value=dead_attempt),
             mock.patch(f"{_GATE}.persist_check_result") as persist,
-            mock.patch(_LOGGER) as m,
         ):
             await gate(PreflightGateInput())
-        assert _outcome_event(m) is None
+        assert _outcome_event(capture_preflight_outcomes) is None
         persist.assert_not_called()
 
-    async def test_an_abandoned_unverifiable_source_does_not_persist(self) -> None:
+    async def test_an_abandoned_unverifiable_source_does_not_persist(
+        self, capture_preflight_outcomes
+    ) -> None:
         # And the no_verdict path, the third _emit_outcome call site.
         class _Crashing(DefaultHandler):
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
@@ -1882,11 +1931,10 @@ class TestAnAbandonedAttemptWritesNothingAnywhere:
         with (
             mock.patch(f"{_GATE}.activity.info", return_value=dead_attempt),
             mock.patch(f"{_GATE}.persist_check_result") as persist,
-            mock.patch(_LOGGER) as m,
         ):
             result = await gate(PreflightGateInput())
         assert result.status is PreflightStatus.NOT_READY
-        assert _outcome_event(m) is None
+        assert _outcome_event(capture_preflight_outcomes) is None
         persist.assert_not_called()
 
 
@@ -2077,7 +2125,7 @@ class TestPreflightGateStorageChecks:
         checker.assert_not_awaited()
 
     async def test_relocation_is_reported_not_blocked_in_hard_gate_with_typed_code(
-        self,
+        self, capture_preflight_outcomes
     ) -> None:
         """A failed probe downgrades READY, platform-attributed, and a hard gate
         reports it without blocking: a relocation is DEPENDENCY_UNAVAILABLE, which
@@ -2088,14 +2136,14 @@ class TestPreflightGateStorageChecks:
             mode=PreflightGateMode.HARD,
             verify_storage=True,
         )
-        with self._storage_patches([self._reloc_result()]), mock.patch(_LOGGER) as ml:
+        with self._storage_patches([self._reloc_result()]):
             result = await gate(PreflightGateInput())
         assert result.status is PreflightStatus.NOT_READY
         failed = next(c for c in result.checks if not c.passed)
         assert failed.error is not None
         assert failed.error.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
         assert failed.error.audience is Audience.PLATFORM
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev["outcome"] == "would_block"
         assert ev[GATE_MODE_KEY] == "hard"
         assert ev["reason"] == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
@@ -2241,7 +2289,7 @@ class TestPreflightGateStorageChecks:
         assert excinfo.value.non_retryable is False
 
     async def test_storage_failure_on_final_attempt_is_reported_not_blocked(
-        self,
+        self, capture_preflight_outcomes
     ) -> None:
         """Retries exhausted → the storage failure becomes the verdict, which a
         hard gate reports as ``would_block``: DEPENDENCY_UNAVAILABLE never blocks
@@ -2261,11 +2309,10 @@ class TestPreflightGateStorageChecks:
         with (
             self._storage_patches([self._reloc_result()]),
             mock.patch(f"{_GATE}.activity.info", return_value=info),
-            mock.patch(_LOGGER) as ml,
         ):
             result = await gate(PreflightGateInput())
         assert result.status is PreflightStatus.NOT_READY
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev["outcome"] == "would_block"
         assert ev["reason"] == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
 
@@ -2568,7 +2615,9 @@ class TestOutcomeRowNamesTheFailure:
     escalation was filed as log loss on exactly that gap.
     """
 
-    async def test_block_row_names_the_failing_check_and_its_message(self) -> None:
+    async def test_block_row_names_the_failing_check_and_its_message(
+        self, capture_preflight_outcomes
+    ) -> None:
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[
@@ -2583,13 +2632,15 @@ class TestOutcomeRowNamesTheFailure:
                 ),
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev.get(FAILURE_CHECK_KEY) == "scannerApiAvailability"
         assert ev.get(FAILURE_MESSAGE_KEY) == "The admin API returned 403."
 
-    async def test_the_lifecycle_body_and_the_row_carry_one_sentence(self) -> None:
+    async def test_the_lifecycle_body_and_the_row_carry_one_sentence(
+        self, capture_preflight_outcomes
+    ) -> None:
         # The interceptor's BLOCKED line and the row's failure.message both read
         # details[0], so a Body substring search and a JSONExtract land on the
         # same text. The block's *rendered* message is the builder's "Preflight
@@ -2613,10 +2664,10 @@ class TestOutcomeRowNamesTheFailure:
                 ),
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError) as raised:
+        with pytest.raises(ApplicationError) as raised:
             await _verdict_gate(out)(PreflightGateInput())
         body = preflight_block_message(raised.value)
-        assert body == _outcome_event(ml)[FAILURE_MESSAGE_KEY]
+        assert body == _outcome_event(capture_preflight_outcomes)[FAILURE_MESSAGE_KEY]
         assert body == "The admin API returned 403."
         assert "Secret store lagged" not in body
         assert not body.startswith("Preflight failed")
@@ -2637,7 +2688,9 @@ class TestOutcomeRowNamesTheFailure:
             == "Preflight failed: the scanner API denied the probe"
         )
 
-    async def test_message_is_redacted_before_it_reaches_the_row(self) -> None:
+    async def test_message_is_redacted_before_it_reaches_the_row(
+        self, capture_preflight_outcomes
+    ) -> None:
         # Scrubbed by the FailureDetails validator, so this holds whatever route
         # the message took to reach the row; the emit site's own redact_and_cap
         # is the cap plus defence in depth. A driver exception routinely carries
@@ -2656,14 +2709,16 @@ class TestOutcomeRowNamesTheFailure:
                 )
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
-        message = _outcome_event(ml)[FAILURE_MESSAGE_KEY]
+        message = _outcome_event(capture_preflight_outcomes)[FAILURE_MESSAGE_KEY]
         assert "hunter2" not in message
         assert "u:pw@h" not in message
         assert "connect failed" in message
 
-    async def test_overlong_message_is_capped_keeping_both_ends(self) -> None:
+    async def test_overlong_message_is_capped_keeping_both_ends(
+        self, capture_preflight_outcomes
+    ) -> None:
         # A head-only cut would spend the budget on boilerplate and delete the
         # sentence naming what failed, which is always at the tail.
         message = "HEAD-MARKER" + ("x" * 4000) + "TAIL-MARKER"
@@ -2675,15 +2730,17 @@ class TestOutcomeRowNamesTheFailure:
                 ),
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
-        emitted = _outcome_event(ml)[FAILURE_MESSAGE_KEY]
+        emitted = _outcome_event(capture_preflight_outcomes)[FAILURE_MESSAGE_KEY]
         assert len(emitted) < len(message)
         assert emitted.startswith("HEAD-MARKER")
         assert emitted.endswith("TAIL-MARKER")
         assert "chars elided" in emitted
 
-    async def test_aggregate_error_wins_but_the_name_comes_from_the_check(self) -> None:
+    async def test_aggregate_error_wins_but_the_name_comes_from_the_check(
+        self, capture_preflight_outcomes
+    ) -> None:
         # SDR inserts a non-fatal row ahead of the real failure and pins the real
         # one on result.error, so first-failed would steal the banner. The
         # aggregate belongs to no single check, so the name still comes from the
@@ -2701,13 +2758,15 @@ class TestOutcomeRowNamesTheFailure:
                 ),
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev[FAILURE_CHECK_KEY] == "scannerApiAvailability"
         assert ev[FAILURE_MESSAGE_KEY] == "Scanner API denied."
 
-    async def test_advisory_failure_on_a_proceeded_run_still_names_itself(self) -> None:
+    async def test_advisory_failure_on_a_proceeded_run_still_names_itself(
+        self, capture_preflight_outcomes
+    ) -> None:
         out = PreflightOutput(
             status=PreflightStatus.READY,
             checks=[
@@ -2717,21 +2776,21 @@ class TestOutcomeRowNamesTheFailure:
                 ),
             ],
         )
-        with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev["outcome"] == "proceeded"
         assert ev[FAILURE_CHECK_KEY] == "version"
         assert ev[FAILURE_MESSAGE_KEY] == "Source is a minor behind."
 
-    async def test_a_clean_run_carries_neither_key(self) -> None:
+    async def test_a_clean_run_carries_neither_key(
+        self, capture_preflight_outcomes
+    ) -> None:
         out = PreflightOutput(
             status=PreflightStatus.READY,
             checks=[PreflightCheck(name="conn", passed=True)],
         )
-        with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev["outcome"] == "proceeded"
         assert FAILURE_CHECK_KEY not in ev
         assert FAILURE_MESSAGE_KEY not in ev
@@ -2782,7 +2841,9 @@ class TestOutcomeRowNamesTheFailure:
         assert kwargs[FAILURE_CHECK_KEY] == "scannerApiAvailability"
         assert kwargs[FAILURE_MESSAGE_KEY] == "The admin API returned 403."
 
-    async def test_both_surfaces_agree_on_the_same_verdict(self) -> None:
+    async def test_both_surfaces_agree_on_the_same_verdict(
+        self, capture_preflight_outcomes
+    ) -> None:
         # One helper feeds both rows precisely so support reads the same answer
         # whichever surface they land on.
         def _verdict() -> PreflightOutput:
@@ -2799,9 +2860,9 @@ class TestOutcomeRowNamesTheFailure:
                 ],
             )
 
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError):
             await _verdict_gate(_verdict())(PreflightGateInput())
-        gate = _outcome_event(ml)
+        gate = _outcome_event(capture_preflight_outcomes)
 
         log = mock.MagicMock()
         emit_preflight_check_outcome(
@@ -2813,7 +2874,7 @@ class TestOutcomeRowNamesTheFailure:
         assert {k: gate[k] for k in keys} == {k: interactive[k] for k in keys}
 
     async def test_the_same_error_on_aggregate_and_check_is_matched_by_value(
-        self,
+        self, capture_preflight_outcomes
     ) -> None:
         # A handler may hand the same AppError to both. PreflightOutput and
         # PreflightCheck each coerce it independently, so the row sees two
@@ -2829,14 +2890,14 @@ class TestOutcomeRowNamesTheFailure:
                 PreflightCheck(name="scannerApi", passed=False, error=blocking),
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev[FAILURE_CHECK_KEY] == "scannerApi"
         assert ev[FAILURE_MESSAGE_KEY] == "The admin API returned 403."
 
     async def test_an_unattributable_aggregate_omits_the_name_rather_than_guessing(
-        self,
+        self, capture_preflight_outcomes
     ) -> None:
         # Several checks failed and the aggregate matches none of them, so any
         # name would be a guess. Naming the wrong check is worse than naming
@@ -2856,13 +2917,15 @@ class TestOutcomeRowNamesTheFailure:
                 ),
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert FAILURE_CHECK_KEY not in ev
         assert ev[FAILURE_MESSAGE_KEY] == "Aggregate that describes neither check."
 
-    async def test_same_code_on_two_checks_is_told_apart_by_message(self) -> None:
+    async def test_same_code_on_two_checks_is_told_apart_by_message(
+        self, capture_preflight_outcomes
+    ) -> None:
         # Two checks fail the same way and only the message distinguishes them.
         # Matching on code alone would find both, and two matches is no answer —
         # the name would be dropped for a verdict that can be attributed exactly.
@@ -2881,14 +2944,14 @@ class TestOutcomeRowNamesTheFailure:
                 ),
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev[FAILURE_CHECK_KEY] == "secondaryCredential"
         assert ev[FAILURE_MESSAGE_KEY] == "The second credential is the expired one."
 
     async def test_proceeded_row_message_comes_from_the_same_check_as_reason(
-        self,
+        self, capture_preflight_outcomes
     ) -> None:
         # `reason` on a proceeded row is the first failed check's code. The
         # message must come from that same check — not from an aggregate the
@@ -2904,9 +2967,8 @@ class TestOutcomeRowNamesTheFailure:
                 ),
             ],
         )
-        with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev["outcome"] == "proceeded"
         assert ev["reason"] == "AUTH"
         assert ev[FAILURE_CHECK_KEY] == "version"
@@ -2938,7 +3000,7 @@ class TestOutcomeRowNamesTheFailure:
         assert kwargs[FAILURE_AUDIENCE_KEY] == "USER"
 
     async def test_row_and_raised_error_agree_when_only_the_aggregate_message_is_set(
-        self,
+        self, capture_preflight_outcomes
     ) -> None:
         # An un-migrated handler puts the sentence on result.message and marks a
         # check failed with no text of its own. details[0] and the row must
@@ -2949,9 +3011,9 @@ class TestOutcomeRowNamesTheFailure:
             message="The admin API (admin/workspaces/modified) returned 403.",
             checks=[PreflightCheck(name="scannerApiAvailability", passed=False)],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError) as excinfo:
+        with pytest.raises(ApplicationError) as excinfo:
             await _verdict_gate(out)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev[FAILURE_MESSAGE_KEY] == (
             "The admin API (admin/workspaces/modified) returned 403."
         )
@@ -2970,14 +3032,14 @@ class TestOutcomeRowNamesTheFailure:
             message="connect postgres://u:pw@h/db?password=hunter2 refused",
             checks=[PreflightCheck(name="conn", passed=False)],
         )
-        with mock.patch(_LOGGER), pytest.raises(ApplicationError) as excinfo:
+        with pytest.raises(ApplicationError) as excinfo:
             await _verdict_gate(out)(PreflightGateInput())
         assert "hunter2" not in excinfo.value.message
         assert "u:pw@" not in excinfo.value.message
         assert "refused" in excinfo.value.message
 
     async def test_an_untyped_check_is_named_when_its_line_is_the_attribution(
-        self,
+        self, capture_preflight_outcomes
     ) -> None:
         # Two un-migrated checks failed; only the first carries text, so the
         # fallback sentence is that check's own line. Naming it is not a guess.
@@ -2992,13 +3054,15 @@ class TestOutcomeRowNamesTheFailure:
                 PreflightCheck(name="workspaceSelection", passed=False),
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev[FAILURE_MESSAGE_KEY] == "The admin API returned 403."
         assert ev[FAILURE_CHECK_KEY] == "scannerApiAvailability"
 
-    async def test_two_untyped_lines_joined_name_no_single_check(self) -> None:
+    async def test_two_untyped_lines_joined_name_no_single_check(
+        self, capture_preflight_outcomes
+    ) -> None:
         # Both failed checks carry text, so the attribution is their lines
         # joined — a sentence that belongs to neither check alone.
         out = PreflightOutput(
@@ -3008,14 +3072,14 @@ class TestOutcomeRowNamesTheFailure:
                 PreflightCheck(name="second", passed=False, message="b"),
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev[FAILURE_MESSAGE_KEY] == "a; b"
         assert FAILURE_CHECK_KEY not in ev
 
     async def test_the_row_carries_the_remediation_when_the_handler_gave_one(
-        self,
+        self, capture_preflight_outcomes
     ) -> None:
         # The escalation's search included the remediation text. The envelope
         # already carries it as a distinct field; the row should too.
@@ -3032,14 +3096,16 @@ class TestOutcomeRowNamesTheFailure:
                 )
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev[FAILURE_SUGGESTED_ACTION_KEY] == (
             "Enable read-only admin APIs for the principal."
         )
 
-    async def test_no_remediation_means_no_key(self) -> None:
+    async def test_no_remediation_means_no_key(
+        self, capture_preflight_outcomes
+    ) -> None:
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[
@@ -3048,11 +3114,15 @@ class TestOutcomeRowNamesTheFailure:
                 )
             ],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
-        assert FAILURE_SUGGESTED_ACTION_KEY not in _outcome_event(ml)
+        assert FAILURE_SUGGESTED_ACTION_KEY not in _outcome_event(
+            capture_preflight_outcomes
+        )
 
-    async def test_a_crashing_handler_puts_its_message_on_the_row(self) -> None:
+    async def test_a_crashing_handler_puts_its_message_on_the_row(
+        self, capture_preflight_outcomes
+    ) -> None:
         # The source_unverifiable path, through the activity itself rather than
         # the row builder: a handler that raised instead of answering. An untyped
         # crash is INTERNAL, which a hard gate reports rather than blocks on
@@ -3064,16 +3134,15 @@ class TestOutcomeRowNamesTheFailure:
         gate = build_preflight_gate_activity(
             _Crashing(), app_name="myapp", mode=PreflightGateMode.HARD, attempts=1
         )
-        with mock.patch(_LOGGER) as ml:
-            result = await gate(PreflightGateInput())
+        result = await gate(PreflightGateInput())
         assert result.status is PreflightStatus.NOT_READY
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev["outcome"] == "would_block"
         assert "driver blew up" in ev[FAILURE_MESSAGE_KEY]
         assert ev[FAILURE_CHECK_KEY] == UNVERIFIABLE_CHECK_NAME
 
     async def test_a_deprecated_fail_open_leaf_puts_its_message_on_the_row(
-        self,
+        self, capture_preflight_outcomes
     ) -> None:
         # The no_verdict row for a leaf still on the deprecated fail-open train
         # carries the leaf's own line, read off the rendered verdict — never
@@ -3091,11 +3160,10 @@ class TestOutcomeRowNamesTheFailure:
         )
         with (
             warnings.catch_warnings(),
-            mock.patch(_LOGGER) as ml,
         ):
             warnings.simplefilter("ignore", DeprecationWarning)
             result = await gate(PreflightGateInput())
         assert result.status is PreflightStatus.NOT_READY
-        ev = _outcome_event(ml)
+        ev = _outcome_event(capture_preflight_outcomes)
         assert ev["outcome"] == "no_verdict"
         assert ev[FAILURE_MESSAGE_KEY] == "Source API throttled: 429 after 3 retries"

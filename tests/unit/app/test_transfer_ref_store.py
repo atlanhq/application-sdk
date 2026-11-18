@@ -18,7 +18,6 @@ import pytest
 from pydantic import ConfigDict
 
 from application_sdk.app.base import App, _validate_workflow_input
-from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.storage import DownloadInput, UploadInput
 from application_sdk.contracts.types import FileReference, MaxItems, StoreTarget
@@ -91,15 +90,6 @@ def _names(root: str | None) -> set[str]:
         for p in Path(root).rglob("*")
         if p.is_file() and not p.name.endswith(".sha256")
     }
-
-
-@pytest.fixture(autouse=True)
-def _reset_registries():
-    AppRegistry.reset()
-    TaskRegistry.reset()
-    yield
-    AppRegistry.reset()
-    TaskRegistry.reset()
 
 
 class TestDownloadHandoffAcrossStores:

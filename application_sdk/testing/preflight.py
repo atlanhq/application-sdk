@@ -1,3 +1,4 @@
+# conformance: ignore[L002] loguru is imported to add a capture sink that reads records, never to log; logging goes through get_logger
 """Reading the preflight gate's outcome row from a test.
 
 The gate *activity* emits exactly one ``Preflight gate outcome`` row per
@@ -14,7 +15,7 @@ the gate activity's logger
 wrapper in ``application_sdk.app.base`` emits outcome rows of its own —
 ``skipped`` (``pre_gate_replay``, ``input_not_credential_resolvable``) and
 ``no_verdict`` — through Temporal's ``workflow.logger``, which this capture
-does not patch (it is temporalio's module-level logger; replacing it globally
+does not read (it is temporalio's module-level logger; replacing it globally
 would swallow every workflow's logging, and its stdlib fallback repacks
 structured fields into ``extra=``). A test pinning those paths must assert on
 ``workflow.logger`` directly; one that reaches for this capture there gets an
@@ -27,12 +28,12 @@ asserted against an empty list. The reader was correct when written and became
 wrong without being touched, which is the failure mode a shared helper exists to
 prevent.
 
-Two entry points, because there are two ways a suite already patches the gate's
-logger:
+Two entry points:
 
-* :func:`capture_preflight_outcomes` — a pytest fixture that installs the
-  recorder itself and yields it. Prefer this in connector suites; there is
-  nothing to patch and no level to get wrong.
+* :func:`capture_preflight_outcomes` — a pytest fixture that reads the rows the
+  gate's real logger delivers to a loguru sink and yields them. Prefer this;
+  there is nothing to patch and no level to get wrong, and a passing assertion
+  proves the row reached a sink with those fields — which a stand-in cannot.
 * :func:`outcome_rows` / :func:`outcome_level` / :func:`single_outcome` — the
   same scan over a ``MagicMock`` logger, for suites that patch
   ``preflight_gate.logger`` themselves and want to keep doing so.
@@ -60,8 +61,6 @@ if TYPE_CHECKING:
 #: empty a suite's assertions.
 OUTCOME_LEVELS: tuple[str, ...] = ("info", "warning", "error")
 
-_GATE_LOGGER_PATH = "application_sdk.execution._temporal.preflight_gate.logger"
-
 
 def _outcome_event_name() -> str:
     from application_sdk.observability.events import (  # noqa: PLC0415 — deferred: keeps the events module off this module's import path
@@ -72,9 +71,11 @@ def _outcome_event_name() -> str:
 
 
 class PreflightOutcomeCapture:
-    """A stand-in for the gate's logger that keeps the rows it was handed.
+    """The outcome rows a test captured, with the level each arrived at.
 
-    Records at every level in :data:`OUTCOME_LEVELS` and remembers which one
+    :func:`capture_preflight_outcomes` fills it from the real log sink. It also
+    still works as a stand-in for the gate's logger, called directly: it
+    records at every level in :data:`OUTCOME_LEVELS` and remembers which one
     carried each row, so a suite can assert the severity as well as the payload.
     ``debug`` is a declared no-op, so gate progress logging does not pollute the
     capture; the gate calls nothing else on its logger.
@@ -141,9 +142,19 @@ class PreflightOutcomeCapture:
 
 @pytest.fixture
 def capture_preflight_outcomes(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch,  # noqa: ARG001 — kept: part of the released fixture signature
 ) -> Iterator[PreflightOutcomeCapture]:
-    """Patch the gate's logger with a :class:`PreflightOutcomeCapture` and yield it.
+    """Capture the gate's outcome rows from the real log sink and yield them.
+
+    Adds a loguru sink for the test and records every outcome row the gate's
+    logger delivers to it, at whichever level it arrives. Nothing is patched:
+    the row goes through the SDK logger adapter exactly as in production, so
+    a passing assertion proves the record reached a sink at that level with
+    those bound fields — which a stand-in logger cannot prove. A row's payload
+    is the record's bound fields as the sink saw them, so it also carries the
+    context the adapter stamps on every record (``app_name``, ``source``, …).
+    An ``exc_info`` passed to the gate's logger arrives as the record's
+    exception and is surfaced under the ``exc_info`` key.
 
     Use this instead of patching ``preflight_gate.logger`` by hand: the capture
     reads every level the outcome row can arrive at, so a verdict that changes
@@ -151,9 +162,38 @@ def capture_preflight_outcomes(
     gate *activity* emits; the workflow-emitted ``skipped``/``no_verdict`` rows
     go through ``workflow.logger`` instead — see the module docstring.
     """
+    from loguru import (  # noqa: PLC0415 — deferred: keeps loguru off this module's import path until a test asks for the fixture
+        logger as loguru_logger,
+    )
+
+    from application_sdk.execution._temporal import (  # noqa: PLC0415 — deferred: the gate module pulls in temporalio
+        preflight_gate,
+    )
+
     capture = PreflightOutcomeCapture()
-    monkeypatch.setattr(_GATE_LOGGER_PATH, capture)
-    yield capture
+    gate_logger_name = preflight_gate.logger.logger_name
+    event = _outcome_event_name()
+
+    def _sink(message: Any) -> None:
+        record = message.record
+        extra = record["extra"]
+        if extra.get("logger_name") != gate_logger_name:
+            return
+        if record["message"] != event:
+            return
+        payload = {k: v for k, v in extra.items() if k != "logger_name"}
+        if record["exception"] is not None:
+            payload["exc_info"] = record["exception"].value
+        capture._rows.append((record["level"].name.lower(), payload))
+
+    sink_id = loguru_logger.add(_sink, level="DEBUG", format="{message}")
+    try:
+        yield capture
+    finally:
+        try:
+            loguru_logger.remove(sink_id)
+        except ValueError:  # conformance: ignore[E002] the sink was already removed by an adapter initialised mid-test; nothing left to take out
+            pass
 
 
 def _outcome_calls(mock_logger: MagicMock) -> list[tuple[str, dict[str, Any]]]:

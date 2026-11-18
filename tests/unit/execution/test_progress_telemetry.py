@@ -12,11 +12,14 @@ covered too.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from loguru import logger as _loguru_logger
 
 from application_sdk.execution import progress_telemetry as pt_mod
 from application_sdk.execution.progress import (
@@ -56,8 +59,8 @@ class Observed:
     """What one hold's release reported."""
 
     recorded: list[Any] = field(default_factory=list)
-    infos: list[Any] = field(default_factory=list)
-    warnings: list[Any] = field(default_factory=list)
+    infos: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def attributes(self) -> dict[str, str]:
@@ -69,6 +72,34 @@ class Observed:
     def duration(self) -> float:
         assert len(self.recorded) == 1
         return self.recorded[0].args[0]
+
+
+@contextmanager
+def _module_log() -> Iterator[list[dict[str, Any]]]:
+    """Records this module's logger delivered to a real loguru sink.
+
+    Read from the sink rather than a stand-in logger, so an assertion proves
+    the line was emitted at that level with its arguments rendered — not just
+    that a method of that name was called.
+    """
+    records: list[dict[str, Any]] = []
+
+    def _sink(message: Any) -> None:
+        if message.record["extra"].get("logger_name") == pt_mod.__name__:
+            records.append(message.record)
+
+    sink_id = _loguru_logger.add(_sink, level="DEBUG", format="{message}")
+    try:
+        yield records
+    finally:
+        try:
+            _loguru_logger.remove(sink_id)
+        except ValueError:
+            pass  # an adapter initialised mid-test already removed every sink
+
+
+def _messages(records: list[dict[str, Any]], level: str) -> list[str]:
+    return [r["message"] for r in records if r["level"].name == level]
 
 
 def _release(
@@ -94,15 +125,15 @@ def _release(
     clock.advance(took)
 
     with (
-        patch.object(pt_mod, "logger") as mock_logger,
+        _module_log() as records,
         patch.object(pt_mod, "_hold_duration_histogram", return_value=histogram),
     ):
         tracker.exit_hold(token)
 
     return Observed(
         recorded=list(histogram.record.call_args_list),
-        infos=list(mock_logger.info.call_args_list),
-        warnings=list(mock_logger.warning.call_args_list),
+        infos=_messages(records, "INFO"),
+        warnings=_messages(records, "WARNING"),
     )
 
 
@@ -238,7 +269,7 @@ class TestObserver:
         """One number with two uses, not two numbers that can drift apart."""
         histogram = MagicMock()
         with (
-            patch.object(pt_mod, "logger") as mock_logger,
+            _module_log() as records,
             patch.object(pt_mod, "_hold_duration_histogram", return_value=histogram),
         ):
             closed_hold_observer("extract")(
@@ -249,7 +280,7 @@ class TestObserver:
                 )
             )
 
-        assert len(mock_logger.info.call_args_list) == 1
+        assert len(_messages(records, "INFO")) == 1
 
     @pytest.mark.parametrize("allowance", [None, 60.0])
     def test_an_unreachable_meter_degrades_to_log_only(
@@ -258,7 +289,7 @@ class TestObserver:
         """No ``MeterProvider`` at all — both shapes of finding must still be
         named in the log rather than disappearing with the metric."""
         with (
-            patch.object(pt_mod, "logger") as mock_logger,
+            _module_log() as records,
             patch.object(
                 pt_mod, "_hold_duration_histogram", side_effect=RuntimeError("no meter")
             ),
@@ -272,5 +303,5 @@ class TestObserver:
                 task_name="extract",
             )
 
-        assert len(mock_logger.info.call_args_list) == 1
-        assert mock_logger.warning.call_args_list
+        assert len(_messages(records, "INFO")) == 1
+        assert _messages(records, "WARNING")

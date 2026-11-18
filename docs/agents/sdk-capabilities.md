@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.58.0
-source-sha:    9fb87168c708438a32e9b967d8e3937796376acf
-source-date:   2026-11-18T01:22:47+05:30
+source-sha:    8986585bd71ce4f401d4222829c767c622a3ad69
+source-date:   2026-11-18T09:05:37+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -5018,7 +5018,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing import PreflightOutcomeCapture`
 - **Signature:** `class PreflightOutcomeCapture()`
-- **Summary:** A stand-in for the gate's logger that keeps the rows it was handed.
+- **Summary:** The outcome rows a test captured, with the level each arrived at.
 - **Defined in:** `application_sdk/testing/preflight.py`
 
 #### `Present`
@@ -5762,7 +5762,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing import capture_preflight_outcomes`
 - **Signature:** `capture_preflight_outcomes(monkeypatch: pytest.MonkeyPatch)`
-- **Summary:** Patch the gate's logger with a :class:`PreflightOutcomeCapture` and yield it.
+- **Summary:** Capture the gate's outcome rows from the real log sink and yield them.
 - **Defined in:** `application_sdk/testing/preflight.py`
 
 #### `check_no_stale_pollers`
