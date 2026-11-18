@@ -6,6 +6,18 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.39.0] - 2026-11-18
+
+### Features
+
+- e2eOverrides on single-entrypoint apps + connectionType/connectionCategory (FND-1643) (#4938) ([f9a967e](https://github.com/atlanhq/application-sdk/commit/f9a967e))
+- add pyatlan's missing connector types and check Connectors.pkl against pyatlan [FND-4933] (#4946) ([a5b4b7b](https://github.com/atlanhq/application-sdk/commit/a5b4b7b))
+
+### Bug fixes
+
+- stop claiming system caller nodes are synced into src/system/ [FND-4936] (#4945) ([d5f3512](https://github.com/atlanhq/application-sdk/commit/d5f3512))
+- guard the e2e and artifact names App.pkl copies from the SDK [FND-4934] (#4937) ([b3ba0dd](https://github.com/atlanhq/application-sdk/commit/b3ba0dd))
+
 ## [0.38.1] - 2026-11-17
 
 ### Bug fixes
