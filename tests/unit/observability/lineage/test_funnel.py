@@ -79,3 +79,26 @@ def test_settle_with_only_not_expected_refs_expects_no_lineage():
 def test_settle_still_waits_for_unreported_refs():
     pending = Assessment(Verdict.PENDING)
     assert settle(pending, [RefOutcome.NOT_EXPECTED, None]).verdict is Verdict.PENDING
+
+
+def test_settle_names_a_type_filtered_miss_when_every_miss_is_one():
+    from application_sdk.observability.lineage import UpstreamTypeNotRequested
+
+    pending = Assessment(Verdict.PENDING)
+    settled = settle(pending, [RefOutcome.TYPE_NOT_REQUESTED])
+    assert (settled.verdict, settled.reason) == (
+        Verdict.MISSING,
+        UpstreamTypeNotRequested,
+    )
+    assert settled.gap.value == "PROCESSING"
+    partial = settle(pending, [RefOutcome.MATCHED, RefOutcome.TYPE_NOT_REQUESTED])
+    assert (partial.verdict, partial.reason) == (
+        Verdict.INVALID,
+        UpstreamTypeNotRequested,
+    )
+
+
+def test_a_plain_miss_outranks_a_type_filtered_one():
+    pending = Assessment(Verdict.PENDING)
+    settled = settle(pending, [RefOutcome.MISSED, RefOutcome.TYPE_NOT_REQUESTED])
+    assert (settled.verdict, settled.reason) == (Verdict.MISSING, UpstreamNotInAtlan)

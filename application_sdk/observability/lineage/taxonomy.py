@@ -304,6 +304,19 @@ class UpstreamAmbiguous(CacheMiss):
     description = "The asset lookup matched more than one asset and picked one"
 
 
+class UpstreamTypeNotRequested(CacheMiss):
+    code = "UPSTREAM_TYPE_NOT_REQUESTED"
+    gap = GapCategory.PROCESSING
+    description = (
+        "The upstream is in Atlan, but under an asset type the ref did not ask the "
+        "lookup for (its matchTypeNames), so the lookup dropped it"
+    )
+    customer_message = (
+        "The upstream is in Atlan, but the connector looked it up as the wrong "
+        "kind of asset. This needs a connector fix; crawling won't help."
+    )
+
+
 SDK_REASONS: tuple[type[LineageReason], ...] = (
     ParserFailure,
     AssetNotFound,
@@ -329,6 +342,7 @@ SDK_REASONS: tuple[type[LineageReason], ...] = (
     GenericConnectionType,
     UpstreamNotInAtlan,
     UpstreamAmbiguous,
+    UpstreamTypeNotRequested,
 )
 """Every reason the SDK ships, leaves first."""
 

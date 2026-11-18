@@ -21,6 +21,7 @@ from application_sdk.observability.lineage.taxonomy import (
     UninstrumentedPath,
     UpstreamAmbiguous,
     UpstreamNotInAtlan,
+    UpstreamTypeNotRequested,
     Verdict,
 )
 
@@ -45,6 +46,9 @@ class RefOutcome(StrEnum):
     NOT_EXPECTED = "NOT_EXPECTED"
     """The producer marked the ref as not expected to resolve (a file source,
     say). The lookup may still report it as missed; settle ignores it."""
+    TYPE_NOT_REQUESTED = "TYPE_NOT_REQUESTED"
+    """A miss whose asset is in Atlan under a type the ref did not request
+    (JoeStar: filtered_by_type). Counts as missed; the fix is the app's type list."""
 
 
 @dataclass(frozen=True)
@@ -103,7 +107,9 @@ def settle(assessment: Assessment, outcomes: Sequence[RefOutcome | None]) -> Ass
     An asset stays PENDING until every ref it emitted has an outcome (``None``
     means not reported yet). Anything that is not PENDING is returned as is.
     Refs marked ``NOT_EXPECTED`` don't count; an asset whose refs are all
-    ``NOT_EXPECTED`` expects no lineage.
+    ``NOT_EXPECTED`` expects no lineage. A miss whose asset exists under a type
+    the ref didn't request (``TYPE_NOT_REQUESTED``) is reported as such only when
+    every miss is one; any plain miss reports the upstream as not in Atlan.
     """
     if assessment.verdict is not Verdict.PENDING or not outcomes:
         return assessment
@@ -116,10 +122,14 @@ def settle(assessment: Assessment, outcomes: Sequence[RefOutcome | None]) -> Ass
         return Assessment(Verdict.VALID_NONE, NonSqlSource, basis="lookup")
     counts = Counter(outcomes)
     matched = counts[RefOutcome.MATCHED] + counts[RefOutcome.AMBIGUOUS]
+    missed = counts[RefOutcome.MISSED] + counts[RefOutcome.TYPE_NOT_REQUESTED]
+    miss_reason = (
+        UpstreamNotInAtlan if counts[RefOutcome.MISSED] else UpstreamTypeNotRequested
+    )
     if matched == 0:
-        return Assessment(Verdict.MISSING, UpstreamNotInAtlan, basis="lookup")
-    if counts[RefOutcome.MISSED]:
-        return Assessment(Verdict.INVALID, UpstreamNotInAtlan, basis="lookup")
+        return Assessment(Verdict.MISSING, miss_reason, basis="lookup")
+    if missed:
+        return Assessment(Verdict.INVALID, miss_reason, basis="lookup")
     if counts[RefOutcome.AMBIGUOUS]:
         return Assessment(Verdict.INVALID, UpstreamAmbiguous, basis="lookup")
     if assessment.reason is not None:

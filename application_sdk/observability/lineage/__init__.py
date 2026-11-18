@@ -47,6 +47,7 @@ from application_sdk.observability.lineage.taxonomy import (
     UpstreamIdentityTooSparse,
     UpstreamNotInAtlan,
     UpstreamTableNameMissing,
+    UpstreamTypeNotRequested,
     Verdict,
 )
 
@@ -85,6 +86,7 @@ __all__ = [
     "UpstreamIdentityTooSparse",
     "UpstreamNotInAtlan",
     "UpstreamTableNameMissing",
+    "UpstreamTypeNotRequested",
     "Verdict",
     "assess",
     "components_hash",
