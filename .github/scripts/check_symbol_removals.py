@@ -363,10 +363,29 @@ def _module_getattr(tree: ast.Module) -> ast.AST | None:
             and any(
                 isinstance(t, ast.Name) and t.id == "__getattr__" for t in node.targets
             )
-            and isinstance(node.value, ast.Call)
+            and _is_getattr_factory(node.value)
         ):
             return node.value
     return None
+
+
+def _is_getattr_factory(node: ast.expr) -> bool:
+    """``deprecated_module_getattr(...)`` or ``_deprecation.deprecated_module_getattr(...)``.
+
+    Only the shared factory is known to serve the table it is handed; any other
+    callable assigned to ``__getattr__`` might raise for every name.
+    """
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    name = (
+        func.id
+        if isinstance(func, ast.Name)
+        else func.attr
+        if isinstance(func, ast.Attribute)
+        else None
+    )
+    return name == "deprecated_module_getattr"
 
 
 def _alias_names(tree: ast.Module) -> set[str]:

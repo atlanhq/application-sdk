@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 import warnings
 from collections.abc import Callable, Collection
 
@@ -59,6 +60,9 @@ def _raw(key: str) -> str | None:
 #: Default-path messages from before :func:`set_log_sink` ran, oldest first.
 _pending: list[str] = []
 _log_sink: Reporter | None = None
+#: Held while reading the sink and holding a message, and while installing the
+#: sink and draining, so a message held during installation is still drained.
+_sink_lock = threading.Lock()
 
 
 def set_log_sink(sink: Reporter) -> None:
@@ -68,16 +72,21 @@ def set_log_sink(sink: Reporter) -> None:
     value read while ``constants`` was importing still reaches the logs.
     """
     global _log_sink
-    _log_sink = sink
-    while _pending:
-        sink(_pending.pop(0))
+    with _sink_lock:
+        _log_sink = sink
+        held = list(_pending)
+        _pending.clear()
+    for message in held:
+        sink(message)
 
 
 def _to_log(message: str) -> None:
-    if _log_sink is None:
-        _pending.append(message)
-    else:
-        _log_sink(message)
+    with _sink_lock:
+        sink = _log_sink
+        if sink is None:
+            _pending.append(message)
+            return
+    sink(message)
 
 
 def warn_rejected(message: str, category: type[Warning] = RuntimeWarning) -> None:

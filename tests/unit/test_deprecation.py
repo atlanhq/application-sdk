@@ -157,6 +157,29 @@ class TestModuleGetattr:
         with pytest.raises(ValueError, match="major.minor.patch"):
             deprecated_module_getattr("example_mod", {}, remove_in="4.0")
 
+    def test_a_missing_dependency_of_the_replacement_is_not_hidden(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The replacement module exists but imports a package that does not:
+        # that error must surface, not turn into an AttributeError on a
+        # shorter prefix.
+        (tmp_path / "fnd4300_pkg").mkdir()
+        (tmp_path / "fnd4300_pkg" / "__init__.py").write_text("")
+        (tmp_path / "fnd4300_pkg" / "mod.py").write_text(
+            "import fnd4300_absent_dependency\nVALUE = 1\n"
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+        module = _module_with(
+            deprecated_module_getattr(
+                "example_mod",
+                {"OLD": ("fnd4300_pkg.mod.VALUE", "moved")},
+                remove_in="4.0.0",
+            )
+        )
+        with pytest.warns(DeprecationWarning):
+            with pytest.raises(ModuleNotFoundError, match="fnd4300_absent_dependency"):
+                module.OLD
+
     def test_lazy_resolver_imports_on_access(self) -> None:
         resolve = lazy_resolver({"Path": ("pathlib", "Path")})
         assert resolve("Path") is Path
@@ -248,6 +271,21 @@ class TestEnvRejectionsReachTheLogger:
         assert record[0].filename == __file__
         assert logged == ["BAD=1 is not valid"]
 
+    def test_a_sink_that_reports_a_rejection_itself_does_not_deadlock(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        logged: list[str] = []
+        monkeypatch.setattr(_env, "_pending", ["held"])
+        monkeypatch.setattr(_env, "_log_sink", None)
+
+        def sink(message: str) -> None:
+            logged.append(message)
+            if message == "held":
+                _env._to_log("raised while draining")
+
+        _env.set_log_sink(sink)
+        assert logged == ["held", "raised while draining"]
+
     def test_the_sdk_logger_installs_the_sink(self) -> None:
         import application_sdk.observability.logger_adaptor  # noqa: F401 — import is the act under test
 
@@ -258,3 +296,25 @@ def test_deprecated_is_the_pep_702_decorator() -> None:
     from typing_extensions import deprecated
 
     assert _deprecation.deprecated is deprecated
+
+
+class TestLegacyRetryErrors:
+    """The deprecated ``app`` error classes warn when raised, never when subclassed."""
+
+    @pytest.mark.parametrize("name", ["NonRetryableError", "RetryableError"])
+    def test_defining_a_subclass_does_not_warn(self, name: str) -> None:
+        from application_sdk.app import base
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            type("AppSpecific", (getattr(base, name),), {})
+
+    @pytest.mark.parametrize("name", ["NonRetryableError", "RetryableError"])
+    def test_raising_one_warns_once_naming_the_class(self, name: str) -> None:
+        from application_sdk.app import base
+
+        with pytest.warns(DeprecationWarning) as record:
+            error = getattr(base, name)("boom", app_name="demo")
+        assert [str(w.message).split(" ")[0] for w in record] == [name]
+        assert record[0].filename == __file__
+        assert error.message == "boom"

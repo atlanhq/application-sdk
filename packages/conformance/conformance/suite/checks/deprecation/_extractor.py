@@ -505,7 +505,12 @@ def _warn_notice(
     if _is_member_notice_lookup(first):
         return None
     if isinstance(first, ast.Name):
-        message = message or bindings.get((first.id, node.lineno), "")
+        # A name the function writes is read from that write; otherwise it is a
+        # module-level constant, or unreadable.
+        key = (first.id, node.lineno)
+        message = message or (
+            bindings[key] if key in bindings else constants.get(first.id, "")
+        )
     elif isinstance(first, ast.JoinedStr):
         message = _render(first, constants)
     return _notice(message, "warn", node.lineno)
@@ -595,6 +600,39 @@ def _render(node: ast.expr | None, constants: dict[str, str]) -> str:
     return "".join(parts)
 
 
+def _own_scope(function: ast.FunctionDef | ast.AsyncFunctionDef):
+    """The nodes of *function*'s body, not descending into nested scopes."""
+    pending = list(ast.iter_child_nodes(function))
+    while pending:
+        node = pending.pop()
+        yield node
+        if not isinstance(
+            node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda | ast.ClassDef
+        ):
+            pending.extend(ast.iter_child_nodes(node))
+
+
+def _bound_names(node: ast.AST) -> list[tuple[str, ast.expr | None]]:
+    """``(name, value)`` for each plain name *node* writes; value ``None`` if unknown."""
+    if isinstance(node, ast.Assign):
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            return [(node.targets[0].id, node.value)]
+        return [
+            (n.id, None)
+            for t in node.targets
+            for n in ast.walk(t)
+            if isinstance(n, ast.Name)
+        ]
+    if isinstance(node, ast.AnnAssign | ast.AugAssign) and isinstance(
+        node.target, ast.Name
+    ):
+        value = node.value if isinstance(node, ast.AnnAssign) else None
+        return [(node.target.id, value)]
+    if isinstance(node, ast.NamedExpr):
+        return [(node.target.id, node.value)]
+    return []
+
+
 def _local_string_bindings(
     tree: ast.Module, constants: dict[str, str]
 ) -> dict[tuple[str, int], str]:
@@ -602,9 +640,11 @@ def _local_string_bindings(
 
     ``message = (f"…"); warnings.warn(message, DeprecationWarning)`` is a common
     shape when the same text also goes to a logger. For each such call, the
-    nearest assignment of that name above it in the same function is the
-    notice. Only a plain ``name = <string or f-string>`` counts; anything else
-    stays unreadable.
+    nearest write of that name above it in the same function is the notice:
+    a plain ``name = <string or f-string>`` gives its text, and any other write
+    gives ``""`` (unreadable), so an earlier literal is never reused. Writes in
+    nested functions or classes are another scope and do not count. A name the
+    function never writes is absent, for the caller to look up at module level.
     """
     out: dict[tuple[str, int], str] = {}
     for func in ast.walk(tree):
@@ -612,18 +652,11 @@ def _local_string_bindings(
             continue
         assigned: dict[str, list[tuple[int, str]]] = {}
         calls: list[tuple[str, int]] = []
-        for node in ast.walk(func):
+        for node in _own_scope(func):
+            for name, value in _bound_names(node):
+                text = _render(value, constants) if value is not None else ""
+                assigned.setdefault(name, []).append((getattr(node, "lineno", 0), text))
             if (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-            ):
-                text = _render(node.value, constants)
-                if text:
-                    assigned.setdefault(node.targets[0].id, []).append(
-                        (node.lineno, text)
-                    )
-            elif (
                 isinstance(node, ast.Call)
                 and node.args
                 and isinstance(node.args[0], ast.Name)

@@ -183,6 +183,16 @@ def test_factory_built_getattr_alias_clears_the_finding():
     assert mod.compare(base, head) == []
 
 
+def test_an_unrelated_callable_assigned_to_getattr_serves_no_alias():
+    """Only the shared factory is known to serve its table."""
+    base = snap("OLD = 1")
+    head = snap(
+        "_DEPRECATED_CONSTANTS = {'OLD': ('NEW', 'moved')}\n"
+        "__getattr__ = make_getter()\n"
+    )
+    assert blocking(mod.compare(base, head)) == {"application_sdk.thing:OLD"}
+
+
 def test_factory_fallback_helper_serves_its_allowlist():
     """A factory getter handed `fallback=_lazy` serves what `_lazy` reads."""
     base = snap("from application_sdk.thing.service import create_service")

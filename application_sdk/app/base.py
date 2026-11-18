@@ -635,16 +635,28 @@ class NonRetryableError(AppError):
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_NON_RETRYABLE
     default_retryable: ClassVar[bool] = False
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        # Raising the class already warns through AppError.__init__; subclassing
-        # it is the other documented use, and the one this marker reaches.
+    def __init__(
+        self,
+        message: str,
+        *,
+        app_name: str | None = None,
+        run_id: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        # Warns when an error is raised, not when a subclass is defined, so
+        # importing an app that subclasses this never warns. Replaces the
+        # generic AppError notice with one naming this class.
         _deprecation.warn_deprecated(
             "NonRetryableError",
             "a typed application_sdk.errors.AppError subclass with "
             "default_retryable = False",
             "4.0.0",
         )
-        super().__init_subclass__(**kwargs)
+        _NewAppError.__init__(
+            self, message=message, cause=cause, app_name=app_name, run_id=run_id
+        )
+        self._legacy_error_code = error_code
 
 
 class RetryableError(AppError):
@@ -679,16 +691,28 @@ class RetryableError(AppError):
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
     default_retryable: ClassVar[bool] = True
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        # Raising the class already warns through AppError.__init__; subclassing
-        # it is the other documented use, and the one this marker reaches.
+    def __init__(
+        self,
+        message: str,
+        *,
+        app_name: str | None = None,
+        run_id: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        # Warns when an error is raised, not when a subclass is defined, so
+        # importing an app that subclasses this never warns. Replaces the
+        # generic AppError notice with one naming this class.
         _deprecation.warn_deprecated(
             "RetryableError",
             "a typed application_sdk.errors.AppError subclass with "
             "default_retryable = True",
             "4.0.0",
         )
-        super().__init_subclass__(**kwargs)
+        _NewAppError.__init__(
+            self, message=message, cause=cause, app_name=app_name, run_id=run_id
+        )
+        self._legacy_error_code = error_code
 
 
 # =============================================================================

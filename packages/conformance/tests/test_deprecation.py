@@ -2397,3 +2397,49 @@ def test_b004_still_fires_on_a_top_level_directive() -> None:
 def test_b002_and_b004_block() -> None:
     assert get_rule("B002").tier is EnforcementTier.BLOCK
     assert get_rule("B004").tier is EnforcementTier.BLOCK
+
+
+def test_a_later_unreadable_write_hides_an_earlier_literal() -> None:
+    src = (
+        "import warnings\n"
+        "def f():\n"
+        "    message = 'old() is deprecated; use new() — removed in v9.0.0.'\n"
+        "    message = build_notice()\n"
+        "    warnings.warn(message, DeprecationWarning)\n"
+    )
+    assert _authoring_ids(src) == ["B002"]
+
+
+def test_a_nested_scopes_binding_does_not_feed_the_outer_warning() -> None:
+    src = (
+        "import warnings\n"
+        "def f():\n"
+        "    def helper():\n"
+        "        message = 'old() is deprecated; use new() — removed in v9.0.0.'\n"
+        "        return message\n"
+        "    warnings.warn(message, DeprecationWarning)\n"
+    )
+    assert _authoring_ids(src) == ["B002"]
+
+
+def test_a_module_level_notice_constant_is_read() -> None:
+    src = (
+        "import warnings\n"
+        "NOTICE = 'Old is deprecated; use New. Will be removed in v9.0.0.'\n"
+        "def f():\n"
+        "    warnings.warn(NOTICE, DeprecationWarning)\n"
+    )
+    (read,) = extract_notices(ast.parse(src))
+    assert read.removal_version_raw == "9.0.0"
+    assert _authoring_ids(src) == []
+
+
+def test_a_local_write_shadows_the_module_constant() -> None:
+    src = (
+        "import warnings\n"
+        "NOTICE = 'Old is deprecated; use New. Will be removed in v9.0.0.'\n"
+        "def f():\n"
+        "    NOTICE = compute()\n"
+        "    warnings.warn(NOTICE, DeprecationWarning)\n"
+    )
+    assert _authoring_ids(src) == ["B002"]

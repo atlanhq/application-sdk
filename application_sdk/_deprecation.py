@@ -109,9 +109,17 @@ def _import_dotted(path: str) -> object:
     """Resolve ``package.module.Attr[.attr]`` by importing the longest module prefix."""
     parts = path.split(".")
     for split in range(len(parts) - 1, 0, -1):
+        candidate = ".".join(parts[:split])
         try:
-            target: object = importlib.import_module(".".join(parts[:split]))
-        except ModuleNotFoundError:
+            target: object = importlib.import_module(candidate)
+        except ModuleNotFoundError as exc:
+            # Only the candidate (or a package above it) being absent means
+            # "try a shorter prefix"; a missing dependency of a module that
+            # exists is the real error.
+            if exc.name is None or not (
+                candidate == exc.name or candidate.startswith(exc.name + ".")
+            ):
+                raise
             continue
         for attr in parts[split:]:
             target = getattr(target, attr)
