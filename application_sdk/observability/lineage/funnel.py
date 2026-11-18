@@ -50,7 +50,8 @@ def funnel_bucket(assessment: Assessment) -> str | None:
     - VALID_NONE (lineage not expected by design) is a product expectation.
     - A lookup miss that left some upstreams in place (INVALID) has no bucket:
       the funnel's lookup bucket means *no* source table resolved.
-    - A reason may override its category's bucket with a ``funnel`` ClassVar.
+    - A reason may override its category's bucket with a ``funnel`` ClassVar;
+      ``""`` means no bucket.
     """
     verdict = assessment.verdict
     if verdict in (Verdict.VALID, Verdict.PENDING):
@@ -62,7 +63,7 @@ def funnel_bucket(assessment: Assessment) -> str | None:
         return None
     override = getattr(reason, "funnel", None)
     if override is not None:
-        return override
+        return override or None
     bucket = FUNNEL_BY_CATEGORY.get(reason.category)
     if bucket == LOOKUP_ALL_SOURCES and verdict is Verdict.INVALID:
         return None

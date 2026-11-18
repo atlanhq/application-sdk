@@ -115,7 +115,8 @@ class LineageReason:
     description: ClassVar[str] = ""
     customer_message: ClassVar[str | None] = None
     funnel: ClassVar[str | None] = None
-    """Overrides the category's lineage-funnel bucket (see ``funnel.py``)."""
+    """Overrides the category's lineage-funnel bucket (see ``funnel.py``);
+    ``""`` means no bucket."""
 
     def __new__(cls, *args: object, **kwargs: object) -> LineageReason:
         raise TypeError(
@@ -322,6 +323,88 @@ class UpstreamTypeNotRequested(CacheMiss):
     )
 
 
+# ── Sub-reasons for BI-internal lineage (dataset -> report -> page, view ->
+# explore -> tile -> dashboard, and their fields). Designed across Tableau,
+# Power BI and Looker; each names a failure all three can hit.
+
+
+class BiDefinitionUnavailable(MissingMetadata):
+    code = "BI_DEFINITION_UNAVAILABLE"
+    description = (
+        "The source didn't return the definition this lineage is built from "
+        "(a report definition, a LookML project)"
+    )
+    customer_message = (
+        "Atlan couldn't read the definition this asset's lineage comes from. Check "
+        "the crawler can read the report or project definitions."
+    )
+
+
+class BiUpstreamNotExtracted(AssetNotFound):
+    code = "BI_UPSTREAM_NOT_EXTRACTED"
+    description = (
+        "The BI asset this one is built from (a dataset, model, explore, worksheet "
+        "or dashboard) is not in this run's extract"
+    )
+    customer_message = (
+        "The asset this one is built from wasn't extracted in this run. Check the "
+        "crawler user can see it."
+    )
+
+
+class BiUpstreamExcludedByFilter(ConnectorLimitation):
+    code = "BI_UPSTREAM_EXCLUDED_BY_FILTER"
+    expected = True
+    description = "The asset this one is built from is outside the workflow's filters"
+    customer_message = (
+        "The asset this one is built from is excluded by this workflow's filters, "
+        "so the link to it isn't built."
+    )
+
+
+class LineageDisabledBySetting(ConnectorLimitation):
+    code = "LINEAGE_DISABLED_BY_SETTING"
+    expected = True
+    description = (
+        "A workflow setting or missing optional credential turns this lineage off"
+    )
+    customer_message = "This lineage is turned off by the workflow's configuration."
+
+
+class BiReferenceUnresolved(ProcessMappingFailure):
+    code = "BI_REFERENCE_UNRESOLVED"
+    description = (
+        "A reference by name inside the BI model (a field, view or explore) matched "
+        "nothing in this run"
+    )
+
+
+class BiReferenceAmbiguous(ProcessMappingFailure):
+    code = "BI_REFERENCE_AMBIGUOUS"
+    funnel = ""  # no bucket: the edge exists, it may point at the wrong asset
+    description = (
+        "A reference by name matched more than one asset and the app picked one, "
+        "so the edge may point at the wrong asset"
+    )
+
+
+class TemplatedSqlUnresolved(UnsupportedSourceFeature):
+    code = "TEMPLATED_SQL_UNRESOLVED"
+    description = (
+        "The SQL uses template syntax (Liquid, Jinja, parameters) the app can't "
+        "render, so it wasn't parsed"
+    )
+    customer_message = (
+        "This asset's SQL uses templating Atlan can't evaluate, so its tables "
+        "couldn't be read."
+    )
+
+
+class EdgeBuildFailed(ProcessMappingFailure):
+    code = "EDGE_BUILD_FAILED"
+    description = "Building this asset's lineage raised an error; the app skipped it"
+
+
 SDK_REASONS: tuple[type[LineageReason], ...] = (
     ParserFailure,
     AssetNotFound,
@@ -348,6 +431,14 @@ SDK_REASONS: tuple[type[LineageReason], ...] = (
     UpstreamNotInAtlan,
     UpstreamAmbiguous,
     UpstreamTypeNotRequested,
+    BiDefinitionUnavailable,
+    BiUpstreamNotExtracted,
+    BiUpstreamExcludedByFilter,
+    LineageDisabledBySetting,
+    BiReferenceUnresolved,
+    BiReferenceAmbiguous,
+    TemplatedSqlUnresolved,
+    EdgeBuildFailed,
 )
 """Every reason the SDK ships: the generic reasons first, then the sub-reasons."""
 

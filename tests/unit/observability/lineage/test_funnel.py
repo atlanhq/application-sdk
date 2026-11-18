@@ -10,14 +10,26 @@ from application_sdk.observability.lineage.funnel import (
     EXPECTATION_MISMATCH,
     FUNNEL_BY_CATEGORY,
     LOOKUP_ALL_SOURCES,
+    NOT_EXTRACTED,
     PARSE_ERROR,
     PARTIAL_PARSE,
+    PROCESS_NOT_CREATED,
+    SOURCE_SPECIFIC,
     funnel_bucket,
 )
 from application_sdk.observability.lineage.taxonomy import (
+    BiDefinitionUnavailable,
+    BiReferenceAmbiguous,
+    BiReferenceUnresolved,
+    BiUpstreamExcludedByFilter,
+    BiUpstreamNotExtracted,
     CustomSqlParserFailure,
+    EdgeBuildFailed,
+    GapCategory,
+    LineageDisabledBySetting,
     NonSqlSource,
     ReasonCategory,
+    TemplatedSqlUnresolved,
     UpstreamNotInAtlan,
 )
 
@@ -61,6 +73,34 @@ def test_reason_can_override_its_category_bucket():
     assert (
         funnel_bucket(Assessment(Verdict.INVALID, SomeQueriesNotParsed))
         == PARTIAL_PARSE
+    )
+
+
+def test_an_empty_override_means_no_bucket():
+    class AppViewPickAmbiguous(BiReferenceAmbiguous):
+        code = "TEST_VIEW_PICK_AMBIGUOUS"
+
+    assert funnel_bucket(Assessment(Verdict.INVALID, BiReferenceAmbiguous)) is None
+    assert funnel_bucket(Assessment(Verdict.INVALID, AppViewPickAmbiguous)) is None
+
+
+def test_bi_internal_sub_reasons():
+    assert BiUpstreamExcludedByFilter.verdict() is Verdict.VALID_NONE
+    assert LineageDisabledBySetting.verdict() is Verdict.VALID_NONE
+    assert BiUpstreamNotExtracted.gap is GapCategory.SOURCE
+    assert BiDefinitionUnavailable.gap is GapCategory.SOURCE
+    assert BiReferenceUnresolved.gap is GapCategory.PROCESSING
+    assert (
+        funnel_bucket(Assessment(Verdict.MISSING, BiUpstreamNotExtracted))
+        == NOT_EXTRACTED
+    )
+    assert (
+        funnel_bucket(Assessment(Verdict.MISSING, EdgeBuildFailed))
+        == PROCESS_NOT_CREATED
+    )
+    assert (
+        funnel_bucket(Assessment(Verdict.MISSING, TemplatedSqlUnresolved))
+        == SOURCE_SPECIFIC
     )
 
 

@@ -30,7 +30,7 @@ subclass them.
 | `GapCategory` | SDK, closed | `SOURCE` (the source gave too little), `PROCESSING` (the app couldn't build it), `ASSET_RESOLUTION` (the lookup couldn't match a ref) |
 | `Verdict` | SDK, closed | `VALID`, `INVALID` (partial or possibly wrong), `MISSING`, `VALID_NONE` (none expected), `PENDING` (waiting on the lookup) |
 | Generic reasons | SDK | One `LineageReason` per `ReasonCategory` (`ParserFailure`, `CacheMiss`, and so on) |
-| Sub-reasons | SDK | 13 connector-agnostic refinements of a generic reason: custom SQL parse failures, non-SQL source, generic connection type, upstream not in Atlan, upstream under a type the ref didn't request, and others |
+| Sub-reasons | SDK | 21 connector-agnostic refinements of a generic reason. 13 for source lineage: custom SQL parse failures, non-SQL source, generic connection type, upstream not in Atlan, upstream under a type the ref didn't request, and others. 8 for BI-internal lineage (see below) |
 | App reasons | App | Subclasses of a generic reason or a sub-reason, each with its own `code` |
 
 A reason is a class with ClassVars: `code`, `category`, `gap`, `expected`, `description` and
@@ -42,6 +42,27 @@ subclassing it, to give it the app's own customer wording. Its category can't ch
 port needed this for 5 codes. `ReasonRegistry` maps a code string back to its class, for rows
 read back and for call sites that still pass strings. An unknown code resolves to
 `UNINSTRUMENTED_PATH`, with one warning per code, so a typo is never counted as covered.
+
+BI-internal lineage (dataset to report to page, view to explore to tile to dashboard, and their
+fields) fails the same few ways in every BI app, so its sub-reasons were designed from three apps
+at once: Tableau's existing codes, Power BI's uninstrumented report and page stages, and Looker,
+which records nothing for lineage today.
+
+| Sub-reason | Under | Verdict | Tableau | Power BI | Looker |
+| --- | --- | --- | --- | --- | --- |
+| `BI_UPSTREAM_NOT_EXTRACTED` | `ASSET_NOT_FOUND` | MISSING | 7 codes (dashboard's worksheet or datasource not found) | upstream dataset not crawled | a look or tile whose explore isn't in the run |
+| `BI_UPSTREAM_EXCLUDED_BY_FILTER` | `CONNECTOR_LIMITATION` | VALID_NONE | project filters | workspace filters | project include filter |
+| `LINEAGE_DISABLED_BY_SETTING` | `CONNECTOR_LIMITATION` | VALID_NONE | 2 flag codes | admin-only mode | no git credentials turns field lineage off |
+| `BI_DEFINITION_UNAVAILABLE` | `MISSING_METADATA` | MISSING | | report definition not returned | LookML project not cloned |
+| `BI_REFERENCE_UNRESOLVED` | `PROCESS_MAPPING_FAILURE` | MISSING | source field not found | field not in the model | explore field's view not matched |
+| `BI_REFERENCE_AMBIGUOUS` | `PROCESS_MAPPING_FAILURE` | INVALID, no funnel bucket | | | several views match the field's view name |
+| `TEMPLATED_SQL_UNRESOLVED` | `UNSUPPORTED_SOURCE_FEATURE` | MISSING | | | Liquid in a derived table |
+| `EDGE_BUILD_FAILED` | `PROCESS_MAPPING_FAILURE` | MISSING | | report-definition step raised | explore with several parent explores |
+
+`BI_REFERENCE_UNRESOLVED` and `BI_REFERENCE_AMBIGUOUS` are processing gaps: the app holds the whole
+extract, so a name it can't resolve, or resolves several ways, is its own matching until shown
+otherwise. An ambiguous pick that differs between runs is how lineage flips run to run; the row
+names it on every run, whichever asset was picked.
 
 ### Verdicts
 
@@ -229,7 +250,8 @@ can restate an SDK reason under its code to keep its own wording (5 Tableau code
    settle them per field. For now fields settle from their parent's outcome: the parent is the
    unit people act on. Per-field settle (keeping the refs, at a memory cost) can come later.
 6. A whole phase failing (Power BI's report-definition step catches one exception for all of it)
-   would surface as `UNINSTRUMENTED_PATH`. A reason for that, or a run-level flag?
+   used to surface as `UNINSTRUMENTED_PATH`. Each asset in it can now carry `EDGE_BUILD_FAILED`.
+   Is a run-level flag also needed?
 7. The funnel mapping names support's Linear labels. Keep it in the SDK, next to the categories it
    must cover (a test enforces that), or move it to the consumer that reads the rows?
 
@@ -237,6 +259,5 @@ can restate an SDK reason under its code to keep its own wording (5 Tableau code
 
 The generic tracker, the artifact writer, the lookup-side outcome export (proven feasible by the
 local replay, not built), and an `adopt-lineage-coverage` skill modelled on `typed-failures`.
-Sub-reasons for BI-internal lineage (report, page, visual and explore fields) come next, designed
-once across Power BI and a third BI app. The Tableau and Power BI ports live on app branches, not
-here.
+The BI-internal sub-reasons are designed and tested here but not yet recorded by an app; Looker is
+the first port. The Tableau and Power BI ports live on app branches, not here.
