@@ -1130,6 +1130,15 @@ def test_restore_runs_only_after_a_failure_with_a_prior_version(jobs: _Jobs) -> 
     assert "steps.install.outputs.previous_version_id != ''" in condition
 
 
+def test_restore_names_the_build_it_rolls_away_from(jobs: _Jobs) -> None:
+    """The pod check needs the build under test, from the same output install used."""
+    step = _restore_step(jobs)
+    assert '--rolled-back-from "$VERSION"' in str(step["run"])
+    assert "'VERSION': '${{ needs.merge-e2e-image.outputs.version }}'" in str(
+        step.get("env")
+    )
+
+
 def test_restore_runs_before_the_summary(jobs: _Jobs) -> None:
     names = [str(s.get("name", "")) for s in _prepare_steps(jobs)]
     assert (
@@ -1145,6 +1154,7 @@ def test_job_timeout_also_covers_the_restore(jobs: _Jobs) -> None:
     restore_waits = (
         app.DEFAULT_RESTORE_INSTALL_RETRY_SECONDS
         + app.DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS
+        + app.DEFAULT_RESTORE_POD_WAIT_SECONDS
     ) // 60
     assert int(str(step["timeout-minutes"])) > restore_waits, (
         "the restore step's own timeout must clear the script's waits"

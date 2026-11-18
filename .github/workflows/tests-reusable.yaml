@@ -2673,12 +2673,14 @@ jobs:
         env:
           PREVIOUS_VERSION: ${{ steps.install.outputs.previous_version }}
           PREVIOUS_VERSION_ID: ${{ steps.install.outputs.previous_version_id }}
+          VERSION: ${{ needs.merge-e2e-image.outputs.version }}
         run: |
           set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/e2e_tenant_app.py restore \
             --base-url "$ATLAN_BASE_URL" \
             --version-id "$PREVIOUS_VERSION_ID" \
-            --expected "$PREVIOUS_VERSION"
+            --expected "$PREVIOUS_VERSION" \
+            --rolled-back-from "$VERSION"
 
       - name: Summarise
         if: always()

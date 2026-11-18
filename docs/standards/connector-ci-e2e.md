@@ -503,7 +503,10 @@ build behind. Before it publishes anything, `e2e_tenant_app.py install` records
 the version the tenant runs (`previous_version`, `previous_version_id`). If any
 later step fails, *Restore the previous version* runs
 `e2e_tenant_app.py restore`. That force-installs the recorded version_id and
-fails unless the tenant's install record names it again. The step is skipped
+fails unless the tenant's install record names it again and the app pod no
+longer reports the build under test. The install record alone is not proof,
+because the install writes it and nothing revisits it. The prior version is
+recorded by UUID even when its version string cannot be read. The step is skipped
 when the app was not installed before, because uninstall is not reliable
 (DISTR-921). It has its own 15-minute timeout on top of the install budget,
 which is why the job allows 65 minutes and the lease TTL is 16800s. The install

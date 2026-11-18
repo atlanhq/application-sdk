@@ -4029,8 +4029,10 @@ def _restore_args(**overrides: object) -> argparse.Namespace:
         "app_id": _APP_ID,
         "version_id": _PREVIOUS_ID,
         "expected": "1.0.0",
+        "rolled_back_from": _VERSION,
         "install_retry_seconds": 0,
         "timeout_seconds": 600,
+        "pod_wait_seconds": 60,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -4133,3 +4135,108 @@ def test_restore_rejects_a_malformed_version_id_before_any_request(
     with pytest.raises(TenantApiError, match="invalid version_id"):
         app.restore(_restore_args(version_id="../../evil"))
     assert transport.calls == []
+
+
+def test_install_records_the_previous_uuid_when_the_version_is_unresolved(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A placeholder version string the catalog cannot resolve still has a UUID.
+
+    The catalog describes a NEWER version, so neither resolver can name the
+    installed one — but the restore installs by UUID, so it must still be
+    recorded, or a later failure leaves the restore step gated off.
+    """
+    out = tmp_path / "out"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok(_info(_PREVIOUS_ID))),
+                StubRoute(
+                    "POST",
+                    "/marketplace/publish",
+                    Response(status=400, body={"detail": "rejected"}),
+                ),
+            ]
+        ),
+    )
+    with pytest.raises((app.TenantAppError, app.PublishBodyError, TenantApiError)):
+        app.install(_install_args(version="9.9.9"))
+
+    written = out.read_text()
+    assert f"previous_version_id={_PREVIOUS_ID}\n" in written
+    assert f"previous_version={app.UNRESOLVED_PREVIOUS_VERSION}\n" in written
+
+
+_POD_ROUTE = f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}"
+
+
+def test_restore_fails_when_the_pod_still_serves_the_build_under_test(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F-67854d: a matching install record is not proof the pod moved."""
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _installed("other-id", _VERSION)),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute("GET", "/deployments/", _ok({"deployment_status": "FAILED"})),
+                StubRoute("GET", "/info", _installed(_PREVIOUS_ID)),
+            ],
+            sticky=[StubRoute("GET", _POD_ROUTE, _pod_identity(_VERSION))],
+        ),
+    )
+    monkeypatch.setattr(app, "_dump_failure", lambda *_a, **_k: None)
+    with pytest.raises(app.TenantAppError, match="still reports build"):
+        app.restore(_restore_args())
+
+
+def test_restore_waits_for_the_old_pod_to_be_replaced(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _installed("other-id", _VERSION)),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _installed(_PREVIOUS_ID)),
+                StubRoute("GET", _POD_ROUTE, _pod_identity(_VERSION)),
+                StubRoute("GET", _POD_ROUTE, _pod_identity("1.0.0")),
+            ],
+        ),
+    )
+    assert app.restore(_restore_args()) == "1.0.0"
+    assert len([p for p in transport.paths("GET") if _POD_ROUTE in p]) == 2
+    assert "verified at the POD layer" in capsys.readouterr().out
+
+
+def test_restore_noop_is_refused_while_the_pod_serves_the_build_under_test(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The entry no-op makes the same record-only assumption, so it asks the pod too."""
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _installed(_PREVIOUS_ID)),
+                StubRoute("GET", _POD_ROUTE, _pod_identity(_VERSION)),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _installed(_PREVIOUS_ID)),
+                StubRoute("GET", _POD_ROUTE, _pod_identity("1.0.0")),
+            ],
+        ),
+    )
+    assert app.restore(_restore_args()) == "1.0.0"
+    assert any("/install" in p for p in transport.paths("POST")), (
+        "a record that already names the prior UUID must not short-circuit while "
+        "the pod still serves the build under test"
+    )
