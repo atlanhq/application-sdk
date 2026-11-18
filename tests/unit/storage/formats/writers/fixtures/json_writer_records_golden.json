@@ -1,0 +1,187 @@
+{
+ "empty_dict": {
+  "chunk_count": 1,
+  "files": {
+   "statistics/statistics.json.ignore": "{\"total_record_count\":0,\"chunk_count\":1,\"partitions\":[1],\"typename\":\"t\"}"
+  },
+  "partitions": [
+   1
+  ],
+  "total_record_count": 0,
+  "uploads": [
+   "chunk-0-part0.json",
+   "statistics/statistics.json.ignore"
+  ]
+ },
+ "int_with_float": {
+  "chunk_count": 1,
+  "files": {
+   "chunk-0-part0.json": "{\"v\":1.0}\n{\"v\":2.5}\n",
+   "statistics/statistics.json.ignore": "{\"total_record_count\":2,\"chunk_count\":1,\"partitions\":[1],\"typename\":\"t\"}"
+  },
+  "partitions": [
+   1
+  ],
+  "total_record_count": 2,
+  "uploads": [
+   "chunk-0-part0.json",
+   "statistics/statistics.json.ignore"
+  ]
+ },
+ "int_with_none": {
+  "chunk_count": 1,
+  "files": {
+   "chunk-0-part0.json": "{\"id\":1,\"n\":3.0}\n{\"id\":2,\"n\":null}\n{\"id\":3,\"n\":null}\n",
+   "statistics/statistics.json.ignore": "{\"total_record_count\":3,\"chunk_count\":1,\"partitions\":[1],\"typename\":\"t\"}"
+  },
+  "partitions": [
+   1
+  ],
+  "total_record_count": 3,
+  "uploads": [
+   "chunk-0-part0.json",
+   "statistics/statistics.json.ignore"
+  ]
+ },
+ "list_of_empty_dicts": {
+  "chunk_count": 2,
+  "files": {
+   "chunk-1-part0.json": "{\"name\":\"a\"}\n",
+   "statistics/statistics.json.ignore": "{\"total_record_count\":1,\"chunk_count\":2,\"partitions\":[0,1],\"typename\":\"t\"}"
+  },
+  "partitions": [
+   0,
+   1
+  ],
+  "total_record_count": 1,
+  "uploads": [
+   "chunk-1-part0.json",
+   "statistics/statistics.json.ignore"
+  ]
+ },
+ "mixed_with_a_dataframe": {
+  "chunk_count": 3,
+  "files": {
+   "chunk-0-part0.json": "{\"typeName\":\"Column\",\"name\":\"col_0\",\"order\":0,\"ratio\":0.0,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_0\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_1\",\"order\":1,\"ratio\":0.14285714285714285,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_1\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_2\",\"order\":2,\"ratio\":0.2857142857142857,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_2\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_3\",\"order\":3,\"ratio\":0.42857142857142855,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_3\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_4\",\"order\":4,\"ratio\":0.5714285714285714,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_4\"},\"tags\":[\"a\",\"b\"]}\n",
+   "chunk-1-part0.json": "{\"typeName\":\"Column\",\"name\":\"col_5\",\"order\":5,\"ratio\":0.7142857142857143,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_5\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_6\",\"order\":6,\"ratio\":0.8571428571428571,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_6\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_7\",\"order\":7,\"ratio\":1.0,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_7\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_8\",\"order\":8,\"ratio\":1.1428571428571428,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_8\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_9\",\"order\":9,\"ratio\":1.2857142857142858,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_9\"},\"tags\":[]}\n",
+   "chunk-2-part0.json": "{\"typeName\":\"Table\",\"name\":\"t_0\",\"description\":\"é 中文 \\\"quoted\\\" / slash\",\"rowCount\":null,\"extra\":{\"k\":0}}\n{\"typeName\":\"Table\",\"name\":\"t_1\",\"description\":null,\"rowCount\":10.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_2\",\"description\":null,\"rowCount\":20.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_3\",\"description\":null,\"rowCount\":30.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_4\",\"description\":\"é 中文 \\\"quoted\\\" / slash\",\"rowCount\":40.0,\"extra\":null}\n",
+   "statistics/statistics.json.ignore": "{\"total_record_count\":15,\"chunk_count\":3,\"partitions\":[1,1,1],\"typename\":\"t\"}"
+  },
+  "partitions": [
+   1,
+   1,
+   1
+  ],
+  "total_record_count": 15,
+  "uploads": [
+   "chunk-0-part0.json",
+   "chunk-1-part0.json",
+   "chunk-2-part0.json",
+   "statistics/statistics.json.ignore"
+  ]
+ },
+ "nan_in_strings": {
+  "chunk_count": 1,
+  "files": {
+   "chunk-0-part0.json": "{\"s\":\"a\"}\n{\"s\":null}\n",
+   "statistics/statistics.json.ignore": "{\"total_record_count\":2,\"chunk_count\":1,\"partitions\":[1],\"typename\":\"t\"}"
+  },
+  "partitions": [
+   1
+  ],
+  "total_record_count": 2,
+  "uploads": [
+   "chunk-0-part0.json",
+   "statistics/statistics.json.ignore"
+  ]
+ },
+ "ragged_keys": {
+  "chunk_count": 1,
+  "files": {
+   "chunk-0-part0.json": "{\"typeName\":\"Table\",\"name\":\"t_0\",\"description\":\"é 中文 \\\"quoted\\\" / slash\",\"rowCount\":null,\"extra\":{\"k\":0}}\n{\"typeName\":\"Table\",\"name\":\"t_1\",\"description\":null,\"rowCount\":10.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_2\",\"description\":null,\"rowCount\":20.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_3\",\"description\":null,\"rowCount\":30.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_4\",\"description\":\"é 中文 \\\"quoted\\\" / slash\",\"rowCount\":40.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_5\",\"description\":null,\"rowCount\":null,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_6\",\"description\":null,\"rowCount\":60.0,\"extra\":{\"k\":6}}\n{\"typeName\":\"Table\",\"name\":\"t_7\",\"description\":null,\"rowCount\":70.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_8\",\"description\":\"é 中文 \\\"quoted\\\" / slash\",\"rowCount\":80.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_9\",\"description\":null,\"rowCount\":90.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_10\",\"description\":null,\"rowCount\":null,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_11\",\"description\":null,\"rowCount\":110.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_12\",\"description\":\"é 中文 \\\"quoted\\\" / slash\",\"rowCount\":120.0,\"extra\":{\"k\":12}}\n{\"typeName\":\"Table\",\"name\":\"t_13\",\"description\":null,\"rowCount\":130.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_14\",\"description\":null,\"rowCount\":140.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_15\",\"description\":null,\"rowCount\":null,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_16\",\"description\":\"é 中文 \\\"quoted\\\" / slash\",\"rowCount\":160.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_17\",\"description\":null,\"rowCount\":170.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_18\",\"description\":null,\"rowCount\":180.0,\"extra\":{\"k\":18}}\n{\"typeName\":\"Table\",\"name\":\"t_19\",\"description\":null,\"rowCount\":190.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_20\",\"description\":\"é 中文 \\\"quoted\\\" / slash\",\"rowCount\":null,\"extra\":null}\n",
+   "chunk-0-part1.json": "{\"typeName\":\"Table\",\"name\":\"t_21\",\"description\":null,\"rowCount\":210.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_22\",\"description\":null,\"rowCount\":220.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_23\",\"description\":null,\"rowCount\":230.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_24\",\"description\":\"é 中文 \\\"quoted\\\" / slash\",\"rowCount\":240.0,\"extra\":{\"k\":24}}\n{\"typeName\":\"Table\",\"name\":\"t_25\",\"description\":null,\"rowCount\":null,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_26\",\"description\":null,\"rowCount\":260.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_27\",\"description\":null,\"rowCount\":270.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_28\",\"description\":\"é 中文 \\\"quoted\\\" / slash\",\"rowCount\":280.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_29\",\"description\":null,\"rowCount\":290.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_30\",\"description\":null,\"rowCount\":null,\"extra\":{\"k\":30}}\n{\"typeName\":\"Table\",\"name\":\"t_31\",\"description\":null,\"rowCount\":310.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_32\",\"description\":\"é 中文 \\\"quoted\\\" / slash\",\"rowCount\":320.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_33\",\"description\":null,\"rowCount\":330.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_34\",\"description\":null,\"rowCount\":340.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_35\",\"description\":null,\"rowCount\":null,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_36\",\"description\":\"é 中文 \\\"quoted\\\" / slash\",\"rowCount\":360.0,\"extra\":{\"k\":36}}\n{\"typeName\":\"Table\",\"name\":\"t_37\",\"description\":null,\"rowCount\":370.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_38\",\"description\":null,\"rowCount\":380.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_39\",\"description\":null,\"rowCount\":390.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_40\",\"description\":\"é 中文 \\\"quoted\\\" / slash\",\"rowCount\":null,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_41\",\"description\":null,\"rowCount\":410.0,\"extra\":null}\n",
+   "chunk-0-part2.json": "{\"typeName\":\"Table\",\"name\":\"t_42\",\"description\":null,\"rowCount\":420.0,\"extra\":{\"k\":42}}\n{\"typeName\":\"Table\",\"name\":\"t_43\",\"description\":null,\"rowCount\":430.0,\"extra\":null}\n{\"typeName\":\"Table\",\"name\":\"t_44\",\"description\":\"é 中文 \\\"quoted\\\" / slash\",\"rowCount\":440.0,\"extra\":null}\n",
+   "statistics/statistics.json.ignore": "{\"total_record_count\":45,\"chunk_count\":1,\"partitions\":[3],\"typename\":\"t\"}"
+  },
+  "partitions": [
+   3
+  ],
+  "total_record_count": 45,
+  "uploads": [
+   "chunk-0-part0.json",
+   "chunk-0-part1.json",
+   "chunk-0-part2.json",
+   "statistics/statistics.json.ignore"
+  ]
+ },
+ "reordered_keys": {
+  "chunk_count": 1,
+  "files": {
+   "chunk-0-part0.json": "{\"b\":1,\"a\":\"x\",\"c\":null}\n{\"b\":2,\"a\":\"y\",\"c\":null}\n{\"b\":3,\"a\":\"z\",\"c\":true}\n",
+   "statistics/statistics.json.ignore": "{\"total_record_count\":3,\"chunk_count\":1,\"partitions\":[1],\"typename\":\"t\"}"
+  },
+  "partitions": [
+   1
+  ],
+  "total_record_count": 3,
+  "uploads": [
+   "chunk-0-part0.json",
+   "statistics/statistics.json.ignore"
+  ]
+ },
+ "single_dict": {
+  "chunk_count": 1,
+  "files": {
+   "chunk-0-part0.json": "{\"typeName\":\"Database\",\"name\":\"db1\"}\n",
+   "statistics/statistics.json.ignore": "{\"total_record_count\":1,\"chunk_count\":1,\"partitions\":[1],\"typename\":\"t\"}"
+  },
+  "partitions": [
+   1
+  ],
+  "total_record_count": 1,
+  "uploads": [
+   "chunk-0-part0.json",
+   "statistics/statistics.json.ignore"
+  ]
+ },
+ "timestamps": {
+  "chunk_count": 1,
+  "files": {
+   "chunk-0-part0.json": "{\"at\":\"2024-01-02 03:04:05\",\"d\":\"2024-01-02\"}\n{\"at\":\"2025-06-07 08:09:10\",\"d\":\"2025-06-07\"}\n",
+   "statistics/statistics.json.ignore": "{\"total_record_count\":2,\"chunk_count\":1,\"partitions\":[1],\"typename\":\"t\"}"
+  },
+  "partitions": [
+   1
+  ],
+  "total_record_count": 2,
+  "uploads": [
+   "chunk-0-part0.json",
+   "statistics/statistics.json.ignore"
+  ]
+ },
+ "uniform_in_three_writes": {
+  "chunk_count": 3,
+  "files": {
+   "chunk-0-part0.json": "{\"typeName\":\"Column\",\"name\":\"col_0\",\"order\":0,\"ratio\":0.0,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_0\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_1\",\"order\":1,\"ratio\":0.14285714285714285,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_1\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_2\",\"order\":2,\"ratio\":0.2857142857142857,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_2\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_3\",\"order\":3,\"ratio\":0.42857142857142855,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_3\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_4\",\"order\":4,\"ratio\":0.5714285714285714,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_4\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_5\",\"order\":5,\"ratio\":0.7142857142857143,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_5\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_6\",\"order\":6,\"ratio\":0.8571428571428571,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_6\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_7\",\"order\":7,\"ratio\":1.0,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_7\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_8\",\"order\":8,\"ratio\":1.1428571428571428,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_8\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_9\",\"order\":9,\"ratio\":1.2857142857142858,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_9\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_10\",\"order\":10,\"ratio\":1.4285714285714286,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_10\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_11\",\"order\":11,\"ratio\":1.5714285714285714,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_11\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_12\",\"order\":12,\"ratio\":1.7142857142857142,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_12\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_13\",\"order\":13,\"ratio\":1.8571428571428572,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_13\"},\"tags\":[\"a\",\"b\"]}\n",
+   "chunk-0-part1.json": "{\"typeName\":\"Column\",\"name\":\"col_14\",\"order\":14,\"ratio\":2.0,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_14\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_15\",\"order\":15,\"ratio\":2.142857142857143,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_15\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_16\",\"order\":16,\"ratio\":2.2857142857142856,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_16\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_17\",\"order\":17,\"ratio\":2.4285714285714284,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_17\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_18\",\"order\":18,\"ratio\":2.5714285714285716,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_18\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_19\",\"order\":19,\"ratio\":2.7142857142857144,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_19\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_20\",\"order\":20,\"ratio\":2.857142857142857,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_20\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_21\",\"order\":21,\"ratio\":3.0,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_21\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_22\",\"order\":22,\"ratio\":3.142857142857143,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_22\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_23\",\"order\":23,\"ratio\":3.2857142857142856,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_23\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_24\",\"order\":24,\"ratio\":3.4285714285714284,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_24\"},\"tags\":[]}\n",
+   "chunk-1-part0.json": "{\"typeName\":\"Column\",\"name\":\"col_25\",\"order\":25,\"ratio\":3.5714285714285716,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_25\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_26\",\"order\":26,\"ratio\":3.7142857142857144,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_26\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_27\",\"order\":27,\"ratio\":3.857142857142857,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_27\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_28\",\"order\":28,\"ratio\":4.0,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_28\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_29\",\"order\":29,\"ratio\":4.142857142857143,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_29\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_30\",\"order\":30,\"ratio\":4.285714285714286,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_30\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_31\",\"order\":31,\"ratio\":4.428571428571429,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_31\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_32\",\"order\":32,\"ratio\":4.571428571428571,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_32\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_33\",\"order\":33,\"ratio\":4.714285714285714,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_33\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_34\",\"order\":34,\"ratio\":4.857142857142857,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_34\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_35\",\"order\":35,\"ratio\":5.0,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_35\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_36\",\"order\":36,\"ratio\":5.142857142857143,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_36\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_37\",\"order\":37,\"ratio\":5.285714285714286,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_37\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_38\",\"order\":38,\"ratio\":5.428571428571429,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_38\"},\"tags\":[\"a\",\"b\"]}\n",
+   "chunk-1-part1.json": "{\"typeName\":\"Column\",\"name\":\"col_39\",\"order\":39,\"ratio\":5.571428571428571,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_39\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_40\",\"order\":40,\"ratio\":5.714285714285714,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_40\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_41\",\"order\":41,\"ratio\":5.857142857142857,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_41\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_42\",\"order\":42,\"ratio\":6.0,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_42\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_43\",\"order\":43,\"ratio\":6.142857142857143,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_43\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_44\",\"order\":44,\"ratio\":6.285714285714286,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_44\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_45\",\"order\":45,\"ratio\":6.428571428571429,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_45\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_46\",\"order\":46,\"ratio\":6.571428571428571,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_46\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_47\",\"order\":47,\"ratio\":6.714285714285714,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_47\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_48\",\"order\":48,\"ratio\":6.857142857142857,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_48\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_49\",\"order\":49,\"ratio\":7.0,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_49\"},\"tags\":[\"a\",\"b\"]}\n",
+   "chunk-2-part0.json": "{\"typeName\":\"Column\",\"name\":\"col_50\",\"order\":50,\"ratio\":7.142857142857143,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_50\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_51\",\"order\":51,\"ratio\":7.285714285714286,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_51\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_52\",\"order\":52,\"ratio\":7.428571428571429,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_52\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_53\",\"order\":53,\"ratio\":7.571428571428571,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_53\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_54\",\"order\":54,\"ratio\":7.714285714285714,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_54\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_55\",\"order\":55,\"ratio\":7.857142857142857,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_55\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_56\",\"order\":56,\"ratio\":8.0,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_56\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_57\",\"order\":57,\"ratio\":8.142857142857142,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_57\"},\"tags\":[]}\n{\"typeName\":\"Column\",\"name\":\"col_58\",\"order\":58,\"ratio\":8.285714285714286,\"isNullable\":false,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_58\"},\"tags\":[\"a\",\"b\"]}\n{\"typeName\":\"Column\",\"name\":\"col_59\",\"order\":59,\"ratio\":8.428571428571429,\"isNullable\":true,\"attributes\":{\"qualifiedName\":\"default/x/1/db/sch/t/col_59\"},\"tags\":[\"a\",\"b\"]}\n",
+   "statistics/statistics.json.ignore": "{\"total_record_count\":60,\"chunk_count\":3,\"partitions\":[2,2,1],\"typename\":\"t\"}"
+  },
+  "partitions": [
+   2,
+   2,
+   1
+  ],
+  "total_record_count": 60,
+  "uploads": [
+   "chunk-0-part0.json",
+   "chunk-0-part1.json",
+   "chunk-1-part0.json",
+   "chunk-1-part1.json",
+   "chunk-2-part0.json",
+   "statistics/statistics.json.ignore"
+  ]
+ }
+}

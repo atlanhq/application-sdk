@@ -1,7 +1,8 @@
 import os
 import warnings
-from collections.abc import AsyncIterator, Generator
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncIterator, Generator, Iterator
+from operator import itemgetter, methodcaller
+from typing import TYPE_CHECKING, Any, Union, cast
 
 import orjson
 
@@ -302,13 +303,152 @@ class JsonFileReader(Reader):
             raise FormatReadError(cause=e) from e
 
 
+def _str_default(obj: object) -> str:
+    """orjson fallback: ``str()`` of a value orjson cannot serialize itself.
+
+    ``pandas.Timestamp`` and similar datetime-likes reach a chunk as dict
+    values, and orjson handles none of them natively.
+    """
+    return str(obj)
+
+
+_NoneType = type(None)
+#: Value types a pandas object column holds as the very objects it was given,
+#: so ``to_dict`` returns them unchanged, alone or mixed. ``int`` and ``float``
+#: are not here: pandas widens an int column holding a ``None`` or a float to
+#: float64 (``3`` is written as ``3.0``), so each is only safe on its own.
+_UNCHANGED_OBJECT_TYPES = frozenset({str, bool, dict, list, _NoneType})
+_INT64_MIN = -(2**63)
+_INT64_MAX = 2**63 - 1
+
+
+def _column_round_trips(records: list[dict[str, Any]], key: str, present: bool) -> bool:
+    """Whether pandas returns column *key* of *records* exactly as given.
+
+    *present* says every record has *key*. A missing key reads as ``None``
+    here: pandas fills it with NaN and both serialize as ``null``.
+    """
+    values = map(itemgetter(key) if present else methodcaller("get", key), records)
+    types = set(map(type, values))
+    if types <= _UNCHANGED_OBJECT_TYPES:
+        return True
+    if types <= {float, _NoneType}:
+        return True
+    if types == {int}:
+        # int64 column; a value outside it makes pandas fall back to a
+        # different dtype, so leave those to pandas.
+        column = list(map(itemgetter(key), records))
+        return _INT64_MIN <= min(column) and max(column) <= _INT64_MAX
+    return False
+
+
+class _RecordBatch:
+    """Records a ``DataFrame`` round trip would return unchanged.
+
+    Writing these records line by line produces the bytes the DataFrame path
+    produces. Only the key order and missing keys differ from the input: the
+    DataFrame's columns are the union of keys in first-seen order, and every
+    row carries all of them. ``columns`` holds that order when the records do
+    not already share it; ``None`` means every record is already in it.
+    """
+
+    __slots__ = ("columns", "records")
+
+    def __init__(self, records: list[dict[str, Any]], columns: list[str] | None):
+        self.records = records
+        self.columns = columns
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, key: slice, /) -> "_RecordBatch":
+        return _RecordBatch(self.records[key], self.columns)
+
+    def rows(self) -> Iterator[dict[str, Any]]:
+        """Each record as the DataFrame round trip would return it."""
+        if self.columns is None:
+            return iter(self.records)
+        columns = self.columns
+        return ({key: record.get(key) for key in columns} for record in self.records)
+
+    def estimate_record_size(self) -> int:
+        """The writer's per-record size estimate, exactly as for the DataFrame.
+
+        Part boundaries are decided by this estimate, so it must match the
+        DataFrame path's to the byte: that estimate serializes the first ten
+        rows with pandas, and the same ten rows (same columns, same values)
+        are built here. Ten rows, not the batch.
+        """
+        import pandas as pd  # noqa: PLC0415 — optional dep: pandas
+
+        # Through the name the DataFrame path calls, so both paths always use
+        # the same estimator.
+        from application_sdk.storage import formats  # noqa: PLC0415
+
+        sample = self.records[:10]
+        frame = (
+            pd.DataFrame(sample)
+            if self.columns is None
+            else pd.DataFrame(sample, columns=self.columns)
+        )
+        return formats.estimate_dataframe_record_size(frame, JSON_FILE_EXTENSION)
+
+
+def _plan_records(data: object) -> _RecordBatch | None:
+    """Return *data* as a :class:`_RecordBatch`, or ``None`` if pandas would alter it.
+
+    ``None`` sends the write down the DataFrame path, which is always correct;
+    this only decides when that path can be skipped without changing a byte.
+    Exact type checks throughout: a ``str`` or ``int`` subclass (an enum, say)
+    is left to pandas.
+    """
+    records = [data] if type(data) is dict else data
+    if type(records) is not list or not records:
+        return None
+    # The scans below run once per value, so they stay in C (map, set, min,
+    # max) rather than in a Python loop: this check must cost a small
+    # fraction of the serialization it lets the writer skip.
+    if set(map(type, records)) != {dict}:
+        return None
+    first_keys = tuple(records[0])
+    shared_order = all(map(first_keys.__eq__, map(tuple, records)))
+    columns = (
+        list(first_keys)
+        if shared_order
+        else list(dict.fromkeys(key for record in records for key in record))
+    )
+    if not columns:
+        # Only empty dicts: the DataFrame has rows but no columns, counts as
+        # empty, and writes nothing.
+        return None
+    for key in columns:
+        if type(key) is not str or not _column_round_trips(
+            records, key, present=shared_order
+        ):
+            return None
+    return _RecordBatch(records, None if shared_order else columns)
+
+
+#: The steps of the DataFrame write path a subclass or instance may replace.
+_DATAFRAME_PATH_STEPS = frozenset(
+    {"_convert_to_dataframe", "_write_dataframe", "_flush_buffer", "_write_chunk"}
+)
+
+
 class JsonFileWriter(Writer):
     """Output handler for writing data to JSON files.
 
     This class provides functionality for writing data to JSON files with support
     for chunking large datasets, buffering, and automatic file path generation.
-    It accepts pandas DataFrames; DataframeType.daft is a deprecated no-op alias
-    that routes to the pandas path.
+    It accepts pandas DataFrames, a dict, or a list of dicts; DataframeType.daft
+    is a deprecated no-op alias that routes to the pandas path.
+
+    A dict or list of dicts is written line by line without building a
+    DataFrame whenever the DataFrame would hand every value back unchanged —
+    plain ``str``, ``bool``, ``dict``, ``list`` and ``None`` values, a float
+    column, or an int column with no gaps. Anything else (a datetime, an int
+    column with a ``None``) still goes through the DataFrame, so the files are
+    the same either way.
 
     The output can be written to local files and optionally uploaded to an object
     store. Files are named using a configurable path generation scheme that
@@ -428,7 +568,77 @@ class JsonFileWriter(Writer):
         if self.chunk_start:
             self.chunk_count = self.chunk_start + self.chunk_count
 
-    async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
+    async def write(
+        self,
+        data: Union["pd.DataFrame", dict[str, Any], list[dict[str, Any]]],
+        **kwargs: Any,
+    ) -> None:
+        """Write a DataFrame, a dict, or a list of dicts.
+
+        Records whose values a DataFrame would return unchanged are written as
+        lines directly; everything else takes the DataFrame path. The files,
+        upload keys and statistics are identical either way.
+
+        Args:
+            data: Data to write - DataFrame, dict, or list of dicts.
+            **kwargs: Passed to the DataFrame path; unused by the record path.
+
+        Raises:
+            WriterClosedError: The writer has been closed.
+            UnsupportedDataTypeError: *data* is not a DataFrame, a dict, or a
+                non-empty list of dicts.
+        """
+        if (
+            self._is_closed
+            or self.dataframe_type != DataframeType.pandas
+            or type(data) not in (dict, list)
+            or not self._writes_records_directly()
+        ):
+            await super().write(data, **kwargs)
+            return
+        # Taken here, before the first await, as the DataFrame path takes its
+        # copy: a caller that clears or refills its list, or edits a record,
+        # once this write is scheduled still gets what it passed.
+        records = (
+            [cast("dict[str, Any]", data).copy()]
+            if type(data) is dict
+            else [r.copy() if type(r) is dict else r for r in data]
+        )
+        # Offloaded: the check reads every value once, which for a large
+        # batch outlasts the heartbeat interval (ADR-0010).
+        batch = await run_in_thread(_plan_records, records)
+        if batch is None:
+            await super().write(records, **kwargs)
+            return
+        await self._write_rows(batch, batch.estimate_record_size)
+
+    def _writes_records_directly(self) -> bool:
+        """Whether this writer's DataFrame path is the stock one.
+
+        A subclass or an instance that replaces a step of it — the
+        conversion, the chunk loop, the flush or the chunk write — expects a
+        DataFrame there, and the replacement is part of what it writes. Such
+        a writer keeps the DataFrame path for every write.
+        """
+        if _DATAFRAME_PATH_STEPS & vars(self).keys():
+            # Replaced on this instance (``patch.object`` in a test, say).
+            return False
+        cls = type(self)
+        return (
+            cls._convert_to_dataframe is Writer._convert_to_dataframe
+            and cls._write_dataframe is Writer._write_dataframe
+            and cls._flush_buffer is Writer._flush_buffer
+            and cls._write_chunk is JsonFileWriter._write_chunk
+        )
+
+    def _is_empty_chunk(self, chunk: Any) -> bool:
+        if isinstance(chunk, _RecordBatch):
+            return len(chunk) == 0
+        return super()._is_empty_chunk(chunk)
+
+    async def _write_chunk(
+        self, chunk: Union["pd.DataFrame", _RecordBatch], file_name: str
+    ):
         """Write a chunk to a JSON file using orjson.
 
         Not an atomic write, unlike the SDK's other artifact writers (FND-318):
@@ -442,22 +652,21 @@ class JsonFileWriter(Writer):
         that failure is still short — the run fails, and the residue is bounded
         by the writer's staging (FND-317) rather than by this method.
         """
-
-        def _default_serializer(obj: object) -> str:
-            # pandas.Timestamp and similar datetime-like objects are not
-            # natively handled by orjson when they appear as dict values.
-            return str(obj)
-
         mode = "ab+" if SafeFileOps.exists(file_name) else "wb"
 
         def _serialize_and_write() -> None:
+            records = (
+                chunk.rows()
+                if isinstance(chunk, _RecordBatch)
+                else chunk.to_dict(orient="records")
+            )
             with disk_full_guard(file_name, operation="json chunk write"):
                 with SafeFileOps.open(file_name, mode=mode) as f:
-                    for record in chunk.to_dict(orient="records"):
+                    for record in records:
                         f.write(
                             orjson.dumps(
                                 record,
-                                default=_default_serializer,
+                                default=_str_default,
                                 option=orjson.OPT_APPEND_NEWLINE,
                             )
                         )
