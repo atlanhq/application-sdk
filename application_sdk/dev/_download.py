@@ -19,7 +19,9 @@ from __future__ import annotations
 import http.client
 import os
 import shutil
+import ssl
 import stat
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -36,6 +38,9 @@ NETWORK_ERRORS: tuple[type[BaseException], ...] = (
     http.client.IncompleteRead,
     ConnectionError,
     TimeoutError,
+    # A peer that drops the connection mid-body without a TLS close_notify
+    # raises this from the read, not wrapped in ``URLError``.
+    ssl.SSLEOFError,
 )
 
 
@@ -66,6 +71,13 @@ def fetch_to_file(url: str, dest: Path, *, timeout: float) -> None:
         actual = dest.stat().st_size
         if actual < expected:
             raise http.client.IncompleteRead(b"", expected - actual)
+
+
+def _reserve_sibling(dest: Path, suffix: str) -> Path:
+    """Create an empty, uniquely named file beside *dest* and return its path."""
+    fd, name = tempfile.mkstemp(dir=dest.parent, prefix=f"{dest.name}.", suffix=suffix)
+    os.close(fd)
+    return Path(name)
 
 
 def _make_executable(path: Path) -> None:
@@ -109,9 +121,10 @@ def fetch_release_asset(
         exhausted.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
-    pid = os.getpid()
-    downloaded = dest.with_name(f"{dest.name}.{pid}.download")
-    staged = dest.with_name(f"{dest.name}.{pid}.tmp") if extract else downloaded
+    # Unique per call, not per process: two threads filling the same missing
+    # cache entry must not share (and unlink) each other's staging files.
+    downloaded = _reserve_sibling(dest, ".download")
+    staged = _reserve_sibling(dest, ".tmp") if extract else downloaded
     try:
         for attempt in range(1, attempts + 1):
             try:

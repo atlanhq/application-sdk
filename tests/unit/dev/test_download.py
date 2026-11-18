@@ -8,7 +8,9 @@ from __future__ import annotations
 import http.client
 import io
 import os
+import ssl
 import stat
+import threading
 import urllib.error
 from collections.abc import Iterator
 from email.message import Message
@@ -102,6 +104,7 @@ class TestIsRetryableNetworkError:
             ConnectionResetError("reset"),
             TimeoutError("stalled"),
             http.client.IncompleteRead(b"", 10),
+            ssl.SSLEOFError(8, "EOF occurred in violation of protocol"),
         ],
     )
     def test_network_failures_are_retryable(self, exc: BaseException) -> None:
@@ -221,3 +224,36 @@ class TestFetchReleaseAsset:
         )
         assert len(calls) == 2
         assert (tmp_path / "tool").read_bytes() == b"binary"
+
+    def test_concurrent_calls_for_one_target_do_not_share_staging_files(
+        self, tmp_path: Path
+    ) -> None:
+        """Two threads filling the same missing cache entry each stage to their
+        own file: with a shared per-process name, one thread's cleanup unlinks
+        the file the other is still writing."""
+        dest = tmp_path / "tool"
+        both_fetching = threading.Barrier(2, timeout=10)
+        staged_at: list[Path] = []
+        errors: list[BaseException] = []
+
+        def fetch(_url: str, path: Path) -> None:
+            staged_at.append(path)
+            path.write_bytes(b"binary")
+            both_fetching.wait()
+
+        def run() -> None:
+            try:
+                fetch_release_asset("u", dest, backoff_seconds=0, fetch=fetch)
+            except BaseException as exc:  # noqa: BLE001 — surfaced by the assert below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=run) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert errors == []
+        assert len(set(staged_at)) == 2
+        assert dest.read_bytes() == b"binary"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["tool"]
