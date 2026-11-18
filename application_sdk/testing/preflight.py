@@ -140,7 +140,9 @@ class PreflightOutcomeCapture:
 
 
 @pytest.fixture
-def capture_preflight_outcomes() -> Iterator[PreflightOutcomeCapture]:
+def capture_preflight_outcomes(
+    monkeypatch: pytest.MonkeyPatch,  # noqa: ARG001 — kept: part of the released fixture signature
+) -> Iterator[PreflightOutcomeCapture]:
     """Capture the gate's outcome rows from the real log sink and yield them.
 
     Adds a loguru sink for the test and records every outcome row the gate's
