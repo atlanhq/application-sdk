@@ -33,6 +33,10 @@ def test_guard_refuses_a_test_socket(guarded: None) -> None:
         socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 
+@pytest.mark.skipif(
+    not hasattr(socket, "_fallback_socketpair"),
+    reason="CPython exposes the emulated pair on every OS from 3.12; on 3.11 it is Windows-only",
+)
 def test_cpython_fallback_pair_is_refused_under_the_guard(guarded: None) -> None:
     """What Windows' ProactorEventLoop would hit without the replacement."""
     with pytest.raises(pytest_socket.SocketBlockedError):
