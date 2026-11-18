@@ -68,7 +68,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only; pyatlan is a lazy import
 
 logger = get_logger(__name__)
 
-__all__ = ["PURGE_BATCH_SIZE", "PurgeReport", "purge_connection"]
+__all__ = ["PURGE_BATCH_SIZE", "PurgeReport", "purge_assets", "purge_connection"]
 
 #: Assets per DELETE. See the module docstring for why this is a correctness
 #: bound rather than a performance choice.
@@ -365,3 +365,57 @@ async def _purge_connection_asset(
         )
     logger.info("harness teardown: purged connection %s", connection_qualified_name)
     return PurgeReport(purged=1)
+
+
+async def purge_assets(client: AsyncAtlanClient, guids: Sequence[str]) -> PurgeReport:
+    """Purge seeded assets that live outside any connection, one GUID at a time.
+
+    :func:`purge_connection` reaches only what sits under a connection. Some
+    assets a suite seeds do not: a glossary and its terms belong to no
+    connection, so a connection delete never reaches them. The harness tracks
+    those by GUID instead, and this purges them.
+
+    It knows nothing about asset kinds. The caller passes GUIDs in the order to
+    delete them, children before their parent (terms before their glossary),
+    which for a seed is the reverse of the order it created them in. A seed of a
+    new asset kind only has to register its GUIDs; nothing here changes.
+
+    One purge per GUID, so one that fails does not stop the rest. A GUID that is
+    already gone counts as purged rather than as an error, for the reason
+    ``_purge_connection_asset`` gives: teardown runs on every path, including
+    after a previous teardown already removed it.
+
+    Args:
+        client: An open client from
+            :func:`~application_sdk.testing.harness.atlas.atlas_client`.
+        guids: GUIDs to purge, in deletion order.
+
+    Returns:
+        A :class:`PurgeReport` whose ``orphaned`` lists the GUIDs left behind.
+        Failures are reported here, not raised: see the module docstring.
+    """
+    from pyatlan.errors import NotFoundError  # noqa: PLC0415
+
+    purged = 0
+    orphaned: list[str] = []
+    errors: list[str] = []
+    for guid in guids:
+        try:
+            await client.asset.purge_by_guid(guid)
+        except NotFoundError:
+            logger.info("harness teardown: seeded asset %s is already gone", guid)
+            purged += 1
+        except Exception as error:
+            logger.warning(
+                "harness teardown: could not purge seeded asset %s — manual "
+                "purge may be needed",
+                guid,
+                exc_info=True,
+            )
+            orphaned.append(guid)
+            errors.append(
+                f"purge of seeded asset {guid} failed: {sanitize_cause_repr(error)}"
+            )
+        else:
+            purged += 1
+    return PurgeReport(purged=purged, orphaned=tuple(orphaned), errors=tuple(errors))

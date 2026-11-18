@@ -99,6 +99,7 @@ from application_sdk.common.task_queue import (
 )
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.errors.base import safe_traceback, sanitize_cause_repr
+from application_sdk.errors.leaves import InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.binding import create_store_from_binding_optional
 from application_sdk.testing.e2e._errors import (
@@ -203,6 +204,7 @@ from application_sdk.testing.harness.teardown import (
     DeleteType,
     connection_delete_task_queue,
     delete_connection,
+    purge_assets,
     purge_connection,
 )
 from application_sdk.testing.harness.waiting import poll_until
@@ -1514,6 +1516,11 @@ class BaseE2ETest:
         # Each seed's object-store root, keyed to the connection it was seeded
         # under — the QN whose connection-delete run is what reclaims it.
         self._seeded_prefixes: dict[str, str] = {}
+        # GUIDs of seeded assets that live outside any connection (a glossary
+        # and its terms), in creation order. Teardown purges them newest
+        # first, so children go before their parent. Kind-agnostic on purpose:
+        # a seed of another such kind registers here and teardown is unchanged.
+        self._seeded_asset_guids: list[str] = []
         self._validate_dag_runs()
 
         # A pinned progress-stall window that is not strictly below the poll
@@ -1933,7 +1940,10 @@ class BaseE2ETest:
             # First: a run still extracting must not race the delete of the
             # connection it is writing into.
             await self._terminate_unsettled_runs()
-            await self._delete_connections()
+            try:
+                await self._delete_connections()
+            finally:
+                await self._purge_seeded_assets()
         finally:
             await self._close_clients()
 
@@ -2267,6 +2277,42 @@ class BaseE2ETest:
                 "purge may be needed",
                 qualified_name,
                 exc_info=True,
+            )
+
+    async def _purge_seeded_assets(self) -> None:
+        """Purge every seeded asset that lives outside a connection.
+
+        These are the GUIDs :meth:`seed_glossary` registered. A connection
+        delete never reaches them, so they need their own purge. Newest first,
+        so a term goes before its glossary. Nothing here raises, for the reason
+        :meth:`_purge_connection_from_runner` gives.
+        """
+        guids = list(reversed(getattr(self, "_seeded_asset_guids", ())))
+        if not guids:
+            return
+        try:
+            async with self._atlas_client() as client:
+                report = await purge_assets(client, guids)
+        # conformance: ignore[E004] teardown boundary — this runs after the assertions have decided the verdict, so a cleanup failure must never replace a real one; it is logged at WARNING with exc_info
+        except Exception:
+            logger.warning(
+                "e2e cleanup: could not reach the tenant to purge %d seeded "
+                "asset(s) %s — manual purge may be needed",
+                len(guids),
+                guids,
+                exc_info=True,
+            )
+            return
+        if report.complete:
+            logger.info("e2e cleanup: purged %d seeded asset(s)", report.purged)
+            self._seeded_asset_guids = []
+        else:
+            logger.warning(
+                "e2e cleanup: left %d seeded asset(s) behind %s — manual purge "
+                "may be needed. %s",
+                len(report.orphaned),
+                list(report.orphaned),
+                "; ".join(report.errors),
             )
 
     def _seed_roots_for(self, qualified_name: str) -> list[str]:
@@ -2891,6 +2937,81 @@ class BaseE2ETest:
             ae=self._ae,
             plan=plan,
             verify=self._count_seeded_assets,
+        )
+
+    def seed_glossary(
+        self, terms: Sequence[atlas.GlossaryTermSpec]
+    ) -> atlas.SeededGlossary:
+        """Seed a glossary with a run-unique name, and its terms, for this run.
+
+        For an app that reads glossary terms instead of creating assets. Call it
+        from :meth:`seed_prerequisites`. A glossary belongs to no connection, so
+        the connection delete in :meth:`teardown_method` never reaches it.
+        Instead every GUID created here is registered on
+        ``self._seeded_asset_guids`` as soon as Atlas returns it, and teardown
+        purges them all, terms first, whatever the run's outcome. A seed that
+        fails part-way leaves only registered assets, so those are reclaimed
+        too.
+
+        The glossary name comes from this run's minter, so two runs never share
+        a glossary. When the app filters glossaries by name, point that filter
+        at the returned ``name`` so the run reads only its own terms on a shared
+        tenant.
+
+        Args:
+            terms: The terms to create, in order. Names must be unique. Set
+                ``verified`` on a term to give it a ``VERIFIED`` certificate.
+
+        Returns:
+            The :class:`~application_sdk.testing.harness.atlas.SeededGlossary`.
+
+        Raises:
+            InvalidInputError: *terms* is empty or repeats a name.
+            SeedWriteUnconfirmedError: Atlas reported no GUID for something it
+                created.
+            Exception: Whatever pyatlan raises if a create is rejected.
+                Propagated: a suite whose seed did not land must fail before
+                the DAG runs.
+        """
+        return run_sync(self._seed_glossary_async(terms))
+
+    async def _seed_glossary_async(
+        self, terms: Sequence[atlas.GlossaryTermSpec]
+    ) -> atlas.SeededGlossary:
+        """Validate, create the glossary, then each term, registering every GUID.
+
+        Args:
+            terms: See :meth:`seed_glossary`.
+
+        Returns:
+            See :meth:`seed_glossary`.
+        """
+        names = [term.name for term in terms]
+        if not names or len(set(names)) != len(names):
+            raise InvalidInputError(
+                message=(
+                    "seed_glossary needs at least one term and unique term "
+                    f"names, because the result is keyed by name; got {names}."
+                ),
+                field="terms",
+                constraint="non-empty, unique names",
+            )
+        name = f"e2e-{self.connector_short_name}-{self._minter.unique_suffix()}"
+        term_guids: dict[str, str] = {}
+        async with self._atlas_client() as client:
+            glossary_guid = await atlas.create_glossary(client, name=name)
+            self._seeded_asset_guids.append(glossary_guid)
+            for term in terms:
+                guid = await atlas.create_glossary_term(
+                    client, glossary_guid=glossary_guid, term=term
+                )
+                self._seeded_asset_guids.append(guid)
+                term_guids[term.name] = guid
+        logger.info(
+            "e2e seed: created glossary %s with %d term(s)", name, len(term_guids)
+        )
+        return atlas.SeededGlossary(
+            name=name, guid=glossary_guid, term_guids=term_guids
         )
 
     async def _count_seeded_assets(

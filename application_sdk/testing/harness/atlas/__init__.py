@@ -51,7 +51,10 @@ from typing import TYPE_CHECKING, TypeAlias, TypeVar, Union
 
 from application_sdk.errors.leaves import InvalidInputValueError
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.testing.harness.atlas._errors import UnknownConnectorTypeError
+from application_sdk.testing.harness.atlas._errors import (
+    SeedWriteUnconfirmedError,
+    UnknownConnectorTypeError,
+)
 from application_sdk.testing.harness.budgets import Budget
 from application_sdk.testing.harness.expectations import (
     AssetAttributes,
@@ -96,8 +99,10 @@ __all__ = [
     # should not need a second import to type its result.
     "AssetAttributes",
     "AssetRef",
+    "GlossaryTermSpec",
     "LineageEdgeCounts",
     "Reading",
+    "SeededGlossary",
     "admin_identity",
     "atlas_client",
     "connection_exists",
@@ -106,11 +111,14 @@ __all__ = [
     "count_lineage_edges",
     "count_total_assets",
     "create_connection",
+    "create_glossary",
+    "create_glossary_term",
     "poll_for_connection",
     "read_asset_attributes",
     "sample_asset_attributes",
     "sample_qualified_names",
-    # Leaf
+    # Leaves
+    "SeedWriteUnconfirmedError",
     "UnknownConnectorTypeError",
 ]
 
@@ -1243,3 +1251,148 @@ async def create_connection(
     await client.asset.save(connection)
     logger.info("harness: created connection %s", qualified_name)
     return qualified_name
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class GlossaryTermSpec:
+    """One glossary term a suite seeds with :func:`create_glossary_term`.
+
+    Attributes:
+        name: The term's name.
+        description: The term's description. Empty leaves it unset.
+        verified: Whether to set the term's certificate to ``VERIFIED``. An app
+            that treats verified terms differently from the rest needs both kinds
+            seeded to show the difference.
+    """
+
+    name: str
+    description: str = ""
+    verified: bool = False
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SeededGlossary:
+    """A glossary a suite seeded, and the terms in it.
+
+    Attributes:
+        name: The glossary's run-unique name. A suite whose app filters
+            glossaries by name points that filter at this.
+        guid: The glossary's GUID.
+        term_guids: Each seeded term's GUID, keyed by term name.
+    """
+
+    name: str
+    guid: str
+    term_guids: Mapping[str, str]
+
+
+def _placeholder_guid() -> str:
+    """A negative placeholder GUID, like the one pyatlan's ``@init_guid`` sets.
+
+    Atlas replaces it with the real GUID and reports the pair in the response's
+    ``guidAssignments``, which is how the caller learns what it created.
+    """
+    return str(-secrets.randbelow(10_000_000_000_000_000) - 1)
+
+
+def _assigned_guid(response: object, placeholder: str, *, label: str) -> str:
+    """Read the GUID Atlas assigned to *placeholder* out of a save response.
+
+    Args:
+        response: The ``AssetMutationResponse`` from ``client.asset.save``.
+        placeholder: The placeholder GUID the created asset carried.
+        label: What was created, for the error message.
+
+    Returns:
+        The real GUID.
+
+    Raises:
+        SeedWriteUnconfirmedError: The response has no GUID for *placeholder*.
+    """
+    assignments = getattr(response, "guid_assignments", None) or {}
+    guid = assignments.get(placeholder)
+    if not isinstance(guid, str) or not guid:
+        raise SeedWriteUnconfirmedError(
+            message=(
+                f"Atlas accepted the create of {label} but reported no GUID for "
+                "it, so teardown could not purge it. Check the tenant for it by "
+                "name and delete it by hand."
+            ),
+            resource=label,
+            actual_state="no GUID in the save response's guidAssignments",
+        )
+    return guid
+
+
+async def create_glossary(client: AsyncAtlanClient, *, name: str) -> str:
+    """Create an empty glossary and return the GUID Atlas assigned to it.
+
+    The GUID, not the qualified name, is what comes back. Atlas generates a
+    glossary's qualified name itself, so there is no name the caller could mint
+    in advance the way :func:`create_connection` takes one; the GUID is the
+    handle teardown purges by.
+
+    Args:
+        client: An open client from :func:`atlas_client`.
+        name: The glossary's name. Pass a run-unique one: a suite whose app reads
+            glossaries by name must not see another run's glossary.
+
+    Returns:
+        The new glossary's GUID.
+
+    Raises:
+        SeedWriteUnconfirmedError: Atlas reported no GUID for the glossary.
+        Exception: Whatever pyatlan raises if the save is rejected. Not collapsed
+            into a verdict, for the reason :func:`create_connection` gives.
+    """
+    from pyatlan.model.assets import AtlasGlossary  # noqa: PLC0415
+
+    glossary = AtlasGlossary.creator(name=name)
+    placeholder = _placeholder_guid()
+    glossary.guid = placeholder
+    response = await client.asset.save(glossary)
+    guid = _assigned_guid(response, placeholder, label=f"glossary {name!r}")
+    logger.info("harness: created glossary %s (%s)", name, guid)
+    return guid
+
+
+async def create_glossary_term(
+    client: AsyncAtlanClient,
+    *,
+    glossary_guid: str,
+    term: GlossaryTermSpec,
+) -> str:
+    """Create one term in the glossary *glossary_guid* and return its GUID.
+
+    One term per save on purpose. The caller registers each GUID for teardown
+    as soon as it is known, so a seed that fails part-way still has every asset
+    it created registered. With one batch save, a response missing one term's
+    GUID would leave the caller unable to register the others either.
+
+    Args:
+        client: An open client from :func:`atlas_client`.
+        glossary_guid: The glossary to anchor the term to, as
+            :func:`create_glossary` returned it.
+        term: The term to create.
+
+    Returns:
+        The new term's GUID.
+
+    Raises:
+        SeedWriteUnconfirmedError: Atlas reported no GUID for the term.
+        Exception: Whatever pyatlan raises if the save is rejected.
+    """
+    from pyatlan.model.assets import AtlasGlossaryTerm  # noqa: PLC0415
+    from pyatlan.model.enums import CertificateStatus  # noqa: PLC0415
+
+    asset = AtlasGlossaryTerm.creator(name=term.name, glossary_guid=glossary_guid)
+    placeholder = _placeholder_guid()
+    asset.guid = placeholder
+    if term.description:
+        asset.description = term.description
+    if term.verified:
+        asset.certificate_status = CertificateStatus.VERIFIED
+    response = await client.asset.save(asset)
+    guid = _assigned_guid(response, placeholder, label=f"glossary term {term.name!r}")
+    logger.info("harness: created glossary term %s (%s)", term.name, guid)
+    return guid
