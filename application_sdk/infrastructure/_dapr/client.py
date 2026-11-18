@@ -59,6 +59,10 @@ def __getattr__(name: str) -> object:
     return _MessageHandler
 
 
+@deprecated(
+    "create_dapr_secret_store is deprecated; construct "
+    "DaprSecretStore(client, store_name=...) directly. Will be removed in v4.0.0."
+)
 def create_dapr_secret_store(
     client: AsyncDaprClient,
     store_name: str = "secretstore",
@@ -739,6 +743,11 @@ class DaprBinding:
 # ---------------------------------------------------------------------------
 
 
+@deprecated(
+    "is_dapr_component_registered is deprecated; check "
+    "`component_name in await get_dapr_component_types()` from "
+    "application_sdk.infrastructure._dapr.http instead. Will be removed in v4.0.0."
+)
 async def is_dapr_component_registered(component_name: str) -> bool:
     """Return ``True`` if a Dapr component with *component_name* is registered.
 

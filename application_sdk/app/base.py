@@ -1217,7 +1217,6 @@ class App(ABC):
     #: app registered by an SDK older than this attribute).
     _app_build_id: ClassVar[str] = ""
     _app_metadata: AppMetadata
-    _original_run: Callable[..., Any]
     _input_type: type[Input]
     _output_type: type[Output]
 

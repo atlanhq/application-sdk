@@ -335,7 +335,7 @@ See [file-reference.md § App-to-app hand-off](../concepts/file-reference.md) an
 `ParquetFileWriter`, `JsonFileWriter`, `ParquetFileReader`, and `JsonFileReader`
 emit `DeprecationWarning` on construction and **will be removed in v4.0**.
 Migrate now — the replacement is fully supported and fully optimised
-(SHA-256 dedup + sidecars + parallel transfers via `_gather_with_semaphore`).
+(SHA-256 dedup + sidecars + parallel transfers via `_run_bounded`).
 
 ### Recommended: `RollingFileWriter`
 

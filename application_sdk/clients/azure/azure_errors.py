@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
+from typing_extensions import deprecated
+
 from application_sdk.errors.leaves import (
     AuthError,
     DependencyUnavailableError,
@@ -57,6 +59,11 @@ class AzureInputValidationError(InvalidInputError):
     field: str | None = None
 
 
+@deprecated(
+    "application_sdk.clients.azure.azure_errors.AzureConnectionError is deprecated and will "
+    "be removed in v4.0.0: nothing in the SDK raises it. Raise or catch "
+    'DependencyUnavailableError (service="azure") instead.'
+)
 @dataclass(kw_only=True)
 class AzureConnectionError(DependencyUnavailableError):
     """Azure service is unavailable."""
@@ -66,6 +73,11 @@ class AzureConnectionError(DependencyUnavailableError):
     service: str | None = "azure"
 
 
+@deprecated(
+    "application_sdk.clients.azure.azure_errors.AzureServiceError is deprecated and will "
+    "be removed in v4.0.0: nothing in the SDK raises it. Raise or catch "
+    'DependencyUnavailableError (service="azure") instead.'
+)
 @dataclass(kw_only=True)
 class AzureServiceError(DependencyUnavailableError):
     """Azure service returned an error."""

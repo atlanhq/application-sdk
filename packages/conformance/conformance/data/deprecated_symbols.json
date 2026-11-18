@@ -155,6 +155,15 @@
     },
     {
       "kind": "class",
+      "marker_via": "decorator",
+      "message": "ChildAppContext is deprecated; read correlation_id and run_id from the parent AppContext directly \u2014 nothing in the SDK creates one. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.app.context",
+      "removal_version": "4.0.0",
+      "symbol": "ChildAppContext"
+    },
+    {
+      "kind": "class",
       "marker_via": "warn",
       "message": "EntryPointContractError is deprecated; use application_sdk.app.entrypoint.EntryPointDeclarationError \u2014 will be removed in v4.0",
       "migration_target": true,
@@ -190,6 +199,15 @@
       "symbol": "TaskNotFoundError"
     },
     {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "AppRegistry.get_all_versions is deprecated; use AppRegistry.get(name), which returns the latest registered version \u2014 it has no caller in the SDK. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.registry",
+      "removal_version": "4.0.0",
+      "symbol": "get_all_versions"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "TaskContractError is deprecated; use application_sdk.app.task.TaskDeclarationError \u2014 will be removed in v4.0",
@@ -197,6 +215,24 @@
       "module": "application_sdk.app.task",
       "removal_version": "4.0",
       "symbol": "TaskContractError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.azure.azure_errors.AzureConnectionError is deprecated and will be removed in v4.0.0: nothing in the SDK raises it. Raise or catch DependencyUnavailableError (service=\"azure\") instead.",
+      "migration_target": true,
+      "module": "application_sdk.clients.azure.azure_errors",
+      "removal_version": "4.0.0",
+      "symbol": "AzureConnectionError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.azure.azure_errors.AzureServiceError is deprecated and will be removed in v4.0.0: nothing in the SDK raises it. Raise or catch DependencyUnavailableError (service=\"azure\") instead.",
+      "migration_target": true,
+      "module": "application_sdk.clients.azure.azure_errors",
+      "removal_version": "4.0.0",
+      "symbol": "AzureServiceError"
     },
     {
       "kind": "class",
@@ -1090,6 +1126,24 @@
       "symbol": "MessageHandler"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "create_dapr_secret_store is deprecated; construct DaprSecretStore(client, store_name=...) directly. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.infrastructure._dapr.client",
+      "removal_version": "4.0.0",
+      "symbol": "create_dapr_secret_store"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "is_dapr_component_registered is deprecated; check `component_name in await get_dapr_component_types()` from application_sdk.infrastructure._dapr.http instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure._dapr.client",
+      "removal_version": "4.0.0",
+      "symbol": "is_dapr_component_registered"
+    },
+    {
       "kind": "method",
       "marker_via": "decorator",
       "message": "DaprPubSub.subscribe is deprecated and will be removed in v4.0.0. It never delivered a message: the handler is stored and nothing calls it. Declare a SubscriptionConfig (application_sdk.handler.contracts) and pass it to create_app_handler_service(subscriptions=...) instead.",
@@ -1106,6 +1160,15 @@
       "module": "application_sdk.infrastructure._dapr.credential_vault",
       "removal_version": "4.0.0",
       "symbol": "DAPR_SECRET_STORE_COMPONENT"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "create_dapr_credential_vault is deprecated; construct DaprCredentialVault(client, ...) directly. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.infrastructure._dapr.credential_vault",
+      "removal_version": "4.0.0",
+      "symbol": "create_dapr_credential_vault"
     },
     {
       "kind": "class",
@@ -1297,6 +1360,15 @@
       "symbol": "UPSTREAM_OBJECT_STORE_NAME"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "memory_fraction is deprecated; divide memory_usage_bytes() by memory_limit_bytes() \u2014 it has no caller in the SDK. Will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.observability.cgroup",
+      "removal_version": "4.0.0",
+      "symbol": "memory_fraction"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "LOG_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported log files. Will be removed in v4.0.0.",
@@ -1333,6 +1405,15 @@
       "symbol": "METRICS_RETENTION_DAYS"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "compute_deltas is deprecated; use ActivityShareLedger for per-activity attribution \u2014 the whole-process delta has no caller in the SDK. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.resource_sampler",
+      "removal_version": "4.0.0",
+      "symbol": "compute_deltas"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "SIZING_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported sizing files. Will be removed in v4.0.0.",
@@ -1349,6 +1430,15 @@
       "module": "application_sdk.observability.sizing_sink",
       "removal_version": "4.0.0",
       "symbol": "SIZING_RETENTION_DAYS"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_trace_context is deprecated; use opentelemetry.trace.get_current_span().get_span_context() directly \u2014 it has no caller in the SDK. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.trace_context",
+      "removal_version": "4.0.0",
+      "symbol": "get_trace_context"
     },
     {
       "kind": "constant",

@@ -345,7 +345,7 @@ application_sdk/
 │   ├── pushgateway.py      # PushGatewayClient + TemporalCoreCollector (worker push path)
 │   ├── resource_sampler.py # Resource-based sampling helpers
 │   ├── segment_client.py   # Segment analytics client
-│   ├── trace_context.py    # Correlation ID propagation
+│   ├── trace_context.py    # Deprecated (removed in v4.0.0); no caller
 │   ├── traces_adaptor.py   # OTel TracerProvider setup (installed by run_main)
 │   └── utils.py            # Shared observability utilities (METRIC_ENRICHMENT_KEYS, etc.)
 │

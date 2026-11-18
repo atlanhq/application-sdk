@@ -573,7 +573,7 @@ class AtlanObservability(Generic[T], ABC):
         for instance in list(cls._instances):
             try:
                 await instance._await_flush_tasks()
-                await instance._flush_buffer(force=True)
+                await instance._flush_buffer()
                 # Records logged while the drain above ran may have started
                 # new batch flushes; wait for those too.
                 await instance._await_flush_tasks()
@@ -867,18 +867,15 @@ class AtlanObservability(Generic[T], ABC):
                     await asyncio.sleep(self._flush_interval)
                 first = False
                 try:
-                    await self._flush_buffer(force=True)
+                    await self._flush_buffer()
                 except Exception:
                     logging.warning("Error in periodic flush", exc_info=True)
         except asyncio.CancelledError:
             # Handle task cancellation gracefully
-            await self._flush_buffer(force=True)
+            await self._flush_buffer()
 
-    async def _flush_buffer(self, force=False):
+    async def _flush_buffer(self) -> None:
         """Flush the buffer to storage.
-
-        Args:
-            force (bool): Whether to force flush regardless of buffer size
 
         This method:
         - Safely copies and clears the buffer

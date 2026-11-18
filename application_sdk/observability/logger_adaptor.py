@@ -1590,12 +1590,12 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             try:
                 loop = asyncio.get_running_loop()
                 # We're in an async context — schedule non-blocking flush
-                loop.create_task(owner._flush_buffer(force=True))
+                loop.create_task(owner._flush_buffer())
             except RuntimeError:
                 # No running loop in this thread. Safe to create one.
                 loop = asyncio.new_event_loop()
                 try:
-                    loop.run_until_complete(owner._flush_buffer(force=True))
+                    loop.run_until_complete(owner._flush_buffer())
                 finally:
                     loop.close()
                 # Also safe to block here, briefly, so the error line reaches

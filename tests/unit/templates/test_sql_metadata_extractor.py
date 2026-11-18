@@ -60,19 +60,11 @@ class TestSqlMetadataExtractorStructure:
         assert is_task(method)
 
     def test_run_accepts_extraction_input(self) -> None:
-        # After registration, run() is wrapped. Check original run() type hints.
-
-        original_run = getattr(
-            SqlMetadataExtractor, "_original_run", SqlMetadataExtractor.run
-        )
-        hints = get_type_hints(original_run)
+        hints = get_type_hints(SqlMetadataExtractor.run)
         assert hints.get("input") is ExtractionInput
 
     def test_run_returns_extraction_output(self) -> None:
-        original_run = getattr(
-            SqlMetadataExtractor, "_original_run", SqlMetadataExtractor.run
-        )
-        hints = get_type_hints(original_run)
+        hints = get_type_hints(SqlMetadataExtractor.run)
         assert hints.get("return") is ExtractionOutput
 
     def test_fetch_databases_input_type(self) -> None:

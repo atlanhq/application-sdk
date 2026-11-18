@@ -10,6 +10,8 @@ import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
+from typing_extensions import deprecated
+
 from application_sdk._runtime import cgroup as _runtime_cgroup
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.resource_sampler import parse_pod_memory_limit
@@ -88,8 +90,17 @@ def memory_limit_bytes() -> int | None:
     return env if env > 0 else None
 
 
+@deprecated(
+    "memory_fraction is deprecated; divide memory_usage_bytes() by "
+    "memory_limit_bytes() — it has no caller in the SDK. Will be removed in v4.0.0."
+)
 def memory_fraction() -> float | None:
-    """Usage as a fraction of the limit, or ``None`` if either side is unknown."""
+    """Usage as a fraction of the limit, or ``None`` if either side is unknown.
+
+    .. deprecated:: 3.59
+        Use ``memory_usage_bytes() / memory_limit_bytes()``. Will be removed
+        in v4.0.0.
+    """
     limit = memory_limit_bytes()
     if not limit or limit <= 0:
         return None

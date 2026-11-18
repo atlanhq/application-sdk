@@ -818,7 +818,7 @@ class TestClassifyTransferError:
     def test_families(self, error_class, family) -> None:
         from application_sdk.storage._telemetry import _classify_transfer_error
 
-        assert _classify_transfer_error(error_class, "") == family
+        assert _classify_transfer_error(error_class) == family
 
 
 # ---------------------------------------------------------------------------

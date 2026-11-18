@@ -516,7 +516,9 @@ def warn_on_warmup_flag_drift(
 # separate, deliberate decision).
 
 
-from application_sdk.handler.metadata_routes import (  # noqa: E402
+# ``decode_fe_inputs`` has no caller here; it stays imported so the name remains
+# importable from this module.
+from application_sdk.handler.metadata_routes import (  # noqa: E402,F401
     MAX_FE_INPUTS_BYTES,
     MetadataSource,
     decode_fe_inputs,
@@ -613,12 +615,6 @@ def _discover_compute_manifest(entrypoint: str) -> _ComputeManifestFn | None:
 # forms. Anything materially larger should move to a POST body (tracked
 # follow-up) rather than grow the query string.
 _MAX_FE_INPUTS_BYTES = MAX_FE_INPUTS_BYTES
-
-
-def _decode_fe_inputs(raw: str | None) -> dict[str, Any]:
-    """Decode the ``fe_inputs`` query payload (see
-    :func:`application_sdk.handler.metadata_routes.decode_fe_inputs`)."""
-    return decode_fe_inputs(raw, _MAX_FE_INPUTS_BYTES)
 
 
 # Allowed characters for config_id and config_type path components: one

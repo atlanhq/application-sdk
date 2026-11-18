@@ -117,7 +117,7 @@ class TestNothingKeptForLater:
                 "application_sdk.observability.observability._upload_to_observability_stores"
             ) as upload,
         ):
-            await adapter._flush_buffer(force=True)
+            await adapter._flush_buffer()
         upload.assert_not_called()
 
 

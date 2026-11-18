@@ -229,7 +229,8 @@ residue for a human to apply, not an applied edit:
   If `app/run_dev.py` doesn't exist yet, draft one following the reference
   pattern in `atlan-metabase-app`, `atlan-openapi-app`, or `atlan-mysql-app`:
   import the app's own `App` subclass and call
-  `await run_dev_combined(MyApp, credential_stores={...}, example_input={...})`.
+  `await run_dev_combined(MyApp, example_input={...})` (add `credentials={...}`
+  to provision a local credential; `credential_stores=` is deprecated and ignored).
   Route to residue — identifying the app's `App` subclass (module path and
   constructor requirements) and a representative `example_input` requires
   reading the app's own code, not just the finding.

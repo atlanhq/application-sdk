@@ -116,7 +116,7 @@ class TemporalCoreCollector:
             return
 
 
-def _default_grouping_key(task_queue: str) -> dict[str, str]:
+def _default_grouping_key() -> dict[str, str]:
     # Do NOT include task_queue here: Temporal metrics already carry task_queue
     # as a metric label, and the Pushgateway rejects pushes where a label appears
     # in both the metric body and the grouping-key URL path (400 Bad Request).
@@ -196,7 +196,7 @@ class PushGatewayClient:
             raise PushGatewayJobRequiredError()
         self._url = url
         self._job = job
-        self._grouping_key = grouping_key or _default_grouping_key(task_queue)
+        self._grouping_key = grouping_key or _default_grouping_key()
         self._interval_s = interval_s
         self._delete_on_shutdown = delete_on_shutdown
         self._sweep_stale_on_start = sweep_stale_on_start

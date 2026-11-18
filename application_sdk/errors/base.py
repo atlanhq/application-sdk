@@ -428,11 +428,6 @@ def safe_traceback(exc: BaseException | None, max_len: int = _TRACEBACK_MAX_LEN)
     return text
 
 
-# Backward-compat alias: the helper is load-bearing across clients/sql.py and
-# credentials/errors.py, so it is public. Kept for existing internal/test imports.
-_sanitize_cause_repr = sanitize_cause_repr
-
-
 @dataclass(kw_only=True)
 class AppError(Exception):
     """Canonical SDK exception base.

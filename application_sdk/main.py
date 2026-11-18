@@ -720,18 +720,12 @@ def _deployment_object_store_missing(
     return DeploymentObjectStoreMissingError(message, binding_name=name, cause=cause)
 
 
-async def _create_infrastructure(
-    credential_stores: Mapping[str, SecretStore] | None = None,
-) -> InfrastructureContext:
+async def _create_infrastructure() -> InfrastructureContext:
     """Create infrastructure services based on environment.
 
     If ``DAPR_HTTP_PORT`` is set (Dapr sidecar present), creates Dapr-backed
     implementations. Otherwise raises ``RuntimeError`` — the Dapr sidecar is
     required for all runtime modes.
-
-    Args:
-        credential_stores: Optional mapping of store name → SecretStore.
-            Reserved for future use; currently unused.
 
     Returns:
         Configured InfrastructureContext.
@@ -2617,7 +2611,8 @@ async def run_combined_mode(
 async def run_dev_combined(
     app_class: type[App],
     *,
-    credential_stores: Mapping[str, SecretStore] | None = None,
+    credential_stores: Mapping[str, SecretStore]
+    | None = None,  # deprecated — ignored, kept for back-compat
     credentials: dict[str, Any] | None = None,
     example_input: dict[str, Any] | None = None,
     host: str | None = None,
@@ -2650,9 +2645,14 @@ async def run_dev_combined(
     ignored — the SDK always boots its own in-process workflow runtime in
     this mode. Passing it emits a :class:`DeprecationWarning`.
 
+    ``credential_stores`` is likewise accepted but ignored: secrets resolve
+    through the embedded ``daprd``'s secret store, never through a store
+    passed here. Passing it emits a :class:`DeprecationWarning`; use
+    ``credentials`` to provision a local credential instead.
+
     Args:
         app_class: The App class to serve (must already be imported).
-        credential_stores: Optional mapping of store name → SecretStore.
+        credential_stores: Deprecated and ignored. Use ``credentials``.
         credentials: Optional credential dict (host, port, username, password,
             authType, extra, etc.). If provided, credentials are auto-provisioned
             via ``POST /workflows/v1/dev/local-vault`` once the handler is ready, and the
@@ -2705,6 +2705,18 @@ async def run_dev_combined(
             stacklevel=2,
         )
 
+    if credential_stores is not None:
+        import warnings  # noqa: PLC0415 — cold path: deprecation warning only
+
+        warnings.warn(
+            "`credential_stores` is deprecated and ignored and will be removed "
+            "in v4.0.0: `run_dev_combined` resolves secrets through the "
+            "embedded Dapr secret store, never through a store passed here. "
+            "Use `credentials=` to provision a local credential instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     app_name = getattr(app_class, "_app_name", "") or app_class.__name__.lower()
 
     # ``embedded_dapr`` sets ``DAPR_HTTP_PORT`` / ``DAPR_GRPC_PORT`` /
@@ -2730,7 +2742,6 @@ async def run_dev_combined(
             print(f"\nTemporal UI running at {_rt.ui_url}")
         await _run_dev_combined_inner(
             app_class=app_class,
-            credential_stores=credential_stores,
             credentials=credentials,
             example_input=example_input,
             host=host,
@@ -2744,7 +2755,6 @@ async def run_dev_combined(
 async def _run_dev_combined_inner(
     *,
     app_class: type[App],
-    credential_stores: Mapping[str, SecretStore] | None,
     credentials: dict[str, Any] | None,
     example_input: dict[str, Any] | None,
     host: str | None,
@@ -2779,7 +2789,7 @@ async def _run_dev_combined_inner(
         set_infrastructure,
     )
 
-    infra = await _create_infrastructure(credential_stores=credential_stores)
+    infra = await _create_infrastructure()
     from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
         verify_object_store_access,
     )

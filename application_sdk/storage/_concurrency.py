@@ -148,23 +148,6 @@ async def _store(
     results[index] = await coro
 
 
-async def _gather_with_semaphore(
-    coros: Iterable[Coroutine[Any, Any, T]],
-    sem: asyncio.Semaphore,
-) -> list[T]:
-    """Run coroutines concurrently, at most ``sem`` slots at a time.
-
-    Preserves input order in the returned list. The failure contract is
-    :func:`_run_bounded`'s: the first failure cancels and drains the rest.
-    """
-
-    async def _run(coro: Coroutine[Any, Any, T]) -> T:
-        async with sem:
-            return await coro
-
-    return await _run_bounded([_run(c) for c in coros], None)
-
-
 async def _run_drained(coro: Coroutine[Any, Any, T]) -> T:
     """Await *coro*; on failure or cancellation, drain what it offloaded first.
 
