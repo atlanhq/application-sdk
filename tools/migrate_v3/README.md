@@ -33,8 +33,8 @@ A toolkit that automates most of the work of migrating a connector from applicat
 ## Prerequisites
 
 ```bash
-# libcst must be installed (it is in the migrate-v3 dependency group, a
-# default group, so a plain `uv sync` installs it too)
+# libcst must be installed (it is in the dev dependency group, a default
+# group, so a plain `uv sync` installs it too)
 uv sync --all-extras --all-groups
 ```
 
@@ -209,9 +209,7 @@ once, in `tools/migrate_v3/__init__.py`; add a new SDK base there.
 ## Retirement
 
 This tool exists for v2 apps. Delete `tools/migrate_v3/`, `tests/unit/tools/`,
-the `migrate-v3` dependency group and its Python 3.14 carve-out (in
-`.github/scripts/unit_test_command.py` and `.github/actions/setup-deps`)
-in one PR once both hold:
+and `libcst` from the dev dependency group in one PR once both hold:
 
 1. No consumer imports v2 code: `/audit-consumers`, checking for an import
    from any module under `DEPRECATED_MODULE_ROOTS` in `import_mapping.py`
