@@ -11,20 +11,21 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from application_sdk.errors import CREDENTIAL_VAULT_ERROR, ErrorCode
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import DependencyUnavailableError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 
-class CredentialVaultError(DependencyUnavailableError):
+class CredentialVaultError(_LegacyErrorCodeMixin, DependencyUnavailableError):
     """Deprecated: use ``application_sdk.infrastructure.CredentialVaultUnavailableError`` — removed in v4.0."""
 
-    #: Leaf instances never run this ``__init__``; the class default keeps the
-    #: inherited ``error_code`` and ``__str__`` working on them.
-    _error_code: ErrorCode | None = None
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_VAULT_ERROR
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_CREDENTIAL_VAULT"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("credential_guid", "credential_guid"),
+    )
 
     def __init__(
         self,
@@ -43,22 +44,6 @@ class CredentialVaultError(DependencyUnavailableError):
         DependencyUnavailableError.__init__(self, message=message, cause=cause)
         self.credential_guid = credential_guid
         self._error_code = error_code
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.credential_guid:
-            parts.append(f"credential_guid={self.credential_guid}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
 
 
 @dataclass(kw_only=True)

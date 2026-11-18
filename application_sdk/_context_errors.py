@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from application_sdk.errors import APP_CONTEXT_ERROR, ErrorCode
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.errors.leaves import PreconditionError
 
@@ -38,7 +39,7 @@ class SecretStoreNotConfiguredError(PreconditionError):
     expected_state: str | None = "configured"
 
 
-class AppContextError(_InternalError):
+class AppContextError(_LegacyErrorCodeMixin, _InternalError):
     """Raised when App or task context is accessed outside of valid execution scope.
 
     This is a programming error — it indicates that context-dependent methods
@@ -51,15 +52,4 @@ class AppContextError(_InternalError):
 
     def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
         _InternalError.__init__(self, message=message)
-        self._legacy_error_code = error_code
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._legacy_error_code
-            if self._legacy_error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        return f"[{self.error_code.code}] {self.message}"
+        self._error_code = error_code

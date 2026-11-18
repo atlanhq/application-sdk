@@ -18,7 +18,10 @@ from application_sdk.errors import (
     CREDENTIAL_VALIDATION_ERROR,
     ErrorCode,
 )
-from application_sdk.errors.base import sanitize_cause_repr
+from application_sdk.errors.base import AppError, _LegacyErrorCodeMixin
+
+# Re-exported: importable from here before FND-4917 moved __str__ to the mixin.
+from application_sdk.errors.base import sanitize_cause_repr as sanitize_cause_repr
 from application_sdk.errors.categories import Audience
 from application_sdk.errors.leaves import AuthError, InvalidInputError, NotFoundError
 
@@ -61,16 +64,25 @@ class AtlanCredentialTypeError(InvalidInputError):
 
 
 @dataclass(kw_only=True)
-class CredentialError(AuthError):
+class CredentialError(_LegacyErrorCodeMixin, AuthError):
     """Generic credential-subsystem failure (category=AUTH).
 
-    Use more specific subclasses when the failure mode is known.
+    Use more specific subclasses when the failure mode is known. A subclass
+    with the same constructor sets ``_CATEGORICAL_BASE`` to its categorical
+    leaf and delegates to this ``__init__`` in one call instead of copying the
+    body. It restates the signature: the leaf comes first in the MRO, so
+    inheriting would pick the leaf's generated keyword-only ``__init__``.
     """
 
     credential_name: str | None = None
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_ERROR
     code: ClassVar[str] = "AUTH_CREDENTIAL"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("credential_name", "credential"),
+    )
+    #: The categorical leaf whose generated ``__init__`` this one runs.
+    _CATEGORICAL_BASE: ClassVar[type[AppError]] = AuthError
 
     # Intentional: dataclass fields define the wire-evidence schema; custom __init__ preserves positional-message compat.
     def __init__(
@@ -81,28 +93,9 @@ class CredentialError(AuthError):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        AuthError.__init__(self, message=message, cause=cause)
+        self._CATEGORICAL_BASE.__init__(self, message=message, cause=cause)
         self.credential_name = credential_name
         self._error_code = error_code
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.credential_name:
-            parts.append(f"credential={self.credential_name}")
-        if self.cause:
-            # Sanitized: cause messages can embed connection strings or
-            # secret values (e.g. SQLAlchemy URLs), and __str__ flows into
-            # HTTP error responses via `detail=str(e)`.
-            parts.append(f"caused_by={sanitize_cause_repr(self.cause)}")
-        return " | ".join(parts)
 
 
 @dataclass(kw_only=True)
@@ -123,17 +116,6 @@ class CredentialNotFoundError(NotFoundError, CredentialError):
             self, message=f"Credential '{credential_name}' not found"
         )
         self.credential_name = credential_name
-        self._error_code = CREDENTIAL_NOT_FOUND
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return self._error_code
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.credential_name:
-            parts.append(f"credential={self.credential_name}")
-        return " | ".join(parts)
 
 
 @dataclass(kw_only=True)
@@ -148,6 +130,7 @@ class CredentialParseError(InvalidInputError, CredentialError):
     code: ClassVar[str] = "INVALID_INPUT_CREDENTIAL_PARSE"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
+    _CATEGORICAL_BASE: ClassVar[type[AppError]] = InvalidInputError
 
     def __init__(
         self,
@@ -157,28 +140,13 @@ class CredentialParseError(InvalidInputError, CredentialError):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        InvalidInputError.__init__(self, message=message, cause=cause)
-        self.credential_name = credential_name
-        self._error_code = error_code
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
+        CredentialError.__init__(
+            self,
+            message,
+            credential_name=credential_name,
+            cause=cause,
+            error_code=error_code,
         )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.credential_name:
-            parts.append(f"credential={self.credential_name}")
-        if self.cause:
-            # Sanitized: cause messages can embed connection strings or
-            # secret values (e.g. SQLAlchemy URLs), and __str__ flows into
-            # HTTP error responses via `detail=str(e)`.
-            parts.append(f"caused_by={sanitize_cause_repr(self.cause)}")
-        return " | ".join(parts)
 
 
 @dataclass(kw_only=True)
@@ -193,6 +161,7 @@ class CredentialValidationError(InvalidInputError, CredentialError):
     code: ClassVar[str] = "INVALID_INPUT_CREDENTIAL_VALIDATION"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
+    _CATEGORICAL_BASE: ClassVar[type[AppError]] = InvalidInputError
 
     def __init__(
         self,
@@ -202,25 +171,10 @@ class CredentialValidationError(InvalidInputError, CredentialError):
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
     ) -> None:
-        InvalidInputError.__init__(self, message=message, cause=cause)
-        self.credential_name = credential_name
-        self._error_code = error_code
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
+        CredentialError.__init__(
+            self,
+            message,
+            credential_name=credential_name,
+            cause=cause,
+            error_code=error_code,
         )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.credential_name:
-            parts.append(f"credential={self.credential_name}")
-        if self.cause:
-            # Sanitized: cause messages can embed connection strings or
-            # secret values (e.g. SQLAlchemy URLs), and __str__ flows into
-            # HTTP error responses via `detail=str(e)`.
-            parts.append(f"caused_by={sanitize_cause_repr(self.cause)}")
-        return " | ".join(parts)

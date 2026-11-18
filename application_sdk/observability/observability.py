@@ -186,6 +186,9 @@ _deferred_stores: set[str] = set()
 # about once, then never retried for the life of the process.
 _disabled_stores: set[str] = set()
 _store_state_lock = threading.Lock()
+# Guards ``AtlanObservability._periodic_flush_owners``: two sinks of one class
+# built at once on different threads would otherwise both start a flush.
+_periodic_flush_lock = threading.Lock()
 
 
 def _partition_segments(timestamp: datetime) -> tuple[str, str, str, str]:
@@ -461,6 +464,14 @@ class AtlanObservability(Generic[T], ABC):
     # of one per adapter. Same reason ``_instances`` is appended via the base.
     _deployment_store: ClassVar["BoundStore | None"] = None
     _upstream_store: ClassVar["BoundStore | None"] = None
+    # The sink whose periodic flush serves its class, one entry per class that
+    # calls ``_ensure_periodic_flush``. Presence is the "flush started" guard;
+    # the sink's ``_periodic_flush_task`` is the handle that stops it (``None``
+    # when the shared loop had already shut down). Read and written only
+    # through ``AtlanObservability`` and under ``_periodic_flush_lock``.
+    _periodic_flush_owners: ClassVar[
+        dict[type["AtlanObservability[Any]"], "AtlanObservability[Any]"]
+    ] = {}
 
     @classmethod
     def _components_dir(cls) -> str:
@@ -662,9 +673,9 @@ class AtlanObservability(Generic[T], ABC):
         periodic flush is cancelled and waited for, and every batch flush
         ``add_record`` started is cancelled (see
         :func:`_cancel_flush_task_for_testing`), including one started while
-        the earlier ones were being stopped. The class-level handle that logs,
-        metrics, traces and sizing keep is cleared with it, so the next sink
-        of that class starts a fresh flush.
+        the earlier ones were being stopped. If this sink runs its class's
+        periodic flush (see :meth:`_ensure_periodic_flush`), the class is
+        released with it, so the next sink of that class starts a fresh flush.
         """
         with self._buffer_lock:
             self._buffer = []
@@ -683,15 +694,12 @@ class AtlanObservability(Generic[T], ABC):
                     "within %ss",
                     _RESET_STOP_TIMEOUT_SECONDS,
                 )
-        # Matched by identity, ``None`` included: a sink built after the loop
-        # shut down got no handle, yet its constructor still set the guard.
-        for owner in type(self).__mro__:
-            if "_flush_task" not in vars(owner):
-                continue
-            if owner._flush_task is handle:  # pyright: ignore[reportUnknownMemberType]  # — declared on this class, checked above
-                owner._flush_task = None
-                owner._flush_task_started = False
-            break
+        # Release the class's "flush started" guard if this sink holds it, so
+        # the next sink of the class starts a fresh flush.
+        with _periodic_flush_lock:
+            owners = AtlanObservability._periodic_flush_owners
+            if owners.get(type(self)) is self:
+                del owners[type(self)]
         # ``add_record`` on another thread can start a batch flush while the
         # ones already seen are being stopped, so look again until a pass
         # finds none new. Tasks that are cancelled but not yet done (on the
@@ -809,6 +817,73 @@ class AtlanObservability(Generic[T], ABC):
         This is an abstract method that must be implemented by subclasses.
         """
 
+    def _ensure_periodic_flush(self) -> None:
+        """Start this sink's class's periodic flush, unless one is already running.
+
+        The first sink of each class that calls this runs the flush; later
+        ones share it. A sink that cannot start it logs the failure and leaves
+        the class unflushed, so the next sink of the class tries again: a sink
+        that cannot flush must not stop collection.
+
+        The class is claimed under ``_periodic_flush_lock`` and the flush
+        started after releasing it. Starting calls overridable methods, and a
+        failure logs through whatever handlers the process installed; any of
+        them may build another sink, whose own call would otherwise wait on
+        this thread's lock for good. Claiming first also makes that nested
+        call return instead of starting a second flush.
+        """
+        cls = type(self)
+        owners = AtlanObservability._periodic_flush_owners
+        with _periodic_flush_lock:
+            if cls in owners:
+                return
+            owners[cls] = self
+        try:
+            handle = self._start_periodic_flush()
+        # conformance: ignore[E004] telemetry; a sink that cannot start its flush must not stop collection
+        except Exception:
+            with _periodic_flush_lock:
+                if owners.get(cls) is self:
+                    del owners[cls]
+            logging.warning(
+                "Could not start the %s periodic flush",
+                self._get_signal_type(),
+                exc_info=True,
+            )
+            return
+        with _periodic_flush_lock:
+            released = owners.get(cls) is not self
+        if released and handle is not None:
+            # A test reset released the class while the flush was starting,
+            # before it had a handle to stop. Stop it now, or it would run on
+            # unowned beside the next sink's.
+            self._periodic_flush_task = None
+            handle.cancel()
+
+    @classmethod
+    def _stop_class_flushes_for_testing(cls) -> None:
+        """Stop the flushes of every sink of *cls*, and release the class.
+
+        Test-only. Each sink's records are discarded and its flushes stopped
+        (see :meth:`_stop_flushes_for_testing`): the class's periodic flush,
+        and the batch flushes ``add_record`` started on any sink of the class,
+        owner or not. All within one ``_RESET_STOP_TIMEOUT_SECONDS``. The class
+        is released, so the next sink of *cls* starts a fresh flush. Clearing
+        only a "started" guard left the old flush running on the shared loop
+        beside the new one, writing a dropped sink's rows later into whatever
+        store a later test had patched.
+        """
+        deadline = monotonic() + _RESET_STOP_TIMEOUT_SECONDS
+        with _periodic_flush_lock:
+            owner = AtlanObservability._periodic_flush_owners.pop(cls, None)
+        sinks: list[AtlanObservability[Any]] = [
+            i for i in list(AtlanObservability._instances) if isinstance(i, cls)
+        ]
+        if owner is not None and owner not in sinks:
+            sinks.append(owner)
+        for sink in sinks:
+            sink._stop_flushes_for_testing(deadline)
+
     def _start_periodic_flush(self) -> BackgroundTask | None:
         """Start :meth:`_periodic_flush` on the shared observability loop.
 
@@ -835,19 +910,22 @@ class AtlanObservability(Generic[T], ABC):
         the thread that ran the flushes, so without this nothing in the child
         would flush. The buffer lock is replaced first: a parent thread may
         have held it at the moment of the fork.
+
+        A class claimed by a sink with no flush handle is released: the fork
+        caught that sink mid-start (or the parent's loop had shut down), and
+        no flush runs for it in the child. Released, the class's next sink
+        starts one, rather than the claim keeping every later sink from it.
         """
+        owners = AtlanObservability._periodic_flush_owners
+        for owner_cls, owner in list(owners.items()):
+            if owner._periodic_flush_task is None:
+                del owners[owner_cls]
         for instance in list(cls._instances):
             instance._buffer_lock = threading.Lock()
             instance._flush_tasks = set()
-            old = instance._periodic_flush_task
-            if old is None:
+            if instance._periodic_flush_task is None:
                 continue
-            new = instance._start_periodic_flush()
-            # Logs, metrics, traces and sizing keep a class-level handle to
-            # stop the flush with; point it at the child's task.
-            owner = type(instance)
-            if getattr(owner, "_flush_task", None) is old:
-                owner._flush_task = new
+            instance._start_periodic_flush()
 
     async def _periodic_flush(self):
         """Periodically flush the buffer to storage.
@@ -1076,14 +1154,16 @@ class AtlanObservability(Generic[T], ABC):
 
 
 def _reset_store_state_lock_after_fork() -> None:
-    """Give a forked child a fresh ``_store_state_lock``.
+    """Give a forked child a fresh ``_store_state_lock`` and ``_periodic_flush_lock``.
 
-    A parent thread may have held it in ``_store_or_none`` at the moment of the
-    fork; the child inherits it locked with no thread left to release it, and
-    its restarted periodic flushes would block on their next upload.
+    A parent thread may have held either at the moment of the fork (in
+    ``_store_or_none`` or ``_ensure_periodic_flush``); the child inherits it
+    locked with no thread left to release it, and its restarted periodic
+    flushes would block on their next upload, or its next sink on construction.
     """
-    global _store_state_lock
+    global _store_state_lock, _periodic_flush_lock
     _store_state_lock = threading.Lock()
+    _periodic_flush_lock = threading.Lock()
 
 
 register_after_fork(_reset_store_state_lock_after_fork)

@@ -939,13 +939,20 @@ class TestFailureMessageIsRedactedAtTheActivityBoundary:
         assert "RuntimeError: connect postgres://" in text
 
     async def test_cause_appended_by_str_is_redacted(self) -> None:
-        from application_sdk.storage.errors import StorageError
+        from application_sdk.errors.leaves import DependencyUnavailableError
 
-        # StorageError.__str__ appends ``{type(cause).__name__}: {cause}``
-        # without redaction — the shape the audit found in 13 ``__str__`` copies.
-        err = StorageError(
-            "upload failed",
-            key="artifacts/k.json",
+        # An app-defined error whose __str__ appends ``{type(cause).__name__}:
+        # {cause}`` without redaction — the shape SDK classes had before the
+        # shared mixin (FND-4917). The boundary must not rely on __str__.
+        class _LeakyStrError(DependencyUnavailableError):
+            def __str__(self) -> str:
+                return (
+                    f"{self.message} | key=artifacts/k.json | "
+                    f"caused_by={type(self.cause).__name__}: {self.cause}"
+                )
+
+        err = _LeakyStrError(
+            message="upload failed",
             cause=RuntimeError("connect postgres://svc:hunter2@db/x?token=abc123"),
         )
         assert "hunter2" in str(err)  # precondition: the class does not redact

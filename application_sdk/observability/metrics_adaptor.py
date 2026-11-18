@@ -18,7 +18,9 @@ from application_sdk.constants import (
     SEGMENT_WRITE_KEY,
     SERVICE_NAME,
 )
-from application_sdk.observability.background_loop import BackgroundTask
+from application_sdk.observability.background_loop import (  # noqa: F401 — re-exported (named here before FND-4918)
+    BackgroundTask,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.models import MetricRecord, MetricType
 from application_sdk.observability.observability import AtlanObservability
@@ -48,21 +50,12 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     - Gzip-compressed NDJSON file storage
     """
 
-    _flush_task_started: ClassVar[bool] = False
-    # Kept so ``_reset_for_testing`` can stop the flush: otherwise the next
-    # construction starts a second one beside it on the shared loop.
-    _flush_task: ClassVar[BackgroundTask | None] = None
     _otel_setup_failed_logged: ClassVar[bool] = False
 
     @classmethod
     def _reset_for_testing(cls) -> None:
         """Reset initialization state for test isolation."""
-        task = cls._flush_task
-        cls._flush_task = None
-        cls._flush_task_started = False
-        if task is not None:
-            task.cancel()
-            task.wait(timeout=5)
+        cls._stop_class_flushes_for_testing()
         cls._otel_setup_failed_logged = False
 
     def __init__(self):
@@ -97,13 +90,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         # No atexit close for the Segment client: its worker runs on the shared
         # observability loop, whose one shutdown at exit sends the last batch.
 
-        # Start periodic flush task if not already started
-        if not AtlanMetricsAdapter._flush_task_started:
-            try:
-                AtlanMetricsAdapter._flush_task = self._start_periodic_flush()
-                AtlanMetricsAdapter._flush_task_started = True
-            except Exception:
-                logging.error("Failed to start metrics flush task", exc_info=True)
+        self._ensure_periodic_flush()
 
     def _setup_otel_metrics(self):
         """Set up the OpenTelemetry MeterProvider with the Prometheus reader.

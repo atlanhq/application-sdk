@@ -319,6 +319,11 @@ def _sdk_dependency_unavailable_classes(sdk_root: Path) -> set[str]:
             if isinstance(node, ast.ClassDef):
                 classes.setdefault(node.name, node)
 
+    # A class with no bases cannot be an error: a mixin such as
+    # ``_LegacyErrorCodeMixin``, listed before the categorical leaf so its
+    # ``__str__`` wins. Skip it rather than wait on it for a verdict.
+    mixins = {name for name, node in classes.items() if not node.bases}
+
     # category per class name: True = DEPENDENCY_UNAVAILABLE, False = other error.
     verdict: dict[str, bool] = {"AppError": False}
     changed = True
@@ -349,6 +354,8 @@ def _sdk_dependency_unavailable_classes(sdk_root: Path) -> set[str]:
                 continue
             for base in node.bases:
                 base_name = _base_name(base)
+                if base_name in mixins:
+                    continue
                 if base_name in verdict:
                     verdict[name] = verdict[base_name]
                     changed = True

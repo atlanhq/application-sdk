@@ -32,6 +32,7 @@ from application_sdk._discovery_errors import (
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
 from application_sdk.errors import DISCOVERY_ERROR, ErrorCode
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import InvalidInputError
 from application_sdk.handler.base import Handler
 from application_sdk.observability.logger_adaptor import get_logger
@@ -39,10 +40,14 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
-class DiscoveryError(InvalidInputError):
+class DiscoveryError(_LegacyErrorCodeMixin, InvalidInputError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = DISCOVERY_ERROR
     code: ClassVar[str] = "INVALID_INPUT_DISCOVERY"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("module_path", "module_path"),
+    )
 
     def __init__(
         self,
@@ -60,19 +65,7 @@ class DiscoveryError(InvalidInputError):
         )
         InvalidInputError.__init__(self, message=message, cause=cause)
         self.module_path = module_path
-        self._legacy_error_code = error_code or DISCOVERY_ERROR
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return self._legacy_error_code
-
-    def __str__(self) -> str:
-        parts = [f"[{self._legacy_error_code}] {self.message}"]
-        if self.module_path:
-            parts.append(f"module_path={self.module_path}")
-        if self.cause:
-            parts.append(f"cause={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
+        self._error_code = error_code
 
 
 def _parse_module_path(module_path: str) -> tuple[str, str]:

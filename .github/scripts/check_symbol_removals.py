@@ -773,6 +773,7 @@ def build_snapshot(root: Path, package: str = DEFAULT_PACKAGE) -> Snapshot:
         raise ValueError(f"no package {package!r} under {root}")
     snapshot = Snapshot(package=package)
     sources: dict[str, tuple[str, str]] = {}
+    class_bases: dict[str, list[tuple[str, str]]] = {}
     for file in iter_modules(package_root):
         try:
             text = file.read_text(encoding="utf-8")
@@ -786,12 +787,146 @@ def build_snapshot(root: Path, package: str = DEFAULT_PACKAGE) -> Snapshot:
         for symbol in extract_module(tree, module, package):
             snapshot.symbols[symbol.key] = symbol
         is_init = file.name == "__init__.py"
-        for bound, source in reexport_sources(
+        module_sources = reexport_sources(
             tree, f"{module}.__init__" if is_init else module, package
-        ).items():
+        )
+        for bound, source in module_sources.items():
             sources[f"{module}:{bound}"] = source
+        class_bases.update(_class_bases(tree, module, module_sources))
+    _add_inherited_methods(snapshot, class_bases, sources)
     _resolve_reexports(snapshot, sources)
     return snapshot
+
+
+def _class_bases(
+    tree: ast.Module, module: str, module_sources: dict[str, tuple[str, str]]
+) -> dict[str, list[tuple[str, str]]]:
+    """``{"module:Class": [(base module, base name), ...]}`` for top-level classes.
+
+    Only bases that name a class in this package resolve: one defined in the
+    same module, or one imported from inside the package. A base the AST cannot
+    place (``Exception``, ``pydantic.BaseModel``, ``mod.Cls``) is dropped, so
+    it contributes no members.
+    """
+    local = {
+        node.name for node in _module_scope(tree.body) if isinstance(node, ast.ClassDef)
+    }
+    result: dict[str, list[tuple[str, str]]] = {}
+    for node in _module_scope(tree.body):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        bases: list[tuple[str, str]] = []
+        for base in node.bases:
+            if not isinstance(base, ast.Name):
+                continue
+            if base.id in local:
+                bases.append((module, base.id))
+            elif base.id in module_sources:
+                bases.append(module_sources[base.id])
+        result[f"{module}:{node.name}"] = bases
+    return result
+
+
+def _linearize(
+    key: str,
+    parents: dict[str, list[str]],
+    memo: dict[str, list[str]],
+    active: frozenset[str] = frozenset(),
+) -> list[str]:
+    """C3 linearization of *key* over the bases the AST could resolve.
+
+    Falls back to a left-to-right depth-first order when C3 has no solution
+    (a hierarchy Python itself would reject) or a cycle appears, so a bad
+    hierarchy still yields an order rather than an exception.
+    """
+    if key in memo:
+        return memo[key]
+    if key in active:
+        return [key]
+    active = active | {key}
+    seqs = [list(_linearize(p, parents, memo, active)) for p in parents.get(key, [])]
+    seqs.append(list(parents.get(key, [])))
+    order = [key]
+    while any(seqs):
+        for seq in seqs:
+            if not seq:
+                continue
+            head = seq[0]
+            if not any(head in other[1:] for other in seqs):
+                break
+        else:
+            seen = set(order)
+            for seq in seqs:
+                for item in seq:
+                    if item not in seen:
+                        order.append(item)
+                        seen.add(item)
+            memo[key] = order
+            return order
+        order.append(head)
+        seqs = [s[1:] if s and s[0] == head else s for s in seqs]
+    memo[key] = order
+    return order
+
+
+def _add_inherited_methods(
+    snapshot: Snapshot,
+    class_bases: dict[str, list[tuple[str, str]]],
+    sources: dict[str, tuple[str, str]],
+) -> None:
+    """Record on each class the public methods it inherits from a package base.
+
+    Moving a method from several subclasses to a shared base (or mixin) keeps
+    ``Cls.method`` working on every one of them, so it must not read as a
+    removal. Each class gets a symbol for every method an ancestor defines and
+    it does not, carrying the first definer's signature in MRO order.
+
+    ``__init__`` is never inherited here. Which ``__init__`` runs depends on
+    things the AST cannot see: a ``@dataclass`` or a library base earlier in
+    the MRO generates its own, and that is what a caller gets. An ``__init__``
+    dropped from a class body therefore stays a finding; restore it on the
+    class to keep its signature on the surface.
+    """
+
+    def definition(ref: tuple[str, str]) -> str:
+        key = f"{ref[0]}:{ref[1]}"
+        seen: set[str] = set()
+        while key not in class_bases and key in sources and key not in seen:
+            seen.add(key)
+            nxt = sources[key]
+            key = f"{nxt[0]}:{nxt[1]}"
+        return key
+
+    parents = {
+        cls: [k for k in (definition(b) for b in bases) if k in class_bases]
+        for cls, bases in class_bases.items()
+    }
+    own: dict[str, dict[str, Symbol]] = {cls: {} for cls in class_bases}
+    for symbol in snapshot.symbols.values():
+        if symbol.kind != SymbolKind.METHOD:
+            continue
+        cls_name, _, member = symbol.qualname.partition(".")
+        cls = f"{symbol.module}:{cls_name}"
+        if cls in own:
+            own[cls][member] = symbol
+    memo: dict[str, list[str]] = {}
+    for cls in sorted(class_bases):
+        module, _, cls_name = cls.partition(":")
+        present = set(own[cls])
+        class_symbol = snapshot.symbols.get(cls)
+        for ancestor in _linearize(cls, parents, memo)[1:]:
+            for member, symbol in sorted(own[ancestor].items()):
+                if member in present or member == "__init__":
+                    continue
+                present.add(member)
+                inherited = replace(
+                    symbol,
+                    module=module,
+                    qualname=f"{cls_name}.{member}",
+                    deprecated=symbol.deprecated
+                    or (class_symbol is not None and class_symbol.deprecated),
+                )
+                snapshot.symbols.setdefault(inherited.key, inherited)
 
 
 def _resolve_reexports(snapshot: Snapshot, sources: dict[str, tuple[str, str]]) -> None:
