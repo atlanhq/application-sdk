@@ -84,6 +84,21 @@ def _make_executable(path: Path) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def _publish(staged: Path, dest: Path) -> None:
+    """``os.replace`` *staged* onto *dest*, tolerating a concurrent publisher.
+
+    On Windows, replacing a file another writer is replacing at the same moment
+    fails with ``PermissionError`` (access denied) for the loser; POSIX renames
+    atomically and never does. Every writer fetched the same pinned asset, so
+    when the loser finds *dest* in place the outcome is the one it wanted.
+    """
+    try:
+        os.replace(staged, dest)
+    except PermissionError:
+        if os.name != "nt" or not dest.exists():
+            raise
+
+
 def fetch_release_asset(
     url: str,
     dest: Path,
@@ -143,7 +158,7 @@ def fetch_release_asset(
                 # conformance: ignore[P060] synchronous single-process dev tooling (pinned binary download) — one caller per machine, so no fleet retry storm; retry_async is async-only
                 time.sleep(backoff_seconds * attempt)
         _make_executable(staged)
-        os.replace(staged, dest)
+        _publish(staged, dest)
     finally:
         downloaded.unlink(missing_ok=True)
         staged.unlink(missing_ok=True)

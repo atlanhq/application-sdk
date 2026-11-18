@@ -257,3 +257,55 @@ class TestFetchReleaseAsset:
         assert len(set(staged_at)) == 2
         assert dest.read_bytes() == b"binary"
         assert sorted(p.name for p in tmp_path.iterdir()) == ["tool"]
+
+
+class TestPublish:
+    """The lost race on Windows: ``os.replace`` onto a target another writer is
+    replacing at that moment is access-denied. Simulated on every platform by a
+    private ``os`` whose ``replace`` raises after the winner has published."""
+
+    def _denied_after(self, winner: bytes):
+        def replace(_src: object, dst: object) -> None:
+            Path(str(dst)).write_bytes(winner)
+            raise PermissionError(13, "Access is denied")
+
+        return replace
+
+    def test_windows_loser_accepts_the_winners_binary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        staged, dest = tmp_path / "staged", tmp_path / "tool"
+        staged.write_bytes(b"binary")
+        with private_stdlib(_download, "os") as local_os:
+            monkeypatch.setattr(local_os, "name", "nt")
+            monkeypatch.setattr(local_os, "replace", self._denied_after(b"binary"))
+            _download._publish(staged, dest)
+        assert dest.read_bytes() == b"binary"
+
+    def test_posix_permission_error_is_raised(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """POSIX has no such race, so a denial there is a real permissions
+        problem and must not be hidden by an existing file."""
+        staged, dest = tmp_path / "staged", tmp_path / "tool"
+        staged.write_bytes(b"binary")
+        with private_stdlib(_download, "os") as local_os:
+            monkeypatch.setattr(local_os, "name", "posix")
+            monkeypatch.setattr(local_os, "replace", self._denied_after(b"old"))
+            with pytest.raises(PermissionError):
+                _download._publish(staged, dest)
+
+    def test_windows_denial_with_nothing_published_is_raised(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        staged, dest = tmp_path / "staged", tmp_path / "tool"
+        staged.write_bytes(b"binary")
+
+        def replace(_src: object, _dst: object) -> None:
+            raise PermissionError(13, "Access is denied")
+
+        with private_stdlib(_download, "os") as local_os:
+            monkeypatch.setattr(local_os, "name", "nt")
+            monkeypatch.setattr(local_os, "replace", replace)
+            with pytest.raises(PermissionError):
+                _download._publish(staged, dest)
