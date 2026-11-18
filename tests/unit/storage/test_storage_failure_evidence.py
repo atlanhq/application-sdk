@@ -21,6 +21,8 @@ these tests rather than silently degrade the envelope.
 
 from __future__ import annotations
 
+from typing import Unpack
+
 import pytest
 from obstore.store import GCSStore, S3Store
 
@@ -30,6 +32,7 @@ from application_sdk.storage.errors import (
     StorageConfigError,
     StorageDiskFullError,
     StorageError,
+    StorageErrorKwargs,
     StorageIntegrityError,
     StorageNotFoundError,
     StoragePermissionError,
@@ -416,3 +419,108 @@ def test_str_surfaces_the_backend_verdict() -> None:
     rendered = str(err)
     assert "http_status=400" in rendered
     assert "provider_code=PreconditionFailed" in rendered
+
+
+# ── one shared __init__ (FND-4917) ───────────────────────────────────────────
+
+
+def _storage_classes() -> list[type[StorageError]]:
+    found: list[type[StorageError]] = [StorageError]
+    stack = list(StorageError.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        if cls not in found:
+            found.append(cls)
+            stack.extend(cls.__subclasses__())
+    return sorted(found, key=lambda c: c.__qualname__)
+
+
+def _runs_the_shared_init(
+    cls: type[StorageError], monkeypatch: pytest.MonkeyPatch
+) -> bool:
+    """Whether constructing *cls* runs ``StorageError.__init__``, directly or by delegation."""
+    original = StorageError.__init__
+    called: list[bool] = []
+
+    def spy(
+        self: StorageError, message: str, **kwargs: Unpack[StorageErrorKwargs]
+    ) -> None:
+        called.append(True)
+        original(self, message, **kwargs)
+
+    monkeypatch.setattr(StorageError, "__init__", spy)
+    cls("m")
+    return bool(called)
+
+
+# Classes whose constructor takes exactly StorageError's arguments.
+_SAME_SIGNATURE = [
+    c
+    for c in _storage_classes()
+    if c.__init__ is StorageError.__init__ or "_CATEGORICAL_BASE" in vars(c)
+]
+
+
+def test_the_shared_init_has_users_beyond_the_base() -> None:
+    names = {c.__name__ for c in _SAME_SIGNATURE}
+    assert {
+        "StorageBucketRelocationError",
+        "StorageGatewayAuthUnavailableError",
+        "StorageGatewayNoRouteError",
+        "StorageNotFoundError",
+        "StoragePermissionError",
+        "StorageAuthError",
+        "StorageConfigError",
+    } <= names
+
+
+@pytest.mark.parametrize("cls", _storage_classes(), ids=lambda c: c.__qualname__)
+def test_every_storage_class_takes_a_positional_message(
+    cls: type[StorageError],
+) -> None:
+    """A dropped ``__init__`` must not leave the leaf's keyword-only one in charge."""
+    err = cls("positional message")
+    assert err.message == "positional message"
+
+
+@pytest.mark.parametrize("cls", _storage_classes(), ids=lambda c: c.__qualname__)
+def test_categorical_base_matches_the_category(
+    cls: type[StorageError], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``StorageError.__init__`` runs ``_CATEGORICAL_BASE``'s; it must be the class's own leaf.
+
+    A new variant that delegates but forgets ``_CATEGORICAL_BASE`` inherits its
+    parent's and runs the wrong leaf's constructor.
+    """
+    if not _runs_the_shared_init(cls, monkeypatch):
+        return  # its own constructor: StorageError.__init__ never runs
+    assert cls._CATEGORICAL_BASE.category is cls.category
+    assert cls._CATEGORICAL_BASE in cls.__mro__
+
+
+@pytest.mark.parametrize("cls", _SAME_SIGNATURE, ids=lambda c: c.__qualname__)
+def test_shared_init_carries_every_argument(cls: type[StorageError]) -> None:
+    cause = RuntimeError("boom")
+    err = cls(
+        "m",
+        key="artifacts/t.json",
+        cause=cause,
+        suggested_action="wait and retry",
+        target="gs://example-bucket/artifacts/t.json",
+        http_status=503,
+        provider_code="Busy",
+    )
+    assert str(err) == (
+        f"[{cls.DEFAULT_ERROR_CODE.code}] m | key=artifacts/t.json | "
+        "http_status=503 | provider_code=Busy | caused_by=RuntimeError: boom"
+    )
+    fd = err.to_failure_details()
+    assert fd.category is cls.category
+    assert fd.code == cls.code
+    assert fd.suggested_action == "wait and retry"
+    assert fd.evidence["service"] == "object_store"
+    assert fd.evidence["target"] == "gs://example-bucket/artifacts/t.json"
+    assert fd.evidence["key"] == "artifacts/t.json"
+    assert fd.evidence["http_status"] == 503
+    assert fd.evidence["provider_code"] == "Busy"
+    assert err.__cause__ is cause

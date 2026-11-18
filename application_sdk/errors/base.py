@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from application_sdk.errors.categories import Audience, FailureCategory
 
 if TYPE_CHECKING:
+    from application_sdk.errors import ErrorCode
     from application_sdk.errors.wire import FailureDetails
 
 # Fields present on every AppError — excluded from the wire `evidence` dict.
@@ -426,6 +427,57 @@ def safe_traceback(exc: BaseException | None, max_len: int = _TRACEBACK_MAX_LEN)
     if len(text) > max_len:
         text = text[:max_len] + "…"
     return text
+
+
+class _LegacyErrorCodeMixin:
+    """``error_code`` and ``__str__`` for an ``AppError`` that still carries a legacy ``ErrorCode``.
+
+    Put it before the categorical leaf in the bases so its ``__str__`` wins
+    over ``AppError.__str__``. A subclass sets ``DEFAULT_ERROR_CODE``, names the
+    evidence ``str()`` prints in ``_STR_FIELDS`` as ``(attribute, label)``
+    pairs, and keeps only its ``__init__``, which stores a per-instance
+    override (or nothing) in ``_error_code``.
+
+    The text is ``[AAF-…] message | label=value | … | caused_by=…``. Falsy
+    values are left out. The cause always goes through
+    :func:`sanitize_cause_repr`, because ``str(exc)`` reaches HTTP responses
+    (``detail=str(e)``) and logs, and a driver message can embed a connection
+    string. Before this mixin each class copied the body, and most copies
+    printed the cause raw (FND-4917).
+
+    A plain class, not a dataclass, so ``_error_code`` never becomes a field
+    and never reaches ``to_failure_details().evidence``. Removed with
+    ``ErrorCode`` in v4.0.
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode]
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = ()
+    #: Per-instance override of ``DEFAULT_ERROR_CODE``. The class default keeps
+    #: ``error_code`` working on a subclass whose ``__init__`` never sets it.
+    _error_code: ErrorCode | None = None
+
+    # Supplied by AppError, which every user of this mixin also inherits.
+    message: str
+    cause: BaseException | None
+
+    @property
+    def error_code(self) -> ErrorCode:
+        """Legacy ``AAF-…`` code: the per-instance override, else the class default."""
+        return (
+            self._error_code
+            if self._error_code is not None
+            else self.DEFAULT_ERROR_CODE
+        )
+
+    def __str__(self) -> str:
+        parts = [f"[{self.error_code.code}] {self.message}"]
+        for attr, label in self._STR_FIELDS:
+            value = getattr(self, attr, None)
+            if value:
+                parts.append(f"{label}={value}")
+        if self.cause:
+            parts.append(f"caused_by={sanitize_cause_repr(self.cause)}")
+        return " | ".join(parts)
 
 
 @dataclass(kw_only=True)

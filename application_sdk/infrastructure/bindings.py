@@ -7,17 +7,19 @@ from typing import ClassVar, Protocol
 from typing_extensions import deprecated
 
 from application_sdk.errors import BINDING_ERROR, ErrorCode
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import DependencyUnavailableError
 
 
-class BindingError(DependencyUnavailableError):
+class BindingError(_LegacyErrorCodeMixin, DependencyUnavailableError):
     """Deprecated: use ``application_sdk.infrastructure.BindingUnavailableError`` — removed in v4.0."""
 
-    #: Leaf instances never run this ``__init__``; the class default keeps the
-    #: inherited ``error_code`` and ``__str__`` working on them.
-    _error_code: ErrorCode | None = None
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = BINDING_ERROR
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_BINDING"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("binding_name", "binding"),
+        ("operation", "operation"),
+    )
 
     def __init__(
         self,
@@ -38,24 +40,6 @@ class BindingError(DependencyUnavailableError):
         self.binding_name = binding_name
         self.operation = operation
         self._error_code = error_code
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.binding_name:
-            parts.append(f"binding={self.binding_name}")
-        if self.operation:
-            parts.append(f"operation={self.operation}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
 
 
 @dataclass(kw_only=True)

@@ -230,6 +230,20 @@ calling conventions (`CredentialError("msg")`,
 `CredentialNotFoundError("guid")`, `SecretNotFoundError("KEY")`) required
 by existing callers and asserted in `tests/unit/errors/test_back_compat.py`.
 
+A class that still carries a legacy `ErrorCode` gets `error_code` and
+`__str__` from `_LegacyErrorCodeMixin` (`application_sdk/errors/base.py`),
+placed before the categorical leaf in its bases. It declares
+`DEFAULT_ERROR_CODE` and lists the evidence `str()` prints in a
+`_STR_FIELDS` ClassVar, and keeps only its `__init__`. The mixin's
+`__str__` always passes the cause through `sanitize_cause_repr`; before it,
+each class carried its own copy and most printed the cause raw. A subclass
+whose constructor matches its domain umbrella's does not copy it: it sets
+`_CATEGORICAL_BASE` to its leaf and names `__init__ = StorageError.__init__`
+(or `CredentialError.__init__`). It names it rather than inheriting it because
+the leaf comes first in the MRO, and the leaf's generated keyword-only
+`__init__` would otherwise win. `tests/unit/errors/test_base.py` and
+`tests/unit/storage/test_storage_failure_evidence.py` enforce both.
+
 The `CredentialError`/`StorageError`/`SecretStoreError` families are
 first-class members of the hierarchy — they do not emit `DeprecationWarning`
 and are not scheduled for removal in v4.0.

@@ -11,7 +11,7 @@ MRO convention: categorical leaf first, domain base second.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, TypedDict, Unpack
 
 from application_sdk.errors import (
     STORAGE_AUTH,
@@ -29,6 +29,7 @@ from application_sdk.errors import (
     STORAGE_RELOCATION,
     ErrorCode,
 )
+from application_sdk.errors.base import AppError, _LegacyErrorCodeMixin
 from application_sdk.errors.categories import Audience
 from application_sdk.errors.leaves import (
     SDR_DISK_FULL_ACTION,
@@ -44,6 +45,25 @@ from application_sdk.errors.leaves import (
 )
 
 
+class StorageErrorKwargs(TypedDict, total=False):
+    """The keyword arguments of :meth:`StorageError.__init__`.
+
+    A subclass with a categorical leaf first in its bases cannot inherit that
+    ``__init__``: the leaf's generated keyword-only one comes first in the MRO.
+    It delegates in two lines with ``**kwargs: Unpack[StorageErrorKwargs]``
+    instead of restating the signature, and type checkers still see every
+    argument.
+    """
+
+    key: str | None
+    cause: Exception | None
+    error_code: ErrorCode | None
+    suggested_action: str | None
+    target: str | None
+    http_status: int | None
+    provider_code: str | None
+
+
 def _init_storage_evidence(
     err: StorageError,
     *,
@@ -55,13 +75,13 @@ def _init_storage_evidence(
 ) -> None:
     """Set the shared storage evidence fields on *err*.
 
-    Every ``Storage*`` class hand-writes its own ``__init__`` to keep the
-    positional-message signature its callers rely on, and that duplication is
-    exactly why ``service`` and ``target`` were never set on any of them: they
-    are fields of the categorical parent, so ``to_failure_details()`` emitted
-    them as ``null`` on every storage failure the SDK has ever reported.
-    Centralising the assignment means a field added here reaches every
-    subclass at once. (FND-957)
+    ``StorageError.__init__`` calls it, and so does every ``Storage*`` class
+    whose constructor takes different evidence and so keeps its own
+    ``__init__``. When each class hand-copied this block, ``service`` and
+    ``target`` were never set on any of them: they are fields of the
+    categorical parent, so ``to_failure_details()`` emitted them as ``null``
+    on every storage failure. Centralising the assignment means a field added
+    here reaches every subclass at once. (FND-957)
 
     ``service`` is a constant for this whole module, matching the convention
     :class:`~application_sdk.errors.leaves.ObjectStoreReadError` and
@@ -82,10 +102,19 @@ def _init_storage_evidence(
 
 
 @dataclass(kw_only=True)
-class StorageError(DependencyUnavailableError):
+class StorageError(_LegacyErrorCodeMixin, DependencyUnavailableError):
     """Generic storage-subsystem failure (category=DEPENDENCY_UNAVAILABLE).
 
     Use more specific subclasses when the failure mode is known.
+
+    A subclass whose constructor takes the same arguments reuses this
+    ``__init__`` rather than copying it. With ``StorageError`` as its only
+    base it declares ``@dataclass(kw_only=True, init=False)``; without
+    ``init=False`` the decorator generates a keyword-only ``__init__`` and the
+    positional message stops working. With a categorical leaf first in its
+    bases it sets ``_CATEGORICAL_BASE`` to that leaf and delegates through
+    :class:`StorageErrorKwargs`. ``tests/unit/storage/
+    test_storage_failure_evidence.py`` checks both.
     """
 
     key: str | None = None
@@ -98,6 +127,13 @@ class StorageError(DependencyUnavailableError):
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_OPERATION
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("key", "key"),
+        ("http_status", "http_status"),
+        ("provider_code", "provider_code"),
+    )
+    #: The categorical leaf whose generated ``__init__`` this one runs.
+    _CATEGORICAL_BASE: ClassVar[type[AppError]] = DependencyUnavailableError
 
     # Intentional: dataclass fields define the wire-evidence schema; custom __init__ preserves positional-message compat.
     def __init__(
@@ -107,11 +143,14 @@ class StorageError(DependencyUnavailableError):
         key: str | None = None,
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
+        suggested_action: str | None = None,
         target: str | None = None,
         http_status: int | None = None,
         provider_code: str | None = None,
     ) -> None:
-        DependencyUnavailableError.__init__(self, message=message, cause=cause)
+        self._CATEGORICAL_BASE.__init__(
+            self, message=message, cause=cause, suggested_action=suggested_action
+        )
         _init_storage_evidence(
             self,
             key=key,
@@ -121,28 +160,8 @@ class StorageError(DependencyUnavailableError):
             error_code=error_code,
         )
 
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
 
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.key:
-            parts.append(f"key={self.key}")
-        if self.http_status:
-            parts.append(f"http_status={self.http_status}")
-        if self.provider_code:
-            parts.append(f"provider_code={self.provider_code}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
-
-
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, init=False)
 class StorageBucketRelocationError(StorageError):
     """A write was rejected because the bucket is being relocated.
 
@@ -160,30 +179,8 @@ class StorageBucketRelocationError(StorageError):
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_RELOCATION
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
 
-    def __init__(
-        self,
-        message: str,
-        *,
-        key: str | None = None,
-        cause: Exception | None = None,
-        suggested_action: str | None = None,
-        target: str | None = None,
-        http_status: int | None = None,
-        provider_code: str | None = None,
-    ) -> None:
-        StorageError.__init__(
-            self,
-            message,
-            key=key,
-            cause=cause,
-            target=target,
-            http_status=http_status,
-            provider_code=provider_code,
-        )
-        self.suggested_action = suggested_action
 
-
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, init=False)
 class StorageGatewayAuthUnavailableError(StorageError):
     """A request was rejected by the object-store gateway's own auth backend.
 
@@ -212,30 +209,8 @@ class StorageGatewayAuthUnavailableError(StorageError):
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_GATEWAY_AUTH
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_AUTH"
 
-    def __init__(
-        self,
-        message: str,
-        *,
-        key: str | None = None,
-        cause: Exception | None = None,
-        suggested_action: str | None = None,
-        target: str | None = None,
-        http_status: int | None = None,
-        provider_code: str | None = None,
-    ) -> None:
-        StorageError.__init__(
-            self,
-            message,
-            key=key,
-            cause=cause,
-            target=target,
-            http_status=http_status,
-            provider_code=provider_code,
-        )
-        self.suggested_action = suggested_action
 
-
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, init=False)
 class StorageGatewayNoRouteError(StorageError):
     """The object-store gateway answered 404 because its route table is not loaded yet.
 
@@ -256,28 +231,6 @@ class StorageGatewayNoRouteError(StorageError):
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_GATEWAY_NO_ROUTE
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_NO_ROUTE"
 
-    def __init__(
-        self,
-        message: str,
-        *,
-        key: str | None = None,
-        cause: Exception | None = None,
-        suggested_action: str | None = None,
-        target: str | None = None,
-        http_status: int | None = None,
-        provider_code: str | None = None,
-    ) -> None:
-        StorageError.__init__(
-            self,
-            message,
-            key=key,
-            cause=cause,
-            target=target,
-            http_status=http_status,
-            provider_code=provider_code,
-        )
-        self.suggested_action = suggested_action
-
 
 @dataclass(kw_only=True)
 class StorageNotFoundError(NotFoundError, StorageError):
@@ -291,47 +244,10 @@ class StorageNotFoundError(NotFoundError, StorageError):
     code: ClassVar[str] = "NOT_FOUND_STORAGE"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
+    _CATEGORICAL_BASE: ClassVar[type[AppError]] = NotFoundError
 
-    def __init__(
-        self,
-        message: str,
-        *,
-        key: str | None = None,
-        cause: Exception | None = None,
-        error_code: ErrorCode | None = None,
-        target: str | None = None,
-        http_status: int | None = None,
-        provider_code: str | None = None,
-    ) -> None:
-        NotFoundError.__init__(self, message=message, cause=cause)
-        _init_storage_evidence(
-            self,
-            key=key,
-            target=target,
-            http_status=http_status,
-            provider_code=provider_code,
-            error_code=error_code,
-        )
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.key:
-            parts.append(f"key={self.key}")
-        if self.http_status:
-            parts.append(f"http_status={self.http_status}")
-        if self.provider_code:
-            parts.append(f"provider_code={self.provider_code}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
+    def __init__(self, message: str, **kwargs: Unpack[StorageErrorKwargs]) -> None:
+        StorageError.__init__(self, message, **kwargs)
 
 
 @dataclass(kw_only=True)
@@ -346,47 +262,10 @@ class StoragePermissionError(AppPermissionDeniedError, StorageError):
     code: ClassVar[str] = "PERMISSION_STORAGE"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
+    _CATEGORICAL_BASE: ClassVar[type[AppError]] = AppPermissionDeniedError
 
-    def __init__(
-        self,
-        message: str,
-        *,
-        key: str | None = None,
-        cause: Exception | None = None,
-        error_code: ErrorCode | None = None,
-        target: str | None = None,
-        http_status: int | None = None,
-        provider_code: str | None = None,
-    ) -> None:
-        AppPermissionDeniedError.__init__(self, message=message, cause=cause)
-        _init_storage_evidence(
-            self,
-            key=key,
-            target=target,
-            http_status=http_status,
-            provider_code=provider_code,
-            error_code=error_code,
-        )
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.key:
-            parts.append(f"key={self.key}")
-        if self.http_status:
-            parts.append(f"http_status={self.http_status}")
-        if self.provider_code:
-            parts.append(f"provider_code={self.provider_code}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
+    def __init__(self, message: str, **kwargs: Unpack[StorageErrorKwargs]) -> None:
+        StorageError.__init__(self, message, **kwargs)
 
 
 @dataclass(kw_only=True)
@@ -406,27 +285,10 @@ class StorageAuthError(AuthError, StoragePermissionError):
     code: ClassVar[str] = "AUTH_STORAGE"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
+    _CATEGORICAL_BASE: ClassVar[type[AppError]] = AuthError
 
-    def __init__(
-        self,
-        message: str,
-        *,
-        key: str | None = None,
-        cause: Exception | None = None,
-        error_code: ErrorCode | None = None,
-        target: str | None = None,
-        http_status: int | None = None,
-        provider_code: str | None = None,
-    ) -> None:
-        AuthError.__init__(self, message=message, cause=cause)
-        _init_storage_evidence(
-            self,
-            key=key,
-            target=target,
-            http_status=http_status,
-            provider_code=provider_code,
-            error_code=error_code,
-        )
+    def __init__(self, message: str, **kwargs: Unpack[StorageErrorKwargs]) -> None:
+        StorageError.__init__(self, message, **kwargs)
 
 
 @dataclass(kw_only=True)
@@ -441,47 +303,10 @@ class StorageConfigError(InvalidInputError, StorageError):
     code: ClassVar[str] = "INVALID_INPUT_STORAGE_CONFIG"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
+    _CATEGORICAL_BASE: ClassVar[type[AppError]] = InvalidInputError
 
-    def __init__(
-        self,
-        message: str,
-        *,
-        key: str | None = None,
-        cause: Exception | None = None,
-        error_code: ErrorCode | None = None,
-        target: str | None = None,
-        http_status: int | None = None,
-        provider_code: str | None = None,
-    ) -> None:
-        InvalidInputError.__init__(self, message=message, cause=cause)
-        _init_storage_evidence(
-            self,
-            key=key,
-            target=target,
-            http_status=http_status,
-            provider_code=provider_code,
-            error_code=error_code,
-        )
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.key:
-            parts.append(f"key={self.key}")
-        if self.http_status:
-            parts.append(f"http_status={self.http_status}")
-        if self.provider_code:
-            parts.append(f"provider_code={self.provider_code}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
+    def __init__(self, message: str, **kwargs: Unpack[StorageErrorKwargs]) -> None:
+        StorageError.__init__(self, message, **kwargs)
 
 
 # code is the new structured identifier; legacy DEFAULT_ERROR_CODE inherited from
@@ -496,6 +321,9 @@ class StorageBindingNotFoundError(StorageConfigError):
     """
 
     code: ClassVar[str] = "INVALID_INPUT_STORAGE_BINDING_NOT_FOUND"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("binding_name", "binding_name"),
+    )
     binding_name: str | None = None
 
     def __init__(
@@ -510,14 +338,6 @@ class StorageBindingNotFoundError(StorageConfigError):
             self, message=message, cause=cause, error_code=error_code
         )
         self.binding_name = binding_name
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.binding_name:
-            parts.append(f"binding_name={self.binding_name}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
 
 
 @dataclass(kw_only=True)
@@ -575,6 +395,10 @@ class StorageBindingBrokenError(StorageConfigError):
     """
 
     code: ClassVar[str] = "INVALID_INPUT_STORAGE_BINDING_BROKEN"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("binding_name", "binding_name"),
+        ("broken_fields", "broken_fields"),
+    )
     binding_name: str | None = None
     broken_fields: list[str] | None = None
 
@@ -592,16 +416,6 @@ class StorageBindingBrokenError(StorageConfigError):
         )
         self.binding_name = binding_name
         self.broken_fields = broken_fields or []
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.binding_name:
-            parts.append(f"binding_name={self.binding_name}")
-        if self.broken_fields:
-            parts.append(f"broken_fields={', '.join(self.broken_fields)}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
 
 
 @dataclass(kw_only=True)
@@ -639,6 +453,7 @@ class StorageEmptyUploadError(DataIntegrityError, StorageError):
     code: ClassVar[str] = "DATA_INTEGRITY_STORAGE_EMPTY_UPLOAD"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.APP_OWNER
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (("local_path", "local_path"),)
 
     local_path: str | None = None
 
@@ -653,22 +468,6 @@ class StorageEmptyUploadError(DataIntegrityError, StorageError):
         DataIntegrityError.__init__(self, message=message, cause=cause)
         self.local_path = local_path
         _init_storage_evidence(self, error_code=error_code)
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.local_path:
-            parts.append(f"local_path={self.local_path}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
 
 
 @dataclass(kw_only=True)
@@ -709,6 +508,13 @@ class StorageIntegrityError(DataIntegrityError, StorageError):
     code: ClassVar[str] = "DATA_INTEGRITY_STORAGE_TRANSFER"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.APP_OWNER
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("key", "key"),
+        ("local_path", "local_path"),
+        ("check", "check"),
+        ("expectation", "expected"),
+        ("observed", "observed"),
+    )
 
     local_path: str | None = None
     check: str | None = None
@@ -737,30 +543,6 @@ class StorageIntegrityError(DataIntegrityError, StorageError):
         self.check = check
         _init_storage_evidence(self, key=key, error_code=error_code)
 
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.key:
-            parts.append(f"key={self.key}")
-        if self.local_path:
-            parts.append(f"local_path={self.local_path}")
-        if self.check:
-            parts.append(f"check={self.check}")
-        if self.expectation:
-            parts.append(f"expected={self.expectation}")
-        if self.observed:
-            parts.append(f"observed={self.observed}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
-
 
 @dataclass(kw_only=True)
 class ObjectStorePreflightError(StorageError):
@@ -784,6 +566,8 @@ class ObjectStorePreflightError(StorageError):
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_PREFLIGHT"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.APP_OWNER
+    # The message already holds the full per-store report, one line per store.
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = ()
 
     failure_count: int = 0
 
@@ -797,11 +581,6 @@ class ObjectStorePreflightError(StorageError):
     ) -> None:
         StorageError.__init__(self, message=message, cause=cause, error_code=error_code)
         self.failure_count = failure_count
-
-    def __str__(self) -> str:
-        # The message already contains the full per-store report with newlines;
-        # prepend the error code prefix for structured-log searchability.
-        return f"[{self.error_code.code}] {self.message}"
 
 
 @dataclass(kw_only=True)
@@ -843,6 +622,10 @@ class StorageHandoffIncompleteError(DataIntegrityError, StorageError):
     code: ClassVar[str] = "DATA_INTEGRITY_STORAGE_HANDOFF_INCOMPLETE"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.APP_OWNER
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("missing_keys", "missing"),
+        ("outside_prefix_keys", "outside_prefix"),
+    )
 
     missing_keys: list[str] | None = None
     outside_prefix_keys: list[str] | None = None
@@ -875,24 +658,6 @@ class StorageHandoffIncompleteError(DataIntegrityError, StorageError):
         self.declared_count = declared_count
         _init_storage_evidence(self, key=prefix, error_code=error_code)
 
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.missing_keys:
-            parts.append(f"missing={self.missing_keys}")
-        if self.outside_prefix_keys:
-            parts.append(f"outside_prefix={self.outside_prefix_keys}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
-
 
 @dataclass(kw_only=True)
 class UnplaceableDeclaredFileError(InvalidInputError, StorageError):
@@ -922,6 +687,8 @@ class UnplaceableDeclaredFileError(InvalidInputError, StorageError):
     code: ClassVar[str] = "INVALID_INPUT_UNPLACEABLE_DECLARED_FILE"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.APP_OWNER
+    # The message already names the path; ``key`` repeats it.
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = ()
 
     storage_path: str | None = None
     source_prefix: str | None = None
@@ -945,17 +712,6 @@ class UnplaceableDeclaredFileError(InvalidInputError, StorageError):
         self.storage_path = storage_path
         self.source_prefix = source_prefix
         _init_storage_evidence(self, key=storage_path, error_code=error_code)
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        return f"[{self.error_code.code}] {self.message}"
 
 
 @dataclass(kw_only=True)
@@ -1031,14 +787,6 @@ class StorageDiskFullError(DiskFullError, StorageError):
             observed=exc.observed,
             cause=exc.cause,
         )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.key:
-            parts.append(f"key={self.key}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
 
 
 @dataclass(kw_only=True, init=False)
