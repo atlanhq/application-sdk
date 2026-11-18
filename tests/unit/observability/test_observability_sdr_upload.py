@@ -32,7 +32,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import ExitStack
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -40,7 +40,6 @@ import pytest
 from application_sdk.constants import LOG_FILE_NAME, METRICS_FILE_NAME, TRACES_FILE_NAME
 from application_sdk.observability import observability as obs_module
 from application_sdk.observability.background_loop import (
-    BackgroundTask,
     ObservabilityLoop,
 )
 from application_sdk.observability.observability import AtlanObservability
@@ -858,9 +857,6 @@ class TestResetStopsDroppedSinks:
         clears that guard, so the next adaptor of the class starts a flush."""
 
         class _Adaptor(_ConcreteObs):
-            _flush_task_started: ClassVar[bool] = False
-            _flush_task: ClassVar[BackgroundTask | None] = None
-
             def __init__(self, data_dir: str) -> None:
                 super().__init__(
                     batch_size=1000,
@@ -868,17 +864,169 @@ class TestResetStopsDroppedSinks:
                     data_dir=data_dir,
                     file_name=METRICS_FILE_NAME,
                 )
-                # The shape every adaptor's constructor has.
-                if not _Adaptor._flush_task_started:
-                    _Adaptor._flush_task = self._start_periodic_flush()
-                    _Adaptor._flush_task_started = True
+                self._ensure_periodic_flush()
 
         AtlanObservability._reset_for_testing()
         own_loop.shutdown(timeout=5)
-        _Adaptor(str(tmp_path / "late"))
-        assert _Adaptor._flush_task is None
-        assert _Adaptor._flush_task_started
+        adaptor = _Adaptor(str(tmp_path / "late"))
+        assert adaptor._periodic_flush_task is None
+        assert AtlanObservability._periodic_flush_owners.get(_Adaptor) is adaptor
 
         AtlanObservability._reset_for_testing()
 
-        assert not _Adaptor._flush_task_started
+        assert _Adaptor not in AtlanObservability._periodic_flush_owners
+
+
+class TestEnsurePeriodicFlush:
+    """``_ensure_periodic_flush`` claims the class under its lock, then starts
+    the flush with the lock released (FND-4918).
+
+    Starting calls overridable methods and, on failure, logging handlers the
+    process installed. Held across them, the lock hung any of them that built
+    another sink: that sink's own call waited on this thread's lock for good.
+    """
+
+    @pytest.fixture
+    def own_loop(self, monkeypatch) -> Iterator[ObservabilityLoop]:
+        """A private observability loop, so the process-wide one is untouched."""
+        AtlanObservability._reset_for_testing()
+        loop = ObservabilityLoop()
+        monkeypatch.setattr(obs_module, "observability_loop", loop)
+        try:
+            yield loop
+        finally:
+            AtlanObservability._reset_for_testing()
+            loop.shutdown(timeout=5)
+
+    @staticmethod
+    def _build_off_thread(build) -> None:
+        """Run *build* on a daemon thread; fail if it is still running at 10s."""
+        errors: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                build()
+            except BaseException as exc:  # noqa: BLE001 — re-raised on the test thread
+                errors.append(exc)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        thread.join(timeout=10)
+        assert not thread.is_alive(), "building a sink hung on the flush lock"
+        if errors:
+            raise errors[0]
+
+    def test_a_sink_built_while_the_flush_starts_does_not_hang(
+        self, own_loop, tmp_path
+    ):
+        built: list[_ConcreteObs] = []
+
+        class _Nesting(_ConcreteObs):
+            def __init__(self, data_dir: str) -> None:
+                super().__init__(
+                    batch_size=1000,
+                    flush_interval=60,
+                    data_dir=data_dir,
+                    file_name=METRICS_FILE_NAME,
+                )
+                built.append(self)
+                self._ensure_periodic_flush()
+
+            def _start_periodic_flush(self):
+                if len(built) == 1:
+                    _Nesting(str(tmp_path / "inner"))
+                return super()._start_periodic_flush()
+
+        self._build_off_thread(lambda: _Nesting(str(tmp_path / "outer")))
+
+        outer, inner = built
+        assert AtlanObservability._periodic_flush_owners.get(_Nesting) is outer
+        assert outer._periodic_flush_task is not None
+        assert inner._periodic_flush_task is None, "a second flush was started"
+
+    def test_a_sink_built_by_a_log_handler_on_failure_does_not_hang(
+        self, own_loop, tmp_path
+    ):
+        built: list[_ConcreteObs] = []
+
+        class _Failing(_ConcreteObs):
+            def __init__(self, data_dir: str) -> None:
+                super().__init__(
+                    batch_size=1000,
+                    flush_interval=60,
+                    data_dir=data_dir,
+                    file_name=METRICS_FILE_NAME,
+                )
+                built.append(self)
+                self._ensure_periodic_flush()
+
+            def _start_periodic_flush(self):
+                raise RuntimeError("loop unavailable")
+
+        def build_on_log(*_args: Any, **_kwargs: Any) -> None:
+            if len(built) == 1:
+                _Failing(str(tmp_path / "from-handler"))
+
+        with mock.patch.object(obs_module.logging, "warning", build_on_log):
+            self._build_off_thread(lambda: _Failing(str(tmp_path / "first")))
+
+        assert len(built) == 2
+        assert _Failing not in AtlanObservability._periodic_flush_owners, (
+            "a failed start left the class claimed; no later sink would retry"
+        )
+
+    def test_a_reset_during_the_start_stops_the_new_flush(self, own_loop, tmp_path):
+        """The reset finds no handle to stop yet; the flush it would have
+        missed is stopped when its start returns."""
+        started: list[Any] = []
+
+        class _ResetMidStart(_ConcreteObs):
+            def __init__(self, data_dir: str) -> None:
+                super().__init__(
+                    batch_size=1000,
+                    flush_interval=60,
+                    data_dir=data_dir,
+                    file_name=METRICS_FILE_NAME,
+                )
+                self._ensure_periodic_flush()
+
+            def _start_periodic_flush(self):
+                type(self)._stop_class_flushes_for_testing()
+                handle = super()._start_periodic_flush()
+                started.append(handle)
+                return handle
+
+        sink = _ResetMidStart(str(tmp_path))
+
+        (handle,) = started
+        assert handle is not None, "no flush was started: vacuous"
+        assert handle.wait(timeout=10), "the flush outlived the reset"
+        assert sink._periodic_flush_task is None
+        assert _ResetMidStart not in AtlanObservability._periodic_flush_owners
+
+    def test_a_fork_mid_start_leaves_the_class_free_to_start_a_flush(
+        self, own_loop, tmp_path
+    ):
+        """A claim with no handle (the fork caught its sink mid-start) is
+        released in the child, so the class's next sink starts a flush."""
+
+        class _Claimed(_ConcreteObs):
+            def __init__(self, data_dir: str) -> None:
+                super().__init__(
+                    batch_size=1000,
+                    flush_interval=60,
+                    data_dir=data_dir,
+                    file_name=METRICS_FILE_NAME,
+                )
+
+        stuck = _Claimed(str(tmp_path / "stuck"))
+        AtlanObservability._periodic_flush_owners[_Claimed] = stuck
+        assert stuck._periodic_flush_task is None
+
+        AtlanObservability._restart_periodic_flushes_after_fork()
+
+        assert _Claimed not in AtlanObservability._periodic_flush_owners
+        fresh = _Claimed(str(tmp_path / "fresh"))
+        fresh._ensure_periodic_flush()
+        assert AtlanObservability._periodic_flush_owners.get(_Claimed) is fresh
+        assert fresh._periodic_flush_task is not None

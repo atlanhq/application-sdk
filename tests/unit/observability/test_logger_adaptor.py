@@ -39,6 +39,7 @@ from application_sdk.observability.logger_adaptor import (
     _redact_exception_records,
     get_logger,
 )
+from application_sdk.observability.observability import AtlanObservability
 from application_sdk.testing.hypothesis.strategies.common.logger import (
     activity_info_strategy,
     workflow_info_strategy,
@@ -1561,7 +1562,8 @@ class TestPeriodicFlushStartsOnSharedLoop:
         # Close the coroutine the mock swallowed, so it is not reported as
         # never awaited.
         shared_loop.start.call_args.args[0].close()
-        assert AtlanLoggerAdapter._flush_task is shared_loop.start.return_value
+        owner = AtlanObservability._periodic_flush_owners[AtlanLoggerAdapter]
+        assert owner._periodic_flush_task is shared_loop.start.return_value
         return shared_loop
 
     def test_without_a_running_loop(self):
@@ -1571,6 +1573,27 @@ class TestPeriodicFlushStartsOnSharedLoop:
         before = asyncio.all_tasks()
         self._construct("test_flush_in_loop")
         assert asyncio.all_tasks() == before
+
+    def test_a_second_adapter_shares_the_flush(self):
+        shared_loop = self._construct("test_flush_shared_a")
+        with mock.patch(
+            "application_sdk.observability.observability.observability_loop",
+            shared_loop,
+        ):
+            AtlanLoggerAdapter("test_flush_shared_b")
+        shared_loop.start.assert_called_once()
+
+    def test_reset_stops_the_flush(self):
+        """FND-4918: the reset used to clear the "started" guard only.
+
+        The old flush kept running on the shared loop, and the next adapter
+        started a second one beside it.
+        """
+        shared_loop = self._construct("test_flush_reset")
+        handle = shared_loop.start.return_value
+        AtlanLoggerAdapter._reset_for_testing()
+        handle.cancel.assert_called_once()
+        assert AtlanLoggerAdapter not in AtlanObservability._periodic_flush_owners
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -2217,13 +2240,6 @@ class TestSendToOtelSwallowsErrors:
         ):
             # Must not raise.
             logger_adapter._send_to_otel({"any": "record"})
-
-
-def test_reset_for_testing_also_resets_flush_task_started():
-    """Documents the leak between tests in the class-level flush task flag."""
-    AtlanLoggerAdapter._flush_task_started = True
-    AtlanLoggerAdapter._reset_for_testing()
-    assert AtlanLoggerAdapter._flush_task_started is False
 
 
 # ---------------------------------------------------------------------------

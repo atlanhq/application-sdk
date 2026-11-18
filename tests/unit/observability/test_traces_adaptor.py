@@ -191,11 +191,6 @@ class TestNoPeriodicFlush:
     @staticmethod
     def _construct() -> None:
         with (
-            # The old flush's once-per-process guard, cleared so a flush
-            # would start here if construction still started one.
-            mock.patch.object(
-                AtlanTracesAdapter, "_flush_task_started", False, create=True
-            ),
             mock.patch.dict(
                 "os.environ",
                 {

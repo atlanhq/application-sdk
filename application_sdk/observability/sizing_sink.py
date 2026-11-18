@@ -8,7 +8,7 @@ import threading
 import warnings
 from dataclasses import asdict
 from time import time
-from typing import Any, ClassVar
+from typing import Any
 
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -17,7 +17,9 @@ from application_sdk.constants import (
     SIZING_FILE_NAME,
     SIZING_FLUSH_INTERVAL_SECONDS,
 )
-from application_sdk.observability.background_loop import BackgroundTask
+from application_sdk.observability.background_loop import (  # noqa: F401 — re-exported (named here before FND-4918)
+    BackgroundTask,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.sizing import SIZING_SCHEMA_VERSION
@@ -31,42 +33,20 @@ class SizingObservabilitySink(AtlanObservability[Any]):
     is NOT optional: ``add_record`` only checks its trigger when a record arrives.
     """
 
-    _flush_task_started: ClassVar[bool] = False
-    # Kept so ``_reset_for_testing`` can stop the flush: a reset that only
-    # clears the flag leaves the old flush running on the shared loop,
-    # writing a dropped sink's rows later against whatever store the
-    # environment then names.
-    _flush_task: ClassVar[BackgroundTask | None] = None
-
     @classmethod
     def _reset_for_testing(cls) -> None:
-        """Stop the flush and drop every sizing sink's unflushed rows."""
-        task = cls._flush_task
-        cls._flush_task = None
-        cls._flush_task_started = False
+        """Stop every sizing sink's flushes, drop their unflushed rows, and
+        unregister them."""
+        cls._stop_class_flushes_for_testing()
         for instance in list(AtlanObservability._instances):
             if isinstance(instance, cls):
-                with instance._buffer_lock:
-                    instance._buffer = []
                 AtlanObservability._instances.remove(instance)
-        if task is not None:
-            task.cancel()
-            # Waits out a flush already in progress, which may be uploading.
-            task.wait(timeout=30)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        if SizingObservabilitySink._flush_task_started:
-            return
-        try:
-            # On the shared observability loop, whatever thread builds the
-            # sink: it is built lazily inside an activity, but must also work
-            # off a loop.
-            SizingObservabilitySink._flush_task = self._start_periodic_flush()
-            SizingObservabilitySink._flush_task_started = True
-        # conformance: ignore[E004] telemetry; a sink that cannot start its flush must not stop collection
-        except Exception:
-            logger.warning("could not start the sizing flush task", exc_info=True)
+        # On the shared observability loop, whatever thread builds the sink:
+        # it is built lazily inside an activity, but must also work off a loop.
+        self._ensure_periodic_flush()
 
     def process_record(self, record: Any) -> dict[str, Any]:
         """Flatten one observation into a row. ``app``/``deployment`` are stamped
