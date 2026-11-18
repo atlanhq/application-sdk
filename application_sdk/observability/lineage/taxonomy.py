@@ -8,9 +8,14 @@ Modelled on the AppErrors hierarchy (ADR-0013). The SDK owns the closed sets:
   processing, or the asset lookup that resolves refs after the app.
 * :class:`Verdict`: the per-asset answer.
 
-A reason is a class, not a string. The SDK ships one leaf per
-:class:`ReasonCategory` plus a handful of generic, connector-agnostic reasons.
-An app subclasses the closest one and gives it its own ``code``::
+A reason is a class, not a string. The SDK ships two levels:
+
+* a **generic reason** per :class:`ReasonCategory` (``ParserFailure``,
+  ``CacheMiss``, ...), and
+* **sub-reasons**: connector-agnostic refinements of one
+  (``CustomSqlParserFailure``, ``UpstreamNotInAtlan``, ...).
+
+An app subclasses the closest of either and gives it its own ``code``::
 
     class DatasourceHasNoUpstreamTables(NoUpstreamTables):
         code = "DATASOURCE_HAS_NO_UPSTREAM_TABLES"
@@ -137,7 +142,7 @@ class LineageReason:
         return Verdict.VALID_NONE if cls.expected else Verdict.MISSING
 
 
-# ── One leaf per ReasonCategory ─────────────────────────────────────────────
+# ── Generic reasons: one per ReasonCategory ─────────────────────────────────
 
 
 class ParserFailure(LineageReason):
@@ -224,7 +229,7 @@ class UninstrumentedPath(LineageReason):
     description = "Registered, but no code path recorded lineage or a reason"
 
 
-# ── Generic reasons the SDK ships (connector-agnostic) ──────────────────────
+# ── Sub-reasons: connector-agnostic refinements of a generic reason ─────────
 
 
 class CustomSqlParserFailure(ParserFailure):
@@ -344,7 +349,7 @@ SDK_REASONS: tuple[type[LineageReason], ...] = (
     UpstreamAmbiguous,
     UpstreamTypeNotRequested,
 )
-"""Every reason the SDK ships, leaves first."""
+"""Every reason the SDK ships: the generic reasons first, then the sub-reasons."""
 
 
 class ReasonRegistry:

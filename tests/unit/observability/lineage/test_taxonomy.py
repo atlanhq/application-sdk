@@ -13,6 +13,7 @@ from application_sdk.observability.lineage import (
     LineageReason,
     NonSqlSource,
     NoUpstreamTables,
+    ParserFailure,
     ReasonCategory,
     ReasonRegistry,
     UninstrumentedPath,
@@ -46,6 +47,25 @@ def test_app_subclass_inherits_category_and_gap():
     assert reason.category is ReasonCategory.NO_UPSTREAM_DATA
     assert reason.gap is GapCategory.SOURCE
     assert reason.verdict() is Verdict.MISSING
+
+
+def test_app_extends_either_level():
+    """Apps subclass a generic reason or a sub-reason; both aggregate by category."""
+
+    class AppParseTimeout(ParserFailure):
+        code = "APP_PARSE_TIMEOUT"
+
+    class AppCustomSqlTimeout(CustomSqlParserFailure):
+        code = "APP_CUSTOM_SQL_TIMEOUT"
+
+    assert issubclass(CustomSqlParserFailure, ParserFailure)
+    assert AppParseTimeout.category is ReasonCategory.PARSER_FAILURE
+    assert AppCustomSqlTimeout.category is ReasonCategory.PARSER_FAILURE
+    assert (
+        AppCustomSqlTimeout.customer_message == CustomSqlParserFailure.customer_message
+    )
+    registry = ReasonRegistry([AppParseTimeout, AppCustomSqlTimeout])
+    assert registry.resolve("APP_CUSTOM_SQL_TIMEOUT") is AppCustomSqlTimeout
 
 
 def test_expected_reason_is_valid_none():

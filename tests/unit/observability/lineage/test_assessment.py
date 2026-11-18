@@ -34,7 +34,13 @@ def test_missing_takes_the_reason_gap():
     result = assess(LineageStatus.MISSING_LINEAGE, CustomSqlParserFailure)
     assert result.verdict is Verdict.MISSING
     assert result.gap is GapCategory.PROCESSING
-    assert result.to_row()["reasonCode"] == "CUSTOM_SQL_PARSER_FAILURE"
+    row = result.to_row()
+    assert row["reasonCode"] == "CUSTOM_SQL_PARSER_FAILURE"
+    assert row["funnelBucket"] == "Parse error"
+
+
+def test_row_has_no_funnel_bucket_when_nothing_failed():
+    assert assess(LineageStatus.HAS_LINEAGE).to_row()["funnelBucket"] is None
 
 
 def test_missing_with_expected_reason_is_valid_none():

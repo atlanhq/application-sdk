@@ -13,6 +13,7 @@ from application_sdk.observability.lineage.assessment import (
     assess,
     settle,
 )
+from application_sdk.observability.lineage.funnel import funnel_bucket
 from application_sdk.observability.lineage.identity import (
     IDENTITY_SCHEMA_VERSION,
     components_hash,
@@ -90,5 +91,6 @@ __all__ = [
     "Verdict",
     "assess",
     "components_hash",
+    "funnel_bucket",
     "settle",
 ]

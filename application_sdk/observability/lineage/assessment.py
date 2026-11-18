@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from application_sdk.observability.lineage.funnel import funnel_bucket
 from application_sdk.observability.lineage.taxonomy import (
     GapCategory,
     LineageReason,
@@ -76,6 +77,7 @@ class Assessment:
             "gapCategory": self.gap.value if self.gap else None,
             "expectedBasis": self.basis,
             "customerMessage": reason.customer_message if reason else None,
+            "funnelBucket": funnel_bucket(self),
         }
 
 
