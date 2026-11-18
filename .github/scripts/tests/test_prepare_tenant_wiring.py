@@ -1109,3 +1109,53 @@ def test_sdr_and_app_configs_come_from_the_release_paths_producers(
     assert str(producer["run"]).endswith("build_and_publish/prepare.py app-configs")
     ids = [s.get("id") for s in steps]
     assert ids.index("app_configs") < ids.index("install")
+
+
+# ── A failed install puts the previous version back (CONAT-7994) ─────────────
+
+
+def _restore_step(jobs: _Jobs) -> _Step:
+    steps = [
+        s
+        for s in _prepare_steps(jobs)
+        if str(s.get("name", "")) == "Restore the previous version"
+    ]
+    assert len(steps) == 1, "prepare-tenant must restore the prior version on failure"
+    return steps[0]
+
+
+def test_restore_runs_only_after_a_failure_with_a_prior_version(jobs: _Jobs) -> None:
+    condition = " ".join(str(_restore_step(jobs)["if"]).split())
+    assert "failure()" in condition
+    assert "steps.install.outputs.previous_version_id != ''" in condition
+
+
+def test_restore_runs_before_the_summary(jobs: _Jobs) -> None:
+    names = [str(s.get("name", "")) for s in _prepare_steps(jobs)]
+    assert (
+        names.index("Install the app under test")
+        < names.index("Restore the previous version")
+        < names.index("Summarise")
+    )
+
+
+def test_job_timeout_also_covers_the_restore(jobs: _Jobs) -> None:
+    """The restore sits on top of the install budget, so the job must hold both."""
+    step = _restore_step(jobs)
+    restore_waits = (
+        app.DEFAULT_RESTORE_INSTALL_RETRY_SECONDS
+        + app.DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS
+    ) // 60
+    assert int(str(step["timeout-minutes"])) > restore_waits, (
+        "the restore step's own timeout must clear the script's waits"
+    )
+    install_waits = (
+        app.DEFAULT_PUBLISH_RETRY_SECONDS
+        + app.DEFAULT_INSTALL_RETRY_SECONDS
+        + app.DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS
+        + app.DEFAULT_SETTLE_SECONDS
+    ) // 60
+    required = round(install_waits / _MAX_WAIT_SHARE) + int(
+        str(step["timeout-minutes"])
+    )
+    assert int(str(jobs["prepare-tenant"]["timeout-minutes"])) >= required

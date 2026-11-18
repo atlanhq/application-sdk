@@ -4016,3 +4016,120 @@ def test_build_identity_probe_finds_the_module_at_either_sdk_path(
 
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
     assert app._local_sdk_serves_build_identity() is False
+
+
+# ── Restore after a failed prepare-tenant (CONAT-7994) ───────────────────────
+
+_PREVIOUS_ID = "01a1cf05-473d-7600-9726-cfa53f2ef72e"
+
+
+def _restore_args(**overrides: object) -> argparse.Namespace:
+    values: dict[str, object] = {
+        "base_url": _TENANT,
+        "app_id": _APP_ID,
+        "version_id": _PREVIOUS_ID,
+        "expected": "1.0.0",
+        "install_retry_seconds": 0,
+        "timeout_seconds": 600,
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+def _installed(version_id: str, version: str = "1.0.0") -> Response:
+    return _ok({"installed": {"version": version, "version_id": version_id}})
+
+
+def test_install_records_the_previous_version_before_publishing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    out = tmp_path / "out"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _installed(_PREVIOUS_ID)),
+                StubRoute(
+                    "POST",
+                    "/marketplace/publish",
+                    Response(status=400, body={"detail": "rejected"}),
+                ),
+            ]
+        ),
+    )
+    with pytest.raises((app.TenantAppError, app.PublishBodyError, TenantApiError)):
+        app.install(_install_args())
+
+    written = out.read_text()
+    assert "previous_version=1.0.0\n" in written
+    assert f"previous_version_id={_PREVIOUS_ID}\n" in written, (
+        "the prior version must be on the step outputs even when the publish "
+        "fails, or the restore step has nothing to put back"
+    )
+
+
+def test_restore_force_installs_the_previous_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _installed("other-id", _VERSION)),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _installed(_PREVIOUS_ID)),
+            ]
+        ),
+    )
+    assert app.restore(_restore_args()) == "1.0.0"
+    assert transport.body_for("/install") == {
+        "version_id": _PREVIOUS_ID,
+        "force_install": True,
+    }
+    assert not any("/marketplace/publish" in p for p in transport.paths("POST")), (
+        "restore re-installs an existing version; it must never publish one"
+    )
+
+
+def test_restore_is_a_noop_when_the_tenant_already_runs_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _wire(
+        monkeypatch,
+        StubTransport(routes=[StubRoute("GET", "/info", _installed(_PREVIOUS_ID))]),
+    )
+    assert app.restore(_restore_args()) == "1.0.0"
+    assert transport.paths("POST") == []
+
+
+def test_restore_fails_when_the_install_record_does_not_move(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _installed("other-id", _VERSION)),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _installed("other-id", _VERSION)),
+            ]
+        ),
+    )
+    with pytest.raises(app.TenantAppError, match="restore did not take"):
+        app.restore(_restore_args())
+
+
+def test_restore_rejects_a_malformed_version_id_before_any_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _wire(monkeypatch, StubTransport(routes=[]))
+    with pytest.raises(TenantApiError, match="invalid version_id"):
+        app.restore(_restore_args(version_id="../../evil"))
+    assert transport.calls == []

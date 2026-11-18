@@ -140,6 +140,7 @@ from e2e_tenant_api import (
     validate_app_id,
     validate_tenant_base_url,
     validate_tenant_id,
+    validate_version_id,
 )
 from marketplace_publish_body import PublishBodyError, PublishRequest, build
 
@@ -485,6 +486,12 @@ _POD_TRANSIENT_STATUSES = (429, 500, 502, 503, 504)
 #: derivation. Two different numbers for one physical event would only invite
 #: the question of which is right.
 DEFAULT_POD_WAIT_SECONDS = 300
+
+#: Restore re-installs a version the tenant already ran, so LM's catalog
+#: snapshot already holds it and the long post-publish catalog-lag retry
+#: (:data:`DEFAULT_INSTALL_RETRY_SECONDS`) has nothing to wait for. Two minutes
+#: covers a transient marketplace blip without stretching the job budget.
+DEFAULT_RESTORE_INSTALL_RETRY_SECONDS = 120
 _POD_POLL_SECONDS = 10
 
 #: Where the SDK's build-identity module lives, for the diagnostic probe in
@@ -2612,6 +2619,16 @@ def install(args: argparse.Namespace) -> InstallOutcome:
         return _converged_outcome(read_client, app_id, args.version, info, current)
     if current:
         print(f"tenant runs {current}; installing {args.version}")
+        # Recorded BEFORE anything is published, so a failure anywhere below
+        # still leaves the workflow what it needs to put the tenant back.
+        # Without it a failed prepare-tenant strands a broken build on a shared
+        # pool tenant until the next run happens to converge it — which is how
+        # an ai-memory build looped its Service on two pool tenants for hours.
+        previous_id = installed_version_id(info)
+        if previous_id:
+            _write_outputs(
+                {"previous_version": current, "previous_version_id": previous_id}
+            )
     else:
         print(f"{app_id} is not installed on this tenant; installing {args.version}")
 
@@ -2859,6 +2876,70 @@ def install(args: argparse.Namespace) -> InstallOutcome:
         pod_build_id=pod.build_id,
         verified_layer=pod_layer,
     )
+
+
+def installed_version_id(payload: dict[str, object]) -> str:
+    """Return the version UUID LM's install record names, or "" when absent.
+
+    The UUID, not the version string: the string is an optional Atlas attribute
+    (see :func:`resolve_version_via_catalog`), while the install endpoint takes
+    the UUID, and it is the only identifier that round-trips into a restore.
+    """
+    raw = payload.get("installed")
+    installed: dict[str, object] = dict(raw) if isinstance(raw, dict) else {}
+    return str(installed.get("version_id") or "").strip()
+
+
+def restore(args: argparse.Namespace) -> str:
+    """Force-install the version the tenant ran before this run's install.
+
+    Runs only when prepare-tenant failed after ``install`` recorded the prior
+    version. A pool tenant is shared, so a broken build left in place breaks
+    every later run against it and can misbehave on the tenant itself. Returns
+    the restored version. Best-effort on LM's deployment verdict, strict on the
+    read-back: the tenant's install record has to name the restored UUID.
+    """
+    app_id = validate_app_id(resolve_app_id(args.app_id))
+    base_url = validate_tenant_base_url(args.base_url)
+    version_id = validate_version_id(args.version_id)
+    publish_client, read_client = _clients(base_url)
+
+    if installed_version_id(_app_info(read_client, app_id)) == version_id:
+        print(f"tenant already runs {args.expected} ({version_id}); nothing to restore")
+        return args.expected
+
+    print(f"restoring {args.expected} (version_id={version_id})")
+    deployment_id = _install(
+        publish_client,
+        app_id,
+        version_id,
+        "",
+        retry_seconds=args.install_retry_seconds,
+    )
+    if deployment_id:
+        print(f"restore accepted, deployment_id={deployment_id}")
+        try:
+            _poll_deployment(read_client, deployment_id, args.timeout_seconds)
+        except DeploymentFailed as exc:
+            # The read-back below decides; LM's verdict is namespace-scoped and
+            # the failing pod may well be the build being rolled away from.
+            _dump_failure(read_client, app_id)
+            print(
+                f"::warning::restore deployment reported {exc}; checking the install record"
+            )
+    else:
+        print("no deployment started; relying on the install-record read-back")
+
+    now = installed_version_id(_app_info(read_client, app_id))
+    if now != version_id:
+        raise TenantAppError(
+            f"restore did not take: the tenant's install record names "
+            f"{now or '<nothing>'} rather than {version_id} ({args.expected}). "
+            "The tenant is still on the build under test — roll it back by hand "
+            "before releasing the lease to another run."
+        )
+    print(f"tenant restored to {args.expected} ({version_id})")
+    return args.expected
 
 
 def verify(args: argparse.Namespace) -> str:
@@ -3120,12 +3201,33 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
 
+    p_restore = sub.add_parser(
+        "restore", help="force-install the version the tenant ran before"
+    )
+    _add_common(p_restore)
+    p_restore.add_argument("--version-id", required=True)
+    p_restore.add_argument(
+        "--expected",
+        required=True,
+        help="The version string the UUID names, for messages and the output.",
+    )
+    p_restore.add_argument(
+        "--install-retry-seconds",
+        type=int,
+        default=DEFAULT_RESTORE_INSTALL_RETRY_SECONDS,
+    )
+    p_restore.add_argument(
+        "--timeout-seconds", type=int, default=DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS
+    )
+
     args = parser.parse_args(argv)
 
     try:
         if args.command == "install":
             outcome = install(args)
             _write_outputs(outcome.as_outputs())
+        elif args.command == "restore":
+            _write_outputs({"restored_version": restore(args)})
         else:
             _write_outputs({"installed_version": verify(args)})
     except (TenantAppError, TenantApiError) as exc:

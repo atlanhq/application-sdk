@@ -229,8 +229,9 @@ DEFAULT_POLL_SECONDS = 30
 # Raised from 14400 when prepare-tenant's ceiling went to 48 min to fit the
 # publish retry (FND-760). That was the sizing test doing its job, not a margin
 # being spent: the hold this must clear is 48+120 min, and a TTL that no longer
-# cleared it by 1.5x would start breaking live holders.
-DEFAULT_TTL_SECONDS = 16200
+# cleared it by 1.5x would start breaking live holders. Raised again to 16800
+# when prepare-tenant grew a 15-min restore-on-failure step (65+120 min hold).
+DEFAULT_TTL_SECONDS = 16800
 
 
 def lease_ref(app: str, cloud: str) -> str:
