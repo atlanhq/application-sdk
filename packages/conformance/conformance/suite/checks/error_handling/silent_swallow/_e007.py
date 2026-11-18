@@ -820,15 +820,41 @@ class E007Mixin:
         has_category = len(call.args) >= 2 or "category" in keywords
         return imported and has_output_path and has_category
 
+    def _is_awaited_offloaded_residual_failure_record(
+        self, stmt: ast.stmt, call: ast.Call | None
+    ) -> bool:
+        """Whether an awaited SDK thread offload invokes the imported residual writer."""
+        if (
+            call is None
+            or not isinstance(stmt, ast.Expr)
+            or not isinstance(stmt.value, ast.Await)
+            or stmt.value.value is not call
+            or not isinstance(call.func, ast.Name)
+            or self._import_origins.get(call.func.id)
+            != "application_sdk.execution.heartbeat.run_in_thread"
+            or not call.args
+            or any(isinstance(argument, ast.Starred) for argument in call.args)
+        ):
+            return False
+        # Apply the direct writer's provenance and required-argument checks to
+        # the callable and arguments forwarded through run_in_thread.
+        writer_call = ast.Call(
+            func=call.args[0],
+            args=call.args[1:],
+            keywords=call.keywords,
+        )
+        return self._is_residual_failure_record_call(writer_call)
+
     def _has_residual_failure_record(
         self, handler: ast.ExceptHandler, stmt: ast.Return
     ) -> bool:
         """True when the handler writes a residual record before a per-item ``None``.
 
-        An empty aggregate (``{}``, ``[]``) still reads as a genuine empty
-        result to the caller, so it qualifies only when a WARNING/ERROR also
-        logged the binding through a sanitizer before the return.  The record
-        may read the binding through a local built from it.
+        A record may be written directly or by an awaited SDK ``run_in_thread``
+        offload. An empty aggregate (``{}``, ``[]``) still reads as a genuine
+        empty result to the caller, so it qualifies only when a WARNING/ERROR
+        also logged the binding through a sanitizer before the return. The
+        record may read the binding through a local built from it.
         """
         none = isinstance(stmt.value, ast.Constant) and stmt.value.value is None
         if not none and not _is_empty_sentinel(stmt.value):
@@ -840,8 +866,9 @@ class E007Mixin:
         for previous in handler.body:
             if previous is stmt:
                 return recorded and (none or warned)
-            if self._is_failure_record_call(
-                self._unwrapped_call(previous), handler.name, carriers
+            call = self._unwrapped_call(previous)
+            if self._is_failure_record_call(call, handler.name, carriers) or (
+                self._is_awaited_offloaded_residual_failure_record(previous, call)
             ):
                 recorded = True
             elif self._is_sanitized_failure_log(previous, handler):

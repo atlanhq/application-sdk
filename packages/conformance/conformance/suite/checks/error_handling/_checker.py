@@ -22,6 +22,8 @@ def import_bindings(tree: ast.Module) -> dict[str, str]:
     it), unlike ``import a.b as c``, which binds ``c`` to ``a.b``. A name the
     module also assigns, defines or rebinds anywhere is left out: after
     ``asyncio = domain_errors`` the name no longer names the stdlib module.
+    A function or lambda parameter of the same name counts as a rebinding:
+    inside ``def f(run_in_thread)`` the name is whatever the caller passed.
     Likewise a name imported from different origins (e.g. a function-local
     import shadowing a module-level one) is left out: the map is module-wide
     and cannot say which binding a given use sees.
@@ -56,6 +58,7 @@ def import_bindings(tree: ast.Module) -> dict[str, str]:
             for n in ast.walk(tree)
             if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
         }
+        | {n.arg for n in ast.walk(tree) if isinstance(n, ast.arg)}
     )
     return {name: origin for name, origin in bound.items() if name not in rebound}
 
