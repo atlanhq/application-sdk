@@ -105,7 +105,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/bundle/`](examples/bundle/) — multi-entrypoint app (crawler + miner); shared credential configmap; per-entrypoint artifact subfolders.
 - [`examples/credential-configs/`](examples/credential-configs/) — `additionalCredentialConfigs`: an entrypoint that emits more than one credential configmap (primary + wrapped delivery + bare object-store), and one whose only credential is the shared bare config. The bundle hoists and dedupes them. See [CredentialConfig](docs/reference.md#credentialconfig--additional-credential-configmaps).
 - [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`packageId` on the card entrypoint; route-only entrypoint has none).
-- [`examples/behind-the-scenes/`](examples/behind-the-scenes/) — single-entrypoint app with `marketplaceCard = false`; routable but no marketplace card or `package_id` emitted.
+- [`examples/behind-the-scenes/`](examples/behind-the-scenes/) — single-entrypoint app with `marketplaceCard = false`; routable but no marketplace card or `package_id` emitted. Also sets root `e2eOverrides` (`connectionType` / `connectionCategory`) for an app with no `connector`.
 - [`examples/system-app/`](examples/system-app/) — `type = "system"`: an in-tenant app started by other apps' DAG nodes. No `entrypoints` block, no card, no credential config, no manifest. Typed `inputs` (string, number, enum, bounded list/map, nested object) render `_input.py` without a `uiConfig`. They also render `contract/generated/input.pkl`, the typed DAG node for callers. Its planned toolkit home, `src/system/<name>.pkl`, does not exist yet, so callers cannot import it through the toolkit today.
 - [`examples/system-bundle/`](examples/system-bundle/) — `type = "system"` with two entrypoints, each a UI-less system sub-contract with its own `inputs`. Each renders `app/generated/<entrypoint_snake>/` (importable), `contract/generated/<entrypoint>/input.pkl`, and an `_e2e_base.py` extending `SystemAppE2ETest`.
 - [`examples/system-triggers/`](examples/system-triggers/) — `type = "system"` bundle whose entrypoints declare `schedules` and streaming `events`. `atlan.yaml` renders an `entrypoints` block listing those entrypoints (`type: utility`, `marketplace_card: false`), so Local Marketplace reconciles the triggers and no card appears.
@@ -482,6 +482,8 @@ new Entrypoint {
 }
 ```
 
+A bundle root, or an entrypoint's own `contract`, refuses `e2eOverrides`; declare it on the `Entrypoint`. For a single-entrypoint app, see [E2E harness overrides](#e2e-harness-overrides).
+
 ```pkl
 // app.pkl
 amends "@app-contract-toolkit/App.pkl"
@@ -555,6 +557,19 @@ See [`examples/system-bundle/`](examples/system-bundle/).
 - An `Entrypoint.metadata` `marketplace_card` other than `false`: a system app never renders a card.
 
 See [`examples/system-triggers/`](examples/system-triggers/).
+
+## E2E Harness Overrides
+
+`app/generated/_e2e_base.py` derives the e2e harness identity from the contract. When an app enriches a connection of a source it does not declare as its `connector` (a query-history miner whose user picks any database connection), name that connection in `e2eOverrides` instead of pinning it in the test module:
+
+```pkl
+e2eOverrides {
+  connectionType = "postgres"
+  connectionCategory = "database"
+}
+```
+
+At a single-entrypoint root only `connectorShortName`, `connectionType` and `connectionCategory` apply; it changes only `_e2e_base.py`. The Argo names come from the root `argoPackageNames` and `argoTemplateName`. `connector_config_name` is emitted only for a `connectorShortName` alias on an app that generates a primary credential config; an alias on an app whose only credential configs are `additionalCredentialConfigs` is refused. Bundles declare `e2eOverrides` per `Entrypoint` (see above).
 
 ## Widget Types
 
