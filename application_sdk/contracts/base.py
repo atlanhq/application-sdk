@@ -134,7 +134,7 @@ class SerializableEnum(StrEnum):
     """
 
     @staticmethod
-    def _generate_next_value_(  # type: ignore[override]
+    def _generate_next_value_(
         name: str, start: int, count: int, last_values: list[str]
     ) -> str:
         """Auto-generate value from name in lowercase.
@@ -420,7 +420,7 @@ class Input(BaseModel):
                 continue
             if (
                 field_info.default_factory is not None
-                and value == field_info.default_factory()  # type: ignore[call-arg]
+                and value == field_info.default_factory()  # pyright: ignore[reportCallIssue]
             ):
                 continue
             data[name] = value
@@ -454,7 +454,7 @@ class Input(BaseModel):
 
         # Store the flag for potential later checks
         if allow_unbounded_fields:
-            cls._allow_unbounded_fields = True  # type: ignore[attr-defined]
+            cls._allow_unbounded_fields = True
 
         # Validate payload safety, skipping internal framework fields
         validate_payload_safety(cls, skip_fields=set())
@@ -527,7 +527,7 @@ class Output(BaseModel):
 
         # Store the flag for potential later checks
         if allow_unbounded_fields:
-            cls._allow_unbounded_fields = True  # type: ignore[attr-defined]
+            cls._allow_unbounded_fields = True
 
         # Skip framework-managed fields — metrics and artifacts are populated
         # by the OutputInterceptor, not by user code, and are bounded in
@@ -837,7 +837,7 @@ def _is_forbidden_type(
             return False, ""
         module = sys.modules.get(getattr(field_type, "__module__", "") or "")
         return _is_forbidden_type(
-            field_type.__value__,  # type: ignore[attr-defined]
+            field_type.__value__,  # pyright: ignore[reportUnknownMemberType]
             _aliases | {id(field_type)},
             vars(module) if module is not None else _namespace,
         )

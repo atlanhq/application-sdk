@@ -226,7 +226,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         )
 
     @task(timeout_seconds=1800)
-    async def fetch_tables(  # type: ignore[override]
+    async def fetch_tables(  # pyright: ignore[reportIncompatibleMethodOverride]
         self, input: FetchTablesIncrementalInput
     ) -> FetchTablesOutput:
         """Fetch tables, switching between full and incremental SQL based on run context.
@@ -369,7 +369,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
     # ------------------------------------------------------------------
 
     @task(timeout_seconds=1800)
-    async def fetch_columns(  # type: ignore[override]
+    async def fetch_columns(  # pyright: ignore[reportIncompatibleMethodOverride]
         self, input: FetchColumnsIncrementalInput
     ) -> FetchColumnsOutput:
         """Fetch columns for a full (non-incremental) extraction run.
@@ -1003,7 +1003,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
     # Orchestration — run()
     # ------------------------------------------------------------------
 
-    async def run(  # type: ignore[override]
+    async def run(  # pyright: ignore[reportIncompatibleMethodOverride]
         self, input: IncrementalExtractionInput
     ) -> IncrementalExtractionOutput:
         """Orchestrate the full incremental metadata extraction pipeline.

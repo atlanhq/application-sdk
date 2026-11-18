@@ -63,7 +63,7 @@ def module_bindings(tree: ast.Module) -> tuple[frozenset[str], frozenset[str]]:
         elif isinstance(
             node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
         ) or (isinstance(node, ast.ExceptHandler) and node.name):
-            rebound.add(node.name)  # type: ignore[arg-type]
+            rebound.add(node.name)  # pyright: ignore[reportArgumentType]
         elif isinstance(node, ast.arg):
             rebound.add(node.arg)
         elif isinstance(node, ast.MatchAs | ast.MatchStar) and node.name:

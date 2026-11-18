@@ -45,7 +45,7 @@ class AtlanApiToken(BearerTokenCredential, frozen=True):
                 credential_name="atlan_api_token",
             )
         # Lazy import — avoids hard dependency for apps that don't use Atlan creds.
-        from pyatlan_v9.client.aio import (  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored)
+        from pyatlan_v9.client.aio import (  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored)
             AsyncAtlanClient,
         )
 
@@ -191,7 +191,7 @@ class AtlanOAuthClient(OAuthClientCredential, frozen=True):
                 credential_name="atlan_oauth_client",
             )
         # Lazy import — avoids hard dependency for apps that don't use Atlan creds.
-        from pyatlan_v9.client.aio import (  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored)
+        from pyatlan_v9.client.aio import (  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored)
             AsyncAtlanClient,
         )
 

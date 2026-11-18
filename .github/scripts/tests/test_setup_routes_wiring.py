@@ -40,16 +40,16 @@ _PYTEST_STEP_NAME = "Run SDR integration tests"
 
 
 @pytest.fixture(scope="module")
-def action() -> dict:  # type: ignore[type-arg]
+def action() -> dict:
     return yaml.safe_load(_SDR_ACTION.read_text(encoding="utf-8"))
 
 
 @pytest.fixture(scope="module")
-def steps(action: dict) -> list[dict]:  # type: ignore[type-arg]
+def steps(action: dict) -> list[dict]:
     return action["runs"]["steps"]
 
 
-def _index(steps: list[dict], name: str) -> int:  # type: ignore[type-arg]
+def _index(steps: list[dict], name: str) -> int:
     for position, step in enumerate(steps):
         if step.get("name") == name:
             return position
@@ -59,11 +59,11 @@ def _index(steps: list[dict], name: str) -> int:  # type: ignore[type-arg]
 # ── It exists, and it runs the shell that exists ─────────────────────────────
 
 
-def test_the_step_exists(steps: list[dict]) -> None:  # type: ignore[type-arg]
+def test_the_step_exists(steps: list[dict]) -> None:
     _index(steps, _STEP_NAME)
 
 
-def test_the_shell_it_invokes_is_committed(steps: list[dict]) -> None:  # type: ignore[type-arg]
+def test_the_shell_it_invokes_is_committed(steps: list[dict]) -> None:
     """The step's script must actually be in the action directory.
 
     ``$SDR_E2E_ROOT`` resolves to this action's directory, so a step naming a
@@ -76,7 +76,7 @@ def test_the_shell_it_invokes_is_committed(steps: list[dict]) -> None:  # type: 
     assert _SHELL.is_file(), f"{_SHELL} is referenced by the step but not committed"
 
 
-def test_it_runs_under_uv_not_bare_python(steps: list[dict]) -> None:  # type: ignore[type-arg]
+def test_it_runs_under_uv_not_bare_python(steps: list[dict]) -> None:
     """`uv run python`, because the check imports the SDK.
 
     The shell reads ``application_sdk.common._generated_tree`` — the same authority
@@ -95,7 +95,7 @@ def test_it_runs_under_uv_not_bare_python(steps: list[dict]) -> None:  # type: i
 # ── Ordering: after the install, before the assertions ───────────────────────
 
 
-def test_it_runs_after_the_version_verify(steps: list[dict]) -> None:  # type: ignore[type-arg]
+def test_it_runs_after_the_version_verify(steps: list[dict]) -> None:
     """The version check is the cheaper, more fundamental failure.
 
     A tenant running the wrong version would make the served-form subset check
@@ -105,7 +105,7 @@ def test_it_runs_after_the_version_verify(steps: list[dict]) -> None:  # type: i
     assert _index(steps, _STEP_NAME) > _index(steps, _VERSION_STEP_NAME)
 
 
-def test_it_runs_before_the_assertions(steps: list[dict]) -> None:  # type: ignore[type-arg]
+def test_it_runs_before_the_assertions(steps: list[dict]) -> None:
     """An app whose setup page will not load is not usefully installed.
 
     There is nothing to learn from running a full DAG against it, so this fails
@@ -130,7 +130,7 @@ def test_the_calling_job_runs_after_prepare_tenant() -> None:
 # ── The gate ─────────────────────────────────────────────────────────────────
 
 
-def test_it_shares_the_install_paths_gate(steps: list[dict]) -> None:  # type: ignore[type-arg]
+def test_it_shares_the_install_paths_gate(steps: list[dict]) -> None:
     """Gated on `expected-app-version`, exactly like the version verify.
 
     That input is non-empty precisely when THIS run installed the app under
@@ -149,7 +149,7 @@ def test_it_shares_the_install_paths_gate(steps: list[dict]) -> None:  # type: i
 # ── Injection discipline ─────────────────────────────────────────────────────
 
 
-def test_nothing_is_interpolated_into_the_run_block(steps: list[dict]) -> None:  # type: ignore[type-arg]
+def test_nothing_is_interpolated_into_the_run_block(steps: list[dict]) -> None:
     """Everything through `env:`, nothing through `${{ }}` inside `run:`.
 
     docs/standards/ci.md, and the same finding sdk-review has raised against
@@ -162,7 +162,7 @@ def test_nothing_is_interpolated_into_the_run_block(steps: list[dict]) -> None: 
     assert "${{" not in step["run"]
 
 
-def test_the_token_never_reaches_argv(steps: list[dict]) -> None:  # type: ignore[type-arg]
+def test_the_token_never_reaches_argv(steps: list[dict]) -> None:
     """The credential is read from the environment inside the shell.
 
     argv is visible in process listings and in ``set -x`` output, so a token

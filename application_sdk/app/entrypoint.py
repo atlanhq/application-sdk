@@ -518,7 +518,7 @@ def entrypoint(
                 "Use only letters, digits, hyphens, and underscores."
             )
         input_type, output_type = _validate_entrypoint_signature(fn)
-        fn._entrypoint_metadata = EntryPointMetadata(  # type: ignore[attr-defined]
+        fn._entrypoint_metadata = EntryPointMetadata(  # pyright: ignore[reportFunctionMemberAccess]
             name=ep_name,
             input_type=input_type,
             output_type=output_type,

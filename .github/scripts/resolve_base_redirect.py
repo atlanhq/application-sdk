@@ -300,7 +300,7 @@ def _bearer_token(
     request = urllib.request.Request(url)
     if token:
         request.add_header("Authorization", _basic_auth(user, token))
-    with _urlopen(request, timeout=_HTTP_TIMEOUT_S) as response:  # type: ignore[operator]
+    with _urlopen(request, timeout=_HTTP_TIMEOUT_S) as response:  # pyright: ignore[reportGeneralTypeIssues]
         payload = json.loads(response.read().decode())
     return payload.get("token") or payload.get("access_token")
 
@@ -337,7 +337,7 @@ def registry_digest(
         request.add_header("Accept", _ACCEPT)
         if auth:
             request.add_header("Authorization", auth)
-        with _urlopen(request, timeout=_HTTP_TIMEOUT_S) as response:  # type: ignore[operator]
+        with _urlopen(request, timeout=_HTTP_TIMEOUT_S) as response:  # pyright: ignore[reportGeneralTypeIssues]
             digest = response.headers.get("Docker-Content-Digest")
             if digest:
                 return digest

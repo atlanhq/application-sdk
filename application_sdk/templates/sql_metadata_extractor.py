@@ -445,7 +445,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             operation="transform_data",
         )
 
-    async def run(self, input: ExtractionInput) -> ExtractionOutput:  # type: ignore[override]
+    async def run(self, input: ExtractionInput) -> ExtractionOutput:  # pyright: ignore[reportIncompatibleMethodOverride]
         """Orchestrate the full metadata extraction pipeline.
 
         Default orchestration:

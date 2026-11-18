@@ -57,7 +57,7 @@ def run_checked(cmd: Sequence[str], **kwargs: object) -> str:
     Mirrors ``X=$(cmd)`` under ``bash -e``: a failure ends the step with the
     command's own exit code. Trailing newlines are stripped as ``$(...)`` does.
     """
-    proc = run(cmd, capture=True, **kwargs)  # type: ignore[arg-type]
+    proc = run(cmd, capture=True, **kwargs)  # pyright: ignore[reportArgumentType]
     if proc.returncode != 0:
         raise CommandFailed(proc.returncode)
     return (proc.stdout or "").rstrip("\n")

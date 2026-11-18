@@ -1072,7 +1072,7 @@ def _install_excepthook() -> None:
     """
     _orig = sys.excepthook
 
-    def _hook(exc_type, exc_value, exc_traceback):  # type: ignore[no-untyped-def]
+    def _hook(exc_type, exc_value, exc_traceback):
         logger.error(
             "Unhandled exception — flushing observability before exit",
             exc_info=(exc_type, exc_value, exc_traceback),
@@ -1997,12 +1997,12 @@ async def run_worker_mode(
 
     app_class = load_app_class(config.app_module)
     validate_app_class(app_class)
-    app_name = app_class._app_name  # type: ignore[attr-defined]
+    app_name = app_class._app_name
 
     logger.info(
         "Loaded app %s version %s",
         app_name,
-        app_class._app_version,  # type: ignore[attr-defined]
+        app_class._app_version,
     )
 
     data_converter = create_data_converter_for_app(app_class)
@@ -2243,7 +2243,7 @@ def run_handler_mode(config: AppConfig) -> None:
 
     app_class = load_app_class(config.app_module)
     validate_app_class(app_class)
-    app_name = app_class._app_name  # type: ignore[attr-defined]
+    app_name = app_class._app_name
 
     handler_class = load_handler_class(
         config.app_module,
@@ -2360,12 +2360,12 @@ async def run_combined_mode(
 
     app_class = load_app_class(config.app_module)
     validate_app_class(app_class)
-    app_name = app_class._app_name  # type: ignore[attr-defined]
+    app_name = app_class._app_name
 
     logger.info(
         "Loaded app %s version %s",
         app_name,
-        app_class._app_version,  # type: ignore[attr-defined]
+        app_class._app_version,
     )
 
     data_converter = create_data_converter_for_app(app_class)
@@ -2581,7 +2581,7 @@ async def run_combined_mode(
             stall_watchdog.on_shutdown_signal()
             uvicorn_handle_exit(sig, frame)
 
-        uvicorn_server.handle_exit = _handle_exit  # type: ignore[method-assign]
+        uvicorn_server.handle_exit = _handle_exit
     # uvicorn keeps serving while the worker is supervised and restarted
     # independently; a shutdown signal (which also sets should_exit) stops both.
     async with health_server:

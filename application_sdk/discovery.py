@@ -189,7 +189,7 @@ def load_app_class(module_path: str) -> type[App]:
         )
 
     logger.info("Loaded app class: %s from %s", class_name, module_path)
-    return cls  # type: ignore[return-value]
+    return cls
 
 
 def load_handler_class(
@@ -230,7 +230,7 @@ def load_handler_class(
             handler_module_path,
             class_name,
         )
-        return cls  # type: ignore[return-value]
+        return cls
 
     # Convention-based discovery
     module_name, app_class_name = _parse_module_path(module_path)
@@ -249,7 +249,7 @@ def load_handler_class(
                 module_path,
                 handler_class_name,
             )
-            return cls  # type: ignore[return-value]
+            return cls
 
     # Fall back to scanning for any Handler subclass
     for name, obj in inspect.getmembers(module, inspect.isclass):
@@ -260,7 +260,7 @@ def load_handler_class(
                 module_path,
                 name,
             )
-            return obj  # type: ignore[return-value]
+            return obj
 
     logger.debug(
         "No handler class found for app module_path=%s tried_class=%s",
@@ -301,7 +301,7 @@ def validate_app_class(cls: type[App]) -> None:
         )
 
     registry = AppRegistry.get_instance()
-    app_name = cls._app_name  # type: ignore[attr-defined]
+    app_name = cls._app_name
 
     if app_name not in registry.list_apps():
         raise DiscoveryAppRegistrationError(
@@ -314,5 +314,5 @@ def validate_app_class(cls: type[App]) -> None:
     logger.debug(
         "App class validated app_name=%s version=%s",
         app_name,
-        cls._app_version,  # type: ignore[attr-defined]
+        cls._app_version,
     )

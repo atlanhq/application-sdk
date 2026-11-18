@@ -1328,7 +1328,7 @@ class BaseSQLClient(ClientInterface):
     async def get_batched_results(
         self,
         query: str,
-    ) -> AsyncIterator["pd.DataFrame"] | Iterator["pd.DataFrame"]:  # type: ignore
+    ) -> AsyncIterator["pd.DataFrame"] | Iterator["pd.DataFrame"]:
         """Get query results as batched pandas DataFrames asynchronously.
 
         The result is iterable both ways. ``async for frame in results`` reads

@@ -46,7 +46,7 @@ def _bind_task_for_mcp(app_name: str, task_meta: Any) -> Callable[..., Any]:
         app_instance = AppRegistry.get_instance().get(app_name).app_cls()
         return await func(app_instance, *args, **kwargs)
 
-    _invoke.__signature__ = signature.replace(  # type: ignore[attr-defined]
+    _invoke.__signature__ = signature.replace(  # pyright: ignore[reportAttributeAccessIssue]
         parameters=[
             param
             for param_name, param in signature.parameters.items()

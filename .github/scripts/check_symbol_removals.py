@@ -423,7 +423,7 @@ def _lazy_names(tree: ast.Module) -> dict[str, tuple[str, str]]:
                     for e in v.elts
                 )
             ):
-                served[k.value] = (v.elts[0].value, v.elts[1].value)  # type: ignore[union-attr]
+                served[k.value] = (v.elts[0].value, v.elts[1].value)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     return served
 
 

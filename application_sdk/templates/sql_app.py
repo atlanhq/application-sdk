@@ -223,15 +223,15 @@ class _EnvelopeError(AppError):
     evidence: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     @property
-    def category(self) -> FailureCategory:  # type: ignore[override]
+    def category(self) -> FailureCategory:  # pyright: ignore[reportIncompatibleVariableOverride]
         return self.category_override
 
     @property
-    def audience(self) -> Audience:  # type: ignore[override]
+    def audience(self) -> Audience:  # pyright: ignore[reportIncompatibleVariableOverride]
         return self.audience_override
 
     @property
-    def code(self) -> str:  # type: ignore[override]
+    def code(self) -> str:  # pyright: ignore[reportIncompatibleVariableOverride]
         return self.code_override or super().code
 
     def to_failure_details(self) -> FailureDetails:
@@ -1195,7 +1195,7 @@ class SqlApp(App):
     # run() — default orchestration
     # =====================================================================
 
-    async def run(  # type: ignore[override]
+    async def run(  # pyright: ignore[reportIncompatibleMethodOverride]
         self, input: ExtractionInput
     ) -> ExtractionOutput:
         """Default extraction orchestration.

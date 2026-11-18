@@ -239,7 +239,7 @@ class CancelHandle:
                 if not self._requested and self._action is action:
                     self._action = previous
             if fire_previous:
-                _fire_cancel_action(previous)  # type: ignore[arg-type]
+                _fire_cancel_action(previous)  # pyright: ignore[reportArgumentType]
 
     def request(self) -> None:
         """Request a cancel: fire the registered action, if any, at most once.

@@ -43,8 +43,8 @@ def test_warm_enters_and_leaves_both_runtimes(monkeypatch: pytest.MonkeyPatch) -
         return _ctx
 
     fake = types.ModuleType("application_sdk.dev")
-    fake.embedded_runtime = _tracking("temporal")  # type: ignore[attr-defined]
-    fake.embedded_dapr = _tracking("dapr")  # type: ignore[attr-defined]
+    fake.embedded_runtime = _tracking("temporal")  # pyright: ignore[reportAttributeAccessIssue]
+    fake.embedded_dapr = _tracking("dapr")  # pyright: ignore[reportAttributeAccessIssue]
     monkeypatch.setitem(sys.modules, "application_sdk.dev", fake)
     monkeypatch.setattr(warm, "time_skipping_server", _tracking("test-server"))
 

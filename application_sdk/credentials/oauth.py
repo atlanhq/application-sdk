@@ -49,7 +49,7 @@ def _parse_jwt_exp(token: str) -> float | None:
         padded = parts[1] + "=" * (-len(parts[1]) % 4)
         claims: dict[str, object] = orjson.loads(base64.urlsafe_b64decode(padded))
         exp = claims.get("exp")
-        return float(exp) if exp is not None else None  # type: ignore[arg-type]
+        return float(exp) if exp is not None else None  # pyright: ignore[reportArgumentType]
     # conformance: ignore[E004] probe that decodes opaque/non-JWT tokens; None return is the intended fallback for any parse failure
     except Exception:  # noqa: BLE001
         # conformance: ignore[E007] probe returning None on parse failure; logging every non-JWT token decode attempt would be noisy
@@ -206,7 +206,7 @@ class OAuthTokenService:
             iat = claims.get("iat")
             if iat is not None:
                 local_midpoint = (t_before + t_after) / 2
-                self._clock_offset_seconds = float(iat) - local_midpoint  # type: ignore[arg-type]
+                self._clock_offset_seconds = float(iat) - local_midpoint  # pyright: ignore[reportArgumentType]
                 if abs(self._clock_offset_seconds) > 1:
                     logger.debug(
                         "Server clock offset: %.1fs (container clock is %s)",

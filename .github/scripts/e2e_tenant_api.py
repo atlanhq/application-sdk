@@ -340,10 +340,10 @@ class TenantClient:
             ) from exc
 
     def get(self, path: str, **kwargs: object) -> Response:
-        return self.request("GET", path, **kwargs)  # type: ignore[arg-type]
+        return self.request("GET", path, **kwargs)  # pyright: ignore[reportArgumentType]
 
     def post(self, path: str, **kwargs: object) -> Response:
-        return self.request("POST", path, **kwargs)  # type: ignore[arg-type]
+        return self.request("POST", path, **kwargs)  # pyright: ignore[reportArgumentType]
 
     # -- diagnostics ----------------------------------------------------
 

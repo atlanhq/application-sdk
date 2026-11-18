@@ -193,11 +193,11 @@ _GATE_ACTION = "atlanhq/application-sdk/.github/actions/verify-test-gate@main"
 
 
 @pytest.fixture(scope="module")
-def reusable() -> dict:  # type: ignore[type-arg]
+def reusable() -> dict:
     return yaml.safe_load(_REUSABLE.read_text(encoding="utf-8"))
 
 
-def _gate_step(job: dict) -> dict:  # type: ignore[type-arg]
+def _gate_step(job: dict) -> dict:
     """The step in `job` that evaluates the shared Tests Gate driver."""
     steps = [s for s in job["steps"] if s.get("uses") == _GATE_ACTION]
     assert len(steps) == 1, (

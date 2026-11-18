@@ -413,7 +413,7 @@ def find_foreign(
         None,
     )
     found: list[tuple[dict, str]] = []
-    for pr in prs or []:  # type: ignore[union-attr]
+    for pr in prs or []:  # pyright: ignore[reportGeneralTypeIssues]
         branch = pr["head"]["ref"]
         if not is_reapable_lane(branch):
             continue
@@ -428,7 +428,7 @@ def find_foreign(
                 f"/commits?per_page={COMMIT_PAGE_LIMIT}",
                 None,
             )
-            or []  # type: ignore[arg-type]
+            or []  # pyright: ignore[reportArgumentType]
         )
         if len(commits) >= COMMIT_PAGE_LIMIT:
             # foreign_only_history refuses this too; say so out loud rather than
@@ -466,7 +466,7 @@ def find_refusal(
     # same org satisfies it while living in a different repository — and the
     # ref we would delete is this repo's, not the one we inspected. Only an
     # in-repo PR counts; a fork PR alone says nothing about this repo's branch.
-    in_repo = [pr for pr in prs or [] if head_is_in_repo(pr, repo)]  # type: ignore[union-attr]
+    in_repo = [pr for pr in prs or [] if head_is_in_repo(pr, repo)]  # pyright: ignore[reportGeneralTypeIssues]
     if not in_repo:
         return find_prless_refusal(token, repo, fetch)
     pr = in_repo[0]
@@ -475,7 +475,7 @@ def find_refusal(
         f"{API_ROOT}/repos/{owner}/{name}/pulls/{pr['number']}/files?per_page=100",
         None,
     )
-    files = [f["filename"] for f in files_payload]  # type: ignore[union-attr]
+    files = [f["filename"] for f in files_payload]  # pyright: ignore[reportGeneralTypeIssues]
     path = lone_lock(files)
     if path is None:
         # Short-circuit before fetching contents. Same predicate should_reap
@@ -486,7 +486,7 @@ def find_refusal(
         f"{API_ROOT}/repos/{owner}/{name}/contents/{path}?ref={BRANCH}",
         None,
     )
-    lock_text = base64.b64decode(contents["content"]).decode(  # type: ignore[index]
+    lock_text = base64.b64decode(contents["content"]).decode(  # pyright: ignore[reportIndexIssue]
         errors="replace"
     )
     if not should_reap(files, lock_text):
@@ -513,7 +513,7 @@ def find_prless_refusal(
     """
     owner, name = repo.split("/", 1)
     meta = fetch(token, f"{API_ROOT}/repos/{owner}/{name}", None)
-    base = meta["default_branch"]  # type: ignore[index]
+    base = meta["default_branch"]  # pyright: ignore[reportIndexIssue]
     try:
         compare = fetch(
             token,
@@ -524,15 +524,15 @@ def find_prless_refusal(
         if exc.code == 404:
             return None  # no lock branch: the ordinary state between refreshes
         raise
-    commits = compare["commits"]  # type: ignore[index]
-    if not commits or compare.get("total_commits") != len(commits):  # type: ignore[union-attr]
+    commits = compare["commits"]  # pyright: ignore[reportIndexIssue]
+    if not commits or compare.get("total_commits") != len(commits):  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
         # The compare API pages its commit list. A partial page could hide a
         # human commit past the cut, so an unprovable history is kept.
         return None
     if any((c.get("author") or {}).get("login") != FLEET_ENGINE for c in commits):
         return None
     head_sha = commits[-1]["sha"]
-    files = [f["filename"] for f in compare.get("files", [])]  # type: ignore[union-attr]
+    files = [f["filename"] for f in compare.get("files", [])]  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     path = lone_lock(files)
     if path is None:
         return None
@@ -541,7 +541,7 @@ def find_prless_refusal(
         f"{API_ROOT}/repos/{owner}/{name}/contents/{path}?ref={head_sha}",
         None,
     )
-    lock_text = base64.b64decode(contents["content"]).decode(  # type: ignore[index]
+    lock_text = base64.b64decode(contents["content"]).decode(  # pyright: ignore[reportIndexIssue]
         errors="replace"
     )
     if not should_reap(files, lock_text):
@@ -636,7 +636,7 @@ def main(argv: list[str] | None = None) -> int:
     if not dry_run:
         try:
             meta = _request(token, f"{API_ROOT}/repos/{owner}/{name}")
-            repo_node_id = meta["node_id"]  # type: ignore[index]
+            repo_node_id = meta["node_id"]  # pyright: ignore[reportIndexIssue]
         except (urllib.error.URLError, TimeoutError, KeyError, TypeError) as exc:
             print(f"::warning::reaper could not resolve {args.repo}: {exc}")
             return 0

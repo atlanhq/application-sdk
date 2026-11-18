@@ -2032,7 +2032,7 @@ def create_app_handler_service(
         _mcp_server = MCPServer(application_name=app_name)
 
         @asynccontextmanager
-        async def _mcp_lifespan(fastapi_app: FastAPI):  # type: ignore[type-arg]
+        async def _mcp_lifespan(fastapi_app: FastAPI):
             await _mcp_server.register_tools_from_registry(app_name)
             mcp_http = _mcp_server.server.http_app()
             async with mcp_http.lifespan(mcp_http):

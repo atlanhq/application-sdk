@@ -96,7 +96,7 @@ class SqlQueryExtractor(BaseMetadataExtractor):
             operation="fetch_queries",
         )
 
-    async def run(self, input: QueryExtractionInput) -> QueryExtractionOutput:  # type: ignore[override]
+    async def run(self, input: QueryExtractionInput) -> QueryExtractionOutput:  # pyright: ignore[reportIncompatibleMethodOverride]
         """Orchestrate the full query extraction pipeline.
 
         Default orchestration:

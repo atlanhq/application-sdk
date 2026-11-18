@@ -359,7 +359,7 @@ def test_registry_get_authenticates_with_push_scope_and_404_is_none(
 ) -> None:
     seen: list[tuple[str, str, Optional[str]]] = []
 
-    def urlopen(request, timeout=None):  # type: ignore[no-untyped-def]
+    def urlopen(request, timeout=None):
         url = request.full_url
         auth = request.get_header("Authorization")
         seen.append((request.get_method(), url, auth))
@@ -374,11 +374,11 @@ def test_registry_get_authenticates_with_push_scope_and_404_is_none(
                 "unauthorized",
                 {
                     "WWW-Authenticate": 'Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:atlanhq/x:pull"'
-                },  # type: ignore[arg-type]
+                },  # pyright: ignore[reportArgumentType]
                 io.BytesIO(),
             )
         if url.endswith("/manifests/missing"):
-            raise urllib.error.HTTPError(url, 404, "nf", {}, io.BytesIO())  # type: ignore[arg-type]
+            raise urllib.error.HTTPError(url, 404, "nf", {}, io.BytesIO())  # pyright: ignore[reportArgumentType]
         return _Response(b'{"schemaVersion":2}')
 
     monkeypatch.setattr(rc.rbr, "_urlopen", urlopen)

@@ -534,7 +534,7 @@ class QueryBasedTransformer(TransformerInterface):
         """)
         return sql_query, literal_columns or None
 
-    def _build_struct(self, level: dict, prefix: str = "") -> None:  # type: ignore[return]
+    def _build_struct(self, level: dict, prefix: str = "") -> None:
         """No-op shim — struct building moved to get_grouped_dataframe_by_prefix.
 
         Kept as a no-op so callers that were patching this in tests do not blow up.
@@ -697,7 +697,7 @@ class QueryBasedTransformer(TransformerInterface):
 
         return dataframe, entity_sql_template
 
-    def transform_metadata(  # type: ignore
+    def transform_metadata(
         self,
         typename: str,
         dataframe: pa.Table | pd.DataFrame | list[dict[str, Any]],

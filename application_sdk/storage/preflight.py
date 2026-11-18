@@ -345,7 +345,7 @@ async def _probe_store_structured(
             _resolve_put_attributes,
         )
 
-        put_attributes = _resolve_put_attributes(store)  # type: ignore[arg-type]
+        put_attributes = _resolve_put_attributes(store)  # pyright: ignore[reportArgumentType]
     except Exception:
         # Probing without them can certify a write path real uploads do not
         # take (a different storage class), so this is not DEBUG detail.

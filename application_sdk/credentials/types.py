@@ -30,7 +30,7 @@ class Credential(Protocol):
         """Type identifier matching the registry key (e.g. 'api_key')."""
         ...
 
-    async def validate(self) -> None:  # type: ignore[override]
+    async def validate(self) -> None:
         """Validate this credential.
 
         Raises:
@@ -62,7 +62,7 @@ class BasicCredential(BaseModel, frozen=True):
         token = base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
         return f"Basic {token}"
 
-    async def validate(self) -> None:  # type: ignore[override]
+    async def validate(self) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
         from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
             CredentialValidationError,
         )
@@ -97,7 +97,7 @@ class ApiKeyCredential(BaseModel, frozen=True):
         value = f"{self.prefix}{self.api_key}" if self.prefix else self.api_key
         return {self.header_name: value}
 
-    async def validate(self) -> None:  # type: ignore[override]
+    async def validate(self) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
         from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
             CredentialValidationError,
         )
@@ -145,7 +145,7 @@ class BearerTokenCredential(BaseModel, frozen=True):
             )
             return False
 
-    async def validate(self) -> None:  # type: ignore[override]
+    async def validate(self) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
         from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
             CredentialValidationError,
         )
@@ -212,7 +212,7 @@ class OAuthClientCredential(BaseModel, frozen=True):
         """Return HTTP headers dict using the current access token."""
         return {"Authorization": f"Bearer {self.access_token}"}
 
-    async def validate(self) -> None:  # type: ignore[override]
+    async def validate(self) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
         from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
             CredentialValidationError,
         )
@@ -255,7 +255,7 @@ class CertificateCredential(BaseModel, frozen=True):
     def credential_type(self) -> str:
         return "certificate"
 
-    async def validate(self) -> None:  # type: ignore[override]
+    async def validate(self) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
         from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
             CredentialValidationError,
         )
@@ -282,7 +282,7 @@ class RawCredential(BaseModel, frozen=True):
     def credential_type(self) -> str:
         return "raw"
 
-    async def validate(self) -> None:  # type: ignore[override]
+    async def validate(self) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
         pass
 
     def get(self, key: str, default: Any = None) -> Any:

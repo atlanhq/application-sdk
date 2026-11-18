@@ -688,9 +688,9 @@ class AtlanObservability(Generic[T], ABC):
         for owner in type(self).__mro__:
             if "_flush_task" not in vars(owner):
                 continue
-            if owner._flush_task is handle:  # type: ignore[attr-defined]  # — declared on this class, checked above
-                owner._flush_task = None  # type: ignore[attr-defined]
-                owner._flush_task_started = False  # type: ignore[attr-defined]
+            if owner._flush_task is handle:  # pyright: ignore[reportUnknownMemberType]  # — declared on this class, checked above
+                owner._flush_task = None
+                owner._flush_task_started = False
             break
         # ``add_record`` on another thread can start a batch flush while the
         # ones already seen are being stopped, so look again until a pass
@@ -847,7 +847,7 @@ class AtlanObservability(Generic[T], ABC):
             # stop the flush with; point it at the child's task.
             owner = type(instance)
             if getattr(owner, "_flush_task", None) is old:
-                owner._flush_task = new  # type: ignore[attr-defined]  # — set only on classes that declare it
+                owner._flush_task = new
 
     async def _periodic_flush(self):
         """Periodically flush the buffer to storage.

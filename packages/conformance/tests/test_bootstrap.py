@@ -1509,7 +1509,7 @@ def test_resync_writes_exactly_when_c002_flags(
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
     wf = tmp_path / ".github" / "workflows" / "tests.yaml"
-    wf.write_text(mutate(wf.read_text()))  # type: ignore[operator]
+    wf.write_text(mutate(wf.read_text()))  # pyright: ignore[reportCallIssue]
     before = wf.read_text()
 
     flagged = bool(scan_path(wf, tmp_path))

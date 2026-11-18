@@ -160,7 +160,7 @@ def _load_ledger_build_hook(monkeypatch: pytest.MonkeyPatch) -> type:
     )
     for name in names:
         monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
-    sys.modules[names[-1]].BuildHookInterface = BuildHookInterface  # type: ignore[attr-defined]
+    sys.modules[names[-1]].BuildHookInterface = BuildHookInterface  # pyright: ignore[reportAttributeAccessIssue]
     path = Path(__file__).resolve().parents[1] / "hatch_build_ledger.py"
     spec = importlib.util.spec_from_file_location("hatch_build_ledger", path)
     assert spec is not None and spec.loader is not None

@@ -222,9 +222,9 @@ dev = [
     # (enforced by .github/scripts/tests/test_lint_guards.py), so `uv run ruff`
     # and the CI hook lint, format and sort imports identically.
     "ruff==0.17.5",
-    # Exact pin, equal to the pyright-python rev in .pre-commit-config.yaml
-    # (enforced by .github/scripts/tests/test_check_pyright_baseline.py), so the
-    # .github/scripts baseline check and the pre-commit hook run one pyright.
+    # Exact pin: both pyright pre-commit hooks (check_pyright_baseline.py, for
+    # the SDK tree and for .github/scripts) run this pyright, and each baseline
+    # records it, so a bump must regenerate both baselines in the same PR.
     "pyright==1.1.414",
     "boto3-stubs>=1.38.6,<2.0.0",
     "poethepoet>=0.49.0,<1.0.0",
@@ -468,11 +468,22 @@ exclude = [
     ".github/**",
     "tests",
 ]
+# `# type: ignore` is not read: it silences every rule on its line, and the
+# mypy codes in its brackets mean nothing to pyright. Suppress with
+# `# pyright: ignore[<rule>]`, which names the rule it silences (FND-4295).
+enableTypeIgnoreComments = false
+# A `# pyright: ignore[...]` that no longer suppresses anything is an error, so
+# a suppression cannot outlive the finding it was written for.
+reportUnnecessaryTypeIgnoreComment = "error"
 reportUnknownMemberType = "warning"
-reportAttributeAccessIssue = "warning"
+# These three catch real bugs (a wrong argument type, a missing attribute), so
+# they are errors. The findings that predate that are held to the repo-root
+# pyright_baseline.json, which only shrinks: `check_pyright_baseline.py
+# --scope sdk` (the pre-commit `pyright` hook) fails on any new one.
+reportAttributeAccessIssue = "error"
+reportFunctionMemberAccess = "error"
+reportArgumentType = "error"
 reportPossiblyUnboundVariable = "information"
-reportFunctionMemberAccess = "warning"
-reportArgumentType = "warning"
 reportGeneralTypeIssues = "warning"
 reportMissingImports = "warning"
 reportInvalidTypeForm = "warning"

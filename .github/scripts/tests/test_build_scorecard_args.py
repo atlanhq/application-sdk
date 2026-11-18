@@ -44,7 +44,7 @@ _BASE = {
 
 
 def _args(**overrides: object) -> list[str]:
-    return build_args(**{**_BASE, **overrides})  # type: ignore[arg-type]
+    return build_args(**{**_BASE, **overrides})
 
 
 def _value_after(args: list[str], flag: str) -> str | None:

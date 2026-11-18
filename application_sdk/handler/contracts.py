@@ -1071,7 +1071,7 @@ class SqlMetadataOutput(MetadataOutput):
         ])
     """
 
-    objects: list[SqlMetadataObject] = []  # type: ignore[assignment]
+    objects: list[SqlMetadataObject] = []
     """Discovered catalog/schema pairs."""
 
 
@@ -1093,7 +1093,7 @@ class ApiMetadataOutput(MetadataOutput):
         ])
     """
 
-    objects: list[ApiMetadataObject] = []  # type: ignore[assignment]
+    objects: list[ApiMetadataObject] = []
     """Top-level tree nodes."""
 
 

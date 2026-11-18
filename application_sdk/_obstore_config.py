@@ -101,7 +101,7 @@ def _default_user_agent() -> str:
     module into circular-import paths during package init.
     """
     try:
-        from application_sdk.version import (  # type: ignore[import]  # noqa: PLC0415
+        from application_sdk.version import (  # noqa: PLC0415
             __version__,
         )
 
@@ -236,7 +236,7 @@ def make_s3_store(
     )
     if credential_provider is not None:
         kw["credential_provider"] = credential_provider
-    return S3Store(**kw)  # type: ignore[arg-type]
+    return S3Store(**kw)  # pyright: ignore[reportArgumentType]
 
 
 # obstore-rs reads ``AZURE_*`` from the environment at AzureStore construction
@@ -335,7 +335,7 @@ def make_azure_store(
         _azure_config_has_explicit_credential(config) or credential_provider is not None
     )
     with _suppress_ambient_azure_env(isolate):
-        return AzureStore(**kw)  # type: ignore[arg-type]
+        return AzureStore(**kw)  # pyright: ignore[reportArgumentType]
 
 
 def make_gcs_store(
@@ -365,7 +365,7 @@ def make_gcs_store(
     )
     if credential_provider is not None:
         kw["credential_provider"] = credential_provider
-    return GCSStore(**kw)  # type: ignore[arg-type]
+    return GCSStore(**kw)  # pyright: ignore[reportArgumentType]
 
 
 def log_obstore_config(

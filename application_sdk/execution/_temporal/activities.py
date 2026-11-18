@@ -895,8 +895,8 @@ def create_activity_from_task(
     }
 
     decorated = activity.defn(name=activity_name)(activity_fn)
-    decorated._task_metadata = task_metadata  # type: ignore[attr-defined]
-    decorated._activity_name = activity_name  # type: ignore[attr-defined]
+    decorated._task_metadata = task_metadata  # pyright: ignore[reportFunctionMemberAccess]
+    decorated._activity_name = activity_name  # pyright: ignore[reportFunctionMemberAccess]
 
     return decorated
 

@@ -62,7 +62,7 @@ SpillableKey: TypeAlias = str | int | float | bool | bytes
 ROCKSDB_KEY_TYPES: tuple[type, ...] = (str, int, float, bool, bytes)
 
 
-class SpillableDict(MutableMapping):  # type: ignore[type-arg]
+class SpillableDict(MutableMapping):
     """A disk-backed dictionary using RocksDB.
 
     Implements ``collections.abc.MutableMapping`` — ``pop``, ``update``,
@@ -258,7 +258,7 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
         # has no reason to touch the pickle surface.
         # rocksdict's keys() returns Iterator[str|int|float|bytes|bool] (the
         # supported key types); annotation matches the union directly.
-        return iter(self._db.keys())  # type: ignore[return-value]
+        return iter(self._db.keys())
 
     def __contains__(self, key: object) -> bool:
         # Protocol signature uses `object`. rocksdict raises on unsupported
