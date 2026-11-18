@@ -44,6 +44,12 @@ PKL="$(python -m application_sdk.dev.pkl path)"   # download + cache that build
 "$PKL" --version
 ```
 
+The binary is cached under `~/.cache/atlan-sdk/pkl/<version>/`. Each download
+attempt has a 60-second socket timeout. A 5xx response or a dropped connection
+is retried up to 3 times. A 404 means the pin has no asset for your platform,
+so it fails after the first attempt. A cached binary is used only if it runs
+and reports the pinned version. Otherwise it is downloaded again.
+
 `pkl` is a language, not just a renderer, so versions disagree about what your
 contract *means*: backslash line-continuations inside a multi-line string are
 valid from 0.28 on and a hard `Invalid character escape sequence` before it. A

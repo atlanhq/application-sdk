@@ -31,8 +31,10 @@ class PklDownloadError(InternalError):
     """The pinned pkl binary could not be fetched.
 
     pkl is a GitHub release asset, so this is a live dependency on the release
-    CDN — which returns 503s in bursts. Raised only after the retries in
-    ``application_sdk.dev.pkl`` are exhausted.
+    CDN — which returns 503s in bursts. Raised once the retries in
+    ``application_sdk.dev.pkl`` are exhausted, or after the first attempt when
+    the CDN answers 4xx (a pin with no such asset, which no retry will fix).
+    ``attempts`` is the number actually made.
     """
 
     code: ClassVar[str] = "INTERNAL_PKL_DOWNLOAD_FAILED"
