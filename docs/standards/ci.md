@@ -719,6 +719,34 @@ no `pre-commit / Pre-commit` context or never call `checks-reusable.yaml`.
 Both sit in shared workflows, not bootstrap templates, so they go live in the
 same merge as the skip.
 
+## Every unit leg runs a socket guard
+
+**Rule:** every SDK unit leg, Windows included, runs pytest-socket with
+`--disable-socket --allow-unix-socket`. `.github/scripts/unit_test_command.py`
+builds the flags, and its tests pin them.
+
+**How Windows survives it:** `ProactorEventLoop`'s self-pipe is
+`socket.socketpair()`, and Windows has no native one. CPython emulates it with
+two AF_INET sockets on loopback, created through the guarded `socket.socket`,
+so every new event loop would fail. On Windows, `tests/conftest.py` replaces
+`socket.socketpair` with `tests/socket_guard.py`'s `loopback_socketpair`. That
+function builds the same pair from the socket class captured at collection,
+before pytest-socket swaps it. Every socket a test creates itself is still
+refused. `tests/unit/test_socket_guard.py` proves this on every OS.
+
+**Not `--allow-hosts`:** it patches `socket.connect()` only. On Windows,
+asyncio connects through `ConnectEx`, and UDP sends through `sendto`. Neither
+calls `connect()`, so a host allowlist guards neither.
+
+**Dapr, locally too:** a plain local `pytest` run has no socket guard. The
+autouse `_intercept_dapr_sidecar` fixture in `tests/unit/conftest.py` gives
+`application_sdk.infrastructure._dapr.http` a private `httpx` whose transport
+raises `UnmockedDaprSidecarCallError`, so a test that forgot to mock Dapr fails
+the same way everywhere. A test that wants a Dapr answer mocks the client or
+swaps the transport. If the module stops importing `httpx`, the fixture raises
+at setup, so a refactor cannot leave the interceptor silently patching nothing.
+That happened to the `DaprClient` mock it replaced (FND-4287).
+
 ## Runner sizing
 
 **Rule:** a short glue job (it calls the GitHub API, rolls up results, posts a

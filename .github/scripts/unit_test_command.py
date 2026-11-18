@@ -1,7 +1,7 @@
 """Build and run the SDK unit-test pytest command for one matrix leg.
 
 Called by ``.github/actions/unit-tests``. The per-leg decisions — which uv
-groups exist on this Python, whether the socket guard can be on, how a hung
+groups exist on this Python, how a hung
 test is interrupted, whether this leg measures coverage — live here rather
 than in the action's ``run:`` block so each branch has a test
 (``tests/test_unit_test_command.py``; see ``docs/standards/ci.md``).
@@ -186,12 +186,13 @@ def build_command(
     # execnet, and it made a job log 20,000 lines.
     argv += ["-n", "auto", "--hypothesis-show-statistics"]
 
-    # pytest-socket: on Linux/macOS the event loop uses os.pipe()/AF_UNIX for
-    # its self-pipe, so --allow-unix-socket is sufficient. On Windows,
-    # ProactorEventLoop uses AF_INET socket pairs internally; --disable-socket
-    # would break asyncio entirely there, so Windows runs without the guard.
-    if not windows:
-        argv += ["--disable-socket", "--allow-unix-socket"]
+    # pytest-socket on every OS: no test may create a socket other than an
+    # AF_UNIX one (the POSIX event loop's self-pipe). Windows has no native
+    # socketpair(), so ProactorEventLoop's self-pipe is an emulated loopback
+    # pair; tests/conftest.py builds it from the pre-guard socket class there
+    # (tests/socket_guard.py). --allow-hosts is not used for Windows: it guards
+    # socket.connect() only, which Proactor's ConnectEx and UDP sendto bypass.
+    argv += ["--disable-socket", "--allow-unix-socket"]
 
     # SIGALRM interrupts the hung test and the worker carries on. Windows has
     # no SIGALRM, so it gets the thread method, which dumps every stack and
