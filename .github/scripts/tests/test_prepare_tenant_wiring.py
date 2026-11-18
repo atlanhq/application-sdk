@@ -1109,3 +1109,97 @@ def test_sdr_and_app_configs_come_from_the_release_paths_producers(
     assert str(producer["run"]).endswith("build_and_publish/prepare.py app-configs")
     ids = [s.get("id") for s in steps]
     assert ids.index("app_configs") < ids.index("install")
+
+
+# ── A failed install puts the previous version back (CONAT-7994) ─────────────
+
+
+def _restore_step(jobs: _Jobs) -> _Step:
+    steps = [
+        s
+        for s in _prepare_steps(jobs)
+        if str(s.get("name", "")) == "Restore the previous version"
+    ]
+    assert len(steps) == 1, "prepare-tenant must restore the prior version on failure"
+    return steps[0]
+
+
+def test_restore_runs_only_after_a_failure_with_a_prior_version(jobs: _Jobs) -> None:
+    condition = " ".join(str(_restore_step(jobs)["if"]).split())
+    assert "failure()" in condition
+    assert "steps.install.outputs.previous_version_id != ''" in condition
+
+
+def test_restore_names_the_build_it_rolls_away_from(jobs: _Jobs) -> None:
+    """The pod check needs the build under test, from the same output install used."""
+    step = _restore_step(jobs)
+    assert '--rolled-back-from "$VERSION"' in str(step["run"])
+    assert "'VERSION': '${{ needs.merge-e2e-image.outputs.version }}'" in str(
+        step.get("env")
+    )
+
+
+def test_restore_runs_before_the_summary(jobs: _Jobs) -> None:
+    names = [str(s.get("name", "")) for s in _prepare_steps(jobs)]
+    assert (
+        names.index("Install the app under test")
+        < names.index("Restore the previous version")
+        < names.index("Summarise")
+    )
+
+
+def test_job_timeout_also_covers_the_restore(jobs: _Jobs) -> None:
+    """The restore sits on top of the install budget, so the job must hold both."""
+    step = _restore_step(jobs)
+    restore_waits = (
+        app.DEFAULT_RESTORE_INSTALL_RETRY_SECONDS
+        + app.DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS
+        + app.DEFAULT_RESTORE_POD_WAIT_SECONDS
+    ) // 60
+    assert int(str(step["timeout-minutes"])) > restore_waits, (
+        "the restore step's own timeout must clear the script's waits"
+    )
+    install_waits = (
+        app.DEFAULT_PUBLISH_RETRY_SECONDS
+        + app.DEFAULT_INSTALL_RETRY_SECONDS
+        + app.DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS
+        + app.DEFAULT_SETTLE_SECONDS
+    ) // 60
+    required = round(install_waits / _MAX_WAIT_SHARE) + int(
+        str(step["timeout-minutes"])
+    )
+    assert int(str(jobs["prepare-tenant"]["timeout-minutes"])) >= required
+
+
+#: Minutes the steps before the install (script fetch, lease check, tenant
+#: resolve, atlan.yaml and app_configs reads) may take before the install starts.
+_PRE_INSTALL_MINUTES = 5
+
+
+def test_install_step_timeout_leaves_room_for_the_restore(jobs: _Jobs) -> None:
+    """A hung install must fail its step, not time out the job.
+
+    A job timeout cancels the job, `failure()` is then false, and the restore
+    is skipped — on exactly the slow path most likely to strand a broken build.
+    So the install step carries its own timeout: above the script's own waits,
+    and low enough that the restore still fits inside the job after it.
+    """
+    install = next(s for s in _prepare_steps(jobs) if s.get("id") == "install")
+    assert "timeout-minutes" in install, (
+        "the install step needs its own timeout, or a hung install cancels the "
+        "job and the restore never runs"
+    )
+    install_minutes = int(str(install["timeout-minutes"]))
+    install_waits = (
+        app.DEFAULT_PUBLISH_RETRY_SECONDS
+        + app.DEFAULT_INSTALL_RETRY_SECONDS
+        + app.DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS
+        + app.DEFAULT_SETTLE_SECONDS
+    ) // 60
+    assert install_minutes > install_waits, (
+        "the install step's timeout must clear the script's own waits, or a slow "
+        "sync reads as a step timeout instead of the script's error"
+    )
+    restore_minutes = int(str(_restore_step(jobs)["timeout-minutes"]))
+    job_minutes = int(str(jobs["prepare-tenant"]["timeout-minutes"]))
+    assert _PRE_INSTALL_MINUTES + install_minutes + restore_minutes <= job_minutes

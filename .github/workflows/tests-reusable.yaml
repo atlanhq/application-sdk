@@ -2437,7 +2437,11 @@ jobs:
     # 48 → 50 for the FND-831 settle. The lease TTL still clears the hold this
     # is half of (1.5 × (50 + 120) min < 16200s), so it needs no change; at 60
     # it would.
-    timeout-minutes: 50
+    #
+    # 50 → 65 for the 15-min "Restore the previous version" step, which runs
+    # only after a failed install and so sits on top of the install budget, not
+    # inside it. The lease TTL rose to 16800s with it (1.5 × (65 + 120) min).
+    timeout-minutes: 65
     concurrency:
       # Run-unique, i.e. deliberately NOT a serialising group. Tenant exclusion
       # is the lease's job now (lease-tenant above), and the lease is strictly
@@ -2606,8 +2610,16 @@ jobs:
       # --app-id is deliberately omitted: the script reads app_id from atlan.yaml
       # in the working directory (and validates the result either way), so the id
       # has one source rather than being threaded through a step output.
+      # Its own timeout, not just the job's: a job timeout cancels the job, and
+      # `failure()` is false on a cancelled job, so a hung install would skip
+      # "Restore the previous version" — the slow path is the one most likely to
+      # strand a broken build. A step timeout fails the step instead, so the
+      # restore still runs. 45 min clears the script's own ~25 min of waits, and
+      # 45 + the restore's 15 leaves 5 of the job's 65 for the steps above.
+      # test_install_step_timeout_leaves_room_for_the_restore holds both.
       - name: Install the app under test
         id: install
+        timeout-minutes: 45
         env:
           IMAGE: ${{ needs.merge-e2e-image.outputs.image }}
           VERSION: ${{ needs.merge-e2e-image.outputs.version }}
@@ -2645,10 +2657,36 @@ jobs:
         # the sum of the two, or a slow sync reads as a job timeout instead of
         # the actionable error the script would otherwise raise.
 
+      # A failed install must not strand the build under test on a shared pool
+      # tenant. `install` records the version the tenant ran BEFORE it publishes
+      # anything, so this can put it back whatever failed after that point. A
+      # broken build left in place breaks every later run against the tenant
+      # and can misbehave on the tenant itself (an ai-memory build left its
+      # Service in a vcluster-syncer recreate loop on two pool tenants).
+      # Skipped when nothing was installed before: there is nothing to return
+      # to, and uninstall is not reliable (DISTR-921). Its own timeout is added
+      # on top of the install budget in this job's timeout-minutes.
+      - name: Restore the previous version
+        id: restore
+        if: failure() && steps.install.outputs.previous_version_id != ''
+        timeout-minutes: 15
+        env:
+          PREVIOUS_VERSION: ${{ steps.install.outputs.previous_version }}
+          PREVIOUS_VERSION_ID: ${{ steps.install.outputs.previous_version_id }}
+          VERSION: ${{ needs.merge-e2e-image.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_app.py restore \
+            --base-url "$ATLAN_BASE_URL" \
+            --version-id "$PREVIOUS_VERSION_ID" \
+            --expected "$PREVIOUS_VERSION" \
+            --rolled-back-from "$VERSION"
+
       - name: Summarise
         if: always()
         env:
           IMAGE: ${{ needs.merge-e2e-image.outputs.image }}
+          RESTORED: ${{ steps.restore.outputs.restored_version }}
           SKIPPED: ${{ steps.install.outputs.skipped }}
           RELEASE_STATUS: ${{ steps.install.outputs.release_status }}
           INSTALLED: ${{ steps.install.outputs.installed_version }}
@@ -2672,6 +2710,7 @@ jobs:
             echo "| Tenant reports installed | \`${INSTALLED:-unreported}\` |"
             echo "| Established at layer | \`${LAYER:-unknown}\` |"
             echo "| Pod reports build | \`${POD_BUILD_ID:-not reported}\` |"
+            echo "| Restored after failure | \`${RESTORED:-no}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   e2e:

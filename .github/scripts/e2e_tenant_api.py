@@ -206,6 +206,21 @@ def validate_app_id(app_id: str) -> str:
     return value
 
 
+def validate_version_id(version_id: str) -> str:
+    """Return ``version_id`` when it has the GM UUID shape, or raise.
+
+    The restore path sends it in an install body that re-points a shared pool
+    tenant, and it arrives through a step output, so it is checked with the
+    same rigour as ``app_id`` before any API call.
+    """
+    value = version_id.strip()
+    if not _APP_ID_RE.fullmatch(value):
+        raise TenantApiError(
+            f"invalid version_id {version_id!r}: GM version ids are UUIDs."
+        )
+    return value
+
+
 def path_segment(value: str) -> str:
     """Quote one value for safe insertion into a path-constant format string.
 

@@ -496,6 +496,30 @@ use the install path, and neither can the single-tenant fallback (which has no
 entry to add the field to); the `E2E Tenant Install` workflow's `tenant_id` input
 covers one-off runs in both cases.
 
+### A failed install restores the previous version
+
+The e2e tenants are a shared pool, so `prepare-tenant` must not leave a broken
+build behind. Before it publishes anything, `e2e_tenant_app.py install` records
+the version the tenant runs (`previous_version`, `previous_version_id`). If any
+later step fails, *Restore the previous version* runs
+`e2e_tenant_app.py restore`. That force-installs the recorded version_id and
+fails unless the tenant's install record names it again and the app pod no
+longer reports the build under test. The install record alone is not proof,
+because the install writes it and nothing revisits it. The prior version is
+recorded by UUID even when its version string cannot be read. The step is skipped
+when the app was not installed before, because uninstall is not reliable
+(DISTR-921). It has its own 15-minute timeout on top of the install budget,
+which is why the job allows 65 minutes and the lease TTL is 16800s. The install
+step has its own 45-minute timeout so that a hung install fails the step rather
+than timing out the job: `failure()` is false on a timed-out (cancelled) job, so
+the restore would otherwise be skipped.
+
+This was added after an ai-memory test build failed `prepare-tenant` and was
+left installed on two pool tenants. Its own `ClusterIP` Service clashed with the
+host-side `ExternalName` left by the API server consolidation, and the vcluster
+syncer recreated the Service many times a second until it was rolled back by
+hand (CONAT-7994).
+
 ### What the e2e registration sends
 
 `prepare-tenant` registers the version under test through the same body builder
