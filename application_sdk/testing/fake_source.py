@@ -60,6 +60,7 @@ from __future__ import annotations
 import base64
 import re
 import socket
+import socketserver
 import ssl
 import sys
 import threading
@@ -344,9 +345,21 @@ class _FakeSourceServer(ThreadingHTTPServer):
         super().__init__(*args, **kwargs)
 
     def server_bind(self) -> None:
+        """Bind without ``HTTPServer.server_bind``'s reverse-DNS lookup.
+
+        ``HTTPServer.server_bind`` sets ``server_name`` from
+        ``socket.getfqdn(host)``, a reverse lookup of the bound address. Nothing
+        here reads ``server_name`` (``base_url`` is built from the bound address),
+        and on a runner whose resolver times out that lookup blocked every
+        start for 35 s — 70 s for a wildcard bind. So bind at the
+        ``TCPServer`` level and record the literal host instead.
+        """
         if sys.platform == "win32":
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        super().server_bind()
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host.decode() if isinstance(host, bytes) else str(host)
+        self.server_port = port
 
     def get_request(self) -> tuple[Any, Any]:
         """Accept one connection, then handshake TLS under ``handshake_timeout``.
