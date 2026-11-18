@@ -56,9 +56,12 @@ def test_posix_legs_guard_sockets_and_interrupt_hangs_with_sigalrm(
     assert "--timeout-method=signal" in argv
 
 
-def test_windows_has_no_socket_guard_and_no_sigalrm() -> None:
+def test_windows_guards_connect_to_loopback_and_has_no_sigalrm() -> None:
     argv = _build(runner_os="Windows")
+    # --disable-socket blocks socket creation, and Proactor's self-pipe needs
+    # an AF_INET socket pair; --allow-hosts guards connect() only.
     assert "--disable-socket" not in argv
+    assert "--allow-hosts=127.0.0.1,::1" in argv
     assert "--timeout=120" in argv
     assert "--timeout-method=thread" in argv
 

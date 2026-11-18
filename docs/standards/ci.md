@@ -719,6 +719,28 @@ no `pre-commit / Pre-commit` context or never call `checks-reusable.yaml`.
 Both sit in shared workflows, not bootstrap templates, so they go live in the
 same merge as the skip.
 
+## Every unit leg runs a socket guard
+
+**Rule:** every SDK unit leg runs pytest-socket. Linux and macOS use
+`--disable-socket --allow-unix-socket`. Windows uses
+`--allow-hosts=127.0.0.1,::1`. `.github/scripts/unit_test_command.py` builds
+both, and its tests pin them.
+
+**Why Windows differs:** `ProactorEventLoop`'s self-pipe is
+`socket.socketpair()`, which Python emulates on Windows with an `AF_INET`
+socket connected to `127.0.0.1`. `--disable-socket` blocks socket creation, so
+it would break asyncio there. `--allow-hosts` guards `connect()` only, so the
+loopback pair still works and every other host is refused.
+
+**What loopback leaves open:** a Dapr sidecar on `localhost:3500`. The autouse
+`_intercept_dapr_sidecar` fixture in `tests/unit/conftest.py` covers it on every
+OS. It gives `application_sdk.infrastructure._dapr.http` a private `httpx`
+whose transport raises `UnmockedDaprSidecarCallError`. A test that wants a
+Dapr answer mocks the client or swaps the transport. If the module stops
+importing `httpx`, the fixture raises at setup, so a refactor cannot leave the
+interceptor silently patching nothing. That happened to the `DaprClient` mock
+it replaced (FND-4287).
+
 ## Runner sizing
 
 **Rule:** a short glue job (it calls the GitHub API, rolls up results, posts a

@@ -1,7 +1,7 @@
 """Build and run the SDK unit-test pytest command for one matrix leg.
 
 Called by ``.github/actions/unit-tests``. The per-leg decisions — which uv
-groups exist on this Python, whether the socket guard can be on, how a hung
+groups exist on this Python, which socket guard the OS allows, how a hung
 test is interrupted, whether this leg measures coverage — live here rather
 than in the action's ``run:`` block so each branch has a test
 (``tests/test_unit_test_command.py``; see ``docs/standards/ci.md``).
@@ -47,6 +47,10 @@ TEST_TIMEOUT_SECONDS = 120
 #: included (FND-4304). Over budget is a warning, never a failure: a slow
 #: runner is not a broken suite, and a red leg for it would be a flake.
 STEP_BUDGET_SECONDS = {"Windows": 180.0}
+
+#: The only hosts a Windows unit leg may connect() to: the loopback addresses
+#: socket.socketpair() uses for ProactorEventLoop's self-pipe.
+WINDOWS_ALLOWED_HOSTS = ("127.0.0.1", "::1")
 DEFAULT_STEP_BUDGET_SECONDS = 120.0
 
 #: A unit test slower than this (setup + call + teardown) is annotated on the
@@ -188,9 +192,15 @@ def build_command(
 
     # pytest-socket: on Linux/macOS the event loop uses os.pipe()/AF_UNIX for
     # its self-pipe, so --allow-unix-socket is sufficient. On Windows,
-    # ProactorEventLoop uses AF_INET socket pairs internally; --disable-socket
-    # would break asyncio entirely there, so Windows runs without the guard.
-    if not windows:
+    # ProactorEventLoop's self-pipe is socket.socketpair(), which Python
+    # emulates with an AF_INET socket connected to 127.0.0.1, so
+    # --disable-socket would break asyncio entirely. Windows instead guards
+    # connect(): loopback only, so a test cannot reach the network. Loopback
+    # still reaches a local Dapr sidecar; tests/unit/conftest.py refuses
+    # unmocked Dapr requests on every OS for that (FND-4287).
+    if windows:
+        argv += [f"--allow-hosts={','.join(WINDOWS_ALLOWED_HOSTS)}"]
+    else:
         argv += ["--disable-socket", "--allow-unix-socket"]
 
     # SIGALRM interrupts the hung test and the worker carries on. Windows has
