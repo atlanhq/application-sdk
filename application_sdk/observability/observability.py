@@ -824,22 +824,41 @@ class AtlanObservability(Generic[T], ABC):
         ones share it. A sink that cannot start it logs the failure and leaves
         the class unflushed, so the next sink of the class tries again: a sink
         that cannot flush must not stop collection.
+
+        The class is claimed under ``_periodic_flush_lock`` and the flush
+        started after releasing it. Starting calls overridable methods, and a
+        failure logs through whatever handlers the process installed; any of
+        them may build another sink, whose own call would otherwise wait on
+        this thread's lock for good. Claiming first also makes that nested
+        call return instead of starting a second flush.
         """
+        cls = type(self)
+        owners = AtlanObservability._periodic_flush_owners
         with _periodic_flush_lock:
-            owners = AtlanObservability._periodic_flush_owners
-            if type(self) in owners:
+            if cls in owners:
                 return
-            try:
-                self._start_periodic_flush()
-            # conformance: ignore[E004] telemetry; a sink that cannot start its flush must not stop collection
-            except Exception:
-                logging.warning(
-                    "Could not start the %s periodic flush",
-                    self._get_signal_type(),
-                    exc_info=True,
-                )
-                return
-            owners[type(self)] = self
+            owners[cls] = self
+        try:
+            handle = self._start_periodic_flush()
+        # conformance: ignore[E004] telemetry; a sink that cannot start its flush must not stop collection
+        except Exception:
+            with _periodic_flush_lock:
+                if owners.get(cls) is self:
+                    del owners[cls]
+            logging.warning(
+                "Could not start the %s periodic flush",
+                self._get_signal_type(),
+                exc_info=True,
+            )
+            return
+        with _periodic_flush_lock:
+            released = owners.get(cls) is not self
+        if released and handle is not None:
+            # A test reset released the class while the flush was starting,
+            # before it had a handle to stop. Stop it now, or it would run on
+            # unowned beside the next sink's.
+            self._periodic_flush_task = None
+            handle.cancel()
 
     @classmethod
     def _stop_class_flushes_for_testing(cls) -> None:
@@ -891,7 +910,16 @@ class AtlanObservability(Generic[T], ABC):
         the thread that ran the flushes, so without this nothing in the child
         would flush. The buffer lock is replaced first: a parent thread may
         have held it at the moment of the fork.
+
+        A class claimed by a sink with no flush handle is released: the fork
+        caught that sink mid-start (or the parent's loop had shut down), and
+        no flush runs for it in the child. Released, the class's next sink
+        starts one, rather than the claim keeping every later sink from it.
         """
+        owners = AtlanObservability._periodic_flush_owners
+        for owner_cls, owner in list(owners.items()):
+            if owner._periodic_flush_task is None:
+                del owners[owner_cls]
         for instance in list(cls._instances):
             instance._buffer_lock = threading.Lock()
             instance._flush_tasks = set()
