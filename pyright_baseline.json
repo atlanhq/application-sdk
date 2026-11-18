@@ -167,9 +167,6 @@
       "error:reportArgumentType": 1,
       "error:reportAttributeAccessIssue": 1
     },
-    "packages/conformance/conformance/suite/checks/deprecation/_extractor.py": {
-      "error:reportAttributeAccessIssue": 1
-    },
     "packages/conformance/conformance/suite/checks/deprecation/_private_imports.py": {
       "error:reportAttributeAccessIssue": 1
     },
