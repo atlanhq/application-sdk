@@ -230,7 +230,7 @@ def test_read_ref_target_reads_an_unreadable_ref_as_unheld(http) -> None:
 
 
 def _ok(cmd, **kwargs) -> subprocess.CompletedProcess:
-    _ok.calls.append((cmd, kwargs))  # type: ignore[attr-defined]
+    _ok.calls.append((cmd, kwargs))  # pyright: ignore[reportFunctionMemberAccess]
     return subprocess.CompletedProcess(cmd, 0, 'HTTP/2 304 x\nETag: "v2"\n\n', "")
 
 
@@ -238,14 +238,14 @@ def test_extra_headers_are_sent_and_the_status_comes_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("GH_TOKEN", "ghs_token-value")
-    _ok.calls = []  # type: ignore[attr-defined]
+    _ok.calls = []  # pyright: ignore[reportFunctionMemberAccess]
     monkeypatch.setattr("_gh_refs.run", _ok)
 
     response = gh_request("GET", "some/path", headers={"If-None-Match": '"v1"'})
 
     assert response.status == 304
     assert response.headers["etag"] == '"v2"'
-    cmd, kwargs = _ok.calls[0]  # type: ignore[attr-defined]
+    cmd, kwargs = _ok.calls[0]  # pyright: ignore[reportFunctionMemberAccess, reportUnknownMemberType]
     assert 'If-None-Match: "v1"' in cmd
     assert not any("ghs_token-value" in part for part in cmd)
     assert "ghs_token-value" in kwargs["input"]
@@ -258,12 +258,12 @@ def test_an_authorization_header_is_refused_not_put_on_argv(
     """``headers`` go on argv. Accepting a credential there would undo the one
     property the transport exists to keep, so it is refused before curl runs."""
     monkeypatch.setenv("GH_TOKEN", "ghs_token-value")
-    _ok.calls = []  # type: ignore[attr-defined]
+    _ok.calls = []  # pyright: ignore[reportFunctionMemberAccess]
     monkeypatch.setattr("_gh_refs.run", _ok)
 
     with pytest.raises(ValueError, match="argv"):
         gh_request("GET", "some/path", headers={name: "Bearer other-token"})
-    assert _ok.calls == []  # type: ignore[attr-defined]
+    assert _ok.calls == []  # pyright: ignore[reportFunctionMemberAccess, reportUnknownMemberType]
 
 
 def _argv_bearer_literals(path: Path) -> list[int]:

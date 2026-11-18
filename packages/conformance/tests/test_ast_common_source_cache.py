@@ -36,7 +36,7 @@ def parse_counts(monkeypatch: pytest.MonkeyPatch) -> Iterator[Counter[str]]:
     counts: Counter[str] = Counter()
     real_parse = ast.parse
 
-    def counting_parse(source, *args, **kwargs):  # type: ignore[no-untyped-def]
+    def counting_parse(source, *args, **kwargs):
         if isinstance(source, str):
             counts[source] += 1
         return real_parse(source, *args, **kwargs)

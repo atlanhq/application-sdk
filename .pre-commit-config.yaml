@@ -84,10 +84,22 @@ repos:
         # validator accepts the JS one too.
         files: ^(renovate\.json|renovate-config/(default\.json|self-hosted\.js))$
 
-  - repo: https://github.com/RobertCraigie/pyright-python
-    rev: v1.1.414
+  # pyright over the SDK tree, held to the repo-root pyright_baseline.json
+  # (FND-4295). reportArgumentType, reportAttributeAccessIssue and
+  # reportFunctionMemberAccess are errors, with findings that predate that, so
+  # a plain pyright hook (the pyright-python one this replaces) fails on every
+  # run. This fails on a NEW error instead, per file and rule. pyright is the
+  # exact `dev`-group pin; every extra and group is installed so imports
+  # resolve as in CI's venv. In CI, PYRIGHT_BASELINE_BASE_SHA (codeql.yaml)
+  # also holds the baseline to the base revision's.
+  - repo: local
     hooks:
       - id: pyright
+        name: pyright (baseline)
+        entry: uv run --frozen --all-extras --all-groups python .github/scripts/check_pyright_baseline.py --scope sdk
+        language: system
+        files: ^(.*\.py|pyright_baseline\.json|pyproject\.toml|uv\.lock)$
+        pass_filenames: false
   # Every `extra_javascript` entry in mkdocs.yml runs on every docs page.
   # polyfill.io sat there after its domain was taken over in 2024 and began
   # serving malicious JavaScript (FND-4243). Only local paths pass; vendor
@@ -103,11 +115,11 @@ repos:
         pass_filenames: false
       # The pyright hook above never sees .github/scripts ([tool.pyright]
       # excludes .github/**); CI's `pyright .github/scripts` job holds them to
-      # pyright_baseline.json instead. Run the same ratchet here so a PR finds
-      # out before push. It also triggers on pyproject.toml / uv.lock: adding or
-      # dropping a package changes how the scripts' imports resolve (dropping
-      # httpx2 made starlette's TestClient unknown). Without --base-sha, so a
-      # same-PR baseline raise is still caught only in CI.
+      # .github/scripts/pyright_baseline.json instead. Run the same ratchet here
+      # so a PR finds out before push. It also triggers on pyproject.toml /
+      # uv.lock: adding or dropping a package changes how the scripts' imports
+      # resolve (dropping httpx2 made starlette's TestClient unknown). Locally
+      # without a base SHA, so a same-PR baseline raise is caught only in CI.
       - id: pyright-scripts-baseline
         name: pyright .github/scripts baseline
         entry: uv run --frozen --extra workflows python .github/scripts/check_pyright_baseline.py

@@ -1182,7 +1182,7 @@ def test_pod_identity_is_read_from_either_half_of_the_envelope(
     flattens it can make a reachable pod look unreachable — which would silently
     demote the check to the record layer it exists to stop trusting.
     """
-    identity = app.parse_pod_identity(body["data"])  # type: ignore[arg-type]
+    identity = app.parse_pod_identity(body["data"])  # pyright: ignore[reportArgumentType]
     assert identity.reachable is True
     assert identity.build_id == expected
 
@@ -3420,7 +3420,7 @@ def _no_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     def _fail(name: str, *args: object, **kwargs: object) -> object:
         if name == "yaml":
             raise ModuleNotFoundError("No module named 'yaml'")
-        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+        return real_import(name, *args, **kwargs)  # pyright: ignore[reportArgumentType]
 
     monkeypatch.setattr(builtins, "__import__", _fail)
 
@@ -3516,7 +3516,7 @@ def test_pyyaml_is_still_preferred_when_present(
 _UUID = "019fdc06-dbe3-7992-93a0-1791575164b3"
 
 
-def _info(installed_id: str, version: str = _VERSION, text: str = "unknown") -> dict:  # type: ignore[type-arg]
+def _info(installed_id: str, version: str = _VERSION, text: str = "unknown") -> dict:
     return {
         "catalog": {"app_version": {"version_id": _UUID, "version": version}},
         "installed": {"version_id": installed_id, "version_text": text},
@@ -3549,7 +3549,7 @@ def test_a_mismatched_uuid_never_resolves() -> None:
         },
     ],
 )
-def test_an_incomplete_payload_never_resolves(payload: dict) -> None:  # type: ignore[type-arg]
+def test_an_incomplete_payload_never_resolves(payload: dict) -> None:
     assert app.resolve_version_via_catalog(payload) == ""
 
 

@@ -219,4 +219,9 @@ jobs:
       - uses: "./.github/actions/setup-deps"
         with:
           checkout: "false"
+      # The pyright hooks (check_pyright_baseline.py) read this as --base-sha,
+      # so a PR cannot add a finding and raise its baseline to match in one
+      # change. Empty on a push to main or the schedule: no base comparison.
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+        env:
+          PYRIGHT_BASELINE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}

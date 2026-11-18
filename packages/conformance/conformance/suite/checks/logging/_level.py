@@ -472,7 +472,7 @@ class LevelMixin(_MixinBase):
         if isinstance(innermost, ast.While):
             # While loops are always flagged — bound is not statically obvious
             pass
-        elif loop_is_bounded(innermost, self._bounded_loop_caps):  # type: ignore[arg-type]
+        elif loop_is_bounded(innermost, self._bounded_loop_caps):
             return
         enclosing_loops_are_bounded = all(
             isinstance(loop, (ast.For, ast.AsyncFor))

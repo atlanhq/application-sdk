@@ -115,10 +115,10 @@ try:  # PEP 508/440 parsing for floor classification and the rollback gate.
     from packaging.utils import canonicalize_name
     from packaging.version import InvalidVersion, Version
 except ImportError:  # pragma: no cover - packaging is effectively universal
-    Requirement = None  # type: ignore[assignment]
-    canonicalize_name = None  # type: ignore[assignment]
-    Version = None  # type: ignore[assignment]
-    InvalidVersion = ValueError  # type: ignore[assignment]
+    Requirement = None
+    canonicalize_name = None
+    Version = None
+    InvalidVersion = ValueError
 
 # Why a refusal says *why* (FND-909)
 # ----------------------------------

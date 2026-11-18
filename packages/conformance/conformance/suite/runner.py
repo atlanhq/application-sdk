@@ -842,7 +842,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(payload)
 
-    sarif_exit_code: int = report.runs[0].invocations[0].exit_code  # type: ignore[assignment]
+    sarif_exit_code: int = report.runs[0].invocations[0].exit_code  # pyright: ignore[reportAssignmentType]
     if args.exit_zero:
         return 0
     if change_adds is None:

@@ -173,7 +173,7 @@ def test_an_unfinished_run_is_left_to_post_its_own_verdict(status: str) -> None:
 
 def test_a_non_integer_attempt_is_treated_as_already_re_run() -> None:
     """Fail towards doing nothing when the payload is not the shape we expect."""
-    repairable, _ = is_repairable_eviction(_run(1, attempt="2"), 180)  # type: ignore[arg-type]
+    repairable, _ = is_repairable_eviction(_run(1, attempt="2"), 180)  # pyright: ignore[reportArgumentType]
     assert not repairable
 
 

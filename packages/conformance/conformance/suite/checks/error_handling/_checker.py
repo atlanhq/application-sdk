@@ -153,7 +153,7 @@ class Checker(
         self._bound_names, self._rebound_names = module_bindings(node)
         self.generic_visit(node)
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # type: ignore[override]
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         # Reset loop/except/try context: a nested function body executes later
         # and is not protected by the surrounding function's handlers.
         saved_loops = self._loop_stack
@@ -170,15 +170,15 @@ class Checker(
         self._except_stack = saved_excepts
         self._try_stack = saved_tries
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # type: ignore[override]
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         saved_loops = self._loop_stack
         saved_excepts = self._except_stack
         saved_tries = self._try_stack
         self._loop_stack = []
         self._except_stack = []
         self._try_stack = []
-        self._function_stack.append(node)  # type: ignore[arg-type]
-        self._check_p010_in_function(node)  # type: ignore[arg-type]
+        self._function_stack.append(node)
+        self._check_p010_in_function(node)
         self.generic_visit(node)
         self._function_stack.pop()
         self._loop_stack = saved_loops
@@ -199,12 +199,12 @@ class Checker(
         self._loop_stack.pop()
 
     def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
-        self._loop_stack.append(node)  # type: ignore[arg-type]
+        self._loop_stack.append(node)
         self.generic_visit(node)
         self._loop_stack.pop()
 
     def visit_While(self, node: ast.While) -> None:
-        self._loop_stack.append(node)  # type: ignore[arg-type]
+        self._loop_stack.append(node)
         self.generic_visit(node)
         self._loop_stack.pop()
 

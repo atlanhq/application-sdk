@@ -191,7 +191,7 @@ def _set_connection_name(asset: object, connection_name: str) -> None:
     if current:
         return
     try:
-        asset.connection_name = connection_name  # type: ignore[attr-defined]
+        asset.connection_name = connection_name  # pyright: ignore[reportAttributeAccessIssue]
     except (AttributeError, TypeError):
         # Frozen or slot-less asset: the attribute is simply not settable.
         # Losing connectionName is worse than failing the run only if the
@@ -239,7 +239,7 @@ def _set_default_status(asset: object) -> None:
     if current:
         return
     try:
-        asset.status = _DEFAULT_STATUS  # type: ignore[attr-defined]
+        asset.status = _DEFAULT_STATUS  # pyright: ignore[reportAttributeAccessIssue]
     except (AttributeError, TypeError, ValueError):
         # Frozen asset: same trade-off as connectionName — skip the default
         # rather than fail the whole transform. ``ValueError`` because a
@@ -296,7 +296,7 @@ def _clear_placeholder_guid(asset: object) -> None:
 
     cleared = msgspec.UNSET if isinstance(asset, msgspec.Struct) else None
     try:
-        asset.guid = cleared  # type: ignore[attr-defined]
+        asset.guid = cleared  # pyright: ignore[reportAttributeAccessIssue]
     except (AttributeError, TypeError):
         # Frozen asset: the placeholder costs a redundant diff, not a wrong
         # entity. Same trade-off as connectionName.
@@ -462,7 +462,7 @@ def _nested_dict(asset: object, entity_type: str | None) -> dict[str, Any]:
     """
     if isinstance(asset, NestedBytesAsset):
         line = _checked_line(asset.to_nested_bytes(), asset, entity_type)
-        return orjson.loads(line)  # type: ignore[no-any-return]
+        return orjson.loads(line)
     if isinstance(asset, NestedDictAsset):
         return asset.to_nested_dict()
     if isinstance(asset, ModelDumpAsset):

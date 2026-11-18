@@ -298,7 +298,7 @@ def to_atlas_format_dict(asset: object) -> dict[str, Any] | None:
         from pyatlan_v9.model.assets import (  # noqa: PLC0415 — deferred: optional dep
             Asset,
         )
-        from pyatlan_v9.model.transform import (  # type: ignore[import]  # noqa: PLC0415 — deferred: optional dep
+        from pyatlan_v9.model.transform import (  # noqa: PLC0415 — deferred: optional dep
             to_atlas_format,
         )
     except ImportError:

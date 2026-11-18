@@ -103,14 +103,12 @@ class Checker(
         self._bounded_loop_caps = collect_bounded_loop_caps(node)
         self.generic_visit(node)
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # type: ignore[override]
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         # Reset loop/except context: handlers in a nested function are not
         # "inside" the outer function's loop or except block.
         self._visit_function(node)
 
-    def visit_AsyncFunctionDef(  # type: ignore[override]
-        self, node: ast.AsyncFunctionDef
-    ) -> None:
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._visit_function(node)
 
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
@@ -131,12 +129,12 @@ class Checker(
         self._loop_stack.pop()
 
     def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
-        self._loop_stack.append(node)  # type: ignore[arg-type]
+        self._loop_stack.append(node)
         self.generic_visit(node)
         self._loop_stack.pop()
 
     def visit_While(self, node: ast.While) -> None:
-        self._loop_stack.append(node)  # type: ignore[arg-type]
+        self._loop_stack.append(node)
         self.generic_visit(node)
         self._loop_stack.pop()
 

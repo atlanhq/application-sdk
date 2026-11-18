@@ -587,7 +587,7 @@ def _child(container: object, name: str) -> object | None:
     # `container` is typed `object` because the arrow types are only imported inside
     # `_load_pyarrow`, so there is no annotation to narrow it to. Both `pa.Schema`
     # and `pa.StructType` iterate their fields at runtime.
-    for field in container:  # type: ignore[attr-defined]  # Schema/StructType are iterable
+    for field in container:  # pyright: ignore[reportGeneralTypeIssues]  # Schema/StructType are iterable
         if getattr(field, "name", None) == name:
             return field
     return None

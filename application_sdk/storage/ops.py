@@ -61,9 +61,9 @@ try:  # pragma: no cover — defensive import
     from obstore.exceptions import NotFoundError as _ObstoreNotFoundError
     from obstore.exceptions import PreconditionError as _ObstorePreconditionError
 except ImportError:  # conformance: ignore[E008,E009] optional dep obstore.exceptions; sentinel fallback for older versions  # pragma: no cover
-    _ObstoreBaseError = None  # type: ignore[assignment,misc]
-    _ObstoreNotFoundError = None  # type: ignore[assignment,misc]
-    _ObstorePreconditionError = None  # type: ignore[assignment,misc]
+    _ObstoreBaseError = None
+    _ObstoreNotFoundError = None
+    _ObstorePreconditionError = None
 
 
 if TYPE_CHECKING:

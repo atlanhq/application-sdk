@@ -778,7 +778,7 @@ class ConnectionRef(BaseModel, frozen=True):
         Returns:
             A ConnectionRef with normalized snake_case fields.
         """
-        from pyatlan_v9.model.transform import (  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored module not always available)
+        from pyatlan_v9.model.transform import (  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored module not always available)
             to_atlas_format,
         )
 
@@ -794,7 +794,7 @@ class ConnectionRef(BaseModel, frozen=True):
         Returns:
             A pyatlan_v9 Connection msgspec.Struct instance.
         """
-        from pyatlan_v9.model.transform import (  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored module not always available)
+        from pyatlan_v9.model.transform import (  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored module not always available)
             from_atlas_format,
         )
 

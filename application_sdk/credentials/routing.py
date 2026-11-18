@@ -223,7 +223,7 @@ def normalize_inline_credentials(
                 credential_name=key,
             )
     # Every leaf was just checked against the CredentialValue scalars.
-    return flat  # type: ignore[return-value]
+    return flat  # pyright: ignore[reportReturnType]
 
 
 RUN_CREDENTIAL_FIELD_ATTR = "run_credential_field"
@@ -367,7 +367,7 @@ def route_credentials(
         if isinstance(source, CredentialResolvable) or not guid:
             # A non-resolvable input with only an agent spec raises
             # CredentialResolvableTypeError here, naming the missing fields.
-            return ResolvedCredentials(CredentialRef.resolve(source), {})  # type: ignore[arg-type]
+            return ResolvedCredentials(CredentialRef.resolve(source), {})  # pyright: ignore[reportArgumentType]
         return ResolvedCredentials(
             CredentialRef(name=guid, credential_type="unknown", credential_guid=guid),
             {},

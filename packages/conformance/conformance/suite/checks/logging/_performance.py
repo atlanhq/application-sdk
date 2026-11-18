@@ -334,7 +334,7 @@ class WarnThenRaiseVisitor(ast.NodeVisitor):
                     call.func.attr
                     if isinstance(call.func, ast.Attribute)
                     else "warning"
-                )  # type: ignore[union-attr]
+                )
                 self._findings.append(
                     make_finding(
                         filename=self._filename,
@@ -411,5 +411,5 @@ class WarnThenRaiseVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     # Python 3.11+ try/except* blocks have the same structure as Try.
-    # The type: ignore is needed because TryStar and Try are sibling AST nodes.
-    visit_TryStar = visit_Try  # type: ignore[assignment]
+    # The pyright: ignore is needed because TryStar and Try are sibling AST nodes.
+    visit_TryStar = visit_Try  # pyright: ignore[reportAssignmentType]

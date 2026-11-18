@@ -1,5 +1,19 @@
 #!/usr/bin/env python3
-"""Hold pyright's findings on ``.github/scripts`` to a baseline that only shrinks.
+"""Hold pyright's findings to a baseline that only shrinks, in two scopes.
+
+``--scope scripts`` (the default) covers ``.github/scripts``; ``--scope sdk``
+covers everything else ``[tool.pyright]`` analyses (``application_sdk``,
+``packages``, ``tools``). The mechanics below are the same for both.
+
+Why the sdk scope exists (FND-4295)
+-----------------------------------
+``reportArgumentType``, ``reportAttributeAccessIssue`` and
+``reportFunctionMemberAccess`` are errors in ``[tool.pyright]``. Hundreds of
+existing findings of those rules predate the promotion, so a plain pyright run
+fails. The sdk scope holds the tree's ERRORS (not its warnings, which stay
+advisory) to the repo-root ``pyright_baseline.json``: an argument-type bug in
+new code fails, and the existing ones may only be fixed, never added to. It
+replaces the pre-commit ``pyright-python`` hook, which fails on any error.
 
 Why this exists (FND-4245)
 --------------------------
@@ -69,10 +83,15 @@ from typing import Callable, Mapping, Sequence, cast
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = ".github/scripts"
 BASELINE = REPO_ROOT / SCRIPTS_DIR / "pyright_baseline.json"
+SDK_BASELINE = REPO_ROOT / "pyright_baseline.json"
+#: Read when ``--base-sha`` is not given, so a pre-commit hook (whose arguments
+#: are fixed) can still be held to the base revision's baseline in CI. Empty
+#: (a push to main, a local run) means no base comparison.
+BASE_SHA_ENV = "PYRIGHT_BASELINE_BASE_SHA"
 _PYRIGHT_PIN_RE = re.compile(r"^pyright==(?P<version>\S+)$")
 #: A stalled fetch of the base must not hold the job until its timeout.
 GIT_TIMEOUT_S = 120
-#: Severities the baseline tracks. ``information`` is not a finding.
+#: Severities the scripts baseline tracks. ``information`` is not a finding.
 TRACKED_SEVERITIES = ("error", "warning")
 #: pyright exits 0 (clean) or 1 (diagnostics reported); anything else is fatal.
 PYRIGHT_OK_EXIT_CODES = (0, 1)
@@ -82,6 +101,53 @@ PYRIGHT_TIMEOUT_S = 600
 #: Per file, ``"<severity>:<rule>"`` -> count.
 Counts = dict[str, dict[str, int]]
 Runner = Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"]
+
+
+@dataclass(frozen=True)
+class Scope:
+    """What one baseline covers and how pyright is pointed at it."""
+
+    name: str
+    #: How the scope is named in messages and the job summary.
+    label: str
+    #: Repo-relative path of the committed baseline.
+    baseline_rel: str
+    #: Repo-relative directory the generated pyright config is written in.
+    config_dir: str
+    #: Severities counted. The sdk scope counts errors only: its warnings
+    #: (``reportUnknownMemberType`` above all) are advisory, not a ratchet.
+    severities: tuple[str, ...]
+    #: Keep ``[tool.pyright]``'s include/exclude (True), or analyse exactly
+    #: ``config_dir`` (False: the scripts, which that exclude hides).
+    keep_scope: bool
+    #: Path ``git diff`` looks for renames under; ``"."`` is the whole repo.
+    rename_root: str
+
+    def update_command(self) -> str:
+        flag = "" if self.name == "scripts" else f" --scope {self.name}"
+        return f"python {SCRIPTS_DIR}/check_pyright_baseline.py{flag} --update"
+
+
+SCOPES: dict[str, Scope] = {
+    "scripts": Scope(
+        name="scripts",
+        label=SCRIPTS_DIR,
+        baseline_rel=f"{SCRIPTS_DIR}/pyright_baseline.json",
+        config_dir=SCRIPTS_DIR,
+        severities=TRACKED_SEVERITIES,
+        keep_scope=False,
+        rename_root=SCRIPTS_DIR,
+    ),
+    "sdk": Scope(
+        name="sdk",
+        label="the SDK tree",
+        baseline_rel="pyright_baseline.json",
+        config_dir=".",
+        severities=("error",),
+        keep_scope=True,
+        rename_root=".",
+    ),
+}
 
 
 class PyrightRunError(RuntimeError):
@@ -135,11 +201,14 @@ def pyright_pin(pyproject: Path) -> str:
     raise PyrightRunError(f"{pyproject.name} has no exact `pyright==` dev pin")
 
 
-def build_config(pyproject: Path, repo_root: Path) -> dict[str, object]:
-    """The repo's ``[tool.pyright]`` settings, scoped to ``.github/scripts``.
+def build_config(
+    pyproject: Path, repo_root: Path, scope: Scope = SCOPES["scripts"]
+) -> dict[str, object]:
+    """The repo's ``[tool.pyright]`` settings, for one scope.
 
-    Every setting is kept (rule levels, type-checking mode, the venv) except
-    ``include``/``exclude``. The config is written INSIDE ``.github/scripts``
+    Every setting is kept (rule levels, type-checking mode, the venv). The sdk
+    scope also keeps ``include``/``exclude``; the scripts scope replaces them.
+    The scripts config is written INSIDE ``.github/scripts``
     and includes ``"."``: pyright (1.1.414) auto-excludes ``**/.*`` whatever
     ``exclude`` says, and matches it against paths below the config's
     directory, so a config at the repo root can never reach ``.github/``. It
@@ -148,8 +217,9 @@ def build_config(pyproject: Path, repo_root: Path) -> dict[str, object]:
     """
     settings = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     config: dict[str, object] = dict(settings["tool"]["pyright"])
-    config["include"] = ["."]
-    config["exclude"] = ["**/__pycache__"]
+    if not scope.keep_scope:
+        config["include"] = ["."]
+        config["exclude"] = ["**/__pycache__"]
     venv_path = config.get("venvPath")
     if isinstance(venv_path, str):
         config["venvPath"] = str((repo_root / venv_path).resolve())
@@ -159,8 +229,9 @@ def build_config(pyproject: Path, repo_root: Path) -> dict[str, object]:
             str((repo_root / str(e)).resolve()) for e in extra_paths
         ]
     # Pinned, not inferred from the interpreter that runs this, so a baseline
-    # regenerated on a laptop matches the Linux CI runner. The version is the
-    # requires-python floor: the oldest Python the scripts must stay valid on.
+    # regenerated on a laptop matches the Linux CI runner (a 3.14 venv's ast
+    # stubs alone add errors a 3.13 runner does not see). The version is the
+    # requires-python floor: the oldest Python the code must stay valid on.
     config["pythonPlatform"] = "Linux"
     config["pythonVersion"] = requires_python_floor(
         settings["project"]["requires-python"]
@@ -180,7 +251,9 @@ def requires_python_floor(spec: str) -> str:
     return match.group(1)
 
 
-def parse_report(stdout: str, repo_root: Path) -> tuple[Counts, int]:
+def parse_report(
+    stdout: str, repo_root: Path, severities: Sequence[str] = TRACKED_SEVERITIES
+) -> tuple[Counts, int]:
     """Count tracked diagnostics per (file, severity:rule); return files analysed."""
     try:
         report = json.loads(stdout)
@@ -189,7 +262,7 @@ def parse_report(stdout: str, repo_root: Path) -> tuple[Counts, int]:
     counts: dict[str, Counter[str]] = {}
     for diag in report.get("generalDiagnostics", []):
         severity = diag.get("severity")
-        if severity not in TRACKED_SEVERITIES:
+        if severity not in severities:
             continue
         path = Path(diag["file"])
         try:
@@ -205,10 +278,15 @@ def parse_report(stdout: str, repo_root: Path) -> tuple[Counts, int]:
     )
 
 
-def run_pyright(repo_root: Path, runner: Runner = _run) -> Counts:
-    config = build_config(repo_root / "pyproject.toml", repo_root)
+def run_pyright(
+    repo_root: Path, runner: Runner = _run, scope: Scope = SCOPES["scripts"]
+) -> Counts:
+    config = build_config(repo_root / "pyproject.toml", repo_root, scope)
+    # A dot-file, so neither scope's pyright run analyses or lists it.
     fd, name = tempfile.mkstemp(
-        prefix=".pyright-scripts-", suffix=".json", dir=repo_root / SCRIPTS_DIR
+        prefix=f".pyright-{scope.name}-",
+        suffix=".json",
+        dir=repo_root / scope.config_dir,
     )
     config_path = Path(name)
     try:
@@ -221,20 +299,24 @@ def run_pyright(repo_root: Path, runner: Runner = _run) -> Counts:
         raise PyrightRunError(
             f"pyright exited {result.returncode}: {result.stderr.strip() or result.stdout[:2000]}"
         )
-    counts, files_analysed = parse_report(result.stdout, repo_root)
+    counts, files_analysed = parse_report(result.stdout, repo_root, scope.severities)
     if files_analysed == 0:
         raise PyrightRunError(
-            f"pyright analysed 0 files under {SCRIPTS_DIR}; the scope is broken, "
+            f"pyright analysed 0 files in {scope.label}; the scope is broken, "
             "and an empty run would match an empty baseline"
         )
     return counts
 
 
-def totals(counts: Mapping[str, Mapping[str, int]]) -> dict[str, int]:
-    out = {severity: 0 for severity in TRACKED_SEVERITIES}
+def totals(
+    counts: Mapping[str, Mapping[str, int]],
+    severities: Sequence[str] = TRACKED_SEVERITIES,
+) -> dict[str, int]:
+    out = {severity: 0 for severity in severities}
     for per_rule in counts.values():
         for key, n in per_rule.items():
-            out[key.split(":", 1)[0]] += n
+            severity = key.split(":", 1)[0]
+            out[severity] = out.get(severity, 0) + n
     return out
 
 
@@ -256,14 +338,16 @@ def compare(
     return regressions, stale
 
 
-def render_baseline(counts: Counts, pyright_version: str) -> str:
+def render_baseline(
+    counts: Counts, pyright_version: str, scope: Scope = SCOPES["scripts"]
+) -> str:
     doc = {
         "_comment": (
-            "Generated by .github/scripts/check_pyright_baseline.py --update. "
+            f"Generated by {scope.update_command().removeprefix('python ')}. "
             "Counts may only go down; see docs/standards/ci.md."
         ),
         "pyright_version": pyright_version,
-        "totals": totals(counts),
+        "totals": totals(counts, scope.severities),
         "files": counts,
     }
     return json.dumps(doc, indent=2, sort_keys=False) + "\n"
@@ -357,9 +441,11 @@ def read_base_baseline(
         ) from exc
 
 
-def renamed_paths(base_sha: str, git: Runner = _git) -> dict[str, str]:
-    """``{base path: head path}`` for files under SCRIPTS_DIR renamed since base."""
-    diff = git(["diff", "--name-status", "-M", base_sha, "HEAD", "--", SCRIPTS_DIR])
+def renamed_paths(
+    base_sha: str, git: Runner = _git, root: str = SCRIPTS_DIR
+) -> dict[str, str]:
+    """``{base path: head path}`` for files under ``root`` renamed since base."""
+    diff = git(["diff", "--name-status", "-M", base_sha, "HEAD", "--", root])
     if diff.returncode != 0:
         raise BaseRevisionError(f"could not diff against base {base_sha}")
     renames: dict[str, str] = {}
@@ -375,25 +461,42 @@ def raised_since_base(
     head: Mapping[str, Mapping[str, int]],
     renames: Mapping[str, str],
 ) -> list[str]:
-    """(file, rule) counts the PR's baseline raises above the base's."""
+    """(file, rule) counts the PR's baseline raises above the base's.
+
+    Compared per rule, not per ``severity:rule``: a PR that promotes a rule
+    from warning to error in ``[tool.pyright]`` moves its findings from one key
+    to the other without adding any (FND-4295 did exactly that). Within one
+    scope a rule has one severity, so summing over severities loses nothing.
+    """
     carried: dict[str, Counter[str]] = {}
     for file, per_rule in base.items():
-        carried.setdefault(renames.get(file, file), Counter()).update(per_rule)
-    increases, _ = compare(carried, head)
+        carried.setdefault(renames.get(file, file), Counter()).update(
+            _by_rule(per_rule)
+        )
+    head_by_rule = {file: _by_rule(per_rule) for file, per_rule in head.items()}
+    increases, _ = compare(carried, head_by_rule)
     return increases
 
 
-def _write_summary(actual: Counts, baseline: Counts) -> None:
+def _by_rule(per_key: Mapping[str, int]) -> Counter[str]:
+    """``{"severity:rule": n}`` -> ``{"rule": n}``, summed over severities."""
+    out: Counter[str] = Counter()
+    for key, n in per_key.items():
+        out[key.split(":", 1)[-1]] += n
+    return out
+
+
+def _write_summary(actual: Counts, baseline: Counts, scope: Scope) -> None:
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
         return
-    now, was = totals(actual), totals(baseline)
+    now, was = totals(actual, scope.severities), totals(baseline, scope.severities)
     lines = [
-        "### pyright on `.github/scripts`",
+        f"### pyright on {scope.label}",
         "",
         "| severity | baseline | this run |",
         "| --- | ---: | ---: |",
-        *(f"| {s} | {was[s]} | {now[s]} |" for s in TRACKED_SEVERITIES),
+        *(f"| {s} | {was[s]} | {now[s]} |" for s in scope.severities),
         "",
     ]
     with open(summary_path, "a", encoding="utf-8") as fh:
@@ -404,33 +507,49 @@ def main(
     argv: Sequence[str] | None = None,
     runner: Runner = _run,
     repo_root: Path = REPO_ROOT,
-    baseline_path: Path = BASELINE,
+    baseline_path: Path | None = None,
     git: Runner = _git,
 ) -> int:
     parser = argparse.ArgumentParser(
-        description="Hold pyright findings on .github/scripts to a shrink-only baseline."
+        description="Hold pyright findings to a shrink-only baseline."
+    )
+    parser.add_argument(
+        "--scope",
+        choices=sorted(SCOPES),
+        default="scripts",
+        help="scripts: .github/scripts (default); sdk: the rest of the repo",
     )
     parser.add_argument(
         "--update", action="store_true", help="rewrite the baseline from this run"
     )
     parser.add_argument(
         "--base-sha",
-        help="base revision whose baseline this PR's baseline may not exceed",
+        help=(
+            "base revision whose baseline this PR's baseline may not exceed "
+            f"(default: ${BASE_SHA_ENV}, when set and non-empty)"
+        ),
     )
     args = parser.parse_args(argv)
+    scope = SCOPES[args.scope]
+    if baseline_path is None:
+        baseline_path = repo_root / scope.baseline_rel
+    base_sha: str | None = args.base_sha
+    if base_sha is None:
+        base_sha = os.environ.get(BASE_SHA_ENV) or None
 
     try:
         pin = pyright_pin(repo_root / "pyproject.toml")
-        actual = run_pyright(repo_root, runner)
+        actual = run_pyright(repo_root, runner, scope)
     except PyrightRunError as exc:
         print(f"::error::{exc}")
         return 2
 
     if args.update:
-        baseline_path.write_text(render_baseline(actual, pin), encoding="utf-8")
-        t = totals(actual)
+        baseline_path.write_text(render_baseline(actual, pin, scope), encoding="utf-8")
+        t = totals(actual, scope.severities)
         print(
-            f"Wrote {baseline_path.name}: {t['error']} errors, {t['warning']} warnings"
+            f"Wrote {baseline_path.name}: "
+            + ", ".join(f"{t[s]} {s}s" for s in scope.severities)
         )
         return 0
 
@@ -441,17 +560,20 @@ def main(
         print(
             f"::error::{baseline_path.name} was generated with pyright "
             f"{head.pyright_version}, but the dev pin is {pin}. Regenerate it: "
-            f"python {SCRIPTS_DIR}/check_pyright_baseline.py --update"
+            f"{scope.update_command()}"
         )
         failed = True
-    if args.base_sha is not None:
+    if base_sha is not None:
         failed = (
-            _check_base(args.base_sha, head, baseline_path, repo_root, git) or failed
+            _check_base(base_sha, head, baseline_path, repo_root, git, scope) or failed
         )
-    _write_summary(actual, baseline)
+    _write_summary(actual, baseline, scope)
     regressions, stale = compare(baseline, actual)
-    t = totals(actual)
-    print(f"pyright on {SCRIPTS_DIR}: {t['error']} errors, {t['warning']} warnings")
+    t = totals(actual, scope.severities)
+    print(
+        f"pyright on {scope.label}: "
+        + ", ".join(f"{t[s]} {s}s" for s in scope.severities)
+    )
     if regressions:
         print(
             f"::error::{len(regressions)} pyright finding count(s) rose above the "
@@ -462,8 +584,8 @@ def main(
     if stale:
         print(
             f"::error::{len(stale)} pyright finding count(s) fell below the baseline. "
-            f"Lock the improvement in: python {SCRIPTS_DIR}/check_pyright_baseline.py "
-            "--update, and commit the result."
+            f"Lock the improvement in: {scope.update_command()}, "
+            "and commit the result."
         )
         for line in stale:
             print(f"  - {line}")
@@ -476,6 +598,7 @@ def _check_base(
     baseline_path: Path,
     repo_root: Path,
     git: Runner,
+    scope: Scope,
 ) -> bool:
     """Print and return whether the PR's baseline rises above the base's."""
     baseline_rel = baseline_path.relative_to(repo_root).as_posix()
@@ -484,7 +607,7 @@ def _check_base(
         if base_doc is None:
             print(f"No {baseline_rel} at base {base_sha}: this PR introduces it.")
             return False
-        renames = renamed_paths(base_sha, git)
+        renames = renamed_paths(base_sha, git, scope.rename_root)
     except BaseRevisionError as exc:
         print(f"::error::{exc}")
         return True

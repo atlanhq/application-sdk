@@ -115,7 +115,7 @@ class ConnectorContext:
     difficulty: str  # "simple" | "moderate" | "complex"
     difficulty_score: float  # 0.0–1.0
 
-    def to_dict(self) -> dict:  # type: ignore[return]
+    def to_dict(self) -> dict:
         return asdict(self)
 
 

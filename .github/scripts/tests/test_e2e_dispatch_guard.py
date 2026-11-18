@@ -185,7 +185,7 @@ def _resolve(**kwargs):
         clock=lambda: 1000.0,
     )
     defaults.update(kwargs)
-    return resolve(REPO, REF, **defaults)  # type: ignore[arg-type]
+    return resolve(REPO, REF, **defaults)  # pyright: ignore[reportArgumentType]
 
 
 # --- keying ----------------------------------------------------------------
@@ -1111,18 +1111,18 @@ def test_several_named_checks_are_only_done_when_all_are(http: FakeHTTP) -> None
 
 
 @pytest.fixture(scope="module")
-def action() -> dict:  # type: ignore[type-arg]
+def action() -> dict:
     return yaml.safe_load(_ACTION.read_text(encoding="utf-8"))
 
 
-def _step(action: dict, name_fragment: str) -> dict:  # type: ignore[type-arg]
+def _step(action: dict, name_fragment: str) -> dict:
     for step in action["runs"]["steps"]:
         if name_fragment in str(step.get("name", "")):
             return step
     raise AssertionError(f"e2e-apps has no step matching {name_fragment!r}")
 
 
-def test_the_guard_runs_before_the_check_run_is_created(action: dict) -> None:  # type: ignore[type-arg]
+def test_the_guard_runs_before_the_check_run_is_created(action: dict) -> None:
     """Order is the point. A duplicate run that created its own in_progress
     check on the SHA would leave a check nothing completes — the connector's
     callback completes the winner's — and it would hang until the watchdog."""
@@ -1135,13 +1135,13 @@ def test_the_guard_runs_before_the_check_run_is_created(action: dict) -> None:  
     assert guard < create < dispatch
 
 
-def test_the_guard_invokes_the_script_at_a_real_path(action: dict) -> None:  # type: ignore[type-arg]
+def test_the_guard_invokes_the_script_at_a_real_path(action: dict) -> None:
     step = _step(action, "Claim the dispatch slot")
     assert "e2e_dispatch_guard.py" in step["run"]
     assert (_REPO_ROOT / ".github/scripts/e2e_dispatch_guard.py").is_file()
 
 
-def test_the_guard_cannot_fail_the_dispatch(action: dict) -> None:  # type: ignore[type-arg]
+def test_the_guard_cannot_fail_the_dispatch(action: dict) -> None:
     """Both halves of failing open. `continue-on-error` keeps a crashed guard
     from ending the job before the dispatch, and `!= 'false'` keeps the empty
     output a crashed step leaves behind from reading as "somebody else has it"."""
@@ -1156,7 +1156,7 @@ def test_the_guard_cannot_fail_the_dispatch(action: dict) -> None:  # type: igno
         )
 
 
-def test_the_guard_is_callback_mode_only(action: dict) -> None:  # type: ignore[type-arg]
+def test_the_guard_is_callback_mode_only(action: dict) -> None:
     """Not a scope decision. In poll mode THIS job's conclusion is the verdict,
     so a skipped dispatch would be a vacuous green that can mask the winner's
     real result on the same SHA. In callback mode the verdict is the check run,
@@ -1167,7 +1167,7 @@ def test_the_guard_is_callback_mode_only(action: dict) -> None:  # type: ignore[
     )
 
 
-def test_the_guard_uses_this_repos_own_token(action: dict) -> None:  # type: ignore[type-arg]
+def test_the_guard_uses_this_repos_own_token(action: dict) -> None:
     # The claim refs live in THIS repo, next to the SHA they key on. The fleet
     # App tokens are scoped for other jobs: github-token to the connector,
     # checks-app-token to check ownership.
@@ -1178,7 +1178,7 @@ def test_the_guard_uses_this_repos_own_token(action: dict) -> None:  # type: ign
     assert env["NAME"] == "${{ inputs.check-run-name }}"
 
 
-def test_the_pr_number_comes_from_the_event(action: dict) -> None:  # type: ignore[type-arg]
+def test_the_pr_number_comes_from_the_event(action: dict) -> None:
     """Two properties in one expression. It must come from the EVENT, not an
     input, or a caller could name a PR whose head has nothing to do with
     `check-sha` — and the guard would then skip against a stranger's commit. And

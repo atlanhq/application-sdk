@@ -70,7 +70,7 @@ _DNS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 )
 
 
-def _getaddrinfo(host: str, port: int) -> list[tuple]:  # type: ignore[type-arg]
+def _getaddrinfo(host: str, port: int) -> list[tuple]:
     """The blocking resolver call. A module seam so tests replace only this."""
     return socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
 

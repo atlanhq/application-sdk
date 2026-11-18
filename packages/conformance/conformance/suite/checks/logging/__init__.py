@@ -192,8 +192,8 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         fake_node = ast.Module(body=[], type_ignores=[])
         # Line 1, or the first line after a shebang / coding header, so a
         # directive there can suppress it (see _file_level_report_line).
-        fake_node.lineno = report_line_by_file.get(rel_str, 1)  # type: ignore[attr-defined]
-        fake_node.col_offset = 0  # type: ignore[attr-defined]
+        fake_node.lineno = report_line_by_file.get(rel_str, 1)  # pyright: ignore[reportAttributeAccessIssue]
+        fake_node.col_offset = 0  # pyright: ignore[reportAttributeAccessIssue]
         findings.append(
             make_finding(
                 filename=rel_str,

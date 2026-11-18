@@ -33,20 +33,20 @@ def freeze_clock(
 
     class _FrozenDateTime(datetime):
         @classmethod
-        def now(cls, tz=None):  # type: ignore[override]
+        def now(cls, tz=None):
             return at.astimezone(tz) if tz is not None else at.replace(tzinfo=None)
 
         @classmethod
-        def today(cls):  # type: ignore[override]
+        def today(cls):
             return at.replace(tzinfo=None)
 
         @classmethod
-        def utcnow(cls):  # type: ignore[override]
+        def utcnow(cls):
             return at.astimezone(timezone.utc).replace(tzinfo=None)
 
     class _FrozenDate(date):
         @classmethod
-        def today(cls):  # type: ignore[override]
+        def today(cls):
             return date(at.year, at.month, at.day)
 
     patched = False

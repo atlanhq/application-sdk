@@ -148,7 +148,7 @@ def _extract_daprd(archive: Path, url: str, dest: Path) -> None:
             if member is None:
                 raise DaprdBinaryMissingError(archive_url=url, archive_format="tar")
             expected = member.size
-            with tar.extractfile(member) as src, dest.open("wb") as dst:  # type: ignore[union-attr]
+            with tar.extractfile(member) as src, dest.open("wb") as dst:  # pyright: ignore[reportOptionalContextManager]
                 shutil.copyfileobj(src, dst)
     actual = dest.stat().st_size
     if actual != expected:

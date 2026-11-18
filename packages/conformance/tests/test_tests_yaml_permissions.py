@@ -42,7 +42,7 @@ _REUSABLE = _REPO_ROOT / ".github/workflows/tests-reusable.yaml"
 _LEVELS = ("none", "read", "write")
 
 
-def _caller_job() -> dict:  # type: ignore[type-arg]
+def _caller_job() -> dict:
     """The `tests:` job of the canonical scaffolded caller, as GitHub reads it."""
     rendered = yaml.safe_load(render("tests.yaml", app_name="example"))
     return rendered["jobs"]["tests"]

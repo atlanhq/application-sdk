@@ -176,4 +176,4 @@ def test_gate_exit_code_clean() -> None:
 def test_type_error_on_non_result() -> None:
     """Passing a non-Result raises TypeError."""
     with pytest.raises(TypeError):
-        derive_disposition({"ruleId": "P001"})  # type: ignore[arg-type]
+        derive_disposition({"ruleId": "P001"})  # pyright: ignore[reportArgumentType]

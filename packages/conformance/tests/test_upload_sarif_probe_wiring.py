@@ -108,12 +108,12 @@ def _case_id(value: str) -> str:
     return "" if "\n" in value else value
 
 
-def _job(source: str) -> dict:  # type: ignore[type-arg]
+def _job(source: str) -> dict:
     """The `upload` job, as GitHub reads it."""
     return yaml.safe_load(source)["jobs"]["upload"]
 
 
-def _steps(source: str) -> list[dict]:  # type: ignore[type-arg]
+def _steps(source: str) -> list[dict]:
     """The `upload` job's steps, as GitHub reads them."""
     return _job(source)["steps"]
 
@@ -146,7 +146,7 @@ def _permissions(source: str) -> dict[str, str]:
     return {"contents": "read"} if block in ("read-all", "write-all") else {}
 
 
-def _step_by_id(steps: list[dict], step_id: str) -> dict:  # type: ignore[type-arg]
+def _step_by_id(steps: list[dict], step_id: str) -> dict:
     matches = [step for step in steps if step.get("id") == step_id]
     assert len(matches) == 1, (
         f"expected exactly one step with `id: {step_id}`, found {len(matches)}. "
@@ -266,7 +266,7 @@ def _suite_sarif_slugs() -> set[str]:
     return slugs
 
 
-def _sdk_caller_slug_entries() -> list[dict]:  # type: ignore[type-arg]
+def _sdk_caller_slug_entries() -> list[dict]:
     """The `slugs` input application-sdk's own caller pins, parsed.
 
     Two loads deep on purpose: the input is a YAML string whose *content* is

@@ -41,16 +41,16 @@ RUNNER_SYNC_JOBS = ["unit", "integration", "e2e"]
 
 
 @pytest.fixture(scope="module")
-def workflow() -> dict:  # type: ignore[type-arg]
+def workflow() -> dict:
     return yaml.safe_load(REUSABLE.read_text())
 
 
 @pytest.fixture(scope="module")
-def jobs(workflow: dict) -> dict:  # type: ignore[type-arg]
+def jobs(workflow: dict) -> dict:
     return workflow["jobs"]
 
 
-def test_apt_packages_input_is_declared_and_off_by_default(workflow: dict) -> None:  # type: ignore[type-arg]
+def test_apt_packages_input_is_declared_and_off_by_default(workflow: dict) -> None:
     inputs = workflow[True]["workflow_call"]["inputs"]  # `on` parses as True
     assert "apt-packages" in inputs, "apt-packages input missing from tests-reusable"
     assert inputs["apt-packages"].get("default", "") == "", (
@@ -59,14 +59,14 @@ def test_apt_packages_input_is_declared_and_off_by_default(workflow: dict) -> No
     )
 
 
-def _apt_step(job: dict) -> dict:  # type: ignore[type-arg]
+def _apt_step(job: dict) -> dict:
     steps = [s for s in job["steps"] if s.get("name") == APT_STEP_NAME]
     assert steps, f"missing '{APT_STEP_NAME}' step"
     return steps[0]
 
 
 @pytest.mark.parametrize("job_name", RUNNER_SYNC_JOBS)
-def test_every_runner_sync_job_installs_before_deps(jobs: dict, job_name: str) -> None:  # type: ignore[type-arg]
+def test_every_runner_sync_job_installs_before_deps(jobs: dict, job_name: str) -> None:
     """The step exists, is gated on the input, and precedes any deps/composite
     step — a post-sync install would be dead code for the failure it fixes."""
     job = jobs[job_name]
@@ -88,7 +88,7 @@ def test_every_runner_sync_job_installs_before_deps(jobs: dict, job_name: str) -
 
 
 @pytest.mark.parametrize("job_name", RUNNER_SYNC_JOBS)
-def test_apt_step_routes_the_value_through_env(jobs: dict, job_name: str) -> None:  # type: ignore[type-arg]
+def test_apt_step_routes_the_value_through_env(jobs: dict, job_name: str) -> None:
     """docs/standards/ci.md: caller-controlled values reach `run:` via env,
     never by direct ``${{ }}`` interpolation into the script text."""
     step = _apt_step(jobs[job_name])
@@ -107,7 +107,7 @@ SCRIPT = ".sdk-apt/.github/scripts/install_apt_packages.py"
 
 
 @pytest.mark.parametrize("job_name", RUNNER_SYNC_JOBS)
-def test_apt_step_runs_the_shared_script(jobs: dict, job_name: str) -> None:  # type: ignore[type-arg]
+def test_apt_step_runs_the_shared_script(jobs: dict, job_name: str) -> None:
     """The step only hands the value to the script, under an explicit
     ``set -e`` so a later ``defaults: run: shell:`` cannot make a rejected
     list fall through, and removes the fetched copy before the app checkout."""
@@ -120,7 +120,7 @@ def test_apt_step_runs_the_shared_script(jobs: dict, job_name: str) -> None:  # 
 
 
 @pytest.mark.parametrize("job_name", RUNNER_SYNC_JOBS)
-def test_the_script_is_fetched_at_this_workflows_sha(jobs: dict, job_name: str) -> None:  # type: ignore[type-arg]
+def test_the_script_is_fetched_at_this_workflows_sha(jobs: dict, job_name: str) -> None:
     """Fetched right before the install, under the same gate, at
     ``job.workflow_sha`` so an SDK PR's CI runs its own copy of the script."""
     steps = jobs[job_name]["steps"]

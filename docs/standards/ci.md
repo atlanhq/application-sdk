@@ -133,8 +133,8 @@ same change, or every PR waits on a check that never reports.
 
 ## pyright on `.github/scripts`: a baseline that only shrinks
 
-`[tool.pyright]` excludes `.github/**`, so the pre-commit pyright hook never
-sees the CI scripts. The `pyright .github/scripts` job runs
+`[tool.pyright]` excludes `.github/**`, so the pre-commit pyright hook (the
+SDK-tree check below) never sees the CI scripts. The `pyright .github/scripts` job runs
 `.github/scripts/check_pyright_baseline.py`, which runs pyright over
 `.github/scripts` with the repo's own pyright settings (minus the exclude,
 pinned to Linux and the `requires-python` floor) and compares the result,
@@ -157,13 +157,44 @@ uv run --frozen --extra workflows python .github/scripts/check_pyright_baseline.
 
 Counts are per (file, rule), so fixing one finding does not pay for a different
 new one in the same file. A new script starts at zero: it must be pyright-clean.
-A pyright upgrade (the `dev`-group pin, kept equal to the pre-commit hook's rev)
-may move counts either way; regenerate the baseline in that PR.
+A pyright upgrade (the `dev`-group pin, which both pyright pre-commit hooks run)
+may move counts either way; regenerate both baselines in that PR.
 
 The generated pyright config is written inside `.github/scripts`, not at the repo
 root. pyright auto-excludes `**/.*` below a config's root whatever `exclude`
 says, so a repo-root config can never reach `.github/`. If pyright reports 0
 files analysed, the check fails rather than matching an empty baseline.
+
+## pyright on the SDK tree: errors held to a baseline that only shrinks
+
+`reportArgumentType`, `reportAttributeAccessIssue` and
+`reportFunctionMemberAccess` are errors in `[tool.pyright]` (FND-4295). They
+were warnings, which pre-commit does not fail on, so an argument-type or
+attribute bug in new code passed CI; the findings that predate the promotion
+are held to the repo-root `pyright_baseline.json`. The pre-commit `pyright`
+hook runs `check_pyright_baseline.py --scope sdk`, the same check as above over
+everything `[tool.pyright]` includes, with two differences: it counts errors
+only (warnings stay advisory), and it runs in a venv with every extra and
+group installed, as CI's is. The same three outcomes apply. In CI, the
+`Pre-commit Checks` job (`codeql.yaml`) sets `PYRIGHT_BASELINE_BASE_SHA` to the
+PR's (or merge group's) base, which the check reads when `--base-sha` is not
+given, so both pyright hooks there also refuse a baseline raised in the same
+PR.
+
+```bash
+uv run --frozen --all-extras --all-groups python .github/scripts/check_pyright_baseline.py --scope sdk           # check
+uv run --frozen --all-extras --all-groups python .github/scripts/check_pyright_baseline.py --scope sdk --update  # rewrite baseline
+```
+
+The base comparison is per rule, summed over severities, so promoting a rule
+from warning to error moves its findings to a new key without reading as new
+ones. Promoting a rule the SDK baseline does not track yet (a warning there is
+not counted) does raise its counts: say so in the PR.
+
+`# type: ignore` is off (`enableTypeIgnoreComments = false`): it silenced every
+rule on its line, and the mypy codes in its brackets mean nothing to pyright.
+Suppress with `# pyright: ignore[<rule>]`. `reportUnnecessaryTypeIgnoreComment`
+is an error, so a suppression that outlives its finding fails the check.
 
 ## Conformance function size: a C901 / PLR0915 baseline that only shrinks
 

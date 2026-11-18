@@ -290,7 +290,7 @@ def test_an_unreadable_pull_request_proceeds(http: FakeHTTP, answer) -> None:
 def test_a_pr_number_of_true_is_not_pull_request_one(http: FakeHTTP) -> None:
     """bool is an int in Python, so a corrupted record carrying `true` would
     otherwise be compared against whatever PR #1 happens to point at today."""
-    _stub_claim(http, blob=_claim(pr_number=True))  # type: ignore[arg-type]
+    _stub_claim(http, blob=_claim(pr_number=True))
 
     assert is_superseded(REPO, APP, STALE) is False
 

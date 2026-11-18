@@ -36,7 +36,7 @@ logger = get_logger(__name__)
 try:
     import duckdb
 except ImportError:  # conformance: ignore[E008,E009] optional dep duckdb not installed; sentinel fallback
-    duckdb = None  # type: ignore[assignment]
+    duckdb = None
 
 
 class DuckDBResult(Protocol):

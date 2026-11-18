@@ -350,7 +350,7 @@ async def _scan(
         The objects read, and whether the listing had more than *limit*.
     """
     items: list[tuple[str, int, str | None]] = []
-    async for batch in obstore.list(store, prefix=listing_prefix):  # type: ignore[arg-type]
+    async for batch in obstore.list(store, prefix=listing_prefix):  # pyright: ignore[reportArgumentType, reportUnknownMemberType]
         for item in batch:
             if len(items) >= limit:
                 return items, True
@@ -369,10 +369,10 @@ async def _root_marker_exists(store: object, listing_prefix: str) -> bool:
     """
     root = listing_prefix.rstrip("/")
     try:
-        await obstore.head_async(store, root)  # type: ignore[arg-type]
+        await obstore.head_async(store, root)  # pyright: ignore[reportArgumentType]
     # conformance: ignore[E004] not-found is the expected answer; anything else re-raises
     except Exception as exc:
-        if _is_not_found(exc) or _is_local_dir_collision(exc, store, root):  # type: ignore[arg-type]
+        if _is_not_found(exc) or _is_local_dir_collision(exc, store, root):  # pyright: ignore[reportArgumentType]
             return False
         raise
     return True
@@ -416,7 +416,7 @@ async def _count_records(
     scanned = matched = fetched = 0
     for key, _ in files:
         try:
-            result = await obstore.get_async(store, key)  # type: ignore[arg-type]
+            result = await obstore.get_async(store, key)  # pyright: ignore[reportArgumentType]
             # The caps above used the listed sizes; an object replaced since
             # can be larger. The GET's own metadata arrives before the body,
             # so re-check against it before reading.

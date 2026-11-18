@@ -394,7 +394,7 @@ def _safe_kind(source: object) -> str:
     try:
         # Deliberate: this probes a plug-in that may not have `kind` at all — that
         # is the case being handled, not a type the checker should have to accept.
-        kind = source.kind  # type: ignore[attr-defined]
+        kind = source.kind  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     except Exception as exc:  # a plug-in seam; nothing may escape
         logger.warning(
             "Artifact validation: schema source %s raised from .kind: %s",

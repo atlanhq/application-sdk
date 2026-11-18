@@ -112,7 +112,7 @@ class FormatMixin(_MixinBase):
             if kw.arg is not None and kw.arg not in STDLIB_LOG_KWARGS_ALLOWED
         ]
         if extra_kwargs:
-            names = ", ".join(kw.arg for kw in extra_kwargs if kw.arg)  # type: ignore[misc]
+            names = ", ".join(kw.arg for kw in extra_kwargs if kw.arg)
             self._add(
                 "L018",
                 node,

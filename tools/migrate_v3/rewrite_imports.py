@@ -141,7 +141,7 @@ class V3ImportRewriter(cst.CSTTransformer):
             return updated_node
 
         # ── named imports ────────────────────────────────────────────────
-        aliases: Sequence[cst.ImportAlias] = updated_node.names  # type: ignore[assignment]
+        aliases: Sequence[cst.ImportAlias] = updated_node.names
 
         # Resolve each symbol to its new (module, target).
         resolved: list[tuple[cst.ImportAlias, str, RewriteTarget]] = []

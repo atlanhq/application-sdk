@@ -11,8 +11,9 @@
 2. **No useless f-strings** - Don't use `f"string"` if there are no `{placeholders}`
 3. **No Unicode in print statements** - Windows CI fails on emojis (`✓`, `❌`, `⚠️`). Use ASCII: `PASS`, `FAIL`, `WARNING`
 4. **Import sorting** - Imports must be sorted (ruff `I` rules; `uv run ruff check --fix` sorts them)
-5. **Type hints** - Pyright enforces type checking
-6. **Conventional commits** - Commit messages must follow conventional format (e.g., `fix:`, `feat:`, `chore:`)
+5. **Type hints** - Pyright enforces type checking. `reportArgumentType`, `reportAttributeAccessIssue` and `reportFunctionMemberAccess` are errors; findings that predate that are in `pyright_baseline.json`, which may only shrink
+6. **Suppress with `# pyright: ignore[<rule>]`, never `# type: ignore`** - `# type: ignore` is switched off (`enableTypeIgnoreComments = false`), and a `# pyright: ignore` that no longer suppresses anything is an error (`reportUnnecessaryTypeIgnoreComment`)
+7. **Conventional commits** - Commit messages must follow conventional format (e.g., `fix:`, `feat:`, `chore:`)
 7. **No customer names** - Never reference customer names, tenant names, run IDs, or any customer-identifiable information in code, comments, docstrings, commit messages, or PR descriptions. Use generic language: "a production incident", "a prior RCA".
 
 ## Serialization & Type Systems

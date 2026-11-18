@@ -453,7 +453,7 @@ def create_aws_client(
                 service,
                 region,
             )
-            return session.client(service, region_name=region)  # type: ignore
+            return session.client(service, region_name=region)  # pyright: ignore[reportArgumentType, reportCallIssue, reportUnknownMemberType]
 
         # Priority 2: Use temporary credentials
         if temp_credentials is not None:
@@ -462,7 +462,7 @@ def create_aws_client(
                 service,
                 region,
             )
-            return boto3.client(  # type: ignore
+            return boto3.client(  # pyright: ignore[reportCallIssue, reportUnknownMemberType]
                 service,
                 aws_access_key_id=temp_credentials["AccessKeyId"],
                 aws_secret_access_key=temp_credentials["SecretAccessKey"],
@@ -477,7 +477,7 @@ def create_aws_client(
                 service,
                 region,
             )
-            return boto3.client(service, region_name=region)  # type: ignore
+            return boto3.client(service, region_name=region)  # pyright: ignore[reportArgumentType, reportCallIssue, reportUnknownMemberType]
 
     # conformance: ignore[E004] exception translation layer; broad catch converts to typed AwsClientCreationError and re-raises
     except Exception as e:

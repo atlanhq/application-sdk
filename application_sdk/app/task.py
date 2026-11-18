@@ -692,7 +692,7 @@ def task(
         input_type, output_type = _validate_task_signature(fn)
 
         # Store metadata on the function
-        fn._task_metadata = TaskMetadata(  # type: ignore[attr-defined]
+        fn._task_metadata = TaskMetadata(  # pyright: ignore[reportFunctionMemberAccess]
             name=task_name,
             func=fn,
             input_type=input_type,

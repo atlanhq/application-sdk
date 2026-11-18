@@ -74,7 +74,7 @@ def create_data_converter(
 
     payload_converter = CompositePayloadConverter(*converters)
     return DataConverter(
-        payload_converter_class=lambda: payload_converter,  # type: ignore[arg-type]
+        payload_converter_class=lambda: payload_converter,  # pyright: ignore[reportArgumentType]
     )
 
 

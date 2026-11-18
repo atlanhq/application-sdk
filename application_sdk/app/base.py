@@ -2986,11 +2986,11 @@ def _collect_interaction_relays(
         if signal_defn is not None:
             # Rebind the definition's fn to the relay so Temporal's _bind_method
             # passes wf_self (not an App instance) as the first arg.
-            relay.__temporal_signal_definition = replace(  # type: ignore[attr-defined]
+            relay.__temporal_signal_definition = replace(  # pyright: ignore[reportFunctionMemberAccess]
                 signal_defn, fn=relay
             )
         elif query_defn is not None:
-            relay.__temporal_query_definition = replace(  # type: ignore[attr-defined]
+            relay.__temporal_query_definition = replace(  # pyright: ignore[reportFunctionMemberAccess]
                 query_defn, fn=relay
             )
         else:
@@ -3000,7 +3000,7 @@ def _collect_interaction_relays(
             if update_defn.validator is not None:
                 new_validator = _build_validator_relay(update_defn.validator)
 
-            relay._defn = replace(  # type: ignore[attr-defined]
+            relay._defn = replace(  # pyright: ignore[reportFunctionMemberAccess]
                 update_defn, fn=relay, validator=new_validator
             )
             # Temporal's @workflow.update decorator also sets a `.validator`
@@ -3008,7 +3008,7 @@ def _collect_interaction_relays(
             # We don't need it for runtime dispatch — Temporal reads the
             # validator off the definition — but provide one so the relay
             # structurally matches UpdateMethodMultiParam.
-            relay.validator = lambda fn: fn  # type: ignore[attr-defined]
+            relay.validator = lambda fn: fn  # pyright: ignore[reportFunctionMemberAccess]
 
         relays[member_name] = relay
 
