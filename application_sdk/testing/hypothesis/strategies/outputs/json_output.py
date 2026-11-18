@@ -12,7 +12,7 @@ _INT64_MAX = 2**63 - 1
 
 # Upper bound on drawn rows: enough to span several chunks without making each
 # example build a large frame.
-MAX_ROWS = 50
+_MAX_ROWS = 50
 
 # Strategy for generating file path components. Portable filename characters
 # only: an arbitrary code point can be a separator, NUL, or a byte sequence the
@@ -34,7 +34,7 @@ output_path_strategy = st.builds(
 output_prefix_strategy = safe_path_strategy
 
 # Strategy for generating chunk sizes. A writer needs at least one row per
-# chunk; the upper bound is well past MAX_ROWS so a single chunk is drawn too.
+# chunk; the upper bound is well past _MAX_ROWS so a single chunk is drawn too.
 chunk_size_strategy = st.integers(min_value=1, max_value=10_000)
 
 # Text a source can actually hand the writer: any code point except unpaired
@@ -66,7 +66,7 @@ dataframe_columns_strategy = st.lists(column_name_strategy, max_size=10)
 def dataframe_strategy(draw) -> pd.DataFrame:
     """Generate a pandas DataFrame with random data."""
     columns = draw(dataframe_columns_strategy)
-    num_rows = draw(st.integers(min_value=0, max_value=MAX_ROWS))
+    num_rows = draw(st.integers(min_value=0, max_value=_MAX_ROWS))
 
     if num_rows == 0 or not columns:
         return pd.DataFrame(columns=columns)
