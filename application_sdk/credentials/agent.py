@@ -404,7 +404,13 @@ async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str
             component=DAPR_SECRET_STORE_COMPONENT,
         )
     except SecretNotFoundError as exc:
-        raise CredentialNotFoundError(secret_path) from exc
+        # Keep the missing-credential message on the wire, not the sidecar's
+        # raw transport cause. Preserve only a scrubbed diagnostic in the log.
+        logger.warning(  # conformance: ignore[L009,L004] from None drops the cause; exc_info would log the unscrubbed traceback
+            "Agent secret-bundle fetch failed - secret not found:\n%s",
+            redact_secrets("".join(traceback.format_exception(exc))),
+        )
+        raise CredentialNotFoundError(secret_path) from None
     except Exception as exc:  # conformance: ignore[E004] scrubbed traceback logged here at the boundary; a clean-message SecretStoreError is raised for the caller/UI
         # The secret store failed or is unreachable (distinct from a missing
         # bundle, handled above). Log the scrubbed underlying cause for
