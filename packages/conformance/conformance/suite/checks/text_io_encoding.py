@@ -94,6 +94,7 @@ from conformance.suite.checks._ast_common import (
     make_cli_main,
     make_finding,
     make_scan_path,
+    parse_module,
 )
 from conformance.suite.checks._ast_common import discover as _shared_discover
 from conformance.suite.schema.findings import Finding
@@ -440,7 +441,7 @@ class _TextIoChecker(ast.NodeVisitor):
 def scan_text(text: str, file: str) -> list[Finding]:
     """Scan a single Python source *text* for P046 findings."""
     try:
-        tree = ast.parse(text, filename=file)
+        tree = parse_module(text, filename=file)
     except SyntaxError:
         return []
     checker = _TextIoChecker(filename=file, directives=_parse_directives(text))

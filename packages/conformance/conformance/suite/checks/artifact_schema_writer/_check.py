@@ -29,6 +29,7 @@ from pathlib import Path
 from conformance.suite.checks._ast_common import (
     _IgnoreDirective,
     _parse_directives,
+    load_source,
     make_finding,
 )
 from conformance.suite.checks._entrypoint_contract_fields import resolve_contract_fields
@@ -288,14 +289,10 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     by_name: dict[str, ClassRecord] = {}
 
     for path in paths:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        source = load_source(path)
+        if source is None:
             continue
-        try:
-            tree = ast.parse(text, filename=str(path))
-        except SyntaxError:
-            continue
+        text, tree = source.text, source.tree
         if not isinstance(tree, ast.Module):  # pragma: no cover — ast.parse default
             continue
         try:
