@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.58.0
-source-sha:    3512054124351dd65c9ae408ae7063373b7bb23d
-source-date:   2026-11-18T19:05:29+05:30
+source-sha:    720e3fc4ee75c075db6bade717451eb21c974e21
+source-date:   2026-11-18T21:21:03+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -8033,7 +8033,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `constraint: str | None`
   - `value_summary: str | None`
   - `DEFAULT_ERROR_CODE: ClassVar[ErrorCode]` `= CONTRACT_VALIDATION`
-  - `error_code: ErrorCode`
+  - `error_code: ErrorCode` — Legacy ``AAF-…`` code: the per-instance override, else the class default.
 - **Defined in:** `application_sdk/contracts/base.py`
 
 #### `DeclaredFile`

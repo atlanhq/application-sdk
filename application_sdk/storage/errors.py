@@ -11,7 +11,7 @@ MRO convention: categorical leaf first, domain base second.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar, TypedDict, Unpack
+from typing import ClassVar
 
 from application_sdk.errors import (
     STORAGE_AUTH,
@@ -43,25 +43,6 @@ from application_sdk.errors.leaves import (
     PreconditionError,
     SdrDiskFullError,
 )
-
-
-class StorageErrorKwargs(TypedDict, total=False):
-    """The keyword arguments of :meth:`StorageError.__init__`.
-
-    A subclass with a categorical leaf first in its bases cannot inherit that
-    ``__init__``: the leaf's generated keyword-only one comes first in the MRO.
-    It delegates in two lines with ``**kwargs: Unpack[StorageErrorKwargs]``
-    instead of restating the signature, and type checkers still see every
-    argument.
-    """
-
-    key: str | None
-    cause: Exception | None
-    error_code: ErrorCode | None
-    suggested_action: str | None
-    target: str | None
-    http_status: int | None
-    provider_code: str | None
 
 
 def _init_storage_evidence(
@@ -107,14 +88,14 @@ class StorageError(_LegacyErrorCodeMixin, DependencyUnavailableError):
 
     Use more specific subclasses when the failure mode is known.
 
-    A subclass whose constructor takes the same arguments reuses this
-    ``__init__`` rather than copying it. With ``StorageError`` as its only
-    base it declares ``@dataclass(kw_only=True, init=False)``; without
-    ``init=False`` the decorator generates a keyword-only ``__init__`` and the
-    positional message stops working. With a categorical leaf first in its
-    bases it sets ``_CATEGORICAL_BASE`` to that leaf and delegates through
-    :class:`StorageErrorKwargs`. ``tests/unit/storage/
-    test_storage_failure_evidence.py`` checks both.
+    A subclass whose constructor takes the same arguments delegates to this
+    ``__init__`` in one call instead of copying its body; with a categorical
+    leaf first in its bases it also sets ``_CATEGORICAL_BASE`` to that leaf.
+    It restates the signature rather than inheriting it: a leaf first in the
+    MRO, or the ``@dataclass`` decorator itself, would otherwise supply a
+    generated keyword-only ``__init__``, and the surface gate and capability
+    manifest read signatures from the class body. ``tests/unit/storage/
+    test_storage_failure_evidence.py`` checks the base matches the category.
     """
 
     key: str | None = None
@@ -161,7 +142,7 @@ class StorageError(_LegacyErrorCodeMixin, DependencyUnavailableError):
         )
 
 
-@dataclass(kw_only=True, init=False)
+@dataclass(kw_only=True)
 class StorageBucketRelocationError(StorageError):
     """A write was rejected because the bucket is being relocated.
 
@@ -179,8 +160,32 @@ class StorageBucketRelocationError(StorageError):
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_RELOCATION
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        key: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+        suggested_action: str | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
+    ) -> None:
+        StorageError.__init__(
+            self,
+            message,
+            key=key,
+            cause=cause,
+            error_code=error_code,
+            suggested_action=suggested_action,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+        )
 
-@dataclass(kw_only=True, init=False)
+
+@dataclass(kw_only=True)
 class StorageGatewayAuthUnavailableError(StorageError):
     """A request was rejected by the object-store gateway's own auth backend.
 
@@ -209,8 +214,32 @@ class StorageGatewayAuthUnavailableError(StorageError):
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_GATEWAY_AUTH
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_AUTH"
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        key: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+        suggested_action: str | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
+    ) -> None:
+        StorageError.__init__(
+            self,
+            message,
+            key=key,
+            cause=cause,
+            error_code=error_code,
+            suggested_action=suggested_action,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+        )
 
-@dataclass(kw_only=True, init=False)
+
+@dataclass(kw_only=True)
 class StorageGatewayNoRouteError(StorageError):
     """The object-store gateway answered 404 because its route table is not loaded yet.
 
@@ -231,6 +260,30 @@ class StorageGatewayNoRouteError(StorageError):
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_GATEWAY_NO_ROUTE
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_NO_ROUTE"
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        key: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+        suggested_action: str | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
+    ) -> None:
+        StorageError.__init__(
+            self,
+            message,
+            key=key,
+            cause=cause,
+            error_code=error_code,
+            suggested_action=suggested_action,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+        )
+
 
 @dataclass(kw_only=True)
 class StorageNotFoundError(NotFoundError, StorageError):
@@ -246,8 +299,29 @@ class StorageNotFoundError(NotFoundError, StorageError):
     audience: ClassVar[Audience] = Audience.USER
     _CATEGORICAL_BASE: ClassVar[type[AppError]] = NotFoundError
 
-    def __init__(self, message: str, **kwargs: Unpack[StorageErrorKwargs]) -> None:
-        StorageError.__init__(self, message, **kwargs)
+    def __init__(
+        self,
+        message: str,
+        *,
+        key: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+        suggested_action: str | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
+    ) -> None:
+        StorageError.__init__(
+            self,
+            message,
+            key=key,
+            cause=cause,
+            error_code=error_code,
+            suggested_action=suggested_action,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+        )
 
 
 @dataclass(kw_only=True)
@@ -264,8 +338,29 @@ class StoragePermissionError(AppPermissionDeniedError, StorageError):
     audience: ClassVar[Audience] = Audience.USER
     _CATEGORICAL_BASE: ClassVar[type[AppError]] = AppPermissionDeniedError
 
-    def __init__(self, message: str, **kwargs: Unpack[StorageErrorKwargs]) -> None:
-        StorageError.__init__(self, message, **kwargs)
+    def __init__(
+        self,
+        message: str,
+        *,
+        key: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+        suggested_action: str | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
+    ) -> None:
+        StorageError.__init__(
+            self,
+            message,
+            key=key,
+            cause=cause,
+            error_code=error_code,
+            suggested_action=suggested_action,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+        )
 
 
 @dataclass(kw_only=True)
@@ -287,8 +382,29 @@ class StorageAuthError(AuthError, StoragePermissionError):
     audience: ClassVar[Audience] = Audience.USER
     _CATEGORICAL_BASE: ClassVar[type[AppError]] = AuthError
 
-    def __init__(self, message: str, **kwargs: Unpack[StorageErrorKwargs]) -> None:
-        StorageError.__init__(self, message, **kwargs)
+    def __init__(
+        self,
+        message: str,
+        *,
+        key: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+        suggested_action: str | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
+    ) -> None:
+        StorageError.__init__(
+            self,
+            message,
+            key=key,
+            cause=cause,
+            error_code=error_code,
+            suggested_action=suggested_action,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+        )
 
 
 @dataclass(kw_only=True)
@@ -305,8 +421,29 @@ class StorageConfigError(InvalidInputError, StorageError):
     audience: ClassVar[Audience] = Audience.USER
     _CATEGORICAL_BASE: ClassVar[type[AppError]] = InvalidInputError
 
-    def __init__(self, message: str, **kwargs: Unpack[StorageErrorKwargs]) -> None:
-        StorageError.__init__(self, message, **kwargs)
+    def __init__(
+        self,
+        message: str,
+        *,
+        key: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+        suggested_action: str | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
+    ) -> None:
+        StorageError.__init__(
+            self,
+            message,
+            key=key,
+            cause=cause,
+            error_code=error_code,
+            suggested_action=suggested_action,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+        )
 
 
 # code is the new structured identifier; legacy DEFAULT_ERROR_CODE inherited from

@@ -237,11 +237,13 @@ placed before the categorical leaf in its bases. It declares
 `_STR_FIELDS` ClassVar, and keeps only its `__init__`. The mixin's
 `__str__` always passes the cause through `sanitize_cause_repr`; before it,
 each class carried its own copy and most printed the cause raw. A subclass
-whose constructor matches its domain umbrella's does not copy it: it sets
-`_CATEGORICAL_BASE` to its leaf and names `__init__ = StorageError.__init__`
-(or `CredentialError.__init__`). It names it rather than inheriting it because
-the leaf comes first in the MRO, and the leaf's generated keyword-only
-`__init__` would otherwise win. `tests/unit/errors/test_base.py` and
+whose constructor matches its domain umbrella's does not copy the body. It
+sets `_CATEGORICAL_BASE` to its leaf and its `__init__` makes one call to
+`StorageError.__init__` (or `CredentialError.__init__`). It restates the
+signature rather than inheriting it, for two reasons. The leaf comes first in
+the MRO, so its generated keyword-only `__init__` would otherwise win. And the
+Symbol Removal Check reads `__init__` signatures from the class body.
+`tests/unit/errors/test_base.py` and
 `tests/unit/storage/test_storage_failure_evidence.py` enforce both.
 
 The `CredentialError`/`StorageError`/`SecretStoreError` families are

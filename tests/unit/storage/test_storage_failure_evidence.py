@@ -21,7 +21,7 @@ these tests rather than silently degrade the envelope.
 
 from __future__ import annotations
 
-from typing import Unpack
+import inspect
 
 import pytest
 from obstore.store import GCSStore, S3Store
@@ -32,7 +32,6 @@ from application_sdk.storage.errors import (
     StorageConfigError,
     StorageDiskFullError,
     StorageError,
-    StorageErrorKwargs,
     StorageIntegrityError,
     StorageNotFoundError,
     StoragePermissionError,
@@ -442,9 +441,7 @@ def _runs_the_shared_init(
     original = StorageError.__init__
     called: list[bool] = []
 
-    def spy(
-        self: StorageError, message: str, **kwargs: Unpack[StorageErrorKwargs]
-    ) -> None:
+    def spy(self: StorageError, message: str, **kwargs: object) -> None:
         called.append(True)
         original(self, message, **kwargs)
 
@@ -457,7 +454,8 @@ def _runs_the_shared_init(
 _SAME_SIGNATURE = [
     c
     for c in _storage_classes()
-    if c.__init__ is StorageError.__init__ or "_CATEGORICAL_BASE" in vars(c)
+    if inspect.signature(c.__init__).parameters.keys()
+    == inspect.signature(StorageError.__init__).parameters.keys()
 ]
 
 

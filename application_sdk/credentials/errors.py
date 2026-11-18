@@ -9,7 +9,7 @@ MRO convention: categorical leaf first, domain base second.
 """
 
 from dataclasses import dataclass
-from typing import ClassVar, TypedDict, Unpack
+from typing import ClassVar
 
 from application_sdk.errors import (
     CREDENTIAL_ERROR,
@@ -19,6 +19,9 @@ from application_sdk.errors import (
     ErrorCode,
 )
 from application_sdk.errors.base import AppError, _LegacyErrorCodeMixin
+
+# Re-exported: importable from here before FND-4917 moved __str__ to the mixin.
+from application_sdk.errors.base import sanitize_cause_repr as sanitize_cause_repr
 from application_sdk.errors.categories import Audience
 from application_sdk.errors.leaves import AuthError, InvalidInputError, NotFoundError
 
@@ -60,23 +63,15 @@ class AtlanCredentialTypeError(InvalidInputError):
     field: str | None = "credential"
 
 
-class CredentialErrorKwargs(TypedDict, total=False):
-    """The keyword arguments of :meth:`CredentialError.__init__`, for delegating subclasses."""
-
-    credential_name: str | None
-    cause: Exception | None
-    error_code: ErrorCode | None
-
-
 @dataclass(kw_only=True)
 class CredentialError(_LegacyErrorCodeMixin, AuthError):
     """Generic credential-subsystem failure (category=AUTH).
 
     Use more specific subclasses when the failure mode is known. A subclass
     with the same constructor sets ``_CATEGORICAL_BASE`` to its categorical
-    leaf and delegates through :class:`CredentialErrorKwargs` instead of
-    copying the body (the leaf comes first in the MRO, so inheriting would
-    pick the leaf's generated keyword-only ``__init__``).
+    leaf and delegates to this ``__init__`` in one call instead of copying the
+    body. It restates the signature: the leaf comes first in the MRO, so
+    inheriting would pick the leaf's generated keyword-only ``__init__``.
     """
 
     credential_name: str | None = None
@@ -137,8 +132,21 @@ class CredentialParseError(InvalidInputError, CredentialError):
     audience: ClassVar[Audience] = Audience.USER
     _CATEGORICAL_BASE: ClassVar[type[AppError]] = InvalidInputError
 
-    def __init__(self, message: str, **kwargs: Unpack[CredentialErrorKwargs]) -> None:
-        CredentialError.__init__(self, message, **kwargs)
+    def __init__(
+        self,
+        message: str,
+        *,
+        credential_name: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        CredentialError.__init__(
+            self,
+            message,
+            credential_name=credential_name,
+            cause=cause,
+            error_code=error_code,
+        )
 
 
 @dataclass(kw_only=True)
@@ -155,5 +163,18 @@ class CredentialValidationError(InvalidInputError, CredentialError):
     audience: ClassVar[Audience] = Audience.USER
     _CATEGORICAL_BASE: ClassVar[type[AppError]] = InvalidInputError
 
-    def __init__(self, message: str, **kwargs: Unpack[CredentialErrorKwargs]) -> None:
-        CredentialError.__init__(self, message, **kwargs)
+    def __init__(
+        self,
+        message: str,
+        *,
+        credential_name: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        CredentialError.__init__(
+            self,
+            message,
+            credential_name=credential_name,
+            cause=cause,
+            error_code=error_code,
+        )
