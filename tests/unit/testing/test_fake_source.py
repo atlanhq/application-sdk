@@ -1164,6 +1164,48 @@ class TestHttpFakeSourceFactory:
         finally:
             factory.stop_all()
 
+    def test_forwards_ssl_context_and_serves_https(self, tmp_path: Path) -> None:
+        """A connector whose client forces https gets a factory-built TLS fake.
+
+        Without the forwarded context it would build the fake by hand and lose
+        the factory's per-test reset and session-end stop.
+        """
+        cert, key = _self_signed_cert(tmp_path, "127.0.0.1")
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(certfile=str(cert), keyfile=str(key))
+        factory = HttpFakeSourceFactory()
+        source = factory(name="tls", ssl_context=ctx, connection_timeout=60)
+        source.route(r"/ping", lambda _r: FakeResponse.json_({"ok": True}))
+        try:
+            assert source.base_url.startswith("https://")
+            client_ctx = ssl.create_default_context(cafile=str(cert))
+            with urllib.request.urlopen(
+                f"{source.base_url}/ping", context=client_ctx, timeout=60
+            ) as response:
+                assert response.status == 200
+                assert json.loads(response.read()) == {"ok": True}
+        finally:
+            factory.stop_all()
+
+    def test_reset_all_clears_a_tls_source(self, tmp_path: Path) -> None:
+        cert, key = _self_signed_cert(tmp_path, "127.0.0.1")
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(certfile=str(cert), keyfile=str(key))
+        factory = HttpFakeSourceFactory()
+        source = factory(name="tls-reset", ssl_context=ctx, connection_timeout=60)
+        source.route(r"/ping", lambda _r: {"ok": True})
+        try:
+            client_ctx = ssl.create_default_context(cafile=str(cert))
+            with urllib.request.urlopen(
+                f"{source.base_url}/ping", context=client_ctx, timeout=60
+            ) as response:
+                response.read()
+            assert source.hits(r"/ping") == 1
+            factory.reset_all()
+            assert list(source.requests) == []
+        finally:
+            factory.stop_all()
+
     def test_a_source_that_fails_to_start_is_not_remembered(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
