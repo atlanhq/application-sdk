@@ -9,6 +9,7 @@ from typing import Any, ClassVar, Protocol
 # the API host; re-exported here, the same class.
 from application_sdk._context_errors import SecretStoreNotConfiguredError
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.categories import Audience
 from application_sdk.errors.leaves import (  # PreconditionError re-exported for existing importers
     ColdStartRaceError,
@@ -198,7 +199,7 @@ def _is_present(value: Any) -> bool:
 
 
 @dataclass(kw_only=True)
-class SecretStoreError(DependencyUnavailableError):
+class SecretStoreError(_LegacyErrorCodeMixin, DependencyUnavailableError):
     """Generic secret-store failure (category=DEPENDENCY_UNAVAILABLE).
 
     Use ``SecretNotFoundError`` when the secret key is absent; use this class
@@ -209,6 +210,7 @@ class SecretStoreError(DependencyUnavailableError):
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_STORE_ERROR
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SECRET_STORE"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (("secret_name", "secret"),)
 
     # Intentional: dataclass fields define the wire-evidence schema; custom __init__ preserves positional-message compat.
     def __init__(
@@ -225,22 +227,6 @@ class SecretStoreError(DependencyUnavailableError):
         )
         self.secret_name = secret_name
         self._error_code = error_code
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.secret_name:
-            parts.append(f"secret={self.secret_name}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
 
 
 class SecretStoreTransientError(SecretStoreError):
@@ -389,17 +375,6 @@ class SecretNotFoundError(NotFoundError, SecretStoreError):
     def __init__(self, secret_name: str) -> None:
         NotFoundError.__init__(self, message=f"Secret '{secret_name}' not found")
         self.secret_name = secret_name
-        self._error_code = SECRET_NOT_FOUND
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return self._error_code
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.secret_name:
-            parts.append(f"secret={self.secret_name}")
-        return " | ".join(parts)
 
 
 class SecretStore(Protocol):

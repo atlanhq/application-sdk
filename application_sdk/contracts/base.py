@@ -84,6 +84,7 @@ from pydantic_core import PydanticUndefined
 
 from application_sdk._logging import get_logger
 from application_sdk.errors import CONTRACT_VALIDATION, PAYLOAD_SAFETY, ErrorCode
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
 
 _logger = get_logger(__name__)
@@ -591,15 +592,17 @@ class Record(BaseModel):
 # =============================================================================
 
 
-class ContractValidationError(_InvalidInputError):
+class ContractValidationError(_LegacyErrorCodeMixin, _InvalidInputError):
     """Deprecated: use ``application_sdk.contracts.ContractDeclarationError`` — removed in v4.0."""
-
-    #: Leaf instances never run this ``__init__``; the class default keeps the
-    #: inherited ``error_code`` and ``__str__`` working on them.
-    _error_code: ErrorCode | None = None
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CONTRACT_VALIDATION
     code: ClassVar[str] = "INVALID_INPUT_CONTRACT_VALIDATION"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("contract_type", "contract_type"),
+        ("field_name", "field"),
+        ("expected_type", "expected"),
+        ("actual_type", "actual"),
+    )
 
     def __init__(
         self,
@@ -623,26 +626,6 @@ class ContractValidationError(_InvalidInputError):
         self.expected_type = expected_type
         self.actual_type = actual_type
         self._error_code = error_code
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.contract_type:
-            parts.append(f"contract_type={self.contract_type}")
-        if self.field_name:
-            parts.append(f"field={self.field_name}")
-        if self.expected_type:
-            parts.append(f"expected={self.expected_type}")
-        if self.actual_type:
-            parts.append(f"actual={self.actual_type}")
-        return " | ".join(parts)
 
 
 @dataclass(kw_only=True)
@@ -713,7 +696,6 @@ class PayloadSafetyError(ContractDeclarationError):
         self.actual_type: str | None = None
         self.field_type = field_type
         self.reason = reason
-        self._error_code = PAYLOAD_SAFETY
 
 
 # =============================================================================
