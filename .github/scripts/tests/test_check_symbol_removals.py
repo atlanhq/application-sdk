@@ -881,3 +881,148 @@ def test_narrowing_a_moved_class_method_is_still_caught(tmp_path: Path):
         },
     )
     assert "application_sdk.old:Thing.run" in blocking(mod.compare(base, head))
+
+
+# ---------------------------------------------------------------------------
+# Inherited methods (FND-4917)
+# ---------------------------------------------------------------------------
+
+
+def _tree(tmp_path: Path, files: dict[str, str]) -> mod.Snapshot:
+    """Build a snapshot from ``{relative path under application_sdk/: source}``."""
+    root = tmp_path / "application_sdk"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "__init__.py").write_text("")
+    for rel, text in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.parent != root and not (path.parent / "__init__.py").exists():
+            (path.parent / "__init__.py").write_text("")
+        path.write_text(text)
+    return mod.build_snapshot(tmp_path)
+
+
+_BASE_ERRORS = """
+class Base:
+    pass
+
+class StoreError(Base):
+    @property
+    def error_code(self): ...
+    def describe(self, verbose=False): ...
+
+class NotFound(StoreError):
+    @property
+    def error_code(self): ...
+"""
+
+
+def test_method_moved_to_a_shared_base_in_another_module_is_not_a_removal(
+    tmp_path: Path,
+):
+    """The FND-4917 shape: copies replaced by one mixin the classes inherit."""
+    base = _tree(tmp_path / "base", {"errors.py": _BASE_ERRORS})
+    head = _tree(
+        tmp_path / "head",
+        {
+            "mixins.py": "class _Mixin:\n    @property\n    def error_code(self): ...\n",
+            "errors.py": (
+                "from application_sdk.mixins import _Mixin\n\n"
+                "class Base:\n    pass\n\n"
+                "class StoreError(_Mixin, Base):\n"
+                "    def describe(self, verbose=False): ...\n\n"
+                "class NotFound(StoreError):\n    pass\n"
+            ),
+        },
+    )
+    assert mod.compare(base, head) == []
+    assert "application_sdk.errors:NotFound.describe" in head.symbols
+
+
+def test_inherited_method_carries_the_definers_signature(tmp_path: Path):
+    """Narrowing the base's method still narrows every subclass that inherits it."""
+    base = _tree(tmp_path / "base", {"errors.py": _BASE_ERRORS})
+    head = _tree(
+        tmp_path / "head",
+        {
+            "errors.py": (
+                "class Base:\n    pass\n\n"
+                "class StoreError(Base):\n"
+                "    @property\n    def error_code(self): ...\n"
+                "    def describe(self): ...\n\n"
+                "class NotFound(StoreError):\n    pass\n"
+            )
+        },
+    )
+    assert blocking(mod.compare(base, head)) == {
+        "application_sdk.errors:StoreError.describe",
+        "application_sdk.errors:NotFound.describe",
+    }
+
+
+def test_method_gone_from_class_and_bases_is_still_a_removal(tmp_path: Path):
+    base = _tree(tmp_path / "base", {"errors.py": _BASE_ERRORS})
+    head = _tree(
+        tmp_path / "head",
+        {
+            "errors.py": (
+                "class Base:\n    pass\n\n"
+                "class StoreError(Base):\n"
+                "    def describe(self, verbose=False): ...\n\n"
+                "class NotFound(StoreError):\n    pass\n"
+            )
+        },
+    )
+    assert blocking(mod.compare(base, head)) == {
+        "application_sdk.errors:StoreError.error_code",
+        "application_sdk.errors:NotFound.error_code",
+    }
+
+
+def test_an_init_dropped_in_favour_of_the_bases_is_still_a_finding(tmp_path: Path):
+    """The AST cannot see a generated ``__init__`` earlier in the MRO, so it never assumes one is inherited."""
+    base = _tree(
+        tmp_path / "base",
+        {
+            "errors.py": (
+                "class StoreError:\n    def __init__(self, message, *, key=None): ...\n\n"
+                "class NotFound(StoreError):\n"
+                "    def __init__(self, message, *, key=None): ...\n"
+            )
+        },
+    )
+    head = _tree(
+        tmp_path / "head",
+        {
+            "errors.py": (
+                "class StoreError:\n    def __init__(self, message, *, key=None): ...\n\n"
+                "class NotFound(StoreError):\n    pass\n"
+            )
+        },
+    )
+    assert blocking(mod.compare(base, head)) == {
+        "application_sdk.errors:NotFound.__init__"
+    }
+
+
+def test_inherited_methods_follow_a_reexported_class(tmp_path: Path):
+    """``from application_sdk.pkg import NotFound`` keeps the inherited members too."""
+    files = {
+        "pkg/errors.py": (
+            "class StoreError:\n    def describe(self): ...\n\n"
+            "class NotFound(StoreError):\n    pass\n"
+        ),
+        "pkg/__init__.py": "from application_sdk.pkg.errors import NotFound\n",
+    }
+    head = _tree(tmp_path, files)
+    assert "application_sdk.pkg:NotFound.describe" in head.symbols
+
+
+def test_linearize_follows_c3_for_a_diamond():
+    parents = {"D": ["B", "C"], "B": ["A"], "C": ["A"], "A": []}
+    assert mod._linearize("D", parents, {}) == ["D", "B", "C", "A"]
+
+
+def test_linearize_survives_a_cycle():
+    parents = {"A": ["B"], "B": ["A"]}
+    assert mod._linearize("A", parents, {})[0] == "A"

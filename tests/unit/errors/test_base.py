@@ -1083,3 +1083,151 @@ def test_redact_secrets_splits_query_params_on_semicolons() -> None:
         redact_secrets("https://h.example.com/p?page=2;owner=FAKE18&limit=5;sig=FAKE19")
         == "https://h.example.com/p?page=2;owner=***&limit=5;sig=***"
     )
+
+
+# ── _LegacyErrorCodeMixin: one error_code and one __str__ (FND-4917) ─────────
+
+# Every module whose error classes adopt the mixin. Imported so that walking
+# ``__subclasses__`` below sees all of them.
+import application_sdk._context_errors  # noqa: E402, F401
+import application_sdk.contracts.base  # noqa: E402, F401
+import application_sdk.credentials.errors  # noqa: E402, F401
+import application_sdk.discovery  # noqa: E402, F401
+import application_sdk.infrastructure.bindings  # noqa: E402, F401
+import application_sdk.infrastructure.credential_vault  # noqa: E402, F401
+import application_sdk.infrastructure.pubsub  # noqa: E402, F401
+import application_sdk.infrastructure.secrets  # noqa: E402, F401
+import application_sdk.infrastructure.state  # noqa: E402, F401
+import application_sdk.storage.errors  # noqa: E402, F401
+from application_sdk.errors.base import _LegacyErrorCodeMixin  # noqa: E402
+
+
+def _mixin_users() -> list[type]:
+    found: list[type] = []
+    stack = list(_LegacyErrorCodeMixin.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        if cls not in found:
+            found.append(cls)
+            stack.extend(cls.__subclasses__())
+    return sorted(found, key=lambda c: f"{c.__module__}.{c.__qualname__}")
+
+
+def test_mixin_has_users() -> None:
+    names = {c.__name__ for c in _mixin_users()}
+    assert {"StorageError", "CredentialError", "SecretStoreError"} <= names
+
+
+@pytest.mark.parametrize("cls", _mixin_users(), ids=lambda c: c.__qualname__)
+def test_mixin_users_do_not_redefine_error_code_or_str(cls: type) -> None:
+    """A class that copies these drifts: most copies printed the cause raw."""
+    assert "error_code" not in vars(cls)
+    assert "__str__" not in vars(cls)
+
+
+@pytest.mark.parametrize("cls", _mixin_users(), ids=lambda c: c.__qualname__)
+def test_mixin_precedes_apperror_in_the_mro(cls: type) -> None:
+    """Behind ``AppError`` the mixin's ``__str__`` would never run."""
+    mro = cls.__mro__
+    assert mro.index(_LegacyErrorCodeMixin) < mro.index(AppError)
+
+
+def _redaction_cases() -> list[tuple[str, object]]:
+    from application_sdk.discovery import DiscoveryError
+    from application_sdk.infrastructure.bindings import BindingError
+    from application_sdk.infrastructure.credential_vault import CredentialVaultError
+    from application_sdk.infrastructure.pubsub import PubSubError
+    from application_sdk.infrastructure.secrets import SecretStoreError
+    from application_sdk.infrastructure.state import StateStoreError
+    from application_sdk.storage.errors import (
+        StorageBindingBrokenError,
+        StorageBindingNotFoundError,
+        StorageBucketRelocationError,
+        StorageDiskFullError,
+        StorageEmptyUploadError,
+        StorageError,
+        StorageHandoffIncompleteError,
+        StorageIntegrityError,
+        StorageNotFoundError,
+    )
+
+    # The classes whose own __str__ printed the cause unredacted.
+    return [
+        ("StorageError", lambda c: StorageError("m", cause=c)),
+        ("StorageNotFoundError", lambda c: StorageNotFoundError("m", cause=c)),
+        (
+            "StorageBucketRelocationError",
+            lambda c: StorageBucketRelocationError("m", cause=c),
+        ),
+        (
+            "StorageBindingNotFoundError",
+            lambda c: StorageBindingNotFoundError("m", cause=c),
+        ),
+        (
+            "StorageBindingBrokenError",
+            lambda c: StorageBindingBrokenError("m", cause=c),
+        ),
+        ("StorageEmptyUploadError", lambda c: StorageEmptyUploadError("m", cause=c)),
+        ("StorageIntegrityError", lambda c: StorageIntegrityError("m", cause=c)),
+        (
+            "StorageHandoffIncompleteError",
+            lambda c: StorageHandoffIncompleteError("m", cause=c),
+        ),
+        ("StorageDiskFullError", lambda c: StorageDiskFullError("m", cause=c)),
+        ("SecretStoreError", lambda c: SecretStoreError("m", cause=c)),
+        ("BindingError", lambda c: BindingError("m", cause=c)),
+        ("CredentialVaultError", lambda c: CredentialVaultError("m", cause=c)),
+        ("PubSubError", lambda c: PubSubError("m", cause=c)),
+        ("StateStoreError", lambda c: StateStoreError("m", cause=c)),
+        ("DiscoveryError", lambda c: DiscoveryError("m", cause=c)),
+    ]
+
+
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.parametrize(
+    "factory",
+    [f for _, f in _redaction_cases()],
+    ids=[n for n, _ in _redaction_cases()],
+)
+def test_str_redacts_the_cause(factory) -> None:
+    cause = ConnectionError(
+        "connect postgresql://svc:FAKE_PW_4917@db.internal/x failed"
+    )
+    text = str(factory(cause))
+    assert "FAKE_PW_4917" not in text
+    assert "caused_by=ConnectionError: connect postgresql://***@db.internal/x" in text
+
+
+def test_str_layout_prints_labelled_truthy_fields_in_order() -> None:
+    from application_sdk.storage.errors import StorageIntegrityError
+
+    err = StorageIntegrityError(
+        "digest mismatch",
+        key="k",
+        check="digest",
+        expectation="aa",
+        observed="bb",
+    )
+    # local_path is None, so it is left out; ``expectation`` prints as ``expected``.
+    assert str(err) == (
+        "[AAF-STR-007] digest mismatch | key=k | check=digest | expected=aa | observed=bb"
+    )
+
+
+def test_error_code_falls_back_to_the_class_default() -> None:
+    from application_sdk.errors import STORAGE_CONFIG, STORAGE_OPERATION
+    from application_sdk.storage.errors import StorageError
+
+    assert StorageError("m").error_code is STORAGE_OPERATION
+    assert StorageError("m", error_code=STORAGE_CONFIG).error_code is STORAGE_CONFIG
+
+
+def test_error_code_is_not_wire_evidence() -> None:
+    from application_sdk.errors import STORAGE_CONFIG
+    from application_sdk.storage.errors import StorageError
+
+    evidence = (
+        StorageError("m", error_code=STORAGE_CONFIG).to_failure_details().evidence
+    )
+    assert "_error_code" not in evidence
+    assert "error_code" not in evidence

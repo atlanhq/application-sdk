@@ -5,17 +5,19 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol
 
 from application_sdk.errors import STATE_STORE_ERROR, ErrorCode
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import DependencyUnavailableError
 
 
-class StateStoreError(DependencyUnavailableError):
+class StateStoreError(_LegacyErrorCodeMixin, DependencyUnavailableError):
     """Deprecated: use ``application_sdk.infrastructure.StateStoreUnavailableError`` — removed in v4.0."""
 
-    #: Leaf instances never run this ``__init__``; the class default keeps the
-    #: inherited ``error_code`` and ``__str__`` working on them.
-    _error_code: ErrorCode | None = None
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STATE_STORE_ERROR
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STATE_STORE"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("key", "key"),
+        ("operation", "operation"),
+    )
 
     def __init__(
         self,
@@ -36,24 +38,6 @@ class StateStoreError(DependencyUnavailableError):
         self.key = key
         self.operation = operation
         self._error_code = error_code
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.key:
-            parts.append(f"key={self.key}")
-        if self.operation:
-            parts.append(f"operation={self.operation}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
 
 
 @dataclass(kw_only=True)
