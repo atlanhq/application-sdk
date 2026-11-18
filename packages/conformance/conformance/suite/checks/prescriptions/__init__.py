@@ -85,8 +85,10 @@ from conformance.suite.checks._ast_common import (
     _parse_directives,
     collect_module_alias_targets,
     discover,
+    load_source,
     make_cli_main,
     make_scan_path,
+    parse_module,
     register_alias_records,
 )
 from conformance.suite.schema.findings import Finding
@@ -136,7 +138,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     ``scan_path`` runner contract.
     """
     try:
-        tree = ast.parse(text, filename=file)
+        tree = parse_module(text, filename=file)
     except SyntaxError:
         return []
 
@@ -227,14 +229,10 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     reused: frozenset[str] | None = None
 
     for path in paths:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        source = load_source(path)
+        if source is None:
             continue
-        try:
-            tree = ast.parse(text, filename=str(path))
-        except SyntaxError:
-            continue
+        text, tree = source.text, source.tree
         try:
             rel = path.relative_to(root)
         except ValueError:

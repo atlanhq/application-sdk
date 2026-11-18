@@ -196,15 +196,13 @@
     "C901": 1
   },
   "conformance/suite/checks/manifest_contract/_entrypoint_class_names.py": {
-    "C901": 2,
-    "PLR0915": 1
+    "C901": 2
   },
   "conformance/suite/checks/manifest_contract/_filter_string_acceptance.py": {
     "C901": 1
   },
   "conformance/suite/checks/manifest_contract/_input_fields.py": {
-    "C901": 1,
-    "PLR0915": 1
+    "C901": 1
   },
   "conformance/suite/checks/manifest_contract/_legacy_aliases.py": {
     "C901": 1

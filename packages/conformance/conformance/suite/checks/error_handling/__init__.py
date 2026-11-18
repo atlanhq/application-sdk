@@ -32,7 +32,6 @@ Rule implementations are split by category:
 
 from __future__ import annotations
 
-import ast
 import io
 import re
 import sys
@@ -46,7 +45,9 @@ from conformance.suite.checks._ast_common import (
     discover,
     make_cli_main,
     parse_ignore_directive,
+    parse_module,
     read_source,
+    source_cache,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -159,7 +160,7 @@ def scan_text(
     the whole repo; without it, the scope is computed from this file alone.
     """
     try:
-        tree = ast.parse(text, filename=file)
+        tree = parse_module(text, filename=file)
     except SyntaxError:
         return []
     if preflight_lines is None:
@@ -211,21 +212,23 @@ def _scan_all(paths: list[Path], root: Path) -> list[Finding]:
     # follows helpers across files, so it is computed once over every path.
     from ..preflight._common import build_registry, preflight_scope_lines  # noqa: PLC0415 — circular: the preflight package imports error_handling
 
-    scope = preflight_scope_lines(build_registry(paths, root))
-
     def _rel(path: Path) -> str:
         try:
             return str(path.relative_to(root))
         except ValueError:
             return str(path)
 
-    return [
-        finding
-        for path in paths
-        for finding in scan_path(
-            path, root, preflight_lines=scope.get(_rel(path), frozenset())
-        )
-    ]
+    # The cache lets E004/E021's import resolution reuse each imported
+    # module's tree across every scanned file instead of re-parsing it.
+    with source_cache():
+        scope = preflight_scope_lines(build_registry(paths, root))
+        return [
+            finding
+            for path in paths
+            for finding in scan_path(
+                path, root, preflight_lines=scope.get(_rel(path), frozenset())
+            )
+        ]
 
 
 #: Whole-repo entry point for the suite runner: same findings as scanning each

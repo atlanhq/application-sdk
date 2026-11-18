@@ -42,6 +42,7 @@ from conformance.suite.checks._ast_common import (
     _IgnoreDirective,
     base_names,
     leaf_name,
+    load_source,
     make_finding,
 )
 from conformance.suite.schema.extensions import SafeSwap, SafeSwapRequires
@@ -617,10 +618,10 @@ def reused_class_names(root: Path) -> frozenset[str]:
     """
     names: set[str] = set()
     for path in _all_python_files(root):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+        source = load_source(path)
+        if source is None:
             return frozenset({"*"})
+        tree = source.tree
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 for b in node.bases:

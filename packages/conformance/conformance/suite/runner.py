@@ -83,6 +83,7 @@ from conformance.suite.checks._ast_common import (
     ParseFailure,
     detect_scope,
     parse_failure,
+    source_cache,
 )
 from conformance.suite.checks.preflight._lifetime import scan_removed_config
 from conformance.suite.introduced import BaseUnavailable, introduced_since
@@ -553,14 +554,18 @@ def _collect(
     """
     all_findings: list[Finding] = []
     py_paths: set[Path] = set()
-    for check in active:
-        # Skip a whole check when none of its series' rules could be in scope
-        # (e.g. the all-APP D-series when scanning the SDK itself).
-        if not _series_in_scope(check.series, active_scope):
-            continue
-        paths = _drop_excluded(check.discover(root), root, excluded_prefixes)
-        py_paths |= _python_files(paths)
-        all_findings.extend(check.scan(paths, root))
+    # One read, one parse and one discovery walk per file for the whole pass,
+    # shared by every check (see _ast_common._source_cache). Scoped to this
+    # call: the --since base pass scans a different tree with its own cache.
+    with source_cache():
+        for check in active:
+            # Skip a whole check when none of its series' rules could be in
+            # scope (e.g. the all-APP D-series when scanning the SDK itself).
+            if not _series_in_scope(check.series, active_scope):
+                continue
+            paths = _drop_excluded(check.discover(root), root, excluded_prefixes)
+            py_paths |= _python_files(paths)
+            all_findings.extend(check.scan(paths, root))
 
     # --exclude also applies at the finding level: a check that discovers the
     # repo root (e.g. K029) reads files beneath it that _drop_excluded never
