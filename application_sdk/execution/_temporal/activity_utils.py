@@ -186,10 +186,10 @@ def build_output_path(app_name: str = "") -> str:
     )
 
 
-def run_temp_dir() -> str:
+def run_temp_dir(app_name: str = "") -> str:
     """SDK-internal: the local scratch directory of the current run.
 
-    ``{TEMPORARY_PATH}/{build_output_path()}``, e.g.
+    ``{TEMPORARY_PATH}/{build_output_path(app_name)}``, e.g.
     ``./local/tmp/artifacts/apps/appName/workflows/wf-123/run-456``. It is the
     directory ``cleanup_files`` removes by default, so anything the SDK writes
     under it on the run's behalf goes with the run. ``TEMPORARY_PATH`` is read
@@ -199,6 +199,10 @@ def run_temp_dir() -> str:
     verbatim), so the result is checked to resolve strictly *inside*
     ``TEMPORARY_PATH``: not outside it via ``..`` segments, and not the root
     itself, whose removal would take every other run's scratch with it.
+
+    Args:
+        app_name: The name of the App that owns the run, forwarded to
+            :func:`build_output_path`; empty resolves through ``AppRegistry``.
 
     Raises:
         WorkflowIdError: Outside an activity context.
@@ -210,7 +214,7 @@ def run_temp_dir() -> str:
         RunTempDirEscapeError,
     )
 
-    path = os.path.join(constants.TEMPORARY_PATH, build_output_path())
+    path = os.path.join(constants.TEMPORARY_PATH, build_output_path(app_name))
     root = os.path.realpath(constants.TEMPORARY_PATH)
     resolved = os.path.realpath(path)
     try:

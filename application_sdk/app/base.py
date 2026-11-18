@@ -2431,11 +2431,17 @@ class App(ABC):
         elif CLEANUP_BASE_PATHS:
             dir_paths = CLEANUP_BASE_PATHS
         else:
-            # The same directory a path-less FileReference materialises into
-            # (storage/reference.py ``_default_materialize_dir``), so those
-            # downloads go with the run instead of piling up on the pod.
+            # The run's scratch under this App's name (where SqlApp extraction
+            # writes), and under the name AppRegistry resolves without one:
+            # writers that never see the App (a path-less FileReference
+            # materialising, storage/reference.py ``_default_materialize_dir``;
+            # the skipped-records file) use that. They are the same directory
+            # unless several Apps share the worker under a different
+            # ATLAN_APPLICATION_NAME.
             try:
-                dir_paths = [run_temp_dir()]
+                dir_paths = list(
+                    dict.fromkeys([run_temp_dir(self._app_name), run_temp_dir()])
+                )
             except RunTempDirEscapeError:
                 # A workflow ID with ``..`` segments: deleting what it points
                 # at would reach outside TEMPORARY_PATH, so sweep nothing.

@@ -542,3 +542,9 @@ class TestPartUsesTheStampedAppName:
             "artifacts/apps/my-app/workflows/wf/run/skipped-records/parts/activity-1.ndjson",
             sink.path,
         )
+
+
+def test_new_field_does_not_shift_positional_construction(tmp_path: Path) -> None:
+    """FND-4921 added ``app_name`` keyword-only, after the counters."""
+    s = SkippedRecordSink(tmp_path / "x.ndjson", "part.ndjson", 3, 2)
+    assert (s.part_name, s.seen, s.kept, s.app_name) == ("part.ndjson", 3, 2, "")

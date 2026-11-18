@@ -306,7 +306,9 @@ class SkippedRecordSink:
 
     path: Path
     part_name: str = ""
-    app_name: str = ""
+    # Keyword-only: a positional call written before this field existed
+    # (``SkippedRecordSink(path, part_name, seen, kept)``) keeps its meaning.
+    app_name: str = field(default="", kw_only=True)
     seen: int = 0
     kept: int = 0
     _buffer: list[bytes] = field(default_factory=list)
