@@ -107,6 +107,7 @@ __all__ = [
     "atlas_client",
     "connection_exists",
     "count_assets",
+    "count_assets_by_guid",
     "count_lineage",
     "count_lineage_edges",
     "count_total_assets",
@@ -591,6 +592,44 @@ async def count_total_assets(
             FluentSearch()
             .where(FluentSearch.active_assets())
             .where(Asset.QUALIFIED_NAME.startswith(prefix))
+            .to_request()
+        )
+        request.dsl.size = 0  # cheap response: only .count matters
+        total = int((await client.asset.search(request)).count)
+    except Exception as error:
+        return _unreadable(label, started, error)
+    name, attempts, elapsed = _one_shot(label, started)
+    return Settled(label=name, attempts=attempts, elapsed=elapsed, value=total)
+
+
+async def count_assets_by_guid(
+    client: AsyncAtlanClient, guids: Sequence[str]
+) -> Reading[int]:
+    """Count how many of *guids* the search index returns as active assets.
+
+    The read-back for assets a suite created directly in Atlas: a save is
+    accepted before the search index has the asset, and an app that finds
+    assets through search sees only what this count sees.
+
+    Args:
+        client: An open client from :func:`atlas_client`.
+        guids: The GUIDs to look for.
+
+    Returns:
+        :class:`~application_sdk.testing.harness.outcome.Settled` carrying the
+        count, or :class:`~application_sdk.testing.harness.outcome.Indeterminate`
+        when the search could not be read.
+    """
+    from pyatlan.model.assets import Asset  # noqa: PLC0415
+    from pyatlan.model.fluent_search import FluentSearch  # noqa: PLC0415
+
+    label = f"search visibility of {len(guids)} seeded asset(s)"
+    started = time.monotonic()
+    try:
+        request = (
+            FluentSearch()
+            .where(FluentSearch.active_assets())
+            .where(Asset.GUID.within(list(guids)))
             .to_request()
         )
         request.dsl.size = 0  # cheap response: only .count matters

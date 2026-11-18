@@ -115,6 +115,7 @@ from application_sdk.testing.e2e._errors import (
     MissingHarnessEnvError,
     NoWorkerOnTaskQueueError,
     ProgressWatchdogUnreachableError,
+    SeededAssetsNotSearchableError,
     SeededConnectionNotSearchableError,
     WorkerNotHealthyError,
 )
@@ -2953,6 +2954,11 @@ class BaseE2ETest:
         fails part-way leaves only registered assets, so those are reclaimed
         too.
 
+        Returns only once the search index returns every created asset, polled
+        on the seed read-back budget: Atlas accepts a save before search has
+        it, and an app that finds terms through search would otherwise see
+        fewer than were seeded.
+
         The glossary name comes from this run's minter, so two runs never share
         a glossary. When the app filters glossaries by name, point that filter
         at the returned ``name`` so the run reads only its own terms on a shared
@@ -2969,6 +2975,8 @@ class BaseE2ETest:
             InvalidInputError: *terms* is empty or repeats a name.
             SeedWriteUnconfirmedError: Atlas reported no GUID for something it
                 created.
+            SeededAssetsNotSearchableError: Search never returned every created
+                asset within ``atlas_poll_timeout_seconds``.
             Exception: Whatever pyatlan raises if a create is rejected.
                 Propagated: a suite whose seed did not land must fail before
                 the DAG runs.
@@ -3007,11 +3015,51 @@ class BaseE2ETest:
                 )
                 self._seeded_asset_guids.append(guid)
                 term_guids[term.name] = guid
+        await self._wait_until_searchable([glossary_guid, *term_guids.values()])
         logger.info(
             "e2e seed: created glossary %s with %d term(s)", name, len(term_guids)
         )
         return atlas.SeededGlossary(
             name=name, guid=glossary_guid, term_guids=term_guids
+        )
+
+    async def _wait_until_searchable(self, guids: Sequence[str]) -> None:
+        """Poll search until it returns every one of *guids*, or raise.
+
+        Args:
+            guids: GUIDs of assets this run just created.
+
+        Raises:
+            SeededAssetsNotSearchableError: The budget ran out first.
+        """
+        last: int | None = None
+
+        async def _probe() -> int | None:
+            nonlocal last
+            async with self._atlas_client() as client:
+                reading = await atlas.count_assets_by_guid(client, guids)
+            if isinstance(reading, Settled):
+                last = reading.value
+            return last
+
+        outcome = await poll_until(
+            _probe,
+            settled=lambda count: count is not None and count >= len(guids),
+            budget=self._seed_readback_budget(),
+            label=f"{len(guids)} seeded asset(s) searchable",
+        )
+        if isinstance(outcome, Settled):
+            return
+        raise SeededAssetsNotSearchableError(
+            message=(
+                f"Search returned {last if last is not None else 'no readable count'}"
+                f" of {len(guids)} seeded asset(s) within "
+                f"{self.atlas_poll_timeout_seconds}s ({type(outcome).__name__}). "
+                "The DAG would run against a seed the app cannot find."
+            ),
+            resource=", ".join(guids),
+            actual_state=f"{last} of {len(guids)} returned by search",
+            cause=getattr(outcome, "cause", None),
         )
 
     async def _count_seeded_assets(

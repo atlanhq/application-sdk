@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 467 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 468 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 85 |
 
 ## Subpackage Details
@@ -5908,6 +5908,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.harness.atlas import count_assets`
 - **Signature:** `count_assets(client: AsyncAtlanClient, ...)`
 - **Summary:** Count active assets of each named type under a connection.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `count_assets_by_guid`
+
+- **Import:** `from application_sdk.testing.harness.atlas import count_assets_by_guid`
+- **Signature:** `count_assets_by_guid(client: AsyncAtlanClient, guids: Sequence[str]) -> Reading[int]`
+- **Summary:** Count how many of *guids* the search index returns as active assets.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
 #### `count_lineage`
