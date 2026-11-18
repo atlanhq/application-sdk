@@ -24,10 +24,6 @@ _REPO = Path(__file__).resolve().parents[3]
 _STRATEGIES = _REPO / "application_sdk" / "testing" / "hypothesis" / "strategies"
 _TESTS = _REPO / "tests"
 
-#: Unbounded integers FND-4286 bounds, together with un-skipping the JSON
-#: writer tests they break. Remove the entry when that lands.
-_UNBOUNDED_INTEGERS_PENDING = {"outputs/json_output.py"}
-
 #: The one module allowed to load a profile at import: it registers and loads
 #: the ``unit`` profile every unit test runs under. Any other conftest doing the
 #: same would replace it for the whole worker, so only this path is exempt.
@@ -145,8 +141,6 @@ def _unbounded_integers(tree: ast.Module) -> list[int]:
 
 @pytest.mark.parametrize("module", _strategy_modules(), ids=_rel)
 def test_every_integer_strategy_is_bounded(module: Path) -> None:
-    if _rel(module) in _UNBOUNDED_INTEGERS_PENDING:
-        pytest.skip("bounded by FND-4286")
     lines = _unbounded_integers(ast.parse(module.read_text(encoding="utf-8")))
     assert not lines, (
         f"{_rel(module)}: st.integers() without both min_value and max_value "

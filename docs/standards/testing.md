@@ -129,3 +129,8 @@
   - Keep test data minimal and focused
   - Use factories for complex objects
   - Clean up test data after tests
+
+- **Skipping Tests**
+  - An unconditional `@pytest.mark.skip` (decorator, `pytestmark` or `pytest.param(marks=...)`) must name the ticket that lifts it in its reason, e.g. `reason="waits on FND-1234"`. A hook in `tests/conftest.py` fails any test whose skip reason has no ticket key.
+  - Prefer fixing or deleting a broken test over skipping it. A skip with no owner becomes permanent.
+  - `skipif` is not checked: its condition (a platform, a missing optional dependency) is what makes it temporary.
