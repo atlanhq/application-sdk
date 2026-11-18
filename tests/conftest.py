@@ -1,6 +1,7 @@
 """Global test configuration."""
 
 import os
+import re
 
 # Disable the Dapr observability sink globally for all unit tests.
 # Without this, metrics flushing tries to connect to the Dapr sidecar
@@ -46,3 +47,46 @@ def pytest_configure(config):
     hypothesis_configuration.set_hypothesis_home_dir(
         config._tmp_path_factory.getbasetemp() / "hypothesis"
     )
+
+
+#: A ticket key such as ``FND-1234``. An unconditional skip must name the issue
+#: that will lift it, so it cannot become permanent unnoticed. See FND-4286.
+_TICKET_REFERENCE = re.compile(r"\b[A-Z][A-Z0-9]{1,9}-\d+\b")
+
+
+_UNTICKETED_SKIP = pytest.StashKey[str]()
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Reject any ``@pytest.mark.skip`` whose reason names no ticket.
+
+    Covers the decorator, ``pytestmark`` and ``pytest.param(marks=...)``: each
+    puts a ``skip`` marker on the item. ``skipif`` is left alone — its condition
+    (a platform, a missing optional dependency) is what makes it temporary.
+
+    The offending test fails rather than the session aborting: under xdist an
+    exception here surfaces as a worker INTERNALERROR that hides the reason.
+    """
+    for item in items:
+        for marker in item.iter_markers(name="skip"):
+            reason = str(
+                marker.kwargs.get("reason", marker.args[0] if marker.args else "")
+            )
+            if not _TICKET_REFERENCE.search(reason):
+                item.stash[_UNTICKETED_SKIP] = reason
+                break
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Fail an unticketed skip before pytest's own setup hook skips it."""
+    reason = item.stash.get(_UNTICKETED_SKIP, None)
+    if reason is not None:
+        pytest.fail(
+            f"skip reason {reason!r} names no ticket: an unconditional skip must "
+            "name the issue that lifts it (e.g. reason='... FND-1234'), or the "
+            "test must be fixed or deleted",
+            pytrace=False,
+        )
