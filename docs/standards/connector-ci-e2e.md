@@ -1651,6 +1651,38 @@ beneath it. Never point a suite at a long-lived shared connection to skip the
 seeding work: a left-over, half-set-up connection is exactly what greens a later
 run that should have failed.
 
+### Seeding glossary terms an entrypoint reads
+
+An app that reads glossary terms, rather than creating assets, needs terms on
+the tenant before it runs. A glossary belongs to no connection, so the
+connection delete in `teardown_method` never reaches it. Seed it with
+`seed_glossary()` instead:
+
+```python
+from application_sdk.testing.harness.atlas import GlossaryTermSpec
+
+
+class TestMyGlossaryReaderE2E(MyGeneratedE2EBase):
+    def seed_prerequisites(self) -> None:
+        self.glossary = self.seed_glossary(
+            [
+                GlossaryTermSpec(name="Revenue", description="...", verified=True),
+                GlossaryTermSpec(name="Churn", description="..."),
+            ]
+        )
+```
+
+The glossary gets a run-unique name (`e2e-<connector>-<suffix>`, from the run's
+minter). When the app filters glossaries by name, point that filter at
+`self.glossary.name` so the run reads only its own terms on a shared tenant.
+
+Every GUID the seed creates is registered as soon as Atlas returns it, and
+`teardown_method` purges them on pass, fail and error, terms before their
+glossary. A seed that fails part-way still has what it created purged.
+Teardown purges these by GUID and does not depend on the asset kind, so
+seeding another kind that lives outside a connection only has to register its
+GUIDs.
+
 ### When the state is an artifact only another DAG produces
 
 `seed_prerequisites()` writes to Atlas through pyatlan, so it can seed only what
