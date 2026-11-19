@@ -10,10 +10,16 @@ import os
 import shutil
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Generator,
+    Iterator,
+)
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Union, cast
+from typing import TYPE_CHECKING, Any, Protocol, Union, cast
 
 import orjson
 
@@ -110,6 +116,14 @@ _STAGED_SCRATCH_DIRNAME = "scratch"
 
 if TYPE_CHECKING:
     import pandas as pd
+
+
+class _Rows(Protocol):
+    """A batch the writer can count and slice: a DataFrame, or a subclass's own row type."""
+
+    def __len__(self) -> int: ...
+
+    def __getitem__(self, key: slice, /) -> Any: ...
 
 
 class Reader(ABC):
@@ -673,16 +687,33 @@ class Writer(ABC):
             dataframe (pd.DataFrame): The DataFrame to write.
             **kwargs: Additional parameters (currently unused for pandas DataFrames).
         """
+        await self._write_rows(
+            dataframe,
+            lambda: estimate_dataframe_record_size(dataframe, self.extension),
+        )
+
+    async def _write_rows(
+        self, rows: _Rows, estimate_record_size: Callable[[], int]
+    ) -> None:
+        """Split *rows* into chunk files of at most ``max_file_size_bytes`` and upload them.
+
+        *rows* is a DataFrame or any sized, sliceable batch the subclass's
+        ``_write_chunk`` can write. One call is one chunk (``chunk-<N>``); a
+        part (``-part<M>``) closes when the next ``buffer_size`` slice would
+        take the part past ``max_file_size_bytes``, judged by
+        *estimate_record_size* — the estimated bytes of one record, computed
+        once per call and only for a non-empty batch.
+        """
         try:
             if self.chunk_start is None:
                 self.chunk_part = 0
-            if len(dataframe) == 0:
+            if len(rows) == 0:
                 return
 
-            chunk_size_bytes = estimate_dataframe_record_size(dataframe, self.extension)
+            chunk_size_bytes = estimate_record_size()
 
-            for i in range(0, len(dataframe), self.buffer_size):
-                chunk = dataframe[i : i + self.buffer_size]
+            for i in range(0, len(rows), self.buffer_size):
+                chunk = rows[i : i + self.buffer_size]
 
                 # Only upload accumulated data if there is any — guards against
                 # the first chunk being larger than max_file_size_bytes where
@@ -724,7 +755,7 @@ class Writer(ABC):
             # Record metrics for successful write
             self.metrics.record_metric(
                 name="write_records",
-                value=len(dataframe),
+                value=len(rows),
                 metric_type=MetricType.COUNTER,
                 labels={"type": "pandas", "mode": WriteMode.APPEND.value},
                 description="Number of records written to files from pandas DataFrame",
@@ -923,7 +954,11 @@ class Writer(ABC):
         )
         self.current_buffer_size_bytes = 0
 
-    async def _flush_buffer(self, chunk: "pd.DataFrame", chunk_part: int):
+    def _is_empty_chunk(self, chunk: Any) -> bool:
+        """Whether *chunk* holds no rows; a subclass with its own row type extends this."""
+        return is_empty_dataframe(chunk)
+
+    async def _flush_buffer(self, chunk: "pd.DataFrame | _Rows", chunk_part: int):
         """Flush the current buffer to a JSON file.
 
         This method combines all DataFrames in the buffer, writes them to a JSON file,
@@ -933,7 +968,7 @@ class Writer(ABC):
             If the buffer is empty or has no records, the method returns without writing.
         """
         try:
-            if not is_empty_dataframe(chunk):
+            if not self._is_empty_chunk(chunk):
                 self.total_record_count += len(chunk)
                 output_file_name = os.path.join(
                     self._write_root,
