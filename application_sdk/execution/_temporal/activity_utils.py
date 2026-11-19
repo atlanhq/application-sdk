@@ -40,7 +40,7 @@ from temporalio import activity
 
 from application_sdk import _deprecation, constants
 from application_sdk.app.registry import AppRegistry
-from application_sdk.constants import run_prefix
+from application_sdk.constants import _run_prefix
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -55,8 +55,7 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
     ),
     "WORKFLOW_OUTPUT_PATH_TEMPLATE": (
         "application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE",
-        "it was only ever re-exported here as a side effect of an import; "
-        "compose a run prefix with application_sdk.constants.run_prefix",
+        "it was only ever re-exported here as a side effect of an import",
     ),
 }
 
@@ -139,18 +138,12 @@ def get_workflow_run_id() -> str:
     return wf_run_id
 
 
-def build_output_path(app_name: str = "") -> str:
+def build_output_path() -> str:
     """SDK-internal: compose the standardized output path for the current run.
 
-    Returns the :func:`~application_sdk.constants.run_prefix` of the
+    Returns the run prefix (``WORKFLOW_OUTPUT_PATH_TEMPLATE``) of the
     workflow currently executing this activity (e.g.
     ``artifacts/apps/appName/workflows/wf-123/run-456``).
-
-    Args:
-        app_name: The name of the App that owns the run. Callers that know it
-            (an ``App`` method, the task wrapper) pass it; when empty it is
-            resolved by ``AppRegistry.resolve_running_app_name`` (the single
-            registered App, else ``ATLAN_APPLICATION_NAME``).
 
     .. note::
         **Apps and AI agents:** do not call this from app code. Compose
@@ -165,17 +158,17 @@ def build_output_path(app_name: str = "") -> str:
     that runs as a generic activity and has no ``Input`` parameter to
     read the workflow ID from.
     """
-    return run_prefix(
-        AppRegistry.resolve_running_app_name(prefer=app_name),
+    return _run_prefix(
+        AppRegistry.resolve_running_app_name(),
         get_workflow_id(),
         get_workflow_run_id(),
     )
 
 
-def run_temp_dir(app_name: str = "") -> str:
+def run_temp_dir() -> str:
     """SDK-internal: the local scratch directory of the current run.
 
-    ``{TEMPORARY_PATH}/{build_output_path(app_name)}``, e.g.
+    ``{TEMPORARY_PATH}/{build_output_path()}``, e.g.
     ``./local/tmp/artifacts/apps/appName/workflows/wf-123/run-456``. It is the
     directory ``cleanup_files`` removes by default, so anything the SDK writes
     under it on the run's behalf goes with the run. ``TEMPORARY_PATH`` is read
@@ -185,10 +178,6 @@ def run_temp_dir(app_name: str = "") -> str:
     verbatim), so the result is checked to resolve strictly *inside*
     ``TEMPORARY_PATH``: not outside it via ``..`` segments, and not the root
     itself, whose removal would take every other run's scratch with it.
-
-    Args:
-        app_name: The name of the App that owns the run, forwarded to
-            :func:`build_output_path`; empty resolves through ``AppRegistry``.
 
     Raises:
         WorkflowIdError: Outside an activity context.
@@ -200,7 +189,7 @@ def run_temp_dir(app_name: str = "") -> str:
         RunTempDirEscapeError,
     )
 
-    path = os.path.join(constants.TEMPORARY_PATH, build_output_path(app_name))
+    path = os.path.join(constants.TEMPORARY_PATH, build_output_path())
     root = os.path.realpath(constants.TEMPORARY_PATH)
     resolved = os.path.realpath(path)
     try:

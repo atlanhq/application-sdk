@@ -299,16 +299,10 @@ class SkippedRecordSink:
         kept: Lines written (or buffered) to :attr:`path`; at most
             :data:`MAX_SKIPPED_RECORDS`. Lines lost to a failed local write
             are moved from here to ``skipped-records-unpersisted``.
-        app_name: The App that owns the run, set by the task wrapper so the
-            part lands under the same run prefix ``merge_skipped_records``
-            lists. Empty resolves through ``AppRegistry``.
     """
 
     path: Path
     part_name: str = ""
-    # Keyword-only: a positional call written before this field existed
-    # (``SkippedRecordSink(path, part_name, seen, kept)``) keeps its meaning.
-    app_name: str = field(default="", kw_only=True)
     seen: int = 0
     kept: int = 0
     _buffer: list[bytes] = field(default_factory=list)
@@ -564,7 +558,7 @@ async def persist_activity_skips(sink: SkippedRecordSink) -> None:
             upload_file,
         )
 
-        key = f"{build_output_path(sink.app_name)}/{SKIPPED_RECORDS_PARTS_DIR}/{sink.object_name}"
+        key = f"{build_output_path()}/{SKIPPED_RECORDS_PARTS_DIR}/{sink.object_name}"
         await upload_file(key, sink.path)
     # conformance: ignore[E004] fail-open by design (FND-4881): logged at ERROR and counted in skipped-records-unpersisted
     except Exception:

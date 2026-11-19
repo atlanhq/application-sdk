@@ -197,13 +197,14 @@ WORKFLOW_OUTPUT_PATH_TEMPLATE = (
 )
 
 
-def run_prefix(app_name: str, workflow_id: str, run_id: str) -> str:
-    """The object-store prefix every artifact of one workflow run lives under.
+def _run_prefix(app_name: str, workflow_id: str, run_id: str) -> str:
+    """SDK-internal: the object-store prefix one workflow run's artifacts live under.
 
     ``WORKFLOW_OUTPUT_PATH_TEMPLATE`` filled in, e.g.
     ``artifacts/apps/my-app/workflows/wf-123/run-456``. The one place the
-    run-prefix layout is composed: uploads, persisted refs, cleanup and the
-    skipped-records merge all go through it, so they cannot drift apart.
+    run-prefix layout is composed, so uploads, persisted refs, cleanup and the
+    skipped-records merge cannot drift apart. Private: the layout is the SDK's
+    to change; apps compose run-scoped paths from ``input.workflow_id``.
 
     Args:
         app_name: The registered name of the App that owns the run.

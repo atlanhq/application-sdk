@@ -1058,8 +1058,9 @@ class TestRunPrefixUsesTheTaskApp:
 
     With two Apps registered and ``ATLAN_APPLICATION_NAME`` naming neither, the
     registry resolver falls back to the env name, while ``App.upload`` writes
-    under the App's own name. Ref persistence and skipped-record parts must use
-    the App's name too, or they land under a different prefix.
+    under the App's own name. The wrapper records the task's App for the whole
+    activity, so ref persistence (and every other run-scoped path built in the
+    activity) lands under the same prefix.
     """
 
     def setup_method(self) -> None:
@@ -1087,11 +1088,8 @@ class TestRunPrefixUsesTheTaskApp:
         tasks = TaskRegistry.get_instance().get_tasks_for_app("_prefix-app")
         return create_activity_from_task(next(t for t in tasks if t.name == "greet"))
 
-    async def test_refs_and_skipped_parts_use_the_task_app_name(self) -> None:
-        from application_sdk.outputs.skipped import (
-            SkippedRecordSink,
-            current_skipped_records,
-        )
+    async def test_refs_and_the_activity_scope_use_the_task_app_name(self) -> None:
+        from application_sdk.app.registry import _running_app_name
 
         activity_fn = self._activity()
         ctx = TaskContext(
@@ -1105,8 +1103,8 @@ class TestRunPrefixUsesTheTaskApp:
         infra = mock.MagicMock()
         infra.upstream_storage = None
         persist = mock.AsyncMock(side_effect=lambda store, result, **_: result)
-        sink = SkippedRecordSink(mock.MagicMock())
-        token = current_skipped_records.set(sink)
+        # Stands in for the output interceptor's activity-wide scope.
+        token = _running_app_name.set("")
         try:
             with (
                 mock.patch.object(
@@ -1130,11 +1128,13 @@ class TestRunPrefixUsesTheTaskApp:
                 ),
             ):
                 await activity_fn(ctx, _AfnIn(name="x"))
+            # Still set after the wrapper returns, for the skipped-records part
+            # the output interceptor persists next.
+            assert _running_app_name.get() == "_prefix-app"
         finally:
-            current_skipped_records.reset(token)
+            _running_app_name.reset(token)
 
         assert (
             persist.await_args.kwargs["output_path"]
             == "artifacts/apps/_prefix-app/workflows/wf-1/run-1"
         )
-        assert sink.app_name == "_prefix-app"

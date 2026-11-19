@@ -930,7 +930,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "WORKFLOW_OUTPUT_PATH_TEMPLATE is deprecated; use application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE \u2014 it was only ever re-exported here as a side effect of an import; compose a run prefix with application_sdk.constants.run_prefix. Will be removed in v4.0.0.",
+      "message": "WORKFLOW_OUTPUT_PATH_TEMPLATE is deprecated; use application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.execution._temporal.activity_utils",
       "removal_version": "4.0.0",
@@ -1740,7 +1740,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "WORKFLOW_OUTPUT_PATH_TEMPLATE is deprecated; use application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE \u2014 it was only ever re-exported here as a side effect of an import; compose a run prefix with application_sdk.constants.run_prefix. Will be removed in v4.0.0.",
+      "message": "WORKFLOW_OUTPUT_PATH_TEMPLATE is deprecated; use application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.templates.sql_app",
       "removal_version": "4.0.0",

@@ -21,7 +21,7 @@ from temporalio import activity
 from temporalio.exceptions import FailureError
 
 from application_sdk._runtime.progress import ProgressTracker, bind_progress_tracker
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import AppRegistry, TaskRegistry, _running_app_name
 from application_sdk.app.task import TaskMetadata
 from application_sdk.common.build_identity import build_identity
 from application_sdk.constants import LOCAL_WORKFLOW_ID, TRACKED_FILE_REFS_KEY
@@ -494,16 +494,11 @@ def create_activity_from_task(
 
         app_instance._context = app_context
 
-        # The output interceptor installed this activity's skipped-records sink
-        # before the wrapper ran, without knowing which App owns the task. Stamp
-        # it, so the part uploads under the run prefix merge_skipped_records lists.
-        from application_sdk.outputs.skipped import (  # noqa: PLC0415 — circular: execution imports app, which imports outputs
-            current_skipped_records,
-        )
-
-        skipped_sink = current_skipped_records.get()
-        if skipped_sink is not None:
-            skipped_sink.app_name = context.app_name
+        # Run-scoped paths built anywhere in this activity (build_output_path,
+        # run_temp_dir) resolve to this App. Not reset here: the output
+        # interceptor persists skipped records after this wrapper returns, and
+        # owns the activity-wide scope (it resets the name with its token).
+        _running_app_name.set(context.app_name)
 
         # Create heartbeat controller based on configuration
         carried_details = tuple(context.evicted_heartbeat_details or ())
@@ -724,7 +719,7 @@ def create_activity_from_task(
                     )
 
                     try:
-                        output_path: str | None = build_output_path(context.app_name)
+                        output_path: str | None = build_output_path()
                     except Exception:
                         logger.warning(
                             "build_output_path() failed, proceeding without output path",

@@ -50,6 +50,7 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
+from application_sdk.app.registry import _running_app_name
 from application_sdk.contracts.base import Output, OutputStatus
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs import current_outputs
@@ -157,6 +158,10 @@ class OutputActivityInboundInterceptor(ActivityInboundInterceptor):
         # Installed up front, like the collector, so skips recorded from child
         # tasks of the activity body land in the same sink.
         current_skipped_records.set(new_activity_sink())
+        # The task wrapper fills in the App's name; this scope keeps it until
+        # the skipped-records part is persisted, under the same run prefix
+        # merge_skipped_records lists, and clears it after.
+        app_name_token = _running_app_name.set("")
 
         try:
             result = await super().execute_activity(input)
@@ -169,6 +174,7 @@ class OutputActivityInboundInterceptor(ActivityInboundInterceptor):
             # collector into the next task that runs on this thread.
             current_outputs.set(None)
             current_skipped_records.set(None)
+            _running_app_name.reset(app_name_token)
 
         try:
             return _attach_outputs(result, collector)

@@ -111,7 +111,7 @@ from application_sdk.common.sql_filters import (
     safe_substitute_placeholders,
     strip_sql_block_comments,
 )
-from application_sdk.constants import TEMPORARY_PATH, run_prefix
+from application_sdk.constants import TEMPORARY_PATH, _run_prefix
 from application_sdk.contracts.base import OutputStatus
 from application_sdk.contracts.storage import VerifyRefsInput
 from application_sdk.contracts.types import FileReference, StorageTier
@@ -1318,7 +1318,7 @@ class SqlApp(App):
             info = _temporal_workflow.info()
             resolved_base = os.path.join(
                 TEMPORARY_PATH,
-                run_prefix(
+                _run_prefix(
                     AppRegistry.resolve_running_app_name(prefer=self._app_name),
                     info.workflow_id,
                     info.run_id,
@@ -1575,14 +1575,11 @@ class SqlApp(App):
             raw_file=raw_file,
         )
 
-    def _resolve_output_path(self, input: ExtractionTaskInput) -> str:
-        """Resolve output_path — auto-set from build_output_path() in activity context.
-
-        Uses this App's name, as ``run()`` does when it derives the
-        ``transformed`` prefix, so extraction writes where publish reads.
-        """
+    @staticmethod
+    def _resolve_output_path(input: ExtractionTaskInput) -> str:
+        """Resolve output_path — auto-set from build_output_path() in activity context."""
         if not input.output_path:
-            resolved = build_output_path(self._app_name)
+            resolved = build_output_path()
             logger.info("Auto-resolved output_path: %s", resolved)
             return os.path.join(TEMPORARY_PATH, resolved)
         return input.output_path
@@ -2080,7 +2077,7 @@ class SqlApp(App):
 #: name importable from here only by accident of that import. Served once more
 #: by ``__getattr__`` below (PEP 562) so the removal waits for v4.0.0.
 #: ``WORKFLOW_OUTPUT_PATH_TEMPLATE`` likewise, since FND-4921 composes the run
-#: prefix through ``application_sdk.constants.run_prefix``.
+#: prefix through ``application_sdk.constants._run_prefix``.
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
     "legacy_credential_ref": (
         "application_sdk.credentials.ref.legacy_credential_ref",
@@ -2088,8 +2085,7 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
     ),
     "WORKFLOW_OUTPUT_PATH_TEMPLATE": (
         "application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE",
-        "it was only ever re-exported here as a side effect of an import; "
-        "compose a run prefix with application_sdk.constants.run_prefix",
+        "it was only ever re-exported here as a side effect of an import",
     ),
 }
 

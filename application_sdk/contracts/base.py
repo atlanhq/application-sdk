@@ -1015,10 +1015,10 @@ class PublishInputMixin(BaseModel):
                     AppRegistry,
                 )
                 from application_sdk.constants import (  # noqa: PLC0415 — co-located with temporalio import in same try block
-                    run_prefix,
+                    _run_prefix,
                 )
 
-                self.output_path = run_prefix(
+                self.output_path = _run_prefix(
                     AppRegistry.resolve_running_app_name(),
                     _wf.info().workflow_id,
                     _wf.info().run_id,

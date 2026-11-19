@@ -88,37 +88,3 @@ async def test_task_records_truncation(collector):
 
     assert (out.kept, out.truncated) == (5, 3)
     assert collector.numeric_metric(SKIPPED_RECORDS_TRUNCATED_METRIC) == 3
-
-
-async def test_task_merges_under_the_app_name_not_the_env_name(collector):
-    """FND-4921: the merge lists the parts under the App's own run prefix.
-
-    The parts upload under the name the task wrapper stamped on the sink (the
-    App's), so the merge must not fall back to ``ATLAN_APPLICATION_NAME``.
-    """
-    self_ = mock.MagicMock(_app_name="my-app")
-    merge = mock.AsyncMock(return_value=MergeResult(key=None, kept=0))
-    with (
-        mock.patch(
-            "application_sdk.app.registry.AppRegistry.list_apps", return_value=[]
-        ),
-        mock.patch("application_sdk.constants.APPLICATION_NAME", "env-app"),
-        mock.patch(
-            "application_sdk.execution._temporal.activity_utils.get_workflow_id",
-            return_value="wf",
-        ),
-        mock.patch(
-            "application_sdk.execution._temporal.activity_utils.get_workflow_run_id",
-            return_value="run",
-        ),
-        mock.patch(
-            "application_sdk.execution._temporal.activity_utils.run_temp_dir",
-            return_value="/tmp/x",
-        ),
-        mock.patch("application_sdk.outputs.skipped.merge_run_skips", merge),
-    ):
-        await base.App.merge_skipped_records(
-            self_, MergeSkippedRecordsInput(skipped_count=1)
-        )
-
-    assert merge.await_args.args[0] == "artifacts/apps/my-app/workflows/wf/run"

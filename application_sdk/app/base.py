@@ -70,7 +70,7 @@ from application_sdk.constants import (
     ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
     COMMIT_SHA,
     LOCAL_WORKFLOW_ID,
-    run_prefix,
+    _run_prefix,
 )
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
@@ -1819,11 +1819,11 @@ class App(ABC):
                 (single, "upstream" if single is upstream else "deployment", True)
             ]
 
-        this_run_prefix = run_prefix(
+        run_prefix = _run_prefix(
             self._app_name, self.context.workflow_id, self.context.run_id
         )
         app_prefix = input.tier.upload_prefix(
-            run_prefix=this_run_prefix, app_name=self._app_name
+            run_prefix=run_prefix, app_name=self._app_name
         )
 
         # Derive the FileReference for cross-store dedup / deployment-store fallback.
@@ -1867,7 +1867,7 @@ class App(ABC):
                     _source_store=source_store,
                     _app_prefix=app_prefix,
                     _tier=input.tier,
-                    _output_path=this_run_prefix,
+                    _output_path=run_prefix,
                 )
             except Exception as exc:
                 if fatal:
@@ -2286,7 +2286,7 @@ class App(ABC):
             delivered = await self.upload_refs(
                 UploadRefsInput(
                     files=[DeclaredFile(ref=r, label=t) for t, r in transformed],
-                    prefix=f"{run_prefix(app, wf_id, run_id)}/transformed",
+                    prefix=f"artifacts/apps/{app}/workflows/{wf_id}/{run_id}/transformed",
                 )
             )
             return MyOutput(transformed_data_prefix=delivered.prefix)
@@ -2478,17 +2478,11 @@ class App(ABC):
         elif CLEANUP_BASE_PATHS:
             dir_paths = CLEANUP_BASE_PATHS
         else:
-            # The run's scratch under this App's name (where SqlApp extraction
-            # writes), and under the name AppRegistry resolves without one:
-            # writers that never see the App (a path-less FileReference
-            # materialising, storage/reference.py ``_default_materialize_dir``;
-            # the skipped-records file) use that. They are the same directory
-            # unless several Apps share the worker under a different
-            # ATLAN_APPLICATION_NAME.
+            # The same directory a path-less FileReference materialises into
+            # (storage/reference.py ``_default_materialize_dir``), so those
+            # downloads go with the run instead of piling up on the pod.
             try:
-                dir_paths = list(
-                    dict.fromkeys([run_temp_dir(self._app_name), run_temp_dir()])
-                )
+                dir_paths = [run_temp_dir()]
             except RunTempDirEscapeError:
                 # A workflow ID with ``..`` segments: deleting what it points
                 # at would reach outside TEMPORARY_PATH, so sweep nothing.
@@ -2710,7 +2704,7 @@ class App(ABC):
 
         # 2. Delete run-scoped prefix (opt-in).
         if input.include_prefix_cleanup:
-            prefix = build_output_path(self._app_name) + "/"
+            prefix = build_output_path() + "/"
             import obstore as obs  # noqa: PLC0415 — lazy: heavy Rust ext; keep out of the workflow-sandbox import set
 
             async for batch in obs.list(resolved, prefix=prefix):
@@ -2764,9 +2758,7 @@ class App(ABC):
             merge_run_skips,
         )
 
-        merged = await merge_run_skips(
-            build_output_path(self._app_name), run_temp_dir()
-        )
+        merged = await merge_run_skips(build_output_path(), run_temp_dir())
         truncated = max(0, input.skipped_count - input.unpersisted_count - merged.kept)
         if truncated:
             get_outputs().add_metric(

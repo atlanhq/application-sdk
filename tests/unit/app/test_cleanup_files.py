@@ -187,51 +187,6 @@ class TestCleanupFiles:
         assert not os.path.exists(dir_ref.local_path)
         assert all(result.path_results.values())
 
-    async def test_default_sweep_covers_the_app_root_and_the_resolver_root(
-        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """FND-4921: with two Apps registered, both of the run's scratch roots go.
-
-        SqlApp extraction writes under the App's name; path-less ref
-        materialisation and the skipped-records file write under the name the
-        registry resolves (here ``ATLAN_APPLICATION_NAME``, as when several
-        Apps are registered). The default sweep must remove both.
-        """
-        from types import SimpleNamespace
-
-        from temporalio import activity
-
-        from application_sdk.testing.fixtures import _redirect_temporary_path
-
-        sdk_tmp = tmp_path / "sdk-tmp"
-        _redirect_temporary_path(monkeypatch, str(sdk_tmp))
-        monkeypatch.setattr(
-            activity,
-            "info",
-            lambda: SimpleNamespace(workflow_id="wf-1", workflow_run_id="run-1"),
-        )
-        app = _CleanupApp()
-        roots = [
-            sdk_tmp / "artifacts/apps" / name / "workflows/wf-1/run-1"
-            for name in (app._app_name, "env-app")
-        ]
-        for root in roots:
-            root.mkdir(parents=True)
-            (root / "data.json").write_text("{}")
-
-        with (
-            mock.patch(
-                "application_sdk.app.base.TaskStateAccessor.get", return_value=None
-            ),
-            mock.patch("application_sdk.constants.CLEANUP_BASE_PATHS", []),
-            mock.patch("application_sdk.constants.APPLICATION_NAME", "env-app"),
-            mock.patch.object(AppRegistry, "list_apps", return_value=[]),
-        ):
-            result = await app.cleanup_files(CleanupInput())
-
-        assert not any(root.exists() for root in roots)
-        assert len(result.path_results) == 2 and all(result.path_results.values())
-
     async def test_a_climbing_workflow_id_deletes_nothing_outside_temporary_path(
         self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
