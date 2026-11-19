@@ -18,9 +18,10 @@ from __future__ import annotations
 import types
 import typing
 from dataclasses import dataclass
-from typing import Any, get_type_hints
+from typing import Any, ClassVar, get_type_hints
 
 from application_sdk.contracts.base import has_default, validate_is_contract
+from application_sdk.errors.leaves import InternalError
 
 __all__ = [
     "CompatibilityError",
@@ -153,13 +154,25 @@ class Incompatibility:
     reason: str
 
 
-class CompatibilityError(Exception):
-    """Raised by :func:`assert_backwards_compatible` on incompatible contracts."""
+@dataclass(kw_only=True)
+class CompatibilityError(InternalError):
+    """Raised by :func:`assert_backwards_compatible` on incompatible contracts.
 
+    An :class:`InternalError` (APP_OWNER): the app's own contract change would
+    break payloads an older version wrote.
+    """
+
+    code: ClassVar[str] = "INTERNAL_CONTRACT_NOT_BACKWARDS_COMPATIBLE"
+
+    # Intentional: dataclass fields define the wire-evidence schema; custom __init__ keeps the positional-issues signature callers use.
     def __init__(self, issues: list[Incompatibility]) -> None:
-        self.issues = issues
         lines = "\n".join(f"  - {i.field}: {i.reason}" for i in issues)
-        super().__init__(f"Contract is not backwards-compatible:\n{lines}")
+        InternalError.__init__(
+            self, message=f"Contract is not backwards-compatible:\n{lines}"
+        )
+        #: The incompatibilities found. Not a dataclass field, so it stays off
+        #: the failure envelope's evidence.
+        self.issues = issues
 
 
 def check_backwards_compatible(

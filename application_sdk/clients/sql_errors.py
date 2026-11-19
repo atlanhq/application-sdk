@@ -5,9 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from application_sdk.errors.categories import Audience
+from application_sdk.credentials.errors import CredentialError, CredentialParseError
 from application_sdk.errors.leaves import (
-    AppTimeoutError,
     AuthError,
     InternalError,
     InvalidInputError,
@@ -54,23 +53,29 @@ class SqlClientSourceUnavailableError(SourceUnavailableError):
 
 
 @dataclass(kw_only=True)
-class SqlClientConnectTimeoutError(AppTimeoutError):
+class SqlClientConnectTimeoutError(SourceUnavailableError):
     """The SQL client's connect or login ran out of time waiting on the source.
 
-    ``AppTimeoutError`` defaults to ``APP_OWNER`` because a timeout's locus is
-    usually ambiguous. Here it is not: what times out is the driver's or the
-    socket's own timeout, or ``load()``'s connect budget, spent building the
-    connection string (an STS AssumeRole for IAM-role auth) and connecting —
-    so the clock ran out waiting for the customer's source or its auth path.
+    What times out is the driver's or the socket's own timeout, or ``load()``'s
+    connect budget, spent building the connection string (an STS AssumeRole
+    for IAM-role auth) and connecting: the clock ran out waiting for the
+    customer's source or its auth path.
+
+    ``SOURCE_UNAVAILABLE``, not ``TIMEOUT``, for the reason the network probe's
+    ``SourceConnectTimeoutError`` is (ADR-0021): a source that never answers
+    the connect cannot be told apart from one that is down. ``TIMEOUT`` is for
+    a budget that says nothing about the source, and a hard preflight gate never
+    blocks on it, so the same outage used to block when the probe saw it and
+    pass when the client did (FND-4298).
     """
 
-    code: ClassVar[str] = "TIMEOUT_SQL_CLIENT_CONNECT"
-    audience: ClassVar[Audience] = Audience.USER
+    code: ClassVar[str] = "SOURCE_UNAVAILABLE_SQL_CLIENT_CONNECT_TIMEOUT"
     message: str = "SQL client timed out connecting to the source"
     suggested_action: str | None = (
         "Check that the source is up and reachable from the worker network, "
         "and that the connection's login timeout suits the source."
     )
+    source_type: str | None = "sql"
     operation: str | None = "sql_client_connect"
 
 
@@ -90,16 +95,25 @@ class SqlClientConnectUnclassifiedError(InternalError):
 
 
 @dataclass(kw_only=True)
-class SqlCredentialsParseError(InvalidInputError):
-    """SQL credentials could not be parsed or are missing required fields."""
+class SqlCredentialsParseError(CredentialParseError):
+    """SQL credentials could not be parsed or are missing required fields.
 
-    code: ClassVar[str] = "INVALID_INPUT_CREDENTIALS_PARSE"
+    A :class:`~application_sdk.credentials.errors.CredentialParseError`, so it
+    carries that class's code (``INVALID_INPUT_CREDENTIAL_PARSE``) and
+    ``except CredentialError`` catches it. Before FND-4298 it had its own code,
+    ``INVALID_INPUT_CREDENTIALS_PARSE``, one letter away from the shared one.
+    """
+
     message: str = "SQL credentials parse error"
 
 
 @dataclass(kw_only=True)
-class SqlAwsCredentialsError(AuthError):
-    """AWS IAM credentials required for RDS authentication are missing."""
+class SqlAwsCredentialsError(CredentialError):
+    """AWS IAM credentials required for RDS authentication are missing.
+
+    A :class:`~application_sdk.credentials.errors.CredentialError` (category
+    ``AUTH``), so ``except CredentialError`` catches it.
+    """
 
     code: ClassVar[str] = "AUTH_AWS_CREDENTIALS"
     message: str = "AWS IAM credentials are missing or incomplete"

@@ -56,6 +56,14 @@ What this means in practice:
   A consumer may group by `code` and read `evidence` for context, but must not
   assume a key holds the same *kind* of value across every producer of that
   code. If you need one that does, say so here and make it so at both sites.
+- **Merging or re-categorising a code is a wire change too.** FND-4298 retired
+  four codes: `INVALID_INPUT_CREDENTIALS_PARSE` (SQL) and
+  `INVALID_INPUT_AZURE_CREDENTIALS_PARSE` now arrive as
+  `INVALID_INPUT_CREDENTIAL_PARSE`; `TIMEOUT_SQL_CLIENT_CONNECT` and
+  `TIMEOUT_SQL_PROBE` now arrive as `SOURCE_UNAVAILABLE_SQL_CLIENT_CONNECT_TIMEOUT`
+  and `SOURCE_UNAVAILABLE_SQL_PROBE_TIMEOUT`, category `SOURCE_UNAVAILABLE`.
+  `retryable` and `audience` did not change. A board keyed on an old code
+  should add the new one.
 - **Adding an `evidence` key is safe; repurposing one is not.** Evidence is the
   producing dataclass's fields, so a new field appears automatically — but a
   field that changes meaning silently changes what a consumer reads. Note that

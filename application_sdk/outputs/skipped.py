@@ -64,6 +64,7 @@ import orjson
 from pydantic import BaseModel
 
 from application_sdk._logging import get_logger
+from application_sdk.errors.leaves import InternalError
 from application_sdk.outputs.models import Metric
 
 _logger = get_logger(__name__)
@@ -255,8 +256,15 @@ def reason_metric_name(reason: SkipReason) -> str:
     return f"{SKIPPED_RECORDS_METRIC}-{reason.value.replace('_', '-')}"
 
 
-class _RollbackFailedError(Exception):
+@dataclass(kw_only=True)
+class _RollbackFailedError(InternalError):
     """A failed append could not be rolled back; the file may end mid-line."""
+
+    code: ClassVar[str] = "INTERNAL_SKIPPED_RECORDS_ROLLBACK"
+    message: str = (
+        "A failed append to the skipped-records file could not be rolled back"
+    )
+    component: str | None = "skipped_records"
 
 
 def _append_lines(path: Path, chunk: bytes) -> None:
@@ -277,7 +285,7 @@ def _append_lines(path: Path, chunk: bytes) -> None:
             try:
                 fh.truncate(start)
             except OSError as exc:
-                raise _RollbackFailedError(str(path)) from exc
+                raise _RollbackFailedError() from exc
             raise
 
 

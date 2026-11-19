@@ -26,7 +26,7 @@ class TestAzureAuthProvider:
         with pytest.raises(AzureCredentialParseError) as exc_info:
             await auth_provider.create_credential("unsupported_type", {})
 
-        assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
+        assert exc_info.value.code == "INVALID_INPUT_CREDENTIAL_PARSE"
         assert "Only 'service_principal' authentication is supported" in str(
             exc_info.value
         )
@@ -42,7 +42,7 @@ class TestAzureAuthProvider:
         with pytest.raises(AzureCredentialParseError) as exc_info:
             await auth_provider._create_service_principal_credential(credentials)
 
-        assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
+        assert exc_info.value.code == "INVALID_INPUT_CREDENTIAL_PARSE"
         # Pydantic provides clear error messages about missing fields
         validation_errors = exc_info.value.validation_errors or ""
         assert "tenant" in validation_errors.lower() or "tenantId" in validation_errors
@@ -61,7 +61,7 @@ class TestAzureAuthProvider:
         with pytest.raises(AzureCredentialParseError) as exc_info:
             await auth_provider._create_service_principal_credential(credentials)
 
-        assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
+        assert exc_info.value.code == "INVALID_INPUT_CREDENTIAL_PARSE"
         validation_errors = exc_info.value.validation_errors or ""
         assert "client" in validation_errors.lower() or "clientId" in validation_errors
         assert (
@@ -76,7 +76,7 @@ class TestAzureAuthProvider:
         with pytest.raises(AzureCredentialParseError) as exc_info:
             await auth_provider._create_service_principal_credential(credentials)
 
-        assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
+        assert exc_info.value.code == "INVALID_INPUT_CREDENTIAL_PARSE"
         validation_errors = exc_info.value.validation_errors or ""
         assert (
             "client_secret" in validation_errors.lower()
@@ -97,7 +97,7 @@ class TestAzureAuthProvider:
         with pytest.raises(AzureCredentialParseError) as exc_info:
             await auth_provider._create_service_principal_credential(credentials)
 
-        assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
+        assert exc_info.value.code == "INVALID_INPUT_CREDENTIAL_PARSE"
         validation_errors = exc_info.value.validation_errors or ""
         # Pydantic provides clear error messages about all missing fields
         assert "client" in validation_errors.lower()
@@ -113,7 +113,7 @@ class TestAzureAuthProvider:
         with pytest.raises(AzureCredentialParseError) as exc_info:
             await auth_provider._create_service_principal_credential(credentials)
 
-        assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
+        assert exc_info.value.code == "INVALID_INPUT_CREDENTIAL_PARSE"
         # Empty credentials are caught by the "if not credentials" check
         assert "Credentials required for service principal authentication" in str(
             exc_info.value
@@ -124,7 +124,7 @@ class TestAzureAuthProvider:
         with pytest.raises(AzureCredentialParseError) as exc_info:
             await auth_provider._create_service_principal_credential(None)
 
-        assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
+        assert exc_info.value.code == "INVALID_INPUT_CREDENTIAL_PARSE"
         assert "Credentials required for service principal authentication" in str(
             exc_info.value
         )
@@ -134,7 +134,7 @@ class TestAzureAuthProvider:
         with pytest.raises(AzureCredentialParseError) as exc_info:
             await auth_provider._create_service_principal_credential({})
 
-        assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
+        assert exc_info.value.code == "INVALID_INPUT_CREDENTIAL_PARSE"
         # Empty credentials are caught by the "if not credentials" check
         assert "Credentials required for service principal authentication" in str(
             exc_info.value
@@ -199,7 +199,7 @@ class TestAzureAuthProvider:
             await auth_provider.create_credential(
                 auth_type="service_principal", credentials=None
             )
-        assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
+        assert exc_info.value.code == "INVALID_INPUT_CREDENTIAL_PARSE"
         assert "Credentials required for service principal authentication" in str(
             exc_info.value
         )
@@ -210,7 +210,7 @@ class TestAzureAuthProvider:
             await auth_provider.create_credential(
                 auth_type="service_principal", credentials={}
             )
-        assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
+        assert exc_info.value.code == "INVALID_INPUT_CREDENTIAL_PARSE"
         # falsy {} matches the same `if not credentials` branch
         assert "Credentials required for service principal authentication" in str(
             exc_info.value
@@ -229,7 +229,7 @@ class TestAzureAuthProvider:
                     "client_secret": "s",
                 },
             )
-        assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
+        assert exc_info.value.code == "INVALID_INPUT_CREDENTIAL_PARSE"
         assert "Only 'service_principal' authentication is supported" in str(
             exc_info.value
         )
@@ -267,7 +267,7 @@ class TestAzureAuthProvider:
                     "client_secret": "s",
                 },
             )
-        assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
+        assert exc_info.value.code == "INVALID_INPUT_CREDENTIAL_PARSE"
         assert "Invalid credential parameters" in str(exc_info.value)
 
     async def test_create_credential_wraps_type_error(self, auth_provider):
@@ -330,7 +330,7 @@ class TestAzureAuthProvider:
                     "client_secret": "s",
                 },
             )
-        assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
+        assert exc_info.value.code == "INVALID_INPUT_CREDENTIAL_PARSE"
         assert "Unexpected error" in str(exc_info.value)
 
     # ------------------------------------------------------------------
@@ -366,7 +366,7 @@ class TestAzureAuthProvider:
             await auth_provider._create_service_principal_credential(
                 {"tenant_id": "t", "client_id": "c", "client_secret": "s"}
             )
-        assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
+        assert exc_info.value.code == "INVALID_INPUT_CREDENTIAL_PARSE"
         assert "Invalid credential parameters" in str(exc_info.value)
 
     async def test_create_service_principal_run_in_thread_type_error(
@@ -416,7 +416,7 @@ class TestAzureAuthProvider:
             await auth_provider._create_service_principal_credential(
                 {"tenant_id": "t", "client_id": "c", "client_secret": "s"}
             )
-        assert exc_info.value.code == "INVALID_INPUT_AZURE_CREDENTIALS_PARSE"
+        assert exc_info.value.code == "INVALID_INPUT_CREDENTIAL_PARSE"
         assert "Unexpected error" in str(exc_info.value)
 
     # ------------------------------------------------------------------

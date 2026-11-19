@@ -13,6 +13,7 @@ from unittest import mock
 
 import pytest
 
+from application_sdk.clients.sql_errors import SqlClientConnectTimeoutError
 from application_sdk.errors.base import AppError
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.errors.leaves import (
@@ -42,6 +43,8 @@ from application_sdk.handler.contracts import (
     PreflightOutput,
     PreflightStatus,
 )
+from application_sdk.handler.source_probe_errors import SourceConnectTimeoutError
+from application_sdk.templates.sql_app_errors import SqlProbeTimeoutError
 
 _ALL_CATEGORIES = list(FailureCategory)
 
@@ -146,6 +149,38 @@ class TestThePolicy:
         self, category: FailureCategory
     ) -> None:
         assert not gate_blocks(PreflightGateMode.HARD, category)
+
+
+# Every leaf that reports "the source did not answer the connect in time". The
+# gate decides on the category, so a connect timeout must land in the same one
+# whichever path saw it (FND-4298). Before, the SQL client's was TIMEOUT, which
+# a hard gate never blocks on, while the network probe's was SOURCE_UNAVAILABLE.
+_CONNECT_TIMEOUT_LEAVES: list[type[AppError]] = [
+    SourceConnectTimeoutError,
+    SqlClientConnectTimeoutError,
+    SqlProbeTimeoutError,
+]
+
+
+class TestAConnectTimeoutIsOneFailure:
+    @pytest.mark.parametrize(
+        "leaf", _CONNECT_TIMEOUT_LEAVES, ids=lambda leaf: leaf.__name__
+    )
+    def test_every_path_reports_it_as_an_unreachable_source(
+        self, leaf: type[AppError]
+    ) -> None:
+        assert issubclass(leaf, SourceUnavailableError)
+        assert leaf.category is FailureCategory.SOURCE_UNAVAILABLE
+        assert leaf.code.startswith("SOURCE_UNAVAILABLE_")
+
+    @pytest.mark.parametrize(
+        "leaf", _CONNECT_TIMEOUT_LEAVES, ids=lambda leaf: leaf.__name__
+    )
+    def test_a_hard_gate_blocks_on_it_on_the_final_attempt(
+        self, leaf: type[AppError]
+    ) -> None:
+        assert gate_blocks(PreflightGateMode.HARD, leaf.category)
+        assert leaf.category in GATE_RETRIED_CATEGORIES
 
 
 class TestAHardVerdictBlocksOnItsCategory:

@@ -44,7 +44,7 @@ Example:
     ...     )
     ... except AzureCredentialParseError as e:
     ...     print(f"Authentication failed: {e}")
-    ...     # Output: Authentication failed: Missing required credential keys: client_id, client_secret
+    ...     # Output: Authentication failed: [AAF-CRD-003] Invalid credential parameters | ...
     >>>
     >>> # Unsupported authentication type
     >>> try:
@@ -54,7 +54,7 @@ Example:
     ...     )
     ... except AzureCredentialParseError as e:
     ...     print(f"Authentication failed: {e}")
-    ...     # Output: Authentication failed: Only 'service_principal' authentication is supported
+    ...     # Output: Authentication failed: [AAF-CRD-003] Only 'service_principal' authentication is supported
 """
 
 from typing import Any
