@@ -115,7 +115,7 @@ class TestEveryLiteralLogFieldIsExported:
         dropped: list[str] = []
         for path in sorted(_PACKAGE_ROOT.rglob("*.py")):
             relative = path.relative_to(_PACKAGE_ROOT).as_posix()
-            dropped.extend(_dropped_fields(path.read_text(), relative))
+            dropped.extend(_dropped_fields(path.read_text(encoding="utf-8"), relative))
         assert not dropped, (
             "These log fields are neither in _KNOWN_EXTRA_KEYS nor under a "
             "passthrough prefix, so they never reach OTLP. Allowlist them in "
