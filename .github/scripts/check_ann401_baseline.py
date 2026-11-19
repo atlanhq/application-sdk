@@ -16,10 +16,15 @@ with ``.github/scripts/ann401_baseline.json``:
 * a file's count BELOW its baseline also fails, asking for ``--update``. Slack
   left in the baseline would let a later ``Any`` in the same file through.
 
-The baseline is the only suppression: ruff runs with ``--ignore-noqa``, so a
-``# noqa: ANN401`` hides nothing, and ``test_check_ann401_baseline.py`` fails
-if ``pyproject.toml`` ignores ANN401 or sets a flake8-annotations option that
-would (``allow-star-arg-any``, ``ignore-fully-untyped``, ...).
+The baseline is the only suppression. ruff runs with ``--isolated``, so no
+configuration file is read: no ``ignore`` / ``extend-ignore``, no
+``per-file-ignores`` / ``extend-per-file-ignores``, no ``exclude``, no nested
+``ruff.toml``, and no flake8-annotations option (``allow-star-arg-any``) can
+hide a site. ``--ignore-noqa`` does the same for ``# noqa: ANN401``.
+
+The counts are per file, not per site: swapping one ``Any`` for another in the
+same file nets zero and passes. The ratchet stops a file from GROWING its
+count; review is what catches a like-for-like swap.
 
 Comparing against the PR's own baseline is not enough: a PR could add an
 ``Any`` and raise the baseline in the same change. So, given ``--base-sha``,
@@ -28,8 +33,10 @@ whose count RISES fails. A file renamed in the PR carries its base count to
 the new path. A base revision with no baseline (the PR that introduces it) is
 measured instead: ruff runs on the base tree in a temporary ``git worktree``.
 
-A run in which ruff reports no ANN401 at all fails rather than passes: a ruff
-that analysed nothing would otherwise match an emptied baseline.
+A run in which ruff reports no ANN401 is accepted only if ruff still reports
+the rule on a canary with a known ``Any`` signature, so a ruff that stopped
+reporting ANN401 cannot match an emptied baseline, while a fully paid-down
+tree can.
 
 Usage:
     python .github/scripts/check_ann401_baseline.py                  # check (local)
@@ -63,6 +70,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BASELINE_REL = ".github/scripts/ann401_baseline.json"
 SOURCE_DIR = "application_sdk"
 RULE = "ANN401"
+#: ``--isolated`` reads no config, so the target version is passed explicitly.
+#: Held equal to ``requires-python`` by the test suite.
+TARGET_VERSION = "py311"
+#: A signature ANN401 must flag twice (parameter and return).
+CANARY = "from typing import Any\n\n\ndef f(x: Any) -> Any:\n    return x\n"
 #: ruff over the package takes a few seconds; a hang must not hold the runner.
 RUFF_TIMEOUT_S = 300
 UPDATE_COMMAND = (
@@ -88,7 +100,7 @@ def _ruff_cmd() -> list[str]:
 def measure(tree: Path = REPO_ROOT) -> tuple[Counts, list[Violation]]:
     """ANN401 findings under ``tree/application_sdk``, counted per file.
 
-    Runs from ``tree`` so ruff reads that tree's own ``pyproject.toml``.
+    ``--isolated``: no config file can suppress, exclude or re-scope a finding.
     """
     try:
         proc = subprocess.run(
@@ -97,7 +109,9 @@ def measure(tree: Path = REPO_ROOT) -> tuple[Counts, list[Violation]]:
                 "check",
                 "--no-cache",
                 "--exit-zero",
+                "--isolated",
                 "--ignore-noqa",
+                f"--target-version={TARGET_VERSION}",
                 "--output-format=json",
                 f"--select={RULE}",
                 SOURCE_DIR,
@@ -138,6 +152,17 @@ def parse_report(stdout: str, tree: Path) -> tuple[Counts, list[Violation]]:
         )
     counts = Counter(file for file, _, _, _ in violations)
     return dict(sorted(counts.items())), sorted(violations)
+
+
+def ruff_reports_ann401(
+    measure_tree: Callable[[Path], tuple[Counts, list[Violation]]] = measure,
+) -> bool:
+    """Whether ruff, as this check runs it, flags a known ``Any`` signature."""
+    with tempfile.TemporaryDirectory(prefix="ann401-canary-") as tmp:
+        source = Path(tmp) / SOURCE_DIR
+        source.mkdir()
+        (source / "canary.py").write_text(CANARY, encoding="utf-8")
+        return measure_tree(Path(tmp))[0] == {f"{SOURCE_DIR}/canary.py": 2}
 
 
 def render_baseline(counts: Mapping[str, int]) -> str:
@@ -300,8 +325,10 @@ def main(
     except RuffRunError as exc:
         print(f"::error::{exc}")
         return 2
-    if not actual:
-        print(f"::error::ruff reported no {RULE} findings at all under {SOURCE_DIR}/")
+    if not actual and not ruff_reports_ann401(measure_tree):
+        print(
+            f"::error::ruff no longer reports {RULE}, even on a known `Any` signature"
+        )
         return 2
 
     if args.update:

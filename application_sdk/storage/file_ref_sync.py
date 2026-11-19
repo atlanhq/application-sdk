@@ -50,7 +50,7 @@ import os
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, overload
 
 from pydantic import BaseModel
 
@@ -71,8 +71,11 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-#: The shape of the tree a persist/materialize pass is given, and returns.
-_T = TypeVar("_T")
+#: A model a persist/materialize pass returns as the same class: a changed
+#: model is rebuilt with ``model_copy``, which keeps ``type(node)``. Containers
+#: are not covered: a list/tuple/dict subclass (a NamedTuple, say) comes back
+#: as the built-in, so only the model case promises the input's type.
+_ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 
 @dataclass(frozen=True)
@@ -311,13 +314,13 @@ def _materialize_key(ref: FileReference) -> str:
 
 
 async def _replace_refs(
-    data: _T,
+    data: object,
     store: ObjectStore,
     mode: str,
     output_path: str | None = None,
     *,
     upstream_store: ObjectStore | None = None,
-) -> _T:
+) -> object:
     """Replace FileReference instances in a data tree using concurrent execution.
 
     Uses a three-pass approach:
@@ -530,9 +533,21 @@ async def _replace_refs(
     return _scatter(data)
 
 
+@overload
 async def persist_file_refs(
-    store: ObjectStore, data: _T, output_path: str | None = None
-) -> _T:
+    store: ObjectStore, data: FileReference, output_path: str | None = None
+) -> FileReference: ...
+@overload
+async def persist_file_refs(
+    store: ObjectStore, data: _ModelT, output_path: str | None = None
+) -> _ModelT: ...
+@overload
+async def persist_file_refs(
+    store: ObjectStore, data: object, output_path: str | None = None
+) -> object: ...
+async def persist_file_refs(
+    store: ObjectStore, data: object, output_path: str | None = None
+) -> object:
     """Upload all ephemeral FileReferences in *data* to the store.
 
     Args:
@@ -550,9 +565,24 @@ async def persist_file_refs(
     return await _replace_refs(data, store, "persist", output_path=output_path)
 
 
+@overload
 async def materialize_file_refs(
-    store: ObjectStore, data: _T, *, upstream_store: ObjectStore | None = None
-) -> _T:
+    store: ObjectStore,
+    data: FileReference,
+    *,
+    upstream_store: ObjectStore | None = None,
+) -> FileReference: ...
+@overload
+async def materialize_file_refs(
+    store: ObjectStore, data: _ModelT, *, upstream_store: ObjectStore | None = None
+) -> _ModelT: ...
+@overload
+async def materialize_file_refs(
+    store: ObjectStore, data: object, *, upstream_store: ObjectStore | None = None
+) -> object: ...
+async def materialize_file_refs(
+    store: ObjectStore, data: object, *, upstream_store: ObjectStore | None = None
+) -> object:
     """Download all durable FileReferences in *data* to local temp files.
 
     Each ref is read from the store it names: *upstream_store* for

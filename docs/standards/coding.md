@@ -54,16 +54,20 @@ This document outlines the development standards for the Application SDK, includ
       (see [ci.md](ci.md)).
     - A value the function only passes on, stores or inspects with
       `isinstance`: `object`.
-    - A value returned in the shape it came in: a `TypeVar`
-      (`persist_file_refs(store, data: T) -> T`).
+    - A value returned as the same class it came in: a `TypeVar`, but only for
+      the cases the code really preserves. `persist_file_refs` rebuilds a
+      changed model with `model_copy` (same class) but a changed container as
+      the built-in, so it is overloaded: `data: M -> M` for a `BaseModel`,
+      `object -> object` otherwise.
     - A callable and its arguments, forwarded: `ParamSpec`
       (`run_in_thread(func: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T`).
     - `__exit__` / `__aexit__`: `type[BaseException] | None`,
       `BaseException | None`, `TracebackType | None`.
     - `**kwargs` forwarded to a typed API (pydantic's `__init_subclass__`): that
       API's own type (`Unpack[ConfigDict]`), not `object`, which it rejects.
-    - New code adds no site; paying one down means running
-      `check_ann401_baseline.py --update` in the same change.
+    - A file's count may not rise; paying one down means running
+      `check_ann401_baseline.py --update` in the same change. The count is per
+      file, so do not trade one `Any` for another in the same file.
 
 - **Testing Standards**
     - Testing standards are defined in [testing.md](testing.md)

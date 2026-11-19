@@ -258,11 +258,25 @@ uv run --frozen python .github/scripts/check_ann401_baseline.py           # chec
 uv run --frozen python .github/scripts/check_ann401_baseline.py --update  # lock in a reduction
 ```
 
-The baseline is the only suppression. ruff runs with `--ignore-noqa`, so a
-`# noqa: ANN401` hides nothing, and `test_check_ann401_baseline.py` fails if
-`pyproject.toml` ignores ANN401 or configures `flake8-annotations` (whose
-`allow-star-arg-any` would let `*args: Any` through). The `ann401-baseline`
-pre-commit hook runs the check on every change under `application_sdk/`.
+The baseline is the only suppression. ruff runs with `--isolated`, so it reads
+no config file: `ignore`, `extend-ignore`, `per-file-ignores`,
+`extend-per-file-ignores`, `exclude`, `extend-exclude`, a nested `ruff.toml` and
+`flake8-annotations.allow-star-arg-any` cannot hide a site. `--ignore-noqa` does
+the same for `# noqa: ANN401`. `test_check_ann401_baseline.py` writes each of
+those into a throwaway tree and asserts the sites are still counted. Because no
+config is read, the target version is passed explicitly and a test holds it to
+`requires-python`.
+
+The counts are per file, not per site. Swapping one `Any` for another in the
+same file leaves the count unchanged and passes; the ratchet stops a file's
+count from rising, and review is what catches a like-for-like swap.
+
+A tree with no ANN401 left passes: an empty measurement is accepted when ruff,
+run the same way, still flags a canary with a known `Any` signature. A ruff
+that stopped reporting the rule fails instead of matching an emptied baseline.
+
+The `ann401-baseline` pre-commit hook runs the check on every change under
+`application_sdk/`.
 
 ## An artifact upload retry must use a DIFFERENT artifact name
 

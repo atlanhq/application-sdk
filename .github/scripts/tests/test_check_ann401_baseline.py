@@ -2,8 +2,9 @@
 
 The comparison and base-revision logic run against stubs; ruff runs for real
 once against a throwaway tree, and once against this repo, so the committed
-baseline is held to the code it describes and a ruff that stopped reporting
-ANN401 fails here instead of matching an emptied baseline.
+baseline is held to the code it describes. Every way a ruff config can
+suppress a site is tried against a throwaway tree, to prove ``--isolated``
+ignores it.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
-from typing import Callable, Sequence, cast
+from typing import Callable, Sequence
 
 import pytest
 import yaml
@@ -25,9 +26,6 @@ import check_ann401_baseline as cab
 from check_pyright_baseline import BaseRevisionError
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-
-#: Every ruff selector that would switch ANN401 off if ignored.
-_ANN401_SELECTORS = {"ALL", "ANN", "ANN4", "ANN40", "ANN401"}
 
 _TYPED = "def f(x: int) -> int:\n    return x\n"
 _TWO_ANY = (
@@ -73,28 +71,52 @@ class TestRepoBaseline:
         text = (REPO_ROOT / cab.BASELINE_REL).read_text()
         assert text == cab.render_baseline(cab.parse_baseline(text))
 
-    def test_ruff_measures_something(self) -> None:
-        # An empty measurement would "match" an emptied baseline.
-        assert cab.measure()[0]
+    def test_target_version_is_requires_python(self) -> None:
+        # --isolated reads no config, so the floor is passed by hand.
+        project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+        floor = project["project"]["requires-python"]
+        assert floor == ">=3." + cab.TARGET_VERSION.removeprefix("py3")
+
+
+#: Every config-file route ruff has to switch ANN401 off for a file. Each is
+#: written into a throwaway tree; the check must still count both sites.
+_SUPPRESSING_CONFIGS = {
+    "ignore": '[tool.ruff.lint]\nignore = ["ANN401"]\n',
+    "extend-ignore": '[tool.ruff.lint]\nextend-ignore = ["ANN"]\n',
+    "per-file-ignores": (
+        '[tool.ruff.lint.per-file-ignores]\n"application_sdk/m.py" = ["ANN401"]\n'
+    ),
+    "extend-per-file-ignores": (
+        '[tool.ruff.lint.extend-per-file-ignores]\n"application_sdk/m.py" = ["ALL"]\n'
+    ),
+    "allow-star-arg-any": (
+        "[tool.ruff.lint.flake8-annotations]\nallow-star-arg-any = true\n"
+    ),
+    "exclude": '[tool.ruff]\nexclude = ["application_sdk"]\n',
+    "extend-exclude": '[tool.ruff]\nextend-exclude = ["application_sdk/m.py"]\n',
+}
+
+_STAR_ANY = (
+    "from typing import Any\n\n\ndef f(*a: Any, **k: Any) -> None:\n    return None\n"
+)
 
 
 class TestBaselineIsTheOnlySuppression:
     """``Done when``: the baseline file is the only way ANN401 is let through."""
 
-    def _lint(self) -> dict[str, object]:
-        doc = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
-        return doc["tool"]["ruff"]["lint"]
+    @pytest.mark.parametrize("setting", sorted(_SUPPRESSING_CONFIGS))
+    def test_no_root_config_hides_a_site(self, tmp_path: Path, setting: str) -> None:
+        (tmp_path / "pyproject.toml").write_text(_SUPPRESSING_CONFIGS[setting])
+        (tmp_path / cab.SOURCE_DIR).mkdir()
+        (tmp_path / cab.SOURCE_DIR / "m.py").write_text(_STAR_ANY)
+        assert cab.measure(tmp_path)[0] == {f"{cab.SOURCE_DIR}/m.py": 2}
 
-    def test_pyproject_does_not_ignore_ann401(self) -> None:
-        lint = self._lint()
-        ignored = cast("list[str]", lint.get("ignore", []))
-        per_file = cast("dict[str, list[str]]", lint.get("per-file-ignores", {}))
-        for codes in [ignored, *per_file.values()]:
-            assert not _ANN401_SELECTORS & set(codes), codes
-
-    def test_no_flake8_annotations_escape_hatch(self) -> None:
-        # allow-star-arg-any / ignore-fully-untyped would silence sites.
-        assert "flake8-annotations" not in self._lint()
+    def test_no_nested_config_hides_a_site(self, tmp_path: Path) -> None:
+        source = tmp_path / cab.SOURCE_DIR
+        source.mkdir()
+        (source / "ruff.toml").write_text('[lint]\nignore = ["ANN401"]\n')
+        (source / "m.py").write_text(_STAR_ANY)
+        assert cab.measure(tmp_path)[0] == {f"{cab.SOURCE_DIR}/m.py": 2}
 
     def test_noqa_comments_do_not_hide_a_site(self, tmp_path: Path) -> None:
         (tmp_path / cab.SOURCE_DIR).mkdir()
@@ -314,10 +336,26 @@ class TestMain:
         baseline.write_text(cab.render_baseline({"a.py": 2}))
         assert cab.main([], baseline, self._measure({"a.py": 1})) == 1
 
-    def test_nothing_measured_fails(self, tmp_path: Path) -> None:
+    def test_a_paid_down_tree_passes(self, tmp_path: Path) -> None:
+        # Nothing measured, and the canary proves ruff still reports ANN401:
+        # the ratchet has reached zero, which must not fail.
+        baseline = tmp_path / "b.json"
+        baseline.write_text("{}\n")
+
+        def fake(tree: Path) -> tuple[cab.Counts, list[cab.Violation]]:
+            if (tree / cab.SOURCE_DIR / "canary.py").exists():
+                return {f"{cab.SOURCE_DIR}/canary.py": 2}, []
+            return {}, []
+
+        assert cab.main([], baseline, fake) == 0
+
+    def test_ruff_that_reports_nothing_fails(self, tmp_path: Path) -> None:
         baseline = tmp_path / "b.json"
         baseline.write_text("{}\n")
         assert cab.main([], baseline, self._measure({})) == 2
+
+    def test_canary_is_flagged_by_real_ruff(self) -> None:
+        assert cab.ruff_reports_ann401()
 
     def test_update_writes_the_measurement(self, tmp_path: Path) -> None:
         baseline = tmp_path / "b.json"
