@@ -14,6 +14,7 @@ import orjson
 import pytest
 
 import application_sdk.outputs as outputs_module
+from application_sdk.app.registry import _running_app_name
 from application_sdk.contracts.base import Output, OutputStatus
 from application_sdk.execution._temporal.interceptors.outputs import (
     OutputActivityInboundInterceptor,
@@ -810,3 +811,82 @@ class TestSkippedRecordsThroughInterceptors:
         with pytest.raises(ValueError, match="creator rejects"):
             await self._run_activity(transform)
         assert uploads == {}
+
+
+class TestSkippedPartsUseTheRunningApp:
+    """FND-4921: a skipped-records part uploads under the App that ran the task.
+
+    The task wrapper records the App's name in ``_running_app_name`` inside the
+    activity body; the part is persisted after the body returns. With no single
+    registered App and ``ATLAN_APPLICATION_NAME`` naming neither, the part must
+    still land under the App's run prefix, which is where
+    ``merge_skipped_records`` lists. Concurrent activities keep their own names.
+    """
+
+    @pytest.fixture(autouse=True)
+    def cleanup_state(self):
+        current_outputs.set(None)
+        yield
+        current_outputs.set(None)
+
+    @pytest.fixture
+    def uploaded(self, tmp_path):
+        keys: list[str] = []
+
+        async def upload_file(key, _local_path):
+            keys.append(key)
+
+        with (
+            mock.patch("application_sdk.storage.upload_file", upload_file),
+            mock.patch(
+                "application_sdk.app.registry.AppRegistry.list_apps", return_value=[]
+            ),
+            mock.patch("application_sdk.constants.APPLICATION_NAME", "env-app"),
+            mock.patch(
+                "application_sdk.execution._temporal.activity_utils.get_workflow_id",
+                return_value="wf-1",
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.activity_utils.get_workflow_run_id",
+                return_value="run-1",
+            ),
+            mock.patch(
+                "application_sdk.outputs.skipped._new_sink",
+                side_effect=lambda: SkippedRecordSink(
+                    tmp_path / f"{id(object())}.ndjson"
+                ),
+            ),
+        ):
+            yield keys
+
+    @staticmethod
+    async def _run_activity(app_name: str) -> None:
+        async def body(_input):
+            _running_app_name.set(app_name)  # what the task wrapper does
+            await asyncio.sleep(0)  # let a concurrent activity interleave
+            await skip_record(
+                {"name": "t", "schema": ""},
+                SkipReason.BLANK_IDENTITY,
+                record_id="t",
+                entity_type="Table",
+            )
+            return {"status": "success"}
+
+        nxt = mock.AsyncMock()
+        nxt.execute_activity = mock.AsyncMock(side_effect=body)
+        await OutputActivityInboundInterceptor(nxt).execute_activity(
+            MockExecuteActivityInput()
+        )
+
+    async def test_part_uploads_under_the_app_not_the_env_name(self, uploaded):
+        await self._run_activity("my-app")
+
+        assert len(uploaded) == 1
+        assert uploaded[0].startswith("artifacts/apps/my-app/workflows/wf-1/run-1/")
+        # Scoped to the activity: nothing leaks to the caller once it returns.
+        assert _running_app_name.get() == ""
+
+    async def test_concurrent_activities_keep_their_own_app(self, uploaded):
+        await asyncio.gather(*(self._run_activity(n) for n in ("app-a", "app-b")))
+
+        assert sorted(k.split("/")[2] for k in uploaded) == ["app-a", "app-b"]

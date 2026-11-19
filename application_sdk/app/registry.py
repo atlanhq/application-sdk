@@ -3,6 +3,7 @@
 import os
 import types
 from collections.abc import Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar
 
@@ -25,6 +26,14 @@ from application_sdk.errors import (
     ErrorCode,
 )
 from application_sdk.errors.leaves import InvalidInputError
+
+#: SDK-internal: the registered name of the App whose task the current activity
+#: runs. Set by the task wrapper (``create_activity_from_task``) and scoped to
+#: the activity by ``OutputActivityInboundInterceptor``, so every run-scoped
+#: path built in the activity (``build_output_path``, ``run_temp_dir``) resolves
+#: to the App that owns the run, without the name being threaded through public
+#: signatures. Empty outside an activity (workflow code, the handler, tests).
+_running_app_name: ContextVar[str] = ContextVar("running_app_name", default="")
 
 
 @dataclass(frozen=True)
@@ -357,9 +366,11 @@ class AppRegistry:
         Resolution order:
         1. ``prefer`` — caller-supplied name (e.g. ``self._app_name`` from an
            ``App`` instance that already owns its registered identity).
-        2. Registry — when exactly one app is registered, its name is
+        2. The App whose task the current activity runs, as the task wrapper
+           recorded it in ``_running_app_name``.
+        3. Registry — when exactly one app is registered, its name is
            unambiguous and more reliable than an env var.
-        3. ``APPLICATION_NAME`` env var (``ATLAN_APPLICATION_NAME``) — last
+        4. ``APPLICATION_NAME`` env var (``ATLAN_APPLICATION_NAME``) — last
            resort; defaults to ``"default"`` when unset.
 
         Args:
@@ -370,6 +381,9 @@ class AppRegistry:
         """
         if prefer:
             return prefer
+        running = _running_app_name.get()
+        if running:
+            return running
         apps = cls.get_instance().list_apps()
         if len(apps) == 1:
             return apps[0]

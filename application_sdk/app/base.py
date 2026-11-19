@@ -70,6 +70,7 @@ from application_sdk.constants import (
     ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
     COMMIT_SHA,
     LOCAL_WORKFLOW_ID,
+    _run_prefix,
 )
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
@@ -1818,7 +1819,9 @@ class App(ABC):
                 (single, "upstream" if single is upstream else "deployment", True)
             ]
 
-        run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.workflow_id}/{self.context.run_id}"
+        run_prefix = _run_prefix(
+            self._app_name, self.context.workflow_id, self.context.run_id
+        )
         app_prefix = input.tier.upload_prefix(
             run_prefix=run_prefix, app_name=self._app_name
         )

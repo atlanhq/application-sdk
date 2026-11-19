@@ -3635,3 +3635,14 @@ def test_legacy_credential_ref_reexport_is_a_deprecated_alias(module_name: str) 
     module = importlib.import_module(module_name)
     with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
         assert module.legacy_credential_ref is ref.legacy_credential_ref
+
+
+def test_output_template_reexport_is_a_deprecated_alias() -> None:
+    """FND-4921 dropped the import; the name stays importable, warning, until v4.0.0."""
+    from application_sdk import constants
+    from application_sdk.templates import sql_app
+
+    assert "WORKFLOW_OUTPUT_PATH_TEMPLATE" not in vars(sql_app)
+    with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+        value = sql_app.WORKFLOW_OUTPUT_PATH_TEMPLATE
+    assert value == constants.WORKFLOW_OUTPUT_PATH_TEMPLATE

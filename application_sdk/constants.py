@@ -196,6 +196,26 @@ WORKFLOW_OUTPUT_PATH_TEMPLATE = (
     "artifacts/apps/{application_name}/workflows/{workflow_id}/{run_id}"
 )
 
+
+def _run_prefix(app_name: str, workflow_id: str, run_id: str) -> str:
+    """SDK-internal: the object-store prefix one workflow run's artifacts live under.
+
+    ``WORKFLOW_OUTPUT_PATH_TEMPLATE`` filled in, e.g.
+    ``artifacts/apps/my-app/workflows/wf-123/run-456``. The one place the
+    run-prefix layout is composed, so uploads, persisted refs, cleanup and the
+    skipped-records merge cannot drift apart. Private: the layout is the SDK's
+    to change; apps compose run-scoped paths from ``input.workflow_id``.
+
+    Args:
+        app_name: The registered name of the App that owns the run.
+        workflow_id: The run's workflow ID.
+        run_id: The run's Temporal run ID.
+    """
+    return WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
+        application_name=app_name, workflow_id=workflow_id, run_id=run_id
+    )
+
+
 # Temporary Path (used to store intermediate files)
 TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
 

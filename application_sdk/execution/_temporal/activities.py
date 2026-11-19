@@ -21,7 +21,7 @@ from temporalio import activity
 from temporalio.exceptions import FailureError
 
 from application_sdk._runtime.progress import ProgressTracker, bind_progress_tracker
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import AppRegistry, TaskRegistry, _running_app_name
 from application_sdk.app.task import TaskMetadata
 from application_sdk.common.build_identity import build_identity
 from application_sdk.constants import LOCAL_WORKFLOW_ID, TRACKED_FILE_REFS_KEY
@@ -493,6 +493,12 @@ def create_activity_from_task(
             app_context._upstream_storage = infra.upstream_storage
 
         app_instance._context = app_context
+
+        # Run-scoped paths built anywhere in this activity (build_output_path,
+        # run_temp_dir) resolve to this App. Not reset here: the output
+        # interceptor persists skipped records after this wrapper returns, and
+        # owns the activity-wide scope (it resets the name with its token).
+        _running_app_name.set(context.app_name)
 
         # Create heartbeat controller based on configuration
         carried_details = tuple(context.evicted_heartbeat_details or ())
