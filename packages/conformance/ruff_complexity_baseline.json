@@ -288,9 +288,6 @@
   "conformance/suite/checks/security/_s002.py": {
     "C901": 1
   },
-  "conformance/suite/runner.py": {
-    "C901": 1
-  },
   "conformance/tools/generate_contract_ledger.py": {
     "C901": 1
   },
