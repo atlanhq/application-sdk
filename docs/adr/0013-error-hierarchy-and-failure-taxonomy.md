@@ -121,6 +121,29 @@ locus varies: a source network timeout is USER-fixable; an internal Temporal
 deadline is PLATFORM-routed. Subclasses override `audience` when the locus is
 known.
 
+**A timeout waiting on the source is `SOURCE_UNAVAILABLE`, not `TIMEOUT`.**
+When the clock ran out waiting for the customer's source to answer a connect,
+a login or a probe, raise a `SourceUnavailableError` leaf. A source that never
+answers cannot be told apart from one that is down, and the hard preflight
+gate decides on the category: it retries `SOURCE_UNAVAILABLE` and blocks on it
+at the final attempt, but never blocks on `TIMEOUT`. `AppTimeoutError` is for a
+budget that says nothing about the source: an activity deadline, a heartbeat,
+a stalled task. The network probe (`SourceConnectTimeoutError`), the SQL client
+(`SqlClientConnectTimeoutError`) and the SQL auth-cache prime
+(`SqlProbeTimeoutError`) all follow this, so one outage gets one gate outcome
+whichever path saw it (FND-4298). Codes stay per path, so a consumer can still
+tell which layer timed out.
+
+**Every SDK exception is an `AppError`.** A class outside the hierarchy has no
+category, code or audience, so every boundary routes it as an untyped crash.
+`tests/unit/errors/test_app_error_coverage.py` enforces this for every
+exception class in `application_sdk` outside the `testing` package, with a
+short allowlist of roots that cannot be one: the deprecated v2 `AtlanError`
+tree, the Temporal `ApplicationError` subclass, and control-flow signals that
+never escape (`RecordSkipped`, two private ones). When a builtin base is part
+of a contract, keep it as a second base (`InvalidInputValueError`,
+`UnserializableValue`) rather than leaving the class out.
+
 The constant `WORKER_EVICTED_TYPE = "WorkerEvicted"` is the Temporal wire type
 string used for worker-pod-termination failures. When `asyncio.CancelledError`
 arrives inside an activity while the process-wide worker-shutdown flag is set
@@ -252,6 +275,12 @@ the MRO, so its generated keyword-only `__init__` would otherwise win. And the
 Symbol Removal Check reads `__init__` signatures from the class body.
 `tests/unit/errors/test_base.py` and
 `tests/unit/storage/test_storage_failure_evidence.py` enforce both.
+
+A client's credential errors join the `CredentialError` family rather than
+subclassing `AuthError` or `InvalidInputError` directly, so `except
+CredentialError:` catches every credential failure. A parse failure subclasses
+`CredentialParseError` and carries its code, `INVALID_INPUT_CREDENTIAL_PARSE`:
+the SQL and Azure clients each had their own before FND-4298.
 
 The `CredentialError`/`StorageError`/`SecretStoreError` families are
 first-class members of the hierarchy — they do not emit `DeprecationWarning`

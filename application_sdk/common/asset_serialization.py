@@ -59,8 +59,9 @@ is simply its first caller.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
 import orjson
 
@@ -78,6 +79,7 @@ from application_sdk.common.last_sync import (
     LastSyncStampable,
     set_last_sync_details_on_asset,
 )
+from application_sdk.errors.leaves import InternalError
 
 __all__ = [
     "NestedBytesAsset",
@@ -122,7 +124,8 @@ class ModelDumpAsset(Protocol):
     def model_dump(self) -> dict[str, Any]: ...
 
 
-class UnserializableValue(TypeError):
+@dataclass(kw_only=True)
+class UnserializableValue(InternalError, TypeError):
     """A nested value ``orjson_default`` cannot render, naming its type.
 
     A ``TypeError`` because that is what orjson's ``default=`` protocol
@@ -130,11 +133,19 @@ class UnserializableValue(TypeError):
     swallowed or re-raised as something less useful. The subclass exists so
     :func:`entity_bytes` can re-raise it as the module's own typed error with
     the *offending value's* type rather than the mapper result's, which for a
-    dict is the uninformative ``dict``.
+    dict is the uninformative ``dict``. Also an :class:`InternalError`, like
+    every SDK exception (FND-4298); ``TypeError`` stays in the bases so the
+    protocol, and any caller catching ``TypeError``, keeps working.
     """
 
+    code: ClassVar[str] = "INTERNAL_UNSERIALIZABLE_VALUE"
+    type_name: str = ""
+
+    # Intentional: dataclass fields define the wire-evidence schema; custom __init__ keeps the positional type_name signature callers use.
     def __init__(self, type_name: str) -> None:
-        super().__init__(f"Object of type {type_name} is not JSON-serializable")
+        InternalError.__init__(
+            self, message=f"Object of type {type_name} is not JSON-serializable"
+        )
         self.type_name = type_name
 
 
@@ -156,10 +167,8 @@ def orjson_default(obj: Any) -> Any:
         return float(obj)
     if isinstance(obj, (bytes, bytearray)):
         return obj.decode("utf-8", errors="replace")
-    # conformance: ignore[E012] orjson default= protocol contractually requires TypeError to signal non-serialisable; replacing with AppError would break serialisation
-    raise UnserializableValue(  # orjson default= protocol requires TypeError to signal non-serializable
-        type(obj).__name__
-    )
+    # A TypeError as well as an AppError: orjson's default= protocol requires it.
+    raise UnserializableValue(type(obj).__name__)
 
 
 def _set_connection_name(asset: object, connection_name: str) -> None:

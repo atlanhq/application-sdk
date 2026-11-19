@@ -177,7 +177,10 @@ _EXTRACT_BATCH_SIZE: int = 10_000
 #: rebuild the typed error on the far side of the activity boundary, where only
 #: the ``FailureDetails`` envelope survives. The base ``TIMEOUT`` code is
 #: accepted alongside the probe-specific one so a verdict from any other
-#: producer still rebuilds as a timeout rather than degrading to internal.
+#: producer still rebuilds as a timeout rather than degrading to internal. A
+#: verdict recorded before FND-4298 carries ``TIMEOUT_SQL_PROBE``, which has no
+#: leaf any more; it rebuilds through ``_EnvelopeError`` with the category the
+#: envelope recorded.
 _PROBE_FAILURE_LEAVES: dict[str, type[AppError]] = {
     AuthError.code: AuthError,
     SqlProbeTimeoutError.code: SqlProbeTimeoutError,
@@ -840,10 +843,10 @@ class SqlApp(App):
         - ``SqlProbeTimeoutError`` for probe timeouts (``TimeoutError`` /
           ``asyncio.TimeoutError`` / message contains ``timed out``, and the
           ODBC login-timeout shape ``HYT00`` / ``login timeout`` /
-          ``timeout expired``). It overrides ``AppTimeoutError``'s
-          ``APP_OWNER`` default to USER: the only timeouts that can reach here
-          are the driver's and the socket's, so the clock always ran out
-          waiting for the customer's source.
+          ``timeout expired``). A ``SourceUnavailableError`` (USER): the
+          only timeouts that can reach here are the driver's and the
+          socket's, so the clock always ran out waiting for the customer's
+          source.
         - ``SourceUnavailableError`` for network / DNS / TLS /
           connection-refused failures — the customer-owned source is
           presumed reachable but didn't respond cleanly, so the failure

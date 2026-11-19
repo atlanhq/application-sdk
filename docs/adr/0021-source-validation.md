@@ -160,7 +160,7 @@ declarations.
 | `sourceTcp` | runtime | `SOURCE_UNAVAILABLE_TCP_REFUSED` / `_TIMEOUT` / `_UNREACHABLE` | ≤5s, no credential | generic |
 | `sourceTls` | runtime | `PRECONDITION_SOURCE_TLS_CERTIFICATE`, `PRECONDITION_SOURCE_TLS_HANDSHAKE`, `SOURCE_UNAVAILABLE_TLS_TIMEOUT` | ≤10s, no credential | generic for `DIRECT`; dialect hook for `NEGOTIATED` |
 | TLS never disabled | conformance S003 | — | static | generic |
-| `sourceCredentialFormat` | runtime, before any network I/O | `INVALID_INPUT_CREDENTIALS_PARSE` (exists) | no I/O | generic for `BaseSQLClient`; per app otherwise |
+| `sourceCredentialFormat` | runtime, before any network I/O | `INVALID_INPUT_CREDENTIAL_PARSE` (exists) | no I/O | generic for `BaseSQLClient`; per app otherwise |
 | `sourceAuth` | runtime | `AUTH`, plus dialect subcodes for expired / locked / MFA-required | one connect | generic, dialect classifier |
 | `sourceIdentity` | runtime | `PRECONDITION` | one query | dialect |
 | `sourceQuery` | runtime | `SOURCE_UNAVAILABLE`, `TIMEOUT` | one statement | generic |
@@ -178,7 +178,9 @@ Notes on specific checks:
   timeout or server failure is `SOURCE_UNAVAILABLE` and retried, the same split the gate makes for any
   source fault (FND-3774).
 * **TCP.** A connect timeout stays `SOURCE_UNAVAILABLE` rather than `TIMEOUT`. A firewall dropping
-  packets cannot be told apart from a transient outage, and `TIMEOUT` never blocks.
+  packets cannot be told apart from a transient outage, and `TIMEOUT` never blocks. The SQL client's
+  connect timeout follows the same rule (FND-4298, ADR-0013), so the gate treats one outage the same
+  whichever path saw it.
 * **Certificate expiry and volume estimate.** Both need an advisory severity that `PreflightCheck`
   lacks today. A failed row would block a working source. They wait for that field.
 
@@ -268,7 +270,8 @@ matters, and it puts a customer host into a second system. **Rejected.**
 ## Follow-ups
 
 * `BaseSQLClient.load` wraps every failure as AUTH. Classify by root cause, and route parse errors to
-  `INVALID_INPUT_CREDENTIALS_PARSE`.
+  `INVALID_INPUT_CREDENTIAL_PARSE` (the SQL client's `INVALID_INPUT_CREDENTIALS_PARSE` merged into it in
+  FND-4298).
 * An advisory severity on `PreflightCheck`, so a row can warn without failing.
 * A connection-config model for proxies and tunnels, so their reachability has something to read.
 

@@ -11,10 +11,13 @@ extra, and importing this module (which every worker does) must not load it.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Protocol
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 from urllib.parse import unquote
 
 import orjson
+
+from application_sdk.errors.leaves import DataIntegrityError, UnimplementedError
 
 if TYPE_CHECKING:
     from pyarrow.parquet import ParquetFile
@@ -24,12 +27,19 @@ if TYPE_CHECKING:
 PARQUET_BATCH_ROWS = 10_000
 
 
-class ParquetUnavailableError(Exception):
+@dataclass(kw_only=True)
+class ParquetUnavailableError(UnimplementedError):
     """pyarrow is not installed on this worker, so parquet cannot be read."""
 
+    code: ClassVar[str] = "UNIMPLEMENTED_STORE_ASSERT_PARQUET"
+    message: str = "parquet checks need pyarrow, which this app does not install"
 
-class MalformedRecordsError(Exception):
+
+@dataclass(kw_only=True)
+class MalformedRecordsError(DataIntegrityError):
     """A file's contents are not records in the declared format."""
+
+    code: ClassVar[str] = "DATA_INTEGRITY_STORE_ASSERT_MALFORMED_RECORDS"
 
 
 class Condition(Protocol):
@@ -155,9 +165,9 @@ def count_jsonl(
         try:
             record = orjson.loads(line)
         except orjson.JSONDecodeError as exc:
-            raise MalformedRecordsError("a line is not valid JSON") from exc
+            raise MalformedRecordsError(message="a line is not valid JSON") from exc
         if not isinstance(record, dict):
-            raise MalformedRecordsError("a line is not a JSON object")
+            raise MalformedRecordsError(message="a line is not a JSON object")
         scanned += 1
         matched += record_matches(record, conditions, partitions)
     return scanned, matched
@@ -180,17 +190,17 @@ def count_parquet(
         import pyarrow as pa  # noqa: PLC0415 — optional extra; see module docstring
         import pyarrow.parquet as pq  # noqa: PLC0415
     except ImportError as exc:
-        raise ParquetUnavailableError from exc
+        raise ParquetUnavailableError() from exc
     try:
         parquet_file = pq.ParquetFile(pa.BufferReader(data))
     except (pa.ArrowException, OSError) as exc:
-        raise MalformedRecordsError("not a parquet file") from exc
+        raise MalformedRecordsError(message="not a parquet file") from exc
     # A readable footer says nothing about the pages: a corrupt or truncated
     # one only fails when its batch is decoded.
     try:
         return _count_parquet_rows(parquet_file, conditions, partitions)
     except (pa.ArrowException, OSError) as exc:
-        raise MalformedRecordsError("a data page could not be decoded") from exc
+        raise MalformedRecordsError(message="a data page could not be decoded") from exc
 
 
 def _count_parquet_rows(
