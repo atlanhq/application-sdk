@@ -354,12 +354,16 @@ options:
                               value) to also force-update renovate.json.
                               true  — hard gate: conformance blocks on violations,
                                       Renovate auto-merges when CI is green.
-                              false — soft/observe: conformance tracks without blocking,
-                                      Renovate raises PRs but humans must merge.
+                              false — soft/observe: conformance tracks the existing
+                                      backlog without blocking on it (a finding a PR
+                                      introduces still fails that PR), Renovate raises
+                                      PRs but humans must merge.
   --conformance-blocking true|false
-                              whether conformance findings block CI (conformance.yaml's
-                              exit-zero). Overrides --enforce for this lever alone;
-                              omit to take the --enforce value (explicit or detected).
+                              whether the repo's EXISTING conformance findings block
+                              CI (conformance.yaml's exit-zero). A blocking finding
+                              a pull request introduces fails that PR either way.
+                              Overrides --enforce for this lever alone; omit to take
+                              the --enforce value (explicit or detected).
   --renovate-automerge true|false
                               whether Renovate merges its own PRs on green
                               (renovate.json). Overrides --enforce for this lever

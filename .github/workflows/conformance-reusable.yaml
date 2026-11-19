@@ -410,6 +410,24 @@ jobs:
         ${{ (github.event_name == 'pull_request' && github.event.pull_request.base.sha)
         || (github.event_name == 'merge_group' && github.event.merge_group.base_sha)
         || '' }}
+      # Soft mode (`exit-zero: true`, which most callers render) no longer
+      # covers what a pull request ADDS. On pull_request and merge_group
+      # runs `detect` reads this as `--gate-introduced`: a blocking finding
+      # the change introduces fails the run even under `--exit-zero`, while
+      # the base's backlog, warnings, and a base that could not be compared
+      # stay excused. Push, schedule and dispatch leave it unset, so soft
+      # mode still keeps a repo with backlog from reddening its default
+      # branch. Enforcement arrives per step with the `detect` that runs
+      # it: one too old to know the variable (the dependency series runs
+      # the caller's locked version) keeps plain soft mode until its lock
+      # moves, so no ordering between this file and a caller's bump can
+      # fail a PR for findings it did not add.
+      # Escape hatch: a repository variable CONFORMANCE_SOFT_PRS=true keeps
+      # the old behaviour for that repo. A variable, not a workflow input,
+      # so a pull request cannot switch its own gate off.
+      CONFORMANCE_GATE_INTRODUCED: >-
+        ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+        && vars.CONFORMANCE_SOFT_PRS != 'true' }}
     steps:
       # Full history only where the ledger guard runs (it diffs against
       # origin/main); push-to-main skips the guard, so it keeps the shallow
