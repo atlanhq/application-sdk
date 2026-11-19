@@ -40,7 +40,7 @@ from application_sdk.contracts.types_errors import RunPrefixRequiredError
 from application_sdk.credentials.ref import CredentialRef
 
 if TYPE_CHECKING:
-    from pyatlan_v9.model.assets import Asset, Connection
+    from pyatlan_v9.model.assets import Connection
 
 T = TypeVar("T")
 K = TypeVar("K")
@@ -787,21 +787,21 @@ class ConnectionRef(BaseModel, frozen=True):
 
         return ConnectionRef.model_validate(to_atlas_format(conn))
 
-    def to_connection(self) -> Asset:
+    def to_connection(self) -> Connection:
         """Convert back to a pyatlan_v9 Connection (msgspec.Struct).
 
-        ``model_dump(by_alias=True)`` produces the nested Atlas API shape
-        ``{"typeName": ..., "attributes": {...}}``; ``from_atlas_format``
-        flattens that back into the pyatlan_v9 struct.
+        ``model_dump_json(by_alias=True)`` produces the nested Atlas API shape
+        ``{"typeName": ..., "attributes": {...}}``, which
+        ``Connection.from_json`` flattens into the struct.
+
+        Always builds a ``Connection``: a ref whose ``type_name`` names some
+        other asset type is coerced to one.
 
         Returns:
-            The pyatlan_v9 asset ``type_name`` names: a ``Connection`` for a
-            ref built by ``from_connection`` or left at its default.
+            A pyatlan_v9 Connection msgspec.Struct instance.
         """
-        from pyatlan_v9.model.transform import (  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored module not always available)
-            from_atlas_format,
+        from pyatlan_v9.model.assets import (  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored module not always available)
+            Connection,
         )
 
-        # Asset, not Connection: from_atlas_format builds the class the
-        # serialised typeName names, and type_name is a free string here.
-        return from_atlas_format(self.model_dump(by_alias=True))
+        return Connection.from_json(self.model_dump_json(by_alias=True))

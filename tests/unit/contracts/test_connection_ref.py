@@ -4,7 +4,7 @@ Covers:
 - Alias deserialization from AE wire format (camelCase → snake_case)
 - model_dump(by_alias=True) produces the correct AE wire shape
 - from_connection(): pyatlan_v9 flat struct → ConnectionRef via to_atlas_format
-- to_connection(): ConnectionRef → pyatlan_v9 flat struct via from_atlas_format
+- to_connection(): ConnectionRef → pyatlan_v9 Connection via Connection.from_json
 - Round-trip: from_connection(conn).to_connection() preserves field values
 - extra="allow" on ConnectionRef preserves unknown top-level AE fields
 - populate_by_name=True accepts both snake_case and camelCase on construction
@@ -17,7 +17,7 @@ from typing import Any
 import msgspec
 import orjson
 import pytest
-from pyatlan_v9.model.transform import get_type, to_atlas_format
+from pyatlan_v9.model.transform import from_atlas_format, get_type, to_atlas_format
 from pydantic import ValidationError
 
 from application_sdk.contracts.types import (
@@ -542,12 +542,46 @@ class TestToConnection:
         conn = ref.to_connection()
         assert set(conn.admin_users) == {"alice", "bob"}
 
-    def test_returns_asset_instance(self) -> None:
-        from pyatlan_v9.model.assets.asset import Asset
+    def test_returns_connection_instance(self) -> None:
+        from pyatlan_v9.model.assets import Connection
 
         ref = ConnectionRef(type_name="Connection")
+        assert isinstance(ref.to_connection(), Connection)
+
+    def test_matches_the_typename_dispatch_it_replaced(self) -> None:
+        # to_connection used from_atlas_format, which dispatches on typeName.
+        # For a Connection ref the struct must be byte-identical, including
+        # guid, admin lists, allowQuery and an unknown extra field.
+        ref = ConnectionRef.model_validate(
+            {
+                "typeName": "Connection",
+                "guid": "11111111-2222-3333-4444-555555555555",
+                "unknownTopLevel": "kept",
+                "attributes": {
+                    "qualifiedName": "default/sf/1",
+                    "name": "sf-conn",
+                    "adminUsers": ["alice"],
+                    "adminGroups": ["data-platform"],
+                    "adminRoles": [],
+                    "allowQuery": True,
+                },
+            }
+        )
+        expected = from_atlas_format(ref.model_dump(by_alias=True))
+        assert ref.to_connection().to_json() == expected.to_json()
+
+    def test_non_connection_type_name_is_coerced(self) -> None:
+        # The return type is Connection, so another typeName cannot leak
+        # through as a different asset class.
+        from pyatlan_v9.model.assets import Connection
+
+        ref = ConnectionRef.model_validate(
+            {"typeName": "Table", "attributes": {"qualifiedName": "default/sf/1"}}
+        )
         conn = ref.to_connection()
-        assert isinstance(conn, Asset)
+        assert type(conn) is Connection
+        assert conn.type_name == "Connection"
+        assert conn.qualified_name == "default/sf/1"
 
 
 # ---------------------------------------------------------------------------
