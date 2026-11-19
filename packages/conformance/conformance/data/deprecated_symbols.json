@@ -919,6 +919,15 @@
       "symbol": "RedisLockError"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal.activities.get_activity_options is deprecated and will be removed in v4.0.0: nothing in the SDK calls it. Declare activity options on @task(...) instead; the App builds the options it hands Temporal when it registers the task.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.activities",
+      "removal_version": "4.0.0",
+      "symbol": "get_activity_options"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "TEMPORARY_PATH is deprecated; use application_sdk.constants.TEMPORARY_PATH \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",

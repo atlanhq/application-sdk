@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from temporalio import activity
 from temporalio.exceptions import FailureError
+from typing_extensions import deprecated
 
 from application_sdk._runtime.progress import ProgressTracker, bind_progress_tracker
 from application_sdk.app.registry import AppRegistry, TaskRegistry, _running_app_name
@@ -920,8 +921,19 @@ def get_all_task_activities() -> list[Callable[..., Any]]:
     return activities
 
 
+@deprecated(
+    "application_sdk.execution._temporal.activities.get_activity_options is "
+    "deprecated and will be removed in v4.0.0: nothing in the SDK calls it. "
+    "Declare activity options on @task(...) instead; the App builds the "
+    "options it hands Temporal when it registers the task."
+)
 def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
     """Get Temporal activity options from task metadata.
+
+    .. deprecated:: 3.59
+        Not on any dispatch path: a ``@task`` method's options are built by
+        ``app.base._create_task_activity_wrapper``. Declare them on
+        ``@task(...)``. Will be removed in v4.0.0.
 
     Args:
         task_metadata: The task metadata.
@@ -931,37 +943,23 @@ def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
         ``schedule_to_close_timeout`` only when the task declares a ceiling on
         its retry product — omitted, as before, when it does not.
     """
-    from temporalio.common import (  # noqa: PLC0415 — cold path: only used in retry policy reconstruction
-        RetryPolicy as TemporalRetryPolicy,
-    )
-
     from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + retry imports errors transitively
-        _with_worker_evicted_non_retryable,
+        RetryPolicy,
+        _to_temporal_retry_policy,
         resolve_activity_time_bounds,
     )
 
-    if task_metadata.retry_policy is not None:
-        rp = task_metadata.retry_policy
-        retry_policy = TemporalRetryPolicy(
-            maximum_attempts=rp.max_attempts,
-            initial_interval=rp.initial_interval,
-            maximum_interval=rp.max_interval,
-            backoff_coefficient=rp.backoff_coefficient,
-            non_retryable_error_types=_with_worker_evicted_non_retryable(
-                list(rp.non_retryable_errors)
-            ),
-        )
-    else:
-        retry_policy = TemporalRetryPolicy(
-            maximum_attempts=task_metadata.retry_max_attempts,
+    retry_policy = _to_temporal_retry_policy(
+        task_metadata.retry_policy
+        if task_metadata.retry_policy is not None
+        else RetryPolicy(
+            max_attempts=task_metadata.retry_max_attempts,
             initial_interval=timedelta(
                 seconds=task_metadata.retry_initial_interval_seconds
             ),
-            maximum_interval=timedelta(
-                seconds=task_metadata.retry_max_interval_seconds
-            ),
-            non_retryable_error_types=_with_worker_evicted_non_retryable([]),
+            max_interval=timedelta(seconds=task_metadata.retry_max_interval_seconds),
         )
+    )
 
     start_to_close, schedule_to_close = resolve_activity_time_bounds(
         task_metadata.timeout_seconds, task_metadata.schedule_to_close_seconds
