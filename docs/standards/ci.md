@@ -235,6 +235,49 @@ The file is both a pytest module (the package's own test run) and a script (the
 needs only ruff, which the root env pins to the package's version. A new file
 starts at zero, so new code must stay under both thresholds.
 
+## `Any` in an SDK signature: an ANN401 baseline that only shrinks
+
+ruff's ANN401 flags `typing.Any` in a parameter or return annotation. It is not
+in the root ruff `select`: `application_sdk/` had about 490 such sites when it
+was enabled (FND-4301). They are held instead to
+`.github/scripts/ann401_baseline.json`, per file, by
+`.github/scripts/check_ann401_baseline.py`, with the same three outcomes as the
+baselines above:
+
+- **A count above the baseline fails.** Type the new signature (see
+  [coding.md](coding.md), "No `Any` in a signature"). The failure lists every site in
+  the file.
+- **A count below the baseline also fails.** Lock the improvement in with
+  `--update`.
+- **A baseline count above the base revision's fails.** The
+  `CI script tests` job passes `--base-sha`; a file renamed in the PR keeps its
+  base count. A base with no baseline file is measured on its own tree instead.
+
+```bash
+uv run --frozen python .github/scripts/check_ann401_baseline.py           # check
+uv run --frozen python .github/scripts/check_ann401_baseline.py --update  # lock in a reduction
+```
+
+The baseline is the only suppression. ruff runs with `--isolated`, so it reads
+no config file: `ignore`, `extend-ignore`, `per-file-ignores`,
+`extend-per-file-ignores`, `exclude`, `extend-exclude`, a nested `ruff.toml` and
+`flake8-annotations.allow-star-arg-any` cannot hide a site. `--ignore-noqa` does
+the same for `# noqa: ANN401`. `test_check_ann401_baseline.py` writes each of
+those into a throwaway tree and asserts the sites are still counted. Because no
+config is read, the target version is passed explicitly and a test holds it to
+`requires-python`.
+
+The counts are per file, not per site. Swapping one `Any` for another in the
+same file leaves the count unchanged and passes; the ratchet stops a file's
+count from rising, and review is what catches a like-for-like swap.
+
+A tree with no ANN401 left passes: an empty measurement is accepted when ruff,
+run the same way, still flags a canary with a known `Any` signature. A ruff
+that stopped reporting the rule fails instead of matching an emptied baseline.
+
+The `ann401-baseline` pre-commit hook runs the check on every change under
+`application_sdk/`.
+
 ## An artifact upload retry must use a DIFFERENT artifact name
 
 `actions/upload-artifact` treats the artifact service's `FinalizeArtifact` 403

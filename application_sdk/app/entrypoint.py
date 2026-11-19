@@ -547,12 +547,12 @@ def _resolve_default_entrypoint(
     return None
 
 
-def is_entrypoint(obj: Any) -> bool:
+def is_entrypoint(obj: object) -> bool:
     """Check if an object is decorated with @entrypoint."""
     return hasattr(obj, "_entrypoint_metadata")
 
 
-def get_entrypoint_metadata(obj: Any) -> EntryPointMetadata | None:
+def get_entrypoint_metadata(obj: object) -> EntryPointMetadata | None:
     """Get entry point metadata from a decorated function."""
     return getattr(obj, "_entrypoint_metadata", None)
 

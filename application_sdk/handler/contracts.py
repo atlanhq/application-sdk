@@ -213,7 +213,7 @@ class HandlerCredential(BaseModel):
         ]
 
 
-def _serialize_credential_value(value: Any) -> str:
+def _serialize_credential_value(value: object) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value)
@@ -438,7 +438,7 @@ class AuthOutput(BaseModel):
 
     @field_validator("error", mode="before")
     @classmethod
-    def _coerce_error(cls, value: Any) -> Any:
+    def _coerce_error(cls, value: object) -> object:
         if isinstance(value, AppError):
             return value.to_failure_details()
         return value
@@ -616,7 +616,7 @@ class PreflightCheck(BaseModel):
 
     @field_validator("error", mode="before")
     @classmethod
-    def _coerce_error(cls, value: Any) -> Any:
+    def _coerce_error(cls, value: object) -> object:
         if isinstance(value, AppError):
             return value.to_failure_details()
         return value
@@ -804,7 +804,7 @@ class PreflightOutput(BaseModel):
 
     @field_validator("error", mode="before")
     @classmethod
-    def _coerce_error(cls, value: Any) -> Any:
+    def _coerce_error(cls, value: object) -> object:
         if isinstance(value, AppError):
             return value.to_failure_details()
         return value

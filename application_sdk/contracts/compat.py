@@ -50,7 +50,7 @@ def _normalize_args(args: tuple[Any, ...]) -> str:
     return ", ".join(canonical_type_str(a) for a in args)
 
 
-def canonical_type_str(tp: Any) -> str:
+def canonical_type_str(tp: object) -> str:
     """Return a normalized string representation of a type annotation.
 
     Normalizations applied:

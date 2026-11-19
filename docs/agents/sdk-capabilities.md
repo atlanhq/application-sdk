@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.58.0
-source-sha:    8062b2734fa933f611f06e3b1caaa4722836db12
-source-date:   2026-11-19T04:50:47Z
+source-sha:    8c44cea53fba1189bb8d632126086381563ac7f4
+source-date:   2026-11-19T17:14:11+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -233,7 +233,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `_safe_log`
 
 - **Import:** `from application_sdk.app.base import _safe_log`
-- **Signature:** `_safe_log(level: str, message: str, **attrs: Any) -> None`
+- **Signature:** `_safe_log(level: str, message: str, **attrs: object) -> None`
 - **Summary:** Log using Temporal's workflow logger.
 - **Defined in:** `application_sdk/app/base.py`
 
@@ -1226,7 +1226,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `canonical_type_str`
 
 - **Import:** `from application_sdk.contracts.compat import canonical_type_str`
-- **Signature:** `canonical_type_str(tp: Any) -> str`
+- **Signature:** `canonical_type_str(tp: object) -> str`
 - **Summary:** Return a normalized string representation of a type annotation.
 - **Defined in:** `application_sdk/contracts/compat.py`
 

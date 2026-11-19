@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
 from dataclasses import dataclass
 from enum import Enum
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Union, cast
 
 import orjson
@@ -169,7 +170,12 @@ class Reader(ABC):
         """
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Exit the async context manager, closing the reader.
 
         Args:
@@ -492,7 +498,12 @@ class Writer(ABC):
         """
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Exit the async context manager, closing the writer.
 
         Args:

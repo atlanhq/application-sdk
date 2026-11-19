@@ -78,6 +78,14 @@ jobs:
       - name: Run script tests
         run: uv run --frozen --extra workflows python -m pytest .github/scripts/tests -q
 
+      # `Any` in an application_sdk signature is held to a per-file baseline
+      # that only shrinks (FND-4301). The pre-commit hook checks the counts;
+      # --base-sha also fails a PR that raises the baseline to fit a new one.
+      - name: Check ANN401 against the base revision's baseline
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: uv run --frozen python .github/scripts/check_ann401_baseline.py --base-sha "$BASE_SHA"
+
       # Plain bash, no uv — the script under test is bash + perl and the harness
       # asserts on its output, so keeping it dependency-free keeps it runnable
       # by hand in the review sandbox exactly as it runs here.
