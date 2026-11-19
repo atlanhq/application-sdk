@@ -1,7 +1,7 @@
 """E-series error-handling checks — AST-based.
 
 Scans Python source files for error-handling anti-patterns defined in the
-E001–E021 rule catalog.  Every check is purely deterministic: the same
+E001–E022 rule catalog.  Every check is purely deterministic: the same
 source text always produces the same set of findings.
 
 Inline suppression
@@ -25,6 +25,7 @@ Rule implementations are split by category:
 * ``exception_chaining`` — E015, E016, E019 (chaining and message hygiene)
 * ``security``           — E017 (secrets in error evidence fields)
 * ``dependency_audience`` — E021 (DEPENDENCY_UNAVAILABLE overridden to USER)
+* ``legacy_error_code``   — E022 (DEFAULT_ERROR_CODE in the SDK's legacy AAF-* vocabulary)
 
 ``_checker.py`` assembles these into a single ``Checker`` visitor.
 ``__init__.py`` (this file) exposes the public scan + CLI API.

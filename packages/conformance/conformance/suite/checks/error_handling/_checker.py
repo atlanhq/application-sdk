@@ -10,6 +10,7 @@ from conformance.suite.schema.findings import Finding
 from .dependency_audience import DependencyAudienceMixin
 from .exception_chaining import ExceptionChainingMixin, ExceptionHelper
 from .http_failure import HttpFailureMixin
+from .legacy_error_code import LegacyErrorCodeMixin
 from .security import SecurityMixin
 from .silent_swallow import SilentSwallowMixin
 from .untyped_raise import UntypedRaiseMixin, module_bindings
@@ -70,6 +71,7 @@ class Checker(
     HttpFailureMixin,
     SecurityMixin,
     DependencyAudienceMixin,
+    LegacyErrorCodeMixin,
     ast.NodeVisitor,
 ):
     """Walk a module AST and emit E-series findings."""
@@ -189,6 +191,7 @@ class Checker(
         self._check_p011(node)
         if not self._class_stack and not self._function_stack:
             self._check_e021(node)
+        self._check_e022(node)
         self._class_stack.append(node)
         self.generic_visit(node)
         self._class_stack.pop()

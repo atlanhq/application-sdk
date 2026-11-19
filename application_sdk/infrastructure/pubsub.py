@@ -18,20 +18,23 @@ from typing import Any, ClassVar, Protocol
 from typing_extensions import deprecated
 
 from application_sdk import _deprecation
-from application_sdk.errors import PUBSUB_ERROR, ErrorCode
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
 from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import DependencyUnavailableError
 
 
+@dataclass(kw_only=True)
 class PubSubError(_LegacyErrorCodeMixin, DependencyUnavailableError):
     """Deprecated: use ``application_sdk.infrastructure.PubSubUnavailableError`` — removed in v4.0."""
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = PUBSUB_ERROR
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_PUBSUB"
     _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
         ("topic", "topic"),
         ("operation", "operation"),
     )
+    topic: str | None = None
+    operation: str | None = None
 
     def __init__(
         self,
@@ -51,7 +54,7 @@ class PubSubError(_LegacyErrorCodeMixin, DependencyUnavailableError):
         DependencyUnavailableError.__init__(self, message=message, cause=cause)
         self.topic = topic
         self.operation = operation
-        self._error_code = error_code
+        self._set_legacy_error_code(error_code)
 
 
 @dataclass(kw_only=True)
@@ -90,6 +93,10 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
         "SubscriptionConfig.handler in application_sdk.handler.contracts",
         "it typed PubSub.subscribe handlers, which DaprPubSub never called",
     ),
+    "PUBSUB_ERROR": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
 }
 
 
@@ -97,7 +104,9 @@ __getattr__ = _deprecation.deprecated_module_getattr(
     __name__,
     _DEPRECATED_CONSTANTS,
     remove_in="4.0.0",
-    resolve=lambda _name: _MessageHandler,
+    resolve=lambda name: (
+        _MessageHandler if name == "MessageHandler" else getattr(_legacy_codes, name)
+    ),
 )
 
 

@@ -19,12 +19,9 @@ if TYPE_CHECKING:
 from application_sdk.app.entrypoint import build_workflow_type_index
 from application_sdk.common.task_queue import task_queue_from_env
 from application_sdk.contracts.base import validate_is_contract
-from application_sdk.errors import (
-    APP_ALREADY_REGISTERED,
-    APP_NOT_FOUND,
-    TASK_NOT_FOUND,
-    ErrorCode,
-)
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import InvalidInputError
 
 #: SDK-internal: the registered name of the App whose task the current activity
@@ -89,14 +86,13 @@ class AppMetadata:
         return f"{self.name}@{self.version}"
 
 
-class AppNotFoundError(InvalidInputError):
+@dataclass(kw_only=True)
+class AppNotFoundError(_LegacyErrorCodeMixin, InvalidInputError):
     """Deprecated: use ``application_sdk.app.registry.AppNotRegisteredError`` — removed in v4.0."""
 
-    #: Leaf instances never run this ``__init__``; the class default keeps the
-    #: inherited ``__str__`` working on them.
-    _legacy_error_code: ErrorCode = APP_NOT_FOUND
-
     code: ClassVar[str] = "INVALID_INPUT_APP_NOT_FOUND"
+    name: str | None = None
+    version: str | None = None
 
     def __init__(
         self,
@@ -118,14 +114,7 @@ class AppNotFoundError(InvalidInputError):
         InvalidInputError.__init__(self, message=msg)
         self.name = name
         self.version = version
-        self._legacy_error_code = error_code or APP_NOT_FOUND
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return self._legacy_error_code
-
-    def __str__(self) -> str:
-        return f"[{self._legacy_error_code}] {self.message}"
+        self._set_legacy_error_code(error_code)
 
 
 @dataclass(kw_only=True)
@@ -153,14 +142,13 @@ def _app_not_registered(name: str, version: str | None = None) -> AppNotRegister
     return AppNotRegisteredError(message=message, name=name, version=version)
 
 
-class AppAlreadyRegisteredError(InvalidInputError):
+@dataclass(kw_only=True)
+class AppAlreadyRegisteredError(_LegacyErrorCodeMixin, InvalidInputError):
     """Deprecated: use ``application_sdk.app.registry.AppVersionAlreadyRegisteredError`` — removed in v4.0."""
 
-    #: Leaf instances never run this ``__init__``; the class default keeps the
-    #: inherited ``__str__`` working on them.
-    _legacy_error_code: ErrorCode = APP_ALREADY_REGISTERED
-
     code: ClassVar[str] = "INVALID_INPUT_APP_ALREADY_REGISTERED"
+    name: str | None = None
+    version: str | None = None
 
     def __init__(
         self, name: str, version: str, *, error_code: ErrorCode | None = None
@@ -175,14 +163,7 @@ class AppAlreadyRegisteredError(InvalidInputError):
         )
         self.name = name
         self.version = version
-        self._legacy_error_code = error_code or APP_ALREADY_REGISTERED
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return self._legacy_error_code
-
-    def __str__(self) -> str:
-        return f"[{self._legacy_error_code}] {self.message}"
+        self._set_legacy_error_code(error_code)
 
 
 @dataclass(kw_only=True)
@@ -459,14 +440,12 @@ class AppRegistry:
         self._apps[name][version] = new_metadata
 
 
-class TaskNotFoundError(InvalidInputError):
+@dataclass(kw_only=True)
+class TaskNotFoundError(_LegacyErrorCodeMixin, InvalidInputError):
     """Deprecated: use ``application_sdk.app.registry.TaskNotRegisteredError`` — removed in v4.0."""
 
-    #: Leaf instances never run this ``__init__``; the class default keeps the
-    #: inherited ``__str__`` working on them.
-    _legacy_error_code: ErrorCode = TASK_NOT_FOUND
-
     code: ClassVar[str] = "INVALID_INPUT_TASK_NOT_FOUND"
+    task_name: str | None = None
 
     def __init__(
         self, app_name: str, task_name: str, *, error_code: ErrorCode | None = None
@@ -481,10 +460,7 @@ class TaskNotFoundError(InvalidInputError):
         )
         self.app_name = app_name
         self.task_name = task_name
-        self._legacy_error_code = error_code or TASK_NOT_FOUND
-
-    def __str__(self) -> str:
-        return f"[{self._legacy_error_code}] {self.message}"
+        self._set_legacy_error_code(error_code)
 
 
 @dataclass(kw_only=True)
@@ -672,3 +648,29 @@ def resolve_pool_queue(pool: str) -> str | None:
         return explicit
     base_queue = os.environ.get("ATLAN_TASK_QUEUE", "") or (task_queue_from_env() or "")
     return f"{base_queue}-{pool}" if base_queue else None
+
+
+#: The AAF-* constants this module imported before FND-4299, kept importable
+#: from here with a warning until v4.0.0. Literal per entry: the surface gate
+#: and gen-deprecations read this table statically.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "APP_ALREADY_REGISTERED": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "APP_NOT_FOUND": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "TASK_NOT_FOUND": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda name: getattr(_legacy_codes, name),
+)

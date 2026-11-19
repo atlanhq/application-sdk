@@ -87,11 +87,12 @@ class TestStorageIntegrityErrorContract:
     """
 
     def test_error_code_and_classification(self) -> None:
-        from application_sdk.errors import STORAGE_INTEGRITY, Audience, FailureCategory
+        from application_sdk.errors import Audience, FailureCategory
 
         err = StorageIntegrityError("boom", key="a/b.json")
-        assert err.DEFAULT_ERROR_CODE is STORAGE_INTEGRITY
-        assert err.error_code.code == "AAF-STR-007"
+        assert err.code == "DATA_INTEGRITY_STORAGE_TRANSFER"
+        # The legacy AAF code survives only as the str() prefix (FND-4299).
+        assert str(err).startswith("[AAF-STR-007] boom")
         assert err.category is FailureCategory.DATA_INTEGRITY
         assert err.audience is Audience.APP_OWNER
         assert err.effective_retryable is False

@@ -207,7 +207,7 @@ Structured logs and OTel traces flow from every worker and handler pod to the cl
 
 `self.logger` is available in both `run()` and `@task` methods. It is automatically bound with `app_name`, `workflow_run_id`, and `correlation_id` on every entry (`run_id` is kept as a backwards-compat alias). When apps call other apps, the correlation ID propagates automatically, linking distributed traces across services. See [ADR-0003](../adr/0003-per-app-observability.md) and [ADR-0011](../adr/0011-logging-level-guidelines.md).
 
-Errors carry structured codes in `AAF-{COMPONENT}-{ID}` format.
+Every error class names its failure with a `code` ClassVar (`DEPENDENCY_UNAVAILABLE_STORAGE`, `NOT_FOUND_CREDENTIAL`, …), read on the wire as `CATEGORY.CODE`. The older `AAF-{COMPONENT}-{ID}` codes survive only as the `str()` prefix of legacy-coded errors and are removed in v4.0.
 
 ---
 
@@ -308,7 +308,7 @@ application_sdk/
 ├── common/                 # Shared utilities (not SDK-specific)
 │   ├── aws_utils.py        # AWS credential and session helpers
 │   ├── concurrency.py      # get_actual_cpu_count(), run_in_thread
-│   ├── error_codes.py      # Component-specific error code constants
+│   ├── error_codes.py      # Deprecated AtlanError tree and Atlan-{Comp}-{HTTP}-{ID} codes (removed in v4.0)
 │   ├── exc_utils.py        # Exception handling utilities
 │   ├── file_converter.py   # JSON <-> Parquet helpers (deprecated, removed in v4.0)
 │   ├── file_ops.py         # File-system utilities
@@ -384,7 +384,7 @@ application_sdk/
 │
 ├── discovery.py            # Auto-discovery helpers for apps and handlers
 ├── errors/                 # Categorical error hierarchy: AppError, FailureCategory, Audience, 15 leaf classes
-│   │                       # Legacy errors.py shim kept for back-compat (AAF-{COMPONENT}-{ID} constants)
+│   │                       # _legacy_codes.py: deprecated AAF-{COMPONENT}-{ID} ErrorCode constants (removed in v4.0)
 ├── constants.py            # Import-time configuration (env vars, path templates)
 ├── version.py              # Package version (__version__)
 └── main.py                 # Unified CLI entry point (--mode worker|handler|combined)

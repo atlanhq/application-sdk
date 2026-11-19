@@ -667,10 +667,21 @@ outcome mirroring the error-handling shape in the reference app named by
   really covers an Atlan-side service, the override is the bug: delete the
   `audience` line and keep the category.
 
+- **E022 LegacyDefaultErrorCode** — a class body binds `DEFAULT_ERROR_CODE`
+  in the SDK's deprecated `AAF-*` vocabulary: it overrides the code of an SDK
+  class that carries one (`StorageError`, `CredentialError`, …), or binds it
+  to `application_sdk.errors.ErrorCode` or an `AAF-*` constant.  Delete the
+  `DEFAULT_ERROR_CODE` line and any import it alone used.  If the class has no
+  `code: ClassVar[str]` of its own, add one, prefixed with its category (see
+  P003), naming the failure the deleted line named.  Do not touch `str()`
+  assertions: the SDK base keeps printing its `[AAF-…]` prefix until v4.0.0.
+  Classification is `"mechanical"` when the class already declares its own
+  `code`, and `"judgment"` when one has to be named.
+
 - **E013 LegacyAtlanErrorRaise** — the code raises a deprecated `AtlanError`
   subclass.  Consult the `/typed-failures` prescription: propose replacing
   with the appropriate `AppError` subclass from
-  `application_sdk.common.error_codes`.  Choose the subclass by matching the
+  `application_sdk.errors`.  Choose the subclass by matching the
   raise site's semantic category (connection, permission, not-found, etc.) to
   the `AppError` hierarchy.  Classification is always `"judgment"` — the
   mapping requires understanding the call-site intent.
@@ -679,7 +690,7 @@ outcome mirroring the error-handling shape in the reference app named by
   Propose narrowing to `except Exception as exc:` and adding
   `exc_info=True` to any existing log calls in the body.
 
-- **All other E-series rules (E003, E004, E007–E012, E014, E015, E017, E018, E020, E021)** — produce
+- **All other E-series rules (E003, E004, E007–E012, E014, E015, E017, E018, E020, E021, E022)** — produce
   `classification = "judgment"` and a best-effort fix guided by the `hint` and
   `message`.  (E020: replace the empty/None return on
   a checked HTTP-failure branch with a raised typed `AppError` so the failure

@@ -19,7 +19,8 @@ Public API::
 see each one's notice for its replacement.
 
 Note: ``application_sdk.common.error_codes`` is retained for back-compat with
-v2 connectors. Prefer ``application_sdk.errors`` for new code.
+v2 connectors and is removed in v4.0. Use ``application_sdk.errors`` for new
+code.
 """
 
 from application_sdk.common.concurrency import (

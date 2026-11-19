@@ -13,22 +13,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from application_sdk.errors import (
-    STORAGE_AUTH,
-    STORAGE_CONFIG,
-    STORAGE_DISK_FULL,
-    STORAGE_EMPTY_UPLOAD,
-    STORAGE_GATEWAY_AUTH,
-    STORAGE_GATEWAY_NO_ROUTE,
-    STORAGE_HANDOFF_INCOMPLETE,
-    STORAGE_INTEGRITY,
-    STORAGE_NOT_FOUND,
-    STORAGE_OPERATION,
-    STORAGE_PERMISSION,
-    STORAGE_PREFLIGHT,
-    STORAGE_RELOCATION,
-    ErrorCode,
-)
+from application_sdk import _deprecation
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
 from application_sdk.errors.base import AppError, _LegacyErrorCodeMixin
 from application_sdk.errors.categories import Audience
 from application_sdk.errors.leaves import (
@@ -79,7 +66,7 @@ def _init_storage_evidence(
     err.key = key
     err.http_status = http_status
     err.provider_code = provider_code
-    err._error_code = error_code
+    err._set_legacy_error_code(error_code)
 
 
 @dataclass(kw_only=True)
@@ -106,7 +93,6 @@ class StorageError(_LegacyErrorCodeMixin, DependencyUnavailableError):
     http_status: int | None = None
     provider_code: str | None = None
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_OPERATION
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE"
     _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
         ("key", "key"),
@@ -157,7 +143,6 @@ class StorageBucketRelocationError(StorageError):
     after the relocation finishes.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_RELOCATION
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
 
     def __init__(
@@ -211,7 +196,6 @@ class StorageGatewayAuthUnavailableError(StorageError):
     ``StorageError``. (FND-2076)
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_GATEWAY_AUTH
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_AUTH"
 
     def __init__(
@@ -257,7 +241,6 @@ class StorageGatewayNoRouteError(StorageError):
     missing, and ``upload_file`` raises it once its own retries are spent.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_GATEWAY_NO_ROUTE
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_NO_ROUTE"
 
     def __init__(
@@ -293,7 +276,6 @@ class StorageNotFoundError(NotFoundError, StorageError):
     parent is ``StorageError`` so ``except StorageError:`` still catches.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_NOT_FOUND
     code: ClassVar[str] = "NOT_FOUND_STORAGE"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
@@ -332,7 +314,6 @@ class StoragePermissionError(AppPermissionDeniedError, StorageError):
     domain parent is ``StorageError``.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_PERMISSION
     code: ClassVar[str] = "PERMISSION_STORAGE"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
@@ -376,7 +357,6 @@ class StorageAuthError(AuthError, StoragePermissionError):
     the split keep catching both.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_AUTH
     code: ClassVar[str] = "AUTH_STORAGE"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
@@ -415,7 +395,6 @@ class StorageConfigError(InvalidInputError, StorageError):
     domain parent is ``StorageError``.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_CONFIG
     code: ClassVar[str] = "INVALID_INPUT_STORAGE_CONFIG"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
@@ -446,8 +425,6 @@ class StorageConfigError(InvalidInputError, StorageError):
         )
 
 
-# code is the new structured identifier; legacy DEFAULT_ERROR_CODE inherited from
-# StorageConfigError (AAF-STR-003, deprecated, kept for back-compat — do not override).
 @dataclass(kw_only=True)
 class StorageBindingNotFoundError(StorageConfigError):
     """No Dapr component with the given name exists in the components directory.
@@ -586,7 +563,6 @@ class StorageEmptyUploadError(DataIntegrityError, StorageError):
     so ``except StorageError:`` catch blocks still fire.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_EMPTY_UPLOAD
     code: ClassVar[str] = "DATA_INTEGRITY_STORAGE_EMPTY_UPLOAD"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.APP_OWNER
@@ -641,7 +617,6 @@ class StorageIntegrityError(DataIntegrityError, StorageError):
         observed: Digest actually computed, or the observed byte count.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_INTEGRITY
     code: ClassVar[str] = "DATA_INTEGRITY_STORAGE_TRANSFER"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.APP_OWNER
@@ -699,7 +674,6 @@ class ObjectStorePreflightError(StorageError):
     rather than any narrower leaf.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_PREFLIGHT
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_PREFLIGHT"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.APP_OWNER
@@ -755,7 +729,6 @@ class StorageHandoffIncompleteError(DataIntegrityError, StorageError):
         declared_count: How many refs the producer declared.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_HANDOFF_INCOMPLETE
     code: ClassVar[str] = "DATA_INTEGRITY_STORAGE_HANDOFF_INCOMPLETE"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.APP_OWNER
@@ -820,7 +793,6 @@ class UnplaceableDeclaredFileError(InvalidInputError, StorageError):
         source_prefix: The prefix it was checked against.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_OPERATION
     code: ClassVar[str] = "INVALID_INPUT_UNPLACEABLE_DECLARED_FILE"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.APP_OWNER
@@ -868,7 +840,6 @@ class StorageDiskFullError(DiskFullError, StorageError):
     # The same value as DiskFullError's, declared here as the typed-error
     # prescription requires: consumers that classify a full disk by this code
     # (alerting, RCA tooling) must match both classes.
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_DISK_FULL
     code: ClassVar[str] = "RESOURCE_EXHAUSTED_DISK_FULL"
 
     def __init__(
@@ -973,3 +944,69 @@ class SdrStorageDiskFullError(SdrDiskFullError, StorageDiskFullError):
         # The storage constructor takes no remediation and leaves the hosted
         # default in place; an SDR agent's operator acts on its host volume.
         self.suggested_action = SDR_DISK_FULL_ACTION
+
+
+#: The AAF-* constants this module imported before FND-4299, kept importable
+#: from here with a warning until v4.0.0. Literal per entry: the surface gate
+#: and gen-deprecations read this table statically.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "STORAGE_AUTH": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "STORAGE_CONFIG": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "STORAGE_DISK_FULL": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "STORAGE_EMPTY_UPLOAD": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "STORAGE_GATEWAY_AUTH": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "STORAGE_GATEWAY_NO_ROUTE": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "STORAGE_HANDOFF_INCOMPLETE": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "STORAGE_INTEGRITY": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "STORAGE_NOT_FOUND": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "STORAGE_OPERATION": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "STORAGE_PERMISSION": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "STORAGE_PREFLIGHT": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "STORAGE_RELOCATION": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda name: getattr(_legacy_codes, name),
+)
