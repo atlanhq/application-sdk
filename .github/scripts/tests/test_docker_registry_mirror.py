@@ -10,7 +10,9 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -254,7 +256,9 @@ def integration_steps() -> list[dict]:
     return workflow["jobs"]["integration"]["steps"]
 
 
-def _index(steps: list[dict], predicate) -> int:
+def _index(
+    steps: list[dict[str, Any]], predicate: Callable[[dict[str, Any]], bool]
+) -> int:
     matches = [i for i, s in enumerate(steps) if predicate(s)]
     assert len(matches) == 1, matches
     return matches[0]

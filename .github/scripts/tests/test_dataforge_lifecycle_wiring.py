@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -309,7 +310,7 @@ def test_both_jobs_try_twingate_before_globalprotect(
 
 def test_test_jobs_try_twingate_before_globalprotect(jobs: dict) -> None:
     for job in ("integration", "e2e"):
-        steps = jobs[job]["steps"]
+        steps = cast("list[dict[str, Any]]", jobs[job]["steps"])
         uses = [s.get("uses", "") for s in steps]
         tg = next(i for i, u in enumerate(uses) if "twingate-connect" in u)
         gp = next(i for i, u in enumerate(uses) if "globalprotect-connect" in u)
@@ -346,7 +347,8 @@ def test_test_jobs_try_twingate_before_globalprotect(jobs: dict) -> None:
         checkout = next(
             s
             for s in steps
-            if (s.get("with") or {}).get("path") == "application-sdk-scripts"
+            if cast("dict[str, Any]", s.get("with") or {}).get("path")
+            == "application-sdk-scripts"
         )
         assert ".github/actions/twingate-connect" in checkout["with"]["sparse-checkout"]
 
