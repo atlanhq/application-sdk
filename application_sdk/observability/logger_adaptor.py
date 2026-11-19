@@ -67,6 +67,7 @@ from application_sdk.observability.utils import (
     get_observability_dir,
     get_workflow_context,
     in_temporal_workflow,
+    self_failure_logger,
 )
 from application_sdk.version import __version__ as _SDK_VERSION
 
@@ -882,7 +883,9 @@ class _LazyLoggerProxy:
         try:
             self._logger.log(level_name, msg, **kwargs)
         except Exception:
-            logging.error("Error in lazy %s logging", level_name.lower(), exc_info=True)
+            self_failure_logger.warning(
+                "Error in lazy %s logging", level_name.lower(), exc_info=True
+            )
 
     def debug(self, msg: str, **kwargs: Any) -> None:
         self._emit("DEBUG", msg, kwargs)
@@ -1139,7 +1142,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 atexit.register(shutdown_otlp_logs)
 
         except Exception:
-            logging.error("Failed to setup OTLP logging", exc_info=True)
+            self_failure_logger.warning("Failed to setup OTLP logging", exc_info=True)
 
         # Register a single unified loguru sink that builds the log-record dict once
         # and fans it out to all active targets.  When both the object-store sink and
@@ -1349,7 +1352,9 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             if flush:
                 self._sync_flush()
         except Exception:
-            logging.error("Error in %s logging", level_name.lower(), exc_info=True)
+            self_failure_logger.warning(
+                "Error in %s logging", level_name.lower(), exc_info=True
+            )
             self._sync_flush()
 
     def debug(self, msg: str, *args: Any, **kwargs: Any) -> None:
@@ -1449,7 +1454,9 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             otel_logger = self.logger_provider.get_logger(SERVICE_NAME)
             otel_logger.emit(otel_record)
         except Exception:
-            logging.error("Error sending log to OpenTelemetry", exc_info=True)
+            self_failure_logger.warning(
+                "Error sending log to OpenTelemetry", exc_info=True
+            )
 
     def _sync_flush(self):
         """Flush the log buffer, dispatching appropriately for the current context.
@@ -1496,7 +1503,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 # waiting would stall the loop, which is what FND-4075 removed.
                 flush_console_logs(_CONSOLE_FLUSH_TIMEOUT_SECONDS)
         except Exception:
-            logging.error("Error during sync flush", exc_info=True)
+            self_failure_logger.warning("Error during sync flush", exc_info=True)
 
     def tracing(self, msg: str, *args: Any, **kwargs: Any) -> None:
         """Log at the custom TRACING level (DEBUG severity), tagged ``log_type=trace``."""
@@ -1532,7 +1539,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             ):
                 self._send_to_otel(log_record)
         except Exception:
-            logging.error("Error in log sink", exc_info=True)
+            self_failure_logger.warning("Error in log sink", exc_info=True)
 
     @deprecated(
         "AtlanLoggerAdapter.objectstore_sink is deprecated; use "
@@ -1552,7 +1559,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             log_record = _make_log_record_dict(message)
             self.add_record(log_record)
         except Exception:
-            logging.error("Error buffering log", exc_info=True)
+            self_failure_logger.warning("Error buffering log", exc_info=True)
 
     @deprecated(
         "AtlanLoggerAdapter.otlp_sink is deprecated; use "
@@ -1571,7 +1578,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             log_record = _make_log_record_dict(message)
             self._send_to_otel(log_record)
         except Exception:
-            logging.error("Error processing log record", exc_info=True)
+            self_failure_logger.warning("Error processing log record", exc_info=True)
 
 
 # Create a singleton instance of the logger

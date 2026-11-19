@@ -272,7 +272,7 @@ def get_table_qns_from_columns(
             return None
 
     except Exception as e:
-        logger.error(
+        logger.warning(
             "Failed to get tables with columns from %s: %s",
             column_dir,
             e,

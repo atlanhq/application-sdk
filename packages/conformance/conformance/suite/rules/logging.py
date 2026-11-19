@@ -915,4 +915,69 @@ RULES: tuple[RuleDefinition, ...] = (
             target="programs/areas/logging.prose.md",
         ),
     ),
+    RuleDefinition(
+        id="L022",
+        canonical_reference=(
+            "atlan-openapi-app app/api_client.py — `_parse_zip` catches a ZIP "
+            "entry that does not parse, logs `skipping file in ZIP` at WARNING "
+            "with exc_info=True and moves on to the next entry: the failure is "
+            "handled, so the record is a WARNING. atlan-mysql-app app/handler.py "
+            "`test_auth` is the contrast: it logs at ERROR and returns "
+            "AuthOutput(status=AuthStatus.FAILED, ...), so the failure reaches "
+            "the caller and the record stays at ERROR."
+        ),
+        rule_interactions=(
+            "E007 (ErrorToReturnValue) and E020 (HttpFailureToEmptyReturn) "
+            "judge what the handler returns; L022 judges only the level. A "
+            "handler that logs at ERROR and returns None can draw both: fix "
+            "the return first, because a handler that now raises or returns a "
+            "failure result clears L022 too. L009 (WarnThenRaiseDuplication) "
+            "never meets L022 on the same line: L022 skips every handler that "
+            "contains a raise. L004 still applies after the downgrade, so keep "
+            "exc_info=True on the WARNING."
+        ),
+        scope=RuleScope.BOTH,
+        name="HandledFailureLoggedAtError",
+        tier=EnforcementTier.WARN,
+        category="log-level",
+        autofixable=True,
+        since="0.60.0",
+        rationale=(
+            "ERROR means the operation failed. The customer-facing log view "
+            "filters at ERROR, so a failure the code caught and recovered from "
+            "— a best-effort close, a cache miss, a fallback taken — reads to "
+            "the customer as a failed run. A handler that neither raises, "
+            "exits, nor returns a failure result has handled the exception; "
+            "its record belongs at WARNING, which is what graceful degradation "
+            "is for."
+        ),
+        short_description=(
+            "logger.error() in an except block that neither raises nor returns "
+            "a failure — log the handled failure at WARNING"
+        ),
+        full_description=(
+            "Flags ``logger.error(...)`` (and ``logging.error(...)``) whose\n"
+            "innermost enclosing ``except`` handler does none of these:\n"
+            "\n"
+            "* contains a ``raise`` (anywhere in the handler, conditional or not);\n"
+            "* calls ``sys.exit``, ``os._exit``, ``exit`` or ``quit``;\n"
+            "* returns a failure result — a call or dict literal carrying\n"
+            "  ``success=False``, ``status=<Enum>.FAILURE|FAILED|ERROR`` or a\n"
+            "  ``status_code`` of 500 or more.\n"
+            "\n"
+            "Returning ``False``, ``None`` or a default value does not count as a\n"
+            "failure result: the caller gets a sentinel it may ignore, so the\n"
+            "handler has absorbed the failure.\n"
+            "\n"
+            "Fix: change ``.error(`` to ``.warning(`` and keep ``exc_info=True``.\n"
+            "When the handled failure can repeat at high rate (a per-record\n"
+            "pipeline path), rate-limit the record as well.  When the failure\n"
+            "is in fact fatal but surfaces later (collected and raised after\n"
+            "other work completes), keep ERROR and suppress with a reason.\n"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
+    ),
 )

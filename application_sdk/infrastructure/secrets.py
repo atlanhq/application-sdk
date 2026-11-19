@@ -88,7 +88,7 @@ async def get_deployment_secret(key: str, *, raise_on_error: bool | None = None)
             # conformance: ignore[E007] legacy contract: a missing key is None
             return None
         except Exception:
-            logger.error(
+            logger.warning(
                 "Failed to fetch deployment config key: %s", key, exc_info=True
             )
             return None

@@ -269,18 +269,18 @@ class AzureAuthProvider:
                 return False
 
         except ClientAuthenticationError:
-            logger.error(
+            logger.warning(
                 "Azure credential validation failed - authentication error",
                 exc_info=True,
             )
             return False
         except ValueError:
-            logger.error(
+            logger.warning(
                 "Azure credential validation failed - invalid parameters", exc_info=True
             )
             return False
         except Exception:
-            logger.error(
+            logger.warning(
                 "Azure credential validation failed - unexpected error", exc_info=True
             )
             return False

@@ -208,10 +208,10 @@ class TestSyncWrapper:
             return x * 2
 
         assert double(7) == 14
-        # Logger should record the failure (one of the .error() calls).
+        # Logger should record the failure at WARNING: the decorator swallows it.
         assert any(
             "Failed to record trace" in str(call.args[0])
-            for call in logger.error.call_args_list
+            for call in logger.warning.call_args_list
         )
 
     def test_sync_swallows_metric_exception_but_returns_result(self) -> None:
@@ -225,7 +225,7 @@ class TestSyncWrapper:
         assert echo("hi") == "hi"
         assert any(
             "Failed to record metric" in str(call.args[0])
-            for call in logger.error.call_args_list
+            for call in logger.warning.call_args_list
         )
 
 
@@ -281,7 +281,7 @@ class TestAsyncWrapper:
         # Error path's recorder failure was logged.
         assert any(
             "Failed to record error trace" in str(call.args[0])
-            for call in logger.error.call_args_list
+            for call in logger.warning.call_args_list
         )
 
     async def test_async_swallows_metric_failure_in_error_path(self) -> None:
@@ -296,7 +296,7 @@ class TestAsyncWrapper:
             await boom()
         assert any(
             "Failed to record error metric" in str(call.args[0])
-            for call in logger.error.call_args_list
+            for call in logger.warning.call_args_list
         )
 
 

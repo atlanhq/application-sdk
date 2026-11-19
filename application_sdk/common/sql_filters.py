@@ -481,7 +481,7 @@ def extract_database_names_from_regex_common(
         return f"'^({'|'.join(sorted(database_names))})$'"
 
     except Exception:
-        logger.error(
+        logger.warning(
             "Error extracting database names from regex: %s",
             normalized_regex,
             exc_info=True,
@@ -618,7 +618,7 @@ def prepare_query(
             )
     except AppError as e:
         error_message = str(e).split(": ", 1)[-1] if ": " in str(e) else str(e)
-        logger.error(
+        logger.warning(
             "Error preparing query: error_code=%s error_message=%s",
             e.code,
             error_message,

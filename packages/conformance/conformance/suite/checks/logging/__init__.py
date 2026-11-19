@@ -1,6 +1,6 @@
 """L-series logging checks — AST-based and TOML-based.
 
-Scans Python source files for logging anti-patterns defined in the L001–L021
+Scans Python source files for logging anti-patterns defined in the L001–L022
 rule catalog.  Every check is purely deterministic: the same source text always
 produces the same set of findings.
 
@@ -19,7 +19,7 @@ Package layout
 Rule implementations are split by category:
 
 * ``_format``      — L001, L003, L011, L014, L018, L020 (message-format rules)
-* ``_level``       — L006, L007, L017 (log-level rules)
+* ``_level``       — L006, L007, L017, L022 (log-level rules)
 * ``_traceback``   — L004 (missing-traceback)
 * ``_security``    — L010 (credential in log)
 * ``_performance`` — L008, L009 (performance/noise rules)
@@ -69,7 +69,7 @@ __all__ = ["SERIES", "discover", "main", "scan_all", "scan_path", "scan_text"]
 
 
 # ---------------------------------------------------------------------------
-# Per-file scan (L001–L015, L017–L020; excludes cross-file L002, L016)
+# Per-file scan (L001–L015, L017–L020, L022; excludes cross-file L002, L016)
 # ---------------------------------------------------------------------------
 
 

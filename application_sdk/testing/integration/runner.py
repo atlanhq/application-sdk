@@ -765,7 +765,7 @@ class BaseIntegrationTest:
                         actual,
                     )
             except Exception as e:
-                logger.error("Assertion error for %s", path, exc_info=True)
+                logger.warning("Assertion error for %s", path, exc_info=True)
                 result_entry = {
                     "passed": False,
                     "actual": actual,

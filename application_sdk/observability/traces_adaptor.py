@@ -30,6 +30,7 @@ from application_sdk.observability.observability import (
 from application_sdk.observability.utils import (
     build_otel_resource,
     get_observability_dir,
+    self_failure_logger,
 )
 
 # Passed to the AtlanObservability base, which this adapter still extends.
@@ -96,7 +97,7 @@ def setup_tracer_provider() -> Optional[trace.TracerProvider]:
             provider = _build_tracer_provider()
             trace.set_tracer_provider(provider)
         except Exception:
-            _module_logger.error(
+            _module_logger.warning(
                 "Failed to set up the OpenTelemetry tracer provider; tracing disabled",
                 exc_info=True,
             )
@@ -207,7 +208,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         try:
             self.export_record(record)
         except Exception:
-            logging.error("Error adding record", exc_info=True)
+            self_failure_logger.warning("Error adding trace record", exc_info=True)
 
     def process_record(self, record: Any) -> Dict[str, Any]:
         """Convert a trace record into a plain dictionary.
@@ -328,7 +329,9 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                 span.end(end_time=end_ns)
 
         except Exception:
-            logging.error("Error sending trace to OpenTelemetry", exc_info=True)
+            self_failure_logger.warning(
+                "Error sending trace to OpenTelemetry", exc_info=True
+            )
 
     def _log_to_console(self, trace_record: TraceRecord):
         """Write *trace_record* as one ``tracing``-level log line.
@@ -355,7 +358,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             logger = get_logger()
             logger.tracing(log_message)
         except Exception:
-            logging.error("Error logging trace to console", exc_info=True)
+            self_failure_logger.warning("Error logging trace to console", exc_info=True)
 
     def record_trace(
         self,

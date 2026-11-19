@@ -29,6 +29,7 @@ from application_sdk.observability.utils import (
     build_otel_resource,
     get_metric_labels,
     get_observability_dir,
+    self_failure_logger,
 )
 
 # MetricRecord and MetricType are imported from models.py to avoid circular dependencies
@@ -137,7 +138,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         except Exception:
             self._otel_metrics_enabled = False
             if not AtlanMetricsAdapter._otel_setup_failed_logged:
-                logging.error("Failed to setup OTel meter provider", exc_info=True)
+                logging.warning("Failed to setup OTel meter provider", exc_info=True)
                 AtlanMetricsAdapter._otel_setup_failed_logged = True
 
     async def _flush_buffer(self) -> None:
@@ -248,7 +249,9 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 )
                 histogram.record(metric_record.value, otel_attrs)
         except Exception:
-            logging.error("Error sending metric to OpenTelemetry", exc_info=True)
+            self_failure_logger.warning(
+                "Error sending metric to OpenTelemetry", exc_info=True
+            )
 
     def _log_to_console(self, metric_record: MetricRecord):
         """Log metric to console using the logger.
@@ -279,7 +282,9 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             logger = get_logger()
             logger.metric(log_message)
         except Exception:
-            logging.error("Error logging metric to console", exc_info=True)
+            self_failure_logger.warning(
+                "Error logging metric to console", exc_info=True
+            )
 
     def record_metric(
         self,
@@ -331,7 +336,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             self.add_record(metric_record)
 
         except Exception:
-            logging.error("Error recording metric", exc_info=True)
+            self_failure_logger.warning("Error recording metric", exc_info=True)
 
 
 # Create a singleton instance of the metrics adapter

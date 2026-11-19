@@ -366,6 +366,7 @@ class SkippedRecordSink:
             lost = self.kept
             self.kept = 0
             self._poisoned = True
+            # conformance: ignore[L022] the write failed and these records are lost from the run's file; fail-open keeps the run going (FND-4881)
             _logger.error(
                 "Failed to write skipped records and could not roll the local "
                 "file back; %d record(s) are counted but missing from the "
@@ -378,6 +379,7 @@ class SkippedRecordSink:
         except Exception:
             # _append_lines rolled the file back, so earlier lines stay valid.
             self.kept -= lines
+            # conformance: ignore[L022] the write failed and these records are lost from the run's file; fail-open keeps the run going (FND-4881)
             _logger.error(
                 "Failed to write %d skipped record(s) to the local file; they "
                 "are counted but missing from the run's skipped-records file",
@@ -562,6 +564,7 @@ async def persist_activity_skips(sink: SkippedRecordSink) -> None:
         await upload_file(key, sink.path)
     # conformance: ignore[E004] fail-open by design (FND-4881): logged at ERROR and counted in skipped-records-unpersisted
     except Exception:
+        # conformance: ignore[L022] the persist failed and these records are lost from the run's file; fail-open keeps the run going (FND-4881)
         _logger.error(
             "Failed to persist %d skipped record(s); they are counted but "
             "missing from the run's skipped-records file",

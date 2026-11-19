@@ -171,7 +171,7 @@ class AtlasTransformer(TransformerInterface):
                         else None,
                     )
             except Exception:
-                logger.error("Error processing row: %s", typename, exc_info=True)
+                logger.warning("Error processing row: %s", typename, exc_info=True)
 
         return transformed_metadata_list
 
@@ -273,7 +273,7 @@ class AtlasTransformer(TransformerInterface):
 
                 return entity.dict(by_alias=True, exclude_none=True, exclude_unset=True)
             except Exception:
-                logger.error("Error transforming entity: %s", typename, exc_info=True)
+                logger.warning("Error transforming entity: %s", typename, exc_info=True)
                 return None
         else:
             logger.error("Unknown typename: %s", typename)

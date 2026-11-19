@@ -420,7 +420,7 @@ class AppWorker:
         try:
             await self._start_metrics_push()
         except Exception:
-            logger.error(
+            logger.warning(
                 "Pushgateway pusher start failed — worker will run without metrics",
                 exc_info=True,
             )
@@ -452,7 +452,7 @@ class AppWorker:
         try:
             await self._start_metrics_push()
         except Exception:
-            logger.error(
+            logger.warning(
                 "Pushgateway pusher start failed — worker will run without metrics",
                 exc_info=True,
             )
@@ -1200,6 +1200,7 @@ def create_worker(
         try:
             await _log_worker_fatal_error(exc)
         except BaseException:
+            # conformance: ignore[L022] the worker's fatal crash record: the poll loop has already failed, this handler only lost the cause chain
             logger.error(
                 "Temporal worker poll loop failed fatally (cause chain "
                 "unavailable: rendering the exception raised %s)",
