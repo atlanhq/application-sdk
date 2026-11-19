@@ -262,6 +262,20 @@ def _clear_infrastructure() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _reset_dropped_log_keys() -> Iterator[None]:
+    """Clear the logger's dropped-key bookkeeping around every unit test.
+
+    A key one test drops is reported by the next adapter call in the process,
+    which would otherwise be another test's call on a mocked logger.
+    """
+    from application_sdk.observability import logger_adaptor
+
+    logger_adaptor._reset_dropped_keys_for_testing()
+    yield
+    logger_adaptor._reset_dropped_keys_for_testing()
+
+
+@pytest.fixture(autouse=True)
 def _reset_sizing_sink() -> Iterator[None]:
     """Drop the lazily built, process-wide sizing sink around every unit test.
 

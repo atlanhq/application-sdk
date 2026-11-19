@@ -3085,7 +3085,7 @@ async def _merge_skipped_records(app_instance: "App") -> None:
             "error",
             "Failed to merge skipped-record parts; the run has no "
             "skipped-records artifact (parts remain under the run prefix)",
-            skipped=skipped,
+            skipped_count=skipped,
             exc_info=True,
         )
         lost = skipped - unpersisted
@@ -3946,6 +3946,10 @@ def generate_workflow_class(
 
         try:
             if hasattr(input_data, "_log_summary"):
+                # The summary itself is not attached: ``_log_summary`` drops
+                # fields by name only, so a value such as a URL carrying
+                # userinfo would pass through unredacted to OTLP and the
+                # object-store log sink. It was never exported before either.
                 input_summary = input_data._log_summary()
                 if input_summary:
                     _safe_log(
@@ -3954,7 +3958,6 @@ def generate_workflow_class(
                         app_name=app_name,
                         run_id=str(run_id),
                         correlation_id=context.correlation_id,
-                        input=input_summary,
                     )
         except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
             _safe_log("warning", "Failed to log input summary", exc_info=True)

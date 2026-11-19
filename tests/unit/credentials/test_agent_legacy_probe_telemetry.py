@@ -107,11 +107,14 @@ def _telemetry_record(records: list[dict[str, Any]]) -> dict[str, Any]:
     return matches[0]["extra"]
 
 
+_TELEMETRY_PREFIX = "atlan.agent_json."
+
+
 async def _resolve(store) -> tuple[dict[str, Any], BaseException | None]:
-    """The ``atlan.agent_json.*`` fields — the call site passes them as ``extra=``,
-    so the sink receives them nested under the record's ``extra`` key."""
+    """The ``atlan.agent_json.*`` fields. The call site passes them as ``extra=``;
+    the adapter spreads that dict into the record's bound fields."""
     record, raised = await _resolve_record(store)
-    return record["extra"], raised
+    return {k: v for k, v in record.items() if k.startswith(_TELEMETRY_PREFIX)}, raised
 
 
 async def _resolve_record(store) -> tuple[dict[str, Any], BaseException | None]:
@@ -178,23 +181,17 @@ class TestExportSafety:
             assert key.startswith("atlan."), key
             assert isinstance(value, (str, int)), (key, type(value))
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "The call site passes its fields as extra={...}; the logger adapter "
-            "binds that dict under a single 'extra' key, which the export "
-            "allowlist drops, so no atlan.agent_json.* field reaches OTLP or the "
-            "NDJSON sink. A stand-in logger hid this. Turns green when fixed."
-        ),
-    )
     async def test_extras_survive_the_object_store_export_filter(self) -> None:
         """The NDJSON sink an SDR uploads to Atlan keeps only allowlisted
         extras; run the record the sink received through that same filter."""
         from application_sdk.observability.logger_adaptor import _build_extra_dict
 
         record, _ = await _resolve_record(MixedStore(SecretStoreError("denied")))
+        assert "extra" not in record, "extra= must be spread, not bound as one field"
         exported = _build_extra_dict(record)
-        for key, value in record["extra"].items():
+        telemetry = {k: v for k, v in record.items() if k.startswith(_TELEMETRY_PREFIX)}
+        assert telemetry
+        for key, value in telemetry.items():
             assert exported.get(key) == value, key
 
     async def test_never_carries_values_or_ref_names(self) -> None:
