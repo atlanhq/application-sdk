@@ -24,6 +24,7 @@ from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.deprecation._authoring import scan_authoring
 from conformance.suite.checks.deprecation._consumer import (
     PUBLIC_RENAMES,
+    own_module_paths,
     scan_consumer,
     unsafe_renames,
 )
@@ -144,6 +145,103 @@ def test_b001_fires_on_deprecated_method_call() -> None:
     findings = _b001(src)
     assert [f.rule_id for f in findings] == ["B001"]
     assert "upload_to_atlan" in findings[0].message
+
+
+def _b001_own(src: str, file: str, own: frozenset[str]) -> list:
+    tree, directives = _tree_and_directives(src)
+    return scan_consumer(tree, file, _MANIFEST, directives, own_modules=own)
+
+
+def test_b001_skips_a_method_name_called_on_an_own_module() -> None:
+    # FND-4919: an app's own module exposing a function named like a
+    # deprecated SDK method. ``events.upload_to_atlan(...)`` runs the
+    # module's function; it cannot be the SDK method.
+    src = (
+        "from app.toolshed import events\n"
+        "def run(data):\n    return events.upload_to_atlan(data)\n"
+    )
+    own = own_module_paths_of("app/toolshed/events.py")
+    assert _b001_own(src, "app/main.py", own) == []
+
+
+def test_b001_skips_a_method_name_called_on_an_imported_module() -> None:
+    src = (
+        "import events as ev\nimport pkg.events\n"
+        "ev.upload_to_atlan(1)\npkg.upload_to_atlan(2)\n"
+    )
+    assert _b001(src) == []
+
+
+def test_b001_resolves_a_relative_import_of_an_own_module() -> None:
+    src = "from . import events\nevents.upload_to_atlan(1)\n"
+    own = own_module_paths_of("app/toolshed/events.py")
+    assert _b001_own(src, "app/toolshed/runner.py", own) == []
+
+
+def test_b001_still_fires_when_from_import_is_not_a_known_module() -> None:
+    # ``logger`` imported from an app module is an object, maybe an SDK one.
+    src = "from app.utils import logger\nlogger.upload_to_atlan(1)\n"
+    own = own_module_paths_of("app/utils.py")
+    assert [f.rule_id for f in _b001_own(src, "app/main.py", own)] == ["B001"]
+
+
+def test_b001_still_fires_when_a_module_name_is_rebound() -> None:
+    src = (
+        "import events\n"
+        "def run(make):\n"
+        "    events = make()\n"
+        "    return events.upload_to_atlan(1)\n"
+    )
+    assert [f.rule_id for f in _b001(src)] == ["B001"]
+
+
+def test_b001_still_fires_on_an_attribute_receiver_of_a_module() -> None:
+    # ``mod.obj.method()`` — the receiver is ``mod.obj``, not the module.
+    src = "import mod\nmod.extractor.upload_to_atlan(1)\n"
+    assert [f.rule_id for f in _b001(src)] == ["B001"]
+
+
+def test_b001_scan_all_exempts_own_module_receiver(tmp_path) -> None:
+    """The FND-4919 shape, through scan_all and the committed manifest.
+
+    An app module's ``activity()`` context manager must not be reported as
+    the deprecated ``AtlanLoggerAdapter.activity``; the SDK logger's own
+    ``activity()`` call in the same file still is.
+    """
+    from conformance.suite.checks.deprecation import scan_all
+
+    root = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": '[project]\nname = "atlan-example-app"\nversion = "0.1.0"\n',
+            "app/toolshed/lookup_events.py": "def activity(labels):\n    pass\n",
+            "app/main.py": (
+                "from application_sdk.observability.logger_adaptor import get_logger\n"
+                "from app.toolshed import lookup_events\n"
+                "logger = get_logger(__name__)\n"
+                "with lookup_events.activity({}):\n"
+                "    logger.activity('x')\n"
+            ),
+        },
+    )
+    lines = [
+        f.line
+        for f in scan_all([root / "app/main.py"], root)
+        if f.rule_id == "B001" and "'activity'" in f.message
+    ]
+    assert lines == [5]
+
+
+def own_module_paths_of(*files: str) -> frozenset[str]:
+    """``own_module_paths`` for a tree holding exactly *files*."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        for f in files:
+            path = Path(d) / f
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("")
+        return own_module_paths(Path(d))
 
 
 def test_b001_never_matches_a_deprecated_property_as_a_call() -> None:
