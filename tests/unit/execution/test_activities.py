@@ -21,10 +21,8 @@ from application_sdk.execution._temporal.activities import (
     TaskContext,
     _track_file_refs,
     create_activity_from_task,
-    get_activity_options,
     get_all_task_activities,
 )
-from application_sdk.execution.retry import RetryPolicy as SdkRetryPolicy
 
 
 # Module-level types so get_type_hints can resolve them
@@ -361,100 +359,29 @@ class TestAllAppsActivities:
         assert "_dedup-secondary:task_s" in defn_names
 
 
-class TestGetActivityOptions:
-    """Tests for get_activity_options()."""
+class TestGetActivityOptionsIsDeprecated:
+    """The builder is off every dispatch path; it warns until v4.0.0 removes it."""
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
+    def test_warns_and_still_returns_options(self) -> None:
+        from application_sdk.app.task import TaskMetadata
+        from application_sdk.execution._temporal.activities import (
+            get_activity_options,
+        )
 
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
+        meta = TaskMetadata(
+            name="t",
+            app_name="_a",
+            func=lambda: None,
+            input_type=_ActInput,
+            output_type=_ActOutput,
+            timeout_seconds=300,
+            retry_max_attempts=5,
+        )
+        with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+            options = get_activity_options(meta)  # pyright: ignore[reportDeprecated]
 
-    def test_returns_start_to_close_timeout(self) -> None:
-        class _TimeoutApp(App):
-            @task(timeout_seconds=300)
-            async def my_task(self, input: _ActInput) -> _ActOutput:
-                return _ActOutput()
-
-            async def run(self, input: _ActInput) -> _ActOutput:
-                return _ActOutput()
-
-        task_registry = TaskRegistry.get_instance()
-        tasks = task_registry.get_tasks_for_app("_timeout-app")
-        my_task = next(t for t in tasks if t.name == "my_task")
-        options = get_activity_options(my_task)
-
-        assert "start_to_close_timeout" in options
         assert options["start_to_close_timeout"] == timedelta(seconds=300)
-
-    def test_returns_retry_policy(self) -> None:
-        class _RetryApp(App):
-            @task(timeout_seconds=60, retry_max_attempts=5)
-            async def retryable(self, input: _ActInput) -> _ActOutput:
-                return _ActOutput()
-
-            async def run(self, input: _ActInput) -> _ActOutput:
-                return _ActOutput()
-
-        task_registry = TaskRegistry.get_instance()
-        tasks = task_registry.get_tasks_for_app("_retry-app")
-        retryable_task = next(t for t in tasks if t.name == "retryable")
-        options = get_activity_options(retryable_task)
-
-        assert "retry_policy" in options
         assert options["retry_policy"].maximum_attempts == 5
-
-    def test_default_retry_policy_has_max_attempts(self) -> None:
-        class _DefaultRetryApp(App):
-            @task(timeout_seconds=60)
-            async def simple(self, input: _ActInput) -> _ActOutput:
-                return _ActOutput()
-
-            async def run(self, input: _ActInput) -> _ActOutput:
-                return _ActOutput()
-
-        task_registry = TaskRegistry.get_instance()
-        tasks = task_registry.get_tasks_for_app("_default-retry-app")
-        simple_task = next(t for t in tasks if t.name == "simple")
-        options = get_activity_options(simple_task)
-        assert options["retry_policy"] is not None
-
-    def test_explicit_retry_policy_passed_through(self) -> None:
-        """When task_metadata.retry_policy is set, get_activity_options uses it.
-
-        This exercises the inline import of temporalio.common.RetryPolicy and
-        the rp-is-not-None branch (line ~287-295).
-        """
-
-        class _ExplicitRetryApp(App):
-            @task(
-                timeout_seconds=60,
-                retry_policy=SdkRetryPolicy(
-                    max_attempts=7,
-                    initial_interval=timedelta(seconds=2),
-                    max_interval=timedelta(seconds=42),
-                    backoff_coefficient=3.0,
-                    non_retryable_errors=("ValueError",),
-                ),
-            )
-            async def explicit(self, input: _ActInput) -> _ActOutput:
-                return _ActOutput()
-
-            async def run(self, input: _ActInput) -> _ActOutput:
-                return _ActOutput()
-
-        task_registry = TaskRegistry.get_instance()
-        tasks = task_registry.get_tasks_for_app("_explicit-retry-app")
-        explicit_task = next(t for t in tasks if t.name == "explicit")
-        options = get_activity_options(explicit_task)
-        rp = options["retry_policy"]
-        assert rp.maximum_attempts == 7
-        assert rp.initial_interval == timedelta(seconds=2)
-        assert rp.maximum_interval == timedelta(seconds=42)
-        assert rp.backoff_coefficient == 3.0
-        assert "ValueError" in rp.non_retryable_error_types
 
 
 # ---------------------------------------------------------------------------
