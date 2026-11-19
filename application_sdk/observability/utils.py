@@ -1,3 +1,4 @@
+# conformance: ignore[L002] self_failure_logger must be stdlib: a failing OTel sink logging through get_logger would recurse into itself
 import logging
 import os
 import threading
