@@ -901,13 +901,25 @@ def test_aaf_constants_imported_by_sdk_modules_still_import_with_a_warning() -> 
 
 
 def test_importing_legacy_codes_module_does_not_warn() -> None:
-    import importlib
+    # A fresh interpreter, not importlib.reload: reloading would rebuild the
+    # constants and ErrorCode in this worker and break ``is`` checks in every
+    # later test.
+    import subprocess
+    import sys
 
-    import application_sdk.errors._legacy_codes as legacy
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        importlib.reload(legacy)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-W",
+            "error::DeprecationWarning",
+            "-c",
+            "import application_sdk.errors._legacy_codes",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_default_error_code_warns_and_reads_the_table() -> None:

@@ -72,6 +72,7 @@ from ._dependency_category import dependency_unavailable_classes
 from ._helpers import is_broad_suppress, is_builtin_raise, module_helpers
 from ._sdk_errors import sdk_error_names
 from .exception_chaining import exception_helpers
+from .legacy_error_code import legacy_coded_bases
 
 __all__ = [
     "ACTIVITY_DECORATORS",
@@ -150,7 +151,7 @@ def scan_text(
 ) -> list[Finding]:
     """Scan Python source *text* and return all E-series findings.
 
-    *path* and *root* let E004 and E021 follow the scanned repo's own imports
+    *path* and *root* let E004, E021 and E022 follow the scanned repo's own imports
     when they resolve an error class's SDK ancestry (see :mod:`._sdk_errors`
     and :mod:`._dependency_category`), and let E007 see a deprecation marker
     on an enclosing package (see :mod:`.._deprecated_module`).
@@ -186,6 +187,7 @@ def scan_text(
         sdk_errors=sdk_errors,
         raised_error_helpers=raised_error_helpers,
         dependency_classes=dependency_unavailable_classes(tree, path=path, root=root),
+        legacy_coded_bases=legacy_coded_bases(tree, path=path, root=root),
         deprecated_module=module_is_deprecated(tree, path=path, root=root),
         e012_in_scope=not _is_build_tooling(file),
         script_file=is_script_file(text, tree),

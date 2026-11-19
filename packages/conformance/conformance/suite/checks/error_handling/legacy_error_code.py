@@ -7,8 +7,11 @@ access until v4.0.0 removes them.
 
 The rule is an allowlist of two syntactic shapes, both local to the class:
 
-* a base of the class is an SDK class that carries an ``AAF-*`` code
-  (:data:`SDK_LEGACY_CODED_CLASSES`), imported by name from ``application_sdk``;
+* the class reaches an SDK class that carries an ``AAF-*`` code
+  (:data:`SDK_LEGACY_CODED_CLASSES`) through its bases: directly, imported by
+  name from ``application_sdk`` or through an ``application_sdk`` module alias,
+  or through app-defined intermediates in the same module or imported from the
+  scanned repo (the in-repo resolution :mod:`._sdk_errors` and E021 use);
 * the bound value or its annotation names the SDK's ``ErrorCode`` or one of its
   ``AAF-*`` constants, imported from ``application_sdk.errors`` or reached as
   ``application_sdk.errors.<NAME>``.
@@ -21,8 +24,12 @@ the SDK's legacy vocabulary.
 from __future__ import annotations
 
 import ast
+from pathlib import Path
 
 from ._constants import SDK_LEGACY_CODE_NAMES, SDK_LEGACY_CODED_CLASSES
+from ._sdk_errors import _Resolver as _SdkErrorResolver
+
+_SDK_PACKAGE = "application_sdk"
 
 _ERRORS_MODULES: frozenset[str] = frozenset(
     {"application_sdk.errors", "application_sdk.errors._legacy_codes"}
@@ -60,10 +67,130 @@ def _dotted(expr: ast.expr) -> str | None:
     return ".".join(reversed(parts))
 
 
+def _sdk_legacy_name(module: str, name: str) -> str | None:
+    """*name* when it is an SDK legacy-coded class imported from *module*.
+
+    A name from ``application_sdk.errors`` never matches: the canonical
+    ``AppError`` there carries no ``AAF-*`` code, only ``application_sdk.app``'s
+    deprecated shim of the same name does.
+    """
+    if module == "application_sdk.errors" or module.startswith(
+        "application_sdk.errors."
+    ):
+        return None
+    return name if name in SDK_LEGACY_CODED_CLASSES else None
+
+
+def _sdk_module_aliases(tree: ast.Module) -> dict[str, str]:
+    """Local names bound to an ``application_sdk`` module, mapped to that module."""
+    aliases: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] != _SDK_PACKAGE:
+                    continue
+                if alias.asname:
+                    aliases[alias.asname] = alias.name
+                else:
+                    aliases[_SDK_PACKAGE] = _SDK_PACKAGE
+        elif (
+            isinstance(node, ast.ImportFrom)
+            and node.level == 0
+            and node.module is not None
+            and node.module.split(".")[0] == _SDK_PACKAGE
+        ):
+            for alias in node.names:
+                if not alias.name[:1].isupper():
+                    aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    return aliases
+
+
+class _Resolver(_SdkErrorResolver):
+    """Reuses :mod:`._sdk_errors`' in-repo module loading to answer: which SDK
+    legacy-coded class, if any, does a class reach through its bases?"""
+
+    def name_base(
+        self,
+        tree: ast.Module,
+        path: Path | None,
+        name: str,
+        visited: frozenset[tuple[Path | None, str]],
+    ) -> str | None:
+        key = (path, name)
+        if key in visited:
+            return None
+        visited = visited | {key}
+        for node in tree.body:
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            for alias in node.names:
+                if (alias.asname or alias.name) != name:
+                    continue
+                if (
+                    node.level == 0
+                    and node.module is not None
+                    and (node.module.split(".")[0] == _SDK_PACKAGE)
+                ):
+                    return _sdk_legacy_name(node.module, alias.name)
+                target = self.module_file(node.module, node.level, path)
+                loaded = self.load(target) if target is not None else None
+                if loaded is None:
+                    return None
+                return self.name_base(loaded, target, alias.name, visited)
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name == name:
+                return self.class_base(tree, path, node, visited)
+        return None
+
+    def class_base(
+        self,
+        tree: ast.Module,
+        path: Path | None,
+        node: ast.ClassDef,
+        visited: frozenset[tuple[Path | None, str]] = frozenset(),
+    ) -> str | None:
+        for base in node.bases:
+            if isinstance(base, ast.Name):
+                found = self.name_base(tree, path, base.id, visited)
+            else:
+                dotted = _dotted(base)
+                found = None
+                if dotted is not None and "." in dotted:
+                    head, _, rest = dotted.partition(".")
+                    module = _sdk_module_aliases(tree).get(head)
+                    if module is not None:
+                        qualified = f"{module}.{rest}"
+                        owner, _, attr = qualified.rpartition(".")
+                        found = _sdk_legacy_name(owner, attr)
+            if found is not None:
+                return found
+        return None
+
+
+def legacy_coded_bases(
+    tree: ast.Module, *, path: Path | None = None, root: Path | None = None
+) -> dict[str, str]:
+    """Each class in *tree* that reaches an SDK legacy-coded class, mapped to it.
+
+    Without *root*, bases imported from the scanned repo cannot be followed;
+    same-module intermediates and SDK imports still resolve.
+    """
+    resolver = _Resolver(root)
+    module_path = path.resolve() if path is not None else None
+    found: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            base = resolver.class_base(tree, module_path, node)
+            if base is not None:
+                found.setdefault(node.name, base)
+    return found
+
+
 class LegacyErrorCodeMixin:
     """Rule method for E022 (legacy-error-code)."""
 
     _import_origins: dict[str, str]
+    _legacy_coded_bases: dict[str, str]
 
     def _add(self, rule_id: str, node: ast.AST, message: str) -> None: ...
 
@@ -92,25 +219,13 @@ class LegacyErrorCodeMixin:
                 return True
         return False
 
-    def _sdk_legacy_base(self, node: ast.ClassDef) -> str | None:
-        for base in node.bases:
-            origin = self._sdk_origin(base)
-            if origin is None or not origin.startswith("application_sdk."):
-                continue
-            module, _, name = origin.rpartition(".")
-            if module.startswith("application_sdk.errors"):
-                continue
-            if name in SDK_LEGACY_CODED_CLASSES:
-                return name
-        return None
-
     # ── E022 ─────────────────────────────────────────────────────────────────
 
     def _check_e022(self, node: ast.ClassDef) -> None:
         bindings = _default_error_code_bindings(node)
         if not bindings:
             return
-        base = self._sdk_legacy_base(node)
+        base = self._legacy_coded_bases.get(node.name)
         for stmt in bindings:
             annotation = stmt.annotation if isinstance(stmt, ast.AnnAssign) else None
             legacy_value = self._names_legacy_vocabulary(

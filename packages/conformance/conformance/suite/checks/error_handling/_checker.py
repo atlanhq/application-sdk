@@ -86,6 +86,7 @@ class Checker(
         sdk_errors: frozenset[str] = frozenset(),
         raised_error_helpers: dict[str, ExceptionHelper] | None = None,
         dependency_classes: frozenset[str] = frozenset(),
+        legacy_coded_bases: dict[str, str] | None = None,
         deprecated_module: bool = False,
         e012_in_scope: bool = True,
         script_file: bool = False,
@@ -100,6 +101,8 @@ class Checker(
         self._sdk_errors = sdk_errors
         self._exception_helpers = raised_error_helpers or {}
         self._dependency_classes = dependency_classes
+        # E022: class name -> the SDK legacy-coded class it reaches.
+        self._legacy_coded_bases = legacy_coded_bases or {}
         self._deprecated_module = deprecated_module
         # False for build / dev tooling outside the app runtime (see
         # E012_TOOLING_ROOTS): its raises never reach the AE error envelope.

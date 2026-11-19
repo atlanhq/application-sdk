@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import ast
+from pathlib import Path
 
 import pytest
 
-from conformance.suite.checks.error_handling import scan_text
+from conformance.suite.checks.error_handling import scan_path, scan_text
 from conformance.suite.checks.error_handling._constants import (
     SDK_LEGACY_CODE_NAMES,
     SDK_LEGACY_CODED_CLASSES,
@@ -85,6 +86,54 @@ def test_flags_override_on_an_sdk_legacy_coded_subclass() -> None:
     assert "StorageError" in findings[0].message
 
 
+def test_flags_override_through_a_same_module_app_intermediate() -> None:
+    src = (
+        _HEADER + "from application_sdk.storage.errors import StorageError\n"
+        "from app.codes import MY_CODE\n\n\n"
+        "class AppStorageError(StorageError):\n"
+        "    pass\n\n\n"
+        "class CustomStorageError(AppStorageError):\n"
+        "    DEFAULT_ERROR_CODE = MY_CODE\n"
+    )
+    findings = [f for f in scan_text(src, "app/errors.py") if f.rule_id == "E022"]
+    assert [f.line for f in findings] == [
+        _line_of(src, "    DEFAULT_ERROR_CODE = MY_CODE")
+    ]
+    assert "StorageError" in findings[0].message
+
+
+def test_flags_override_through_an_app_intermediate_imported_from_the_repo(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "__init__.py").write_text("")
+    (tmp_path / "app" / "base.py").write_text(
+        "from application_sdk.credentials.errors import CredentialError\n\n\n"
+        "class AppCredentialError(CredentialError):\n"
+        "    pass\n"
+    )
+    target = tmp_path / "app" / "errors.py"
+    target.write_text(
+        "from app.base import AppCredentialError\n"
+        "from app.codes import MY_CODE\n\n\n"
+        "class Custom(AppCredentialError):\n"
+        "    DEFAULT_ERROR_CODE = MY_CODE\n"
+    )
+    findings = [f for f in scan_path(target, tmp_path) if f.rule_id == "E022"]
+    assert [f.line for f in findings] == [6]
+    assert "CredentialError" in findings[0].message
+
+
+def test_flags_override_on_a_base_reached_through_a_module_alias() -> None:
+    src = (
+        "import application_sdk.storage.errors as storage_errors\n"
+        "from app.codes import MY_CODE\n\n\n"
+        "class Custom(storage_errors.StorageNotFoundError):\n"
+        "    DEFAULT_ERROR_CODE = MY_CODE\n"
+    )
+    assert _e022_lines(src) == [_line_of(src, "    DEFAULT_ERROR_CODE = MY_CODE")]
+
+
 # ---------------------------------------------------------------------------
 # Not flagged
 # ---------------------------------------------------------------------------
@@ -153,7 +202,7 @@ def test_suppression_directive_is_honoured() -> None:
         "    DEFAULT_ERROR_CODE = STORAGE_CONFIG  # conformance: ignore[E022] migrating in FOO-1\n"
     )
     findings = [f for f in scan_text(src, "app/errors.py") if f.rule_id == "E022"]
-    assert all(f.suppressed for f in findings)
+    assert findings and all(f.suppressed for f in findings)
 
 
 # ---------------------------------------------------------------------------

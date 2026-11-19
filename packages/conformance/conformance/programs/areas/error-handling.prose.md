@@ -690,7 +690,7 @@ outcome mirroring the error-handling shape in the reference app named by
   Propose narrowing to `except Exception as exc:` and adding
   `exc_info=True` to any existing log calls in the body.
 
-- **All other E-series rules (E003, E004, E007–E012, E014, E015, E017, E018, E020, E021, E022)** — produce
+- **All other E-series rules (E003, E004, E007–E012, E014, E015, E017, E018, E020, E021)** — produce
   `classification = "judgment"` and a best-effort fix guided by the `hint` and
   `message`.  (E020: replace the empty/None return on
   a checked HTTP-failure branch with a raised typed `AppError` so the failure
