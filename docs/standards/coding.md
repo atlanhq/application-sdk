@@ -47,6 +47,24 @@ This document outlines the development standards for the Application SDK, includ
     - Fix technical debt early
     - Leave code cleaner than you found it
 
+- **No `Any` in a signature**
+    - `typing.Any` in a parameter or return annotation turns type checking off
+      exactly where a consumer types against the SDK. ruff's ANN401 flags it,
+      held to a per-file baseline that only shrinks
+      (see [ci.md](ci.md)).
+    - A value the function only passes on, stores or inspects with
+      `isinstance`: `object`.
+    - A value returned in the shape it came in: a `TypeVar`
+      (`persist_file_refs(store, data: T) -> T`).
+    - A callable and its arguments, forwarded: `ParamSpec`
+      (`run_in_thread(func: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T`).
+    - `__exit__` / `__aexit__`: `type[BaseException] | None`,
+      `BaseException | None`, `TracebackType | None`.
+    - `**kwargs` forwarded to a typed API (pydantic's `__init_subclass__`): that
+      API's own type (`Unpack[ConfigDict]`), not `object`, which it rejects.
+    - New code adds no site; paying one down means running
+      `check_ann401_baseline.py --update` in the same change.
+
 - **Testing Standards**
     - Testing standards are defined in [testing.md](testing.md)
 

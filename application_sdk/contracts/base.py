@@ -71,6 +71,7 @@ from typing import (
     ClassVar,
     Protocol,
     TypeVar,
+    Unpack,
     get_args,
     get_origin,
     get_type_hints,
@@ -282,7 +283,7 @@ class Input(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _warn_on_unknown_keys(cls, data: Any) -> Any:
+    def _warn_on_unknown_keys(cls, data: object) -> object:
         """Warn when the incoming payload contains keys not declared on the model.
 
         Pydantic silently drops unknown keys by default. That default masks
@@ -350,7 +351,7 @@ class Input(BaseModel):
             n = name.lower()
             return any(p in n for p in SENSITIVE)
 
-        def safe_value(v: Any) -> Any:
+        def safe_value(v: object) -> object:
             if isinstance(v, str):
                 if len(v) > 200:
                     return f"{v[:100]}...({len(v)} chars)"
@@ -428,7 +429,7 @@ class Input(BaseModel):
                 continue
             data[name] = value
 
-        def default_serializer(obj: Any) -> Any:
+        def default_serializer(obj: object) -> object:
             if isinstance(obj, BaseModel):
                 return obj.model_dump()
             return str(obj)
@@ -439,7 +440,7 @@ class Input(BaseModel):
         return hashlib.sha256(content).hexdigest()[:16]
 
     def __init_subclass__(
-        cls, allow_unbounded_fields: bool = False, **kwargs: Any
+        cls, allow_unbounded_fields: bool = False, **kwargs: Unpack[ConfigDict]
     ) -> None:
         """Validate payload safety when Input subclasses are defined.
 
@@ -512,7 +513,7 @@ class Output(BaseModel):
     Populated automatically — do not set manually."""
 
     def __init_subclass__(
-        cls, allow_unbounded_fields: bool = False, **kwargs: Any
+        cls, allow_unbounded_fields: bool = False, **kwargs: Unpack[ConfigDict]
     ) -> None:
         """Validate payload safety when Output subclasses are defined.
 
@@ -720,7 +721,7 @@ _COLLECTION_MODULES = frozenset({"builtins", "collections", "collections.abc"})
 _BARE_ACCEPTED: tuple[type, ...] = (dict, list)
 
 
-def _collection_kind(field_type: Any) -> str | None:
+def _collection_kind(field_type: object) -> str | None:
     """Name of the variable-size collection *field_type* is, or ``None``.
 
     Fails closed: any parameterised iterable class counts (``dict``, ``list``,
@@ -757,7 +758,7 @@ def _collection_kind(field_type: Any) -> str | None:
     return origin.__name__
 
 
-def _is_unbounded_collection(field_type: Any) -> str | None:
+def _is_unbounded_collection(field_type: object) -> str | None:
     """Kind of the unbounded collection *field_type* is (no ``MaxItems``), or ``None``."""
     if get_origin(field_type) is Annotated:
         args = get_args(field_type)
@@ -780,7 +781,7 @@ _TYPE_ALIAS_TYPES: tuple[type, ...] = tuple(
 )
 
 
-def _resolve_alias_reference(ref: str, namespace: dict[str, Any]) -> Any:
+def _resolve_alias_reference(ref: str, namespace: dict[str, Any]) -> object:
     """Resolve a quoted name inside a type alias's value, or ``None``.
 
     ``list["UnsafeMap"]`` keeps the name as a plain string and ``List["UnsafeMap"]``
@@ -794,7 +795,7 @@ def _resolve_alias_reference(ref: str, namespace: dict[str, Any]) -> Any:
     return obj
 
 
-def _is_type_arg(arg: Any) -> bool:
+def _is_type_arg(arg: object) -> bool:
     """Whether a generic's argument is a type to check, not a constraint value."""
     return (
         isinstance(arg, (type, str, typing.ForwardRef, *_TYPE_ALIAS_TYPES))
@@ -803,7 +804,7 @@ def _is_type_arg(arg: Any) -> bool:
 
 
 def _is_forbidden_type(
-    field_type: type,
+    field_type: object,
     _aliases: frozenset[int] = frozenset(),
     _namespace: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
@@ -828,7 +829,8 @@ def _is_forbidden_type(
             return False, ""
         module = sys.modules.get(getattr(field_type, "__module__", "") or "")
         return _is_forbidden_type(
-            field_type.__value__,  # pyright: ignore[reportUnknownMemberType]
+            # The alias classes are not typed as having it; both define it.
+            getattr(field_type, "__value__"),
             _aliases | {id(field_type)},
             vars(module) if module is not None else _namespace,
         )

@@ -22,6 +22,7 @@ from typing import (
     ClassVar,
     Literal,
     Never,
+    ParamSpec,
     Sequence,
     TypeVar,
     cast,
@@ -431,6 +432,7 @@ def _tag_ref_store(
 
 # Type variable for require() method
 T = TypeVar("T")
+_P = ParamSpec("_P")
 HT = TypeVar("HT", bound=HeartbeatDetails)
 
 # BLDX-878: inter-app calls deactivated pending review.
@@ -529,7 +531,7 @@ def _format_build_identity() -> str:
 _BUILD_IDENTITY = _format_build_identity()
 
 
-def _safe_log(level: str, message: str, **attrs: Any) -> None:
+def _safe_log(level: str, message: str, **attrs: object) -> None:
     """Log using Temporal's workflow logger.
 
     Always runs in Temporal workflow context.
@@ -836,7 +838,7 @@ class TaskStateAccessor:
         with _app_state_lock:
             return _app_state.get(workflow_id, {}).get(key)
 
-    def set(self, key: str, value: Any) -> None:
+    def set(self, key: str, value: object) -> None:
         """Set in-memory state for the current app execution."""
         workflow_id = _get_execution_id_from_task()
         with _app_state_lock:
@@ -873,7 +875,7 @@ class AppStateAccessor:
         """
         return self._app.get_app_state(key)
 
-    def set(self, key: str, value: Any) -> None:
+    def set(self, key: str, value: object) -> None:
         """Set in-memory state for the current app execution.
 
         Args:
@@ -1261,7 +1263,7 @@ class App(ABC):
     # _client: "WorkflowAppClient | None" = None
     _task_context: "TaskExecutionContext | None" = None
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
+    def __init_subclass__(cls, **kwargs: object) -> None:
         """Automatically register App subclasses.
 
         This is called when a class inherits from App. It:
@@ -1380,7 +1382,7 @@ class App(ABC):
     # Task-only methods (raise AppContextError if called outside @task methods)
     # =========================================================================
 
-    def heartbeat(self, *details: Any) -> None:
+    def heartbeat(self, *details: object) -> None:
         """Send a heartbeat with optional progress details.
 
         Only available in @task methods.
@@ -1436,10 +1438,10 @@ class App(ABC):
 
     async def run_in_thread(
         self,
-        func: Callable[..., Any],
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
+        func: Callable[_P, T],
+        *args: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> T:
         """Run a blocking function in a thread pool.
 
         Only available in @task methods. The offload is automatically wrapped in
@@ -1589,7 +1591,7 @@ class App(ABC):
         with _app_state_lock:
             return _app_state.get(execution_id, {}).get(key)
 
-    def set_app_state(self, key: str, value: Any) -> None:
+    def set_app_state(self, key: str, value: object) -> None:
         """Set in-memory state for the current app execution.
 
         Only available inside @task methods.

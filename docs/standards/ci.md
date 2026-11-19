@@ -235,6 +235,35 @@ The file is both a pytest module (the package's own test run) and a script (the
 needs only ruff, which the root env pins to the package's version. A new file
 starts at zero, so new code must stay under both thresholds.
 
+## `Any` in an SDK signature: an ANN401 baseline that only shrinks
+
+ruff's ANN401 flags `typing.Any` in a parameter or return annotation. It is not
+in the root ruff `select`: `application_sdk/` had about 490 such sites when it
+was enabled (FND-4301). They are held instead to
+`.github/scripts/ann401_baseline.json`, per file, by
+`.github/scripts/check_ann401_baseline.py`, with the same three outcomes as the
+baselines above:
+
+- **A count above the baseline fails.** Type the new signature (see
+  [coding.md](coding.md), "No `Any` in a signature"). The failure lists every site in
+  the file.
+- **A count below the baseline also fails.** Lock the improvement in with
+  `--update`.
+- **A baseline count above the base revision's fails.** The
+  `CI script tests` job passes `--base-sha`; a file renamed in the PR keeps its
+  base count. A base with no baseline file is measured on its own tree instead.
+
+```bash
+uv run --frozen python .github/scripts/check_ann401_baseline.py           # check
+uv run --frozen python .github/scripts/check_ann401_baseline.py --update  # lock in a reduction
+```
+
+The baseline is the only suppression. ruff runs with `--ignore-noqa`, so a
+`# noqa: ANN401` hides nothing, and `test_check_ann401_baseline.py` fails if
+`pyproject.toml` ignores ANN401 or configures `flake8-annotations` (whose
+`allow-star-arg-any` would let `*args: Any` through). The `ann401-baseline`
+pre-commit hook runs the check on every change under `application_sdk/`.
+
 ## An artifact upload retry must use a DIFFERENT artifact name
 
 `actions/upload-artifact` treats the artifact service's `FinalizeArtifact` 403

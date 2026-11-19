@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, TypeVar, cast
 
 from pydantic import (
     BaseModel,
@@ -38,6 +38,9 @@ from application_sdk.contracts.base import (  # re-exported; defined with the co
 )
 from application_sdk.contracts.types_errors import RunPrefixRequiredError
 from application_sdk.credentials.ref import CredentialRef
+
+if TYPE_CHECKING:
+    from pyatlan_v9.model.assets import Connection
 
 T = TypeVar("T")
 K = TypeVar("K")
@@ -765,7 +768,7 @@ class ConnectionRef(BaseModel, frozen=True):
         )
 
     @staticmethod
-    def from_connection(conn: Any) -> ConnectionRef:
+    def from_connection(conn: Connection) -> ConnectionRef:
         """Convert a pyatlan_v9 Connection (msgspec.Struct) to ConnectionRef.
 
         The pyatlan_v9 struct is flat (all attributes at top level with camelCase
@@ -784,7 +787,7 @@ class ConnectionRef(BaseModel, frozen=True):
 
         return ConnectionRef.model_validate(to_atlas_format(conn))
 
-    def to_connection(self) -> Any:
+    def to_connection(self) -> Connection:
         """Convert back to a pyatlan_v9 Connection (msgspec.Struct).
 
         ``model_dump(by_alias=True)`` produces the nested Atlas API shape
@@ -798,4 +801,6 @@ class ConnectionRef(BaseModel, frozen=True):
             from_atlas_format,
         )
 
-        return from_atlas_format(self.model_dump(by_alias=True))
+        # from_atlas_format builds the class its typeName names, and this
+        # model's typeName is always "Connection".
+        return cast("Connection", from_atlas_format(self.model_dump(by_alias=True)))

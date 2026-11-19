@@ -713,12 +713,12 @@ def task(
     return decorator
 
 
-def is_task(obj: Any) -> bool:
+def is_task(obj: object) -> bool:
     """Check if an object is decorated with @task."""
     return hasattr(obj, "_task_metadata")
 
 
-def get_task_metadata(obj: Any) -> TaskMetadata | None:
+def get_task_metadata(obj: object) -> TaskMetadata | None:
     """Get task metadata from a decorated function."""
     return getattr(obj, "_task_metadata", None)
 

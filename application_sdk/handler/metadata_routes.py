@@ -37,9 +37,9 @@ from uuid import uuid4
 import orjson
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
-from application_sdk._logging import get_logger
+from application_sdk._logging import SdkLogger, get_logger
 from application_sdk.common._generated_tree import (
     MANIFEST_STEM,
     choose_form_configmap,
@@ -179,7 +179,7 @@ def tree_default_entrypoint(generated_dir: Path) -> str | None:
 
 def tree_input_contract(
     generated_dir: Path, app_package: str, entrypoint: str | None
-) -> Any:
+) -> type[BaseModel]:
     """The generated ``AppInputContract`` for *entrypoint*, resolved from disk.
 
     Looks where the contract toolkit writes it: ``generated/<ep>/_input.py``
@@ -343,7 +343,7 @@ def missing_fields_error(paths: list[tuple[str, ...]]) -> ValidationError:
 def credential_gaps(
     generated_dir: Path,
     entrypoint: str | None,
-    inline_credentials: Any,
+    inline_credentials: object,
     input_data: Any,
 ) -> list[tuple[str, ...]]:
     """Required credential fields a ``/validate`` body leaves out (FND-502).
@@ -431,7 +431,7 @@ def credential_gaps(
 def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
     """Register the configmap, manifest, input-contract and validate routes on *app*."""
 
-    def _default_entrypoint(log: Any, context: str) -> str | None:
+    def _default_entrypoint(log: SdkLogger, context: str) -> str | None:
         """The default entry point, or ``None`` (logged) when there is none."""
         if source.default_entrypoint is None:
             ep_name = tree_default_entrypoint(source.generated_dir())
@@ -870,7 +870,7 @@ def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
             media_type="application/json",
         )
 
-    def _resolve_input_contract(entrypoint: str | None) -> Any:
+    def _resolve_input_contract(entrypoint: str | None) -> type[BaseModel]:
         """The entry point's input model: one resolution for both routes.
 
         ``/validate`` judges a body against exactly the model ``/input-contract``

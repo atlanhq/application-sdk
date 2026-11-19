@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 from uuid import uuid4
 
 # Low-level loguru import used only as the activity-context fallback below.
@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from application_sdk.infrastructure.state import StateStore
 
 T = TypeVar("T")
+_P = ParamSpec("_P")
 HT = TypeVar("HT", bound=HeartbeatDetails)
 
 
@@ -56,7 +57,7 @@ def _is_in_workflow() -> bool:
     return get_execution_context().execution_type == "workflow"
 
 
-def _is_atlan_logger(obj: Any) -> bool:
+def _is_atlan_logger(obj: object) -> bool:
     """Check if a logger object is our AtlanLoggerAdapter (supports arbitrary kwargs).
 
     Uses duck-typing to avoid importing AtlanLoggerAdapter here — which could
@@ -96,7 +97,7 @@ class _WorkflowSafeLogger:
             self._structlog_logger = _loguru_logger.bind(**self._context)
         return self._structlog_logger
 
-    def _log(self, level: str, message: str, *args: Any, **kwargs: Any) -> None:
+    def _log(self, level: str, message: str, *args: object, **kwargs: object) -> None:
         """Log a message at the specified level.
 
         Supports both printf-style positional args and keyword context:
@@ -160,23 +161,23 @@ class _WorkflowSafeLogger:
                 logger = logger.opt(exception=exc_info)
             getattr(logger, level)(message, *args)
 
-    def debug(self, message: str, *args: Any, **kwargs: Any) -> None:
+    def debug(self, message: str, *args: object, **kwargs: object) -> None:
         """Log a debug message."""
         self._log("debug", message, *args, **kwargs)
 
-    def info(self, message: str, *args: Any, **kwargs: Any) -> None:
+    def info(self, message: str, *args: object, **kwargs: object) -> None:
         """Log an info message."""
         self._log("info", message, *args, **kwargs)
 
-    def warning(self, message: str, *args: Any, **kwargs: Any) -> None:
+    def warning(self, message: str, *args: object, **kwargs: object) -> None:
         """Log a warning message."""
         self._log("warning", message, *args, **kwargs)
 
-    def error(self, message: str, *args: Any, **kwargs: Any) -> None:
+    def error(self, message: str, *args: object, **kwargs: object) -> None:
         """Log an error message."""
         self._log("error", message, *args, **kwargs)
 
-    def bind(self, **kwargs: Any) -> "_WorkflowSafeLogger":
+    def bind(self, **kwargs: object) -> "_WorkflowSafeLogger":
         """Create a new logger with additional context bound."""
         new_logger = _WorkflowSafeLogger(
             self._name,
@@ -437,15 +438,15 @@ class AppContext:
 
         return is_single_store(self._storage, self._upstream_storage)
 
-    def log_debug(self, message: str, **kwargs: Any) -> None:
+    def log_debug(self, message: str, **kwargs: object) -> None:
         """Log a debug message."""
         self.logger.debug(message, **kwargs)
 
-    def log_info(self, message: str, **kwargs: Any) -> None:
+    def log_info(self, message: str, **kwargs: object) -> None:
         """Log an info message."""
         self.logger.info(message, **kwargs)
 
-    def log_warning(self, message: str, **kwargs: Any) -> None:
+    def log_warning(self, message: str, **kwargs: object) -> None:
         """Log a warning message."""
         self.logger.warning(message, **kwargs)
 
@@ -528,7 +529,7 @@ class AppContext:
             field="credential_ref",
         )
 
-    def log_error(self, message: str, **kwargs: Any) -> None:
+    def log_error(self, message: str, **kwargs: object) -> None:
         """Log an error message."""
         self.logger.error(message, **kwargs)
 
@@ -601,7 +602,7 @@ class TaskExecutionContext:
     heartbeat_controller: "HeartbeatController"
     """Controller for heartbeat operations."""
 
-    def heartbeat(self, *details: Any) -> None:
+    def heartbeat(self, *details: object) -> None:
         """Send a heartbeat with optional progress details.
 
         Call this periodically during long-running operations to signal
@@ -703,9 +704,9 @@ class TaskExecutionContext:
 
     async def run_in_thread(
         self,
-        func: Callable[..., T],
-        *args: Any,
-        **kwargs: Any,
+        func: Callable[_P, T],
+        *args: _P.args,
+        **kwargs: _P.kwargs,
     ) -> T:
         """Last-resort escape hatch: run a blocking function in a thread pool.
 

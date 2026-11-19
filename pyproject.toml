@@ -615,6 +615,11 @@ extend-select = [
     "BLE001",  # blind `except Exception` / `except BaseException` (FND-4294)
     "RUF100",  # unused `noqa` — keeps every suppression live (FND-4294)
 ]
+# ANN401 (`typing.Any` in a signature) is deliberately NOT selected here: ~490
+# existing sites would make every run red. .github/scripts/check_ann401_baseline.py
+# holds application_sdk/ to .github/scripts/ann401_baseline.json, per file, and
+# that file is the only suppression — do not add ANN401 to an ignore list or a
+# per-file-ignores entry (FND-4301, docs/standards/ci.md).
 
 [tool.ruff.lint.per-file-ignores]
 "application_sdk/main.py" = ["T201"]
