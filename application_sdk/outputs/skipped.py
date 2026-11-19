@@ -265,6 +265,9 @@ class _RollbackFailedError(InternalError):
         "A failed append to the skipped-records file could not be rolled back"
     )
     component: str | None = "skipped_records"
+    #: The worker-local file that may now end mid-line. The truncate's own
+    #: OSError can be descriptor-level and name no file, so it rides here.
+    path: str | None = None
 
 
 def _append_lines(path: Path, chunk: bytes) -> None:
@@ -285,7 +288,13 @@ def _append_lines(path: Path, chunk: bytes) -> None:
             try:
                 fh.truncate(start)
             except OSError as exc:
-                raise _RollbackFailedError() from exc
+                raise _RollbackFailedError(
+                    message=(
+                        "A failed append to the skipped-records file could not "
+                        f"be rolled back: {path}"
+                    ),
+                    path=str(path),
+                ) from exc
             raise
 
 
@@ -377,8 +386,9 @@ class SkippedRecordSink:
             # conformance: ignore[L022] the write failed and these records are lost from the run's file; fail-open keeps the run going (FND-4881)
             _logger.error(
                 "Failed to write skipped records and could not roll the local "
-                "file back; %d record(s) are counted but missing from the "
+                "file %s back; %d record(s) are counted but missing from the "
                 "run's skipped-records file",
+                self.path,
                 lost,
                 exc_info=True,
             )

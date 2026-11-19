@@ -126,3 +126,19 @@ def test_a_client_parse_error_keeps_its_evidence_fields() -> None:
     assert details.code == "INVALID_INPUT_CREDENTIAL_PARSE"
     assert details.evidence["received_auth_type"] == "msi"
     assert details.evidence["field"] == "credentials"
+
+
+@pytest.mark.parametrize(
+    "err", _client_credential_errors(), ids=lambda e: type(e).__name__
+)
+def test_a_client_credential_error_renders_like_its_family(err: Exception) -> None:
+    """The dataclass-generated __init__ skips CredentialError.__init__; nothing
+    it sets is lost. ``str()`` takes the family's AAF prefix from the MRO, and
+    the deprecated per-instance override stays unset."""
+    from application_sdk.errors._legacy_codes import legacy_code_for
+
+    code = legacy_code_for(type(err))
+    assert code is not None
+    assert str(err).startswith(f"[{code.code}] ")
+    assert err._error_code is None  # type: ignore[attr-defined]
+    assert err.credential_name is None  # type: ignore[attr-defined]
