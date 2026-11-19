@@ -37,6 +37,15 @@ Coverage limits (intentional, documented): module-qualified *usage* without a
 ``from`` import (``import application_sdk.discovery as d; d.DiscoveryError(...)``)
 and sibling re-export aliasing can produce false negatives — biased toward zero
 false positives at WARN.
+
+**Module receivers are exempt from method matching.**  ``x.name(...)`` is not a
+method call when ``x`` is provably a module: a name bound only by ``import x``,
+or by ``from pkg import x`` where ``pkg/x.py`` (or ``pkg/x/``) is in the app's own
+tree.  Calling a module attribute runs a module-level function, never an SDK
+method.  The case that prompted it: an app's own ``lookup_events`` module with
+an ``activity()`` context manager collided with the deprecated
+``AtlanLoggerAdapter.activity`` (FND-4919).  Any receiver that is not proven a
+module (``logger``, ``self.x``, a parameter) is still matched by name.
 """
 
 from __future__ import annotations
@@ -116,6 +125,90 @@ def _repo_python_files(root: Path) -> Iterator[tuple[Path, tuple[str, ...]]]:
         for filename in filenames:
             if filename.endswith(".py"):
                 yield base / filename, (*prefix, filename)
+
+
+def own_module_paths(root: Path) -> frozenset[str]:
+    """Every dotted module/package path in *root*'s own tree, at every depth.
+
+    ``app/toolshed/lookup_events.py`` yields ``app.toolshed.lookup_events``,
+    ``toolshed.lookup_events`` and ``lookup_events`` (plus the packages above
+    it), so a ``src/`` layout or a pytest rootdir resolves the same way an
+    import from the repo root does.  Used to prove that ``from pkg import x``
+    bound a module, not a function or object; failing to read the tree yields
+    an empty set, which proves nothing and leaves every call matched.
+    """
+    paths: set[str] = set()
+    for _, parts in _repo_python_files(root):
+        stem = parts[-1][: -len(".py")]
+        dotted = [*parts[:-1]] if stem == "__init__" else [*parts[:-1], stem]
+        for end in range(1, len(dotted) + 1):
+            for start in range(end):
+                paths.add(".".join(dotted[start:end]))
+    return frozenset(paths)
+
+
+def _module_receivers(
+    tree: ast.Module, file: str, own_modules: frozenset[str]
+) -> frozenset[str]:
+    """Local names in *tree* proven to be bound to a module, and only ever that.
+
+    A name qualifies when every binding of it in the file is an import that
+    binds a module: ``import a.b`` (binds ``a``), ``import a.b as x``, or
+    ``from pkg import x`` with ``pkg.x`` in *own_modules*.  Any other binding
+    anywhere in the file — assignment, parameter, ``def``, ``for``/``with``
+    target, ``except ... as`` — disqualifies it, so a rebound name is never
+    exempted.
+    """
+    module_bound: set[str] = set()
+    other_bound: set[str] = set()
+    package = file.replace("\\", "/").split("/")[:-1]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                module_bound.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            base = _import_from_base(node, package)
+            for alias in node.names:
+                is_module = bool(base) and f"{base}.{alias.name}" in own_modules
+                (module_bound if is_module else other_bound).add(
+                    alias.asname or alias.name
+                )
+        else:
+            other_bound.update(_non_import_bindings(node))
+    return frozenset(module_bound - other_bound)
+
+
+def _import_from_base(node: ast.ImportFrom, package: list[str]) -> str:
+    """The absolute dotted module a ``from ... import`` reads from.
+
+    A relative import resolves against *package*, the importing file's
+    directory parts; one that climbs above it resolves to ``""``, which proves
+    nothing.
+    """
+    base = node.module or ""
+    if not node.level:
+        return base
+    up = node.level - 1
+    if up > len(package):
+        return ""
+    return ".".join([*package[: len(package) - up], *([base] if base else [])])
+
+
+def _non_import_bindings(node: ast.AST) -> list[str]:
+    """Names *node* binds other than by an import statement."""
+    if isinstance(node, ast.Name):
+        return [] if isinstance(node.ctx, ast.Load) else [node.id]
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return [node.name]
+    if isinstance(node, ast.arg):
+        return [node.arg]
+    if isinstance(node, (ast.Global, ast.Nonlocal)):
+        return list(node.names)
+    if isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)):
+        return [node.name] if node.name else []
+    if isinstance(node, ast.MatchMapping):
+        return [node.rest] if node.rest else []
+    return []
 
 
 def _is_test_file(parts: tuple[str, ...]) -> bool:
@@ -323,8 +416,14 @@ def scan_consumer(
     directives: dict[int, _IgnoreDirective],
     unsafe: frozenset[str] | None = None,
     source: str | None = None,
+    own_modules: frozenset[str] = frozenset(),
 ) -> list[Finding]:
     """Return B001 findings for *tree* against the deprecated-symbol *manifest*.
+
+    A method call whose receiver is proven a module is not matched; see
+    :func:`_module_receivers`.  *own_modules* (from :func:`own_module_paths`)
+    lets ``from pkg import x`` count as a module binding; without it only
+    ``import x`` does.
 
     A call of a :data:`PUBLIC_RENAMES` method is marked as a safe swap only when
     *unsafe* (from :func:`unsafe_renames`) is given and does not name it, the
@@ -481,6 +580,9 @@ def scan_consumer(
         else frozenset()
     )
     lines = source.splitlines() if source is not None else []
+    module_receivers = (
+        _module_receivers(tree, file, own_modules) if method else frozenset()
+    )
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
@@ -503,6 +605,10 @@ def scan_consumer(
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
             and node.func.attr in method
+            and not (
+                isinstance(node.func.value, ast.Name)
+                and node.func.value.id in module_receivers
+            )
         ):
             record = method[node.func.attr]
             swap = (

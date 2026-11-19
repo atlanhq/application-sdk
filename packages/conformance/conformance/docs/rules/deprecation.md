@@ -76,9 +76,12 @@ AtlanError` site); B001 owns import / construct / subclass, so the two never
 double-report.
 
 Coverage limits (intentional, low-false-positive at WARN): deprecated *parameters* /
-*modes* are out of scope; method matching is attribute-name-anchored (a same-named
-method on an unrelated object is a known false-positive risk); re-export aliasing can
-produce false negatives.  All are suppressible with `# conformance: ignore[B001]`.
+*modes* are out of scope; method matching is attribute-name-anchored, except that a call
+on a receiver proven to be a module (bound only by `import x`, or by `from pkg import x`
+where `pkg/x.py` is in the app) is never matched, since it runs a module function.  A
+same-named method on any other unrelated object remains a known false-positive risk;
+re-export aliasing can produce false negatives.  All are suppressible with `#
+conformance: ignore[B001]`.
 
 ---
 
