@@ -257,7 +257,8 @@ can restate an SDK reason under its code to keep its own wording (5 Tableau code
 
 ## Not in this spike
 
-The generic tracker, the artifact writer, the lookup-side outcome export (proven feasible by the
-local replay, not built), and an `adopt-lineage-coverage` skill modelled on `typed-failures`.
-The BI-internal sub-reasons are designed and tested here but not yet recorded by an app; Looker is
-the first port. The Tableau and Power BI ports live on app branches, not here.
+The generic tracker, the artifact writer, and the lookup-side outcome export (proven feasible by
+the local replay, not built). The Tableau, Power BI and Looker ports live on app branches, not here;
+Looker records the BI-internal sub-reasons. The rollout skill, `adopt-lineage-coverage` (modelled on
+`typed-failures`), ships here as a draft: it is how those ports were built, and its rule is that an
+app's lineage output stays byte-identical to its unmodified build.
