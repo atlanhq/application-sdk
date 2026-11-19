@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from application_sdk.credentials.errors import CredentialError, CredentialParseError
+
+# Re-exported: importable from here before FND-4298 moved the connect timeout
+# off AppTimeoutError (Symbol Removal Check).
+from application_sdk.errors.categories import Audience as Audience
+from application_sdk.errors.leaves import AppTimeoutError as AppTimeoutError
 from application_sdk.errors.leaves import (
     AuthError,
     InternalError,
@@ -103,6 +108,10 @@ class SqlCredentialsParseError(CredentialParseError):
     ``except CredentialError`` catches it. Before FND-4298 it had its own code,
     ``INVALID_INPUT_CREDENTIALS_PARSE``, one letter away from the shared one.
     """
+
+    # Restated, not new: the code CredentialParseError carries. Conformance
+    # P003 reads only a class's own body; test_errors pins the two equal.
+    code: ClassVar[str] = "INVALID_INPUT_CREDENTIAL_PARSE"
 
     message: str = "SQL credentials parse error"
 

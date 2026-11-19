@@ -29,6 +29,10 @@ class AzureCredentialParseError(CredentialParseError):
     ``INVALID_INPUT_AZURE_CREDENTIALS_PARSE``.
     """
 
+    # Restated, not new: the code CredentialParseError carries. Conformance
+    # P003 reads only a class's own body; test_errors pins the two equal.
+    code: ClassVar[str] = "INVALID_INPUT_CREDENTIAL_PARSE"
+
     message: str = "Azure credential parsing failed"
     field: str | None = "credentials"
     received_auth_type: str | None = None

@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
+# Re-exported: importable from here before FND-4298 moved SqlProbeTimeoutError
+# off AppTimeoutError (Symbol Removal Check).
+from application_sdk.errors.categories import Audience as Audience
+from application_sdk.errors.leaves import AppTimeoutError as AppTimeoutError
 from application_sdk.errors.leaves import (
     DataIntegrityError,
     SourceUnavailableError,
