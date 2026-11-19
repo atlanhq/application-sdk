@@ -826,6 +826,33 @@ async def check_secret_store_access(
             ),
             resolved=resolved,
         )
+    unresolved = (
+        _unresolved_secret_fields(raw, bundle) if spec.key_type == "single-key" else []
+    )
+    if unresolved:
+        # Partial resolution: some credential fields resolved, a secret one did
+        # not (typo, wrong case, variable not injected into the container). The
+        # field is then sent as its literal ref-key, and the source reports a
+        # login failure that hides this. Flag it here instead. Not fatal: the
+        # connectivity checks still run and show the source's own verdict.
+        fields = ", ".join(unresolved)
+        return SecretStoreCheckResult(
+            passed=False,
+            store_down=False,
+            fatal=False,
+            substituted=substituted,
+            message=(
+                f"Configured secret store is accessible - {substituted} secret(s) "
+                f"retrieved, but {fields} could not be resolved and will be used "
+                "as entered."
+            ),
+            suggested_action=(
+                f"Check the key entered for {fields}: with Key Type Single Key it "
+                "must exactly match a key in the secret store (for environment "
+                "variables, the variable name, which is case-sensitive)."
+            ),
+            resolved=resolved,
+        )
     return SecretStoreCheckResult(
         passed=True,
         store_down=False,
@@ -837,6 +864,51 @@ async def check_secret_store_access(
         ),
         resolved=resolved,
     )
+
+
+#: Final segment of a credential field name that always holds a secret, so a
+#: single-key ref-key under it that the store didn't resolve is a misconfiguration
+#: (not a literal like ``extra.database``). Matched on the last ``.``-segment, so
+#: ``basic.password`` and ``extra.password`` both count.
+_SECRET_FIELD_NAMES: frozenset[str] = frozenset(
+    {
+        "username",
+        "password",
+        "passphrase",
+        "secret",
+        "client-secret",
+        "client_secret",
+        "token",
+        "api-key",
+        "api_key",
+        "private-key",
+        "private_key",
+    }
+)
+
+
+def _unresolved_secret_fields(raw: dict[str, Any], bundle: dict[str, Any]) -> list[str]:
+    """Names (never values) of secret credential fields the bundle didn't resolve."""
+    out: list[str] = []
+
+    def _check(name: str, value: Any) -> None:
+        if (
+            name.rsplit(".", 1)[-1].lower() in _SECRET_FIELD_NAMES
+            and isinstance(value, str)
+            and value
+            and value not in bundle
+        ):
+            out.append(name)
+
+    for key, value in raw.items():
+        if key in _LITERAL_KEYS:
+            continue
+        _check(key, value)
+    extra = raw.get("extra")
+    if isinstance(extra, dict):
+        for key, value in extra.items():
+            _check(f"extra.{key}", value)
+    return sorted(out)
 
 
 async def _check_declared_sources(
