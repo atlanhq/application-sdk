@@ -133,6 +133,9 @@ they read a mock, and now pin them as strict `xfail`s.
   preflight gate's non-outcome lines: `gate_records("WARNING")`.
 - To check what is exported, run the record's `extra` through
   `_build_extra_dict` — the allowlist the OTLP and NDJSON sinks apply.
+  A key it drops is counted on `log.extra_key.dropped`; to assert on that
+  counter, see the `drop_state` fixture in
+  `tests/unit/observability/test_log_extra_allowlist.py`.
 
 ## Registry Isolation
 

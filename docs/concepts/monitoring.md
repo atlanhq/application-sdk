@@ -372,6 +372,16 @@ adding a new queryable field is a deliberate one-line change next to the emitter
 prefixes (`atlan.`, `temporal.`, `failure.`, `exception.`, `otel.`, `tenant.`, `workflow_run.`) pass
 through without being individually listed.
 
+A dropped key is not silent. Each drop adds 1 to the `log.extra_key.dropped` counter, labelled with
+the dropped `key` (at most 64 distinct labels per process; later keys share `_other`). The first drop
+of each key also logs one DEBUG line naming it. A unit test (`tests/unit/observability/test_log_extra_allowlist.py`)
+fails when an SDK log call passes a literal field that is not allowlisted, so in practice the counter
+measures app fields and third-party `extra=` keys, which the test cannot see.
+
+`AtlanLoggerAdapter` accepts a stdlib-style `extra={...}` dict and spreads its entries into the bound
+fields; an explicit keyword field wins over an `extra` entry with the same name. The SDK installs the
+adapter as Temporal's `workflow.logger`, so code written for a stdlib logger keeps its fields.
+
 ### Log provenance: the `source` field
 
 Every record carries a low-cardinality `source` attribute answering *which layer emitted this line*.

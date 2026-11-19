@@ -151,6 +151,9 @@ Every gated run emits a structured `Preflight gate outcome` event
 also stamps `gate_tier` and `warmup_outcome` on its rows (plus `warmup_duration_ms` /
 `warmup_transitions` once the wait has ended); every new row key must be added to
 `_KNOWN_EXTRA_KEYS`, or it is dropped before export and cannot be queried.
+`tests/unit/observability/test_log_extra_allowlist.py` scans every literal log
+field in `application_sdk` (keyword fields, literal `extra={...}` keys and
+`_safe_log` fields) and fails on one that is not allowlisted or prefixed.
 
 ### Logging contract
 

@@ -3085,7 +3085,7 @@ async def _merge_skipped_records(app_instance: "App") -> None:
             "error",
             "Failed to merge skipped-record parts; the run has no "
             "skipped-records artifact (parts remain under the run prefix)",
-            skipped=skipped,
+            skipped_count=skipped,
             exc_info=True,
         )
         lost = skipped - unpersisted
@@ -3954,7 +3954,7 @@ def generate_workflow_class(
                         app_name=app_name,
                         run_id=str(run_id),
                         correlation_id=context.correlation_id,
-                        input=input_summary,
+                        input_summary=input_summary,
                     )
         except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
             _safe_log("warning", "Failed to log input summary", exc_info=True)
