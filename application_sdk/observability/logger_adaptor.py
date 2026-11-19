@@ -333,7 +333,6 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "legacy_workflow_type",
         "canonical_workflow_type",
         "skipped_count",
-        "input_summary",
     }
 )
 
@@ -348,6 +347,10 @@ _METER_NAME = "application_sdk.observability"
 # not grow one series per key. Keys past the cap share the overflow label.
 _DROPPED_KEY_LABEL_CAP = 64
 _DROPPED_KEY_OVERFLOW_LABEL = "_other"
+# Bounds the once-only bookkeeping: a worker that sees an unbounded stream of
+# distinct keys must not retain every one. Past the cap, new keys are still
+# counted (under the overflow label) but no longer reported at DEBUG.
+_DROPPED_KEY_TRACK_CAP = 1024
 _dropped_keys_lock = threading.Lock()
 _dropped_keys_seen: set[str] = set()
 # Keys dropped for the first time and not yet reported. The DEBUG line cannot be
@@ -388,7 +391,10 @@ def _dropped_key_metric() -> Counter:
 def _record_dropped_key(key: str) -> None:
     """Count one dropped field and queue its key for a once-only DEBUG report."""
     with _dropped_keys_lock:
-        if key not in _dropped_keys_seen:
+        if (
+            key not in _dropped_keys_seen
+            and len(_dropped_keys_seen) < _DROPPED_KEY_TRACK_CAP
+        ):
             _dropped_keys_seen.add(key)
             _dropped_keys_unreported.append(key)
             if len(_dropped_keys_labelled) < _DROPPED_KEY_LABEL_CAP:

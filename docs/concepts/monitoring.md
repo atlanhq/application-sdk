@@ -374,7 +374,8 @@ through without being individually listed.
 
 A dropped key is not silent. Each drop adds 1 to the `log.extra_key.dropped` counter, labelled with
 the dropped `key` (at most 64 distinct labels per process; later keys share `_other`). The first drop
-of each key also logs one DEBUG line naming it. A unit test (`tests/unit/observability/test_log_extra_allowlist.py`)
+of each key also logs one DEBUG line naming it; past 1024 distinct keys per process, new keys are
+only counted, so a stream of data-derived keys cannot grow the worker's memory. A unit test (`tests/unit/observability/test_log_extra_allowlist.py`)
 fails when an SDK log call passes a literal field that is not allowlisted, so in practice the counter
 measures app fields and third-party `extra=` keys, which the test cannot see.
 

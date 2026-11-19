@@ -212,6 +212,25 @@ class TestDroppedFieldsAreCounted:
 
         assert _dropped_counts(drop_state) == {"k1": 2, "k2": 1, "_other": 2}
 
+    def test_once_only_tracking_is_bounded(
+        self,
+        drop_state: InMemoryMetricReader,
+        monkeypatch: pytest.MonkeyPatch,
+        loguru_capture: list[dict[str, Any]],
+    ) -> None:
+        monkeypatch.setattr(logger_adaptor, "_DROPPED_KEY_TRACK_CAP", 2)
+        monkeypatch.setattr(logger_adaptor, "_DROPPED_KEY_LABEL_CAP", 2)
+
+        _build_extra_dict({"k1": 1, "k2": 1, "k3": 1, "k4": 1})
+        get_logger("tests.log_extra_allowlist").info("drain")
+
+        assert logger_adaptor._dropped_keys_seen == {"k1", "k2"}
+        assert _dropped_counts(drop_state) == {"k1": 1, "k2": 1, "_other": 2}
+        reported = [
+            r["message"] for r in loguru_capture if "export allowlist" in r["message"]
+        ]
+        assert len(reported) == 2
+
     def test_the_counter_is_created_on_the_sdk_meter(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -277,3 +296,11 @@ class TestStdlibExtraIsSpreadIntoFields:
 
         record = next(r for r in loguru_capture if r["message"] == "both")
         assert record["extra"]["reason"] == "explicit"
+
+
+def test_input_summaries_are_never_exported() -> None:
+    """``Input._log_summary`` filters by field name only; a value such as a URL
+    with userinfo passes through it, so the summary must not reach OTLP or the
+    object-store log sink under either name it has been logged as."""
+    for key in ("input", "input_summary"):
+        assert not _exported(key), key
