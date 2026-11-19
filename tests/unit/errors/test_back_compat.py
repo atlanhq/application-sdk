@@ -754,6 +754,239 @@ def test_legacy_error_code_aaf_format() -> None:
 
 
 # =============================================================================
+# FND-4299 — one vocabulary: AAF-* codes come from one table and warn on use
+# =============================================================================
+
+#: Every SDK class that carried an AAF-* code before FND-4299, and that code.
+#: Captured from main before the change; the table must reproduce it exactly.
+_AAF_BY_CLASS = {
+    "application_sdk._context_errors.AppContextError": "AAF-APP-003",
+    "application_sdk.app.base.AppError": "AAF-APP-001",
+    "application_sdk.app.base.NonRetryableError": "AAF-APP-002",
+    "application_sdk.app.base.RetryableError": "AAF-APP-001",
+    "application_sdk.app.entrypoint.EntryPointContractError": "AAF-CTR-001",
+    "application_sdk.app.entrypoint.EntryPointDeclarationError": "AAF-CTR-001",
+    "application_sdk.app.registry.AppAlreadyRegisteredError": "AAF-APP-005",
+    "application_sdk.app.registry.AppNotFoundError": "AAF-APP-004",
+    "application_sdk.app.registry.AppNotRegisteredError": "AAF-APP-004",
+    "application_sdk.app.registry.AppVersionAlreadyRegisteredError": "AAF-APP-005",
+    "application_sdk.app.registry.TaskNotFoundError": "AAF-APP-006",
+    "application_sdk.app.registry.TaskNotRegisteredError": "AAF-APP-006",
+    "application_sdk.app.task.TaskContractError": "AAF-CTR-001",
+    "application_sdk.app.task.TaskDeclarationError": "AAF-CTR-001",
+    "application_sdk.contracts.base.ContractDeclarationError": "AAF-CTR-001",
+    "application_sdk.contracts.base.ContractValidationError": "AAF-CTR-001",
+    "application_sdk.contracts.base.PayloadSafetyError": "AAF-CTR-002",
+    "application_sdk.credentials.errors.CredentialError": "AAF-CRD-001",
+    "application_sdk.credentials.errors.CredentialNotFoundError": "AAF-CRD-002",
+    "application_sdk.credentials.errors.CredentialParseError": "AAF-CRD-003",
+    "application_sdk.credentials.errors.CredentialValidationError": "AAF-CRD-004",
+    "application_sdk.discovery.DiscoveryError": "AAF-DSC-001",
+    "application_sdk.handler.base.HandlerError": "AAF-HDL-001",
+    "application_sdk.infrastructure.bindings.BindingError": "AAF-INF-003",
+    "application_sdk.infrastructure.bindings.BindingUnavailableError": "AAF-INF-003",
+    "application_sdk.infrastructure.credential_vault.CredentialConfigNotFoundError": "AAF-CRD-005",
+    "application_sdk.infrastructure.credential_vault.CredentialVaultError": "AAF-CRD-005",
+    "application_sdk.infrastructure.credential_vault.CredentialVaultUnavailableError": "AAF-CRD-005",
+    "application_sdk.infrastructure.pubsub.PubSubError": "AAF-INF-002",
+    "application_sdk.infrastructure.pubsub.PubSubUnavailableError": "AAF-INF-002",
+    "application_sdk.infrastructure.secrets.AgentSecretReadError": "AAF-INF-004",
+    "application_sdk.infrastructure.secrets.SecretNotFoundError": "AAF-INF-005",
+    "application_sdk.infrastructure.secrets.SecretStoreError": "AAF-INF-004",
+    "application_sdk.infrastructure.secrets.SecretStoreTransientError": "AAF-INF-004",
+    "application_sdk.infrastructure.secrets.SecretStoreUnavailableError": "AAF-INF-004",
+    "application_sdk.infrastructure.secrets.SecretStoreUnreachableError": "AAF-INF-004",
+    "application_sdk.infrastructure.state.StateStoreError": "AAF-INF-001",
+    "application_sdk.infrastructure.state.StateStoreUnavailableError": "AAF-INF-001",
+    "application_sdk.storage.errors.DeploymentObjectStoreMissingError": "AAF-STR-003",
+    "application_sdk.storage.errors.ObjectStorePreflightError": "AAF-STR-006",
+    "application_sdk.storage.errors.SdrStorageDiskFullError": "AAF-STR-011",
+    "application_sdk.storage.errors.StorageAuthError": "AAF-STR-013",
+    "application_sdk.storage.errors.StorageBindingBrokenError": "AAF-STR-003",
+    "application_sdk.storage.errors.StorageBindingNotFoundError": "AAF-STR-003",
+    "application_sdk.storage.errors.StorageBucketRelocationError": "AAF-STR-008",
+    "application_sdk.storage.errors.StorageConfigError": "AAF-STR-003",
+    "application_sdk.storage.errors.StorageDiskFullError": "AAF-STR-011",
+    "application_sdk.storage.errors.StorageEmptyUploadError": "AAF-STR-005",
+    "application_sdk.storage.errors.StorageError": "AAF-STR-004",
+    "application_sdk.storage.errors.StorageGatewayAuthUnavailableError": "AAF-STR-010",
+    "application_sdk.storage.errors.StorageGatewayNoRouteError": "AAF-STR-012",
+    "application_sdk.storage.errors.StorageHandoffIncompleteError": "AAF-STR-009",
+    "application_sdk.storage.errors.StorageIntegrityError": "AAF-STR-007",
+    "application_sdk.storage.errors.StorageNotFoundError": "AAF-STR-001",
+    "application_sdk.storage.errors.StoragePermissionError": "AAF-STR-002",
+    "application_sdk.storage.errors.UnplaceableDeclaredFileError": "AAF-STR-004",
+}
+
+
+def _resolve(qualified: str) -> type:
+    import importlib
+
+    module, _, name = qualified.rpartition(".")
+    cls = getattr(importlib.import_module(module), name)
+    assert isinstance(cls, type)
+    return cls
+
+
+@pytest.mark.parametrize("qualified", sorted(_AAF_BY_CLASS))
+def test_every_legacy_coded_class_keeps_its_aaf_code(qualified: str) -> None:
+    from application_sdk.errors._legacy_codes import legacy_code_for
+
+    code = legacy_code_for(_resolve(qualified))
+    assert code is not None
+    assert code.code == _AAF_BY_CLASS[qualified]
+
+
+def test_every_table_entry_names_a_real_class() -> None:
+    # A typo in a key would silently drop that class's code; this catches it.
+    from application_sdk.errors._legacy_codes import _CLASS_CODES
+
+    for qualified in _CLASS_CODES:
+        assert (
+            f"{_resolve(qualified).__module__}.{_resolve(qualified).__qualname__}"
+            == qualified
+        )
+
+
+def test_no_sdk_class_body_declares_default_error_code() -> None:
+    # The one-vocabulary guard: AAF codes live in _legacy_codes._CLASS_CODES,
+    # never beside ``code`` on a class.
+    import ast
+    import pathlib
+
+    import application_sdk
+
+    root = pathlib.Path(application_sdk.__file__).parent
+    offenders = []
+    for path in root.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            for stmt in node.body:
+                target = (
+                    stmt.target
+                    if isinstance(stmt, ast.AnnAssign)
+                    else stmt.targets[0]
+                    if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
+                    else None
+                )
+                if isinstance(target, ast.Name) and target.id == "DEFAULT_ERROR_CODE":
+                    if node.name != "_LegacyErrorCodeMixin":
+                        offenders.append(f"{path.relative_to(root)}:{node.name}")
+    assert offenders == []
+
+
+def test_legacy_names_warn_when_read_from_errors() -> None:
+    import application_sdk.errors as errors
+
+    with pytest.warns(DeprecationWarning, match="STORAGE_CONFIG is deprecated.*v4.0.0"):
+        storage_config = errors.STORAGE_CONFIG
+    # ErrorCode itself is a @deprecated class: importing it is silent (the
+    # SDK's own annotations name it), constructing one warns.
+    assert isinstance(storage_config, errors.ErrorCode)
+    with pytest.warns(DeprecationWarning, match="ErrorCode is deprecated.*v4.0.0"):
+        errors.ErrorCode("APP", 99)
+    # Star-import must not touch the warning aliases.
+    assert "STORAGE_CONFIG" not in errors.__all__
+
+
+def test_aaf_constants_imported_by_sdk_modules_still_import_with_a_warning() -> None:
+    # Before FND-4299 these modules bound the constants they used; the surface
+    # gate keeps each one importable from there until v4.0.0.
+    import application_sdk.storage.errors as storage_errors
+
+    with pytest.warns(DeprecationWarning, match="STORAGE_INTEGRITY is deprecated"):
+        code = storage_errors.STORAGE_INTEGRITY
+    assert code.code == "AAF-STR-007"
+
+
+def test_importing_legacy_codes_module_does_not_warn() -> None:
+    # A fresh interpreter, not importlib.reload: reloading would rebuild the
+    # constants and ErrorCode in this worker and break ``is`` checks in every
+    # later test.
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-W",
+            "error::DeprecationWarning",
+            "-c",
+            "import application_sdk.errors._legacy_codes",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_default_error_code_warns_and_reads_the_table() -> None:
+    from application_sdk.errors._legacy_codes import STORAGE_INTEGRITY
+    from application_sdk.storage.errors import StorageIntegrityError
+
+    with pytest.warns(DeprecationWarning, match="DEFAULT_ERROR_CODE is deprecated"):
+        assert StorageIntegrityError.DEFAULT_ERROR_CODE is STORAGE_INTEGRITY
+
+
+def test_error_code_property_warns_and_str_does_not() -> None:
+    from application_sdk.errors._legacy_codes import STORAGE_OPERATION
+    from application_sdk.storage.errors import StorageError
+
+    err = StorageError("boom", key="k")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert str(err) == "[AAF-STR-004] boom | key=k"
+    with pytest.warns(DeprecationWarning, match="error_code is deprecated"):
+        assert err.error_code is STORAGE_OPERATION
+
+
+def test_error_code_keyword_warns_and_overrides() -> None:
+    from application_sdk.errors._legacy_codes import STORAGE_CONFIG
+    from application_sdk.storage.errors import StorageError
+
+    with pytest.warns(DeprecationWarning, match="error_code= keyword"):
+        err = StorageError("boom", error_code=STORAGE_CONFIG)
+    assert str(err).startswith("[AAF-STR-003] boom")
+
+
+def test_constructing_without_error_code_does_not_warn() -> None:
+    from application_sdk.credentials.errors import CredentialParseError
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        err = CredentialParseError("bad", credential_name="c")
+    assert str(err) == "[AAF-CRD-003] bad | credential=c"
+
+
+def test_app_subclass_declaring_its_own_default_error_code_keeps_it() -> None:
+    # An app subclass written before FND-4299 may still bind DEFAULT_ERROR_CODE.
+    from application_sdk.errors._legacy_codes import STORAGE_AUTH, ErrorCode
+    from application_sdk.storage.errors import StorageError
+
+    class AppStorageError(StorageError):
+        DEFAULT_ERROR_CODE: ErrorCode = STORAGE_AUTH
+
+    assert str(AppStorageError("boom")).startswith("[AAF-STR-013] boom")
+
+
+def test_legacy_shims_print_their_evidence_through_the_mixin() -> None:
+    from application_sdk.app.registry import TaskNotFoundError
+    from application_sdk.handler.base import HandlerError
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        handler_err = HandlerError("auth failed", handler_name="h", app_name="a")
+        task_err = TaskNotFoundError("app", "t")
+    assert str(handler_err) == "[AAF-HDL-001] auth failed | handler=h | app=a"
+    assert str(task_err) == "[AAF-APP-006] Task 't' not found in app 'app'"
+    # Dataclass form: the evidence reaches the wire envelope.
+    assert handler_err.to_failure_details().evidence["handler_name"] == "h"
+    assert task_err.to_failure_details().evidence["task_name"] == "t"
+
+
+# =============================================================================
 # Catch-by-base-class: legacy errors are catchable as AppError
 # =============================================================================
 

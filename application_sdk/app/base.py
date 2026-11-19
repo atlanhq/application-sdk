@@ -13,7 +13,7 @@ import warnings
 from abc import ABC
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import (
@@ -94,8 +94,9 @@ from application_sdk.contracts.storage import (
     VerifyRefsOutput,
 )
 from application_sdk.contracts.types import FileReference, StorageTier, StoreTarget
-from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE, ErrorCode
+from application_sdk.errors._legacy_codes import ErrorCode
 from application_sdk.errors.base import AppError as _NewAppError
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import WORKER_EVICTED_TYPE
 from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
@@ -564,15 +565,19 @@ def _safe_log(level: str, message: str, **attrs: Any) -> None:
 # =============================================================================
 
 
-class AppError(_NewAppError):
+@dataclass(kw_only=True)
+class AppError(_LegacyErrorCodeMixin, _NewAppError):
     """Deprecated: use ``application_sdk.errors.AppError`` directly — removed in v4.0.
 
     Back-compat shim. Accepts a positional ``message`` argument and the legacy
     ``error_code`` keyword to avoid breaking existing raise sites.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
     code: ClassVar[str] = "APP"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("app_name", "app"),
+        ("run_id", "run_id"),
+    )
 
     def __init__(
         self,
@@ -592,27 +597,10 @@ class AppError(_NewAppError):
         _NewAppError.__init__(
             self, message=message, cause=cause, app_name=app_name, run_id=run_id
         )
-        self._legacy_error_code = error_code
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._legacy_error_code
-            if self._legacy_error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.app_name:
-            parts.append(f"app={self.app_name}")
-        if self.run_id:
-            parts.append(f"run_id={self.run_id}")
-        if self.cause:
-            parts.append(f"caused_by={self.cause}")
-        return " | ".join(parts)
+        self._set_legacy_error_code(error_code)
 
 
+@dataclass(kw_only=True)
 class NonRetryableError(AppError):
     """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.0.
 
@@ -633,7 +621,6 @@ class NonRetryableError(AppError):
             )
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_NON_RETRYABLE
     default_retryable: ClassVar[bool] = False
 
     def __init__(
@@ -657,9 +644,10 @@ class NonRetryableError(AppError):
         _NewAppError.__init__(
             self, message=message, cause=cause, app_name=app_name, run_id=run_id
         )
-        self._legacy_error_code = error_code
+        self._set_legacy_error_code(error_code)
 
 
+@dataclass(kw_only=True)
 class RetryableError(AppError):
     """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = True`` — removed in v4.0.0.
 
@@ -689,7 +677,6 @@ class RetryableError(AppError):
             ...
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
     default_retryable: ClassVar[bool] = True
 
     def __init__(
@@ -713,7 +700,7 @@ class RetryableError(AppError):
         _NewAppError.__init__(
             self, message=message, cause=cause, app_name=app_name, run_id=run_id
         )
-        self._legacy_error_code = error_code
+        self._set_legacy_error_code(error_code)
 
 
 # =============================================================================

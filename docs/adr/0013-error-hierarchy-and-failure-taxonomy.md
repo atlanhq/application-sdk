@@ -232,9 +232,16 @@ by existing callers and asserted in `tests/unit/errors/test_back_compat.py`.
 
 A class that still carries a legacy `ErrorCode` gets `error_code` and
 `__str__` from `_LegacyErrorCodeMixin` (`application_sdk/errors/base.py`),
-placed before the categorical leaf in its bases. It declares
-`DEFAULT_ERROR_CODE` and lists the evidence `str()` prints in a
-`_STR_FIELDS` ClassVar, and keeps only its `__init__`. The mixin's
+placed before the categorical leaf in its bases. It lists the evidence
+`str()` prints in a `_STR_FIELDS` ClassVar and keeps only its `__init__`.
+It does not declare its `AAF-*` code. `_CLASS_CODES` in
+`application_sdk/errors/_legacy_codes.py` records which class carries which
+code, once, and a subclass inherits the nearest entry in its MRO; `code` is
+the class's only vocabulary (FND-4299). Every such class is a
+`@dataclass(kw_only=True)` whose per-instance evidence is a field, so it
+reaches `to_failure_details().evidence`. Its `__init__` hands the deprecated
+`error_code=` keyword to the mixin's `_set_legacy_error_code`, the one place
+the keyword is handled. The mixin's
 `__str__` always passes the cause through `sanitize_cause_repr`; before it,
 each class carried its own copy and most printed the cause raw. A subclass
 whose constructor matches its domain umbrella's does not copy the body. It
@@ -256,7 +263,13 @@ and are not scheduled for removal in v4.0.
 
 The legacy `ErrorCode` dataclass and `AAF-{COMP}-{ID:03d}` constants remain
 importable from `application_sdk.errors` through v3.x and are removed in
-v4.0. The `application_sdk/common/error_codes.py` `Atlan-{Component}-{HTTP}-{ID}`
+v4.0. They live in the private `application_sdk/errors/_legacy_codes.py`;
+`application_sdk.errors` serves them through a PEP 562 alias that emits a
+`DeprecationWarning` on access, so the B001 conformance rule reaches every app
+that still reads one. `Cls.DEFAULT_ERROR_CODE`, `err.error_code` and the
+`error_code=` constructor keyword also warn. `str()` keeps its `[AAF-…]`
+prefix until v4.0 so log text does not change, and the conformance rule
+E022 flags an app class that binds `DEFAULT_ERROR_CODE` in this vocabulary. The `application_sdk/common/error_codes.py` `Atlan-{Component}-{HTTP}-{ID}`
 taxonomy emits `DeprecationWarning` on every `AtlanError.__init__` call and is
 also removed in v4.0.
 
@@ -410,6 +423,8 @@ deliberate breaking change; asserted in
 
 - Two error systems coexist during v3.x (legacy `AAF-…` constants and the
   `AtlanError` family alongside the new hierarchy). Both are removed in v4.0.
+  Since FND-4299 no SDK class declares an `AAF-*` code beside `code`; the
+  codes survive only as the `str()` prefix and the warning accessors.
 - Leaf-first multi-inheritance MRO has a learning curve; the convention is
   documented in the module docstrings of `credentials/errors.py`,
   `storage/errors.py`, and `infrastructure/secrets.py`.

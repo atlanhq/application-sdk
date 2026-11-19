@@ -10,7 +10,9 @@ import warnings
 from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol, runtime_checkable
 
-from application_sdk.errors import CREDENTIAL_VAULT_ERROR, ErrorCode
+from application_sdk import _deprecation
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
 from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import DependencyUnavailableError
 from application_sdk.observability.logger_adaptor import get_logger
@@ -18,14 +20,15 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
+@dataclass(kw_only=True)
 class CredentialVaultError(_LegacyErrorCodeMixin, DependencyUnavailableError):
     """Deprecated: use ``application_sdk.infrastructure.CredentialVaultUnavailableError`` — removed in v4.0."""
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_VAULT_ERROR
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_CREDENTIAL_VAULT"
     _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
         ("credential_guid", "credential_guid"),
     )
+    credential_guid: str | None = None
 
     def __init__(
         self,
@@ -43,7 +46,7 @@ class CredentialVaultError(_LegacyErrorCodeMixin, DependencyUnavailableError):
         )
         DependencyUnavailableError.__init__(self, message=message, cause=cause)
         self.credential_guid = credential_guid
-        self._error_code = error_code
+        self._set_legacy_error_code(error_code)
 
 
 @dataclass(kw_only=True)
@@ -96,3 +99,21 @@ class CredentialVault(Protocol):
             CredentialVaultUnavailableError: If resolution fails.
         """
         ...
+
+
+#: The AAF-* constants this module imported before FND-4299, kept importable
+#: from here with a warning until v4.0.0. Literal per entry: the surface gate
+#: and gen-deprecations read this table statically.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "CREDENTIAL_VAULT_ERROR": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda name: getattr(_legacy_codes, name),
+)

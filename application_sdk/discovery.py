@@ -19,8 +19,10 @@ from __future__ import annotations
 import importlib
 import inspect
 import warnings
+from dataclasses import dataclass
 from typing import Any, ClassVar
 
+from application_sdk import _deprecation
 from application_sdk._discovery_errors import (
     DiscoveryAppRegistrationError,
     DiscoveryClassNotFoundError,
@@ -31,7 +33,8 @@ from application_sdk._discovery_errors import (
 )
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
-from application_sdk.errors import DISCOVERY_ERROR, ErrorCode
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
 from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import InvalidInputError
 from application_sdk.handler.base import Handler
@@ -40,14 +43,15 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
+@dataclass(kw_only=True)
 class DiscoveryError(_LegacyErrorCodeMixin, InvalidInputError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = DISCOVERY_ERROR
     code: ClassVar[str] = "INVALID_INPUT_DISCOVERY"
     _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
         ("module_path", "module_path"),
     )
+    module_path: str | None = None
 
     def __init__(
         self,
@@ -65,7 +69,7 @@ class DiscoveryError(_LegacyErrorCodeMixin, InvalidInputError):
         )
         InvalidInputError.__init__(self, message=message, cause=cause)
         self.module_path = module_path
-        self._error_code = error_code
+        self._set_legacy_error_code(error_code)
 
 
 def _parse_module_path(module_path: str) -> tuple[str, str]:
@@ -309,3 +313,21 @@ def validate_app_class(cls: type[App]) -> None:
         app_name,
         cls._app_version,
     )
+
+
+#: The AAF-* constants this module imported before FND-4299, kept importable
+#: from here with a warning until v4.0.0. Literal per entry: the surface gate
+#: and gen-deprecations read this table statically.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "DISCOVERY_ERROR": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda name: getattr(_legacy_codes, name),
+)

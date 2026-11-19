@@ -82,8 +82,10 @@ import typing_extensions
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_core import PydanticUndefined
 
+from application_sdk import _deprecation
 from application_sdk._logging import get_logger
-from application_sdk.errors import CONTRACT_VALIDATION, PAYLOAD_SAFETY, ErrorCode
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
 from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
 
@@ -592,10 +594,10 @@ class Record(BaseModel):
 # =============================================================================
 
 
+@dataclass(kw_only=True)
 class ContractValidationError(_LegacyErrorCodeMixin, _InvalidInputError):
     """Deprecated: use ``application_sdk.contracts.ContractDeclarationError`` — removed in v4.0."""
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CONTRACT_VALIDATION
     code: ClassVar[str] = "INVALID_INPUT_CONTRACT_VALIDATION"
     _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
         ("contract_type", "contract_type"),
@@ -603,6 +605,10 @@ class ContractValidationError(_LegacyErrorCodeMixin, _InvalidInputError):
         ("expected_type", "expected"),
         ("actual_type", "actual"),
     )
+    contract_type: str | None = None
+    field_name: str | None = None
+    expected_type: str | None = None
+    actual_type: str | None = None
 
     def __init__(
         self,
@@ -625,7 +631,7 @@ class ContractValidationError(_LegacyErrorCodeMixin, _InvalidInputError):
         self.field_name = field_name
         self.expected_type = expected_type
         self.actual_type = actual_type
-        self._error_code = error_code
+        self._set_legacy_error_code(error_code)
 
 
 @dataclass(kw_only=True)
@@ -647,6 +653,7 @@ class ContractDeclarationError(ContractValidationError):
     actual_type: str | None = None
 
 
+@dataclass(kw_only=True)
 class PayloadSafetyError(ContractDeclarationError):
     """Raised when a contract field uses a type that risks exceeding payload limits.
 
@@ -671,8 +678,10 @@ class PayloadSafetyError(ContractDeclarationError):
     - Use allow_unbounded_fields=True class keyword to opt out (use with caution)
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = PAYLOAD_SAFETY
     code: ClassVar[str] = "INVALID_INPUT_PAYLOAD_SAFETY"
+    #: Why the field's type is unsafe. ``field_type`` stays a plain attribute:
+    #: a ``type`` object is not a wire value, so it must not become evidence.
+    reason: str | None = None
 
     def __init__(
         self, cls_name: str, field_name: str, field_type: type, reason: str
@@ -1188,3 +1197,25 @@ class ContractMetadata(BaseModel, frozen=True):
     schema_hash: str | None = None
     deprecated: bool = False
     deprecation_message: str | None = None
+
+
+#: The AAF-* constants this module imported before FND-4299, kept importable
+#: from here with a warning until v4.0.0. Literal per entry: the surface gate
+#: and gen-deprecations read this table statically.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "CONTRACT_VALIDATION": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "PAYLOAD_SAFETY": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda name: getattr(_legacy_codes, name),
+)

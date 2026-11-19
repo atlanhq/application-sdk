@@ -10,6 +10,7 @@ from conformance.suite.schema.findings import Finding
 from .dependency_audience import DependencyAudienceMixin
 from .exception_chaining import ExceptionChainingMixin, ExceptionHelper
 from .http_failure import HttpFailureMixin
+from .legacy_error_code import LegacyErrorCodeMixin
 from .security import SecurityMixin
 from .silent_swallow import SilentSwallowMixin
 from .untyped_raise import UntypedRaiseMixin, module_bindings
@@ -70,6 +71,7 @@ class Checker(
     HttpFailureMixin,
     SecurityMixin,
     DependencyAudienceMixin,
+    LegacyErrorCodeMixin,
     ast.NodeVisitor,
 ):
     """Walk a module AST and emit E-series findings."""
@@ -84,6 +86,7 @@ class Checker(
         sdk_errors: frozenset[str] = frozenset(),
         raised_error_helpers: dict[str, ExceptionHelper] | None = None,
         dependency_classes: frozenset[str] = frozenset(),
+        legacy_coded_bases: dict[str, str] | None = None,
         deprecated_module: bool = False,
         e012_in_scope: bool = True,
         script_file: bool = False,
@@ -98,6 +101,8 @@ class Checker(
         self._sdk_errors = sdk_errors
         self._exception_helpers = raised_error_helpers or {}
         self._dependency_classes = dependency_classes
+        # E022: class name -> the SDK legacy-coded class it reaches.
+        self._legacy_coded_bases = legacy_coded_bases or {}
         self._deprecated_module = deprecated_module
         # False for build / dev tooling outside the app runtime (see
         # E012_TOOLING_ROOTS): its raises never reach the AE error envelope.
@@ -189,6 +194,7 @@ class Checker(
         self._check_p011(node)
         if not self._class_stack and not self._function_stack:
             self._check_e021(node)
+        self._check_e022(node)
         self._class_stack.append(node)
         self.generic_visit(node)
         self._class_stack.pop()
