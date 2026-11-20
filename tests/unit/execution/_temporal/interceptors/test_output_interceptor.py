@@ -12,6 +12,7 @@ from unittest import mock
 
 import orjson
 import pytest
+from pydantic import BaseModel, Field
 
 import application_sdk.outputs as outputs_module
 from application_sdk.app.registry import _running_app_name
@@ -46,6 +47,30 @@ class _TaskOutput(Output):
     """A task-style typed result."""
 
     rows: int = 0
+
+
+class _AliasedOutput(Output):
+    """A workflow result with aliased fields and no ``populate_by_name``.
+
+    A required aliased field makes a ``model_dump()`` / ``model_validate()``
+    round trip raise; a defaulted one makes it silently reset to the default.
+    """
+
+    rows: int = 0
+    schema_name: str = Field(alias="schemaName")
+    table_name: str = Field(default="", alias="tableName")
+
+
+class _PlainModel(BaseModel):
+    """A model with no ``metrics`` / ``artifacts`` fields."""
+
+    name: str = ""
+
+
+class _IntMetricsModel(BaseModel):
+    """A model whose ``metrics`` field cannot hold the collector's map."""
+
+    metrics: int = 0
 
 
 @dataclass
@@ -519,6 +544,84 @@ class TestOutputWorkflowInboundInterceptor:
 
         assert result["metrics"]["workflow-metric"] == 999
         assert result["status"] == "done"
+
+    async def test_aliased_output_keeps_its_fields_when_outputs_merge(
+        self, interceptor, mock_next_inbound
+    ):
+        """An Output with an aliased field keeps every field and gains the outputs.
+
+        ``model_dump()`` emits field names, which a model without
+        ``populate_by_name`` rejects on ``model_validate``; the merge must not
+        depend on that round trip.
+        """
+
+        async def run(input):
+            get_outputs().add_metric(Metric(name="count", value=7))
+            return _AliasedOutput(rows=3, schemaName="sales", tableName="orders")
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert isinstance(result, _AliasedOutput)
+        assert result.schema_name == "sales"
+        assert result.table_name == "orders"
+        assert result.rows == 3
+        assert result.status == OutputStatus.SUCCESS
+        assert result.metrics == {"count": 7}
+
+    async def test_aliased_output_marked_partial_keeps_its_fields(
+        self, interceptor, mock_next_inbound
+    ):
+        """A run that skipped records is PARTIAL_SUCCESS without losing fields."""
+
+        async def run(input):
+            get_outputs().add_metric(Metric(name=SKIPPED_RECORDS_METRIC, value=2))
+            return _AliasedOutput(rows=3, schemaName="sales", tableName="orders")
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert isinstance(result, _AliasedOutput)
+        assert result.schema_name == "sales"
+        assert result.table_name == "orders"
+        assert result.rows == 3
+        assert result.status == OutputStatus.PARTIAL_SUCCESS
+        assert result.metrics == {SKIPPED_RECORDS_METRIC: 2}
+
+    async def test_model_without_output_fields_is_returned_unchanged(
+        self, interceptor, mock_next_inbound
+    ):
+        """A model that cannot carry outputs is returned as-is, never replaced."""
+        original = _PlainModel(name="x")
+
+        async def run(input):
+            get_outputs().add_metric(Metric(name="count", value=7))
+            return original
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert result is original
+
+    async def test_model_whose_output_field_rejects_the_map_is_returned_unchanged(
+        self, interceptor, mock_next_inbound
+    ):
+        """A ``metrics`` field of another type is never set to the collector map."""
+        original = _IntMetricsModel(metrics=1)
+
+        async def run(input):
+            get_outputs().add_metric(Metric(name="count", value=7))
+            return original
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert result is original
+        assert result.metrics == 1
 
 
 class TestOutputInterceptor:
