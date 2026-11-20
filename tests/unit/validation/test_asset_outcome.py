@@ -25,6 +25,10 @@ from application_sdk.validation import (
     validate_artifact,
     validate_assets_as_artifact,
 )
+from application_sdk.validation.assets import (
+    ASSET_VALIDATION_REPORT_LINE_MAXLEN,
+    _bounded_report,
+)
 
 APP = "test-app"
 CONN = "default/snow/123"
@@ -118,25 +122,39 @@ def test_the_outcome_does_not_grow_with_the_number_of_failing_records(
     assert len(full) > 100 * len(large)
 
 
-def test_the_outcome_does_not_grow_with_the_length_of_record_values(
+def test_the_report_text_does_not_grow_with_the_length_of_record_values(
     tmp_path: Path,
 ) -> None:
-    # Rows are capped per axis, but a row's values come from the record: a huge
-    # qualifiedName lands in the report line, the matrix row and the
-    # connection-prefix message; a huge typeName lands in the summary key too.
+    # Rows are capped per axis, but a report line embeds the record's own
+    # qualifiedName and every message .validate() gave for it. The event is a
+    # shipped contract and is carried unchanged; the report text is capped.
     huge = 1_000_000
     long_qn = Table.creator(name="T", schema_qualified_name=f"{CONN}/DB/S")
     long_qn.qualified_name = "x" * huge
-    long_type = b'{"typeName": "' + b"T" * huge + b'", "attributes": 5}'
-    target = _write_lines(tmp_path, [long_qn.to_nested_bytes(), long_type])
+    target = _write_lines(tmp_path, [long_qn.to_nested_bytes()])
 
     outcome = _summarize(target)
 
+    full = validate_assets_as_artifact([str(target)])
+    assert outcome.event_fields == asset_validation_event_fields(
+        full.assets, app_name=APP, max_items=CAP, scope=SCOPE
+    )
     assert outcome.flagged
-    assert outcome.event_fields is not None
-    assert outcome.event_fields["assets_total"] == 2
-    assert outcome.event_fields["assets_passed"] == 0
-    assert len(pickle.dumps(outcome)) < 16 * 1024
+    assert len(outcome.flagged_report) < 4 * 1024
+    assert all(
+        len(line) <= ASSET_VALIDATION_REPORT_LINE_MAXLEN + len(" ... [truncated]")
+        for line in outcome.flagged_report.split("\n")
+    )
+
+
+def test_the_report_text_is_bounded_in_lines_by_the_row_cap() -> None:
+    text = "\n".join(f"line {i}" for i in range(1_000))
+
+    bounded = _bounded_report(text, max_items=CAP)
+
+    lines = bounded.split("\n")
+    assert len(lines) == 2 * CAP + 4 + 1
+    assert lines[-1] == f"  ... and {1_000 - (2 * CAP + 4)} more report lines"
 
 
 def _absent(_path: str) -> ArtifactValidationReport:
