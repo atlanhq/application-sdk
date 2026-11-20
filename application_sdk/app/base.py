@@ -241,6 +241,14 @@ async def _warn_on_invalid_transformed_assets(
     emitted from before the fold-in. This hook does **not** additionally emit
     ``ARTIFACT_VALIDATION_EVENT``: one hand-off, one row.
 
+    **Only a bounded outcome comes back from the scan** (FND-4088). The full
+    report is unbounded — every failure, twice — so the event's attribute map and
+    the capped ``format_report()`` text are built inside the isolated child by
+    :func:`~application_sdk.validation.assets.summarize_asset_validation`, and only
+    that :class:`~application_sdk.validation.assets.AssetValidationOutcome` is
+    pickled back. A batch that fails on every record costs this worker the cap,
+    not the batch.
+
     The scan runs via
     :func:`application_sdk._runtime.offload.run_best_effort`, for two reasons.
     It keeps the event loop and the activity's auto-heartbeat free while a large
@@ -317,30 +325,47 @@ async def _warn_on_invalid_transformed_assets(
     )
 
     from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
-        AssetArtifactReport,
         AssetBatchScope,
         ModelSource,
-        asset_validation_event_fields,
+        summarize_asset_validation,
         validate_artifact,
         validate_assets_as_artifact,
     )
 
+    # One path is ``upload``; a list is every declared part of an ``upload_refs``
+    # fan-in (see the docstring).
+    scope = AssetBatchScope(
+        upload_kind="upload" if isinstance(local_path, str) else "upload_refs",
+        parts_validated=len(targets),
+        parts_not_local=len(remote),
+    )
     # Best-effort: run_best_effort isolates the scan in a child process and, on
     # any native crash / timeout / error, logs a warning and returns None — the
     # upload is never blocked, failed, or crashed by the validation scaffold.
+    # summarize_asset_validation builds the event and the capped report text in
+    # the child, so only that bounded outcome is pickled back into this worker,
+    # never the full report (FND-4088).
     if len(targets) == 1 and check_referential_integrity and not creation_rules:
-        report = await run_best_effort(
+        outcome = await run_best_effort(
+            summarize_asset_validation,
             validate_artifact,
             targets[0],
             ModelSource(model=Asset),
+            app_name=app_name,
+            scope=scope,
+            max_items=_VALIDATION_MATRIX_MAX_ROWS,
             label="Transformed-asset validation",
             logger=_task_logger,
             timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
         )
     else:
-        report = await run_best_effort(
+        outcome = await run_best_effort(
+            summarize_asset_validation,
             validate_assets_as_artifact,
             targets,
+            app_name=app_name,
+            scope=scope,
+            max_items=_VALIDATION_MATRIX_MAX_ROWS,
             check_referential_integrity=check_referential_integrity,
             creation_rules=creation_rules,
             label="Transformed-asset validation",
@@ -348,14 +373,14 @@ async def _warn_on_invalid_transformed_assets(
             timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
         )
 
-    if report is None:
+    if outcome is None:
         # run_best_effort swallowed a native crash / timeout / error (it already
         # logged a warning). The "nothing to validate" cases (flag off, not a
         # transformed/ subtree) already returned above, so reaching here with
         # None means the scan itself failed — no counts to emit.
         return
 
-    if not isinstance(report, AssetArtifactReport):
+    if outcome.event_fields is None:
         # The wrapper resolved to an outcome without running the cell — it never
         # raises, so a broken plug-in or an unreadable artifact arrives as a plain
         # report instead of an exception. There are no asset-vocabulary counts to
@@ -365,38 +390,21 @@ async def _warn_on_invalid_transformed_assets(
         _task_logger.warning(
             "Transformed-asset validation produced no counts (%s: %s); "
             "handoff continues",
-            report.outcome,
-            report.reason or "no reason recorded",
+            outcome.outcome,
+            outcome.reason or "no reason recorded",
         )
         return
 
     # Emit the structured outcome on every validated upload (clean + flagged) so
     # the row is queryable and gives a denominator. Wrapped: a defect in the
-    # emit path (e.g. matrix encoding) must never break a real handoff.
+    # emit path must never break a real handoff.
     try:
-        assets = report.assets
-        flagged = not assets.ok
-        # The summary walks every failure (a broken batch can carry millions), so
-        # the projection is built off the event loop to keep heartbeats flowing.
-        fields = await run_in_thread(
-            asset_validation_event_fields,
-            assets,
-            app_name=app_name,
-            max_items=_VALIDATION_MATRIX_MAX_ROWS,
-            scope=AssetBatchScope(
-                # One path is ``upload``; a list is every declared part of an
-                # ``upload_refs`` fan-in (see the docstring).
-                upload_kind="upload" if isinstance(local_path, str) else "upload_refs",
-                parts_validated=len(targets),
-                parts_not_local=len(remote),
-            ),
-        )
-        _task_logger.info(ASSET_VALIDATION_EVENT, **fields)
-        if flagged:
+        _task_logger.info(ASSET_VALIDATION_EVENT, **outcome.event_fields)
+        if outcome.flagged:
             _task_logger.warning(
                 "Transformed-asset validation flagged issues before upload "
                 "(handoff continues): %s",
-                assets.format_report(max_items=_VALIDATION_MATRIX_MAX_ROWS),
+                outcome.flagged_report,
             )
     except Exception:  # defense-in-depth must never break the upload
         _task_logger.warning(

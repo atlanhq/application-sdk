@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.58.0
-source-sha:    8c44cea53fba1189bb8d632126086381563ac7f4
-source-date:   2026-11-19T17:14:11+05:30
+source-sha:    eddb71aedf168cf1cd7842286211a9685f0c3ba8
+source-date:   2026-11-20T20:27:37+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -36,7 +36,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 461 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 85 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 87 |
 
 ## Subpackage Details
 
@@ -7115,6 +7115,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** A single asset that failed per-asset (``.validate()``) checks.
 - **Defined in:** `application_sdk/validation/assets.py`
 
+#### `AssetValidationOutcome`
+
+- **Import:** `from application_sdk.validation import AssetValidationOutcome`
+- **Signature:** `class AssetValidationOutcome(event_fields: dict[str, ...)`
+- **Summary:** What an isolated upload-validation scan sends back to the worker: bounded.
+- **Defined in:** `application_sdk/validation/assets.py`
+
 #### `AssetValidationReport`
 
 - **Import:** `from application_sdk.validation import AssetValidationReport`
@@ -7341,6 +7348,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Signature:** `resolve_artifact_enforcement(app_cls: type | None)`
 - **Summary:** Resolve one app's artifact-validation posture. ``True`` = hard.
 - **Defined in:** `application_sdk/validation/interceptor.py`
+
+#### `summarize_asset_validation`
+
+- **Import:** `from application_sdk.validation import summarize_asset_validation`
+- **Signature:** `summarize_asset_validation(scan: Callable[..., ...)`
+- **Summary:** Run ``scan(*args, **kwargs)`` and reduce its report to the bounded outcome.
+- **Defined in:** `application_sdk/validation/assets.py`
 
 #### `supports_asset_model`
 
