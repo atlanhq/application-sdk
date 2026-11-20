@@ -35,7 +35,7 @@ Usage:
 
 import asyncio
 from collections.abc import Awaitable, Mapping
-from typing import Any, Optional, Type
+from typing import TYPE_CHECKING, Any, Optional, Type
 
 from temporalio import activity
 from temporalio.worker import (
@@ -61,6 +61,10 @@ from application_sdk.outputs.skipped import (
     new_activity_sink,
     persist_activity_skips,
 )
+
+if TYPE_CHECKING:
+    from pydantic import TypeAdapter
+    from pydantic.fields import FieldInfo
 
 logger = get_logger(__name__)
 
@@ -343,14 +347,18 @@ def _merge_outputs_into_result(result: Any, collector: OutputCollector) -> Any:
       ``metrics`` / ``artifacts`` fields and leaves every other field as it
       is. A ``model_dump()`` / ``model_validate()`` round trip would not:
       ``model_dump()`` emits field names, so an aliased field is rejected or
-      reset to its default. A model that does not declare those fields cannot
-      carry outputs and is returned unchanged.
+      reset to its default. Each value is first validated against its
+      field's declared type, since ``model_copy`` does not validate. A model
+      that does not declare those fields, or declares them with a type that
+      rejects the collected map, cannot carry outputs and is returned
+      unchanged.
     - Other: return just the collector dict (fallback).
 
     The activity's own result is never replaced by the collected outputs.
     """
     from pydantic import (  # noqa: PLC0415 — cold path: pydantic only when serializing
         BaseModel,
+        ValidationError,
     )
 
     output_data = collector.to_dict()
@@ -370,9 +378,36 @@ def _merge_outputs_into_result(result: Any, collector: OutputCollector) -> Any:
                 undeclared,
             )
             return result
-        return result.model_copy(update=output_data)
+        # model_copy does not validate, so check each value against its
+        # field's declared type first: a field named ``metrics`` that is not a
+        # map must never be set to one.
+        try:
+            update = {
+                k: _field_adapter(model_cls.model_fields[k]).validate_python(v)
+                for k, v in output_data.items()
+            }
+        except ValidationError:
+            logger.warning(
+                "Workflow result %s declares %s with a type that cannot hold "
+                "collected outputs; returning it unchanged.",
+                model_cls.__name__,
+                sorted(output_data),
+                exc_info=True,
+            )
+            return result
+        return result.model_copy(update=update)
 
     return output_data
+
+
+def _field_adapter(field: "FieldInfo") -> "TypeAdapter[Any]":
+    """A validator for one model field, keeping its ``Annotated`` constraints."""
+    from pydantic import (  # noqa: PLC0415 — cold path: pydantic only when serializing
+        TypeAdapter,
+    )
+
+    annotation: Any = field.rebuild_annotation()
+    return TypeAdapter(annotation)
 
 
 class OutputInterceptor(Interceptor):

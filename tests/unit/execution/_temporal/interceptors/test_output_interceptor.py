@@ -67,6 +67,12 @@ class _PlainModel(BaseModel):
     name: str = ""
 
 
+class _IntMetricsModel(BaseModel):
+    """A model whose ``metrics`` field cannot hold the collector's map."""
+
+    metrics: int = 0
+
+
 @dataclass
 class MockExecuteWorkflowInput:
     """Mock ExecuteWorkflowInput for testing."""
@@ -599,6 +605,23 @@ class TestOutputWorkflowInboundInterceptor:
         result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
         assert result is original
+
+    async def test_model_whose_output_field_rejects_the_map_is_returned_unchanged(
+        self, interceptor, mock_next_inbound
+    ):
+        """A ``metrics`` field of another type is never set to the collector map."""
+        original = _IntMetricsModel(metrics=1)
+
+        async def run(input):
+            get_outputs().add_metric(Metric(name="count", value=7))
+            return original
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert result is original
+        assert result.metrics == 1
 
 
 class TestOutputInterceptor:
