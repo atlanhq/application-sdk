@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import patch
 
@@ -220,7 +221,7 @@ class TestInputContractEndpoint:
     def test_broken_generated_contract_raises_not_falls_back(
         self,
         tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+        write_generated_package: _WriteGeneratedPackage,
         body: str,
         error: type[ImportError],
     ) -> None:
@@ -230,7 +231,7 @@ class TestInputContractEndpoint:
         from application_sdk.app.entrypoint import EntryPointMetadata
         from application_sdk.handler.service import _published_input_contract
 
-        _write_generated_package(tmp_path, monkeypatch, "broken_ep", body)
+        write_generated_package(tmp_path, "broken_ep", body)
         ep = EntryPointMetadata(
             name="broken-ep",
             input_type=_RoutingInput,
@@ -241,7 +242,7 @@ class TestInputContractEndpoint:
             _published_input_contract(ep)
 
     def test_broken_generated_contract_is_a_server_error_on_the_route(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, write_generated_package: _WriteGeneratedPackage
     ) -> None:
         """The route answers 5xx for a broken generated contract, never 200
         with the thin runtime schema."""
@@ -257,9 +258,7 @@ class TestInputContractEndpoint:
             async def load(self, input: _RoutingInput) -> _RoutingOutput:
                 return _RoutingOutput()
 
-        _write_generated_package(
-            tmp_path, monkeypatch, "crawler", "import _fnd4092_missing_dep\n"
-        )
+        write_generated_package(tmp_path, "crawler", "import _fnd4092_missing_dep\n")
         resp = self._client(_BrokenGenApp).get(
             "/workflows/v1/input-contract?entrypoint=crawler"
         )
@@ -272,34 +271,54 @@ class TestInputContractEndpoint:
         assert resp_load.json() == _RoutingInput.model_json_schema()
 
 
-def _write_generated_package(
-    root: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    ep_module: str,
-    input_body: str,
-    *,
-    parts: tuple[str, ...] = ("app", "generated"),
-) -> None:
-    """Write a real ``app/generated/<ep_module>/_input.py`` package under *root*
-    and put *root* on ``sys.path``.
+_WriteGeneratedPackage = Callable[..., None]
 
-    Any ``app`` modules already in ``sys.modules`` (real or the stand-ins other
-    tests inject) are removed through ``monkeypatch`` so the import resolves
-    from disk, and restored afterwards.
+
+def _is_app_module(name: str) -> bool:
+    return name == "app" or name.startswith("app.")
+
+
+@pytest.fixture
+def write_generated_package(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[_WriteGeneratedPackage]:
+    """Give a writer for a real ``app/generated/<ep_module>/_input.py`` package.
+
+    ``write(root, ep_module, input_body, parts=...)`` writes the package under
+    *root* and puts *root* on ``sys.path``. Any ``app`` modules already in
+    ``sys.modules`` (real or the stand-ins other tests inject) are removed
+    through ``monkeypatch`` so the import resolves from disk.
+
+    At teardown every ``app`` module the test imported is dropped before
+    ``monkeypatch`` restores the pre-test ones, so no package whose
+    ``__path__`` points into ``tmp_path`` outlives the test. This fixture
+    depends on ``monkeypatch``, so its teardown runs first.
     """
     import importlib
     import sys
 
-    pkg = root
-    for part in (*parts, ep_module):
-        pkg = pkg / part
-        pkg.mkdir(parents=True, exist_ok=True)
-        (pkg / "__init__.py").write_text("")
-    (pkg / "_input.py").write_text(input_body)
-    for name in [m for m in sys.modules if m == "app" or m.startswith("app.")]:
-        monkeypatch.delitem(sys.modules, name)
-    monkeypatch.syspath_prepend(str(root))
-    importlib.invalidate_caches()
+    def write(
+        root: Path,
+        ep_module: str,
+        input_body: str,
+        *,
+        parts: tuple[str, ...] = ("app", "generated"),
+    ) -> None:
+        pkg = root
+        for part in (*parts, ep_module):
+            pkg = pkg / part
+            pkg.mkdir(parents=True, exist_ok=True)
+            (pkg / "__init__.py").write_text("")
+        (pkg / "_input.py").write_text(input_body)
+        for name in [m for m in sys.modules if _is_app_module(m)]:
+            monkeypatch.delitem(sys.modules, name)
+        monkeypatch.syspath_prepend(str(root))
+        importlib.invalidate_caches()
+
+    yield write
+
+    for name in [m for m in sys.modules if _is_app_module(m)]:
+        del sys.modules[name]
 
 
 @pytest.mark.usefixtures("clean_app_registry", "clean_task_registry")
@@ -1213,7 +1232,10 @@ class TestBundleMarketplaceEntrypoints:
             svc_module.CONTRACT_GENERATED_DIR = original
 
     def test_input_contract_errors_when_marketplace_contract_is_broken(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        write_generated_package: _WriteGeneratedPackage,
     ) -> None:
         """A generated dir whose relocated _input.py exists but fails to import
         answers 5xx, not the 404 reserved for "no contract here"."""
@@ -1222,9 +1244,8 @@ class TestBundleMarketplaceEntrypoints:
         generated = tmp_path / "generated"
         (generated / "export").mkdir(parents=True)
         (generated / "export" / "manifest.json").write_text("{}")
-        _write_generated_package(
+        write_generated_package(
             tmp_path / "src",
-            monkeypatch,
             "export",
             "import _fnd4092_missing_dep\n",
             parts=("app",),
