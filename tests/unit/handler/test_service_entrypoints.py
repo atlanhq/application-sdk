@@ -208,6 +208,99 @@ class TestInputContractEndpoint:
         )
         assert _published_input_contract(ep) is _RoutingInput
 
+    @pytest.mark.parametrize(
+        ("body", "error"),
+        [
+            # a dependency of the generated module is missing
+            ("import _fnd4092_missing_dep\n", ModuleNotFoundError),
+            # the generated module imports a name that does not exist
+            ("from pydantic import _Fnd4092NoSuchName\n", ImportError),
+        ],
+    )
+    def test_broken_generated_contract_raises_not_falls_back(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        body: str,
+        error: type[ImportError],
+    ) -> None:
+        """A generated _input.py that exists but fails to import surfaces its
+        error. Falling back to the thin runtime input_type would serve a schema
+        without the CredentialRef fields Heracles discovers credentials by."""
+        from application_sdk.app.entrypoint import EntryPointMetadata
+        from application_sdk.handler.service import _published_input_contract
+
+        _write_generated_package(tmp_path, monkeypatch, "broken_ep", body)
+        ep = EntryPointMetadata(
+            name="broken-ep",
+            input_type=_RoutingInput,
+            output_type=_RoutingOutput,
+            method_name="broken_ep",
+        )
+        with pytest.raises(error):
+            _published_input_contract(ep)
+
+    def test_broken_generated_contract_is_a_server_error_on_the_route(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The route answers 5xx for a broken generated contract, never 200
+        with the thin runtime schema."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _BrokenGenApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        _write_generated_package(
+            tmp_path, monkeypatch, "crawler", "import _fnd4092_missing_dep\n"
+        )
+        resp = self._client(_BrokenGenApp).get(
+            "/workflows/v1/input-contract?entrypoint=crawler"
+        )
+        assert resp.status_code == 500
+        # an entry point with no generated module still falls back
+        resp_load = self._client(_BrokenGenApp).get(
+            "/workflows/v1/input-contract?entrypoint=load"
+        )
+        assert resp_load.status_code == 200
+        assert resp_load.json() == _RoutingInput.model_json_schema()
+
+
+def _write_generated_package(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ep_module: str,
+    input_body: str,
+    *,
+    parts: tuple[str, ...] = ("app", "generated"),
+) -> None:
+    """Write a real ``app/generated/<ep_module>/_input.py`` package under *root*
+    and put *root* on ``sys.path``.
+
+    Any ``app`` modules already in ``sys.modules`` (real or the stand-ins other
+    tests inject) are removed through ``monkeypatch`` so the import resolves
+    from disk, and restored afterwards.
+    """
+    import importlib
+    import sys
+
+    pkg = root
+    for part in (*parts, ep_module):
+        pkg = pkg / part
+        pkg.mkdir(parents=True, exist_ok=True)
+        (pkg / "__init__.py").write_text("")
+    (pkg / "_input.py").write_text(input_body)
+    for name in [m for m in sys.modules if m == "app" or m.startswith("app.")]:
+        monkeypatch.delitem(sys.modules, name)
+    monkeypatch.syspath_prepend(str(root))
+    importlib.invalidate_caches()
+
 
 @pytest.mark.usefixtures("clean_app_registry", "clean_task_registry")
 class TestDefaultEntrypoint:
@@ -1118,6 +1211,29 @@ class TestBundleMarketplaceEntrypoints:
             assert resp.status_code == 404
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_input_contract_errors_when_marketplace_contract_is_broken(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A generated dir whose relocated _input.py exists but fails to import
+        answers 5xx, not the 404 reserved for "no contract here"."""
+        from application_sdk.handler import service as svc_module
+
+        generated = tmp_path / "generated"
+        (generated / "export").mkdir(parents=True)
+        (generated / "export" / "manifest.json").write_text("{}")
+        _write_generated_package(
+            tmp_path / "src",
+            monkeypatch,
+            "export",
+            "import _fnd4092_missing_dep\n",
+            parts=("app",),
+        )
+        monkeypatch.setattr(svc_module, "CONTRACT_GENERATED_DIR", generated)
+        resp = self._client(self._bundle_app()).get(
+            "/workflows/v1/input-contract?entrypoint=export"
+        )
+        assert resp.status_code == 500
 
     def test_bare_manifest_on_bundle_still_404s(self, tmp_path: Path) -> None:
         """A bare /manifest call on a bundle app keeps 404-ing even when
