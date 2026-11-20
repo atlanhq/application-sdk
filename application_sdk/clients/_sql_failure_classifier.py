@@ -39,7 +39,18 @@ def root_cause(exc: BaseException) -> BaseException:
 # ODBC renders SQLSTATE HYT00 as "Login timeout expired" — no "timeout" in the
 # class name and no "timed out" in the message, so a generic substring check
 # misses it. Match the driver phrasings explicitly.
-_TIMEOUT_MSG_HINTS = ("timed out", "login timeout", "timeout expired", "hyt00")
+# python-oracledb reports an unanswered TCP connect as ``ORA-12170: Cannot
+# connect. TCP connect timeout of 20s ...`` (older clients: "TNS:Connect timeout
+# occurred") on a plain ``DatabaseError``, so neither the class nor the other
+# phrasings match it.
+_TIMEOUT_MSG_HINTS = (
+    "timed out",
+    "login timeout",
+    "timeout expired",
+    "hyt00",
+    "connect timeout",
+    "ora-12170",
+)
 
 # Driver error_type for MySQL ``Access denied`` is ``OperationalError`` — that
 # class is overloaded across both auth and network failures, so message content
