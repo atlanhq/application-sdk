@@ -221,7 +221,8 @@ async def _warn_on_invalid_transformed_assets(
     are full by design by default, so the batch — the whole hand-off, see below —
     is complete and the orphan pass is accurate. This **never** blocks the upload
     and **never** raises — a defect in the scaffold must not break a real handoff
-    — and it scans every record (no sampling) so the summary is accurate.
+    — and it reads every record (no sampling) so the counts and the summary are
+    exact, unless the scan stops at its memory or wall budget (see below).
 
     **The check is reached through the generic wrapper** (ADR-0020, FND-690):
     ``validate_artifact(target, ModelSource(model=Asset))`` is the NDJSON x
@@ -253,6 +254,15 @@ async def _warn_on_invalid_transformed_assets(
     proceeds. The timeout bounds the scan for the same reason — a hung
     validation must not stall an upload forever. The wrapper is synchronous by
     design precisely so this caller owns that decision.
+
+    **The child works to a fixed budget.** Its report keeps at most
+    ``ASSET_VALIDATION_MAX_ITEMS_PER_AXIS`` failures and orphans as samples and
+    counts the rest, so what it pickles back here is a few KB whether one record
+    failed or every record did. It also stops itself past
+    ``ATLAN_VALIDATE_ASSETS_MAX_RSS_MB`` of resident memory, or at 90% of the
+    timeout, and returns the counts for what it read; the event then carries
+    ``validation_truncated`` and this hook logs a warning. A batch the scan cannot
+    finish therefore still yields a row, instead of a killed child and no row.
 
     **The batch is the whole hand-off, not one file** (FND-3414). The orphan pass
     is only accurate over everything delivered together: a fanned-out connector
@@ -376,8 +386,9 @@ async def _warn_on_invalid_transformed_assets(
     try:
         assets = report.assets
         flagged = not assets.ok
-        # The summary walks every failure (a broken batch can carry millions), so
-        # the projection is built off the event loop to keep heartbeats flowing.
+        # Off the event loop: a report from the walk carries its own tallies and
+        # is cheap to project, but one built elsewhere is summarised by walking
+        # its whole failure list.
         fields = await run_in_thread(
             asset_validation_event_fields,
             assets,
@@ -392,6 +403,13 @@ async def _warn_on_invalid_transformed_assets(
             ),
         )
         _task_logger.info(ASSET_VALIDATION_EVENT, **fields)
+        if assets.truncated:
+            _task_logger.warning(
+                "Transformed-asset validation stopped at its %s after %d records; "
+                "the counts cover those records only (handoff continues)",
+                assets.truncated,
+                assets.total,
+            )
         if flagged:
             _task_logger.warning(
                 "Transformed-asset validation flagged issues before upload "
