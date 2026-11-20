@@ -2196,14 +2196,14 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 
 - **Import:** `from application_sdk.execution import create_data_converter`
 - **Signature:** `create_data_converter(additional_converters: list[EncodingPayloadConverter] | None = None)`
-- **Summary:** Create a data converter with Pydantic support.
+- **Summary:** Return the SDK's Temporal data converter: the official ``pydantic_data_converter``.
 - **Defined in:** `application_sdk/execution/_temporal/converter.py`
 
 #### `create_data_converter_for_app`
 
 - **Import:** `from application_sdk.execution import create_data_converter_for_app`
 - **Signature:** `create_data_converter_for_app(app_class: type[App])`
-- **Summary:** Create a data converter for a specific app, including any app-specific converters.
+- **Summary:** Return the data converter for *app_class*.
 - **Defined in:** `application_sdk/execution/_temporal/converter.py`
 
 #### `create_temporal_client`
