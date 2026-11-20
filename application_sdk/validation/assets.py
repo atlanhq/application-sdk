@@ -54,7 +54,7 @@ import re
 import typing
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final, Iterator, Sequence
+from typing import Callable, Final, Iterator, Sequence
 
 import msgspec
 import orjson
@@ -1219,3 +1219,83 @@ def asset_validation_event_fields(
             }
         ),
     }
+
+
+@dataclass(frozen=True)
+class AssetValidationOutcome:
+    """What an isolated upload-validation scan sends back to the worker: bounded.
+
+    :class:`AssetArtifactReport` carries every failure twice (the asset list and its
+    shared-shape projection) and is unbounded by contract, so pickling it from the
+    isolated child back into the Temporal worker re-creates the whole batch's
+    findings there — about 250 B per failing record, ~0.9 GiB at a million. A
+    systematic mapper bug is exactly when that happens, and exactly the case the
+    isolation exists for (ADR-0017). This carries only what the upload hook emits:
+    the ``ASSET_VALIDATION_EVENT`` attribute map (counts plus the row-capped matrix
+    and the per-type/per-rule summary) and the capped ``format_report()`` text, all
+    built in the child by :func:`summarize_asset_validation`. Its size depends on
+    the cap, not on how many records failed (FND-4088).
+    """
+
+    event_fields: dict[str, str | int] | None
+    """``ASSET_VALIDATION_EVENT``'s attribute map, from
+    :func:`asset_validation_event_fields`. ``None`` when the scan resolved to an
+    outcome without asset-vocabulary counts (a plain report from the wrapper), so
+    the caller can say so instead of emitting fabricated zeros."""
+    flagged_report: str = ""
+    """``format_report()`` capped to ``max_items`` per axis when the batch is
+    flagged; "" when it is clean or has no counts."""
+    outcome: str = ""
+    """The wrapper's outcome when :attr:`event_fields` is ``None``; "" otherwise."""
+    reason: str = ""
+    """The wrapper's reason when :attr:`event_fields` is ``None``; "" otherwise."""
+
+    @property
+    def flagged(self) -> bool:
+        """True when the batch had findings on any axis."""
+        return bool(self.flagged_report)
+
+
+def summarize_asset_validation(
+    scan: Callable[..., ArtifactValidationReport],
+    *args: object,
+    app_name: str,
+    scope: AssetBatchScope | None = None,
+    max_items: int = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
+    **kwargs: object,
+) -> AssetValidationOutcome:
+    """Run ``scan(*args, **kwargs)`` and reduce its report to the bounded outcome.
+
+    Meant to run *inside* the isolated child — module-level so it pickles by
+    reference — so the full report is built, projected and dropped there and only
+    an :class:`AssetValidationOutcome` crosses back into the worker. ``scan`` is
+    the cell to run: :func:`~application_sdk.validation.wrapper.validate_artifact`
+    for one part, :func:`validate_assets_as_artifact` for a fanned-in batch. It is
+    a parameter, not a hard-coded call, so the caller decides which cell runs and
+    that choice is what crosses the process boundary.
+
+    Args:
+        scan: Returns an :class:`~application_sdk.validation.artifacts.ArtifactValidationReport`;
+            an :class:`AssetArtifactReport` carries the asset counts.
+        *args: Positional arguments for ``scan``.
+        app_name: Passed to :func:`asset_validation_event_fields`.
+        scope: Passed to :func:`asset_validation_event_fields`.
+        max_items: Row cap per axis, shared by the matrix and ``format_report()``.
+        **kwargs: Keyword arguments for ``scan``.
+
+    Returns:
+        The event's attribute map and, when flagged, the capped report text; or the
+        wrapper's outcome and reason when the report carries no asset counts.
+    """
+    report = scan(*args, **kwargs)
+    if not isinstance(report, AssetArtifactReport):
+        return AssetValidationOutcome(
+            event_fields=None, outcome=report.outcome, reason=report.reason
+        )
+    assets = report.assets
+    return AssetValidationOutcome(
+        event_fields=asset_validation_event_fields(
+            assets, app_name=app_name, max_items=max_items, scope=scope
+        ),
+        flagged_report="" if assets.ok else assets.format_report(max_items=max_items),
+    )

@@ -31,6 +31,7 @@ import asyncio
 import faulthandler
 import json
 import time
+import tracemalloc
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -85,6 +86,23 @@ def _absent_report(path, source, **kwargs):
     from application_sdk.validation import ArtifactValidationReport
 
     return ArtifactValidationReport.absent(reason="validator raised: RuntimeError")
+
+
+def _report_whose_projection_raises(path, source, **kwargs):
+    # An asset report the event projection cannot encode: a non-string error
+    # message makes the matrix's truncation raise inside the child.
+    from application_sdk.validation import (
+        AssetArtifactReport,
+        AssetValidationFailure,
+        AssetValidationReport,
+    )
+
+    failure = AssetValidationFailure(
+        file="f", line=1, type_name="Table", qualified_name="q", errors=[object()]
+    )
+    return AssetArtifactReport(
+        total=1, assets=AssetValidationReport(total=1, failures=[failure])
+    )
 
 
 def _invalid_table() -> Table:
@@ -422,22 +440,32 @@ class TestWarnOnInvalidTransformedAssets:
             logger.info.assert_not_called()
 
     async def test_emit_failure_is_swallowed(self, tmp_path: Path) -> None:
-        # A defect in the emit path (e.g. matrix encoding) must never break the
-        # upload: it is caught and downgraded to a warning, no raise. The hook
-        # resolves the projection lazily at call time, so patching it on the
-        # validation package is what the hook actually looks up.
+        # A defect in the emit path must never break the upload: it is caught and
+        # downgraded to a warning, no raise. The attribute map is built in the
+        # child (FND-4088), so what can still fail in this process is the log
+        # call itself.
+        _valid_hierarchy(tmp_path)
+        with patch.object(base_module, "_task_logger") as logger:
+            logger.info.side_effect = RuntimeError("emit boom")
+            await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
+            logger.warning.assert_called_once()
+            assert "emission failed" in logger.warning.call_args.args[0]
+            assert logger.warning.call_args.kwargs.get("exc_info") is True
+
+    async def test_a_projection_failure_in_the_child_is_swallowed(
+        self, tmp_path: Path
+    ) -> None:
+        # The projection runs in the child alongside the scan, so a raise there
+        # reaches run_best_effort like any scan error: warn, no event, no raise.
         _valid_hierarchy(tmp_path)
         with patch.object(base_module, "_task_logger") as logger:
             with patch(
-                "application_sdk.validation.asset_validation_event_fields",
-                side_effect=RuntimeError("encode boom"),
+                "application_sdk.validation.validate_artifact",
+                _report_whose_projection_raises,
             ):
                 await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
             logger.warning.assert_called_once()
-            assert logger.warning.call_args.kwargs.get("exc_info") is True
-            # The attribute map is built as an eager arg to _task_logger.info(...),
-            # so a raise there is hit before .info() is called — no partial outcome
-            # event is emitted (mirrors test_unexpected_scan_error_is_swallowed).
+            assert "unexpected error" in logger.warning.call_args.args[0]
             logger.info.assert_not_called()
 
     async def test_a_wrapper_outcome_without_counts_emits_no_event(
@@ -572,3 +600,31 @@ class TestWarnOnInvalidTransformedAssets:
         with patch.object(base_module, "_task_logger") as logger_after:
             await _warn_on_invalid_transformed_assets(str(dirs[0]), APP)
             logger_after.warning.assert_not_called()
+
+    @pytest.mark.perf
+    async def test_a_million_failing_records_cost_the_worker_under_50_mib(
+        self, tmp_path: Path
+    ) -> None:
+        # FND-4088: the child used to pickle the whole report back — every failure
+        # twice, ~250 B a record, ~0.9 GiB at a million. A systematic mapper bug
+        # fails every record, and that is the case the isolation is for. Only the
+        # bounded outcome crosses now, so the worker's allocations stay flat.
+        # tracemalloc sees this process only (the spawn child does not inherit it),
+        # including the pool thread that unpickles the result.
+        records = 1_000_000
+        out_dir = tmp_path / "transformed" / "Table"
+        out_dir.mkdir(parents=True)
+        (out_dir / "entities.json").write_bytes(b"{not json\n" * records)
+
+        tracemalloc.start()
+        try:
+            with patch.object(base_module, "_task_logger") as logger:
+                await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        event = _outcome_event(logger)
+        assert event["assets_total"] == records
+        assert event["assets_undeserializable"] == records
+        assert peak < 50 * 1024 * 1024, f"worker peak {peak / 2**20:.1f} MiB"
