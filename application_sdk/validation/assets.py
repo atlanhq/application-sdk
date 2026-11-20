@@ -939,8 +939,14 @@ def validate_assets_as_artifact(
 # pre-existing key and value is untouched.
 
 ASSET_VALIDATION_MATRIX_ERROR_MAXLEN: Final = 300
-"""Per-row error message cap (chars). pyatlan_v9 ``.validate()`` messages can be
-long; truncate so a single row cannot bloat the ClickHouse attribute."""
+"""Per-value cap (chars) for every free-form string in the matrix and summary rows.
+pyatlan_v9 ``.validate()`` messages can be long, and names, types and paths come
+from the record itself; truncate so a single row cannot bloat the ClickHouse
+attribute or the outcome the isolated scan returns to the worker (FND-4088)."""
+
+
+def _capped(value: str) -> str:
+    return value[:ASSET_VALIDATION_MATRIX_ERROR_MAXLEN]
 
 
 def asset_validation_matrix_json(
@@ -953,6 +959,7 @@ def asset_validation_matrix_json(
     Lands as a single ``LogAttributes`` value in ClickHouse so connector-pulse can
     ``JSONExtract`` the per-failure detail against workflow outcomes with no schema
     change (mirrors the preflight gate's ``check_matrix``). Small fixed fields only,
+    each string capped at :data:`ASSET_VALIDATION_MATRIX_ERROR_MAXLEN` chars and
     bounded to ``max_items`` rows **per axis** — the headline counts on the event
     carry the full totals, and the human-readable ``format_report()`` still rides in
     the WARNING body for flagged runs.
@@ -966,12 +973,10 @@ def asset_validation_matrix_json(
         rows.append(
             {
                 "kind": "undeserializable" if f.deserialize_error else "invalid",
-                "type_name": f.type_name,
-                "qualified_name": f.qualified_name,
-                "error": (f.errors[0] if f.errors else "")[
-                    :ASSET_VALIDATION_MATRIX_ERROR_MAXLEN
-                ],
-                "file": f.file,
+                "type_name": _capped(f.type_name),
+                "qualified_name": _capped(f.qualified_name),
+                "error": _capped(f.errors[0] if f.errors else ""),
+                "file": _capped(f.file),
                 "line": f.line,
             }
         )
@@ -979,11 +984,11 @@ def asset_validation_matrix_json(
         rows.append(
             {
                 "kind": "orphan",
-                "type_name": o.missing_type_name,
-                "qualified_name": o.missing_qualified_name,
-                "relationship": o.relationship,
+                "type_name": _capped(o.missing_type_name),
+                "qualified_name": _capped(o.missing_qualified_name),
+                "relationship": _capped(o.relationship),
                 "reference_count": o.reference_count,
-                "file": o.file,
+                "file": _capped(o.file),
                 "line": o.line,
             }
         )
@@ -1085,6 +1090,9 @@ def asset_validation_summary_json(
       missing targets and ``references`` the references to them.
 
     Rows are ordered by ``count`` descending (ties by key, so output is stable).
+    ``type_name`` and ``detail`` are capped at
+    :data:`ASSET_VALIDATION_MATRIX_ERROR_MAXLEN` chars on the way out; counting
+    uses the full values.
     Past ``max_rows`` the rest fold into one ``kind="truncated"`` row carrying their
     summed ``count`` and the summed ``references`` of any orphan groups among them,
     so both totals survive the cap. Like the matrix, this is not internally guarded; the emitting
@@ -1110,8 +1118,8 @@ def asset_validation_summary_json(
     for (kind, type_name, detail), count in ordered[:max_rows]:
         row: dict[str, object] = {
             "kind": kind,
-            "type_name": type_name,
-            "detail": detail,
+            "type_name": _capped(type_name),
+            "detail": _capped(detail),
             "count": count,
         }
         if kind == "orphan":
@@ -1221,6 +1229,34 @@ def asset_validation_event_fields(
     }
 
 
+ASSET_VALIDATION_REPORT_LINE_MAXLEN: Final = 1000
+"""Per-line cap (chars) on the report text the isolated scan returns. A line of
+``format_report()`` embeds the record's own ``qualifiedName`` and every message
+``.validate()`` produced for it, which can quote record values — so ``max_items``
+bounds the lines but not their length."""
+
+
+def _bounded_report(text: str, *, max_items: int) -> str:
+    """Cap ``format_report()`` text by line length and line count.
+
+    ``format_report(max_items=n)`` emits at most ``2n + 4`` lines (headline, ``n``
+    failures, ``n`` orphans, three overflow lines), unless a message itself contains
+    newlines. Past that many lines the rest are counted, not carried, so the text
+    is bounded by ``max_items`` alone.
+    """
+    lines = text.split("\n")
+    max_lines = 2 * max_items + 4
+    kept = [
+        line
+        if len(line) <= ASSET_VALIDATION_REPORT_LINE_MAXLEN
+        else line[:ASSET_VALIDATION_REPORT_LINE_MAXLEN] + " ... [truncated]"
+        for line in lines[:max_lines]
+    ]
+    if len(lines) > max_lines:
+        kept.append(f"  ... and {len(lines) - max_lines} more report lines")
+    return "\n".join(kept)
+
+
 @dataclass(frozen=True)
 class AssetValidationOutcome:
     """What an isolated upload-validation scan sends back to the worker: bounded.
@@ -1234,7 +1270,10 @@ class AssetValidationOutcome:
     the ``ASSET_VALIDATION_EVENT`` attribute map (counts plus the row-capped matrix
     and the per-type/per-rule summary) and the capped ``format_report()`` text, all
     built in the child by :func:`summarize_asset_validation`. Its size depends on
-    the cap, not on how many records failed (FND-4088).
+    the caps, not on how many records failed or how long their values are: rows
+    are capped per axis, every free-form row value at
+    :data:`ASSET_VALIDATION_MATRIX_ERROR_MAXLEN` chars, and every report line at
+    :data:`ASSET_VALIDATION_REPORT_LINE_MAXLEN` (FND-4088).
     """
 
     event_fields: dict[str, str | int] | None
@@ -1243,8 +1282,9 @@ class AssetValidationOutcome:
     outcome without asset-vocabulary counts (a plain report from the wrapper), so
     the caller can say so instead of emitting fabricated zeros."""
     flagged_report: str = ""
-    """``format_report()`` capped to ``max_items`` per axis when the batch is
-    flagged; "" when it is clean or has no counts."""
+    """``format_report()`` capped to ``max_items`` per axis, with each line capped at
+    :data:`ASSET_VALIDATION_REPORT_LINE_MAXLEN` chars, when the batch is flagged; ""
+    when it is clean or has no counts."""
     outcome: str = ""
     """The wrapper's outcome when :attr:`event_fields` is ``None``; "" otherwise."""
     reason: str = ""
@@ -1297,5 +1337,11 @@ def summarize_asset_validation(
         event_fields=asset_validation_event_fields(
             assets, app_name=app_name, max_items=max_items, scope=scope
         ),
-        flagged_report="" if assets.ok else assets.format_report(max_items=max_items),
+        flagged_report=(
+            ""
+            if assets.ok
+            else _bounded_report(
+                assets.format_report(max_items=max_items), max_items=max_items
+            )
+        ),
     )

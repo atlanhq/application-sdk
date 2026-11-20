@@ -118,5 +118,26 @@ def test_the_outcome_does_not_grow_with_the_number_of_failing_records(
     assert len(full) > 100 * len(large)
 
 
+def test_the_outcome_does_not_grow_with_the_length_of_record_values(
+    tmp_path: Path,
+) -> None:
+    # Rows are capped per axis, but a row's values come from the record: a huge
+    # qualifiedName lands in the report line, the matrix row and the
+    # connection-prefix message; a huge typeName lands in the summary key too.
+    huge = 1_000_000
+    long_qn = Table.creator(name="T", schema_qualified_name=f"{CONN}/DB/S")
+    long_qn.qualified_name = "x" * huge
+    long_type = b'{"typeName": "' + b"T" * huge + b'", "attributes": 5}'
+    target = _write_lines(tmp_path, [long_qn.to_nested_bytes(), long_type])
+
+    outcome = _summarize(target)
+
+    assert outcome.flagged
+    assert outcome.event_fields is not None
+    assert outcome.event_fields["assets_total"] == 2
+    assert outcome.event_fields["assets_passed"] == 0
+    assert len(pickle.dumps(outcome)) < 16 * 1024
+
+
 def _absent(_path: str) -> ArtifactValidationReport:
     return ArtifactValidationReport.absent(reason="validator raised: RuntimeError")
