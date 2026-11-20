@@ -108,13 +108,15 @@ _LITERAL_KEYS: frozenset[str] = frozenset(
 
 #: Connection settings under ``extra`` whose values are literals, never
 #: ref-keys: single-key probing skips them wherever the ``extra`` sits
-#: (``extra.database``, ``basic.extra.database``, a nested ``extra`` dict).
-#: A store that rejects such a value as a secret name (a URL's ``/``)
-#: answers with a failure, not "not found", and that failure stops the whole
-#: resolution. Probing only: a multi-key bundle may still substitute them.
-_CONNECTION_LITERAL_EXTRA_FIELDS: frozenset[str] = frozenset(
-    {"compiled_url", "database"}
-)
+#: (``extra.compiled_url``, ``basic.extra.compiled_url``, a nested ``extra``
+#: dict). Probing only: a multi-key bundle may still substitute them.
+#:
+#: ``database`` is deliberately absent. Legacy single-key payloads can carry a
+#: secret name there (SDK <= 3.51 resolved it), and skipping it sent that
+#: name to the server as the database. A plain database name the store
+#: rejects as a secret name is kept as entered by the legacy bridge in
+#: :func:`_fetch_per_key_bundle`, so probing it no longer fails resolution.
+_CONNECTION_LITERAL_EXTRA_FIELDS: frozenset[str] = frozenset({"compiled_url"})
 
 
 def _is_connection_literal(key: str) -> bool:
