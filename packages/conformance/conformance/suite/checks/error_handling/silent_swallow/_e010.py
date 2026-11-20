@@ -16,6 +16,8 @@ from .._helpers import (
 class E010Mixin:
     """Rule methods for E010."""
 
+    _import_origins: dict[str, str]
+
     # ── E010 ─────────────────────────────────────────────────────────────────
 
     def _check_p010_in_function(
@@ -126,11 +128,27 @@ class E010Mixin:
                     break
             if not inspected:
                 for call in _iter_shallow(func_node):
-                    if not isinstance(call, ast.Call) or not isinstance(
-                        call.func, ast.Name
-                    ):
+                    if not isinstance(call, ast.Call):
                         continue
-                    helper = local_helpers.get(call.func.id)
+                    helper_call = call
+                    helper: ast.FunctionDef | None = None
+                    if isinstance(call.func, ast.Name):
+                        helper = local_helpers.get(call.func.id)
+                        if (
+                            helper is None
+                            and self._import_origins.get(call.func.id)
+                            == "application_sdk.execution.heartbeat.run_in_thread"
+                            and call.args
+                            and isinstance(call.args[0], ast.Name)
+                        ):
+                            # run_in_thread takes the consumer as its first argument
+                            # and forwards the remaining arguments to that helper.
+                            helper = local_helpers.get(call.args[0].id)
+                            helper_call = ast.Call(
+                                func=call.args[0],
+                                args=call.args[1:],
+                                keywords=call.keywords,
+                            )
                     if helper is None:
                         continue
                     parameters = [
@@ -141,7 +159,7 @@ class E010Mixin:
                     if any(
                         isinstance(
                             argument := _call_argument_for_parameter(
-                                call, helper, parameter.arg
+                                helper_call, helper, parameter.arg
                             ),
                             ast.Name,
                         )
@@ -395,7 +413,8 @@ def _helper_handles_gathered_results(helper: ast.FunctionDef, parameter: str) ->
 
     Only a direct per-item exception test followed by a raise or log is a proven
     handling boundary. Merely passing the results to an opaque helper, counting
-    them, or continuing past a detected exception does not satisfy E010.
+    them, or using a bare ``continue`` for an exception does not satisfy E010;
+    logging the exception before continuing does.
     """
     if any(
         isinstance(node, ast.Name)

@@ -3554,6 +3554,44 @@ async def run():
     )
 
 
+def test_p010_no_finding_logged_helper_via_run_in_thread() -> None:
+    _none(
+        """\
+import asyncio
+from application_sdk.execution.heartbeat import run_in_thread
+
+def write_records(path, outcomes):
+    for outcome in outcomes:
+        if isinstance(outcome, Exception):
+            logger.warning("task failed: %s", outcome)
+            continue
+
+async def run(path, tasks):
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+    await run_in_thread(write_records, path, outcomes)
+"""
+    )
+
+
+def test_p010_run_in_thread_helper_bare_continue_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+from application_sdk.execution.heartbeat import run_in_thread
+
+def write_records(path, outcomes):
+    for outcome in outcomes:
+        if isinstance(outcome, Exception):
+            continue
+
+async def run(path, tasks):
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+    await run_in_thread(write_records, path, outcomes)
+""",
+        "E010",
+    )
+
+
 def test_p010_helper_that_only_counts_results_still_fires() -> None:
     _single(
         """\
