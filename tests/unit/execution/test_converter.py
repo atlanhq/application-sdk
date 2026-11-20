@@ -239,6 +239,28 @@ class TestCreateDataConverterForApp:
             AppRegistry.reset()
             TaskRegistry.reset()
 
+    def test_app_payload_converters_declared_none_still_warns(self) -> None:
+        from application_sdk.app.base import App
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+        try:
+
+            class _NoneConverterApp(App):
+                payload_converters = None
+
+                async def run(self, input: _ConverterInput) -> _ConverterOutput:
+                    return _ConverterOutput()
+
+            with pytest.warns(DeprecationWarning, match=r"App\.payload_converters"):
+                converter = create_data_converter_for_app(_NoneConverterApp)
+            assert converter is pydantic_data_converter
+        finally:
+            AppRegistry.reset()
+            TaskRegistry.reset()
+
     def test_app_payload_converters_warn_and_still_round_trip(self) -> None:
         from application_sdk.app.base import App
         from application_sdk.app.registry import AppRegistry, TaskRegistry

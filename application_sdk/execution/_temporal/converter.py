@@ -64,7 +64,7 @@ def create_data_converter_for_app(app_class: type[App]) -> DataConverter:
     """Return the data converter for *app_class*.
 
     Every app gets the shared ``pydantic_data_converter``. An app class that
-    still declares a ``payload_converters`` attribute gets a
+    still declares a ``payload_converters`` attribute, even as ``None``, gets a
     ``DeprecationWarning``: the attribute is ignored, because the chain it fed
     never worked (see :func:`create_data_converter`).
 
@@ -74,7 +74,9 @@ def create_data_converter_for_app(app_class: type[App]) -> DataConverter:
     Returns:
         The shared ``pydantic_data_converter``.
     """
-    if getattr(app_class, "payload_converters", None) is not None:
+    # Any declaration warns, including ``payload_converters = None``: the
+    # attribute itself is what is deprecated, not only a non-empty value.
+    if hasattr(app_class, "payload_converters"):
         _deprecation.warn_deprecated(
             "App.payload_converters",
             "no attribute; remove it from the App class",
