@@ -126,24 +126,103 @@ Call sites that changed with it:
 - The trace line per bundle lists the principle ids, where lens counts rule cards.
 - CLI: `--principles-dir` is new.
 
+### Typing
+
+`.github/scripts` holds a new file to zero pyright findings
+(`check_pyright_baseline.py`, docs/standards/ci.md), and a copy is a new file: the
+baseline entries lens has do not carry over. So the copy is pyright-clean where lens
+is not, and `.github/scripts/pyright_baseline.json` is unchanged. None of this
+changes behaviour, with the two exceptions noted:
+
+- `typed.py` is new: `EMPTY`, a read-only typed empty mapping, and `objects()`, the
+  JSON objects of an untrusted list. `(x.get("user") or {}).get("login")` in lens is
+  `(x.get("user") or EMPTY).get("login")` here (`agent.py`, `event.py`, `github.py`,
+  `holistic.py`, `llm.py`, `review.py`), and `[c for c in items if isinstance(c, dict)]`
+  is `objects(items)` (`holistic._parse_verdict`, `review.verdict_items`,
+  `trace.args_summary`).
+- Local lists and dicts that lens leaves to inference are annotated (`out: list[str] = []`
+  and the like), the private `Client._body`, `_responses_body` and `_complete` have
+  parameter types, `holistic.build_input` and `check` take `dict[str, Any]`, and the
+  tool lists in `prompts.py` are `list[dict[str, Any]]`.
+- Exception: `event.decide` reads the comment body as `str(body or "")`, where lens
+  calls `.strip()` on the value as it comes. A body that is not a string is read as
+  its text and no longer raises.
+- Exception: `GitHub.file_at` narrows the reply with a `cast` after its `isinstance`
+  check. Same result for every reply.
+- Unused `# noqa` comments that lens keeps are gone: the copy is not in the `RUF100`
+  baseline list of `pyproject.toml`, which may not grow.
+
 ### Tests
 
-Removed from the copy because they assert on `.github/workflows/lens.yml` or on the
-shipped lens cards, neither of which this fork has:
+`test_connector_reviewer.py` is `test_lens.py` ported. Of lens's 271 tests at the fork
+point, 217 are kept as they are (only the names above, `app/` fixture paths, the
+principles call sites and type annotations differ), 22 are adapted, 32 are deleted,
+and 26 are new, which makes 265.
 
-- `test_workflow_triggers_only_on_invocation`
-- `test_shipped_workflow_never_checks_out_pr_head`
-- `test_lock_timeout_matches_the_workflow_job_timeout`
-- `test_workflow_can_write_the_status`
-- `test_workflow_acts_as_the_fleet_app_with_a_scoped_token`
-- `test_workflow_uploads_the_run_report_even_on_failure`
-- `test_only_the_approval_step_holds_the_code_owner_token`
-- `test_every_rules_glob_matches_a_tracked_file_and_wins_for_one`
-- `test_every_path_a_card_cites_exists`
-- `test_every_conformance_rule_id_a_card_cites_exists`
-- `test_dont_flag_lines_cite_only_rules_that_fail_ci`
+Fixtures: paths are in the connector layout (`application_sdk/storage/fetch.py` is
+`app/storage/fetch.py`), the `repo` fixture has a fleet principles directory where
+lens has cards and `rules.toml`, an autouse fixture sets
+`CONNECTOR_REVIEWER_PRINCIPLES_DIR`, `fake_github()` returns the fake typed `Any`, and
+`state_of()` / `decode_state()` read a state that must be there.
+
+Deleted, by reason:
+
+- **No workflow yet** (6): `test_workflow_triggers_only_on_invocation`,
+  `test_shipped_workflow_never_checks_out_pr_head`,
+  `test_lock_timeout_matches_the_workflow_job_timeout`,
+  `test_workflow_can_write_the_status`,
+  `test_workflow_acts_as_the_fleet_app_with_a_scoped_token`,
+  `test_workflow_uploads_the_run_report_even_on_failure`.
+- **The approval step is removed** (8):
+  `test_approval_is_decided_only_when_every_finding_at_every_level_is_closed`,
+  `test_a_ready_head_is_approved_by_the_code_owner_token_only`,
+  `test_no_approval_unless_every_condition_holds`,
+  `test_withdraw_dismisses_only_lens_approvals_by_the_code_owner`,
+  `test_the_step_never_fails_a_finished_review`,
+  `test_the_review_writes_the_decision_for_the_last_step`,
+  `test_only_the_approval_step_holds_the_code_owner_token`,
+  `test_a_failed_review_still_leaves_a_withdraw_decision`.
+- **The released-surface check is removed** (12):
+  `test_a_name_added_and_reshaped_within_the_pr_is_not_a_released_removal`,
+  `test_a_released_name_removed_without_deprecation_is_listed`,
+  `test_a_released_name_kept_as_a_deprecated_alias_is_not_listed`,
+  `test_deleting_or_renaming_away_a_released_module_lists_its_names`,
+  `test_base_branch_drift_in_a_module_the_pr_does_not_touch_is_not_listed`,
+  `test_a_removal_the_base_branch_made_is_not_the_prs_in_a_module_it_edits`,
+  `test_a_released_name_still_on_the_base_branch_removed_by_the_pr_is_listed`,
+  `test_a_pr_that_changes_no_package_module_gets_no_block`,
+  `test_a_snapshot_failure_falls_back_without_raising`,
+  `test_no_release_tag_falls_back_without_raising`,
+  `test_run_gives_the_block_to_every_bundle_and_to_verify`,
+  `test_run_survives_a_checkout_with_no_release`.
+- **The public-API flag is removed** (1):
+  `test_the_approach_check_is_told_about_public_api_changes`.
+- **Rule cards are replaced by principles** (5):
+  `test_first_matching_path_entry_decides_the_cards`,
+  `test_every_rules_glob_matches_a_tracked_file_and_wins_for_one`,
+  `test_every_path_a_card_cites_exists`,
+  `test_every_conformance_rule_id_a_card_cites_exists`,
+  `test_dont_flag_lines_cite_only_rules_that_fail_ci`.
+
+The last four of those guarded the shipped rules and cards: against a glob that
+matches nothing, and against citing a path or a conformance rule that does not
+exist. Nothing in this package guards the fleet principles that way.
 
 The change that adds the connector-reviewer workflow must bring the workflow guards
 back for its own file: the trigger list, never checking out the PR head, the
 `run-name` and no `concurrency:` block (`lock.run_name`), `timeout-minutes` equal to
 `lock.JOB_TIMEOUT`, the token permissions, and the run-report upload.
+
+## Not changed, and worth knowing before the next change
+
+These are lens's behaviour, carried over as it is. Later changes to this fork are
+expected to revisit them:
+
+- `event.decide` still lets any OWNER, MEMBER or COLLABORATOR trigger a review, and
+  the PR author still cannot dismiss a blocking finding. The authorization model is
+  lens's.
+- `agent.calibrate` still caps a finding in a test file at low unless its category
+  is `security`. The review scope here includes test integrity, so a principle whose
+  `Severity` says "high" for a test change is capped by this rule.
+- The verdict rule is lens's: any open finding, a nit included, keeps the status red.
+- Nothing requires a finding to name a principle, and `Finding.rule_id` is unused.

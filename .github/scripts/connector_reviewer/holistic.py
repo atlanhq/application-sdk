@@ -33,6 +33,7 @@ from .diff import FileDiff
 from .llm import BudgetExhausted, Client, LLMError, assistant_turn, estimate_tokens
 from .prompts import CONNECTOR_PROFILE
 from .tools import TOOL_SCHEMAS, Workspace, parse_args, run_tool
+from .typed import EMPTY, objects
 
 SYSTEM = (
     """\
@@ -126,7 +127,7 @@ class ApproachCheck:
 
 
 def build_input(
-    ws: Workspace, files: list[FileDiff], pr_meta: dict, max_input_tokens: int
+    ws: Workspace, files: list[FileDiff], pr_meta: dict[str, Any], max_input_tokens: int
 ) -> str:
     title = (pr_meta.get("title") or "")[:200]
     body = (pr_meta.get("body") or "")[:4000]
@@ -148,7 +149,7 @@ def build_input(
         + "\n".join(syms[:60])
         + "\n</changed_symbols>\n\n"
     )
-    mechanical = pr_meta.get("mechanical") or []
+    mechanical: list[str] = pr_meta.get("mechanical") or []
     if mechanical:
         head += (
             "<mechanical_changes>\nProven behaviour-neutral in code (not line-reviewed):\n"
@@ -175,8 +176,8 @@ def _parse_verdict(out: ApproachCheck, args: dict[str, Any], max_concerns: int) 
     out.approach = str(args.get("approach") or "")[:500]
     out.concerns = [
         {k: str(c.get(k, ""))[:600] for k in ("title", "why", "alternative")}
-        for c in (args.get("concerns") or [])
-        if isinstance(c, dict) and c.get("title")
+        for c in objects(args.get("concerns"))
+        if c.get("title")
     ][:max_concerns]
     out.verdict = (
         "concerns" if args.get("verdict") == "concerns" and out.concerns else "sound"
@@ -187,7 +188,7 @@ def check(
     client: Client,
     ws: Workspace,
     files: list[FileDiff],
-    pr_meta: dict,
+    pr_meta: dict[str, Any],
     *,
     max_input_tokens: int = 8000,
     max_lookups: int = 4,
@@ -223,7 +224,7 @@ def check(
                 assistant_turn(comp)
             )  # carries reasoning items across turns
             for tc in comp.tool_calls:
-                fn = tc.get("function") or {}
+                fn = tc.get("function") or EMPTY
                 name = fn.get("name") or ""
                 args = parse_args(fn.get("arguments") or "")
                 if name == "approach_verdict":

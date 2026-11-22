@@ -29,7 +29,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from . import advisory, baseline, holistic, prompts, trace
 from .agent import AgentLimits, BundleResult, review_bundle, suspect_paths
@@ -52,6 +52,7 @@ from .principles import PrincipleSet
 from .select import DEFAULT_EXCLUDE, select_files
 from .tools import Workspace, parse_args
 from .triage import Triage, triage
+from .typed import EMPTY, objects
 
 SUMMARY_MARKER = "<!-- connector-reviewer-summary -->"
 COMMENT_LIMIT = 64_000  # GitHub's cap is 65,536 characters; keep a margin
@@ -261,7 +262,10 @@ def find_state(gh: GitHub, number: int) -> tuple[PRState | None, str]:
     for c in gh.issue_comments(number):
         body = c.get("body") or ""
         # Only the App's own comment is trusted: see github.bot_login().
-        if SUMMARY_MARKER in body and (c.get("user") or {}).get("login") == bot_login():
+        if (
+            SUMMARY_MARKER in body
+            and (c.get("user") or EMPTY).get("login") == bot_login()
+        ):
             return PRState.decode(body), body
     return None, ""
 
@@ -656,7 +660,7 @@ def run(
     weights = {b.label: max(b.changed_lines, 20) for b in bundles}
     total_w = sum(weights.values()) or 1
 
-    def one(b):
+    def one(b: Bundle) -> BundleResult:
         return review_bundle(
             client,
             ws,
@@ -877,7 +881,7 @@ def dismiss(
         del state.history[:-MAX_HISTORY]
     if not post:
         return res
-    head = str(((gh.pr(number) or {}).get("head") or {}).get("sha") or "")
+    head = str(((gh.pr(number) or EMPTY).get("head") or EMPTY).get("sha") or "")
     if head and state.reviewed_head and head != state.reviewed_head:
         res.notes.append(
             "There are commits since the last review; comment `/review` to review them."
@@ -1187,7 +1191,7 @@ def _recheck_call(
     cut_off). The verdicts are None when none came back (budget, transport, or out
     of output tokens); cut_off is True when the call stopped at its output budget
     before answering for every finding, which `/review recheck verify-budget` can fix."""
-    parts = []
+    parts: list[str] = []
     if author_claim:
         # Untrusted: shown as a claim to check, and unable to close or open a tag.
         claim = author_claim.replace("<", "‹").replace(">", "›")
@@ -1252,7 +1256,7 @@ def recheck_cut_off_line(
     if opted_in:
         return line + (
             " (this was already the opt-in budget, `agent.verify_max_tokens_opt_in` "
-            "in `.github/connector-reviewer/config.toml`)"
+            "in the reviewer's own `config.toml`, which lives in application-sdk)"
         )
     return line + (
         f"; comment `/review recheck verify-budget {' '.join(ids)} <reason>` to retry "
@@ -1588,7 +1592,7 @@ def head_reader(
 def added_blocks(added: PRAdditions | None) -> list[str]:
     if added is None:
         return []
-    out = []
+    out: list[str] = []
     if added.paths:
         out.append(
             f"<paths_added_by_this_pr>\n{added.render_paths()}\n</paths_added_by_this_pr>"
@@ -1604,7 +1608,8 @@ def round_diff(files: list[FileDiff], open_: list[Finding]) -> str:
     """What changed this round, for the verify call: files holding an open finding
     first, then the rest, within a fixed budget (a cached, bounded prompt)."""
     owners = {f.path for f in open_}
-    out, used = [], 0
+    out: list[str] = []
+    used = 0
     for fd in sorted(files, key=lambda d: (d.path not in owners, d.path)):
         if fd.is_binary or not fd.hunks:
             continue
@@ -1878,23 +1883,23 @@ def verdict_items(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     Tool arguments are model output: a missing or non-list `items`, or an entry
     that is not an object, is skipped, so its finding keeps its status."""
     out: list[dict[str, Any]] = []
-    for tc in tool_calls:
-        fn = tc.get("function") if isinstance(tc, dict) else None
+    for tc in objects(tool_calls):
+        fn = tc.get("function")
         args = (
-            parse_args(str((fn or {}).get("arguments") or ""))
+            parse_args(str(cast("dict[str, Any]", fn).get("arguments") or ""))
             if isinstance(fn, dict)
             else {}
         )
         items = args.get("items")
         if isinstance(items, list):
-            out += [it for it in items if isinstance(it, dict)]
+            out += objects(items)
     return out
 
 
 def _out_of_output_budget(comp: Any, max_tokens: int) -> bool:
     """The call stopped at its output cap: `length` on Chat Completions,
     `incomplete` on Responses, or every allowed token spent."""
-    used = int((comp.usage or {}).get("completion_tokens") or 0)
+    used = int((comp.usage or EMPTY).get("completion_tokens") or 0)
     return comp.finish_reason in ("length", "incomplete") or used >= max_tokens
 
 
@@ -2010,7 +2015,7 @@ def spiral_paths(
     next corner case is a sign the approach, not the latest patch, needs another look."""
     if round_no < SPIRAL_ROUNDS:
         return []
-    out = []
+    out: list[tuple[str, list[int]]] = []
     for path in sorted({f.path for f in new if f.severity in BLOCKING}):
         rounds = sorted(
             {
@@ -2038,10 +2043,10 @@ def _spiral_lines(res: RunResult) -> list[str]:
 def _concern_lines(ap: dict[str, Any], *, brief: bool) -> list[str]:
     """Open concerns in full; addressed ones as one line, so the PR shows what is
     still worth a look and not a concern the author has since dealt with."""
-    cs = ap.get("concerns") or []
+    cs: list[dict[str, Any]] = ap.get("concerns") or []
     still = [(i, c) for i, c in enumerate(cs, 1) if c.get("status", "open") == "open"]
     done = [(i, c) for i, c in enumerate(cs, 1) if c.get("status") == "addressed"]
-    out = []
+    out: list[str] = []
     if not brief:
         out.append(
             "**Approach check** — worth a second look (advisory, does not block):"
@@ -2271,7 +2276,8 @@ def _details_block(
 
 
 def _without_resolved(lines: list[str]) -> list[str]:
-    out, skipping = [], False
+    out: list[str] = []
+    skipping = False
     for line in lines:
         if line.startswith("\n<details><summary>✔️ Resolved"):
             skipping = True
@@ -2300,7 +2306,7 @@ def verify_cut_off_line(res: RunResult) -> str:
     if res.verify_opted_in:
         return line + (
             " This was already the opt-in budget (`agent.verify_max_tokens_opt_in` in "
-            "`.github/connector-reviewer/config.toml`)."
+            "the reviewer's own `config.toml`, which lives in application-sdk)."
         )
     return line + (
         f" Worth opting in: comment `/review force verify-budget` to re-check them with "
@@ -2408,9 +2414,8 @@ def _verdict_brief(res: RunResult, summary_url: str, detail_chars: int | None) -
         # approach is the right one — not just a one-word verdict.
         lines.append("")
         concerns = ap.get("verdict") == "concerns"
-        still = [
-            c for c in ap.get("concerns") or [] if c.get("status", "open") == "open"
-        ]
+        raised: list[dict[str, Any]] = ap.get("concerns") or []
+        still = [c for c in raised if c.get("status", "open") == "open"]
         label = (
             "⚠️ concerns (advisory)"
             if concerns and still

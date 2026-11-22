@@ -27,6 +27,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+from .typed import EMPTY
+
 
 class LLMError(RuntimeError):
     """A broken request or an exhausted retry budget."""
@@ -170,7 +172,7 @@ class Ledger:
         self.calls += 1
         self.input_tokens += int(usage.get("prompt_tokens") or 0)
         self.output_tokens += int(usage.get("completion_tokens") or 0)
-        details = usage.get("prompt_tokens_details") or {}
+        details = usage.get("prompt_tokens_details") or EMPTY
         self.cached_tokens += int(details.get("cached_tokens") or 0)
         self.by_stage[stage] = self.by_stage.get(stage, 0.0) + cost
 
@@ -475,7 +477,7 @@ class Client:
             return reported
         prompt = int(usage.get("prompt_tokens") or 0)
         cached = int(
-            (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
+            (usage.get("prompt_tokens_details") or EMPTY).get("cached_tokens") or 0
         )
         out = int(usage.get("completion_tokens") or 0)
         return (
@@ -672,13 +674,13 @@ class Client:
 
     def _body(
         self,
-        messages,
-        max_tokens,
-        tools,
-        response_format,
-        temperature,
-        tool_choice,
-        cache_key,
+        messages: list[dict[str, Any]],
+        max_tokens: int,
+        tools: list[dict[str, Any]] | None,
+        response_format: dict[str, Any] | None,
+        temperature: float | None,
+        tool_choice: Any,
+        cache_key: str | None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": self.model,
@@ -709,7 +711,7 @@ class Client:
         # A rejected effort LEVEL steps down one level (max -> xhigh -> high -> ...)
         # instead of dropping reasoning altogether — losing reasoning is the worst
         # outcome for review quality, so it is the last resort, not the first.
-        effort = (body.get("reasoning") or {}).get("effort") or body.get(
+        effort = (body.get("reasoning") or EMPTY).get("effort") or body.get(
             "reasoning_effort"
         )
         # Only when the error names the LEVEL (e.g. "'max' is not supported"); an
@@ -792,8 +794,9 @@ class Client:
             elif role == "assistant":
                 if m.get("content"):
                     out.append({"role": "assistant", "content": m["content"]})
-                for tc in m.get("tool_calls") or []:
-                    fn = tc.get("function") or {}
+                tool_calls: list[dict[str, Any]] = m.get("tool_calls") or []
+                for tc in tool_calls:
+                    fn = tc.get("function") or EMPTY
                     out.append(
                         {
                             "type": "function_call",
@@ -807,7 +810,13 @@ class Client:
         return out
 
     def _responses_body(
-        self, messages, max_tokens, tools, temperature, tool_choice, cache_key
+        self,
+        messages: list[dict[str, Any]],
+        max_tokens: int,
+        tools: list[dict[str, Any]] | None,
+        temperature: float | None,
+        tool_choice: Any,
+        cache_key: str | None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": self.model,
@@ -839,12 +848,13 @@ class Client:
     def _parse_responses(
         data: dict[str, Any],
     ) -> tuple[str, list[dict[str, Any]], dict[str, Any], dict[str, Any], str]:
-        items = data.get("output") or []
+        items: list[dict[str, Any]] = data.get("output") or []
         text_parts: list[str] = []
         tool_calls: list[dict[str, Any]] = []
         for it in items:
             if it.get("type") == "message":
-                for c in it.get("content") or []:
+                content_parts: list[dict[str, Any]] = it.get("content") or []
+                for c in content_parts:
                     if c.get("type") in ("output_text", "text"):
                         text_parts.append(c.get("text") or "")
             elif it.get("type") == "function_call":
@@ -858,21 +868,21 @@ class Client:
                         },
                     }
                 )
-        u = data.get("usage") or {}
-        usage = {
+        u = data.get("usage") or EMPTY
+        usage: dict[str, Any] = {
             "prompt_tokens": u.get("input_tokens", 0),
             "completion_tokens": u.get("output_tokens", 0),
             "prompt_tokens_details": {
-                "cached_tokens": (u.get("input_tokens_details") or {}).get(
+                "cached_tokens": (u.get("input_tokens_details") or EMPTY).get(
                     "cached_tokens", 0
                 )
             },
-            "reasoning_tokens": (u.get("output_tokens_details") or {}).get(
+            "reasoning_tokens": (u.get("output_tokens_details") or EMPTY).get(
                 "reasoning_tokens", 0
             ),
         }
         content = "".join(text_parts)
-        message = {
+        message: dict[str, Any] = {
             "role": "assistant",
             "content": content,
             "tool_calls": tool_calls,
@@ -895,14 +905,14 @@ class Client:
 
     def _complete(
         self,
-        stage,
-        messages,
-        max_tokens,
-        tools,
-        response_format,
-        temperature,
-        tool_choice,
-        cache_key,
+        stage: str,
+        messages: list[dict[str, Any]],
+        max_tokens: int,
+        tools: list[dict[str, Any]] | None,
+        response_format: dict[str, Any] | None,
+        temperature: float | None,
+        tool_choice: Any,
+        cache_key: str | None,
     ) -> Completion:
         def build() -> dict[str, Any]:
             if self.api == "responses":
@@ -940,6 +950,9 @@ class Client:
             if status == 200:
                 self._record(True)
                 data = json.loads(text)
+                choice: dict[str, Any]
+                msg: dict[str, Any]
+                usage: dict[str, Any]
                 if self.api == "responses":
                     _, _, usage, msg, finish = self._parse_responses(data)
                     choice = {"message": msg, "finish_reason": finish}
@@ -961,7 +974,9 @@ class Client:
                     latency_ms=latency_ms,
                     input=int(usage.get("prompt_tokens") or 0),
                     cached=int(
-                        (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+                        (usage.get("prompt_tokens_details") or EMPTY).get(
+                            "cached_tokens"
+                        )
                         or 0
                     ),
                     output=int(usage.get("completion_tokens") or 0),

@@ -39,6 +39,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from .typed import EMPTY
+
 TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}
 
 
@@ -78,11 +80,11 @@ def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
         )
 
     if event_name == "issue_comment":
-        issue = event.get("issue") or {}
-        comment = event.get("comment") or {}
+        issue = event.get("issue") or EMPTY
+        comment = event.get("comment") or EMPTY
         if event.get("action") != "created" or "pull_request" not in issue:
             return Decision(False, reason="not a new PR comment")
-        words = (comment.get("body") or "").strip().split()
+        words = str(comment.get("body") or "").strip().split()
         if not words or words[0].lower() != "/review":
             return Decision(False, reason="comment is not addressed to /review")
         if comment.get("author_association") not in TRUSTED:
@@ -91,7 +93,7 @@ def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
                 int(issue["number"]),
                 reason="only owners, members and collaborators can trigger connector-reviewer",
             )
-        if (comment.get("user") or {}).get("type") == "Bot":
+        if (comment.get("user") or EMPTY).get("type") == "Bot":
             return Decision(
                 False,
                 int(issue["number"]),
@@ -107,8 +109,8 @@ def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
                 comment_id=int(comment.get("id") or 0),
                 dismiss=ids,
                 dismiss_reason=reason[:300],
-                actor=str((comment.get("user") or {}).get("login") or ""),
-                pr_author=str((issue.get("user") or {}).get("login") or ""),
+                actor=str((comment.get("user") or EMPTY).get("login") or ""),
+                pr_author=str((issue.get("user") or EMPTY).get("login") or ""),
             )
         if len(words) > 1 and words[1].lower() == "recheck":
             rest: list[str] = [str(w) for w in words[2:]]
@@ -125,8 +127,8 @@ def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
                 recheck=ids,
                 recheck_reason=reason[:300],
                 verify_budget=verify_budget,
-                actor=str((comment.get("user") or {}).get("login") or ""),
-                pr_author=str((issue.get("user") or {}).get("login") or ""),
+                actor=str((comment.get("user") or EMPTY).get("login") or ""),
+                pr_author=str((issue.get("user") or EMPTY).get("login") or ""),
             )
         options = [w.lower() for w in words[1:3]]
         force = bool(options) and options[0] == "force"
@@ -139,7 +141,7 @@ def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
         )
 
     if event_name == "workflow_dispatch":
-        inputs = event.get("inputs") or {}
+        inputs = event.get("inputs") or EMPTY
         return Decision(
             True,
             int(inputs["pr"]),

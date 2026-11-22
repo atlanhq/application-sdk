@@ -7,6 +7,8 @@ unevidenced findings, repeated comments), kept to what a single bounded pass
 needs.
 """
 
+from typing import Any
+
 # What is under review, and what a bad merge costs. The line review and the
 # approach check (holistic.SYSTEM) both open with it, so they never describe the
 # target differently.
@@ -135,7 +137,7 @@ behaviour/compatibility changes, resource leaks. On a protected subject you do n
 Answer by calling exactly one tool. Write your analysis before listing any ids.
 """
 
-REFLECT_TOOLS = [
+REFLECT_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
@@ -190,7 +192,7 @@ fixed: the defect can no longer occur. moot: it was never a defect under the rul
 open: it still can occur. Do not raise new issues.
 """
 
-VERIFY_TOOLS = [
+VERIFY_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
@@ -242,7 +244,7 @@ resolved: the evidence shows the finding is wrong or cannot occur. open: it stil
 Every reason must name the evidence it rests on.
 """
 
-RECHECK_TOOLS = [
+RECHECK_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {

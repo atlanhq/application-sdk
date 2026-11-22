@@ -43,6 +43,7 @@ from .llm import (
 )
 from .principles import PrincipleSet
 from .tools import TOOL_SCHEMAS, Workspace, parse_args, run_tool
+from .typed import EMPTY
 
 # The whole description of a normal PR: a declared behaviour change is often past
 # the first paragraphs. It sits in the cached prefix, so each turn pays for it once.
@@ -573,7 +574,7 @@ def _loop(
         messages.append(assistant_turn(comp))  # carries reasoning items across turns
         done = False
         for tc in comp.tool_calls:
-            fn = tc.get("function") or {}
+            fn = tc.get("function") or EMPTY
             name = fn.get("name") or ""
             args = parse_args(fn.get("arguments") or "")
             res.tool_calls[name] = res.tool_calls.get(name, 0) + 1
@@ -660,10 +661,11 @@ def _reflect(
     except (BudgetExhausted, LLMError):
         return found
     for tc in comp.tool_calls:
-        fn = tc.get("function") or {}
+        fn = tc.get("function") or EMPTY
         if fn.get("name") == "report_incorrect_comments":
             ids = set(parse_args(fn.get("arguments") or "").get("comment_ids") or [])
-            keep, drop = [], []
+            keep: list[Finding] = []
+            drop: list[Finding] = []
             for i, f in enumerate(found):
                 protected = f.category == "security" or f.severity == "critical"
                 (drop if f"c-{i}" in ids and not protected else keep).append(f)

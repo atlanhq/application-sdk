@@ -209,7 +209,7 @@ def find_symbol(ws: Workspace, name: str) -> str:
 
 
 def read_diff(ws: Workspace, path_array: list[str]) -> str:
-    out = []
+    out: list[str] = []
     for p in path_array[:5]:
         fd = ws.diffs.get(p)
         out.append(

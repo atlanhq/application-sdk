@@ -55,7 +55,7 @@ class Triage:
             paths.append(path)
 
     def summary_lines(self) -> list[str]:
-        out = []
+        out: list[str] = []
         for reason, paths in self.mechanical.items():
             out.append(f"{reason}: {len(paths)} file(s)")
         if self.duplicate_of:

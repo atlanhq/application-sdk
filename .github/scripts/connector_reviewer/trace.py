@@ -19,6 +19,8 @@ import threading
 from contextlib import contextmanager
 from typing import Any, Iterator
 
+from .typed import objects
+
 _lock = threading.Lock()
 _enabled = True
 
@@ -70,11 +72,10 @@ def short(value: Any, limit: int = 120) -> str:
 def args_summary(name: str, args: dict[str, Any]) -> str:
     """What a tool call asked for, in a few words — never a full payload."""
     if name == "code_comment":
-        items = args.get("comments") or []
-        sev = {}
-        for c in items:
-            if isinstance(c, dict):
-                sev[c.get("severity", "?")] = sev.get(c.get("severity", "?"), 0) + 1
+        items: list[Any] = args.get("comments") or []
+        sev: dict[Any, int] = {}
+        for c in objects(items):
+            sev[c.get("severity", "?")] = sev.get(c.get("severity", "?"), 0) + 1
         return f"{len(items)} comment(s) " + ", ".join(
             f"{k}×{v}" for k, v in sev.items()
         )

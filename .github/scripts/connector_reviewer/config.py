@@ -90,7 +90,7 @@ def load_config(config_dir: Path) -> Config:
 
 def validate(cfg: Config) -> list[str]:
     """Refuse to run on a config that cannot enforce its own cap."""
-    errs = []
+    errs: list[str] = []
     if cfg.price.input_per_mtok <= 0 or cfg.price.output_per_mtok <= 0:
         errs.append(
             "model.price.input_per_mtok / output_per_mtok must be set: the $ cap is enforced from them."

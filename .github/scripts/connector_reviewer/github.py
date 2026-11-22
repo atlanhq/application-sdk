@@ -14,6 +14,8 @@ import urllib.parse
 import urllib.request
 from typing import Any, cast
 
+from .typed import EMPTY
+
 API = "https://api.github.com"
 DEFAULT_BOT_LOGIN = "atlan-app-fleet[bot]"
 
@@ -99,7 +101,7 @@ class GitHub:
             )
         except GitHubError:
             return "unknown"
-        return str((data or {}).get("status") or "unknown")
+        return str((data or EMPTY).get("status") or "unknown")
 
     def merge_base(self, base: str, head: str) -> str:
         """The merge base of `base...head` (what the PR's diff is against), or ""."""
@@ -109,7 +111,7 @@ class GitHub:
             )
         except GitHubError:
             return ""
-        return str(((data or {}).get("merge_base_commit") or {}).get("sha") or "")
+        return str(((data or EMPTY).get("merge_base_commit") or EMPTY).get("sha") or "")
 
     def file_at(self, path: str, ref: str) -> str | None:
         q = urllib.parse.quote(path)
@@ -117,8 +119,11 @@ class GitHub:
             data = self._call("GET", f"/repos/{self.repo}/contents/{q}?ref={ref}")
         except GitHubError:
             return None
-        if isinstance(data, dict) and data.get("encoding") == "base64":
-            return base64.b64decode(data["content"]).decode("utf-8", "replace")
+        if not isinstance(data, dict):
+            return None
+        blob = cast("dict[str, Any]", data)
+        if blob.get("encoding") == "base64":
+            return base64.b64decode(blob["content"]).decode("utf-8", "replace")
         return None
 
     def repo_visibility(self, owner_repo: str) -> str | None:
@@ -156,14 +161,14 @@ class GitHub:
             "GET",
             f"/repos/{self.repo}/actions/workflows/{workflow_file}/runs?per_page=50",
         )
-        return list((data or {}).get("workflow_runs") or [])
+        return list((data or EMPTY).get("workflow_runs") or [])
 
     def run_jobs(self, run_id: int) -> list[dict[str, Any]]:
         """Jobs of a run's latest attempt (connector-reviewer has one job, so one page)."""
         data = self._call(
             "GET", f"/repos/{self.repo}/actions/runs/{run_id}/jobs?per_page=100"
         )
-        return list((data or {}).get("jobs") or [])
+        return list((data or EMPTY).get("jobs") or [])
 
     # ---- writes --------------------------------------------------------
     def set_status(
@@ -197,7 +202,7 @@ class GitHub:
         out = self._call(
             "POST", f"/repos/{self.repo}/issues/{number}/comments", {"body": body}
         )
-        return int((out or {}).get("id") or 0)
+        return int((out or EMPTY).get("id") or 0)
 
     def edit_comment(self, comment_id: int, body: str) -> None:
         self._call(
@@ -213,15 +218,15 @@ class GitHub:
         for c in self.issue_comments(number):
             if (
                 marker in (c.get("body") or "")
-                and (c.get("user") or {}).get("login") == bot_login()
+                and (c.get("user") or EMPTY).get("login") == bot_login()
             ):
                 out = self._call(
                     "PATCH",
                     f"/repos/{self.repo}/issues/comments/{c['id']}",
                     {"body": body},
                 )
-                return str((out or {}).get("html_url") or c.get("html_url") or "")
+                return str((out or EMPTY).get("html_url") or c.get("html_url") or "")
         out = self._call(
             "POST", f"/repos/{self.repo}/issues/{number}/comments", {"body": body}
         )
-        return str((out or {}).get("html_url") or "")
+        return str((out or EMPTY).get("html_url") or "")

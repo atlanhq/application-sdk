@@ -42,7 +42,7 @@ from connector_reviewer.event import decide
 from connector_reviewer.findings import Finding, PRState, merge_new
 from connector_reviewer.github import GitHub, GitHubError
 from connector_reviewer.holistic import build_input
-from connector_reviewer.index import build_index
+from connector_reviewer.index import Index, build_index
 from connector_reviewer.llm import (
     BUDGET_PATH,
     BudgetExhausted,
@@ -193,7 +193,7 @@ def repo(tmp_path: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
-def fleet_principles(tmp_path_factory) -> Path:
+def fleet_principles(tmp_path_factory: pytest.TempPathFactory) -> Path:
     d = tmp_path_factory.mktemp("fleet-principles")
     (d / "fp01-never-publish-undeclared-loss.md").write_text(FP01)
     (d / "fp02-never-log-a-credential.md").write_text(FP02)
@@ -201,7 +201,9 @@ def fleet_principles(tmp_path_factory) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def _fleet_principles_configured(monkeypatch, fleet_principles: Path) -> None:
+def _fleet_principles_configured(
+    monkeypatch: pytest.MonkeyPatch, fleet_principles: Path
+) -> None:
     """A review does not start without the fleet principles, so every CLI test
     would have to name a directory. They get a valid one from the environment;
     the tests about a missing directory take it away again."""
@@ -249,12 +251,15 @@ def response(
     return 200, {"x-gateway-model-price": price}, json.dumps(body)
 
 
-def _is_approach(body) -> bool:
+def _is_approach(body: dict[str, Any]) -> bool:
     # Chat tools nest the name under "function"; Responses tools are flat.
-    return any(
-        (t.get("name") or (t.get("function") or {}).get("name")) == "approach_verdict"
-        for t in body.get("tools") or []
-    )
+    tools: list[dict[str, Any]] = body.get("tools") or []
+
+    def name(tool: dict[str, Any]) -> Any:
+        fn: dict[str, Any] = tool.get("function") or {}
+        return tool.get("name") or fn.get("name")
+
+    return any(name(t) == "approach_verdict" for t in tools)
 
 
 class Script:
@@ -264,15 +269,15 @@ class Script:
     routed to its own reply (`approach`) instead of the ordered queue — the
     queue then scripts the bundle loop deterministically."""
 
-    def __init__(self, *responses, approach=None):
-        self.responses = list(responses)
+    def __init__(self, *responses: Any, approach: Any = None):
+        self.responses: list[Any] = list(responses)
         self.requests: list[dict[str, Any]] = []
         self.approach_requests: list[dict[str, Any]] = []
-        self.approach = approach or response(
+        self.approach: Any = approach or response(
             [tool_call("approach_verdict", {"verdict": "sound"})]
         )
 
-    def __call__(self, body):
+    def __call__(self, body: dict[str, Any]) -> Any:
         snap = json.loads(
             json.dumps(body)
         )  # a snapshot: the client may mutate body on retry
@@ -284,6 +289,20 @@ class Script:
             return response([tool_call("task_done", {"state": "DONE"})])
         r = self.responses.pop(0)
         return r(body) if callable(r) else r
+
+
+def state_of(res: RunResult) -> PRState:
+    """The state a run left on the PR. Every run that reviewed, dismissed or
+    re-checked has one; a test that reads it expects one."""
+    assert res.state is not None
+    return res.state
+
+
+def decode_state(comment_body: str) -> PRState:
+    """The state stored in a summary comment, which must hold one."""
+    st = PRState.decode(comment_body)
+    assert st is not None, "no state marker in the comment"
+    return st
 
 
 COMMENT = {
@@ -373,6 +392,18 @@ class FakeGitHub:
         )
 
 
+def fake_github(
+    head: str = "h1",
+    base: str = "b0",
+    diffs: dict[tuple[str, str], str] | None = None,
+    files: dict[tuple[str, str], str] | None = None,
+) -> Any:
+    """A `FakeGitHub`, typed `Any`. The code under test takes a `GitHub`; the
+    fake stands in for it without being one, so its type is left open here once
+    and not cast at every call."""
+    return FakeGitHub(head, base, diffs, files)
+
+
 def cfg_for(repo: Path) -> Config:
     cfg = Config(price=PRICE)
     cfg.raw_hash = "test"
@@ -427,19 +458,20 @@ RENAME_DIFF = (
 )
 
 
-def _renamed_workspace(tmp_path, extra_diff: str = "", max_files: int = 50):
+def _renamed_workspace(tmp_path: Path, extra_diff: str = "", max_files: int = 50):
     """A base checkout that still has the old file, and the PR renaming it."""
     (tmp_path / ".github" / "workflows").mkdir(parents=True)
     (tmp_path / ".github/workflows/old-name.yml").write_text("name: old\non: push\n")
-    gh = FakeGitHub(
+    gh = fake_github(
         files={(".github/workflows/new-name.yml", "h1"): "name: new\non: push\n"}
     )
     files = parse_unified_diff(RENAME_DIFF + extra_diff)
     head = review_mod.head_side_text(gh, files, "h1", max_files)
-    return Workspace(root=tmp_path, head_text=head, diffs={}, index=None), head
+    index = Index(root=str(tmp_path))  # empty: these tests read no symbol
+    return Workspace(root=tmp_path, head_text=head, diffs={}, index=index), head
 
 
-def test_a_renamed_file_is_gone_from_its_old_path(tmp_path):
+def test_a_renamed_file_is_gone_from_its_old_path(tmp_path: Path):
     """The base checkout still has the old file. Without this, every lookup
     reads the base branch's copy, and a finding saying "the old file is still
     here" can never be verified fixed (seen on a PR that renamed a workflow)."""
@@ -454,7 +486,7 @@ def test_a_renamed_file_is_gone_from_its_old_path(tmp_path):
     )
 
 
-def test_a_rename_past_the_changed_file_cap_still_hides_its_old_path(tmp_path):
+def test_a_rename_past_the_changed_file_cap_still_hides_its_old_path(tmp_path: Path):
     """Old paths cost no request, so the cap on head-text reads does not
     apply to them."""
     ws, head = _renamed_workspace(tmp_path, max_files=0)
@@ -463,7 +495,7 @@ def test_a_rename_past_the_changed_file_cap_still_hides_its_old_path(tmp_path):
     assert ws.text(".github/workflows/old-name.yml") is None
 
 
-def test_a_file_added_back_at_a_renamed_path_keeps_its_head_text(tmp_path):
+def test_a_file_added_back_at_a_renamed_path_keeps_its_head_text(tmp_path: Path):
     added = (
         "diff --git a/.github/workflows/old-name.yml b/.github/workflows/old-name.yml\n"
         "new file mode 100644\n"
@@ -473,7 +505,7 @@ def test_a_file_added_back_at_a_renamed_path_keeps_its_head_text(tmp_path):
         "+name: replacement\n"
     )
     (tmp_path / ".github" / "workflows").mkdir(parents=True)
-    gh = FakeGitHub(
+    gh = fake_github(
         files={
             (".github/workflows/new-name.yml", "h1"): "name: new\n",
             (".github/workflows/old-name.yml", "h1"): "name: replacement\n",
@@ -929,7 +961,7 @@ def test_a_skipped_principle_file_is_noted_in_the_summary_and_the_review_runs(
     (repo / FLEET_DIR / "fp03-no-why.md").write_text(
         FP02.replace("FP02", "FP03").replace("Why: Logs", "Because: Logs")
     )
-    gh = FakeGitHub()
+    gh = fake_github()
     script = _review_script()
     res = run(
         gh=gh,
@@ -967,7 +999,9 @@ def test_only_principle_named_files_are_read(repo: Path):
     assert principles.notes == []
 
 
-def test_a_symlinked_principle_is_not_followed(repo: Path, tmp_path_factory):
+def test_a_symlinked_principle_is_not_followed(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory
+):
     outside = tmp_path_factory.mktemp("outside") / "secret.md"
     outside.write_text(FP02.replace("FP02", "FP03"))
     (repo / FLEET_DIR / "fp03-link.md").symlink_to(outside)
@@ -978,7 +1012,7 @@ def test_a_symlinked_principle_is_not_followed(repo: Path, tmp_path_factory):
 
 
 def test_a_missing_or_empty_fleet_directory_is_a_configuration_error(
-    repo: Path, tmp_path_factory
+    repo: Path, tmp_path_factory: pytest.TempPathFactory
 ):
     with pytest.raises(PrinciplesError, match="pass --principles-dir or set"):
         load_principles(None, repo)
@@ -994,7 +1028,7 @@ def test_a_missing_or_empty_fleet_directory_is_a_configuration_error(
     assert load_principles(repo / FLEET_DIR, repo).repo == []
 
 
-def _cli_review(monkeypatch, argv: list[str]):
+def _cli_review(monkeypatch: pytest.MonkeyPatch, argv: list[str]):
     """Run the CLI with GitHub and the review itself stubbed out. Returns the
     exit code and what the review was called with (None when it never started)."""
     import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test, patched below
@@ -1002,7 +1036,7 @@ def _cli_review(monkeypatch, argv: list[str]):
     seen: dict[str, Any] = {}
 
     class NoGitHub:
-        def __init__(self, repo):
+        def __init__(self, repo: Path):
             seen["github"] = True
 
         def delete_comment(self, comment_id):  # pragma: no cover - id is 0
@@ -1022,7 +1056,7 @@ def _cli_review(monkeypatch, argv: list[str]):
 
 
 def test_the_cli_fails_before_any_request_without_the_fleet_principles(
-    repo: Path, monkeypatch, capsys
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
     monkeypatch.delenv("CONNECTOR_REVIEWER_PRINCIPLES_DIR", raising=False)
     code, seen = _cli_review(monkeypatch, ["--root", str(repo)])
@@ -1037,7 +1071,9 @@ def test_the_cli_fails_before_any_request_without_the_fleet_principles(
 
 
 def test_the_cli_reads_the_fleet_directory_from_the_argument_or_the_environment(
-    repo: Path, monkeypatch, tmp_path_factory
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
 ):
     _repo_principle(repo, "rp01-count-assertions.md", RP01)
     monkeypatch.setenv("CONNECTOR_REVIEWER_PRINCIPLES_DIR", str(repo / FLEET_DIR))
@@ -1431,7 +1467,7 @@ def _review_script():
     )
 
 
-def _seed_summary(gh):
+def _seed_summary(gh: Any):
     """An earlier connector-reviewer summary already on the PR, so this run's verdict goes to the bottom."""
     gh.comments.append(
         {
@@ -1451,7 +1487,7 @@ def _factory(script):
 def test_first_round_puts_every_finding_in_the_summary_and_opens_no_thread(repo: Path):
     """connector-reviewer opens no inline review threads (they had to be resolved by hand to merge):
     each finding, its explanation and its suggested change are in the summary."""
-    gh = FakeGitHub()
+    gh = fake_github()
     res = run(
         gh=gh,
         number=1,
@@ -1465,7 +1501,7 @@ def test_first_round_puts_every_finding_in_the_summary_and_opens_no_thread(repo:
     [summary] = gh.comments
     body = summary["body"]
     assert SUMMARY_MARKER in body and "Changes requested" in body
-    fid = res.state.findings[0].id
+    fid = state_of(res).findings[0].id
     details = body.split("**Details**")[1]
     assert f"{fid} · high · bug — decode() on a None result" in details
     assert "client.get returns None for a missing key" in details
@@ -1473,7 +1509,7 @@ def test_first_round_puts_every_finding_in_the_summary_and_opens_no_thread(repo:
     assert "data.decode() if data is not None else None" in details
     link = "https://github.com/o/r/blob/h1/app/storage/fetch.py#L4"
     assert f"[`app/storage/fetch.py:4`]({link})" in body
-    st = PRState.decode(body)
+    st = decode_state(body)
     # review + reflect + approach, each booked at the cost LiteLLM reported.
     assert st and st.round == 1 and st.ledger["calls"] == 3
     assert st.ledger["spent_usd"] == pytest.approx(0.006)
@@ -1481,7 +1517,7 @@ def test_first_round_puts_every_finding_in_the_summary_and_opens_no_thread(repo:
 
 
 def test_unchanged_head_costs_zero_model_calls(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     run(
         gh=gh,
@@ -1505,7 +1541,7 @@ def test_unchanged_head_costs_zero_model_calls(repo: Path):
 
 
 def test_a_fix_that_removes_the_quoted_code_resolves_for_free(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     run(
         gh=gh,
@@ -1537,11 +1573,11 @@ def test_a_fix_that_removes_the_quoted_code_resolves_for_free(repo: Path):
         client_factory=_factory(script),
     )
     assert res.mode == "incremental"
-    assert res.resolved_free == [COMMENT and res.state.findings[0].id]
+    assert res.resolved_free == [COMMENT and state_of(res).findings[0].id]
     body = gh.comments[0]["body"]
     assert "✅ **Ready to merge** — every finding is resolved" in body
     # Editing the summary in place keeps the history: what was fixed, when and how, and every round.
-    f = res.state.findings[0]
+    f = state_of(res).findings[0]
     assert (f.round, f.fixed_round, f.fixed_by) == (1, 2, "code-gone")
     resolved = body.split("✔️ Resolved (1)")[1].split("</details>")[0]
     assert f.id in resolved and f.title in resolved
@@ -1551,11 +1587,13 @@ def test_a_fix_that_removes_the_quoted_code_resolves_for_free(repo: Path):
     assert "| 2 | re-review · only commits since h1 | `h1..h2` | 0 | 1 | 0 |" in history
     # The delta review saw only the one changed line, and was told what is already known.
     user = script.requests[0]["messages"][2]["content"]
-    assert "<confirmed_findings>" not in user or res.state.findings[0].id not in user
+    assert (
+        "<confirmed_findings>" not in user or state_of(res).findings[0].id not in user
+    )
 
 
 def test_later_rounds_only_admit_blocking_findings(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     run(
         gh=gh,
@@ -1602,11 +1640,11 @@ def test_later_rounds_only_admit_blocking_findings(repo: Path):
     assert (
         res.new_findings == []
     )  # ...and dropped the medium nit: round 2 admits critical/high only
-    assert res.state.dry_rounds == 1
+    assert state_of(res).dry_rounds == 1
 
 
 def test_round_cap_and_spent_budget_stop_the_loop(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     st = PRState(reviewed_head="old", model="gpt-6-luna", config_hash="test", round=5)
     gh.comments.append(
         {
@@ -1645,7 +1683,7 @@ def test_round_cap_and_spent_budget_stop_the_loop(repo: Path):
 
 
 def test_state_is_only_trusted_from_the_bot_comment(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     forged = PRState(
         reviewed_head="h1", model="gpt-6-luna", config_hash="test", round=1
     )
@@ -1864,7 +1902,7 @@ def test_cached_tokens_are_priced_at_the_cached_rate_when_no_cost_header():
 
 
 def test_approach_check_runs_once_per_pr_and_is_advisory(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     concern = response(
         [
@@ -1911,7 +1949,7 @@ def test_approach_check_runs_once_per_pr_and_is_advisory(repo: Path):
     change_msg = first.requests[0]["messages"][2]["content"]
     assert "<pr_understanding>" in change_msg and "Decode inside fetch()" in change_msg
     # Advisory: never a fingerprinted finding, so it can never block or drive a resolve loop.
-    assert all("symptom" not in f.title for f in res.state.findings)
+    assert all("symptom" not in f.title for f in state_of(res).findings)
 
     gh.head = "h2"
     gh.diffs[("h1", "h2")] = gh.diffs[("b0", "h1")]
@@ -2007,7 +2045,7 @@ def test_a_broken_model_never_becomes_a_silent_all_clear(repo: Path):
     """A bad alias fails fast with a 400 on every call. That run must say it
     is incomplete, go red, and leave the head unreviewed so the next run
     retries — not record a clean round the unchanged-head rule then skips."""
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
 
     def broken(body):
@@ -2024,7 +2062,7 @@ def test_a_broken_model_never_becomes_a_silent_all_clear(repo: Path):
     assert res.failed and res.incomplete
     body = gh.comments[0]["body"]
     assert "Review incomplete" in body and "No blocking findings" not in body
-    st = PRState.decode(body)
+    st = decode_state(body)
     assert st.reviewed_head == "" and st.round == 0 and st.dry_rounds == 0
 
     healthy = _review_script()
@@ -2046,7 +2084,7 @@ def test_cli_exits_nonzero_only_on_model_failure():
 
 
 def test_no_round_ever_opens_a_review_thread(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     run(
         gh=gh,
@@ -2149,7 +2187,7 @@ def test_untrusted_or_unaddressed_comments_do_not_trigger(event):
 
 
 def test_new_commits_are_reviewed_however_many_rounds_came_back_clean(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     st = PRState(
         reviewed_head="h0",
         model="gpt-6-luna",
@@ -2216,8 +2254,15 @@ def _older(runs, own_run_id=105, jobs_of=_RUNNING):
     )
 
 
+def _blocker(runs, own_run_id=105, jobs_of=_RUNNING) -> int:
+    """The id of the older run this one yields to; the test fails if there is none."""
+    older = _older(runs, own_run_id, jobs_of)
+    assert older is not None, "no older run blocks"
+    return older["id"]
+
+
 def test_a_newer_request_yields_to_an_older_active_review():
-    assert _older([_run(100)])["id"] == 100
+    assert _blocker([_run(100)]) == 100
     assert _older([_run(100, status="queued")])
 
 
@@ -2250,7 +2295,7 @@ def test_a_run_left_in_progress_after_its_jobs_finished_does_not_block():
     ],
 )
 def test_an_older_run_with_work_left_blocks(jobs_of):
-    assert _older([_run(100)], jobs_of=jobs_of)["id"] == 100
+    assert _blocker([_run(100)], jobs_of=jobs_of) == 100
 
 
 def test_jobs_are_only_listed_for_an_older_run_that_claims_to_be_active():
@@ -2261,30 +2306,30 @@ def test_jobs_are_only_listed_for_an_older_run_that_claims_to_be_active():
         return [_job("in_progress")]
 
     runs = [_run(110), _run(104, status="completed"), _run(103, pr=8), _run(100)]
-    assert _older(runs, jobs_of=jobs_of)["id"] == 100
+    assert _blocker(runs, jobs_of=jobs_of) == 100
     assert asked == [100]
 
 
 def test_a_job_started_more_than_the_job_timeout_ago_never_blocks():
     assert _older([_run(100)], jobs_of=_jobs(_job("in_progress", 46))) is None
-    assert _older([_run(100)], jobs_of=_jobs(_job("in_progress", 44)))["id"] == 100
+    assert _blocker([_run(100)], jobs_of=_jobs(_job("in_progress", 44))) == 100
     # A stale run does not hide a live one behind it.
     stale = {101: [_job("in_progress", 60)], 100: [_job("in_progress")]}
-    assert _older([_run(101), _run(100)], jobs_of=stale.__getitem__)["id"] == 100
+    assert _blocker([_run(101), _run(100)], jobs_of=stale.__getitem__) == 100
 
 
 def test_a_job_still_queued_blocks_however_long_ago_the_run_was_created():
     # The job timeout bounds a started job; a queued one can still start and overlap.
-    assert _older([_run(100)], jobs_of=_jobs("queued"))["id"] == 100
+    assert _blocker([_run(100)], jobs_of=_jobs("queued")) == 100
     no_start = {"status": "in_progress", "started_at": None}
-    assert _older([_run(100)], jobs_of=_jobs(no_start))["id"] == 100
+    assert _blocker([_run(100)], jobs_of=_jobs(no_start)) == 100
 
 
 def test_a_failed_jobs_lookup_yields_rather_than_risk_two_reviews():
     def jobs_of(run_id):
         raise GitHubError("GET /jobs: HTTP 403: rate limit exceeded")
 
-    assert _older([_run(100)], jobs_of=jobs_of)["id"] == 100
+    assert _blocker([_run(100)], jobs_of=jobs_of) == 100
 
 
 def test_two_simultaneous_requests_resolve_to_exactly_one_review():
@@ -2303,13 +2348,13 @@ def test_runs_are_named_for_the_guard():
     assert run_name(42) == "connector-reviewer #42"
 
 
-def test_cli_drops_a_request_while_another_review_runs(monkeypatch):
+def test_cli_drops_a_request_while_another_review_runs(monkeypatch: pytest.MonkeyPatch):
     import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test, patched below
 
     posted: list[str] = []
 
     class BusyGitHub:
-        def __init__(self, repo):
+        def __init__(self, repo: Path):
             pass
 
         def workflow_runs(self, workflow_file):
@@ -2401,7 +2446,7 @@ def test_a_file_mixing_real_and_mechanical_hunks_keeps_only_the_real_ones():
 
 
 def test_a_hundred_file_mechanical_pr_costs_no_review_calls(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     diff = "".join(
         _file_diff(f"app/m{i}.py", [f"y = get_x({i})"], [f"y = fetch_x({i})"])
         for i in range(100)
@@ -2544,7 +2589,7 @@ def test_a_bundle_that_spends_its_share_wraps_up_instead_of_starving_others(repo
 def test_a_partly_failed_run_keeps_what_it_reviewed_and_retries_only_the_rest(
     repo: Path,
 ):
-    gh = FakeGitHub()
+    gh = fake_github()
     gh.diffs[("b0", "h1")] = _bundle_files(
         "app/credentials", 1, lines=350
     ) + _bundle_files("docs/x", 1, lines=350)
@@ -2566,7 +2611,7 @@ def test_a_partly_failed_run_keeps_what_it_reviewed_and_retries_only_the_rest(
         principles=PrincipleSet(),
         client_factory=_factory(first),
     )
-    st = res.state
+    st = state_of(res)
     assert len(res.bundles) == 2  # the fixture must really need two bundles
     assert st.reviewed_head == "h1" and st.pending_files == ["docs/x/f0.py"]
     assert gh.statuses[-1]["state"] == "error"  # incomplete is never green
@@ -2589,7 +2634,7 @@ def test_a_partly_failed_run_keeps_what_it_reviewed_and_retries_only_the_rest(
     assert review_sets and all('<file path="docs/x/f0.py">' in m for m in review_sets)
     # The file that WAS reviewed last time is not paid for again.
     assert all('<file path="app/credentials/f0.py">' not in m for m in review_sets)
-    assert res.state.pending_files == []
+    assert state_of(res).pending_files == []
 
 
 # ---- failed requests: fail fast, never retry our own mistakes ------------------------------------------------
@@ -2731,7 +2776,9 @@ def test_preflight_says_what_answered_an_unexpected_status_and_redacts_keys():
     assert "sk-abc123XYZ" not in key and "sk-…" in key
 
 
-def test_every_gateway_request_carries_the_reviewer_user_agent(monkeypatch):
+def test_every_gateway_request_carries_the_reviewer_user_agent(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Cloudflare bans Python's default urllib signature (error 1010): every
     completion and metadata request must identify itself as connector-reviewer."""
     import urllib.request  # noqa: PLC0415 - patched below
@@ -2751,7 +2798,7 @@ def test_every_gateway_request_carries_the_reviewer_user_agent(monkeypatch):
         def __exit__(self, *a):
             return False
 
-    def fake_urlopen(req, timeout=None):
+    def fake_urlopen(req: Any, timeout: Any = None):
         seen.append(req.get_header("User-agent") or "")
         return _Resp()
 
@@ -2783,7 +2830,7 @@ def test_preflight_names_cloudflare_error_1010():
 
 
 def test_a_failed_preflight_sends_no_request_and_turns_the_status_error(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     cfg = cfg_for(repo)
     cfg.preflight = True
     sent = Script()
@@ -2807,16 +2854,14 @@ def test_a_failed_preflight_sends_no_request_and_turns_the_status_error(repo: Pa
     )
     assert sent.requests == [] and sent.approach_requests == []
     assert res.failed and gh.statuses[-1]["state"] == "error"
-    assert (
-        PRState.decode(gh.comments[0]["body"]).reviewed_head == ""
-    )  # retried next time
+    assert decode_state(gh.comments[0]["body"]).reviewed_head == ""  # retried next time
 
 
 # ---- the green/red signal -----------------------------------------------------------------------------------
 
 
 def test_status_is_green_only_when_every_finding_is_closed(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     run(
         gh=gh,
         number=1,
@@ -2919,7 +2964,7 @@ class _CliGitHub:
     comments: list[str] = []  # every comment ever posted, in order
     live: dict[int, str] = {}  # comments still on the PR, by id
 
-    def __init__(self, repo):
+    def __init__(self, repo: Path):
         pass
 
     def react(self, comment_id, content):
@@ -2944,7 +2989,7 @@ class _CliGitHub:
         return []
 
 
-def _event_file(tmp_path, body="/review"):
+def _event_file(tmp_path: Path, body="/review"):
     ev = {
         "action": "created",
         "issue": {"number": 7, "pull_request": {}},
@@ -2969,13 +3014,13 @@ def _event_file(tmp_path, body="/review"):
     ],
 )
 def test_the_author_sees_eyes_then_the_outcome(
-    monkeypatch, tmp_path, outcome, expected
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcome: RunResult, expected
 ):
     import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test, patched below
 
     _CliGitHub.reactions, _CliGitHub.comments, _CliGitHub.live = [], [], {}
     monkeypatch.setattr(cli, "GitHub", _CliGitHub)
-    seen = {}
+    seen: dict[str, Any] = {}
     monkeypatch.setattr(cli, "run", lambda **kw: seen.update(kw) or outcome)
     monkeypatch.setenv("GITHUB_RUN_ID", "105")
     monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
@@ -3011,7 +3056,9 @@ def test_the_author_sees_eyes_then_the_outcome(
         ]
 
 
-def test_a_crash_turns_the_running_note_into_a_failure_note(monkeypatch, tmp_path):
+def test_a_crash_turns_the_running_note_into_a_failure_note(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test, patched below
 
     _CliGitHub.reactions, _CliGitHub.comments, _CliGitHub.live = [], [], {}
@@ -3035,7 +3082,9 @@ def test_a_crash_turns_the_running_note_into_a_failure_note(monkeypatch, tmp_pat
     assert _CliGitHub.reactions == ["eyes", "confused"]
 
 
-def test_no_running_note_outside_actions(monkeypatch, tmp_path):
+def test_no_running_note_outside_actions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     """A local run has no Actions run to link, so it posts no progress note."""
     import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test, patched below
 
@@ -3067,7 +3116,7 @@ def test_no_running_note_outside_actions(monkeypatch, tmp_path):
 def test_state_posted_as_github_actions_bot_is_not_trusted(repo: Path):
     """Any same-repo PR can add a workflow that comments as github-actions[bot].
     A forged state there (a reset ledger, closed findings) must be ignored."""
-    gh = FakeGitHub()
+    gh = fake_github()
     forged = PRState(
         reviewed_head="h1",
         model="gpt-6-luna",
@@ -3321,7 +3370,7 @@ def test_every_request_is_recorded_with_counts_only_and_reported(
 ):
     from connector_reviewer import report  # noqa: PLC0415 - module under test
 
-    gh = FakeGitHub()
+    gh = fake_github()
     logged: list[str] = []
 
     def factory(ledger):
@@ -3409,7 +3458,7 @@ def test_a_failed_request_is_recorded_with_a_redacted_error():
 def test_the_verdict_at_the_bottom_carries_the_new_findings_and_the_approach_check(
     repo: Path,
 ):
-    gh = FakeGitHub()
+    gh = fake_github()
     _seed_summary(gh)  # a later run: the summary sits far above
     concern = response(
         [
@@ -3455,7 +3504,7 @@ def test_the_verdict_at_the_bottom_carries_the_new_findings_and_the_approach_che
 
 
 def test_a_clean_run_posts_its_verdict_as_a_comment_at_the_bottom(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     _seed_summary(gh)  # a later run: the summary sits far above
     script = Script(
         response([tool_call("task_done", {"state": "DONE"})]),
@@ -3490,8 +3539,10 @@ def test_a_clean_run_posts_its_verdict_as_a_comment_at_the_bottom(repo: Path):
     assert "[Full summary](https://github.test/c/90)" in brief
 
 
-def test_the_job_log_traces_every_phase_turn_and_tool_call(repo: Path, capsys):
-    gh = FakeGitHub()
+def test_the_job_log_traces_every_phase_turn_and_tool_call(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+):
+    gh = fake_github()
     script = Script(
         response([tool_call("find_symbol", {"name": "fetch"})]),
         response(
@@ -3531,7 +3582,9 @@ def test_the_job_log_traces_every_phase_turn_and_tool_call(repo: Path, capsys):
     assert "ignore previous instructions" not in log  # the PR body is never echoed
 
 
-def test_the_trace_uses_collapsible_groups_in_actions(monkeypatch, capsys):
+def test_the_trace_uses_collapsible_groups_in_actions(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
     from connector_reviewer import trace  # noqa: PLC0415 - module under test
 
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
@@ -3687,18 +3740,16 @@ def test_an_incomplete_fix_on_unchanged_code_is_a_capped_low_suggestion(
     assert (
         f and f.scope == "unchanged" and f.line == 0 and f.head_line == 6
     )  # summary-only, points at the line
+    padding = [
+        agent_mod.place(
+            ws,
+            bundle,
+            dict(leftover, title=f"x{i}", existing_code="        pad_a = 1"),
+        )
+        for i in range(3)
+    ]
     kept, notes = agent_mod.calibrate(
-        [
-            f,
-            *[
-                agent_mod.place(
-                    ws,
-                    bundle,
-                    dict(leftover, title=f"x{i}", existing_code="        pad_a = 1"),
-                )
-                for i in range(3)
-            ],
-        ],
+        [f, *(x for x in padding if x)],
         agent_mod.AgentLimits(max_unchanged=2),
     )
     assert kept[0].severity == "low" and any("unchanged code" in n for n in notes)
@@ -3758,7 +3809,7 @@ def test_only_the_prs_own_change_is_kept_after_a_base_merge():
 
 
 def test_a_re_review_after_merging_main_reviews_only_the_authors_change(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     gh.diffs[("b0", "h1")] = PR_DIFF
     gh.files[("app/storage/fetch.py", "h1")] = SRC_V1.replace(
         "key):", "key, timeout=None):"
@@ -3842,8 +3893,10 @@ def test_each_kind_of_run_says_what_it_is_and_why(kw, label):
     assert review_mod.describe_mode(**{**base, **kw}) == label
 
 
-def test_the_label_is_shown_on_the_verdict_summary_and_log(repo: Path, capsys):
-    gh = FakeGitHub()
+def test_the_label_is_shown_on_the_verdict_summary_and_log(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+):
+    gh = fake_github()
     principles = principles_of(repo)
     run(
         gh=gh,
@@ -3890,7 +3943,7 @@ def test_re_review_reads_only_its_own_sticky_comment_among_other_bot_comments(
     """The same App posts other comments (coverage, security gate) and anyone can paste connector-reviewer's
     markers. A re-review must read the state from connector_reviewer's own sticky comment only, update only
     that comment, and never show any other comment to the model."""
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     first = run(
         gh=gh,
@@ -3925,10 +3978,10 @@ def test_re_review_reads_only_its_own_sticky_comment_among_other_bot_comments(
     )
 
     assert (
-        res.state.round == 2
+        state_of(res).round == 2
     )  # continued from connector_reviewer's own state, not the forged round 99
-    assert {f.id for f in first.state.findings} <= {
-        f.id for f in res.state.findings
+    assert {f.id for f in state_of(first).findings} <= {
+        f.id for f in state_of(res).findings
     }  # prior findings carried over
     assert (
         gh.comments[2]["body"] != summary_body and "round 2" in gh.comments[2]["body"]
@@ -3980,7 +4033,7 @@ def test_state_from_before_history_was_recorded_still_renders():
         .b64encode(__import__("zlib").compress(json.dumps(raw).encode()))
         .decode()
     )
-    st = PRState.decode(f"<!-- connector-reviewer-state:{blob} -->")
+    st = decode_state(f"<!-- connector-reviewer-state:{blob} -->")
     body = render_summary(RunResult("reviewed", mode="full", state=st))
     assert (
         "| round 1 | — | — |" in body
@@ -3989,7 +4042,7 @@ def test_state_from_before_history_was_recorded_still_renders():
 
 
 def test_round_history_is_bounded(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     run(
         gh=gh,
@@ -3999,7 +4052,7 @@ def test_round_history_is_bounded(repo: Path):
         principles=principles,
         client_factory=_factory(_review_script()),
     )
-    st = PRState.decode(gh.comments[0]["body"])
+    st = decode_state(gh.comments[0]["body"])
     st.history = [dict(st.history[0], round=i) for i in range(1, 40)]
     gh.comments[0]["body"] = review_mod.SUMMARY_MARKER + "\n" + st.encode()
     gh.head = "h2"
@@ -4015,8 +4068,8 @@ def test_round_history_is_bounded(repo: Path):
         client_factory=_factory(Script()),
         force=True,
     )
-    assert len(res.state.history) == review_mod.MAX_HISTORY
-    assert res.state.history[-1]["label"] == res.mode_label
+    assert len(state_of(res).history) == review_mod.MAX_HISTORY
+    assert state_of(res).history[-1]["label"] == res.mode_label
 
 
 # ---- the sticky comment always fits in one GitHub comment ---------------------------------------------------
@@ -4036,7 +4089,7 @@ def test_a_huge_pr_still_fits_in_one_comment_and_keeps_every_finding():
             for _ in range(n)
         )
 
-    fs = []
+    fs: list[Finding] = []
     for i in range(150):
         f = Finding(
             f"app/m{i % 12}/f{i}.py",
@@ -4055,7 +4108,7 @@ def test_a_huge_pr_still_fits_in_one_comment_and_keeps_every_finding():
     st = PRState(round=5, findings=fs, ledger={"spent_usd": 0.4, "cap_usd": 1.0})
     body = render_summary(RunResult("reviewed", mode="full", state=st))
     assert len(body) <= review_mod.COMMENT_LIMIT < 65_536
-    back = PRState.decode(body)
+    back = decode_state(body)
     assert [f.id for f in back.findings] == [f.id for f in fs]  # nothing is dropped
     opened = [f for f in back.findings if f.status == "open"]
     assert all(f.evidence for f in opened)  # free resolution still has the quoted code
@@ -4074,7 +4127,7 @@ def test_a_normal_pr_keeps_the_full_detail():
         suggestion="fix()",
     )
     st = PRState(round=1, findings=[f])
-    back = PRState.decode(render_summary(RunResult("reviewed", mode="full", state=st)))
+    back = decode_state(render_summary(RunResult("reviewed", mode="full", state=st)))
     kept = back.findings[0]
     assert len(kept.body) == findings_mod.BODY_KEEP and kept.evidence == "code()"
     assert kept.scenario == ""  # never read again
@@ -4090,7 +4143,7 @@ def test_a_normal_pr_keeps_the_full_detail():
 
 
 def test_the_run_is_linked_from_the_status_the_verdict_and_the_history(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     _seed_summary(gh)  # a later run: the summary sits far above
     url = "https://github.com/o/r/actions/runs/42"
     run(
@@ -4128,7 +4181,7 @@ OFF_DIFF = {
 def test_a_finding_off_the_diff_is_counted_stored_and_can_block_readiness(repo: Path):
     """A prior run showed "0 low" in the tally while listing one low finding below it,
     and the finding was never stored, so later rounds could not track it."""
-    gh = FakeGitHub()
+    gh = fake_github()
     _seed_summary(gh)  # a later run: the summary sits far above
     script = Script(
         response(
@@ -4147,7 +4200,7 @@ def test_a_finding_off_the_diff_is_counted_stored_and_can_block_readiness(repo: 
         principles=principles_of(repo),
         client_factory=_factory(script),
     )
-    off = [f for f in res.state.findings if f.title == OFF_DIFF["title"]]
+    off = [f for f in state_of(res).findings if f.title == OFF_DIFF["title"]]
     assert len(off) == 1 and off[0].line == 0 and off[0].head_line == 8  # stored
     body = gh.comments[0]["body"]
     assert "⚪ 1 low (nit)" in body  # counted in the tally
@@ -4155,7 +4208,7 @@ def test_a_finding_off_the_diff_is_counted_stored_and_can_block_readiness(repo: 
     assert OFF_DIFF["title"] in body.split("**Details**")[1]  # its full text is shown
     assert gh.reviews == []
     # Once the blocking one is fixed, the open nit still keeps the PR from "ready to merge".
-    for f in res.state.findings:
+    for f in state_of(res).findings:
         if f.severity == "high":
             f.status = "fixed"
     assert verdict_status(RunResult("reviewed", state=res.state))[0] == "failure"
@@ -4191,8 +4244,8 @@ def test_dismiss_is_parsed_with_ids_and_a_required_reason():
         assert not d.run and "usage" in d.reason
 
 
-def _reviewed(repo):
-    gh = FakeGitHub()
+def _reviewed(repo: Path):
+    gh = fake_github()
     res = run(
         gh=gh,
         number=1,
@@ -4201,7 +4254,7 @@ def _reviewed(repo):
         principles=principles_of(repo),
         client_factory=_factory(_review_script()),
     )
-    return gh, res.state.findings[0]
+    return gh, state_of(res).findings[0]
 
 
 def test_a_reviewer_can_dismiss_a_finding_and_the_pr_becomes_ready(repo: Path):
@@ -4216,7 +4269,7 @@ def test_a_reviewer_can_dismiss_a_finding_and_the_pr_becomes_ready(repo: Path):
         pr_author="author",
     )
     assert res.action == "dismissed"
-    st = PRState.decode(gh.comments[0]["body"])
+    st = decode_state(gh.comments[0]["body"])
     kept = {x.id: x for x in st.findings}[f.id]
     assert (kept.status, kept.fixed_by, kept.dismissed_by) == (
         "wontfix",
@@ -4272,14 +4325,13 @@ def test_shared_method_names_do_not_inflate_the_call_site_count():
 
 
 def test_a_non_blocking_preflight_diagnostic_is_not_shown_on_the_pr(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
 
     def factory(ledger):
         c = _factory(_review_script())(ledger)
         c.diagnostics = [f"preflight {BUDGET_PATH}: HTTP 403 from a Cloudflare page"]
-        c.preflight = lambda **kw: (
-            ""
-        )  # the checks that matter passed; only a diagnostic is left
+        # The checks that matter passed; only a diagnostic is left.
+        setattr(c, "preflight", lambda **kw: "")
         return c
 
     cfg = cfg_for(repo)
@@ -4292,7 +4344,7 @@ def test_a_non_blocking_preflight_diagnostic_is_not_shown_on_the_pr(repo: Path):
         principles=principles_of(repo),
         client_factory=factory,
     )
-    assert res.action == "reviewed" and res.state.round == 1
+    assert res.action == "reviewed" and state_of(res).round == 1
     assert "Cloudflare" not in gh.comments[0]["body"]
 
 
@@ -4302,7 +4354,7 @@ def test_a_non_blocking_preflight_diagnostic_is_not_shown_on_the_pr(repo: Path):
 def test_a_first_review_does_not_post_the_verdict_twice(repo: Path):
     """Round 1 used to post the sticky summary and, right under it, a verdict comment
     repeating it. The summary it creates is already the bottom comment."""
-    gh = FakeGitHub()
+    gh = fake_github()
     script = Script(response([tool_call("task_done", {"state": "DONE"})]))
     run(
         gh=gh,
@@ -4319,7 +4371,7 @@ def test_a_first_review_does_not_post_the_verdict_twice(repo: Path):
 
 
 def test_a_first_review_with_findings_posts_only_the_summary(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     run(
         gh=gh,
         number=1,
@@ -4343,7 +4395,7 @@ HELPER_DIFF = (
 )
 
 
-def _round_two_elsewhere(gh):
+def _round_two_elsewhere(gh: Any):
     """A second commit that changes ANOTHER file and leaves the finding's file alone."""
     gh.head = "h2"
     gh.diffs[("h1", "h2")] = HELPER_DIFF
@@ -4355,7 +4407,7 @@ def _round_two_elsewhere(gh):
 def test_a_fix_in_another_file_is_still_rechecked(repo: Path):
     """A finding was re-checked only when its own file changed, so a fix landing in the
     code that feeds it (a data file's finding fixed in the reader) was never seen."""
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     first = run(
         gh=gh,
@@ -4365,7 +4417,7 @@ def test_a_fix_in_another_file_is_still_rechecked(repo: Path):
         principles=principles,
         client_factory=_factory(_review_script()),
     )
-    fid = first.state.findings[0].id
+    fid = state_of(first).findings[0].id
     _round_two_elsewhere(gh)
     script = Script(
         response([tool_call("verdicts", {"items": [{"id": fid, "status": "fixed"}]})])
@@ -4391,15 +4443,16 @@ def test_the_recheck_finds_the_quoted_code_where_it_is_now():
         "a.py", 2, "high", "bug", "t", "b", "    return data.decode()", head_line=2
     )
     now = "import x\n\n\n\ndef fetch(client, key):\n    data = client.get(key)\n    return data.decode()\n"
-    assert review_mod._current_line(None, f, now) == 7
+    ws = cast(Workspace, None)  # not read: the quote alone locates the site
+    assert review_mod._current_line(ws, f, now) == 7
     f.evidence = "gone()"
     assert (
-        review_mod._current_line(None, f, now) == 0
+        review_mod._current_line(ws, f, now) == 0
     )  # no stale guess: the quote is gone
 
 
 def test_a_dismissal_is_labelled_as_one(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     first = run(
         gh=gh,
@@ -4409,7 +4462,7 @@ def test_a_dismissal_is_labelled_as_one(repo: Path):
         principles=principles,
         client_factory=_factory(_review_script()),
     )
-    fid = first.state.findings[0].id
+    fid = state_of(first).findings[0].id
     review_mod.dismiss(
         gh, 1, [fid], "tracked separately", actor="reviewer", pr_author="author"
     )
@@ -4448,7 +4501,7 @@ def test_a_file_drawing_new_blocking_findings_round_after_round_gets_a_step_back
 
 
 def test_a_config_change_does_not_reopen_reviewed_code(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     run(
         gh=gh,
@@ -4576,7 +4629,7 @@ def test_force_after_new_commits_reviews_only_those_commits(repo: Path):
     """How `/review force` is used: after a small push (a docs commit) to get the approval
     back. It lifts the skip and round-cap rules but reviews only the new commits, so it
     is cheap and cannot reopen code an earlier round already passed."""
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     run(
         gh=gh,
@@ -4601,7 +4654,7 @@ def test_force_after_new_commits_reviews_only_those_commits(repo: Path):
 
 
 def test_force_on_an_unchanged_head_re_reviews_the_whole_pr(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     run(
         gh=gh,
@@ -4647,7 +4700,7 @@ def test_open_concerns_are_rechecked_in_the_verify_call_and_marked_addressed(
 ):
     """The approach check runs once per PR; a concern the author then fixed stayed on
     the PR forever. It now rides the verify call and is marked addressed."""
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     first = run(
         gh=gh,
@@ -4657,8 +4710,8 @@ def test_open_concerns_are_rechecked_in_the_verify_call_and_marked_addressed(
         principles=principles,
         client_factory=_factory(_review_script()),
     )
-    first.state.approach = json.loads(json.dumps(_CONCERNS))
-    gh.comments[0]["body"] = review_mod.SUMMARY_MARKER + "\n" + first.state.encode()
+    state_of(first).approach = json.loads(json.dumps(_CONCERNS))
+    gh.comments[0]["body"] = review_mod.SUMMARY_MARKER + "\n" + state_of(first).encode()
     _round_two_elsewhere(gh)
     script = Script(
         response([tool_call("verdicts", {"items": [{"id": "A1", "status": "fixed"}]})])
@@ -4675,10 +4728,10 @@ def test_open_concerns_are_rechecked_in_the_verify_call_and_marked_addressed(
         next(r for r in script.requests if "<changes_this_round>" in json.dumps(r))
     )
     assert 'concern id=\\"A1\\"' in sent and 'concern id=\\"A2\\"' in sent
-    c1, c2 = res.state.approach["concerns"]
+    c1, c2 = state_of(res).approach["concerns"]
     assert (c1["status"], c1["addressed_round"]) == ("addressed", 2)
     assert c2.get("status", "open") == "open"
-    assert [cid for cid, _ in review_mod.open_concerns(res.state)] == ["A2"]
+    assert [cid for cid, _ in review_mod.open_concerns(state_of(res))] == ["A2"]
     body = gh.comments[0]["body"]
     assert "✔️ ~~Re-check stops at 20~~ (A1) — addressed in round 2" in body
     assert "**Force contract** (A2)" in body and "worth a second look" in body
@@ -4771,7 +4824,7 @@ def test_a_suggestion_holding_a_code_fence_cannot_close_its_block():
 
 
 def test_a_dismissal_keeps_the_location_links(repo: Path):
-    gh = FakeGitHub()
+    gh = fake_github()
     script = Script(
         response(
             [
@@ -4789,7 +4842,7 @@ def test_a_dismissal_keeps_the_location_links(repo: Path):
         principles=principles_of(repo),
         client_factory=_factory(script),
     )
-    low = next(f for f in first.state.findings if f.severity == "low")
+    low = next(f for f in state_of(first).findings if f.severity == "low")
     review_mod.dismiss(
         gh, 1, [low.id], "tracked separately", actor="reviewer", pr_author="author"
     )
@@ -4867,7 +4920,7 @@ def test_verify_gets_no_removed_block_when_nothing_was_removed(repo: Path):
 def test_a_round_two_verify_lists_a_rename_from_the_whole_pr(repo: Path):
     """End to end through `run`: the PR's diff renames a workflow, and the
     verify call for the open finding is told the old path is gone."""
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     first = run(
         gh=gh,
@@ -4877,7 +4930,7 @@ def test_a_round_two_verify_lists_a_rename_from_the_whole_pr(repo: Path):
         principles=principles,
         client_factory=_factory(_review_script()),
     )
-    fid = first.state.findings[0].id
+    fid = state_of(first).findings[0].id
     _round_two_elsewhere(gh)
     gh.diffs[("h1", "h2")] += RENAME_DIFF
     gh.diffs[("b0", "h2")] += RENAME_DIFF
@@ -4905,7 +4958,7 @@ def test_a_round_two_verify_lists_a_rename_from_the_whole_pr(repo: Path):
 def test_a_rename_from_an_earlier_round_is_still_listed(repo: Path):
     """The list is the whole PR's, not the round's: round 2 touches another
     file, but the rename made in round 1 is still in effect at the head."""
-    gh = FakeGitHub()
+    gh = fake_github()
     gh.diffs[("b0", "h1")] = DIFF + RENAME_DIFF
     gh.files[(".github/workflows/new-name.yml", "h1")] = "name: new\non: push\n"
     principles = principles_of(repo)
@@ -4917,7 +4970,7 @@ def test_a_rename_from_an_earlier_round_is_still_listed(repo: Path):
         principles=principles,
         client_factory=_factory(_review_script()),
     )
-    assert first.state.findings, "round 1 must leave a finding open to re-check"
+    assert state_of(first).findings, "round 1 must leave a finding open to re-check"
     _round_two_elsewhere(gh)
     gh.files[(".github/workflows/new-name.yml", "h2")] = "name: new\non: push\n"
     script = Script(response([tool_call("verdicts", {"items": []})]))
@@ -5189,7 +5242,7 @@ def test_a_cut_off_round_says_so_and_names_the_opt_in(repo: Path):
     """End to end through `run`: round 2's verify is cut off. The finding stays
     open, and both the verdict and the summary say it was not re-judged and
     how to re-check it with the raised budget."""
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     first = run(
         gh=gh,
@@ -5199,7 +5252,7 @@ def test_a_cut_off_round_says_so_and_names_the_opt_in(repo: Path):
         principles=principles,
         client_factory=_factory(_review_script()),
     )
-    fid = first.state.findings[0].id
+    fid = state_of(first).findings[0].id
     _round_two_elsewhere(gh)
 
     res = run(
@@ -5213,7 +5266,7 @@ def test_a_cut_off_round_says_so_and_names_the_opt_in(repo: Path):
 
     assert fid in res.verify_cut_off and fid not in res.resolved_verified
     assert res.verify_skipped == []  # verify ran; it was cut off, not skipped
-    assert any(f.id == fid for f in res.state.open_findings())
+    assert any(f.id == fid for f in state_of(res).open_findings())
     brief = review_mod.verdict_brief(res, "https://example.test/summary")
     summary = review_mod.render_summary(res)
     for body in (brief, summary):
@@ -5275,17 +5328,19 @@ def test_a_responses_api_cut_off_is_read_from_its_incomplete_status(repo: Path):
     ("argv", "verify_budget"),
     [([], False), (["--verify-budget"], True)],
 )
-def test_cli_forwards_verify_budget_to_the_review(monkeypatch, argv, verify_budget):
+def test_cli_forwards_verify_budget_to_the_review(
+    monkeypatch: pytest.MonkeyPatch, argv, verify_budget
+):
     import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test, patched below
 
-    seen: dict = {}
+    seen: dict[str, Any] = {}
 
     def fake_run(**kwargs):
         seen.update(kwargs)
         return review_mod.RunResult("skipped", "test")
 
     class QuietGitHub:  # --dry-run posts nothing; only cleanup is looked up
-        def __init__(self, repo):
+        def __init__(self, repo: Path):
             pass
 
         def delete_comment(self, comment_id):  # pragma: no cover - id is 0
@@ -5305,7 +5360,7 @@ def test_cli_forwards_verify_budget_to_the_review(monkeypatch, argv, verify_budg
     assert code == 0 and seen["verify_budget"] is verify_budget
 
 
-def _round_two_merge_only(gh):
+def _round_two_merge_only(gh: Any):
     """A second head that only merges the base branch: no PR file changes."""
     gh.head = "h2"
     gh.diffs[("h1", "h2")] = ""
@@ -5318,7 +5373,7 @@ def test_a_round_that_changes_no_pr_file_says_nothing_was_rechecked(repo: Path):
     open findings were shown again with nothing saying they were not re-checked."""
     from connector_reviewer import report as report_mod  # noqa: PLC0415
 
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     first = run(
         gh=gh,
@@ -5328,7 +5383,7 @@ def test_a_round_that_changes_no_pr_file_says_nothing_was_rechecked(repo: Path):
         principles=principles,
         client_factory=_factory(_review_script()),
     )
-    fid = first.state.findings[0].id
+    fid = state_of(first).findings[0].id
     _round_two_merge_only(gh)
     script = Script()
 
@@ -5362,7 +5417,7 @@ def test_a_round_that_changes_no_pr_file_says_nothing_was_rechecked(repo: Path):
 
 def test_a_round_that_rechecks_says_nothing_about_skipping(repo: Path):
     """Control: a round that touches a PR file runs verify and adds no notice."""
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     run(
         gh=gh,
@@ -5394,7 +5449,7 @@ def test_force_rechecks_open_findings_after_a_merge_only_push(repo: Path):
     """The cut-off hint names `/review force verify-budget`. Followed on a new head that
     only merges the base branch, force must still re-check: it reviews the (empty) new
     commits incrementally, and verify used to be skipped, so the hint did nothing."""
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     first = run(
         gh=gh,
@@ -5404,7 +5459,7 @@ def test_force_rechecks_open_findings_after_a_merge_only_push(repo: Path):
         principles=principles,
         client_factory=_factory(_review_script()),
     )
-    fid = first.state.findings[0].id
+    fid = state_of(first).findings[0].id
     _round_two_merge_only(gh)
     script = Script(response([tool_call("verdicts", {"items": []})]))
 
@@ -5461,10 +5516,10 @@ TUPLE_CONTRACT = {
 }
 
 
-def _marker_pr(repo: Path) -> FakeGitHub:
+def _marker_pr(repo: Path) -> Any:
     """Commit A (round 1) adds a private module; commit B (round 2) changes a
     function's return shape. The base checkout (`repo`) never had the module."""
-    gh = FakeGitHub(
+    gh = fake_github(
         diffs={("b0", "h1"): _added_file_diff(MARKER, MARKER_V1)},
         files={(MARKER, "h1"): MARKER_V1},
     )
@@ -5487,7 +5542,7 @@ def _marker_pr(repo: Path) -> FakeGitHub:
     return gh
 
 
-def _round_with(gh: FakeGitHub, repo: Path, comment: dict[str, Any]) -> RunResult:
+def _round_with(gh: Any, repo: Path, comment: dict[str, Any]) -> RunResult:
     script = Script(
         response(
             [
@@ -5514,7 +5569,7 @@ def test_a_compat_claim_on_a_module_this_pr_added_does_not_block(repo: Path):
     gh = _marker_pr(repo)
     res = _round_with(gh, repo, TUPLE_CONTRACT)
     assert res.mode == "incremental"
-    assert res.state.open_findings(findings_mod.BLOCKING) == []
+    assert state_of(res).open_findings(findings_mod.BLOCKING) == []
     assert (
         verdict_status(res)[0] != "failure" or "blocking" not in verdict_status(res)[1]
     )
@@ -5525,7 +5580,7 @@ def test_a_compat_claim_on_a_module_this_pr_added_does_not_block(repo: Path):
 def test_the_review_and_verify_are_told_what_the_pr_added(repo: Path):
     """Round 1 leaves a (non-compatibility) finding open on the added module;
     round 2's real verify request carries the block, as the review context does."""
-    gh = FakeGitHub(
+    gh = fake_github(
         diffs={("b0", "h1"): _added_file_diff(MARKER, MARKER_V1)},
         files={(MARKER, "h1"): MARKER_V1},
     )
@@ -5539,7 +5594,7 @@ def test_the_review_and_verify_are_told_what_the_pr_added(repo: Path):
             "title": "_bracket is unbounded",
         },
     )
-    assert first.state.open_findings(), "round 1 must leave a finding to verify"
+    assert state_of(first).open_findings(), "round 1 must leave a finding to verify"
     gh.head = "h2"
     gh.diffs[("h1", "h2")] = (
         f"diff --git a/{MARKER} b/{MARKER}\n--- a/{MARKER}\n+++ b/{MARKER}\n"
@@ -5563,9 +5618,9 @@ def test_the_review_and_verify_are_told_what_the_pr_added(repo: Path):
     assert block in _review_context(script)
 
 
-def _fetch_pr_with_base(diff: str = DIFF, head_src: str = SRC_V2) -> FakeGitHub:
+def _fetch_pr_with_base(diff: str = DIFF, head_src: str = SRC_V2) -> Any:
     """fetch.py exists on the merge base (b0) as SRC_V1."""
-    return FakeGitHub(
+    return fake_github(
         diffs={("b0", "h1"): diff},
         files={
             ("app/storage/fetch.py", "h1"): head_src,
@@ -5574,7 +5629,7 @@ def _fetch_pr_with_base(diff: str = DIFF, head_src: str = SRC_V2) -> FakeGitHub:
     )
 
 
-def _first_round(gh: FakeGitHub, repo: Path, comment: dict[str, Any]) -> RunResult:
+def _first_round(gh: Any, repo: Path, comment: dict[str, Any]) -> RunResult:
     script = Script(
         response(
             [
@@ -5600,7 +5655,7 @@ def test_a_compat_claim_on_a_symbol_that_exists_on_the_merge_base_still_blocks(
     """No over-correction: `fetch` shipped before this PR, so its callers can break."""
     gh = _fetch_pr_with_base()
     res = _first_round(gh, repo, {**COMMENT, "compatibility": True})
-    [f] = res.state.findings
+    [f] = state_of(res).findings
     assert (f.severity, f.compatibility) == ("high", True)
     assert verdict_status(res) == ("failure", f"1 blocking: {f.id}")
 
@@ -5619,9 +5674,9 @@ def test_a_compat_claim_on_a_symbol_added_to_an_existing_file_is_capped(repo: Pa
         "title": "fetch_many's dict result breaks callers expecting a list",
     }
     res = _first_round(gh, repo, claim)
-    [f] = res.state.findings
+    [f] = state_of(res).findings
     assert f.severity == "medium"
-    assert res.state.open_findings(findings_mod.BLOCKING) == []
+    assert state_of(res).open_findings(findings_mod.BLOCKING) == []
 
 
 def test_a_non_compat_defect_in_added_code_still_blocks(repo: Path):
@@ -5633,7 +5688,7 @@ def test_a_non_compat_defect_in_added_code_still_blocks(repo: Path):
         "title": "Bracketed is undefined",
     }
     res = _round_with(gh, repo, crash)
-    assert [f.severity for f in res.state.open_findings(findings_mod.BLOCKING)] == [
+    assert [f.severity for f in state_of(res).open_findings(findings_mod.BLOCKING)] == [
         "high"
     ]
 
@@ -5685,18 +5740,18 @@ def test_recheck_is_parsed_and_the_pr_author_may_ask():
     assert not bad.run and "usage" in bad.reason
 
 
-def _blocking_on_added_code(repo: Path) -> tuple[FakeGitHub, Finding]:
+def _blocking_on_added_code(repo: Path) -> tuple[Any, Finding]:
     """The F-23084f shape as it stands on a PR today: a blocking finding that
     was not flagged as a compatibility claim, so nothing capped it."""
     gh = _marker_pr(repo)
     res = _round_with(gh, repo, {**TUPLE_CONTRACT, "compatibility": False})
-    [f] = res.state.open_findings(findings_mod.BLOCKING)
+    [f] = state_of(res).open_findings(findings_mod.BLOCKING)
     return gh, f
 
 
 def _recheck(
-    gh,
-    repo,
+    gh: Any,
+    repo: Path,
     ids,
     reason="",
     script=None,
@@ -5731,7 +5786,7 @@ def _verdict(fid, status, reason):
 
 def test_recheck_resolves_the_f23084f_shape_citing_the_merge_base(repo: Path):
     gh, f = _blocking_on_added_code(repo)
-    before = PRState.decode(gh.comments[0]["body"])
+    before = decode_state(gh.comments[0]["body"])
     res, script = _recheck(
         gh,
         repo,
@@ -5740,7 +5795,7 @@ def test_recheck_resolves_the_f23084f_shape_citing_the_merge_base(repo: Path):
         Script(_verdict(f.id, "resolved", "no caller exists on the merge base")),
     )
     assert res.action == "rechecked" and res.resolved_verified == [f.id]
-    st = PRState.decode(gh.comments[0]["body"])
+    st = decode_state(gh.comments[0]["body"])
     done = {x.id: x for x in st.findings}[f.id]
     assert (done.status, done.fixed_by, done.dismissed_by) == (
         "fixed",
@@ -5771,7 +5826,7 @@ def test_recheck_keeps_a_finding_the_evidence_does_not_overturn(repo: Path):
     _recheck(
         gh, repo, [f.id], "", Script(_verdict(f.id, "open", "Bracketed is undefined"))
     )
-    st = PRState.decode(gh.comments[0]["body"])
+    st = decode_state(gh.comments[0]["body"])
     assert {x.id: x for x in st.findings}[f.id].status == "open"
     assert gh.statuses[-1]["state"] == "failure"
     assert f"❌ `{f.id}` still stands: Bracketed is undefined" in gh.posted[-1]
@@ -5780,17 +5835,17 @@ def test_recheck_keeps_a_finding_the_evidence_does_not_overturn(repo: Path):
 
 def test_recheck_resolves_a_flagged_compat_claim_with_no_model_call(repo: Path):
     gh, f = _blocking_on_added_code(repo)
-    st = PRState.decode(gh.comments[0]["body"])
+    st = decode_state(gh.comments[0]["body"])
     {x.id: x for x in st.findings}[f.id].compatibility = True
     gh.comments[0]["body"] = SUMMARY_MARKER + "\n" + st.encode()
     res, script = _recheck(gh, repo, [f.id])
     assert script.requests == [] and res.resolved_verified == [f.id]
-    assert res.state.history[-1]["calls"] == 0
+    assert state_of(res).history[-1]["calls"] == 0
 
 
 def test_recheck_runs_past_the_round_cap_but_not_past_the_dollar_cap(repo: Path):
     gh, f = _blocking_on_added_code(repo)
-    st = PRState.decode(gh.comments[0]["body"])
+    st = decode_state(gh.comments[0]["body"])
     st.round = 99  # far past max_rounds: a re-check is not a round
     gh.comments[0]["body"] = SUMMARY_MARKER + "\n" + st.encode()
     res, script = _recheck(
@@ -5799,7 +5854,7 @@ def test_recheck_runs_past_the_round_cap_but_not_past_the_dollar_cap(repo: Path)
     assert res.resolved_verified == [f.id] and len(script.requests) == 1
 
     gh, f = _blocking_on_added_code(repo)
-    st = PRState.decode(gh.comments[0]["body"])
+    st = decode_state(gh.comments[0]["body"])
     st.ledger["spent_usd"] = cfg_for(repo).cap_usd_per_pr
     gh.comments[0]["body"] = SUMMARY_MARKER + "\n" + st.encode()
     res, script = _recheck(gh, repo, [f.id])
@@ -5845,7 +5900,7 @@ def test_a_cut_off_recheck_says_so_and_names_the_opt_in(repo: Path):
     assert [r["max_tokens"] for r in script.requests] == [8000]
     assert res.incomplete == ["re-check: ran out of output budget"]
     assert res.resolved_verified == []
-    st = PRState.decode(gh.comments[0]["body"])
+    st = decode_state(gh.comments[0]["body"])
     assert st is not None
     assert {x.id: x for x in st.findings}[f.id].status == "open"
     posted = gh.posted[-1]
@@ -5947,7 +6002,7 @@ def test_a_recheck_that_fails_for_another_reason_does_not_offer_the_opt_in(
 def test_recheck_on_shipped_code_reports_it_present_on_the_merge_base(repo: Path):
     gh = _fetch_pr_with_base()
     res = _first_round(gh, repo, COMMENT)
-    [f] = res.state.findings
+    [f] = state_of(res).findings
     _, script = _recheck(gh, repo, [f.id], "", Script(_verdict(f.id, "open", "still")))
     user = script.requests[0]["messages"][1]["content"]
     assert "- present on merge base: fetch in app/storage/fetch.py" in user
@@ -5963,13 +6018,15 @@ def test_recheck_of_an_unknown_id_changes_nothing(repo: Path):
     assert "`F-000000` is not an open finding" in gh.posted[-1]
 
 
-def test_the_cli_routes_recheck_without_a_review_round(monkeypatch, tmp_path):
+def test_the_cli_routes_recheck_without_a_review_round(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test, patched below
 
     _CliGitHub.reactions, _CliGitHub.comments, _CliGitHub.live = [], [], {}
     monkeypatch.setattr(cli, "GitHub", _CliGitHub)
     monkeypatch.setattr(cli, "run", lambda **kw: pytest.fail("recheck is not a review"))
-    seen = {}
+    seen: dict[str, Any] = {}
     monkeypatch.setattr(
         cli, "recheck", lambda **kw: seen.update(kw) or RunResult("rechecked")
     )
@@ -6007,7 +6064,7 @@ def test_the_baseline_reads_python_files_past_the_head_text_cap():
     """Approach concern A1: a file past `max_changed_files` is not in the head
     overlay, but a symbol it adds must still count as added."""
     files = parse_unified_diff(DIFF)
-    gh = FakeGitHub(
+    gh = fake_github(
         files={
             ("app/storage/fetch.py", "h1"): SRC_V2_NEXT,
             ("app/storage/fetch.py", "b0"): SRC_V1,
@@ -6208,7 +6265,7 @@ def test_malformed_verdict_items_are_skipped_not_fatal(repo: Path):
         ]
     ) == [{"id": "F-1"}]
     gh, f = _blocking_on_added_code(repo)
-    before = PRState.decode(gh.comments[0]["body"])
+    before = decode_state(gh.comments[0]["body"])
     _recheck(
         gh,
         repo,
@@ -6216,7 +6273,7 @@ def test_malformed_verdict_items_are_skipped_not_fatal(repo: Path):
         "",
         Script(response([tool_call("verdicts", {"items": [None]})])),
     )
-    st = PRState.decode(gh.comments[0]["body"])
+    st = decode_state(gh.comments[0]["body"])
     assert {x.id: x for x in st.findings}[f.id].status == "open"
     assert st.ledger["spent_usd"] > before.ledger["spent_usd"]  # the call is booked
 
@@ -6263,7 +6320,7 @@ REGRESSION_CLAIM = dict(
 
 
 def _restoring_round_two(repo: Path, verdict: str) -> tuple[RunResult, Script, str]:
-    gh = FakeGitHub()
+    gh = fake_github()
     principles = principles_of(repo)
     run(
         gh=gh,
@@ -6323,8 +6380,8 @@ def test_a_new_blocking_finding_moot_against_the_base_branch_is_not_published(
 
     assert res.mode == "incremental"
     assert res.new_findings == [] and res.new_dropped == [fid]
-    assert fid not in {f.id for f in res.state.findings}
-    assert res.state.open_findings(findings_mod.BLOCKING) == []
+    assert fid not in {f.id for f in state_of(res).findings}
+    assert state_of(res).open_findings(findings_mod.BLOCKING) == []
     user = _new_check_request(script)
     block = user.split("<at_base_branch>\n", 1)[1].split("\n</at_base_branch>", 1)[0]
     assert block.splitlines()[0] == "app/storage/fetch.py: fetch"
@@ -6335,7 +6392,7 @@ def test_a_new_blocking_finding_that_stands_is_published(repo: Path):
     res, script, fid = _restoring_round_two(repo, "open")
 
     assert [f.id for f in res.new_findings] == [fid] and res.new_dropped == []
-    assert [f.id for f in res.state.open_findings(findings_mod.BLOCKING)] == [fid]
+    assert [f.id for f in state_of(res).open_findings(findings_mod.BLOCKING)] == [fid]
     assert _new_check_request(script)
 
 
@@ -6449,11 +6506,9 @@ jobs:
 """
 
 
-def _workflow_pr(
-    src: str = WORKFLOW_SRC, path: str = WORKFLOW
-) -> tuple[FakeGitHub, Finding]:
+def _workflow_pr(src: str = WORKFLOW_SRC, path: str = WORKFLOW) -> tuple[Any, Finding]:
     """A PR adding a workflow, with one open blocking finding on its first checkout."""
-    gh = FakeGitHub(
+    gh = fake_github(
         diffs={("b0", "h1"): _added_file_diff(path, src)},
         files={(path, "h1"): src},
     )
@@ -6949,9 +7004,9 @@ def test_a_refused_review_does_not_tell_the_author_to_retry_and_reports_the_susp
 ):
     from connector_reviewer import report  # noqa: PLC0415 - module under test
 
-    gh = FakeGitHub()
+    gh = fake_github()
     res = run(
-        gh=cast(GitHub, gh),
+        gh=gh,
         number=1,
         root=repo,
         cfg=cfg_for(repo),
@@ -7014,23 +7069,25 @@ def test_the_fork_ships_no_advisory(repo: Path):
     (repo / "pyproject.toml").write_text(
         '[project]\nname = "x"\ndependencies = ["dnspython>=2.8"]\n'
     )
-    gh = FakeGitHub(
+    gh = fake_github(
         diffs={("b0", "h1"): PYPROJECT_DIFF},
         files={("pyproject.toml", "h1"): (repo / "pyproject.toml").read_text()},
     )
     res = run(
-        gh=cast(GitHub, gh),
+        gh=gh,
         number=1,
         root=repo,
         cfg=cfg_for(repo),
         principles=principles_of(repo),
         client_factory=_factory(Script()),
     )
-    assert res.state is not None and res.state.advisories == []
+    assert res.state is not None and state_of(res).advisories == []
     assert "**Advisory**" not in gh.comments[0]["body"]
 
 
-def test_an_advisory_is_a_summary_note_not_a_finding(repo: Path, monkeypatch):
+def test_an_advisory_is_a_summary_note_not_a_finding(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
     """An advisory asks for something only the PR description can show, and verify
     judges only code, so a finding for it could never close. A matching diff
     therefore draws no finding and does carry a non-blocking note in the summary,
@@ -7039,7 +7096,7 @@ def test_an_advisory_is_a_summary_note_not_a_finding(repo: Path, monkeypatch):
     (repo / "pyproject.toml").write_text(
         '[project]\nname = "x"\ndependencies = ["dnspython>=2.8"]\n'
     )
-    gh = FakeGitHub(
+    gh = fake_github(
         diffs={("b0", "h1"): PYPROJECT_DIFF},
         files={
             ("pyproject.toml", "h1"): (repo / "pyproject.toml").read_text(),
@@ -7047,14 +7104,14 @@ def test_an_advisory_is_a_summary_note_not_a_finding(repo: Path, monkeypatch):
     )
     script = Script()  # the reviewer raises nothing and calls task_done
     res = run(
-        gh=cast(GitHub, gh),
+        gh=gh,
         number=1,
         root=repo,
         cfg=cfg_for(repo),
         principles=principles_of(repo),
         client_factory=_factory(script),
     )
-    assert res.state is not None and res.state.open_findings() == []
+    assert res.state is not None and state_of(res).open_findings() == []
     [summary] = gh.comments
     body = summary["body"]
     assert "Ready to merge" in body
@@ -7062,24 +7119,26 @@ def test_an_advisory_is_a_summary_note_not_a_finding(repo: Path, monkeypatch):
     note = body.split("**Advisory** (does not block)")[1].split("\n")[0]
     assert "changes a build file (`pyproject.toml`)" in note
     # A later round, dismiss or recheck re-renders from stored state: the note stays.
-    back = PRState.decode(body)
-    assert back is not None and back.advisories == res.state.advisories
+    back = decode_state(body)
+    assert back is not None and back.advisories == state_of(res).advisories
     again = render_summary(RunResult("reviewed", mode="full", state=back))
     assert "**Advisory** (does not block)" in again
 
 
-def test_a_change_no_advisory_matches_gets_no_note(repo: Path, monkeypatch):
+def test_a_change_no_advisory_matches_gets_no_note(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setattr(advisory, "ADVISORIES", (BUILD_ADVISORY,))
-    gh = FakeGitHub()
+    gh = fake_github()
     res = run(
-        gh=cast(GitHub, gh),
+        gh=gh,
         number=1,
         root=repo,
         cfg=cfg_for(repo),
         principles=principles_of(repo),
         client_factory=_factory(Script()),
     )
-    assert res.state is not None and res.state.advisories == []
+    assert res.state is not None and state_of(res).advisories == []
     assert "**Advisory**" not in gh.comments[0]["body"]
 
 
@@ -7103,7 +7162,7 @@ def test_state_from_a_newer_reviewer_with_unknown_fields_still_decodes():
     blob = findings_mod.base64.b64encode(
         findings_mod.zlib.compress(json.dumps(raw).encode())
     ).decode()
-    back = PRState.decode(f"<!-- {findings_mod.STATE_MARKER}:{blob} -->")
+    back = decode_state(f"<!-- {findings_mod.STATE_MARKER}:{blob} -->")
     assert back is not None and back.round == 2
     assert [f.title for f in back.findings] == ["t"]
 
@@ -7116,16 +7175,18 @@ rename to container.build
 """
 
 
-def test_renaming_a_file_away_still_matches_its_advisory(repo: Path, monkeypatch):
+def test_renaming_a_file_away_still_matches_its_advisory(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
     """A rename's diff entry carries its destination as the path; the Dockerfile it
     renames away still changed, so its former name must count."""
     monkeypatch.setattr(advisory, "ADVISORIES", (BUILD_ADVISORY,))
-    gh = FakeGitHub(
+    gh = fake_github(
         diffs={("b0", "h1"): DOCKERFILE_RENAME_DIFF},
         files={("container.build", "h1"): "FROM scratch\n"},
     )
     res = run(
-        gh=cast(GitHub, gh),
+        gh=gh,
         number=1,
         root=repo,
         cfg=cfg_for(repo),
@@ -7133,7 +7194,7 @@ def test_renaming_a_file_away_still_matches_its_advisory(repo: Path, monkeypatch
         client_factory=_factory(Script()),
     )
     assert res.state is not None
-    [note] = res.state.advisories
+    [note] = state_of(res).advisories
     assert "`Dockerfile`" in note
 
 

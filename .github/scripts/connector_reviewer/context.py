@@ -133,7 +133,7 @@ def referenced_patterns(ws: Workspace, files: list[FileDiff], pr_text: str) -> s
     # Files the PR text names ("… what logger_adaptor.py already does") are the
     # strongest hint: a name defined in several places resolves to the one there,
     # and a named file with no named symbol contributes its main public class.
-    # A mention with a directory ("application_sdk/app/context.py") names that exact file;
+    # A mention with a directory ("app/core/context.py") names that exact file;
     # a bare filename ("logger_adaptor.py") names any file with that name. Files under
     # review never count — the PR naming its own file is not a pointer elsewhere.
     own_stems = {p.rsplit("/", 1)[-1][:-3].lower() for p in own}
