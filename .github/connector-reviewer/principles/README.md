@@ -2,11 +2,8 @@
 
 The connector reviewer is an AI reviewer for pull requests in connector app repos
 (`atlan-*-app`). It judges a pull request against the principles in this directory.
-They ship inside this package, so CI and a coding agent on a laptop read the same copy:
-
-```bash
-uv run atlan-application-sdk-conformance principles-dir
-```
+In CI the reviewer reads them from a checkout of this repository. A person or a coding
+agent reads them here, at `.github/connector-reviewer/principles/` in `application-sdk`.
 
 ## What a principle is
 
@@ -83,7 +80,7 @@ as `E020`, and anything else that is out of scope>
 Severity: <what makes a violation high; otherwise medium>
 ```
 
-The rules, which `conformance.principles.load()` enforces:
+The rules, which `load()` in `.github/scripts/connector_reviewer_principles.py` enforces:
 
 - The file is named `<id in lower case>-<slug>.md`, for example
   `fp01-undeclared-loss.md`.
@@ -145,13 +142,14 @@ naming the file and the problem. `Principle.areas` is empty when the file has no
    principle and belongs in that app's repo.
 3. Edit the file, or add one with the next free id. Never reuse or renumber an id:
    the id is how everything else refers to the principle.
-4. Read the conformance rule catalog (`conformance/suite/rules/`) and name in
+4. Read the conformance rule catalog (`packages/conformance/conformance/suite/rules/`) and name in
    `Don't flag:` every rule that already covers part of the principle.
 5. For a new fleet principle, add it to the table above and to the expected ids in
-   `tests/test_principles.py`.
-6. Run `uv run --project packages/conformance pytest packages/conformance/tests/test_principles.py`.
+   `.github/scripts/tests/test_connector_reviewer_principles.py`.
+6. Run `uv run pytest .github/scripts/tests/test_connector_reviewer_principles.py`.
 
-A change reaches CI and local agents with the next release of this package.
+A change reaches every review as soon as it merges to `main`: the reviewer reads this
+directory at the commit its workflow runs from. No release or resync is needed.
 
 ## Where the 25 old shared rules went
 

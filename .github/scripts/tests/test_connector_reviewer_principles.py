@@ -3,12 +3,11 @@
 The principles are data other code depends on. The reviewer parses them, and
 each ``Don't flag:`` field tells it which conformance rules already cover a
 topic. So this file checks the shipped set, the format of every file, every
-cited rule id, the old-rule mapping in the README, the ``principles-dir``
-command, and the reader's own error messages.
+cited rule id, the old-rule mapping in the README, and the reader's own error
+messages.
 
-The format checks read the raw text as well as going through
-``conformance.principles``, so a reader that accepted too much would not make
-them pass.
+The format checks read the raw text as well as going through the reader, so a
+reader that accepted too much would not make them pass.
 """
 
 from __future__ import annotations
@@ -19,11 +18,19 @@ from pathlib import Path
 
 import pytest
 
-from conformance import cli, principles
-from conformance.principles import AREAS, FLEET_DIR, LABELS, MAX_LINES, Principle
-from conformance.suite.rules import CATALOG
-from conformance.suite.schema.disposition import RuleScope
-from tests._helpers import find_sdk_root
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import connector_reviewer_principles as principles
+from connector_reviewer_principles import (
+    AREAS,
+    FLEET_DIR,
+    LABELS,
+    MAX_LINES,
+    Principle,
+)
+
+_REPO = Path(__file__).resolve().parents[3]
+_RULES_DIR = _REPO / "packages" / "conformance" / "conformance" / "suite" / "rules"
 
 EXPECTED_IDS = [f"FP{n:02d}" for n in range(1, 18)]
 OLD_RULE_COUNT = 25
@@ -110,15 +117,32 @@ def test_file_follows_the_format(principle_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _rule_scopes() -> dict[str, str]:
+    """Rule id -> SDK/APP/BOTH, read from each ``RuleDefinition(...)`` in the
+    catalog source. Read as text, like the lens card checks, so this test does
+    not depend on the conformance package being installed."""
+    scopes: dict[str, str] = {}
+    for source in sorted(_RULES_DIR.glob("*.py")):
+        text = source.read_text(encoding="utf-8")
+        starts = list(re.finditer(r'id="([A-Z]\d{3})"', text))
+        for index, match in enumerate(starts):
+            end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+            scope = re.search(r"scope=RuleScope\.(\w+)", text[match.start() : end])
+            scopes[match.group(1)] = scope.group(1) if scope else "?"
+    return scopes
+
+
 @pytest.mark.parametrize("name", [*EXPECTED_IDS, "README"])
 def test_cited_conformance_rules_exist_and_run_on_apps(name: str) -> None:
     path = README if name == "README" else _file_for(name)
     cited = sorted(set(_CITED_RULE.findall(path.read_text(encoding="utf-8"))))
-    unknown = [rule for rule in cited if rule not in CATALOG]
+    scopes = _rule_scopes()
+    assert scopes, "conformance rule catalog not found"
+    unknown = [rule for rule in cited if rule not in scopes]
     assert unknown == [], f"{path.name} cites rule ids that are not in the catalog"
     # A rule scoped to the SDK never runs on a connector app, so it enforces
     # nothing there and "conformance already covers this" would be false.
-    sdk_only = [rule for rule in cited if CATALOG[rule].scope is RuleScope.SDK]
+    sdk_only = [rule for rule in cited if scopes[rule] == "SDK"]
     assert sdk_only == [], f"{path.name} cites rules that do not run on app repos"
 
 
@@ -162,9 +186,8 @@ def test_readme_maps_twenty_five_old_rules(fleet: list[Principle]) -> None:
 def test_readme_maps_every_old_shared_rule() -> None:
     """Every old rule still in the repo has a row. The rule sets are due to be
     deleted, so this skips once none is left; the count is pinned above."""
-    root = find_sdk_root()
-    rulesets = root / ".mothership" / "review-rulesets" if root else None
-    old = _old_rule_ids(rulesets) if rulesets and rulesets.is_dir() else set()
+    rulesets = _REPO / ".mothership" / "review-rulesets"
+    old = _old_rule_ids(rulesets) if rulesets.is_dir() else set()
     if not old:
         pytest.skip("the old rule sets under .mothership/review-rulesets are gone")
     unmapped = sorted(old - set(_old_rule_rows()))
@@ -179,37 +202,12 @@ def _old_rule_ids(rulesets: Path) -> set[str]:
             r"^\s*-\s*(rules/\S+\.md)\s*$", manifest.read_text("utf-8"), re.M
         )
         files.update(manifest.parent / entry for entry in listed)
-    ids = set()
+    ids: set[str] = set()
     for path in files:
         match = re.search(r"^id:\s*(\S+)\s*$", path.read_text("utf-8"), re.M)
         assert match, f"{path}: no id in front matter"
         ids.add(match.group(1))
     return ids
-
-
-# ---------------------------------------------------------------------------
-# principles-dir
-# ---------------------------------------------------------------------------
-
-
-def test_principles_dir_prints_the_shipped_directory(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(
-        sys, "argv", ["atlan-application-sdk-conformance", "principles-dir"]
-    )
-    with pytest.raises(SystemExit) as exit_info:
-        cli.main()
-    assert exit_info.value.code == 0
-    printed = Path(capsys.readouterr().out.strip())
-    assert printed.is_absolute() and printed.is_dir()
-    assert printed.resolve() == FLEET_DIR
-    assert [p.id for p in principles.load(printed)] == EXPECTED_IDS
-    assert (printed / "README.md").is_file()
-
-
-def test_usage_lists_principles_dir() -> None:
-    assert re.search(r"^  principles-dir +Print the absolute path", cli._USAGE, re.M)
 
 
 # ---------------------------------------------------------------------------
@@ -346,3 +344,15 @@ def test_two_files_cannot_share_an_id(tmp_path: Path) -> None:
 def test_a_missing_directory_is_an_error_not_an_empty_list(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="not a directory"):
         principles.load(tmp_path / "absent")
+
+
+def test_a_file_that_is_not_utf8_is_named_like_any_other_problem(
+    tmp_path: Path,
+) -> None:
+    """A decode error is a ValueError too, and must not escape without the path."""
+    bad = tmp_path / "fp01-a-title.md"
+    bad.write_bytes(b"---\nid: FP01\n---\n# A title \xff\xfe\n")
+    with pytest.raises(ValueError, match=r"fp01-a-title\.md"):
+        principles.parse(bad)
+    with pytest.raises(ValueError, match=r"fp01-a-title\.md"):
+        principles.load(tmp_path)

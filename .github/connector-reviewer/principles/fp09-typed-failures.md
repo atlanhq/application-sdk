@@ -11,7 +11,7 @@ Why: The platform retries, routes and displays failures from these fields alone.
 kills a multi-hour run on its first error, retries a hopeless one, or sends a customer's problem to
 the wrong team.
 Ask:
-- Do the category and audience match what happened and who can fix it (for example, a source that never answered is source unavailable, not a timeout or a platform fault)?
+- Do the category and audience match what happened and who can fix it (for example, a failed connection to the customer's source is source unavailable; a bounded read that ran out of time is a timeout; neither is a platform fault)?
 - Is "retry this" decided separately from "this may be absorbed as a declared gap", on a stable code or type rather than message text, with unknown source errors left retryable?
 - After a catch, can the caller still tell failure from success, and can a re-raise ever make an error its own cause?
 Don't flag: mechanics conformance reports: bare, broad or silent excepts (`E001`, `E002`, `E004`,

@@ -1,15 +1,15 @@
-"""Principles for the connector reviewer: the fleet set and the reader for its format.
+"""The reader for connector-reviewer principle files.
 
 A principle is one short Markdown file. It states something that must stay true
 in a connector app, why, and what to ask of a pull request. The fleet principles
-(``FP01`` onwards) live beside this module and ship in the wheel;
-``atlan-application-sdk-conformance principles-dir`` prints where. An app repo
-keeps its own (``RP01`` onwards) under ``.github/connector-reviewer/principles/``
-in the same format, so :func:`load` reads either directory.
+(``FP01`` onwards) live in this repository under
+``.github/connector-reviewer/principles/``. An app repo keeps its own (``RP01``
+onwards) at the same path in that repo, in the same format, so :func:`load`
+reads either directory.
 
-``README.md`` in this directory describes the format. This module uses the
-standard library only, so the reviewer and a local agent can import it without
-the rest of the suite's dependencies.
+``README.md`` in the principles directory describes the format. This module
+uses the standard library only, so the reviewer can import it with the system
+Python and nothing installed.
 """
 
 from __future__ import annotations
@@ -19,8 +19,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-#: The directory that holds the fleet principles (and this module).
-FLEET_DIR = Path(__file__).resolve().parent
+#: The directory that holds the fleet principles.
+FLEET_DIR = Path(__file__).resolve().parents[1] / "connector-reviewer" / "principles"
 
 #: The parts of an app repo a principle can be limited to with ``applies-to``.
 AREAS = ("app", "generated", "tests", "contract", "ci")
@@ -98,8 +98,10 @@ def load(directory: str | os.PathLike[str]) -> list[Principle]:
 def parse(path: str | os.PathLike[str]) -> Principle:
     """Read one principle file. Raises :class:`ValueError` naming the file and the problem."""
     file = Path(path)
-    lines = file.read_text(encoding="utf-8").splitlines()
     try:
+        # Inside the try: a file that is not valid UTF-8 raises UnicodeDecodeError
+        # (a ValueError), and that message must name the file like any other.
+        lines = file.read_text(encoding="utf-8").splitlines()
         return _parse_lines(lines, file)
     except ValueError as problem:
         raise ValueError(f"{file}: {problem}") from problem

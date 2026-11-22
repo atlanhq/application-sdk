@@ -21,9 +21,6 @@ uv run atlan-application-sdk-conformance detect --repo . --series E,L,C --output
 # Get the path to bundled remediation programs (for SKILL.md / reactor)
 uv run atlan-application-sdk-conformance programs-dir
 
-# Get the path to the bundled connector-reviewer principles (see its README.md)
-uv run atlan-application-sdk-conformance principles-dir
-
 # Regenerate rule docs
 uv run atlan-application-sdk-conformance gen-rule-docs
 ```
