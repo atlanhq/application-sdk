@@ -37,6 +37,10 @@ def _cmd_skills_dir(_argv: list[str]) -> int:
     return _print_package_dir("skills")
 
 
+def _cmd_principles_dir(_argv: list[str]) -> int:
+    return _print_package_dir("principles")
+
+
 def _cmd_gen_rule_docs(argv: list[str]) -> int:
     from conformance.tools.generate_rule_docs import main
 
@@ -161,6 +165,7 @@ _COMMANDS = {
     "detect": _cmd_detect,
     "programs-dir": _cmd_programs_dir,
     "skills-dir": _cmd_skills_dir,
+    "principles-dir": _cmd_principles_dir,
     "gen-rule-docs": _cmd_gen_rule_docs,
     "gen-deprecations": _cmd_gen_deprecations,
     "gen-contract-ledger": _cmd_gen_contract_ledger,
@@ -183,6 +188,7 @@ commands:
   detect         Run the conformance suite and emit SARIF
   programs-dir   Print the absolute path to the bundled .prose.md programs
   skills-dir     Print the absolute path to the bundled migration skills
+  principles-dir Print the absolute path to the bundled connector-reviewer principles
   gen-rule-docs  Regenerate rule docs from Python rule definitions
   gen-deprecations  Regenerate the deprecated-symbol manifest from SDK source
   gen-contract-ledger  Regenerate the entrypoint-contract ledger (contract_schema.lock.json)
