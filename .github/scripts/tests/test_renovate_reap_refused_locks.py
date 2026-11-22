@@ -397,7 +397,7 @@ class TestFindReapable:
                 return {"content": base64.b64encode(lock_text.encode()).decode()}
             raise AssertionError(f"unexpected url {url}")
 
-        fetch.calls = calls  # type: ignore[attr-defined]
+        fetch.calls = calls  # pyright: ignore[reportFunctionMemberAccess]
         return fetch
 
     def test_finds_a_self_healing_refusal(self):
@@ -466,7 +466,7 @@ class TestFindReapable:
                 return {"content": base64.b64encode(lock_text.encode()).decode()}
             raise AssertionError(f"unexpected url {url}")
 
-        fetch.calls = calls  # type: ignore[attr-defined]
+        fetch.calls = calls  # pyright: ignore[reportFunctionMemberAccess]
         return fetch
 
     def test_finds_a_self_healing_refusal_with_no_pr(self):

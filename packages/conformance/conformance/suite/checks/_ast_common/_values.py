@@ -15,8 +15,8 @@ def iter_strings(value: object) -> Iterator[str]:
     if isinstance(value, str):
         yield value
     elif isinstance(value, dict):
-        for v in value.values():  # pyright: ignore[reportUnknownVariableType]
-            yield from iter_strings(v)  # pyright: ignore[reportUnknownArgumentType]
+        for v in value.values():
+            yield from iter_strings(v)
     elif isinstance(value, list):
-        for v in value:  # pyright: ignore[reportUnknownVariableType]
-            yield from iter_strings(v)  # pyright: ignore[reportUnknownArgumentType]
+        for v in value:
+            yield from iter_strings(v)

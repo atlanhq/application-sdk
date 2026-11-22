@@ -273,7 +273,7 @@ RETIRED_CONNECTOR_REVIEW_FILES: tuple[str, ...] = (
 def _load_template(name: str) -> str:
     """Read a template file from the embedded templates directory."""
     pkg = _ir.files("conformance.bootstrap") / "templates"
-    return (pkg / name).read_text(encoding="utf-8")  # type: ignore[union-attr]
+    return (pkg / name).read_text(encoding="utf-8")
 
 
 # Templates that are byte-for-byte vendored copies of files living elsewhere

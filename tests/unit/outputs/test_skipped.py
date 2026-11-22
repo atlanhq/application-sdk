@@ -307,9 +307,12 @@ class TestPartialAppend:
         path.write_bytes(b'{"record_id":"a"}\n')
         with (
             self._open_partial(path, truncate_fails=True),
-            pytest.raises(skipped._RollbackFailedError),
+            pytest.raises(skipped._RollbackFailedError) as caught,
         ):
             skipped._append_lines(path, b'{"record_id":"b"}\n')
+        # The truncate's OSError may name no file; the typed error must.
+        assert caught.value.path == str(path)
+        assert str(path) in str(caught.value)
 
     async def test_partial_write_keeps_earlier_lines_valid(self, collector, sink):
         await skip_record({}, SkipReason.BLANK_IDENTITY, record_id="a", entity_type="T")

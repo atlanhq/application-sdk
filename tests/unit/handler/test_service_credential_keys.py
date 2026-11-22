@@ -30,7 +30,6 @@ from fastapi.testclient import TestClient
 import application_sdk.handler.contracts as contracts
 import application_sdk.handler.service as service
 from application_sdk.app.base import App
-from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.handler.asgi import build_asgi_app
 from application_sdk.handler.base import Handler
@@ -96,17 +95,6 @@ def kerberos_rebound() -> Iterator[None]:
         yield
     finally:
         service._CREDENTIAL_KEYS = original
-
-
-@pytest.fixture
-def clean_registry() -> Iterator[None]:
-    AppRegistry.reset()
-    TaskRegistry.reset()
-    try:
-        yield
-    finally:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
 
 def _worker(handler: Handler, **kwargs: Any) -> TestClient:
@@ -194,7 +182,7 @@ class TestRebindingReachesWorkerNormalization:
         assert "kerberos" in handler.seen["auth"]
 
     def test_start_strips_only_the_credentials_key(
-        self, kerberos_rebound: None, clean_registry: None
+        self, kerberos_rebound: None
     ) -> None:
         input_data = _start_input({**_FLAT_BODY, "name": "x"})
         # As on main: /start deletes ``credentials`` and nothing else, so a
@@ -218,7 +206,7 @@ class TestDefaultSetWithoutRebinding:
             assert "kerberos" not in handler.seen[route], route
             assert "host" in handler.seen[route], route
 
-    def test_start_keeps_kerberos_as_a_plain_field(self, clean_registry: None) -> None:
+    def test_start_keeps_kerberos_as_a_plain_field(self) -> None:
         input_data = _start_input({**_FLAT_BODY, "name": "x"})
         assert input_data.kerberos == _KERBEROS
         assert "host" not in input_data.model_dump()
@@ -263,7 +251,7 @@ class TestWrappedNormalizationReachesWorker:
         assert normalize_wrapped, "wrapper was not called"
 
     def test_every_route_and_start_call_the_wrapper(
-        self, normalize_wrapped: list[dict[str, Any]], clean_registry: None
+        self, normalize_wrapped: list[dict[str, Any]]
     ) -> None:
         _post_routes(_worker(_CapturingHandler()))
         assert len(normalize_wrapped) == 3  # auth, check, metadata

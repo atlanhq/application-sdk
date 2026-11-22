@@ -5,16 +5,18 @@ import sys
 import threading
 import time
 import traceback as tb_module
-import warnings
 from typing import Any, Callable, ClassVar
 
 from loguru import logger
 from opentelemetry import trace as otel_trace
 from opentelemetry._logs import LogRecord, SeverityNumber
+from opentelemetry.metrics import Counter
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.trace.span import TraceFlags
+from typing_extensions import deprecated
 
+from application_sdk import _deprecation, _env
 from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
@@ -43,7 +45,9 @@ from application_sdk.constants import (
 # observability package would otherwise import this module mid-boot and deadlock
 # on the module lock (_DeadlockError at startup when the log level is DEBUG).
 from application_sdk.errors.base import redact_secrets
-from application_sdk.observability.background_loop import BackgroundTask
+from application_sdk.observability.background_loop import (  # noqa: F401 — re-exported (named here before FND-4918)
+    BackgroundTask,
+)
 from application_sdk.observability.console_sink import (
     console_writer,
     flush_console_logs,
@@ -64,6 +68,7 @@ from application_sdk.observability.utils import (
     get_observability_dir,
     get_workflow_context,
     in_temporal_workflow,
+    self_failure_logger,
 )
 from application_sdk.version import __version__ as _SDK_VERSION
 
@@ -318,8 +323,110 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "dedup_key",
         "chunk_offset",
         "chunk_length",
+        # ── Credential resolution / preflight gate diagnostics ───────────
+        "input_type",
+        "inline_keys",
+        "missing_refs",
+        # ── Workflow execution diagnostics ───────────────────────────────
+        "eviction_attempts",
+        "max_eviction_retries",
+        "legacy_workflow_type",
+        "canonical_workflow_type",
+        "skipped_count",
     }
 )
+
+# Every literal kwarg an SDK log call passes must be in ``_KNOWN_EXTRA_KEYS`` or
+# carry a passthrough prefix; ``tests/unit/observability/test_log_extra_allowlist.py``
+# scans the package for that. Keys that still get dropped (an app's dynamic
+# ``**fields``, a third-party ``extra=``) are counted on this metric, labelled by
+# key, and logged once per key at DEBUG so the drop is visible instead of silent.
+_DROPPED_KEY_METRIC = "log.extra_key.dropped"
+_METER_NAME = "application_sdk.observability"
+# Bounds the metric's ``key`` label: a caller spreading data-derived keys must
+# not grow one series per key. Keys past the cap share the overflow label.
+_DROPPED_KEY_LABEL_CAP = 64
+_DROPPED_KEY_OVERFLOW_LABEL = "_other"
+# Bounds the once-only bookkeeping: a worker that sees an unbounded stream of
+# distinct keys must not retain every one. Past the cap, new keys are still
+# counted (under the overflow label) but no longer reported at DEBUG.
+_DROPPED_KEY_TRACK_CAP = 1024
+_dropped_keys_lock = threading.Lock()
+_dropped_keys_seen: set[str] = set()
+# Keys dropped for the first time and not yet reported. The DEBUG line cannot be
+# emitted where the drop happens — that is inside the loguru sink, and logging
+# there re-enters loguru's handler lock — so the adapter drains this after its
+# own loguru call returns.
+_dropped_keys_unreported: list[str] = []
+# Keys that own a label value on the metric; at most ``_DROPPED_KEY_LABEL_CAP``.
+_dropped_keys_labelled: set[str] = set()
+_dropped_key_counter: Counter | None = None
+
+
+def _dropped_key_metric() -> Counter:
+    """The dropped-key counter, created on the first drop.
+
+    Created lazily so nothing binds to a meter before ``run_main()`` configures
+    the ``MeterProvider``.
+    """
+    global _dropped_key_counter
+    if _dropped_key_counter is None:
+        from opentelemetry import (  # noqa: PLC0415 — cold path: only reached once a key is dropped
+            metrics as _otel_metrics,
+        )
+
+        _dropped_key_counter = _otel_metrics.get_meter(_METER_NAME).create_counter(
+            _DROPPED_KEY_METRIC,
+            unit="1",
+            description=(
+                "Structured log fields dropped because their key is neither in "
+                "the export allowlist nor under a passthrough prefix, so they "
+                "never reached OTLP or the object-store log sink. Labelled by "
+                "the dropped key."
+            ),
+        )
+    return _dropped_key_counter
+
+
+def _record_dropped_key(key: str) -> None:
+    """Count one dropped field and queue its key for a once-only DEBUG report."""
+    with _dropped_keys_lock:
+        if (
+            key not in _dropped_keys_seen
+            and len(_dropped_keys_seen) < _DROPPED_KEY_TRACK_CAP
+        ):
+            _dropped_keys_seen.add(key)
+            _dropped_keys_unreported.append(key)
+            if len(_dropped_keys_labelled) < _DROPPED_KEY_LABEL_CAP:
+                _dropped_keys_labelled.add(key)
+        label = key if key in _dropped_keys_labelled else _DROPPED_KEY_OVERFLOW_LABEL
+    try:
+        _dropped_key_metric().add(1, {"key": label})
+    except Exception:  # noqa: S110, BLE001 — runs inside the log sink; a broken meter must never drop the record, and logging here would recurse
+        pass
+
+
+def _reset_dropped_keys_for_testing() -> None:
+    """Forget every dropped key, labelled key and pending report. Test-only.
+
+    A pending report is emitted by the next adapter call in the process, which
+    in a test suite is another test's — possibly one counting calls on a
+    mocked logger.
+    """
+    with _dropped_keys_lock:
+        _dropped_keys_seen.clear()
+        _dropped_keys_labelled.clear()
+        _dropped_keys_unreported.clear()
+
+
+def _take_unreported_dropped_keys() -> list[str]:
+    """Return the keys dropped since the last call, each only ever returned once."""
+    if not _dropped_keys_unreported:
+        return []
+    with _dropped_keys_lock:
+        keys = list(_dropped_keys_unreported)
+        _dropped_keys_unreported.clear()
+    return keys
 
 
 _PREFIXES_PASSTHROUGH = (
@@ -410,7 +517,7 @@ def _context_app_name() -> str:
     try:
         ctx = get_execution_context()
         return ctx.app_name if ctx and ctx.app_name else ""
-    except Exception:
+    except Exception:  # noqa: BLE001 — runs inside log-record formatting, where logging the failure would recurse; the record just carries no app name
         return ""
 
 
@@ -424,8 +531,13 @@ def _build_extra_dict(
             continue
         if k in _KNOWN_EXTRA_KEYS:
             extra[k] = _normalize_log_extra_value(k, v)
-        elif k.startswith(_PREFIXES_PASSTHROUGH) and v is not None:
-            extra[k] = v if isinstance(v, (bool, int, float, str, bytes)) else str(v)
+        elif k.startswith(_PREFIXES_PASSTHROUGH):
+            if v is not None:
+                extra[k] = (
+                    v if isinstance(v, (bool, int, float, str, bytes)) else str(v)
+                )
+        else:
+            _record_dropped_key(k)
     for key, value in _extract_exception_attributes(exception).items():
         extra[key] = value
     return extra
@@ -555,6 +667,22 @@ def _normalize_log_extra_value(key: str, value: Any) -> Any:
     if key == "attempt" and value is not None:
         return str(value)
     return value
+
+
+def _flatten_stdlib_extra(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Spread a stdlib-style ``extra={...}`` dict into the fields to bind.
+
+    The SDK installs :class:`AtlanLoggerAdapter` as Temporal's ``workflow.logger``,
+    so code written for a stdlib logger passes its fields as ``extra={...}``.
+    Bound as-is, that is one field named ``extra``, which the export allowlist
+    drops along with everything inside it. Explicit keyword fields win over a
+    same-named ``extra`` entry. A non-dict ``extra`` is left for the allowlist.
+    """
+    extra = kwargs.get("extra")
+    if not isinstance(extra, dict):
+        return kwargs
+    rest = {k: v for k, v in kwargs.items() if k != "extra"}
+    return {**extra, **rest}
 
 
 def _format_printf_args(msg: str, args: tuple[Any, ...]) -> tuple[str, tuple[Any, ...]]:
@@ -798,8 +926,7 @@ class _CloudflareTimeoutFilter(logging.Filter):
                     )
                 return False
             return True
-        # conformance: ignore[E004] filter infra; any failure safely defaults to emitting the record
-        except Exception:
+        except Exception:  # noqa: BLE001 — filter infra; any failure safely defaults to emitting the record
             return True  # conformance: ignore[E007] logging adapter; log call would recurse; returning default is correct fallback
 
 
@@ -852,6 +979,22 @@ SEVERITY_MAPPING = {
 }
 
 
+def _stdlib_level_method(level: int) -> str:
+    """Name of the level method that serves stdlib integer *level*.
+
+    ``log(level, ...)`` on both the adapter and its lazy proxy routes through
+    this, so the two cannot bucket a level differently. ``CRITICAL`` maps to
+    ``error`` as it always has.
+    """
+    if level >= logging.ERROR:
+        return "error"
+    if level >= logging.WARNING:
+        return "warning"
+    if level >= logging.INFO:
+        return "info"
+    return "debug"
+
+
 class _LazyLoggerProxy:
     """Returned by AtlanLoggerAdapter.opt(); context is pre-bound, loguru handles lazy eval."""
 
@@ -860,47 +1003,32 @@ class _LazyLoggerProxy:
     def __init__(self, bound_opt_logger: Any) -> None:
         self._logger = bound_opt_logger
 
-    def debug(self, msg: str, **kwargs: Any) -> None:
+    def _emit(self, level_name: str, msg: str, kwargs: dict[str, Any]) -> None:
         try:
-            self._logger.debug(msg, **kwargs)
+            self._logger.log(level_name, msg, **kwargs)
         except Exception:
-            logging.error("Error in lazy debug logging", exc_info=True)
+            self_failure_logger.warning(
+                "Error in lazy %s logging", level_name.lower(), exc_info=True
+            )
+
+    def debug(self, msg: str, **kwargs: Any) -> None:
+        self._emit("DEBUG", msg, kwargs)
 
     def info(self, msg: str, **kwargs: Any) -> None:
-        try:
-            self._logger.info(msg, **kwargs)
-        except Exception:
-            logging.error("Error in lazy info logging", exc_info=True)
+        self._emit("INFO", msg, kwargs)
 
     def warning(self, msg: str, **kwargs: Any) -> None:
-        try:
-            self._logger.warning(msg, **kwargs)
-        except Exception:
-            logging.error("Error in lazy warning logging", exc_info=True)
+        self._emit("WARNING", msg, kwargs)
 
     def error(self, msg: str, **kwargs: Any) -> None:
-        try:
-            self._logger.error(msg, **kwargs)
-        except Exception:
-            logging.error("Error in lazy error logging", exc_info=True)
+        self._emit("ERROR", msg, kwargs)
 
     def critical(self, msg: str, **kwargs: Any) -> None:
-        try:
-            # conformance: ignore[L007] this *is* the proxy's own .critical() definition (loguru's bound-opt logger natively supports it), not a deprecated call site — downgrading to .error() would change emitted severity
-            self._logger.critical(msg, **kwargs)
-        except Exception:
-            logging.error("Error in lazy critical logging", exc_info=True)
+        self._emit("CRITICAL", msg, kwargs)
 
     def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
         """Dispatch to the named level method matching stdlib integer *level*."""
-        if level >= logging.ERROR:
-            self.error(msg, *args, **kwargs)
-        elif level >= logging.WARNING:
-            self.warning(msg, *args, **kwargs)
-        elif level >= logging.INFO:
-            self.info(msg, *args, **kwargs)
-        else:
-            self.debug(msg, *args, **kwargs)
+        getattr(self, _stdlib_level_method(level))(msg, *args, **kwargs)
 
 
 class AtlanLoggerAdapter(AtlanObservability[Any]):
@@ -914,8 +1042,6 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
     - Temporal workflow and activity context integration
     """
 
-    _flush_task_started: ClassVar[bool] = False
-    _flush_task: ClassVar[BackgroundTask | None] = None
     _initialized: ClassVar[bool] = False
     # The adapter whose bound ``_log_sink`` loguru calls. The sink is
     # registered once, so this adapter's buffer is the only one records land
@@ -928,14 +1054,16 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         Public test hook: any new ClassVar or module-level cache associated
         with logger initialization MUST be reset here so test isolation
-        stays correct. Currently resets ``_initialized``, ``_flush_task_started``,
-        ``_sink_owner``, and clears the module-level ``_logger_instances`` cache.
+        stays correct. Currently stops the periodic flush (discarding its
+        sink's unflushed records), resets ``_initialized`` and
+        ``_sink_owner``, and clears the module-level ``_logger_instances``
+        cache.
 
         This method should only be used in tests to allow fresh sink setup
         for each test case.
         """
+        cls._stop_class_flushes_for_testing()
         cls._initialized = False
-        cls._flush_task_started = False
         cls._sink_owner = None
         _logger_instances.clear()
         _otlp_shutdown_done.clear()
@@ -1138,7 +1266,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 atexit.register(shutdown_otlp_logs)
 
         except Exception:
-            logging.error("Failed to setup OTLP logging", exc_info=True)
+            self_failure_logger.warning("Failed to setup OTLP logging", exc_info=True)
 
         # Register a single unified loguru sink that builds the log-record dict once
         # and fans it out to all active targets.  When both the object-store sink and
@@ -1149,15 +1277,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             self.logger.add(self._log_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
             AtlanLoggerAdapter._sink_owner = self
             # Start the periodic flush task only when the object-store sink is active.
-            if (
-                ENABLE_OBSERVABILITY_STORE_SINK
-                and not AtlanLoggerAdapter._flush_task_started
-            ):
-                try:
-                    AtlanLoggerAdapter._flush_task = self._start_periodic_flush()
-                    AtlanLoggerAdapter._flush_task_started = True
-                except Exception:
-                    logging.error("Failed to start flush task", exc_info=True)
+            if ENABLE_OBSERVABILITY_STORE_SINK:
+                self._ensure_periodic_flush()
 
         # Mark initialization complete only after all sinks are successfully added
         AtlanLoggerAdapter._initialized = True
@@ -1239,8 +1360,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 otel_trace_id = span_context.trace_id
                 otel_span_id = span_context.span_id
                 otel_trace_flags = TraceFlags(span_context.trace_flags)
-        # conformance: ignore[E004] best-effort trace enrichment; a broken span context must never block log emission
-        except Exception:  # noqa: S110 — degrade to untraced record, never drop the log
+        except Exception:  # noqa: S110, BLE001 — degrade to untraced record, never drop the log; best-effort trace enrichment; a broken span context must never block log emission
             pass
 
         return LogRecord(
@@ -1311,153 +1431,101 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             # conformance: ignore[E007] fail-open level guard on the hot per-log path; logging the benign loguru-internals TypeError here would recurse, so it defaults to enabled
             return True
 
-    def debug(self, msg: str, *args: Any, **kwargs: Any):
-        """Log a debug level message.
+    def _emit(
+        self,
+        level_name: str,
+        msg: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        *,
+        log_type: str | None = None,
+        flush: bool = False,
+    ) -> None:
+        """Emit one record at *level_name*; every public level method lands here.
+
+        Never raises: a failure anywhere in formatting, enrichment or the
+        loguru call is logged through stdlib ``logging`` and swallowed, so a
+        bad format string cannot take down the caller.
 
         Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
+            level_name: A loguru level name, also a key of ``SEVERITY_MAPPING``.
+            msg: The message, %-style when *args* is non-empty.
+            args: Positional %-format arguments.
+            kwargs: Context fields to bind. ``exc_info`` is popped and attaches
+                the exception (``True`` for the current one, or an exception
+                or ``sys.exc_info()`` tuple).
+            log_type: Stamped as the ``log_type`` field when given.
+            flush: Force a buffer flush after the record is emitted.
         """
         if self._suppress_replay_log():
             return
-        if not self._is_enabled(SEVERITY_MAPPING["DEBUG"]):
+        if not self._is_enabled(SEVERITY_MAPPING[level_name]):
             return
         try:
             msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
+            kwargs = _flatten_stdlib_extra(kwargs)
+            if log_type is not None:
+                kwargs["log_type"] = log_type
             msg, kwargs = self.process(msg, kwargs)
-            bound_logger = self.logger.bind(**kwargs)
-            if exc_info:
-                bound_logger.opt(exception=exc_info).debug(msg, *args)
-            else:
-                bound_logger.debug(msg, *args)
+            # depth=1 attributes the record (loguru's function/line, exported
+            # as OTel code.function/code.lineno) to the public level method
+            # that called here, as it was before the methods shared a body.
+            self.logger.bind(**kwargs).opt(depth=1, exception=exc_info or None).log(
+                level_name, msg, *args
+            )
+            if flush:
+                self._sync_flush()
         except Exception:
-            logging.error("Error in debug logging", exc_info=True)
+            self_failure_logger.warning(
+                "Error in %s logging", level_name.lower(), exc_info=True
+            )
             self._sync_flush()
+        self._report_dropped_keys()
 
-    def info(self, msg: str, *args: Any, **kwargs: Any):
-        """Log an info level message.
+    def _report_dropped_keys(self) -> None:
+        """Log each structured-log key the export allowlist dropped, once per key.
 
-        Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
+        Runs after the loguru call, outside the sink where the drop was seen.
         """
-        if self._suppress_replay_log():
-            return
-        if not self._is_enabled(SEVERITY_MAPPING["INFO"]):
-            return
-        try:
-            msg, args = _format_printf_args(msg, args)
-            exc_info = kwargs.pop("exc_info", False)
-            msg, kwargs = self.process(msg, kwargs)
-            bound_logger = self.logger.bind(**kwargs)
-            if exc_info:
-                bound_logger.opt(exception=exc_info).info(msg, *args)
-            else:
-                bound_logger.info(msg, *args)
-        except Exception:
-            logging.error("Error in info logging", exc_info=True)
-            self._sync_flush()
+        for key in _take_unreported_dropped_keys():
+            self.debug(
+                "Log field %r is not in the export allowlist and was dropped "
+                "from OTLP and the object-store log sink; add it to "
+                "_KNOWN_EXTRA_KEYS in application_sdk/observability/"
+                "logger_adaptor.py or give it a passthrough prefix",
+                key,
+            )
 
-    def warning(self, msg: str, *args: Any, **kwargs: Any):
-        """Log a warning level message.
+    def debug(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log a debug level message; *kwargs* are bound as context fields."""
+        self._emit("DEBUG", msg, args, kwargs)
 
-        Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
-        """
-        if self._suppress_replay_log():
-            return
-        if not self._is_enabled(SEVERITY_MAPPING["WARNING"]):
-            return
-        try:
-            msg, args = _format_printf_args(msg, args)
-            exc_info = kwargs.pop("exc_info", False)
-            msg, kwargs = self.process(msg, kwargs)
-            bound_logger = self.logger.bind(**kwargs)
-            if exc_info:
-                bound_logger.opt(exception=exc_info).warning(msg, *args)
-            else:
-                bound_logger.warning(msg, *args)
-        except Exception:
-            logging.error("Error in warning logging", exc_info=True)
-            self._sync_flush()
+    def info(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log an info level message; *kwargs* are bound as context fields."""
+        self._emit("INFO", msg, args, kwargs)
 
-    def error(self, msg: str, *args: Any, **kwargs: Any):
-        """Log an error level message.
+    def warning(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log a warning level message; *kwargs* are bound as context fields."""
+        self._emit("WARNING", msg, args, kwargs)
 
-        Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
+    def error(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log an error level message and force a flush."""
+        self._emit("ERROR", msg, args, kwargs, flush=True)
 
-        Note: Forces an immediate flush of logs when called.
-        """
-        if self._suppress_replay_log():
-            return
-        if not self._is_enabled(SEVERITY_MAPPING["ERROR"]):
-            return
-        try:
-            msg, args = _format_printf_args(msg, args)
-            exc_info = kwargs.pop("exc_info", False)
-            msg, kwargs = self.process(msg, kwargs)
-            bound_logger = self.logger.bind(**kwargs)
-            if exc_info:
-                bound_logger.opt(exception=exc_info).error(msg, *args)
-            else:
-                bound_logger.error(msg, *args)
-            # Force flush on error logs
-            self._sync_flush()
-        except Exception:
-            logging.error("Error in error logging", exc_info=True)
-            self._sync_flush()
-
-    def exception(self, msg: str, *args: Any, **kwargs: Any):
+    def exception(self, msg: str, *args: Any, **kwargs: Any) -> None:
         """Log an error level message with the current exception traceback.
 
         Equivalent to error() with exc_info=True. Matches the interface of
         logging.Logger.exception() so that callers such as the Temporal SDK
         (activity.logger.exception(...)) work correctly.
-
-        Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
         """
         kwargs.setdefault("exc_info", True)
         self.error(msg, *args, **kwargs)
 
-    def critical(self, msg: str, *args: Any, **kwargs: Any):
-        """Log a critical level message.
-
-        Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
-
-        Note: Forces an immediate flush of logs when called.
-        """
-        if self._suppress_replay_log():
-            return
-        if not self._is_enabled(SEVERITY_MAPPING["CRITICAL"]):
-            return
-        try:
-            msg, args = _format_printf_args(msg, args)
-            exc_info = kwargs.pop("exc_info", False)
-            msg, kwargs = self.process(msg, kwargs)
-            bound_logger = self.logger.bind(**kwargs)
-            if exc_info:
-                bound_logger.opt(exception=exc_info).critical(msg, *args)
-            else:
-                bound_logger.critical(msg, *args)
-            # Force flush on critical logs
-            self._sync_flush()
-        except Exception:
-            logging.error("Error in critical logging", exc_info=True)
-            self._sync_flush()
+    def critical(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log a critical level message and force a flush."""
+        self._emit("CRITICAL", msg, args, kwargs, flush=True)
 
     def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
         """Dispatch to the named level method matching stdlib integer *level*.
@@ -1467,14 +1535,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         can vary the level at runtime without building a dispatch table
         themselves.
         """
-        if level >= logging.ERROR:
-            self.error(msg, *args, **kwargs)
-        elif level >= logging.WARNING:
-            self.warning(msg, *args, **kwargs)
-        elif level >= logging.INFO:
-            self.info(msg, *args, **kwargs)
-        else:
-            self.debug(msg, *args, **kwargs)
+        getattr(self, _stdlib_level_method(level))(msg, *args, **kwargs)
 
     def opt(
         self, *, lazy: bool = False, **loguru_opt_kwargs: Any
@@ -1490,56 +1551,30 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         format (not %-style) when passing lazy kwargs.
         """
         _, ctx_kwargs = self.process("", {})
-        bound = self.logger.bind(**ctx_kwargs).opt(lazy=lazy, **loguru_opt_kwargs)
+        # +1 for the proxy's shared ``_emit`` frame, so records stay attributed
+        # to the proxy's level method (or to wherever a caller's depth points).
+        depth = loguru_opt_kwargs.pop("depth", 0) + 1
+        bound = self.logger.bind(**ctx_kwargs).opt(
+            lazy=lazy, depth=depth, **loguru_opt_kwargs
+        )
         return _LazyLoggerProxy(bound)
 
-    def activity(self, msg: str, *args: Any, **kwargs: Any):
-        """Log an activity-specific message with activity context.
+    @deprecated(
+        "AtlanLoggerAdapter.activity is deprecated; use AtlanLoggerAdapter.info "
+        "and pass log_type='activity' if a reader needs the tag — it has no "
+        "caller in the SDK. Will be removed in v4.0.0."
+    )
+    def activity(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log at the custom ACTIVITY level (INFO severity), tagged ``log_type=activity``.
 
-        Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
-
-        This method adds activity-specific context to the log message.
+        .. deprecated:: 3.59
+            Use :meth:`info`. Will be removed in v4.0.0.
         """
-        if self._suppress_replay_log():
-            return
-        if not self._is_enabled(SEVERITY_MAPPING["ACTIVITY"]):
-            return
-        try:
-            msg, args = _format_printf_args(msg, args)
-            local_kwargs = kwargs.copy()
-            local_kwargs["log_type"] = "activity"
-            processed_msg, processed_kwargs = self.process(msg, local_kwargs)
-            self.logger.bind(**processed_kwargs).log("ACTIVITY", processed_msg, *args)
-        except Exception:
-            logging.error("Error in activity logging", exc_info=True)
-            self._sync_flush()
+        self._emit("ACTIVITY", msg, args, kwargs, log_type="activity")
 
-    def metric(self, msg: str, *args: Any, **kwargs: Any):
-        """Log a metric-specific message with metric context.
-
-        Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
-
-        This method adds metric-specific context to the log message.
-        """
-        if self._suppress_replay_log():
-            return
-        if not self._is_enabled(SEVERITY_MAPPING["METRIC"]):
-            return
-        try:
-            msg, args = _format_printf_args(msg, args)
-            local_kwargs = kwargs.copy()
-            local_kwargs["log_type"] = "metric"
-            processed_msg, processed_kwargs = self.process(msg, local_kwargs)
-            self.logger.bind(**processed_kwargs).log("METRIC", processed_msg, *args)
-        except Exception:
-            logging.error("Error in metric logging", exc_info=True)
-            self._sync_flush()
+    def metric(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log at the custom METRIC level (DEBUG severity), tagged ``log_type=metric``."""
+        self._emit("METRIC", msg, args, kwargs, log_type="metric")
 
     def _send_to_otel(self, record: dict[str, Any]):
         """Send log record to OpenTelemetry.
@@ -1559,7 +1594,9 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             otel_logger = self.logger_provider.get_logger(SERVICE_NAME)
             otel_logger.emit(otel_record)
         except Exception:
-            logging.error("Error sending log to OpenTelemetry", exc_info=True)
+            self_failure_logger.warning(
+                "Error sending log to OpenTelemetry", exc_info=True
+            )
 
     def _sync_flush(self):
         """Flush the log buffer, dispatching appropriately for the current context.
@@ -1592,12 +1629,12 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             try:
                 loop = asyncio.get_running_loop()
                 # We're in an async context — schedule non-blocking flush
-                loop.create_task(owner._flush_buffer(force=True))
+                loop.create_task(owner._flush_buffer())
             except RuntimeError:
                 # No running loop in this thread. Safe to create one.
                 loop = asyncio.new_event_loop()
                 try:
-                    loop.run_until_complete(owner._flush_buffer(force=True))
+                    loop.run_until_complete(owner._flush_buffer())
                 finally:
                     loop.close()
                 # Also safe to block here, briefly, so the error line reaches
@@ -1606,27 +1643,11 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 # waiting would stall the loop, which is what FND-4075 removed.
                 flush_console_logs(_CONSOLE_FLUSH_TIMEOUT_SECONDS)
         except Exception:
-            logging.error("Error during sync flush", exc_info=True)
+            self_failure_logger.warning("Error during sync flush", exc_info=True)
 
-    def tracing(self, msg: str, *args: Any, **kwargs: Any):
-        """Log a trace-specific message with trace context.
-
-        Args:
-            msg (str): Message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments for context
-
-        This method adds trace-specific context to the log message.
-        """
-        if self._suppress_replay_log():
-            return
-        if not self._is_enabled(SEVERITY_MAPPING["TRACING"]):
-            return
-        msg, args = _format_printf_args(msg, args)
-        local_kwargs = kwargs.copy()
-        local_kwargs["log_type"] = "trace"
-        processed_msg, processed_kwargs = self.process(msg, local_kwargs)
-        self.logger.bind(**processed_kwargs).log("TRACING", processed_msg, *args)
+    def tracing(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log at the custom TRACING level (DEBUG severity), tagged ``log_type=trace``."""
+        self._emit("TRACING", msg, args, kwargs, log_type="trace")
 
     def _log_sink(self, message: Any) -> None:
         """Unified loguru sink: build the log-record dict once and fan out to active targets.
@@ -1658,67 +1679,46 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             ):
                 self._send_to_otel(log_record)
         except Exception:
-            logging.error("Error in log sink", exc_info=True)
+            self_failure_logger.warning("Error in log sink", exc_info=True)
 
+    @deprecated(
+        "AtlanLoggerAdapter.objectstore_sink is deprecated; use "
+        "AtlanLoggerAdapter.add_record — the SDK registers no sink by this "
+        "name, so a record routed here skips the path production uses. Will "
+        "be removed in v4.0.0."
+    )
     async def objectstore_sink(self, message: Any) -> None:
-        """Buffer a log message for object-store upload.
+        """Buffer a loguru message for object-store upload.
 
-        Builds a log-record dict from *message* and appends it to the in-memory
-        buffer for periodic flush to gzip-compressed NDJSON files in the object
-        store.
-
-        .. note::
-            This method is not registered as a loguru sink directly — the unified
-            :meth:`_log_sink` handles dispatch.  It is kept as a public method so
-            tests can call it in isolation without triggering OTLP side-effects.
-
-        Args:
-            message: Loguru message object (must have a ``.record`` dict attribute).
+        .. deprecated:: 3.59
+            No sink by this name is registered; the SDK's one sink is the
+            private ``_log_sink``. Use :meth:`add_record`. Will be removed in
+            v4.0.0.
         """
         try:
             log_record = _make_log_record_dict(message)
             self.add_record(log_record)
         except Exception:
-            logging.error("Error buffering log", exc_info=True)
+            self_failure_logger.warning("Error buffering log", exc_info=True)
 
+    @deprecated(
+        "AtlanLoggerAdapter.otlp_sink is deprecated; use "
+        "AtlanLoggerAdapter.add_record for the object store, and leave OTLP "
+        "export to the SDK — no sink by this name is registered. Will be "
+        "removed in v4.0.0."
+    )
     def otlp_sink(self, message: Any) -> None:
-        """Emit a log message to the configured OTLP exporter.
+        """Emit a loguru message to the configured OTLP exporter.
 
-        Builds a log-record dict from *message* and forwards it to the
-        OpenTelemetry logger provider.
-
-        .. note::
-            This method is not registered as a loguru sink directly — the unified
-            :meth:`_log_sink` handles dispatch.  It is kept as a public method so
-            tests can exercise the OTLP path in isolation.
-
-        Args:
-            message: Loguru message object (must have a ``.record`` dict attribute).
+        .. deprecated:: 3.59
+            No sink by this name is registered; the SDK's one sink is the
+            private ``_log_sink``. Will be removed in v4.0.0.
         """
         try:
             log_record = _make_log_record_dict(message)
             self._send_to_otel(log_record)
         except Exception:
-            logging.error("Error processing log record", exc_info=True)
-
-    def __del__(self):
-        """Cancel the periodic flush task when the logger is destroyed.
-
-        Guarded against interpreter teardown: during shutdown Python rebinds
-        module globals — including the ``AtlanLoggerAdapter`` class name this
-        references — to ``None``, so the attribute access raises
-        ``AttributeError`` ("'NoneType' object has no attribute '_flush_task'").
-        The event loop may likewise already be closed, making ``cancel()``
-        raise. Both are benign during GC/shutdown (there is nothing left to
-        flush) and cannot be logged (the logging stack may be gone), so they
-        are swallowed.
-        """
-        try:
-            task = AtlanLoggerAdapter._flush_task
-            if task is not None and not task.done():
-                task.cancel()
-        except Exception:  # noqa: S110, BLE001 — teardown-only; see docstring
-            pass
+            self_failure_logger.warning("Error processing log record", exc_info=True)
 
 
 # Create a singleton instance of the logger
@@ -1766,8 +1766,7 @@ def flush_otlp_logs(timeout_millis: int = 5000) -> None:
         for provider in providers:
             try:
                 provider.force_flush(timeout_millis=timeout_millis)
-            # conformance: ignore[E004] best-effort shutdown drain; a failed flush must never break shutdown
-            except Exception:  # noqa: S110 — teardown-only; losing the tail beats crashing shutdown
+            except Exception:  # noqa: S110, BLE001 — teardown-only; losing the tail beats crashing shutdown; best-effort shutdown drain; a failed flush must never break shutdown
                 pass
 
     def _current_or_new() -> tuple[threading.Thread, bool]:
@@ -1813,8 +1812,7 @@ def shutdown_otlp_logs() -> None:
             continue
         try:
             provider.shutdown()
-        # conformance: ignore[E004] best-effort shutdown drain; a failed flush must never break shutdown
-        except Exception:  # noqa: S110 — teardown-only; losing the tail beats crashing shutdown
+        except Exception:  # noqa: S110, BLE001 — teardown-only; losing the tail beats crashing shutdown; best-effort shutdown drain; a failed flush must never break shutdown
             pass
 
 
@@ -1840,6 +1838,12 @@ def get_logger(name: str | None = None) -> AtlanLoggerAdapter:
 # Initialize the default logger
 default_logger = get_logger()  # Use a different name instead of redefining 'logger'
 
+# A malformed env value is reported through ``warnings`` (see ``_env``), which
+# never reaches OTel and is shown once per process; log each one as well,
+# starting with those rejected while ``constants`` was importing.
+_settings_logger = get_logger("application_sdk.settings")
+_env.set_log_sink(lambda message: _settings_logger.warning("%s", message))
+
 
 #: Retention-sweep constants this module used to re-export from
 #: ``application_sdk.constants``; served once more by ``__getattr__`` (PEP 562).
@@ -1855,20 +1859,14 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the removed constants once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
+def _former_default(name: str) -> object:
     from application_sdk.constants import (  # noqa: PLC0415 — only reached on a deprecated access
         _DEPRECATED_CONSTANT_VALUES,
     )
 
     return _DEPRECATED_CONSTANT_VALUES[name]
+
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0", resolve=_former_default
+)

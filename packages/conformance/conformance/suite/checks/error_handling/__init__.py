@@ -1,7 +1,7 @@
 """E-series error-handling checks — AST-based.
 
 Scans Python source files for error-handling anti-patterns defined in the
-E001–E021 rule catalog.  Every check is purely deterministic: the same
+E001–E022 rule catalog.  Every check is purely deterministic: the same
 source text always produces the same set of findings.
 
 Inline suppression
@@ -25,6 +25,7 @@ Rule implementations are split by category:
 * ``exception_chaining`` — E015, E016, E019 (chaining and message hygiene)
 * ``security``           — E017 (secrets in error evidence fields)
 * ``dependency_audience`` — E021 (DEPENDENCY_UNAVAILABLE overridden to USER)
+* ``legacy_error_code``   — E022 (DEFAULT_ERROR_CODE in the SDK's legacy AAF-* vocabulary)
 
 ``_checker.py`` assembles these into a single ``Checker`` visitor.
 ``__init__.py`` (this file) exposes the public scan + CLI API.
@@ -32,7 +33,6 @@ Rule implementations are split by category:
 
 from __future__ import annotations
 
-import ast
 import io
 import re
 import sys
@@ -46,7 +46,9 @@ from conformance.suite.checks._ast_common import (
     discover,
     make_cli_main,
     parse_ignore_directive,
+    parse_module,
     read_source,
+    source_cache,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -70,6 +72,7 @@ from ._dependency_category import dependency_unavailable_classes
 from ._helpers import is_broad_suppress, is_builtin_raise, module_helpers
 from ._sdk_errors import sdk_error_names
 from .exception_chaining import exception_helpers
+from .legacy_error_code import legacy_coded_bases
 
 __all__ = [
     "ACTIVITY_DECORATORS",
@@ -148,7 +151,7 @@ def scan_text(
 ) -> list[Finding]:
     """Scan Python source *text* and return all E-series findings.
 
-    *path* and *root* let E004 and E021 follow the scanned repo's own imports
+    *path* and *root* let E004, E021 and E022 follow the scanned repo's own imports
     when they resolve an error class's SDK ancestry (see :mod:`._sdk_errors`
     and :mod:`._dependency_category`), and let E007 see a deprecation marker
     on an enclosing package (see :mod:`.._deprecated_module`).
@@ -159,7 +162,7 @@ def scan_text(
     the whole repo; without it, the scope is computed from this file alone.
     """
     try:
-        tree = ast.parse(text, filename=file)
+        tree = parse_module(text, filename=file)
     except SyntaxError:
         return []
     if preflight_lines is None:
@@ -184,6 +187,7 @@ def scan_text(
         sdk_errors=sdk_errors,
         raised_error_helpers=raised_error_helpers,
         dependency_classes=dependency_unavailable_classes(tree, path=path, root=root),
+        legacy_coded_bases=legacy_coded_bases(tree, path=path, root=root),
         deprecated_module=module_is_deprecated(tree, path=path, root=root),
         e012_in_scope=not _is_build_tooling(file),
         script_file=is_script_file(text, tree),
@@ -211,21 +215,23 @@ def _scan_all(paths: list[Path], root: Path) -> list[Finding]:
     # follows helpers across files, so it is computed once over every path.
     from ..preflight._common import build_registry, preflight_scope_lines  # noqa: PLC0415 — circular: the preflight package imports error_handling
 
-    scope = preflight_scope_lines(build_registry(paths, root))
-
     def _rel(path: Path) -> str:
         try:
             return str(path.relative_to(root))
         except ValueError:
             return str(path)
 
-    return [
-        finding
-        for path in paths
-        for finding in scan_path(
-            path, root, preflight_lines=scope.get(_rel(path), frozenset())
-        )
-    ]
+    # The cache lets E004/E021's import resolution reuse each imported
+    # module's tree across every scanned file instead of re-parsing it.
+    with source_cache():
+        scope = preflight_scope_lines(build_registry(paths, root))
+        return [
+            finding
+            for path in paths
+            for finding in scan_path(
+                path, root, preflight_lines=scope.get(_rel(path), frozenset())
+            )
+        ]
 
 
 #: Whole-repo entry point for the suite runner: same findings as scanning each

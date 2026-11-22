@@ -1,5 +1,9 @@
+# conformance: ignore[L002] self_failure_logger must be stdlib: a failing OTel sink logging through get_logger would recurse into itself
 import logging
 import os
+import threading
+import time
+from collections.abc import Callable
 
 from opentelemetry.sdk.resources import Resource
 
@@ -22,6 +26,66 @@ from application_sdk.constants import (
     TEMPORARY_PATH,
 )
 from application_sdk.observability.context import correlation_context
+
+#: Minimum seconds between two records of the same observability self-failure.
+SELF_FAILURE_LOG_INTERVAL_SECONDS = 60.0
+
+
+class _SelfFailureRateLimit(logging.Filter):
+    """Pass one record per message template per interval and count the rest.
+
+    A broken exporter or sink fails on every record it handles, so an
+    unthrottled self-failure log repeats at the application's own log rate.
+    The next record that passes says how many were dropped in between.
+    """
+
+    def __init__(
+        self,
+        interval_seconds: float,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        super().__init__()
+        self._interval_seconds = interval_seconds
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._last_passed: dict[str, float] = {}
+        self._suppressed: dict[str, int] = {}
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        key = str(record.msg)
+        now = self._clock()
+        with self._lock:
+            last = self._last_passed.get(key)
+            if last is not None and now - last < self._interval_seconds:
+                self._suppressed[key] = self._suppressed.get(key, 0) + 1
+                return False
+            self._last_passed[key] = now
+            suppressed = self._suppressed.pop(key, 0)
+        if suppressed:
+            record.msg = f"{key} (%d similar failures suppressed since the last report)"
+            record.args = (*(record.args or ()), suppressed)
+        return True
+
+    def reset(self) -> None:
+        """Forget every message. Test-only: production never resets."""
+        with self._lock:
+            self._last_passed.clear()
+            self._suppressed.clear()
+
+
+_self_failure_rate_limit = _SelfFailureRateLimit(SELF_FAILURE_LOG_INTERVAL_SECONDS)
+
+#: Logger for handled failures of the observability pipeline itself — an
+#: exporter, sink or buffer that failed while the application carried on.
+#: Log at WARNING with ``exc_info=True`` from inside the ``except`` block: the
+#: failure was handled, and ERROR is for operations that failed. It is a
+#: stdlib logger, never the SDK logger, so a broken sink cannot recurse into
+#: itself; records propagate to the root handlers exactly as ``logging.*``
+#: calls do. At most one record per message per
+#: :data:`SELF_FAILURE_LOG_INTERVAL_SECONDS`.
+self_failure_logger = logging.getLogger("application_sdk.observability.self_failure")
+self_failure_logger.addFilter(_self_failure_rate_limit)
+
 
 #: Resource attribute keys we inline as labels onto every metric series.
 #: Kept deliberately minimal — every additional inline key multiplies the
@@ -198,7 +262,9 @@ def parse_otel_resource_attributes(env_var: str) -> dict[str, str]:
                 if "=" in item
             }
     except Exception:
-        logging.error("Failed to parse OTLP resource attributes", exc_info=True)
+        self_failure_logger.warning(
+            "Failed to parse OTLP resource attributes", exc_info=True
+        )
     return {}
 
 

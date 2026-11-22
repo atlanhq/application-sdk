@@ -176,9 +176,9 @@ class TestIncrementalSqlMetadataExtractorStructure:
     def test_run_accepts_incremental_extraction_input(self) -> None:
         from typing import get_type_hints
 
-        # Use class's own __dict__ to avoid inheriting _original_run from SqlMetadataExtractor
+        # The class's own __dict__, so the hints are IncrementalSqlMetadataExtractor.run's, not an inherited run's
         cls_dict = IncrementalSqlMetadataExtractor.__dict__
-        run_fn = cls_dict.get("_original_run") or cls_dict.get("run")
+        run_fn = cls_dict["run"]
         hints = get_type_hints(run_fn)
         assert hints.get("input") is IncrementalExtractionInput
 
@@ -186,7 +186,7 @@ class TestIncrementalSqlMetadataExtractorStructure:
         from typing import get_type_hints
 
         cls_dict = IncrementalSqlMetadataExtractor.__dict__
-        run_fn = cls_dict.get("_original_run") or cls_dict.get("run")
+        run_fn = cls_dict["run"]
         hints = get_type_hints(run_fn)
         assert hints.get("return") is IncrementalExtractionOutput
 

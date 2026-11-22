@@ -23,7 +23,7 @@ def _throughput_mbps(size_bytes: int, elapsed_ms: float) -> float | None:
     return round((size_bytes / (1024 * 1024)) / (elapsed_ms / 1000.0), 3)
 
 
-def _classify_transfer_error(error_class: str | None, store_path: str) -> str:
+def _classify_transfer_error(error_class: str | None) -> str:
     """Bucket a transfer failure into a coarse, queryable family.
 
     Timeouts (slow egress / stalled connections), not-found, permission, and
@@ -74,7 +74,7 @@ def _record_transfer_metric(
         )
 
         metrics = get_metrics()
-        family = _classify_transfer_error(error_class, "")
+        family = _classify_transfer_error(error_class)
         labels: dict[str, str | int | float | bool] = {
             "storage_op": op,
             "outcome": outcome,

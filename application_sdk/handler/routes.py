@@ -201,7 +201,7 @@ def _http_error_boundary(
         yield
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — _route_failure logs the failure and the route answers it as an HTTPException
         status = _route_failure(
             e,
             what,
@@ -582,11 +582,14 @@ def register_handler_routes(
         be a credential, and the field path plus the reason is what a caller
         can act on.
         """
+        validation_error = (
+            exc.validation_error if isinstance(exc, RequestContractError) else None
+        )
         errors = (
-            exc.cause.errors(
+            validation_error.errors(
                 include_url=False, include_input=False, include_context=False
             )
-            if isinstance(exc, RequestContractError) and exc.cause is not None
+            if validation_error is not None
             else []
         )
         detail = [
@@ -805,7 +808,7 @@ def register_handler_routes(
                 if e.status_code >= 500:
                     _crash_row(e)
                 raise
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — _route_failure logs it and the route answers with a failure response
                 status = _route_failure(
                     e, "Preflight check", app_name, context.request_id_str
                 )

@@ -218,7 +218,7 @@ class Registry:
             if self._bearer:
                 request.add_header("Authorization", f"Bearer {self._bearer}")
             try:
-                with rbr._urlopen(request, timeout=rbr._HTTP_TIMEOUT_S) as response:  # type: ignore[operator]
+                with rbr._urlopen(request, timeout=rbr._HTTP_TIMEOUT_S) as response:  # pyright: ignore[reportGeneralTypeIssues]
                     return response.read(), response.headers.get("Content-Type", "")
             except urllib.error.HTTPError as exc:
                 if exc.code == 401 and attempt == 1:

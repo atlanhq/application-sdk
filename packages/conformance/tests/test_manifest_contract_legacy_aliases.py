@@ -7,7 +7,7 @@ worker. K015 holds the two in agreement.
 
 Test helpers
 ------------
-``_write_py``: writes ``{relative_path: source_text}`` under ``tmp_path``.
+``write_py``: writes ``{relative_path: source_text}`` under ``tmp_path``.
 ``_write_manifest``: writes one ``manifest.json`` with an optional alias block.
 ``_k015``: the unsuppressed K015 messages from a scan.
 """
@@ -23,20 +23,11 @@ import pytest
 from conformance.suite.checks.manifest_contract import scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
+from tests._helpers import write_py
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _write_py(tmp_path: Path, py_files: dict[str, str]) -> list[Path]:
-    paths: list[Path] = []
-    for name, src in py_files.items():
-        p = tmp_path / name
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(src, encoding="utf-8")
-        paths.append(p)
-    return paths
 
 
 def _write_manifest(
@@ -114,14 +105,14 @@ def test_k015_silent_when_manifest_and_code_agree(tmp_path: Path) -> None:
         tmp_path / "app" / "generated" / "manifest.json",
         aliases=[("LegacyCrawlerWorkflow", "crawler")],
     )
-    paths = _write_py(tmp_path, {"app/connector.py": _app_source()})
+    paths = write_py(tmp_path, {"app/connector.py": _app_source()})
     assert _k015(scan_all(paths, tmp_path)) == []
 
 
 def test_k015_silent_when_neither_site_declares_anything(tmp_path: Path) -> None:
     """The overwhelmingly common shape: no aliases anywhere, no finding."""
     _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": dedent("""\
@@ -146,7 +137,7 @@ def test_k015_fires_when_code_declares_an_alias_the_manifest_omits(
 ) -> None:
     """The contracted declaration site is mandatory once app/generated/ exists."""
     _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
-    paths = _write_py(tmp_path, {"app/connector.py": _app_source()})
+    paths = write_py(tmp_path, {"app/connector.py": _app_source()})
     msgs = _k015(scan_all(paths, tmp_path))
     assert len(msgs) == 1
     assert "LegacyCrawlerWorkflow -> crawler" in msgs[0]
@@ -161,7 +152,7 @@ def test_k015_fires_when_the_manifest_declares_an_alias_the_app_does_not(
         tmp_path / "app" / "generated" / "manifest.json",
         aliases=[("LegacyCrawlerWorkflow", "crawler")],
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": dedent("""\
@@ -187,7 +178,7 @@ def test_k015_fires_when_an_alias_targets_a_different_entrypoint(
         tmp_path / "app" / "generated" / "manifest.json",
         aliases=[("LegacyCrawlerWorkflow", "miner")],
     )
-    paths = _write_py(tmp_path, {"app/connector.py": _app_source()})
+    paths = write_py(tmp_path, {"app/connector.py": _app_source()})
     msgs = _k015(scan_all(paths, tmp_path))
     assert len(msgs) == 2
     assert any("LegacyCrawlerWorkflow -> crawler" in m for m in msgs)
@@ -200,7 +191,7 @@ def test_k015_fires_on_a_removal_version_mismatch(tmp_path: Path) -> None:
         aliases=[("LegacyCrawlerWorkflow", "crawler")],
         removal_version="4.2.0",
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path, {"app/connector.py": _app_source(removal_version="5.0.0")}
     )
     msgs = _k015(scan_all(paths, tmp_path))
@@ -215,7 +206,7 @@ def test_k015_fires_when_only_the_manifest_declares_an_expiry(tmp_path: Path) ->
         aliases=[("LegacyCrawlerWorkflow", "crawler")],
         removal_version="4.2.0",
     )
-    paths = _write_py(tmp_path, {"app/connector.py": _app_source()})
+    paths = write_py(tmp_path, {"app/connector.py": _app_source()})
     msgs = _k015(scan_all(paths, tmp_path))
     assert len(msgs) == 1
     assert "legacy_workflow_types_removal_version" in msgs[0]
@@ -227,7 +218,7 @@ def test_k015_accepts_a_matching_expiry(tmp_path: Path) -> None:
         aliases=[("LegacyCrawlerWorkflow", "crawler")],
         removal_version="4.2.0",
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path, {"app/connector.py": _app_source(removal_version="4.2.0")}
     )
     assert _k015(scan_all(paths, tmp_path)) == []
@@ -243,7 +234,7 @@ def test_k015_fires_on_a_non_literal_declaration(tmp_path: Path) -> None:
         tmp_path / "app" / "generated" / "manifest.json",
         aliases=[("LegacyCrawlerWorkflow", "crawler")],
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": _app_source(
@@ -281,7 +272,7 @@ def test_k015_reads_a_declaration_that_carries_a_separate_annotation(
             async def crawler(self, input: Input) -> Output: ...
     """)
     assert (
-        _k015(scan_all(_write_py(tmp_path, {"app/connector.py": source}), tmp_path))
+        _k015(scan_all(write_py(tmp_path, {"app/connector.py": source}), tmp_path))
         == []
     )
 
@@ -301,7 +292,7 @@ def test_k015_fires_on_a_non_literal_removal_version(tmp_path: Path) -> None:
             @entrypoint(name="crawler")
             async def crawler(self, input: Input) -> Output: ...
     """)
-    msgs = _k015(scan_all(_write_py(tmp_path, {"app/connector.py": source}), tmp_path))
+    msgs = _k015(scan_all(write_py(tmp_path, {"app/connector.py": source}), tmp_path))
     assert len(msgs) == 1
     assert "not a literal declaration" in msgs[0]
 
@@ -332,7 +323,7 @@ def test_k015_ignores_a_sibling_apps_declaration(tmp_path: Path) -> None:
         tmp_path / "app" / "generated" / "manifest.json",
         aliases=[("LegacyCrawlerWorkflow", "crawler")],
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {"app/connector.py": _app_source(), "app/sibling.py": _SIBLING_APP},
     )
@@ -352,7 +343,7 @@ def test_k015_does_not_let_a_sibling_app_satisfy_a_manifest_alias(
         tmp_path / "app" / "generated" / "manifest.json",
         aliases=[("SiblingLegacyWorkflow", "sibling-crawler")],
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": _app_source(
@@ -387,7 +378,7 @@ def test_k015_foreign_colon_prefix_does_not_pull_a_sibling_into_scope(
     path = tmp_path / "app" / "generated" / "manifest.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(manifest), encoding="utf-8")
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {"app/connector.py": _app_source(), "app/sibling.py": _SIBLING_APP},
     )
@@ -400,7 +391,7 @@ def test_k015_no_ops_when_no_app_class_owns_the_manifest(tmp_path: Path) -> None
         tmp_path / "app" / "generated" / "manifest.json",
         aliases=[("LegacyCrawlerWorkflow", "crawler")],
     )
-    paths = _write_py(tmp_path, {"app/sibling.py": _SIBLING_APP})
+    paths = write_py(tmp_path, {"app/sibling.py": _SIBLING_APP})
     assert _k015(scan_all(paths, tmp_path)) == []
 
 
@@ -431,7 +422,7 @@ def test_k015_matches_an_app_class_with_no_explicit_name(tmp_path: Path) -> None
             @entrypoint(name="crawler")
             async def crawler(self, input: Input) -> Output: ...
     """)
-    msgs = _k015(scan_all(_write_py(tmp_path, {"app/connector.py": source}), tmp_path))
+    msgs = _k015(scan_all(write_py(tmp_path, {"app/connector.py": source}), tmp_path))
     assert any("LegacyCrawlerWorkflow -> crawler" in m for m in msgs)
 
 
@@ -465,7 +456,7 @@ def test_k015_fires_on_an_app_on_a_template_base(tmp_path: Path, base: str) -> N
     source = _template_app_source(
         base, '{"LegacyCrawlerWorkflow": "crawler"}', "application_sdk.templates"
     )
-    msgs = _k015(scan_all(_write_py(tmp_path, {"app/connector.py": source}), tmp_path))
+    msgs = _k015(scan_all(write_py(tmp_path, {"app/connector.py": source}), tmp_path))
     assert len(msgs) == 1
     assert "LegacyCrawlerWorkflow -> crawler" in msgs[0]
     assert "the app contract does not" in msgs[0]
@@ -477,7 +468,7 @@ def test_k015_fires_on_a_non_literal_declaration_on_a_template_base(
 ) -> None:
     _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
     source = _template_app_source(base, "dict(ALIASES)", "application_sdk.templates")
-    msgs = _k015(scan_all(_write_py(tmp_path, {"app/connector.py": source}), tmp_path))
+    msgs = _k015(scan_all(write_py(tmp_path, {"app/connector.py": source}), tmp_path))
     assert len(msgs) == 1
     assert "not a literal declaration" in msgs[0]
 
@@ -488,7 +479,7 @@ def test_k015_ignores_a_same_named_non_sdk_base(tmp_path: Path) -> None:
     source = _template_app_source(
         "SqlApp", '{"LegacyCrawlerWorkflow": "crawler"}', "vendor.templates"
     )
-    paths = _write_py(tmp_path, {"app/connector.py": source})
+    paths = write_py(tmp_path, {"app/connector.py": source})
     assert _k015(scan_all(paths, tmp_path)) == []
 
 
@@ -510,7 +501,7 @@ def test_k015_reads_every_entrypoint_manifest_in_multi_mode(tmp_path: Path) -> N
             generated / name / "manifest.json",
             aliases=[("LegacyCrawlerWorkflow", "crawler")],
         )
-    paths = _write_py(tmp_path, {"app/connector.py": _app_source()})
+    paths = write_py(tmp_path, {"app/connector.py": _app_source()})
     assert _k015(scan_all(paths, tmp_path)) == []
 
 
@@ -522,7 +513,7 @@ def test_k015_fires_when_per_entrypoint_manifests_disagree(tmp_path: Path) -> No
         aliases=[("LegacyCrawlerWorkflow", "crawler")],
     )
     _write_manifest(generated / "miner" / "manifest.json")
-    paths = _write_py(tmp_path, {"app/connector.py": _app_source()})
+    paths = write_py(tmp_path, {"app/connector.py": _app_source()})
     msgs = _k015(scan_all(paths, tmp_path))
     assert len(msgs) == 1
     assert "disagree on legacy_workflow_types" in msgs[0]
@@ -547,7 +538,7 @@ def test_k015_accepts_the_committed_bundle_example_shape(tmp_path: Path) -> None
             (bundle / name / "manifest.json").read_text(encoding="utf-8"),
             encoding="utf-8",
         )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/connector.py": _app_source(
@@ -565,7 +556,7 @@ def test_k015_accepts_the_committed_bundle_example_shape(tmp_path: Path) -> None
 
 def test_k015_no_ops_without_a_generated_tree(tmp_path: Path) -> None:
     """Absent mode: the class attribute is the only declaration site."""
-    paths = _write_py(tmp_path, {"app/connector.py": _app_source()})
+    paths = write_py(tmp_path, {"app/connector.py": _app_source()})
     assert _k015(scan_all(paths, tmp_path)) == []
 
 
@@ -574,7 +565,7 @@ def test_k015_no_ops_when_no_app_subclass_is_found(tmp_path: Path) -> None:
         tmp_path / "app" / "generated" / "manifest.json",
         aliases=[("LegacyCrawlerWorkflow", "crawler")],
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path, {"app/helpers.py": "def helper() -> None:\n    return None\n"}
     )
     assert _k015(scan_all(paths, tmp_path)) == []
@@ -591,7 +582,7 @@ def test_k015_is_suppressible_inline(tmp_path: Path) -> None:
             @entrypoint(name="crawler")
             async def crawler(self, input: Input) -> Output: ...
     """)
-    findings = scan_all(_write_py(tmp_path, {"app/connector.py": source}), tmp_path)
+    findings = scan_all(write_py(tmp_path, {"app/connector.py": source}), tmp_path)
     k015 = [f for f in findings if f.rule_id == "K015"]
     assert k015 and all(f.suppressed for f in k015)
     assert _k015(findings) == []

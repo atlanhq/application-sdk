@@ -40,15 +40,13 @@ def main() -> None:
         "credential_guid"
     )
     # conformance: ignore[L005] CLI tool; credential_guid is user-facing stdout meant to be copied into the /start call, not a log record
-    print(  # noqa: T201
+    print(
         orjson.dumps(
             {"credential_guid": credential_guid}, option=orjson.OPT_INDENT_2
         ).decode()
     )
     # conformance: ignore[L005] CLI tool; user-facing stdout instruction for the developer, not a log record
-    print(  # noqa: T201
-        f'\nUse this in your /start call: "credential_guid": "{credential_guid}"'
-    )
+    print(f'\nUse this in your /start call: "credential_guid": "{credential_guid}"')
 
 
 if __name__ == "__main__":

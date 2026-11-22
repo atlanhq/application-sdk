@@ -83,7 +83,7 @@ def check_p026(
                 and isinstance(node.args[0], ast.Name)
                 and node.args[0].id in typed
             ):
-                field = node.args[1].value  # type: ignore[attr-defined]
+                field = node.args[1].value  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
                 findings.append(
                     make_finding(
                         filename=filename,

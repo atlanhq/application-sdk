@@ -163,12 +163,12 @@ runs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.tool_cache }}/uv
-        key: uv-bin-${{ runner.os }}-${{ runner.arch }}-0.13.7
+        key: uv-bin-${{ runner.os }}-${{ runner.arch }}-0.13.8
 
     - name: Install uv
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
-        version: "0.13.7"
+        version: "0.13.8"
         enable-cache: true
         cache-dependency-glob: "uv.lock"
         github-token: ${{ github.token }}
@@ -207,14 +207,7 @@ runs:
       env:
         UV_COMPILE_BYTECODE: "1"
       run: |
-        PYTHON_MINOR=$(echo "${{ steps.python-version.outputs.version }}" | cut -d. -f2)
-        if [ "${PYTHON_MINOR}" -ge 14 ] 2>/dev/null; then
-          # Python 3.14+: skip the migrate-v3 group (libcst, for tools/migrate_v3),
-          # the same group unit_test_command.py's PY314_SKIPPED_GROUP skips.
-          "${{ github.action_path }}/../../scripts/with-retry.sh" uv sync --all-extras --no-group migrate-v3
-        else
-          "${{ github.action_path }}/../../scripts/with-retry.sh" uv sync --all-extras --all-groups
-        fi
+        "${{ github.action_path }}/../../scripts/with-retry.sh" uv sync --all-extras --all-groups
 
     # An app with a private atlanhq git dependency: the ONLY step that holds the
     # token. git_auth.py mirror-clones the private deps into
@@ -233,10 +226,8 @@ runs:
 
     # The same install for that app, from the mirrors. A separate step, not a
     # wrapper on the one above, so a caller with no token never needs
-    # `python3` (the SDK's Windows legs). No 3.14 dev-group carve-out: it
-    # exists for the SDK's own unit matrix, which never passes a token. A
-    # venv-cache hit already holds the dependency, so this, like the plain
-    # install, runs only on a miss.
+    # `python3` (the SDK's Windows legs). A venv-cache hit already holds the
+    # dependency, so this, like the plain install, runs only on a miss.
     - name: Install dependencies (private git dependencies)
       if: steps.cache-venv.outputs.cache-hit != 'true' && inputs.git-auth-token != ''
       shell: bash

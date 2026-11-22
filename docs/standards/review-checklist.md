@@ -547,7 +547,7 @@ def good_validation(max_value: int) -> int:
 - Use generators for memory-efficient iteration
 - Follow asyncio best practices for concurrent code
 - Use Pydantic `BaseModel` for structured data crossing workflow/task boundaries; `@dataclass` only for internal value types
-- Implement proper exception hierarchies using categorical leaf classes from `application_sdk/errors/` (new code) — `error_codes.py` is back-compat only
+- Implement proper exception hierarchies using categorical leaf classes from `application_sdk/errors/` (new code) — `common/error_codes.py` and the `AAF-*` `ErrorCode` constants are back-compat only; an error class names its failure with its `code` ClassVar and never declares `DEFAULT_ERROR_CODE`
 
 **Temporal workflow patterns:**
 

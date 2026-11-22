@@ -287,7 +287,7 @@ class RedisClient(_RedisClientBase):
                 self.redis_client.close()
                 logger.info("Sync Redis connection closed")
             except Exception:
-                logger.error("Error closing sync Redis connection", exc_info=True)
+                logger.warning("Error closing sync Redis connection", exc_info=True)
             finally:
                 self.redis_client = None
 
@@ -452,7 +452,7 @@ class RedisClientAsync(_RedisClientBase):
                 await self.redis_client.aclose()
                 logger.info("Async Redis connection closed")
             except Exception:
-                logger.error("Error closing async Redis connection", exc_info=True)
+                logger.warning("Error closing async Redis connection", exc_info=True)
             finally:
                 self.redis_client = None
 

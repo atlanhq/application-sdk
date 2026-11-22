@@ -234,7 +234,7 @@ async def connection_exists(
         ).to_request()
         request.dsl.size = 0
         found = int((await client.asset.search(request)).count) > 0
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 — _unreadable reports the failure as a typed Settled result
         return _unreadable(label, started, error)
     name, attempts, elapsed = _one_shot(label, started)
     return Settled(label=name, attempts=attempts, elapsed=elapsed, value=found)
@@ -514,7 +514,7 @@ async def count_lineage_edges(
             for source, target in requested:
                 if source in input_types and target in output_types:
                     counts[LineageEdge(source, target)] += 1
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 — _unreadable reports the failure as a typed Settled result
         return _unreadable(label, started, error)
     name, attempts, elapsed = _one_shot(label, started)
     logger.info(
@@ -587,7 +587,7 @@ async def count_total_assets(
         )
         request.dsl.size = 0  # cheap response: only .count matters
         total = int((await client.asset.search(request)).count)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 — _unreadable reports the failure as a typed Settled result
         return _unreadable(label, started, error)
     name, attempts, elapsed = _one_shot(label, started)
     return Settled(label=name, attempts=attempts, elapsed=elapsed, value=total)
@@ -662,7 +662,7 @@ async def sample_qualified_names(
 
     try:
         sampled = await asyncio.gather(*(_sample_one(tn) for tn in type_names))
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 — _unreadable reports the failure as a typed Settled result
         return _unreadable(label, started, error)
     name, attempts, elapsed = _one_shot(label, started)
     return Settled(
@@ -764,7 +764,7 @@ async def sample_asset_attributes(
 
     try:
         sampled = await asyncio.gather(*(_sample_one(tn) for tn in type_names))
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 — _unreadable reports the failure as a typed Settled result
         return _unreadable(label, started, error)
     name, attempts, elapsed = _one_shot(label, started)
     return Settled(
@@ -897,7 +897,7 @@ async def read_asset_attributes(
 
     try:
         read = await asyncio.gather(*(_read_one(ref) for ref in refs))
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 — _unreadable reports the failure as a typed Settled result
         return _unreadable(label, started, error)
     name, attempts, elapsed = _one_shot(label, started)
     return Settled(
@@ -1066,7 +1066,7 @@ async def _counts(
 
     try:
         counts = await asyncio.gather(*(_count_one(tn) for tn in type_names))
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 — _unreadable reports the failure as a typed Settled result
         return _unreadable(label, started, error)
     name, attempts, elapsed = _one_shot(label, started)
     return Settled(
@@ -1135,7 +1135,7 @@ async def admin_identity(
     try:
         guid = await client.role_cache.get_id_for_name(role_name)
         current = await client.user.get_current()
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 — _unreadable reports the failure as a typed Settled result
         return _unreadable(label, started, error)
     username = getattr(current, "username", "") or ""
     if not guid:

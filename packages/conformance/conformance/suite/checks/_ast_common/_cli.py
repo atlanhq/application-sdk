@@ -147,6 +147,6 @@ def make_cli_main(
         else:
             print(payload)
 
-        return report.runs[0].invocations[0].exit_code  # type: ignore[return-value]
+        return report.runs[0].invocations[0].exit_code  # pyright: ignore[reportReturnType]
 
     return main

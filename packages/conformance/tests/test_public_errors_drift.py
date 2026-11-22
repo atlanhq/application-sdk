@@ -13,33 +13,17 @@ allowlist is regenerated in the same PR:
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
 from conformance.suite.checks.error_seam._public_error_surface import (
     ALLOWLIST_PATH,
-    SDK_ERRORS_INIT_RELPATH,
     build_allowlist,
     load_allowlist,
     serialize,
 )
-
-
-def _find_sdk_root() -> Path | None:
-    """Locate the repo root containing application_sdk/errors/__init__.py."""
-    for parent in Path(__file__).resolve().parents:
-        if parent.joinpath(*SDK_ERRORS_INIT_RELPATH).is_file():
-            return parent
-    return None
+from tests._helpers import sdk_root
 
 
 def test_committed_allowlist_matches_sdk_source() -> None:
-    sdk_root = _find_sdk_root()
-    if sdk_root is None:
-        pytest.skip("SDK source not on disk — allowlist drift cannot be checked here.")
-
-    expected = serialize(build_allowlist(sdk_root))
+    expected = serialize(build_allowlist(sdk_root()))
 
     assert ALLOWLIST_PATH.read_text(encoding="utf-8") == expected, (
         "public_errors.json is stale — run "

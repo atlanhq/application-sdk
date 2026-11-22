@@ -63,7 +63,7 @@ def _register_tasks(cls: type, app_name: str) -> None:
 
 def _collect_implicit_ep(
     cls: type,
-    app_run_stub: Any,
+    app_run_stub: object,
 ) -> EntryPointMetadata | None:
     """Collect the implicit run() entry point from an App class, if present.
 

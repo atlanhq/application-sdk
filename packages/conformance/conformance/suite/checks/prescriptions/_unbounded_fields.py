@@ -42,6 +42,7 @@ from conformance.suite.checks._ast_common import (
     _IgnoreDirective,
     base_names,
     leaf_name,
+    load_source,
     make_finding,
 )
 from conformance.suite.schema.extensions import SafeSwap, SafeSwapRequires
@@ -617,10 +618,10 @@ def reused_class_names(root: Path) -> frozenset[str]:
     """
     names: set[str] = set()
     for path in _all_python_files(root):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+        source = load_source(path)
+        if source is None:
             return frozenset({"*"})
+        tree = source.tree
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 for b in node.bases:
@@ -633,7 +634,7 @@ def reused_class_names(root: Path) -> frozenset[str]:
             elif isinstance(node, (ast.Assign, ast.AnnAssign)) and leaf_name(
                 node.value
             ):
-                names.add(leaf_name(node.value))  # type: ignore[arg-type]
+                names.add(leaf_name(node.value))  # pyright: ignore[reportArgumentType]
             elif (
                 isinstance(node, ast.Call)
                 and leaf_name(node.func) == "type"
@@ -731,7 +732,7 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
             ):
                 aliases[stmt.target.id] = stmt.value
             elif type(stmt).__name__ == "TypeAlias":  # `type X = ...` (Python 3.12+)
-                aliases[stmt.name.id] = stmt.value  # type: ignore[attr-defined]
+                aliases[stmt.name.id] = stmt.value  # pyright: ignore[reportArgumentType, reportAttributeAccessIssue, reportUnknownMemberType]
         all_classes = [c for c in ast.walk(node) if isinstance(c, ast.ClassDef)]
         local_names = frozenset(
             t.id
@@ -775,7 +776,7 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
             elif found is not None:
                 source[c] = found
                 if found is not off:
-                    self._inherited[c] = found  # type: ignore[assignment]
+                    self._inherited[c] = found  # pyright: ignore[reportArgumentType]
                     if c in self._contracts and found not in self._contracts:
                         source[c] = c
             if c in module_scope:

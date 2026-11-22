@@ -1135,21 +1135,24 @@ def _handoff_not_visible(ref: FileReference, *, found: int) -> Exception:
     empty) as a lost upload, and the next attempt sees the store afresh. A
     hand-off that is really short keeps failing until retries run out.
     """
-    from application_sdk.errors import (  # noqa: PLC0415 — circular: errors imports storage evidence helpers
+    from application_sdk.errors._legacy_codes import (  # noqa: PLC0415 — circular: errors imports storage evidence helpers
         STORAGE_HANDOFF_INCOMPLETE,
     )
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         StorageError,
     )
 
-    return StorageError(
+    err = StorageError(
         f"Directory FileReference '{ref.storage_path}' declares "
         f"{ref.file_count} file(s) but {found} are visible under the prefix. "
         f"Either the producer's upload is incomplete, or the store credentials "
         f"lack list permission on this location.",
         key=ref.storage_path,
-        error_code=STORAGE_HANDOFF_INCOMPLETE,
     )
+    # Keeps the AAF-STR-009 prefix in str() without the deprecated error_code=
+    # keyword, which warns. Goes with the AAF codes in v4.0.0 (FND-4299).
+    err._error_code = STORAGE_HANDOFF_INCOMPLETE
+    return err
 
 
 async def _fetch_manifest(

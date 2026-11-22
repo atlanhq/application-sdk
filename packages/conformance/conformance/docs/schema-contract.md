@@ -131,8 +131,9 @@ out to every consumer app on the next upgrade, and the suite invalidates every a
 conformance verdict on the next reconcile.  No per-app authoring needed (§4.1 of the design doc).
 
 The per-series rule catalogs below are **auto-generated** from the Python source and live in
-`conformance/docs/rules/`.  Regenerate with `uv run poe generate-rule-docs`; CI verifies
-they are up-to-date with `uv run poe generate-rule-docs --check`.
+`conformance/docs/rules/`.  Regenerate with `uv run atlan-application-sdk-conformance gen-rule-docs`;
+`tests/test_generate_rule_docs.py` runs `--check` against the committed directory on every
+suite-tests leg, so a stale, missing or orphaned file fails CI.
 
 | Prefix | Domain | Catalog |
 |---|---|---|

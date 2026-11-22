@@ -488,18 +488,17 @@ cause is captured, by `sanitize_cause_repr`.
 ### Legacy error-code namespaces (backward-compat only)
 
 - **`application_sdk.common.error_codes`** — `ATLAN-{COMPONENT}-{HTTP_CODE}-{SEQ}` HTTP-style codes. Do not use in new code.
-- **`application_sdk.errors` legacy constants** — `AAF-{COMP}-{NNN}` format (`APP_ERROR`, `HANDLER_ERROR`, etc.). Do not use in new code; retained for v3.x back-compat, removed in v4.0.
+- **`application_sdk.errors` legacy constants** — `ErrorCode` and the `AAF-{COMP}-{NNN}` constants (`APP_ERROR`, `HANDLER_ERROR`, etc.). Reading one from `application_sdk.errors` emits a `DeprecationWarning`; removed in v4.0.
 
-### Legacy constant usage (back-compat shim)
+An SDK error that had an `AAF-*` code still prints it as the `[AAF-…]` prefix of `str()`, so log text is unchanged. The code itself is no longer declared on the class: `Cls.DEFAULT_ERROR_CODE`, `err.error_code` and the `error_code=` constructor keyword keep working but warn. Use the class's `code` (or `qualified_code`) instead:
 
 ```python
-# Still works for existing code — do not use in new code
-from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE, HANDLER_ERROR
+from application_sdk.storage.errors import StorageConfigError
 
-logger.error("Task failed [%s]", APP_ERROR, exc_info=exc)
-
-from application_sdk.execution import ApplicationError
-raise ApplicationError(str(APP_NON_RETRYABLE), non_retryable=True)
+try:
+    ...
+except StorageConfigError as exc:
+    logger.warning("Storage misconfigured [%s]", exc.qualified_code, exc_info=True)
 ```
 
 ## SQL Utilities

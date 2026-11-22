@@ -32,9 +32,12 @@ from typing import (
     overload,
 )
 
+from application_sdk import _deprecation
 from application_sdk.common._env import env_int
 from application_sdk.contracts.base import Input, Output
-from application_sdk.errors import CONTRACT_VALIDATION, ErrorCode
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -198,12 +201,9 @@ class UnresolvableTaskAnnotationsError(InvalidInputError):
     field: str | None = "annotations"
 
 
-class TaskContractError(InvalidInputError):
+@dataclass(kw_only=True)
+class TaskContractError(_LegacyErrorCodeMixin, InvalidInputError):
     """Deprecated: use ``application_sdk.app.task.TaskDeclarationError`` — removed in v4.0."""
-
-    #: Leaf instances never run this ``__init__``; the class default keeps the
-    #: inherited ``error_code`` and ``__str__`` working on them.
-    _legacy_error_code: ErrorCode = CONTRACT_VALIDATION
 
     code: ClassVar[str] = "INVALID_INPUT_TASK_CONTRACT"
 
@@ -215,14 +215,7 @@ class TaskContractError(InvalidInputError):
             stacklevel=2,
         )
         InvalidInputError.__init__(self, message=message)
-        self._legacy_error_code = error_code or CONTRACT_VALIDATION
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return self._legacy_error_code
-
-    def __str__(self) -> str:
-        return f"[{self._legacy_error_code}] {self.message}"
+        self._set_legacy_error_code(error_code)
 
 
 @dataclass(kw_only=True)
@@ -692,7 +685,7 @@ def task(
         input_type, output_type = _validate_task_signature(fn)
 
         # Store metadata on the function
-        fn._task_metadata = TaskMetadata(  # type: ignore[attr-defined]
+        fn._task_metadata = TaskMetadata(  # pyright: ignore[reportFunctionMemberAccess]
             name=task_name,
             func=fn,
             input_type=input_type,
@@ -720,11 +713,29 @@ def task(
     return decorator
 
 
-def is_task(obj: Any) -> bool:
+def is_task(obj: object) -> bool:
     """Check if an object is decorated with @task."""
     return hasattr(obj, "_task_metadata")
 
 
-def get_task_metadata(obj: Any) -> TaskMetadata | None:
+def get_task_metadata(obj: object) -> TaskMetadata | None:
     """Get task metadata from a decorated function."""
     return getattr(obj, "_task_metadata", None)
+
+
+#: The AAF-* constants this module imported before FND-4299, kept importable
+#: from here with a warning until v4.0.0. Literal per entry: the surface gate
+#: and gen-deprecations read this table statically.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "CONTRACT_VALIDATION": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda name: getattr(_legacy_codes, name),
+)

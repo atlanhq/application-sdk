@@ -53,14 +53,20 @@ Example:
 
 import math
 import os
-import warnings
 from dataclasses import dataclass
 from enum import Enum
 
 import httpx
 from dotenv import load_dotenv
 
-from application_sdk._env import env_bool, env_choice, env_float, env_int
+from application_sdk import _deprecation
+from application_sdk._env import (
+    env_bool,
+    env_choice,
+    env_float,
+    env_int,
+    warn_rejected,
+)
 
 load_dotenv(dotenv_path=".env")
 
@@ -189,6 +195,26 @@ SQL_CLIENT_CONNECT_TIMEOUT_SECONDS = env_float(
 WORKFLOW_OUTPUT_PATH_TEMPLATE = (
     "artifacts/apps/{application_name}/workflows/{workflow_id}/{run_id}"
 )
+
+
+def _run_prefix(app_name: str, workflow_id: str, run_id: str) -> str:
+    """SDK-internal: the object-store prefix one workflow run's artifacts live under.
+
+    ``WORKFLOW_OUTPUT_PATH_TEMPLATE`` filled in, e.g.
+    ``artifacts/apps/my-app/workflows/wf-123/run-456``. The one place the
+    run-prefix layout is composed, so uploads, persisted refs, cleanup and the
+    skipped-records merge cannot drift apart. Private: the layout is the SDK's
+    to change; apps compose run-scoped paths from ``input.workflow_id``.
+
+    Args:
+        app_name: The registered name of the App that owns the run.
+        workflow_id: The run's workflow ID.
+        run_id: The run's Temporal run ID.
+    """
+    return WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
+        application_name=app_name, workflow_id=workflow_id, run_id=run_id
+    )
+
 
 # Temporary Path (used to store intermediate files)
 TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
@@ -440,10 +466,10 @@ def load_shutdown_budget() -> ShutdownBudget | None:
     try:
         grace = int(raw)
     except ValueError:
-        warnings.warn(
+        warn_rejected(
             f"{SHUTDOWN_GRACE_SECONDS_ENV}={raw!r} is not an integer; "
             "shutdown bounds keep their fixed defaults",
-            stacklevel=2,
+            UserWarning,
         )
         return None
     if grace <= 0:
@@ -453,11 +479,11 @@ def load_shutdown_budget() -> ShutdownBudget | None:
             grace, preferred_drain_seconds=_preferred_drain_seconds()
         )
     except ValueError as exc:
-        warnings.warn(
+        warn_rejected(
             f"{SHUTDOWN_GRACE_SECONDS_ENV}={grace}: {exc}. Shutdown bounds keep "
             "their fixed defaults; raise the grace or lower "
             "ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS",
-            stacklevel=2,
+            UserWarning,
         )
         return None
 
@@ -796,9 +822,9 @@ def load_worker_loop_stall_timeout_override() -> float | None:
     except ValueError:
         value = math.nan
     if not math.isfinite(value) or value < 0:
-        warnings.warn(
+        warn_rejected(
             f"{name}={raw!r} is not a non-negative number; using the derived bound",
-            stacklevel=2,
+            UserWarning,
         )
         return None
     return value
@@ -1394,7 +1420,7 @@ in that directory are trusted in addition to system CAs.
 
 
 #: name -> (replacement, why), or a self-contained notice string. For a tuple,
-#: the shared sentence and the removal version live in ``__getattr__`` below.
+#: the shared sentence and the removal version come from the factory below.
 #: Served lazily so reading ``APPLICATION_MODE`` can no longer fail the import
 #: of this module (FND-4890). The ``*_RETENTION_DAYS`` / ``*_CLEANUP_ENABLED``
 #: six configured an observability retention sweep that never deleted anything
@@ -1521,23 +1547,9 @@ def _deprecated_constant_value(name: str) -> object:
     raise AssertionError(name)
 
 
-def __getattr__(name: str) -> object:
-    """Serve the deprecated constants once more, with a warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    # The tuple branch's f-string comes first: the deprecation-manifest scanner
-    # reads the removal version from the first warn call in this function.
-    if isinstance(entry, tuple):
-        replacement, note = entry
-        warnings.warn(
-            f"{name} is deprecated; use {replacement} instead — {note}. "
-            "Will be removed in v4.0.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-    else:
-        warnings.warn(
-            f"application_sdk.constants.{entry}", DeprecationWarning, stacklevel=2
-        )
-    return _deprecated_constant_value(name)
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=_deprecated_constant_value,
+)

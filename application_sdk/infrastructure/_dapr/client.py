@@ -8,6 +8,7 @@ import httpx
 import orjson
 from typing_extensions import deprecated
 
+from application_sdk import _deprecation
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 from application_sdk.infrastructure.bindings import (
     BindingError,  # noqa: F401 — deprecated names kept importable from this module (shipped surface); removed with the class in v4.0
@@ -44,21 +45,18 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the deprecated ``MessageHandler`` alias with a warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _MessageHandler
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda _name: _MessageHandler,
+)
 
 
+@deprecated(
+    "create_dapr_secret_store is deprecated; construct "
+    "DaprSecretStore(client, store_name=...) directly. Will be removed in v4.0.0."
+)
 def create_dapr_secret_store(
     client: AsyncDaprClient,
     store_name: str = "secretstore",
@@ -206,8 +204,8 @@ def dapr_error_detail(exc: Exception) -> str | None:
         return None
     try:
         body = orjson.loads(text)
-    except Exception:
-        body = None
+    except orjson.JSONDecodeError:
+        body = None  # a non-JSON body is returned verbatim below
     if isinstance(body, dict) and (body.get("errorCode") or body.get("message")):
         code = body.get("errorCode") or "unknown"
         message = body.get("message") or ""
@@ -739,6 +737,11 @@ class DaprBinding:
 # ---------------------------------------------------------------------------
 
 
+@deprecated(
+    "is_dapr_component_registered is deprecated; check "
+    "`component_name in await get_dapr_component_types()` from "
+    "application_sdk.infrastructure._dapr.http instead. Will be removed in v4.0.0."
+)
 async def is_dapr_component_registered(component_name: str) -> bool:
     """Return ``True`` if a Dapr component with *component_name* is registered.
 

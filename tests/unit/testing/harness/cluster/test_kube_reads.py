@@ -8,10 +8,13 @@ container statuses as fully ready, and a failed read returning an empty list.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+import re
 import sys
 import threading
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -29,6 +32,10 @@ from application_sdk.testing.harness.cluster import (
     ServiceTarget,
 )
 from application_sdk.testing.harness.cluster.kube import (
+    AppsReads,
+    CoreReads,
+    CustomObjectReads,
+    CustomResourceDefinitionReads,
     KubernetesReader,
     kubeconfig_apis,
 )
@@ -761,6 +768,40 @@ def test_an_unusable_kubeconfig_names_the_context():
     assert "e2e-gcp" in raised.value.message
 
 
+# The generated API class behind each read Protocol, and the module defining it.
+_GENERATED_APIS: dict[type, tuple[str, str]] = {
+    CoreReads: ("CoreV1Api", "core_v1_api"),
+    AppsReads: ("AppsV1Api", "apps_v1_api"),
+    CustomObjectReads: ("CustomObjectsApi", "custom_objects_api"),
+    CustomResourceDefinitionReads: ("ApiextensionsV1Api", "apiextensions_v1_api"),
+}
+
+
+class _StubApi:
+    """Stands in for a generated API class: records the client it was built on."""
+
+    def __init__(self, api_client: object) -> None:
+        self.api_client = api_client
+
+
+@pytest.fixture
+def stub_generated_apis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the factory off the client's generated API modules.
+
+    ``kubernetes.client`` imports them lazily, on first attribute access. They
+    are megabytes of decorated methods, and executing them under the coverage
+    tracer on Python 3.12 took 15 s per xdist worker. Setting the names in the
+    module's namespace first means the lazy loader is never consulted, and
+    ``setitem`` (unlike ``setattr``) reads no attribute to save the original.
+    """
+    import kubernetes.client  # noqa: PLC0415 — optional extra, installed for unit tests
+
+    for class_name, _module in _GENERATED_APIS.values():
+        stub = type(class_name, (_StubApi,), {})
+        monkeypatch.setitem(vars(kubernetes.client), class_name, stub)
+
+
+@pytest.mark.usefixtures("stub_generated_apis")
 def test_the_kubeconfig_factory_loads_into_a_fresh_configuration():
     """Never into the client's process-wide default: pool threads would collide."""
     with patch("kubernetes.config.load_kube_config") as load:
@@ -768,15 +809,49 @@ def test_the_kubeconfig_factory_loads_into_a_fresh_configuration():
 
     assert bundle.kube_context == "e2e-gcp"
     assert load.call_args.kwargs["context"] == "e2e-gcp"
-    assert load.call_args.kwargs["client_configuration"] is not None
-    # Every read surface the backend declares is present and callable
-    assert callable(bundle.core.list_namespaced_pod)
-    assert callable(bundle.apps.list_namespaced_deployment)
-    assert callable(bundle.custom.list_namespaced_custom_object)
-    assert callable(bundle.crds.read_custom_resource_definition)
+    configuration = load.call_args.kwargs["client_configuration"]
+    assert configuration is not None
+    # Every API is built on one client, which carries the loaded configuration
+    api_clients = [
+        cast(_StubApi, api).api_client
+        for api in (bundle.core, bundle.apps, bundle.custom, bundle.crds)
+    ]
+    assert all(each is api_clients[0] for each in api_clients)
+    assert getattr(api_clients[0], "configuration") is configuration
     assert bundle.sanitize({"a": 1}) == {"a": 1}
 
 
+@pytest.mark.parametrize("protocol", list(_GENERATED_APIS), ids=lambda p: p.__name__)
+def test_the_generated_client_defines_every_verb_the_reader_declares(
+    protocol: type,
+) -> None:
+    """A verb the client renamed or dropped fails here, not against a cluster.
+
+    Read from the generated module's source rather than by importing it: the
+    import is what cost 15 s under the 3.12 coverage tracer (see
+    ``stub_generated_apis``).
+    """
+    class_name, module_name = _GENERATED_APIS[protocol]
+    spec = importlib.util.find_spec(f"kubernetes.client.api.{module_name}")
+    assert spec is not None and spec.origin is not None
+    source = Path(spec.origin).read_text(encoding="utf-8")
+    verbs = sorted(
+        name
+        for name, value in vars(protocol).items()
+        if callable(value) and not name.startswith("_")
+    )
+
+    assert verbs, f"{protocol.__name__} declares no verbs"
+    assert re.search(rf"^class {class_name}\b", source, re.MULTILINE)
+    missing = [
+        verb
+        for verb in verbs
+        if not re.search(rf"^    def {verb}\(", source, re.MULTILINE)
+    ]
+    assert missing == [], f"{class_name} no longer defines {missing}"
+
+
+@pytest.mark.usefixtures("stub_generated_apis")
 def test_the_default_reader_builds_from_the_ambient_kubeconfig():
     """No ``apis`` factory means the kubeconfig one, carrying the context."""
     reader = KubernetesReader(kube_context="e2e-gcp")

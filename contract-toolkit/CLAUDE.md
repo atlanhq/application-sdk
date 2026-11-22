@@ -81,7 +81,7 @@ demonstrates distinct feature surface, verified by `tests/*.pkl`.
   `extraNodes`; AE activity nodes mixed with a `DAGNode`, no `extract` step.
 - `artifact-schemas`: `artifactSchemas` data hand-off declarations — parquet + NDJSON, nested paths, arrays of structs (`[]` element step), an input artifact.
 - `card-split`: two entrypoints where only one is a marketplace UI card.
-- `behind-the-scenes`: single entrypoint with `marketplaceCard = false`; routable, no card.
+- `behind-the-scenes`: single entrypoint with `marketplaceCard = false`; routable, no card; root `e2eOverrides` naming the e2e connection type.
 - `agent-e2e`: agent/SDR e2e codegen — direct and agent credential bodies, an
   `extraction-method` ConditionalInput.
 - `scheduled`: cron background job via `schedules`.

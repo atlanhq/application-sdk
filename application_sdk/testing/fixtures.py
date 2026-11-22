@@ -25,6 +25,7 @@ from application_sdk.app.context import AppContext
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.constants import LOCAL_WORKFLOW_ID
 from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter
+from application_sdk.observability.observability import AtlanObservability
 from application_sdk.testing.mocks import (
     MockBinding,
     MockCredentialStore,
@@ -126,7 +127,7 @@ def restore_logger_init_flags() -> Generator[None, None, None]:
     ``logger.remove(sink_id)`` for a sink that is already gone, attributed to a
     test that did nothing wrong.
 
-    Both flags are treated as **latches: this fixture only ever restores one
+    The flag is treated as a **latch: this fixture only ever restores it
     upward, and never writes False.** Writing a snapshot back verbatim would
     re-arm the very hazard it exists to close — a test that *starts* with the
     flag down and then constructs an adapter has installed live sinks by the
@@ -142,9 +143,12 @@ def restore_logger_init_flags() -> Generator[None, None, None]:
     imports ``logger_adaptor``, whose import binds ``default_logger`` and so has
     already run a full init.
 
-    ``_flush_task_started`` gets the same treatment for the same reason in
-    reverse — it gates thread spawning, so restoring it *down* after a test
-    started a flush task would let a later init spawn a second one.
+    Restoring the flag restores the state that goes with it. The reset also
+    stops the periodic flush and clears ``_sink_owner``, but the handlers it
+    left in place still write to the old sink's buffer, and with the flag back
+    up no later init would start a flush for it. So the finalizer puts the sink
+    owner back and restarts the flush on the sink that ran it. A test that
+    re-initialised has its own of both, and none of this runs.
 
     Under ``-n auto --dist load`` xdist hands items out as workers free up, so
     which pair collides is a function of relative test speed rather than of
@@ -152,14 +156,17 @@ def restore_logger_init_flags() -> Generator[None, None, None]:
     rerun could turn green — the same shape as FND-961. See FND-976.
     """
     initialized = AtlanLoggerAdapter._initialized
-    flush_task_started = AtlanLoggerAdapter._flush_task_started
+    sink_owner = AtlanLoggerAdapter._sink_owner
+    flush_owner = AtlanObservability._periodic_flush_owners.get(AtlanLoggerAdapter)
     try:
         yield
     finally:
-        if initialized:
+        if initialized and not AtlanLoggerAdapter._initialized:
             AtlanLoggerAdapter._initialized = True
-        if flush_task_started:
-            AtlanLoggerAdapter._flush_task_started = True
+            if AtlanLoggerAdapter._sink_owner is None:
+                AtlanLoggerAdapter._sink_owner = sink_owner
+            if flush_owner is not None:
+                flush_owner._ensure_periodic_flush()
 
 
 def _redirect_temporary_path(patcher: pytest.MonkeyPatch, path: str) -> None:

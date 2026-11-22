@@ -17,11 +17,18 @@ class ApplicationError(_TemporalApplicationError):
     Use ``ApplicationError`` directly only when you need fine-grained control
     over Temporal's retry and error-type semantics.
 
+    There is no ``cause`` keyword: Temporal's constructor rejects it with a
+    ``TypeError``. Chain the underlying exception with
+    ``raise ApplicationError(...) from exc``; Temporal reads ``__cause__``
+    when it serialises the failure.
+
     Args:
         message: Human-readable description of the error.
-        *args: Additional positional arguments forwarded to Temporal.
+        *details: User-defined details, serialised into the failure's
+            ``details`` payload.
         type: Optional string error type tag for categorisation.
         non_retryable: When ``True``, Temporal will not retry the activity.
         next_retry_delay: Override the next retry backoff interval.
-        cause: Underlying exception that caused this error.
+        category: Severity category; ``BENIGN`` logs at DEBUG and records
+            no metrics.
     """

@@ -171,7 +171,7 @@ class Disposition(str, Enum):
     """
 
 
-def derive_disposition(result: Result) -> Disposition | None:  # type: ignore[name-defined]  # noqa: F821
+def derive_disposition(result: Result) -> Disposition | None:  # noqa: F821
     """Derive the :class:`Disposition` for a single SARIF result.
 
     Parameters

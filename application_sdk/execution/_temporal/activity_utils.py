@@ -33,15 +33,14 @@
 """
 
 import os
-import warnings
 from collections.abc import Callable
 from typing import Any, TypeVar
 
 from temporalio import activity
 
-from application_sdk import constants
+from application_sdk import _deprecation, constants
 from application_sdk.app.registry import AppRegistry
-from application_sdk.constants import WORKFLOW_OUTPUT_PATH_TEMPLATE
+from application_sdk.constants import _run_prefix
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -54,25 +53,16 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
         "application_sdk.constants.TEMPORARY_PATH",
         "it was only ever re-exported here as a side effect of an import",
     ),
+    "WORKFLOW_OUTPUT_PATH_TEMPLATE": (
+        "application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the removed re-exports once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated here; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    module_name, _, attr = replacement.rpartition(".")
-    from importlib import import_module  # noqa: PLC0415 — resolved on access only
-
-    return getattr(import_module(module_name), attr)
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)
 
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -151,7 +141,7 @@ def get_workflow_run_id() -> str:
 def build_output_path() -> str:
     """SDK-internal: compose the standardized output path for the current run.
 
-    Returns the path under ``WORKFLOW_OUTPUT_PATH_TEMPLATE`` for the
+    Returns the run prefix (``WORKFLOW_OUTPUT_PATH_TEMPLATE``) of the
     workflow currently executing this activity (e.g.
     ``artifacts/apps/appName/workflows/wf-123/run-456``).
 
@@ -168,10 +158,10 @@ def build_output_path() -> str:
     that runs as a generic activity and has no ``Input`` parameter to
     read the workflow ID from.
     """
-    return WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
-        application_name=AppRegistry.resolve_running_app_name(),
-        workflow_id=get_workflow_id(),
-        run_id=get_workflow_run_id(),
+    return _run_prefix(
+        AppRegistry.resolve_running_app_name(),
+        get_workflow_id(),
+        get_workflow_run_id(),
     )
 
 

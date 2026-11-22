@@ -746,8 +746,9 @@ These fields are emitted into `app/generated/_e2e_base.py` and are required by `
 |---|---|---|---|
 | `argoTemplateName` | String | `"atlan-{name}"` | Argo WorkflowTemplate resource name as deployed in-cluster. Matches `taskQueuePrefix` by default. |
 | `appServiceUrl` | String | `"http://{name}.{name}-app.svc.cluster.local"` | In-cluster Dapr service URL forwarded to by the e2e harness. Override when the app's Kubernetes service name deviates from the standard `{name}-app` pattern. |
+| `e2eOverrides` | E2EOverrides | `{}` | E2E-harness-only overrides for a single-entrypoint app. Optional `connectorShortName`, `connectionType` and `connectionCategory` replace the values generated into `app/generated/_e2e_base.py`; an unset field keeps the derived value, so the default output is byte-identical. Setting `connectorShortName` changes which app the run targets (the harness fills the manifest's `{app_name}` token from it); when the app writes its primary credential configmap (`uiConfig` set, `hasCredentialConfig`, and `credentialAuthOptions` set) it also emits `connector_config_name` (the root `connectorConfigName`; never on a system app), and an alias on an app whose only credential configs are `additionalCredentialConfigs` is refused. `argoPackageName`, `argoTemplateName` and `connectorConfigName` are refused here: set the root properties of the same names. Changes no other generated file, and not the base class, which still follows `connector.category`. Use `connectionType` / `connectionCategory` when the app enriches a connection of a source it does not declare as its `connector`, e.g. a query-history miner whose user picks any database connection: `e2eOverrides { connectionType = "postgres"; connectionCategory = "database" }`. `"warehouse"` is the harness default, so the toolkit never emits it. Refused on a multi-entrypoint bundle root and on an entrypoint's `contract`; use `Entrypoint.e2eOverrides` there. |
 
-A system app (`type = "system"`) gets a base that extends `SystemAppE2ETest` instead. That class submits straight to Automation Engine on the system-app tenant pool, so the base carries only `connector_short_name` (plus `connection_type` / `connection_category` when a `connector` is declared): no `argo_*` names and no `app_service_url`, because no Heracles envelope is sent. A bundle entrypoint of a system app is generated the same way and keeps its `manifest_path` and `entrypoint`. When the app generates no `manifest.json`, the base carries a comment telling the suite to set `manifest_path` to a fixture DAG copied from a calling connector's manifest, and to set `required_dag_nodes`.
+A system app (`type = "system"`) gets a base that extends `SystemAppE2ETest` instead. That class submits straight to Automation Engine on the system-app tenant pool, so the base carries only `connector_short_name` (plus `connection_type` / `connection_category` when a `connector` is declared or `e2eOverrides` names them): no `argo_*` names and no `app_service_url`, because no Heracles envelope is sent. A bundle entrypoint of a system app is generated the same way and keeps its `manifest_path` and `entrypoint`. When the app generates no `manifest.json`, the base carries a comment telling the suite to set `manifest_path` to a fixture DAG copied from a calling connector's manifest, and to set `required_dag_nodes`.
 
 The class attributes a generated base may assign are listed in `SdkNames.e2eBaseAttributes`, and `App.pkl` refuses to emit any other. `scripts/test-sdk-import.py` checks each listed name is declared on `BaseE2ETest`, and that every name a generated example's base assigns is declared on its SDK base class, so an SDK rename fails CI instead of leaving a dead attribute in every connector. `connection_category` is left out when it equals the SDK default (`SdkNames.e2eConnectionCategoryDefault`, `"warehouse"`). A generated `_e2e_substitutions.py` never redeclares a field its SDK parent declares (`SdkNames.mustacheSubstitutionFields` / `sqlMustacheSubstitutionFields`, checked equal to the SDK models' fields).
 
@@ -1252,7 +1253,7 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 | `categories` | Listing\<String\> | `[]` | Marketplace category tags for this entrypoint. |
 | `docsUrl` | String? | null | Documentation URL. Falls back to the app-level `docsUrl` when null. |
 | `packageId` | String? | null | Stable marketplace package ID (e.g. `"@atlan/qlik-sense"`). When set, emits `package_id:` and `marketplace_card: true` in `atlan.yaml`. Required for multi-entrypoint apps to preserve backward compat with legacy Argo workflows that reference the app by its stable card ID. Entrypoints without a `packageId` are routable but do not appear as marketplace cards. |
-| `e2eOverrides` | E2EOverrides | `{}` | E2E-harness-only overrides for a bundle entrypoint. Optional `connectorShortName`, `argoPackageName`, `argoTemplateName` and `connectorConfigName` replace the values generated into `app/generated/<entrypoint>/_e2e_base.py`; an unset field keeps the derived value. Changes no other generated file: not `atlan.yaml`, the manifests or the marketplace card. Use it when an entrypoint's e2e identity can't be derived, e.g. its name matches no `argoPackageNames` leaf and `packageId` would re-key the card. |
+| `e2eOverrides` | E2EOverrides | `{}` | E2E-harness-only overrides for a bundle entrypoint. Optional `connectorShortName`, `argoPackageName`, `argoTemplateName`, `connectorConfigName`, `connectionType` and `connectionCategory` replace the values generated into `app/generated/<entrypoint>/_e2e_base.py`; an unset field keeps the derived value. Changes no other generated file: not `atlan.yaml`, the manifests or the marketplace card. Use it when an entrypoint's e2e identity can't be derived, e.g. its name matches no `argoPackageNames` leaf and `packageId` would re-key the card. |
 | `contract` | Typed? | null | The entrypoint's `App.pkl` contract whose `output.files` are emitted. |
 
 Bundle output layout:
@@ -2407,7 +2408,7 @@ form looks the same:
 | `AgentSelector` | `agent` | `dict[str, Any]` | `agentConfigEntries` — use `Listing<Any>` with `Mapping` for nested objects needing `"default"` keys |
 | `InfoBanner` | `infoBanner` | omitted by default | Static markdown banner with `bannerType`, `content`, optional `iconName`, `hideBannerIcon`, and `linkConfig`. Defaults to `includeInManifest=false` and `includeInInput=false`. Use `widgetName = "InfoBanner"` for credential banners that need that casing. |
 | `Switcher` | `switcher` | `bool` | Boolean switch with `switchTitle`, `defaultSelection`, optional `begin`, and `toastConfig`. Can be used in credential configs through `NamedWidget`. |
-| `ConditionalInput` | configurable | `str` or `dict` | `baseWidgetType` (default `"radio"`), `conditions`, sqltree/connection/credential-specific properties, generic InfoBanner props, and `outputValueType` for object-returning branches |
+| `ConditionalInput` | configurable | `str` or `dict` | `baseWidgetType` (default `"radio"`), `conditions`, sqltree/connection/credential-specific properties, generic InfoBanner props, `outputValueType` for object-returning branches, and `stringMap` (see [String-map conditionals](#string-map-conditionals-stringmap)) |
 | `CustomWidget` | `<widgetName>` | `str` | Escape hatch for bespoke frontend components. `widgetName` picks the component; `props` pass through verbatim into the `ui` object. Use sparingly — prefer typed widgets. |
 
 ##### SageV2 warmup
@@ -4223,6 +4224,54 @@ from application_sdk.contracts.types import TreeSelection
   Its filters are `TreeSelection | str` and keep every level of the tree. A JSON-object string, the form the Automation Engine sends, is decoded into the tree, so `'{"cat": {"ns": {"t": {}}}}'` arrives as a dict. `None`, regex strings and legacy quoted-CSV strings are handled as in `ExtractionInput`. The SQL-injection check still applies, including its nesting-depth limit (trees deeper than 5 levels are refused). A `FilterMap`-shaped value (`{"db": ["schema"]}`, its JSON string, or a list) is refused: its values are regex patterns, not selected nodes. In this mode every filter widget must be a tree widget that sets `treeSelection`, or a `TextInput` (a regex fills the `str` arm); any other filter widget fails evaluation. The class is for apps that read the filters themselves: `SqlMetadataExtractor` and `SqlApp` refuse it with `SqlTreeFilterInputUnsupportedError`, because their task inputs keep two levels. Setting the flag on these widgets was ignored before, so a contract that already sets it changes base class on upgrade. See [`examples/tree-filters/`](../examples/tree-filters/).
 - **Minimum versions for the filter case:** the first contract-toolkit release after 0.33.0 (on 0.33.0 and earlier the flag is ignored on these two widgets, with no error), and the first SDK release that includes `TreeSelectionExtractionInput` (3.47.0 and earlier do not; on those the generated `_input.py` fails at import with `ImportError`). Raise the SDK floor to that release in the same change that sets the flag.
 
+
+---
+
+## String-map conditionals (`stringMap`)
+
+`stringMap: Boolean = false` on `ConditionalInput` (both `Widgets.ConditionalInput` and `Config.ConditionalInput`), for a field with `outputValueType = "object"`.
+
+**Why.** An object-valued conditional renders `Annotated[dict[str, Any], MaxItems(1000)]`. The SDK refuses `Any` (`PayloadSafetyError [AAF-CTR-002]`), so the generated `_input.py` does not import. When the widget behind the conditional stores a flat string-to-string map, `stringMap = true` types the field as `Annotated[dict[str, str], MaxItems(1000)]` instead.
+
+**When to use it.** The conditional's value is a single-level map whose values are strings. The typical case is a `div` base whose condition swaps in the `dsnTreeMap` widget, which stores `{"<dsn name>": "<connection qualified name>"}`:
+
+```pkl
+["odbc-dsn-config-mapping"] = new Config.ConditionalInput {
+  title = ""
+  baseWidgetType = "div"
+  outputValueType = "object"
+  stringMap = true
+  default = "{}"
+  conditions {
+    new Config.Condition {
+      property = "enable-odbc-connectivity-mapping"
+      value = "true"
+      overrideUi = new Mapping { ["widget"] = "dsnTreeMap" }
+    }
+  }
+}
+```
+
+Do not use it for nested selections; use `treeSelection` on an apitree for those.
+
+**What changes in generated output.**
+
+- The field type becomes `Annotated[dict[str, str], MaxItems(1000)]`.
+- The field leaves the shared `_coerce_json_object_strings` validator and gets its own `mode="before"` validator, `_coerce_string_maps`:
+  - a dict passes through unchanged (and is then type-checked);
+  - a JSON-object string is decoded into a dict;
+  - `None`, a blank string, a string that is not valid JSON, or valid JSON that is not an object (`"false"`, `"[]"`, `"1"`) becomes `{}`, with a debug log that never includes the value.
+
+  Saved configs where a stray scalar ended up in the map field keep validating, as an empty map.
+- A map with a non-string value (`{"dsn": {"host": "h"}}`, `{"dsn": 1}`) fails validation.
+
+**What does not change.** The workflow config JSON (`{name}.json`), the manifest, and the wire format. The flag affects only the Python input model.
+
+**Caveats.**
+
+- Evaluation fails if `stringMap = true` is set on a conditional whose `outputValueType` is not `"object"`, including a field with `includeInInput = false`.
+- Evaluation fails if `stringMap = true` and `treeSelection = true` are both set (`Widgets.ConditionalInput`): they declare conflicting types (`dict[str, str]` vs `TreeSelection`).
+- The default (`false`) keeps the existing `dict[str, Any]` type and the shared coercion, so existing contracts generate byte-identical output.
 ---
 
 ## Post-processing generated output (`contract/post-generate.sh`)

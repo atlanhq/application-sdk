@@ -189,7 +189,9 @@ class TestConvertJsonToParquet:
         file_path = "/path/input.json"
 
         # Act
-        with patch("application_sdk.common.file_converter.logger.error") as mock_logger:
+        with patch(
+            "application_sdk.common.file_converter.logger.warning"
+        ) as mock_logger:
             result = convert_json_to_parquet(file_path)
 
         # Assert
@@ -209,7 +211,9 @@ class TestConvertJsonToParquet:
             patch(
                 "pyarrow.parquet.write_table", side_effect=OSError("disk full")
             ) as mock_write,
-            patch("application_sdk.common.file_converter.logger.error") as mock_logger,
+            patch(
+                "application_sdk.common.file_converter.logger.warning"
+            ) as mock_logger,
         ):
             result = convert_json_to_parquet(str(source))
 
@@ -266,7 +270,9 @@ class TestConvertParquetToJson:
         file_path = "/path/input.parquet"
 
         # Act
-        with patch("application_sdk.common.file_converter.logger.error") as mock_logger:
+        with patch(
+            "application_sdk.common.file_converter.logger.warning"
+        ) as mock_logger:
             result = convert_parquet_to_json(file_path)
 
         # Assert
@@ -284,7 +290,9 @@ class TestConvertParquetToJson:
         file_path = "/path/input.parquet"
 
         # Act
-        with patch("application_sdk.common.file_converter.logger.error") as mock_logger:
+        with patch(
+            "application_sdk.common.file_converter.logger.warning"
+        ) as mock_logger:
             result = convert_parquet_to_json(file_path)
 
         # Assert

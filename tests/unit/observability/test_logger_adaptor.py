@@ -34,11 +34,13 @@ from application_sdk.observability.logger_adaptor import (
     _format_exception_stacktrace,
     _format_printf_args,
     _has_remote_otlp_endpoint,
+    _LazyLoggerProxy,
     _make_log_record_dict,
     _normalize_log_extra_value,
     _redact_exception_records,
     get_logger,
 )
+from application_sdk.observability.observability import AtlanObservability
 from application_sdk.testing.hypothesis.strategies.common.logger import (
     activity_info_strategy,
     workflow_info_strategy,
@@ -373,7 +375,8 @@ async def test_objectstore_sink_buffering():
         }
 
         # Call objectstore_sink
-        await logger_adapter.objectstore_sink(test_message)
+        with pytest.warns(DeprecationWarning, match="objectstore_sink"):
+            await logger_adapter.objectstore_sink(test_message)
 
         # Verify log was added to buffer
         assert len(logger_adapter._buffer) == 1
@@ -399,7 +402,8 @@ async def test_objectstore_sink_error_handling():
         }
 
         # Call objectstore_sink - should not raise exception
-        await logger_adapter.objectstore_sink(test_message)
+        with pytest.warns(DeprecationWarning):
+            await logger_adapter.objectstore_sink(test_message)
 
         # Verify buffer is empty (error was handled)
         assert len(logger_adapter._buffer) == 0
@@ -1103,8 +1107,8 @@ def test_warning_inlines_exc_info_in_message(logger_adapter: AtlanLoggerAdapter)
         logger_adapter.warning("Original warning message", exc_info=exc_info)
 
     mock_loguru.bind.assert_called_once_with(logger_name="test_logger")
-    mock_bound.opt.assert_called_once_with(exception=exc_info)
-    mock_opt.warning.assert_called_once_with("Processed warning message")
+    mock_bound.opt.assert_called_once_with(depth=1, exception=exc_info)
+    mock_opt.log.assert_called_once_with("WARNING", "Processed warning message")
 
 
 def test_exception_defaults_exc_info_true(logger_adapter: AtlanLoggerAdapter):
@@ -1561,7 +1565,8 @@ class TestPeriodicFlushStartsOnSharedLoop:
         # Close the coroutine the mock swallowed, so it is not reported as
         # never awaited.
         shared_loop.start.call_args.args[0].close()
-        assert AtlanLoggerAdapter._flush_task is shared_loop.start.return_value
+        owner = AtlanObservability._periodic_flush_owners[AtlanLoggerAdapter]
+        assert owner._periodic_flush_task is shared_loop.start.return_value
         return shared_loop
 
     def test_without_a_running_loop(self):
@@ -1571,6 +1576,27 @@ class TestPeriodicFlushStartsOnSharedLoop:
         before = asyncio.all_tasks()
         self._construct("test_flush_in_loop")
         assert asyncio.all_tasks() == before
+
+    def test_a_second_adapter_shares_the_flush(self):
+        shared_loop = self._construct("test_flush_shared_a")
+        with mock.patch(
+            "application_sdk.observability.observability.observability_loop",
+            shared_loop,
+        ):
+            AtlanLoggerAdapter("test_flush_shared_b")
+        shared_loop.start.assert_called_once()
+
+    def test_reset_stops_the_flush(self):
+        """FND-4918: the reset used to clear the "started" guard only.
+
+        The old flush kept running on the shared loop, and the next adapter
+        started a second one beside it.
+        """
+        shared_loop = self._construct("test_flush_reset")
+        handle = shared_loop.start.return_value
+        AtlanLoggerAdapter._reset_for_testing()
+        handle.cancel.assert_called_once()
+        assert AtlanLoggerAdapter not in AtlanObservability._periodic_flush_owners
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -1969,15 +1995,16 @@ class TestLoggingMethodsForwardToLoguru:
         return mocked, bound, opt
 
     def test_debug_no_exc_info(self, logger_adapter: AtlanLoggerAdapter):
-        _, bound, _ = self._wire_mock(logger_adapter)
+        _, bound, opt = self._wire_mock(logger_adapter)
         logger_adapter.debug("hello %s", "world")
-        bound.debug.assert_called_once()
+        bound.opt.assert_called_once_with(depth=1, exception=None)
+        opt.log.assert_called_once_with("DEBUG", "hello world")
 
     def test_info_with_exc_info(self, logger_adapter: AtlanLoggerAdapter):
         _, bound, opt = self._wire_mock(logger_adapter)
         logger_adapter.info("oops", exc_info=True)
-        bound.opt.assert_called_once_with(exception=True)
-        opt.info.assert_called_once()
+        bound.opt.assert_called_once_with(depth=1, exception=True)
+        opt.log.assert_called_once_with("INFO", "oops")
 
     def test_critical_forces_sync_flush(self, logger_adapter: AtlanLoggerAdapter):
         self._wire_mock(logger_adapter)
@@ -1994,28 +2021,118 @@ class TestLoggingMethodsForwardToLoguru:
     def test_activity_logs_with_activity_log_type(
         self, logger_adapter: AtlanLoggerAdapter
     ):
-        _, bound, _ = self._wire_mock(logger_adapter)
-        logger_adapter.activity("act-msg")
+        _, _, opt = self._wire_mock(logger_adapter)
+        with pytest.warns(DeprecationWarning, match="AtlanLoggerAdapter.activity"):
+            logger_adapter.activity("act-msg")
         # bind() should have received log_type=activity
-        _, bind_kwargs = bound.log.call_args if bound.log.call_args else ((), {})
+        _, bind_kwargs = opt.log.call_args if opt.log.call_args else ((), {})
         called_with = logger_adapter.logger.bind.call_args.kwargs
         assert called_with.get("log_type") == "activity"
-        bound.log.assert_called_once()
-        assert bound.log.call_args.args[0] == "ACTIVITY"
+        opt.log.assert_called_once()
+        assert opt.log.call_args.args[0] == "ACTIVITY"
 
     def test_metric_logs_with_metric_log_type(self, logger_adapter: AtlanLoggerAdapter):
-        _, bound, _ = self._wire_mock(logger_adapter)
+        _, _, opt = self._wire_mock(logger_adapter)
         logger_adapter.metric("m")
         called_with = logger_adapter.logger.bind.call_args.kwargs
         assert called_with.get("log_type") == "metric"
-        assert bound.log.call_args.args[0] == "METRIC"
+        assert opt.log.call_args.args[0] == "METRIC"
 
     def test_tracing_logs_with_trace_log_type(self, logger_adapter: AtlanLoggerAdapter):
-        _, bound, _ = self._wire_mock(logger_adapter)
+        _, _, opt = self._wire_mock(logger_adapter)
         logger_adapter.tracing("t")
         called_with = logger_adapter.logger.bind.call_args.kwargs
         assert called_with.get("log_type") == "trace"
-        assert bound.log.call_args.args[0] == "TRACING"
+        assert opt.log.call_args.args[0] == "TRACING"
+
+    def test_records_are_attributed_to_the_level_method(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        """function/line (exported as OTel code.function) name the public level
+        method, not the shared ``_emit`` frame, on the adapter and the proxy."""
+        functions: list[str] = []
+        handler_id = logger_adapter.logger.add(
+            lambda m: functions.append(m.record["function"]), level=0
+        )
+        try:
+            logger_adapter.info("adapter")
+            logger_adapter.warning("adapter")
+            logger_adapter.opt(lazy=True).info("proxy")
+        finally:
+            logger_adapter.logger.remove(handler_id)
+        assert functions == ["info", "warning", "info"]
+
+    @pytest.mark.parametrize(
+        "method", ["debug", "info", "warning", "error", "critical", "metric", "tracing"]
+    )
+    def test_bad_format_string_is_swallowed(
+        self, logger_adapter: AtlanLoggerAdapter, method: str
+    ):
+        """Every level method logs-and-swallows a failure; tracing used to raise."""
+        self._wire_mock(logger_adapter)
+        with (
+            mock.patch.object(
+                logger_adapter, "process", side_effect=TypeError("bad format")
+            ),
+            mock.patch.object(logger_adapter, "_sync_flush") as fl,
+        ):
+            getattr(logger_adapter, method)("x")
+            fl.assert_called_once()
+
+    @pytest.mark.parametrize(
+        ("method", "level", "log_type"),
+        [("metric", "METRIC", "metric"), ("tracing", "TRACING", "trace")],
+    )
+    def test_custom_levels_honour_exc_info(
+        self,
+        logger_adapter: AtlanLoggerAdapter,
+        method: str,
+        level: str,
+        log_type: str,
+    ):
+        """exc_info attaches the exception instead of binding as a context field."""
+        mocked, bound, opt = self._wire_mock(logger_adapter)
+        getattr(logger_adapter, method)("m", exc_info=True)
+        bind_kwargs = mocked.bind.call_args.kwargs
+        assert "exc_info" not in bind_kwargs
+        assert bind_kwargs["log_type"] == log_type
+        bound.opt.assert_called_once_with(depth=1, exception=True)
+        opt.log.assert_called_once_with(level, "m")
+
+    @pytest.mark.parametrize(
+        ("level", "method"),
+        [
+            (logging.DEBUG, "debug"),
+            (logging.INFO, "info"),
+            (logging.WARNING, "warning"),
+            (logging.ERROR, "error"),
+            (logging.CRITICAL, "error"),
+        ],
+    )
+    def test_log_dispatches_on_adapter_and_lazy_proxy(
+        self, logger_adapter: AtlanLoggerAdapter, level: int, method: str
+    ):
+        """The adapter and its lazy proxy bucket stdlib levels the same way."""
+        with mock.patch.object(logger_adapter, method) as m:
+            logger_adapter.log(level, "x")
+            m.assert_called_once_with("x")
+        proxy = logger_adapter.opt(lazy=True)
+        with mock.patch.object(type(proxy), method) as m:
+            proxy.log(level, "x")
+            m.assert_called_once_with("x")
+
+    @pytest.mark.parametrize(
+        "method", ["debug", "info", "warning", "error", "critical"]
+    )
+    def test_lazy_proxy_forwards_level_and_swallows(
+        self, logger_adapter: AtlanLoggerAdapter, method: str
+    ):
+        inner = mock.MagicMock()
+        proxy = _LazyLoggerProxy(inner)
+        getattr(proxy, method)("m {x}", x=1)
+        inner.log.assert_called_once_with(method.upper(), "m {x}", x=1)
+        inner.log.side_effect = RuntimeError("boom")
+        getattr(proxy, method)("m")  # must not raise
 
     def test_debug_logging_swallows_internal_exceptions(
         self, logger_adapter: AtlanLoggerAdapter
@@ -2206,7 +2323,8 @@ class TestOtlpSinkErrorPath:
             "function": "f",
         }
         # Should not raise even if provider missing or anything else fails.
-        logger_adapter.otlp_sink(msg)
+        with pytest.warns(DeprecationWarning, match="otlp_sink"):
+            logger_adapter.otlp_sink(msg)
 
 
 class TestSendToOtelSwallowsErrors:
@@ -2217,13 +2335,6 @@ class TestSendToOtelSwallowsErrors:
         ):
             # Must not raise.
             logger_adapter._send_to_otel({"any": "record"})
-
-
-def test_reset_for_testing_also_resets_flush_task_started():
-    """Documents the leak between tests in the class-level flush task flag."""
-    AtlanLoggerAdapter._flush_task_started = True
-    AtlanLoggerAdapter._reset_for_testing()
-    assert AtlanLoggerAdapter._flush_task_started is False
 
 
 # ---------------------------------------------------------------------------
@@ -3070,7 +3181,8 @@ class TestReplayLogSuppression:
         adapter.warning("should-suppress-warning")
         adapter.error("should-suppress-error")
         adapter.critical("should-suppress-critical")
-        adapter.activity("should-suppress-activity")
+        with pytest.warns(DeprecationWarning):
+            adapter.activity("should-suppress-activity")
         adapter.metric("should-suppress-metric")
         adapter.tracing("should-suppress-tracing")
 

@@ -1,11 +1,16 @@
 """Unit test configuration and autouse fixtures."""
 
+import importlib
 import importlib.util
 import os
 import time
 from collections.abc import Callable, Iterator
-from unittest.mock import AsyncMock, Mock, patch
+from contextlib import contextmanager
+from types import ModuleType
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from hypothesis import settings
 from loguru import logger as _loguru_logger
@@ -119,21 +124,6 @@ def loguru_capture():
         # from dying in teardown. Note the capture is *incomplete* when this
         # fires — anything logged after the wipe never reached ``records``.
         pass
-
-
-def _safe_patch(target, side_effect=None, mock_obj=None):
-    """Create a patch context that gracefully handles unresolvable targets."""
-    try:
-        if mock_obj is not None:
-            ctx = patch(target, mock_obj)
-        elif side_effect is not None:
-            ctx = patch(target, side_effect=side_effect)
-        else:
-            ctx = patch(target)
-        ctx.__enter__()
-        return ctx
-    except (AttributeError, ModuleNotFoundError):
-        return None
 
 
 @pytest.fixture(autouse=True)
@@ -272,6 +262,20 @@ def _clear_infrastructure() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _reset_dropped_log_keys() -> Iterator[None]:
+    """Clear the logger's dropped-key bookkeeping around every unit test.
+
+    A key one test drops is reported by the next adapter call in the process,
+    which would otherwise be another test's call on a mocked logger.
+    """
+    from application_sdk.observability import logger_adaptor
+
+    logger_adaptor._reset_dropped_keys_for_testing()
+    yield
+    logger_adaptor._reset_dropped_keys_for_testing()
+
+
+@pytest.fixture(autouse=True)
 def _reset_sizing_sink() -> Iterator[None]:
     """Drop the lazily built, process-wide sizing sink around every unit test.
 
@@ -285,6 +289,20 @@ def _reset_sizing_sink() -> Iterator[None]:
     sizing_sink._reset_for_testing()
     yield
     sizing_sink._reset_for_testing()
+
+
+@pytest.fixture(autouse=True)
+def _reset_self_failure_rate_limit() -> Iterator[None]:
+    """Forget which observability self-failures were logged around every test.
+
+    The limiter is process-wide: without the reset, a test that triggers a
+    self-failure silences the same message in every later test on the worker.
+    """
+    from application_sdk.observability import utils
+
+    utils._self_failure_rate_limit.reset()
+    yield
+    utils._self_failure_rate_limit.reset()
 
 
 @pytest.fixture(autouse=True)
@@ -365,42 +383,99 @@ def deterministic_dapr_cold_start_deadline(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def mock_secret_store():
-    """Automatically mock get_deployment_secret for all unit tests."""
-    ctx = _safe_patch(
+def mock_secret_store() -> Iterator[None]:
+    """Automatically mock get_deployment_secret for all unit tests.
+
+    A plain ``patch``: if the target is renamed, every unit test errors at
+    setup instead of running unmocked (FND-4287).
+    """
+    with patch(
         "application_sdk.infrastructure.secrets.get_deployment_secret",
         side_effect=lambda key, **_: None,
-    )
-    yield
-    if ctx is not None:
-        ctx.__exit__(None, None, None)
+    ):
+        yield
+
+
+class UnmockedDaprSidecarCallError(RuntimeError):
+    """A unit test sent a request towards the Dapr sidecar without mocking it.
+
+    A ``RuntimeError`` like pytest-socket's ``SocketBlockedError``, so code
+    that catches ``httpx`` errors does not swallow it, and a test that
+    passes on a socket-guarded POSIX leg behaves the same on Windows.
+    """
+
+
+class _SidecarInterceptingTransport(httpx.AsyncHTTPTransport):
+    """A real ``AsyncHTTPTransport`` that refuses to send.
+
+    Subclassing keeps construction real (the pool limits a test inspects
+    are still there); only sending a request is refused.
+    """
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        raise UnmockedDaprSidecarCallError(
+            f"unit test sent {request.method} {request.url} to the Dapr sidecar; "
+            "mock the transport or the client instead"
+        )
+
+
+@contextmanager
+def intercept_dapr_sidecar(module: ModuleType | str) -> Iterator[ModuleType]:
+    """Make every request *module* sends with ``httpx`` raise instead.
+
+    *module* gets a private copy of ``httpx`` (see :func:`private_stdlib`)
+    whose ``AsyncHTTPTransport`` refuses to send, and whose ``AsyncClient``
+    uses that transport when the caller passes none. ``AsyncDaprClient``
+    builds its transport from the first; ``wait_for_dapr_sidecar`` uses the
+    second. A test that patches ``<module>.httpx.AsyncClient`` or swaps
+    ``client._client._transport._async_transport`` replaces the interceptor
+    for itself, which is the point.
+
+    Raises ``AttributeError`` if *module* has no ``httpx`` global, so a
+    refactor that moves the sidecar calls fails every unit test rather than
+    silently leaving them unguarded, as the old ``DaprClient`` patch did.
+    """
+    target = importlib.import_module(module) if isinstance(module, str) else module
+    if not hasattr(target, "httpx"):
+        raise AttributeError(
+            f"{target.__name__} has no 'httpx' global: the Dapr sidecar "
+            "interceptor no longer covers it; retarget intercept_dapr_sidecar"
+        )
+
+    class _InterceptedAsyncClient(httpx.AsyncClient):
+        def __init__(
+            self,
+            *args: Any,
+            transport: httpx.AsyncBaseTransport | None = None,
+            **kwargs: Any,
+        ) -> None:
+            super().__init__(
+                *args,
+                transport=(
+                    transport
+                    if transport is not None
+                    else _SidecarInterceptingTransport()
+                ),
+                **kwargs,
+            )
+
+    with private_stdlib(target, "httpx") as local_httpx:
+        local_httpx.AsyncHTTPTransport = _SidecarInterceptingTransport  # type: ignore[attr-defined]  # — the private copy, not the real httpx
+        local_httpx.AsyncClient = _InterceptedAsyncClient  # type: ignore[attr-defined]  # — the private copy, not the real httpx
+        yield local_httpx
 
 
 @pytest.fixture(autouse=True)
-def mock_dapr_client():
-    """Automatically mock DaprClient for all unit tests to prevent Dapr health check timeouts."""
+def _intercept_dapr_sidecar() -> Iterator[None]:
+    """Refuse every unmocked request to the Dapr sidecar (FND-4287).
 
-    def _make_mock_dapr():
-        mock_instance = Mock()
-        mock_instance.publish_event = Mock()
-        mock_instance.invoke_binding = Mock()
-        mock_instance.get_state = Mock(return_value=Mock(data=None))
-        mock_instance.save_state = Mock()
-        mock_instance.get_secret = Mock(return_value=Mock(secret={}))
-        return mock_instance
-
-    mock_dapr = Mock()
-    mock_instance = _make_mock_dapr()
-    mock_dapr.return_value.__enter__ = Mock(return_value=mock_instance)
-    mock_dapr.return_value.__exit__ = Mock(return_value=None)
-
-    ctx = _safe_patch(
-        "application_sdk.infrastructure._dapr.client.DaprClient",
-        mock_obj=mock_dapr,
-    )
-    yield
-    if ctx is not None:
-        ctx.__exit__(None, None, None)
+    CI legs run under ``--disable-socket``, but a local ``pytest`` run does
+    not, and there a stray call would reach a real sidecar on
+    ``localhost:3500`` if one is up. This makes an unmocked Dapr call fail
+    the same way in CI and locally, with an error that names the request.
+    """
+    with intercept_dapr_sidecar("application_sdk.infrastructure._dapr.http"):
+        yield
 
 
 #: Mirrors ``components/objectstore.yaml`` except for the root, which the

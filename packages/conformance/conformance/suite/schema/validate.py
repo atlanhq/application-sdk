@@ -59,7 +59,7 @@ def validate_against_schema(
     jsonschema.validate(instance=doc, schema=_load_schema(schema_path))
 
 
-def validate_sarif(report_or_dict: Any) -> None:  # type: ignore[misc]
+def validate_sarif(report_or_dict: Any) -> None:
     """Validate *report_or_dict* against the vendored SARIF 2.1.0 JSON Schema.
 
     Parameters

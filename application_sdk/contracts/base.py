@@ -71,6 +71,7 @@ from typing import (
     ClassVar,
     Protocol,
     TypeVar,
+    Unpack,
     get_args,
     get_origin,
     get_type_hints,
@@ -82,8 +83,11 @@ import typing_extensions
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_core import PydanticUndefined
 
+from application_sdk import _deprecation
 from application_sdk._logging import get_logger
-from application_sdk.errors import CONTRACT_VALIDATION, PAYLOAD_SAFETY, ErrorCode
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
 
 _logger = get_logger(__name__)
@@ -134,7 +138,7 @@ class SerializableEnum(StrEnum):
     """
 
     @staticmethod
-    def _generate_next_value_(  # type: ignore[override]
+    def _generate_next_value_(
         name: str, start: int, count: int, last_values: list[str]
     ) -> str:
         """Auto-generate value from name in lowercase.
@@ -279,7 +283,7 @@ class Input(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _warn_on_unknown_keys(cls, data: Any) -> Any:
+    def _warn_on_unknown_keys(cls, data: object) -> object:
         """Warn when the incoming payload contains keys not declared on the model.
 
         Pydantic silently drops unknown keys by default. That default masks
@@ -347,7 +351,7 @@ class Input(BaseModel):
             n = name.lower()
             return any(p in n for p in SENSITIVE)
 
-        def safe_value(v: Any) -> Any:
+        def safe_value(v: object) -> object:
             if isinstance(v, str):
                 if len(v) > 200:
                     return f"{v[:100]}...({len(v)} chars)"
@@ -420,12 +424,12 @@ class Input(BaseModel):
                 continue
             if (
                 field_info.default_factory is not None
-                and value == field_info.default_factory()  # type: ignore[call-arg]
+                and value == field_info.default_factory()  # pyright: ignore[reportCallIssue]
             ):
                 continue
             data[name] = value
 
-        def default_serializer(obj: Any) -> Any:
+        def default_serializer(obj: object) -> object:
             if isinstance(obj, BaseModel):
                 return obj.model_dump()
             return str(obj)
@@ -436,7 +440,7 @@ class Input(BaseModel):
         return hashlib.sha256(content).hexdigest()[:16]
 
     def __init_subclass__(
-        cls, allow_unbounded_fields: bool = False, **kwargs: Any
+        cls, allow_unbounded_fields: bool = False, **kwargs: Unpack[ConfigDict]
     ) -> None:
         """Validate payload safety when Input subclasses are defined.
 
@@ -454,7 +458,7 @@ class Input(BaseModel):
 
         # Store the flag for potential later checks
         if allow_unbounded_fields:
-            cls._allow_unbounded_fields = True  # type: ignore[attr-defined]
+            cls._allow_unbounded_fields = True
 
         # Validate payload safety, skipping internal framework fields
         validate_payload_safety(cls, skip_fields=set())
@@ -509,7 +513,7 @@ class Output(BaseModel):
     Populated automatically — do not set manually."""
 
     def __init_subclass__(
-        cls, allow_unbounded_fields: bool = False, **kwargs: Any
+        cls, allow_unbounded_fields: bool = False, **kwargs: Unpack[ConfigDict]
     ) -> None:
         """Validate payload safety when Output subclasses are defined.
 
@@ -527,7 +531,7 @@ class Output(BaseModel):
 
         # Store the flag for potential later checks
         if allow_unbounded_fields:
-            cls._allow_unbounded_fields = True  # type: ignore[attr-defined]
+            cls._allow_unbounded_fields = True
 
         # Skip framework-managed fields — metrics and artifacts are populated
         # by the OutputInterceptor, not by user code, and are bounded in
@@ -591,15 +595,21 @@ class Record(BaseModel):
 # =============================================================================
 
 
-class ContractValidationError(_InvalidInputError):
+@dataclass(kw_only=True)
+class ContractValidationError(_LegacyErrorCodeMixin, _InvalidInputError):
     """Deprecated: use ``application_sdk.contracts.ContractDeclarationError`` — removed in v4.0."""
 
-    #: Leaf instances never run this ``__init__``; the class default keeps the
-    #: inherited ``error_code`` and ``__str__`` working on them.
-    _error_code: ErrorCode | None = None
-
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CONTRACT_VALIDATION
     code: ClassVar[str] = "INVALID_INPUT_CONTRACT_VALIDATION"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("contract_type", "contract_type"),
+        ("field_name", "field"),
+        ("expected_type", "expected"),
+        ("actual_type", "actual"),
+    )
+    contract_type: str | None = None
+    field_name: str | None = None
+    expected_type: str | None = None
+    actual_type: str | None = None
 
     def __init__(
         self,
@@ -622,27 +632,7 @@ class ContractValidationError(_InvalidInputError):
         self.field_name = field_name
         self.expected_type = expected_type
         self.actual_type = actual_type
-        self._error_code = error_code
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.contract_type:
-            parts.append(f"contract_type={self.contract_type}")
-        if self.field_name:
-            parts.append(f"field={self.field_name}")
-        if self.expected_type:
-            parts.append(f"expected={self.expected_type}")
-        if self.actual_type:
-            parts.append(f"actual={self.actual_type}")
-        return " | ".join(parts)
+        self._set_legacy_error_code(error_code)
 
 
 @dataclass(kw_only=True)
@@ -664,6 +654,7 @@ class ContractDeclarationError(ContractValidationError):
     actual_type: str | None = None
 
 
+@dataclass(kw_only=True)
 class PayloadSafetyError(ContractDeclarationError):
     """Raised when a contract field uses a type that risks exceeding payload limits.
 
@@ -688,8 +679,10 @@ class PayloadSafetyError(ContractDeclarationError):
     - Use allow_unbounded_fields=True class keyword to opt out (use with caution)
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = PAYLOAD_SAFETY
     code: ClassVar[str] = "INVALID_INPUT_PAYLOAD_SAFETY"
+    #: Why the field's type is unsafe. ``field_type`` stays a plain attribute:
+    #: a ``type`` object is not a wire value, so it must not become evidence.
+    reason: str | None = None
 
     def __init__(
         self, cls_name: str, field_name: str, field_type: type, reason: str
@@ -713,7 +706,6 @@ class PayloadSafetyError(ContractDeclarationError):
         self.actual_type: str | None = None
         self.field_type = field_type
         self.reason = reason
-        self._error_code = PAYLOAD_SAFETY
 
 
 # =============================================================================
@@ -729,7 +721,7 @@ _COLLECTION_MODULES = frozenset({"builtins", "collections", "collections.abc"})
 _BARE_ACCEPTED: tuple[type, ...] = (dict, list)
 
 
-def _collection_kind(field_type: Any) -> str | None:
+def _collection_kind(field_type: object) -> str | None:
     """Name of the variable-size collection *field_type* is, or ``None``.
 
     Fails closed: any parameterised iterable class counts (``dict``, ``list``,
@@ -766,7 +758,7 @@ def _collection_kind(field_type: Any) -> str | None:
     return origin.__name__
 
 
-def _is_unbounded_collection(field_type: Any) -> str | None:
+def _is_unbounded_collection(field_type: object) -> str | None:
     """Kind of the unbounded collection *field_type* is (no ``MaxItems``), or ``None``."""
     if get_origin(field_type) is Annotated:
         args = get_args(field_type)
@@ -789,7 +781,7 @@ _TYPE_ALIAS_TYPES: tuple[type, ...] = tuple(
 )
 
 
-def _resolve_alias_reference(ref: str, namespace: dict[str, Any]) -> Any:
+def _resolve_alias_reference(ref: str, namespace: dict[str, Any]) -> object:
     """Resolve a quoted name inside a type alias's value, or ``None``.
 
     ``list["UnsafeMap"]`` keeps the name as a plain string and ``List["UnsafeMap"]``
@@ -803,7 +795,7 @@ def _resolve_alias_reference(ref: str, namespace: dict[str, Any]) -> Any:
     return obj
 
 
-def _is_type_arg(arg: Any) -> bool:
+def _is_type_arg(arg: object) -> bool:
     """Whether a generic's argument is a type to check, not a constraint value."""
     return (
         isinstance(arg, (type, str, typing.ForwardRef, *_TYPE_ALIAS_TYPES))
@@ -812,7 +804,7 @@ def _is_type_arg(arg: Any) -> bool:
 
 
 def _is_forbidden_type(
-    field_type: type,
+    field_type: object,
     _aliases: frozenset[int] = frozenset(),
     _namespace: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
@@ -837,7 +829,8 @@ def _is_forbidden_type(
             return False, ""
         module = sys.modules.get(getattr(field_type, "__module__", "") or "")
         return _is_forbidden_type(
-            field_type.__value__,  # type: ignore[attr-defined]
+            # The alias classes are not typed as having it; both define it.
+            getattr(field_type, "__value__"),
             _aliases | {id(field_type)},
             vars(module) if module is not None else _namespace,
         )
@@ -1033,16 +1026,16 @@ class PublishInputMixin(BaseModel):
                     AppRegistry,
                 )
                 from application_sdk.constants import (  # noqa: PLC0415 — co-located with temporalio import in same try block
-                    WORKFLOW_OUTPUT_PATH_TEMPLATE,
+                    _run_prefix,
                 )
 
-                self.output_path = WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
-                    application_name=AppRegistry.resolve_running_app_name(),
-                    workflow_id=_wf.info().workflow_id,
-                    run_id=_wf.info().run_id,
+                self.output_path = _run_prefix(
+                    AppRegistry.resolve_running_app_name(),
+                    _wf.info().workflow_id,
+                    _wf.info().run_id,
                 )
             # conformance: ignore[E002,E008] api-only install has no Temporal (any missing module here meant "not a workflow context" before the split too, via the broad swallow below); output_path stays empty by design
-            except ModuleNotFoundError:  # noqa: S110 — see above
+            except ModuleNotFoundError:  # see above
                 # The api distribution ships no Temporal: never a workflow
                 # context, so output_path stays empty -- the same outcome as the
                 # broad swallow below, which caught this before the split.
@@ -1050,7 +1043,7 @@ class PublishInputMixin(BaseModel):
                 # worker-only imports above as guarded.)
                 pass
             # conformance: ignore[E002,E004] probe to detect Temporal workflow context; swallow is intentional, output_path stays empty by design
-            except Exception:  # noqa: S110 — not in a Temporal workflow context; output_path stays empty by design
+            except Exception:  # noqa: S110, BLE001 — not in a Temporal workflow context; output_path stays empty by design
                 pass
 
         # Derive transformed_data_prefix from output_path
@@ -1206,3 +1199,25 @@ class ContractMetadata(BaseModel, frozen=True):
     schema_hash: str | None = None
     deprecated: bool = False
     deprecation_message: str | None = None
+
+
+#: The AAF-* constants this module imported before FND-4299, kept importable
+#: from here with a warning until v4.0.0. Literal per entry: the surface gate
+#: and gen-deprecations read this table statically.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "CONTRACT_VALIDATION": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "PAYLOAD_SAFETY": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda name: getattr(_legacy_codes, name),
+)

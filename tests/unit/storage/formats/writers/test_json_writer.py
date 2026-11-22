@@ -23,9 +23,6 @@ def base_output_path(tmp_path_factory: pytest.TempPathFactory) -> str:
     return str(tmp_path / "test_output")
 
 
-@pytest.mark.skip(
-    reason="Failing due to hypothesis error: Invalid size min_size=-16824 < 0"
-)
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(config=json_output_config_strategy)
 async def test_init(base_output_path: str, config: dict[str, Any]) -> None:
@@ -56,9 +53,17 @@ async def test_write_empty(base_output_path: str) -> None:
     assert json_output.total_record_count == 0
 
 
-@pytest.mark.skip(
-    reason="Failing due to hypothesis error: Invalid size min_size=-8432831563820742370 < 0"
-)
+def _uploaded_rows(mock_push: Any) -> int:
+    """Rows across every file the writer handed to the upload, which must exist."""
+    rows = 0
+    for call in mock_push.call_args_list:
+        local_file = call.args[1]
+        assert os.path.exists(local_file), f"uploaded {local_file} is not on disk"
+        with open(local_file, "rb") as f:
+            rows += sum(1 for line in f if line.strip())
+    return rows
+
+
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(df=dataframe_strategy())  # type: ignore
 async def test_write_single_chunk(base_output_path: str, df: pd.DataFrame) -> None:
@@ -76,21 +81,20 @@ async def test_write_single_chunk(base_output_path: str, df: pd.DataFrame) -> No
 
         assert json_output.chunk_count == (1 if not df.empty else 0)
         assert json_output.total_record_count == len(df)
-        if not df.empty:
-            assert os.path.exists(f"{json_output.path}/1.json")
-            mock_push.assert_called_once()
-        else:
-            mock_push.assert_not_called()
+        assert mock_push.call_count == (1 if not df.empty else 0)
+        assert _uploaded_rows(mock_push) == len(df)
 
 
-@pytest.mark.skip(
-    reason="Failing due to hypothesis error: Invalid size min_size=-16824 < 0"
-)
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(df=dataframe_strategy(), chunk_size=chunk_size_strategy)  # type: ignore
 async def test_write_multiple_chunks(
     base_output_path: str, df: pd.DataFrame, chunk_size: int
 ) -> None:
+    """Whatever the chunk size, every row reaches exactly one uploaded file.
+
+    ``chunk_size`` sets the in-memory buffer; file rollover is by
+    ``max_file_size_bytes``, so the number of files is not a function of it.
+    """
     with patch("application_sdk.storage.formats._upload_file") as mock_push:
         json_output = JsonFileWriter(  # type: ignore
             path=os.path.join(base_output_path, "tests", "raw"),
@@ -102,17 +106,10 @@ async def test_write_multiple_chunks(
         )
         await json_output.write(df)
 
-        expected_chunks = (
-            (len(df) + chunk_size - 1) // chunk_size if not df.empty else 0
-        )
-
-        # Check if the files are created on the path json_output.output_path
-        for i in range(1, expected_chunks + 1):
-            assert os.path.exists(f"{json_output.path}/{i}.json")
-
-        assert json_output.chunk_count == expected_chunks
+        assert json_output.chunk_count == (1 if not df.empty else 0)
         assert json_output.total_record_count == len(df)
-        assert mock_push.call_count == expected_chunks
+        assert (mock_push.call_count > 0) == (not df.empty)
+        assert _uploaded_rows(mock_push) == len(df)
 
 
 async def test_write_error(base_output_path: str) -> None:

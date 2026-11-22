@@ -58,6 +58,12 @@ from ._sdk_app import (
     sdk_app_import_aliases,
 )
 from ._sdr import is_sdr_app
+from ._source_cache import (
+    SourceFile,
+    load_source,
+    parse_module,
+    source_cache,
+)
 from ._toml_suppress import (
     SuppressionsMap,
     _is_suppressed,
@@ -126,4 +132,8 @@ __all__ = [
     "make_scan_path",
     "read_source",
     "relative_uri",
+    "SourceFile",
+    "load_source",
+    "parse_module",
+    "source_cache",
 ]

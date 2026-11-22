@@ -73,6 +73,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
+from types import TracebackType
 from typing import Any, Generic, TypeVar
 
 from application_sdk._runtime.offload import run_in_thread
@@ -305,7 +306,7 @@ class _DeepSizer:
     def __init__(self) -> None:
         self._nodes_left = _SIZE_MAX_NODES
 
-    def size(self, obj: Any, depth: int) -> int:
+    def size(self, obj: object, depth: int) -> int:
         size = sys.getsizeof(obj)
         self._nodes_left -= 1
         if depth <= 0 or self._nodes_left <= 0:
@@ -344,7 +345,7 @@ class _DeepSizer:
         return sized * total // count if count else 0
 
 
-def _is_categorical(dtype: Any) -> bool:
+def _is_categorical(dtype: object) -> bool:
     return getattr(dtype, "name", None) == "category"
 
 
@@ -548,7 +549,12 @@ class RollingFileWriter(Generic[T]):
     async def __aenter__(self) -> RollingFileWriter[T]:
         return self
 
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         await self.close()
 
     async def append(self, batch: T) -> None:

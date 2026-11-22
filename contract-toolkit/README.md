@@ -105,7 +105,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/bundle/`](examples/bundle/) — multi-entrypoint app (crawler + miner); shared credential configmap; per-entrypoint artifact subfolders.
 - [`examples/credential-configs/`](examples/credential-configs/) — `additionalCredentialConfigs`: an entrypoint that emits more than one credential configmap (primary + wrapped delivery + bare object-store), and one whose only credential is the shared bare config. The bundle hoists and dedupes them. See [CredentialConfig](docs/reference.md#credentialconfig--additional-credential-configmaps).
 - [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`packageId` on the card entrypoint; route-only entrypoint has none).
-- [`examples/behind-the-scenes/`](examples/behind-the-scenes/) — single-entrypoint app with `marketplaceCard = false`; routable but no marketplace card or `package_id` emitted.
+- [`examples/behind-the-scenes/`](examples/behind-the-scenes/) — single-entrypoint app with `marketplaceCard = false`; routable but no marketplace card or `package_id` emitted. Also sets root `e2eOverrides` (`connectionType` / `connectionCategory`) for an app with no `connector`.
 - [`examples/system-app/`](examples/system-app/) — `type = "system"`: an in-tenant app started by other apps' DAG nodes. No `entrypoints` block, no card, no credential config, no manifest. Typed `inputs` (string, number, enum, bounded list/map, nested object) render `_input.py` without a `uiConfig`. They also render `contract/generated/input.pkl`, the typed DAG node for callers. Its planned toolkit home, `src/system/<name>.pkl`, does not exist yet, so callers cannot import it through the toolkit today.
 - [`examples/system-bundle/`](examples/system-bundle/) — `type = "system"` with two entrypoints, each a UI-less system sub-contract with its own `inputs`. Each renders `app/generated/<entrypoint_snake>/` (importable), `contract/generated/<entrypoint>/input.pkl`, and an `_e2e_base.py` extending `SystemAppE2ETest`.
 - [`examples/system-triggers/`](examples/system-triggers/) — `type = "system"` bundle whose entrypoints declare `schedules` and streaming `events`. `atlan.yaml` renders an `entrypoints` block listing those entrypoints (`type: utility`, `marketplace_card: false`), so Local Marketplace reconciles the triggers and no card appears.
@@ -482,6 +482,8 @@ new Entrypoint {
 }
 ```
 
+A bundle root, or an entrypoint's own `contract`, refuses `e2eOverrides`; declare it on the `Entrypoint`. For a single-entrypoint app, see [E2E harness overrides](#e2e-harness-overrides).
+
 ```pkl
 // app.pkl
 amends "@app-contract-toolkit/App.pkl"
@@ -556,6 +558,19 @@ See [`examples/system-bundle/`](examples/system-bundle/).
 
 See [`examples/system-triggers/`](examples/system-triggers/).
 
+## E2E Harness Overrides
+
+`app/generated/_e2e_base.py` derives the e2e harness identity from the contract. When an app enriches a connection of a source it does not declare as its `connector` (a query-history miner whose user picks any database connection), name that connection in `e2eOverrides` instead of pinning it in the test module:
+
+```pkl
+e2eOverrides {
+  connectionType = "postgres"
+  connectionCategory = "database"
+}
+```
+
+At a single-entrypoint root only `connectorShortName`, `connectionType` and `connectionCategory` apply; it changes only `_e2e_base.py`. The Argo names come from the root `argoPackageNames` and `argoTemplateName`. `connector_config_name` is emitted only for a `connectorShortName` alias on an app that generates a primary credential config; an alias on an app whose only credential configs are `additionalCredentialConfigs` is refused. Bundles declare `e2eOverrides` per `Entrypoint` (see above).
+
 ## Widget Types
 
 Used inside `uiConfig.tasks` — reference them as `Widgets.*`:
@@ -629,13 +644,15 @@ placeholders when migrating it. See `docs/reference.md`.
 
 `dict[str, Any]` fails the SDK's payload-safety check at import (`AAF-CTR-002`). For a tree selection, set `treeSelection = true` on `APITree` or an apitree `ConditionalInput`: the field is generated as the SDK's payload-safe `TreeSelection`, which keeps the widget's nested-dict value (`{"SAP": {"MM": {}}}`) unchanged in the app and on the wire. Only the Python type changes; the workflow config and manifest do not. Requires the first SDK release after 3.43.0 (which adds `TreeSelection`), so raise the app's SDK floor in the same change. On an extraction app's `include-filter` / `exclude-filter`, the flag makes the generated class extend the SDK's `TreeSelectionExtractionInput`, whose filters are `TreeSelection | str` (see the reference).
 
+For an object-valued `ConditionalInput` whose widget stores a flat string map — such as a `div` base that a condition swaps to `dsnTreeMap` (DSN name → connection qualified name) — set `stringMap = true`: the field is generated as `Annotated[dict[str, str], MaxItems(1000)]`, which passes the payload-safety check. Its own `mode="before"` validator decodes a JSON-object string and turns a blank or any non-object string (e.g. `"false"`) into `{}`; non-string map values are refused. Only the Python type changes; the workflow config and manifest do not. See [String-map conditionals](docs/reference.md#string-map-conditionals-stringmap).
+
 ### Complex & Utility
 
 | Class | Widget | Python Type |
 |---|---|---|
 | `Widgets.NestedInput` | `nested` | `dict[str, Any]` |
 | `Widgets.InfoBanner` | `infoBanner` | omitted |
-| `Widgets.ConditionalInput` | configurable | `str` or `dict` |
+| `Widgets.ConditionalInput` | configurable | `str` or `dict`; `dict[str, str]` with `stringMap = true` |
 | `Widgets.AgentSelector` | `agent` | `dict[str, Any]` |
 | `Widgets.CloudProvider` | `CloudProvider` | `str` |
 | `Widgets.CustomWidget` | `<widgetName>` | `str` |

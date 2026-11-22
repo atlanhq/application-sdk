@@ -1,16 +1,19 @@
 """Secrets management abstraction."""
 
 import os
-import warnings
 from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol
 
+from application_sdk import _deprecation
+
 # Defined in the api distribution's light module so the handler can raise it on
 # the API host; re-exported here, the same class.
-from application_sdk._context_errors import SecretStoreNotConfiguredError  # noqa: F401
-from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
+from application_sdk._context_errors import SecretStoreNotConfiguredError
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.categories import Audience
-from application_sdk.errors.leaves import (  # noqa: F401 — PreconditionError re-exported for existing importers
+from application_sdk.errors.leaves import (  # PreconditionError re-exported for existing importers
     ColdStartRaceError,
     DaprSidecarUnreachableError,
     DependencyUnavailableError,
@@ -62,14 +65,13 @@ async def get_deployment_secret(key: str, *, raise_on_error: bool | None = None)
             rejected the request; ``cause`` carries the underlying error.
     """
     if raise_on_error is None:
-        warnings.warn(
-            "get_deployment_secret() without raise_on_error is deprecated: it "
-            "returns None for a store failure as well as a missing key. Pass "
+        _deprecation.warn_deprecated(
+            "get_deployment_secret() without raise_on_error",
             "raise_on_error=True for a typed SecretStoreError with cold-start "
-            "retry, or raise_on_error=False to keep None — the default flips "
-            "to True in v4.0.",
-            DeprecationWarning,
-            stacklevel=2,
+            "retry (or raise_on_error=False to keep None)",
+            "4.0.0",
+            note="it returns None for a store failure as well as a missing key; "
+            "the None default goes and raise_on_error=True becomes the default",
         )
 
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on secret resolution
@@ -87,7 +89,7 @@ async def get_deployment_secret(key: str, *, raise_on_error: bool | None = None)
             # conformance: ignore[E007] legacy contract: a missing key is None
             return None
         except Exception:
-            logger.error(
+            logger.warning(
                 "Failed to fetch deployment config key: %s", key, exc_info=True
             )
             return None
@@ -198,7 +200,7 @@ def _is_present(value: Any) -> bool:
 
 
 @dataclass(kw_only=True)
-class SecretStoreError(DependencyUnavailableError):
+class SecretStoreError(_LegacyErrorCodeMixin, DependencyUnavailableError):
     """Generic secret-store failure (category=DEPENDENCY_UNAVAILABLE).
 
     Use ``SecretNotFoundError`` when the secret key is absent; use this class
@@ -207,8 +209,8 @@ class SecretStoreError(DependencyUnavailableError):
 
     secret_name: str | None = None
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_STORE_ERROR
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SECRET_STORE"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (("secret_name", "secret"),)
 
     # Intentional: dataclass fields define the wire-evidence schema; custom __init__ preserves positional-message compat.
     def __init__(
@@ -224,23 +226,7 @@ class SecretStoreError(DependencyUnavailableError):
             self, message=message, cause=cause, retryable=retryable
         )
         self.secret_name = secret_name
-        self._error_code = error_code
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.secret_name:
-            parts.append(f"secret={self.secret_name}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
+        self._set_legacy_error_code(error_code)
 
 
 class SecretStoreTransientError(SecretStoreError):
@@ -257,6 +243,7 @@ class SecretStoreTransientError(SecretStoreError):
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SECRET_STORE_TRANSIENT"
 
 
+@dataclass(kw_only=True)
 class SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError):
     """The secret store / Dapr sidecar was *unreachable* — a transport failure
     (connection refused, reset mid-handshake, read/write/close error, timeout)
@@ -381,7 +368,6 @@ class SecretNotFoundError(NotFoundError, SecretStoreError):
     parent is ``SecretStoreError`` so ``except SecretStoreError:`` still catches.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_NOT_FOUND
     code: ClassVar[str] = "NOT_FOUND_SECRET"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
@@ -389,17 +375,6 @@ class SecretNotFoundError(NotFoundError, SecretStoreError):
     def __init__(self, secret_name: str) -> None:
         NotFoundError.__init__(self, message=f"Secret '{secret_name}' not found")
         self.secret_name = secret_name
-        self._error_code = SECRET_NOT_FOUND
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return self._error_code
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.secret_name:
-            parts.append(f"secret={self.secret_name}")
-        return " | ".join(parts)
 
 
 class SecretStore(Protocol):
@@ -531,3 +506,25 @@ class EnvironmentSecretStore:
             for k in os.environ.keys()
             if k.startswith(self._prefix)
         ]
+
+
+#: The AAF-* constants this module imported before FND-4299, kept importable
+#: from here with a warning until v4.0.0. Literal per entry: the surface gate
+#: and gen-deprecations read this table statically.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "SECRET_NOT_FOUND": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "SECRET_STORE_ERROR": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda name: getattr(_legacy_codes, name),
+)

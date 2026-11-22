@@ -16,8 +16,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import pytest
-
 from conformance.suite.checks.deprecation._sdk_type_aliases import (
     DATA_PATH,
     SDK_PACKAGE,
@@ -26,21 +24,11 @@ from conformance.suite.checks.deprecation._sdk_type_aliases import (
     load_sdk_type_aliases,
     serialize,
 )
-
-
-def _find_sdk_root() -> Path | None:
-    for parent in Path(__file__).resolve().parents:
-        if parent.joinpath(SDK_PACKAGE, "__init__.py").is_file():
-            return parent
-    return None
+from tests._helpers import sdk_root
 
 
 def test_committed_table_matches_sdk_source() -> None:
-    sdk_root = _find_sdk_root()
-    if sdk_root is None:
-        pytest.skip("SDK source not on disk — table drift cannot be checked here.")
-
-    expected = serialize(build_sdk_type_aliases(sdk_root))
+    expected = serialize(build_sdk_type_aliases(sdk_root()))
 
     assert DATA_PATH.read_text(encoding="utf-8") == expected, (
         "sdk_type_aliases.json is stale — run "

@@ -85,7 +85,7 @@ def _metadata_reads(
     for node in ast.walk(func):
         if isinstance(node, ast.Call) and _is_metadata_get(node, param):
             if node.args and _str_const(node.args[0]) is not None:
-                reads.append((_str_const(node.args[0]), node))  # type: ignore[arg-type]
+                reads.append((_str_const(node.args[0]), node))  # pyright: ignore[reportArgumentType]
         elif isinstance(node, ast.Subscript) and _is_metadata_attr(node.value, param):
             key = _str_const(node.slice)
             if key is not None:

@@ -86,7 +86,7 @@ class TestPrepareQuery:
 
         with patch("application_sdk.common.sql_filters.logger") as mock_logger:
             result = prepare_query(query, workflow_args)
-            mock_logger.error.assert_called_once_with(
+            mock_logger.warning.assert_called_once_with(
                 "Error preparing query: error_code=%s error_message=%s",
                 "INVALID_INPUT_SQL_FILTER_JSON",
                 "Invalid filter JSON",

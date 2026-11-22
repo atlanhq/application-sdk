@@ -31,8 +31,8 @@ try:  # The vocabulary pin's other half — see _classifier() below.
     from conformance.renovate import classify as _conformance_classify
     from conformance.renovate.models import BlockingReason as _BlockingReason
 except ImportError:  # pragma: no cover - depends on the runner's environment
-    _conformance_classify = None  # type: ignore[assignment]
-    _BlockingReason = None  # type: ignore[assignment]
+    _conformance_classify = None
+    _BlockingReason = None
 
 
 def _write_repo_report(out_dir, slug: str, prs: list[dict]) -> None:

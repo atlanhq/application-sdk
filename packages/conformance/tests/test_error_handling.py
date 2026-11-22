@@ -2178,8 +2178,8 @@ def get_tables():
 
 
 def test_p007_no_finding_after_durable_residual_record() -> None:
-    # atlan-metabase-app's per-question shape: the tolerated failure is written
-    # to the durable residual trail, not just logged, before the item's None.
+    # The tolerated failure is written to the durable residual trail, not just
+    # logged, before the item's None.
     _none(
         """\
 from service.residuals import record_residual_failure
@@ -2195,6 +2195,148 @@ def fetch_item(output_path, item_id):
         return None
 """
     )
+
+
+def test_p007_no_finding_after_awaited_offloaded_residual_record() -> None:
+    _none(
+        """\
+from application_sdk.execution.heartbeat import run_in_thread
+from service.residuals import record_residual_failure
+
+async def fetch_item(output_path, item_id):
+    try:
+        return await load_item(item_id)
+    except Exception:
+        logger.warning("item fetch failed", exc_info=True)
+        await run_in_thread(
+            record_residual_failure,
+            output_path,
+            "item_fetch_failed",
+            record_id=item_id,
+        )
+        return None
+"""
+    )
+
+
+def test_p007_still_flags_unawaited_offloaded_residual_record() -> None:
+    src = """\
+from application_sdk.execution.heartbeat import run_in_thread
+from service.residuals import record_residual_failure
+
+async def fetch_item(output_path, item_id):
+    try:
+        return await load_item(item_id)
+    except Exception:
+        logger.warning("item fetch failed", exc_info=True)
+        run_in_thread(
+            record_residual_failure,
+            output_path,
+            "item_fetch_failed",
+            record_id=item_id,
+        )
+        return None
+"""
+    _single(src, "E007")
+
+
+def test_p007_still_flags_offload_through_parameter_shadowing_run_in_thread() -> None:
+    # The parameter, not the SDK import, is what the handler awaits: a caller
+    # can inject a no-op, so the residual record is not proven written.
+    src = """\
+from application_sdk.execution.heartbeat import run_in_thread
+from service.residuals import record_residual_failure
+
+async def fetch_item(output_path, item_id, run_in_thread):
+    try:
+        return await load_item(item_id)
+    except Exception:
+        logger.warning("item fetch failed", exc_info=True)
+        await run_in_thread(
+            record_residual_failure,
+            output_path,
+            "item_fetch_failed",
+            record_id=item_id,
+        )
+        return None
+"""
+    _single(src, "E007")
+
+
+def test_p007_still_flags_offload_of_parameter_shadowing_residual_writer() -> None:
+    src = """\
+from application_sdk.execution.heartbeat import run_in_thread
+from service.residuals import record_residual_failure
+
+async def fetch_item(output_path, item_id, record_residual_failure):
+    try:
+        return await load_item(item_id)
+    except Exception:
+        logger.warning("item fetch failed", exc_info=True)
+        await run_in_thread(
+            record_residual_failure,
+            output_path,
+            "item_fetch_failed",
+            record_id=item_id,
+        )
+        return None
+"""
+    _single(src, "E007")
+
+
+def test_p007_still_flags_direct_record_through_parameter_shadowing_writer() -> None:
+    src = """\
+from service.residuals import record_residual_failure
+
+def fetch_item(output_path, item_id, record_residual_failure):
+    try:
+        return load_item(item_id)
+    except Exception:
+        logger.warning("item fetch failed", exc_info=True)
+        record_residual_failure(output_path, "item_fetch_failed", record_id=item_id)
+        return None
+"""
+    _single(src, "E007")
+
+
+def test_p007_still_flags_offloaded_residual_record_without_output_path() -> None:
+    src = """\
+from application_sdk.execution.heartbeat import run_in_thread
+from service.residuals import record_residual_failure
+
+async def fetch_item(item_id):
+    try:
+        return await load_item(item_id)
+    except Exception:
+        logger.warning("item fetch failed", exc_info=True)
+        await run_in_thread(
+            record_residual_failure,
+            category="item_fetch_failed",
+            record_id=item_id,
+        )
+        return None
+"""
+    _single(src, "E007")
+
+
+def test_p007_still_flags_offloaded_residual_record_without_category() -> None:
+    src = """\
+from application_sdk.execution.heartbeat import run_in_thread
+from service.residuals import record_residual_failure
+
+async def fetch_item(output_path, item_id):
+    try:
+        return await load_item(item_id)
+    except Exception:
+        logger.warning("item fetch failed", exc_info=True)
+        await run_in_thread(
+            record_residual_failure,
+            output_path,
+            record_id=item_id,
+        )
+        return None
+"""
+    _single(src, "E007")
 
 
 def test_p007_still_flags_unrecognized_failure_record_before_sentinel() -> None:

@@ -196,15 +196,13 @@
     "C901": 1
   },
   "conformance/suite/checks/manifest_contract/_entrypoint_class_names.py": {
-    "C901": 2,
-    "PLR0915": 1
+    "C901": 2
   },
   "conformance/suite/checks/manifest_contract/_filter_string_acceptance.py": {
     "C901": 1
   },
   "conformance/suite/checks/manifest_contract/_input_fields.py": {
-    "C901": 1,
-    "PLR0915": 1
+    "C901": 1
   },
   "conformance/suite/checks/manifest_contract/_legacy_aliases.py": {
     "C901": 1
@@ -288,9 +286,6 @@
     "C901": 6
   },
   "conformance/suite/checks/security/_s002.py": {
-    "C901": 1
-  },
-  "conformance/suite/runner.py": {
     "C901": 1
   },
   "conformance/tools/generate_contract_ledger.py": {

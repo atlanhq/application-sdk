@@ -720,18 +720,12 @@ def _deployment_object_store_missing(
     return DeploymentObjectStoreMissingError(message, binding_name=name, cause=cause)
 
 
-async def _create_infrastructure(
-    credential_stores: Mapping[str, SecretStore] | None = None,
-) -> InfrastructureContext:
+async def _create_infrastructure() -> InfrastructureContext:
     """Create infrastructure services based on environment.
 
     If ``DAPR_HTTP_PORT`` is set (Dapr sidecar present), creates Dapr-backed
     implementations. Otherwise raises ``RuntimeError`` — the Dapr sidecar is
     required for all runtime modes.
-
-    Args:
-        credential_stores: Optional mapping of store name → SecretStore.
-            Reserved for future use; currently unused.
 
     Returns:
         Configured InfrastructureContext.
@@ -1072,7 +1066,7 @@ def _install_excepthook() -> None:
     """
     _orig = sys.excepthook
 
-    def _hook(exc_type, exc_value, exc_traceback):  # type: ignore[no-untyped-def]
+    def _hook(exc_type, exc_value, exc_traceback):
         logger.error(
             "Unhandled exception — flushing observability before exit",
             exc_info=(exc_type, exc_value, exc_traceback),
@@ -1080,7 +1074,7 @@ def _install_excepthook() -> None:
         try:
             asyncio.run(_flush_observability())
         # conformance: ignore[E002,E004] best-effort flush in unhandled-exception hook; must never mask the original crash
-        except Exception:  # noqa: S110 — best-effort flush; must never mask the original crash
+        except Exception:  # noqa: S110, BLE001 — best-effort flush; must never mask the original crash
             pass
         _orig(exc_type, exc_value, exc_traceback)
 
@@ -1997,12 +1991,12 @@ async def run_worker_mode(
 
     app_class = load_app_class(config.app_module)
     validate_app_class(app_class)
-    app_name = app_class._app_name  # type: ignore[attr-defined]
+    app_name = app_class._app_name
 
     logger.info(
         "Loaded app %s version %s",
         app_name,
-        app_class._app_version,  # type: ignore[attr-defined]
+        app_class._app_version,
     )
 
     data_converter = create_data_converter_for_app(app_class)
@@ -2219,7 +2213,9 @@ def run_handler_mode(config: AppConfig) -> None:
     )
     from application_sdk.handler import (  # noqa: PLC0415 — cold path: only loaded in handler mode
         DefaultHandler,
-        run_app_handler_service,
+    )
+    from application_sdk.handler.service import (  # noqa: PLC0415 — cold path: only loaded in handler mode
+        _run_app_handler_service,
     )
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         set_infrastructure,
@@ -2243,7 +2239,7 @@ def run_handler_mode(config: AppConfig) -> None:
 
     app_class = load_app_class(config.app_module)
     validate_app_class(app_class)
-    app_name = app_class._app_name  # type: ignore[attr-defined]
+    app_name = app_class._app_name
 
     handler_class = load_handler_class(
         config.app_module,
@@ -2262,7 +2258,7 @@ def run_handler_mode(config: AppConfig) -> None:
     handler = handler_class()
     data_converter = create_data_converter_for_app(app_class)
 
-    run_app_handler_service(
+    _run_app_handler_service(
         handler,
         host=config.handler_host,
         port=config.handler_port,
@@ -2360,12 +2356,12 @@ async def run_combined_mode(
 
     app_class = load_app_class(config.app_module)
     validate_app_class(app_class)
-    app_name = app_class._app_name  # type: ignore[attr-defined]
+    app_name = app_class._app_name
 
     logger.info(
         "Loaded app %s version %s",
         app_name,
-        app_class._app_version,  # type: ignore[attr-defined]
+        app_class._app_version,
     )
 
     data_converter = create_data_converter_for_app(app_class)
@@ -2581,7 +2577,7 @@ async def run_combined_mode(
             stall_watchdog.on_shutdown_signal()
             uvicorn_handle_exit(sig, frame)
 
-        uvicorn_server.handle_exit = _handle_exit  # type: ignore[method-assign]
+        uvicorn_server.handle_exit = _handle_exit
     # uvicorn keeps serving while the worker is supervised and restarted
     # independently; a shutdown signal (which also sets should_exit) stops both.
     async with health_server:
@@ -2614,10 +2610,17 @@ async def run_combined_mode(
     logger.info("Combined mode stopped")
 
 
+#: Default for ``run_dev_combined(credential_stores=...)``. A sentinel rather
+#: than ``None`` so an explicit ``credential_stores=None`` also warns.
+_CREDENTIAL_STORES_UNSET = object()
+
+
 async def run_dev_combined(
     app_class: type[App],
     *,
-    credential_stores: Mapping[str, SecretStore] | None = None,
+    credential_stores: Mapping[str, SecretStore]
+    | None
+    | object = _CREDENTIAL_STORES_UNSET,  # deprecated — ignored, kept for back-compat
     credentials: dict[str, Any] | None = None,
     example_input: dict[str, Any] | None = None,
     host: str | None = None,
@@ -2650,9 +2653,15 @@ async def run_dev_combined(
     ignored — the SDK always boots its own in-process workflow runtime in
     this mode. Passing it emits a :class:`DeprecationWarning`.
 
+    ``credential_stores`` is likewise accepted but ignored: secrets resolve
+    through the embedded ``daprd``'s secret store, never through a store
+    passed here. Passing it, even as ``None``, emits a
+    :class:`DeprecationWarning`; use
+    ``credentials`` to provision a local credential instead.
+
     Args:
         app_class: The App class to serve (must already be imported).
-        credential_stores: Optional mapping of store name → SecretStore.
+        credential_stores: Deprecated and ignored. Use ``credentials``.
         credentials: Optional credential dict (host, port, username, password,
             authType, extra, etc.). If provided, credentials are auto-provisioned
             via ``POST /workflows/v1/dev/local-vault`` once the handler is ready, and the
@@ -2705,6 +2714,18 @@ async def run_dev_combined(
             stacklevel=2,
         )
 
+    if credential_stores is not _CREDENTIAL_STORES_UNSET:
+        import warnings  # noqa: PLC0415 — cold path: deprecation warning only
+
+        warnings.warn(
+            "`credential_stores` is deprecated and ignored and will be removed "
+            "in v4.0.0: `run_dev_combined` resolves secrets through the "
+            "embedded Dapr secret store, never through a store passed here. "
+            "Use `credentials=` to provision a local credential instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     app_name = getattr(app_class, "_app_name", "") or app_class.__name__.lower()
 
     # ``embedded_dapr`` sets ``DAPR_HTTP_PORT`` / ``DAPR_GRPC_PORT`` /
@@ -2730,7 +2751,6 @@ async def run_dev_combined(
             print(f"\nTemporal UI running at {_rt.ui_url}")
         await _run_dev_combined_inner(
             app_class=app_class,
-            credential_stores=credential_stores,
             credentials=credentials,
             example_input=example_input,
             host=host,
@@ -2744,7 +2764,6 @@ async def run_dev_combined(
 async def _run_dev_combined_inner(
     *,
     app_class: type[App],
-    credential_stores: Mapping[str, SecretStore] | None,
     credentials: dict[str, Any] | None,
     example_input: dict[str, Any] | None,
     host: str | None,
@@ -2779,7 +2798,7 @@ async def _run_dev_combined_inner(
         set_infrastructure,
     )
 
-    infra = await _create_infrastructure(credential_stores=credential_stores)
+    infra = await _create_infrastructure()
     from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
         verify_object_store_access,
     )
@@ -3068,14 +3087,14 @@ def main() -> NoReturn:
             try:
                 asyncio.run(_flush_observability())
             # conformance: ignore[E002,E004] best-effort flush on fatal exit; fatal error already logged above
-            except Exception:  # noqa: S110 — best-effort flush on fatal exit; error already logged above
+            except Exception:  # noqa: S110, BLE001 — best-effort flush on fatal exit; error already logged above
                 pass
             sys.exit(1)
         logger.error("Fatal error", exc_info=True)
         try:
             asyncio.run(_flush_observability())
         # conformance: ignore[E002,E004] best-effort flush on fatal exit; fatal error already logged above
-        except Exception:  # noqa: S110 — best-effort flush on fatal exit; error already logged above
+        except Exception:  # noqa: S110, BLE001 — best-effort flush on fatal exit; error already logged above
             pass
         sys.exit(1)
 

@@ -148,10 +148,9 @@ def resolve_activity_time_bounds(
 ) -> tuple[int, int | None]:
     """Resolve one task's ``(start_to_close, schedule_to_close)`` pair.
 
-    The single reader of ``TaskMetadata.schedule_to_close_seconds``, shared by
-    both dispatch paths (``app.base._create_task_activity_wrapper`` and
-    ``activities.get_activity_options``) so the pair they hand Temporal cannot
-    diverge.
+    The single reader of ``TaskMetadata.schedule_to_close_seconds``, called by
+    the dispatch path (``app.base._create_task_activity_wrapper``) to build
+    the pair it hands Temporal.
 
     Two resolutions, and neither is a guess:
 
@@ -192,10 +191,9 @@ def _with_worker_evicted_non_retryable(non_retryable: list[str]) -> list[str]:
     The SDK enforces that Temporal never auto-retries activities terminated by
     worker pod eviction: the workflow-side eviction loop owns that retry
     decision and re-dispatches the activity as a fresh attempt without burning
-    the application-error retry budget. Both code paths that build a Temporal
-    ``RetryPolicy`` (``_to_temporal_retry_policy`` here and
-    ``activities.get_activity_options``) route through this helper to keep that
-    invariant in one place.
+    the application-error retry budget. ``_to_temporal_retry_policy``, the one
+    builder of a Temporal ``RetryPolicy``, routes through this helper to keep
+    that invariant in one place.
     """
     from application_sdk.errors.leaves import (  # noqa: PLC0415 — keep retry.py free of eager imports of error hierarchy
         WORKER_EVICTED_TYPE,

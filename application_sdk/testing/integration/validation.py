@@ -80,7 +80,7 @@ def _ensure_pandera_check_methods_registered() -> None:
 
     from pandera import extensions  # noqa: PLC0415
 
-    @extensions.register_check_method(statistics=["expected_record_count"])  # pyright: ignore[reportPrivateImportUsage]
+    @extensions.register_check_method(statistics=["expected_record_count"])
     def check_record_count_ge(df: Any, *, expected_record_count: int) -> bool:
         """Validate that a DataFrame has at least the expected number of records.
 
@@ -259,7 +259,7 @@ def validate_with_pandera(
     # (see module docstring + _ensure_pandera_check_methods_registered).
     # Import from pandera.io.pandas_io (the canonical export path) so
     # pyright doesn't flag reportPrivateImportUsage on pandera.io.
-    from pandera.io.pandas_io import (  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
+    from pandera.io.pandas_io import (  # noqa: PLC0415
         from_yaml,
     )
 
@@ -336,7 +336,7 @@ def validate_with_pandera(
             )
         except Exception as e:
             result["error"] = str(e)
-            logger.error("Validation failed for %s: %s", entity, e, exc_info=True)
+            logger.warning("Validation failed for %s: %s", entity, e, exc_info=True)
 
         results.append(result)
 

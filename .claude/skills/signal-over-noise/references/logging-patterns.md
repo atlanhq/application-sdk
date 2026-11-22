@@ -884,6 +884,52 @@ logger.warning("connection to %s:%d failed on attempt %d", host, port, n, exc_in
 
 ---
 
+### L25 — Handled Failure Logged at ERROR
+
+**Grep (multiline):** `except` block containing `LOGGER_VAR_PATTERN\.error\(` — collect hits for Step 2.3
+
+**Severity:** MEDIUM
+
+**Auto-fixable:** Yes (→ `.warning()`)
+
+**Applies to:** all frameworks
+
+**Description:** ERROR means the operation failed. A customer-facing log view that filters
+at ERROR shows every ERROR record as a failed run, so a failure the code caught and
+recovered from — a best-effort close, a fallback, a skipped item — logged at ERROR is a
+false alarm. If the handler neither raises, exits, nor returns a failure result, the
+failure was handled: log it at WARNING, with `exc_info=True`.
+
+```python
+# BAD — the close failure is swallowed, but the record says the run failed
+try:
+    client.close()
+except Exception:
+    logger.error("error closing client", exc_info=True)
+
+# GOOD — handled, so WARNING
+try:
+    client.close()
+except Exception:
+    logger.warning("error closing client; continuing", exc_info=True)
+
+# GOOD — the failure reaches the caller as a result, so ERROR stays
+except Exception:
+    logger.error("auth test failed", exc_info=True)
+    return AuthOutput(status=AuthStatus.FAILED)
+```
+
+**Acceptable exceptions:**
+- The handler raises (anywhere, conditionally or not), calls `sys.exit` / `os._exit`, or
+  returns a failure result (`success=False`, `status=<Enum>.FAILURE|FAILED|ERROR`, a 5xx
+  `status_code`)
+- The failure is fatal later (collected, then raised after other work completes) or loses
+  data the run cannot recover — keep ERROR with a `# conformance: ignore[L022] <reason>`
+
+**Conformance:** suite rule L022 (HandledFailureLoggedAtError).
+
+---
+
 ## Severity Classification
 
 | ID | Name | Severity | Framework | Rationale |
@@ -912,6 +958,7 @@ logger.warning("connection to %s:%d failed on attempt %d", host, port, n, exc_in
 | L22 | loguru kwargs silently ignored or consumed | MEDIUM | loguru | kwargs silently ignored; correct fix is %-style message body |
 | L23 | `logging.warn()` deprecated | LOW | stdlib | DeprecationWarning; will be removed in future Python |
 | L24 | kwargs in application log calls | MEDIUM | non-stdlib | Framework context auto-injected; kwargs land in unindexed JSON blob; use %-style |
+| L25 | Handled failure logged at ERROR | MEDIUM | all | False alarms in the customer log view, which filters at ERROR |
 
 ---
 

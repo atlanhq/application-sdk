@@ -7,9 +7,9 @@ like "Total Assets Extracted: 232,008".
 
 v3 adaptation:
     In v3 App.run() returns a Pydantic Output model, not a dict.  The workflow
-    interceptor detects this and merges collected outputs into the model via
-    model_dump() / model_validate() so the return type stays correct for
-    Temporal's pydantic_data_converter.
+    interceptor detects this and sets the collected outputs on the model via
+    model_copy(update=...) so the return type and every other field stay
+    intact for Temporal's pydantic_data_converter.
 
 Architecture:
     - OutputActivityInboundInterceptor: Creates a fresh collector per activity
@@ -35,7 +35,7 @@ Usage:
 
 import asyncio
 from collections.abc import Awaitable, Mapping
-from typing import Any, Optional, Type
+from typing import TYPE_CHECKING, Any, Optional, Type
 
 from temporalio import activity
 from temporalio.worker import (
@@ -50,6 +50,7 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
+from application_sdk.app.registry import _running_app_name
 from application_sdk.contracts.base import Output, OutputStatus
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs import current_outputs
@@ -60,6 +61,10 @@ from application_sdk.outputs.skipped import (
     new_activity_sink,
     persist_activity_skips,
 )
+
+if TYPE_CHECKING:
+    from pydantic import TypeAdapter
+    from pydantic.fields import FieldInfo
 
 logger = get_logger(__name__)
 
@@ -157,6 +162,10 @@ class OutputActivityInboundInterceptor(ActivityInboundInterceptor):
         # Installed up front, like the collector, so skips recorded from child
         # tasks of the activity body land in the same sink.
         current_skipped_records.set(new_activity_sink())
+        # The task wrapper fills in the App's name; this scope keeps it until
+        # the skipped-records part is persisted, under the same run prefix
+        # merge_skipped_records lists, and clears it after.
+        app_name_token = _running_app_name.set("")
 
         try:
             result = await super().execute_activity(input)
@@ -169,6 +178,7 @@ class OutputActivityInboundInterceptor(ActivityInboundInterceptor):
             # collector into the next task that runs on this thread.
             current_outputs.set(None)
             current_skipped_records.set(None)
+            _running_app_name.reset(app_name_token)
 
         try:
             return _attach_outputs(result, collector)
@@ -262,8 +272,9 @@ class OutputWorkflowInboundInterceptor(WorkflowInboundInterceptor):
     namespaces.
 
     v3 adaptation: when the result is a Pydantic BaseModel (e.g. an Output
-    subclass), the merge round-trips through model_dump() / model_validate()
-    so Temporal's pydantic_data_converter receives the correct typed model back.
+    subclass), the outputs are set with model_copy(update=...), so Temporal's
+    pydantic_data_converter receives the same typed model back with every
+    other field intact.
     """
 
     def __init__(self, next: WorkflowInboundInterceptor) -> None:
@@ -332,13 +343,22 @@ def _merge_outputs_into_result(result: Any, collector: OutputCollector) -> Any:
     Handles three cases:
 
     - dict result: merge directly (v2 / legacy path).
-    - Pydantic BaseModel result: round-trip via model_dump/model_validate.
-      Output base class declares metrics/artifacts fields so they are
-      accepted without any runtime class manipulation.
+    - Pydantic BaseModel result: ``model_copy(update=...)`` sets the
+      ``metrics`` / ``artifacts`` fields and leaves every other field as it
+      is. A ``model_dump()`` / ``model_validate()`` round trip would not:
+      ``model_dump()`` emits field names, so an aliased field is rejected or
+      reset to its default. Each value is first validated against its
+      field's declared type, since ``model_copy`` does not validate. A model
+      that does not declare those fields, or declares them with a type that
+      rejects the collected map, cannot carry outputs and is returned
+      unchanged.
     - Other: return just the collector dict (fallback).
+
+    The activity's own result is never replaced by the collected outputs.
     """
     from pydantic import (  # noqa: PLC0415 — cold path: pydantic only when serializing
         BaseModel,
+        ValidationError,
     )
 
     output_data = collector.to_dict()
@@ -348,18 +368,46 @@ def _merge_outputs_into_result(result: Any, collector: OutputCollector) -> Any:
 
     if isinstance(result, BaseModel):
         model_cls = type(result)
-        merged = {**result.model_dump(), **output_data}
-        try:
-            return model_cls.model_validate(merged)
-        except Exception:
+        undeclared = sorted(k for k in output_data if k not in model_cls.model_fields)
+        if undeclared:
             logger.warning(
-                "Could not merge outputs into %s model; returning outputs as separate dict",
+                "Workflow result %s does not declare %s, so collected outputs "
+                "cannot be merged into it; returning it unchanged. Subclass "
+                "Output to carry metrics and artifacts.",
                 model_cls.__name__,
+                undeclared,
+            )
+            return result
+        # model_copy does not validate, so check each value against its
+        # field's declared type first: a field named ``metrics`` that is not a
+        # map must never be set to one.
+        try:
+            update = {
+                k: _field_adapter(model_cls.model_fields[k]).validate_python(v)
+                for k, v in output_data.items()
+            }
+        except ValidationError:
+            logger.warning(
+                "Workflow result %s declares %s with a type that cannot hold "
+                "collected outputs; returning it unchanged.",
+                model_cls.__name__,
+                sorted(output_data),
                 exc_info=True,
             )
-            return output_data
+            return result
+        return result.model_copy(update=update)
 
     return output_data
+
+
+def _field_adapter(field: "FieldInfo") -> "TypeAdapter[Any]":
+    """A validator for one model field, keeping its ``Annotated`` constraints."""
+    from pydantic import (  # noqa: PLC0415 — cold path: pydantic only when serializing
+        TypeAdapter,
+    )
+
+    annotation: Any = field.rebuild_annotation()
+    return TypeAdapter(annotation)
 
 
 class OutputInterceptor(Interceptor):

@@ -252,8 +252,7 @@ async def _probe_one(
         # — this component has already answered once — and gave up after the
         # short warm retry.
         raise SecretStoreUnavailableError(label) from None
-    # conformance: ignore[E004] logger.warning with redacted traceback is emitted below; exc_info omitted intentionally to prevent secret ref-key leaking through stdlib traceback formatting
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — logger.warning with redacted traceback is emitted below; exc_info omitted intentionally to prevent secret ref-key leaking through stdlib traceback formatting
         # NOT exc_info=True: SecretStoreError.__str__ renders `secret=<ref-key>`
         # and its message embeds the backend cause, which can echo the raw
         # ref-key — that would undo the hashing in the same log record.

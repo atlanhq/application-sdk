@@ -207,3 +207,22 @@ def test_regeneration_removes_an_orphaned_by_id_file(tmp_path) -> None:
     g.main(["--outdir", str(tmp_path)])
     assert not orphan.exists()
     g.main(["--outdir", str(tmp_path), "--check"])
+
+
+def test_committed_rule_docs_are_up_to_date(capsys) -> None:
+    """Freshness gate for the committed docs/rules/ tree.
+
+    Remediation agents read these files one rule at a time, so a rule edit that
+    skips regeneration ships stale guidance.  Running --check against the
+    default (committed) directory here puts that gate on every suite-tests leg,
+    and on the wheel gate, where the default directory is the installed copy.
+    """
+    from conformance.tools import generate_rule_docs as g
+
+    try:
+        g.main(["--check"])
+    except SystemExit as exc:
+        raise AssertionError(
+            "Committed rule docs are stale, missing or orphaned:\n"
+            f"{capsys.readouterr().err}"
+        ) from exc

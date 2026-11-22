@@ -3,6 +3,15 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "APP_CONTEXT_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk._context_errors",
+      "removal_version": "4.0.0",
+      "symbol": "APP_CONTEXT_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "ARTIFACT_SCHEMAS_STEM is deprecated; use application_sdk.common._generated_tree.ARTIFACT_SCHEMAS_STEM \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.app._generated_tree",
@@ -118,6 +127,24 @@
       "symbol": "AppError"
     },
     {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "NonRetryableError is deprecated; use a typed application_sdk.errors.AppError subclass with default_retryable = False instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.base",
+      "removal_version": "4.0.0",
+      "symbol": "NonRetryableError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "RetryableError is deprecated; use a typed application_sdk.errors.AppError subclass with default_retryable = True instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.base",
+      "removal_version": "4.0.0",
+      "symbol": "RetryableError"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "BUILD_IDENTITY_CONFIGMAP_ID is deprecated; use application_sdk.common.build_identity.BUILD_IDENTITY_CONFIGMAP_ID \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
@@ -155,6 +182,24 @@
     },
     {
       "kind": "class",
+      "marker_via": "decorator",
+      "message": "ChildAppContext is deprecated; read correlation_id and run_id from the parent AppContext directly \u2014 nothing in the SDK creates one. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.context",
+      "removal_version": "4.0.0",
+      "symbol": "ChildAppContext"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CONTRACT_VALIDATION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.entrypoint",
+      "removal_version": "4.0.0",
+      "symbol": "CONTRACT_VALIDATION"
+    },
+    {
+      "kind": "class",
       "marker_via": "warn",
       "message": "EntryPointContractError is deprecated; use application_sdk.app.entrypoint.EntryPointDeclarationError \u2014 will be removed in v4.0",
       "migration_target": true,
@@ -163,31 +208,76 @@
       "symbol": "EntryPointContractError"
     },
     {
-      "kind": "class",
-      "marker_via": "warn",
-      "message": "AppAlreadyRegisteredError is deprecated; use application_sdk.app.registry.AppVersionAlreadyRegisteredError \u2014 will be removed in v4.0",
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "APP_ALREADY_REGISTERED is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.app.registry",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
+      "symbol": "APP_ALREADY_REGISTERED"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "APP_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.registry",
+      "removal_version": "4.0.0",
+      "symbol": "APP_NOT_FOUND"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "AppAlreadyRegisteredError is deprecated; use application_sdk.app.registry.AppVersionAlreadyRegisteredError instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.registry",
+      "removal_version": "4.0.0",
       "symbol": "AppAlreadyRegisteredError"
     },
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "AppNotFoundError is deprecated; use application_sdk.app.registry.AppNotRegisteredError \u2014 will be removed in v4.0",
+      "message": "AppNotFoundError is deprecated; use application_sdk.app.registry.AppNotRegisteredError instead. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.app.registry",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "AppNotFoundError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "TASK_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.registry",
+      "removal_version": "4.0.0",
+      "symbol": "TASK_NOT_FOUND"
     },
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "TaskNotFoundError is deprecated; use application_sdk.app.registry.TaskNotRegisteredError \u2014 will be removed in v4.0",
+      "message": "TaskNotFoundError is deprecated; use application_sdk.app.registry.TaskNotRegisteredError instead. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.app.registry",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "TaskNotFoundError"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "AppRegistry.get_all_versions is deprecated; use AppRegistry.get(name, version) for a known version or AppRegistry.get(name) for the latest. No replacement enumerates every version, and it has no caller in the SDK. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.registry",
+      "removal_version": "4.0.0",
+      "symbol": "get_all_versions"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CONTRACT_VALIDATION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.task",
+      "removal_version": "4.0.0",
+      "symbol": "CONTRACT_VALIDATION"
     },
     {
       "kind": "class",
@@ -197,6 +287,24 @@
       "module": "application_sdk.app.task",
       "removal_version": "4.0",
       "symbol": "TaskContractError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.azure.azure_errors.AzureConnectionError is deprecated and will be removed in v4.0.0: nothing in the SDK raises it. To keep its wire code, raise an app-owned DependencyUnavailableError subclass that sets code = \"DEPENDENCY_UNAVAILABLE_AZURE\"; plain DependencyUnavailableError drops the Azure-specific code.",
+      "migration_target": true,
+      "module": "application_sdk.clients.azure.azure_errors",
+      "removal_version": "4.0.0",
+      "symbol": "AzureConnectionError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.clients.azure.azure_errors.AzureServiceError is deprecated and will be removed in v4.0.0: nothing in the SDK raises it. To keep its wire code, raise an app-owned DependencyUnavailableError subclass that sets code = \"DEPENDENCY_UNAVAILABLE_AZURE_SERVICE\"; plain DependencyUnavailableError drops the Azure-specific code.",
+      "migration_target": true,
+      "module": "application_sdk.clients.azure.azure_errors",
+      "removal_version": "4.0.0",
+      "symbol": "AzureServiceError"
     },
     {
       "kind": "class",
@@ -238,7 +346,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.clients.redis_errors.RedisConfigError is deprecated and will be removed in v4.0.0 with the deprecated RedisClient / RedisClientAsync that raise it. Catch the application_sdk.errors category leaf it subclasses.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.clients.redis_errors",
       "removal_version": "4.0.0",
       "symbol": "RedisConfigError"
@@ -247,7 +355,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.clients.redis_errors.RedisConnectionError is deprecated and will be removed in v4.0.0 with the deprecated RedisClient / RedisClientAsync that raise it. Catch the application_sdk.errors category leaf it subclasses.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.clients.redis_errors",
       "removal_version": "4.0.0",
       "symbol": "RedisConnectionError"
@@ -256,7 +364,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.clients.redis_errors.RedisProtocolError is deprecated and will be removed in v4.0.0 with the deprecated RedisClient / RedisClientAsync that raise it. Catch the application_sdk.errors category leaf it subclasses.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.clients.redis_errors",
       "removal_version": "4.0.0",
       "symbol": "RedisProtocolError"
@@ -265,7 +373,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.clients.redis_errors.RedisTimeoutError is deprecated and will be removed in v4.0.0 with the deprecated RedisClient / RedisClientAsync that raise it. Catch the application_sdk.errors category leaf it subclasses.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.clients.redis_errors",
       "removal_version": "4.0.0",
       "symbol": "RedisTimeoutError"
@@ -399,10 +507,10 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "file_converter_registry is deprecated; use pyarrow.json.read_json and pyarrow.parquet.write_table \u2014 the file_converter module has no callers and hides conversion errors. Will be removed in v4.0.",
+      "message": "file_converter_registry is deprecated; use pyarrow.json.read_json and pyarrow.parquet.write_table \u2014 the file_converter module has no callers and hides conversion errors. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.common.file_converter",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "file_converter_registry"
     },
     {
@@ -534,8 +642,8 @@
     {
       "kind": "function",
       "marker_via": "decorator",
-      "message": "cleanup_previous_state is deprecated; previous state now lives in the run-scoped RunStateDirs.previous_state, which goes with the run's output \u2014 will be removed in v4.0.0.",
-      "migration_target": false,
+      "message": "cleanup_previous_state is deprecated; drop the call \u2014 previous state now lives in the run-scoped RunStateDirs.previous_state, which goes with the run's output \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
       "module": "application_sdk.common.incremental.state.state_writer",
       "removal_version": "4.0.0",
       "symbol": "cleanup_previous_state"
@@ -552,8 +660,8 @@
     {
       "kind": "function",
       "marker_via": "decorator",
-      "message": "prepare_current_state_directory is deprecated; create_current_state_snapshot resets its own build directory \u2014 will be removed in v4.0.0.",
-      "migration_target": false,
+      "message": "prepare_current_state_directory is deprecated; drop the call \u2014 create_current_state_snapshot resets its own build directory \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
       "module": "application_sdk.common.incremental.state.state_writer",
       "removal_version": "4.0.0",
       "symbol": "prepare_current_state_directory"
@@ -597,10 +705,10 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "FileUploadResponse is deprecated; use application_sdk.handler.contracts.FileUploadResponse \u2014 this module only ever re-exported the v2 application_sdk.server.fastapi.models.FileUploadResponse, which is itself deprecated. Will be removed in v4.0.",
+      "message": "FileUploadResponse is deprecated; use application_sdk.handler.contracts.FileUploadResponse \u2014 this module only ever re-exported the v2 application_sdk.server.fastapi.models.FileUploadResponse, which is itself deprecated. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.common.utils",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "FileUploadResponse"
     },
     {
@@ -643,7 +751,7 @@
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "LOCK_METADATA_KEY is deprecated and has no effect: needs_lock does nothing in v3 because create_worker registers no lock interceptor. Remove the import; it will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.constants",
       "removal_version": "4.0.0",
       "symbol": "LOCK_METADATA_KEY"
@@ -652,7 +760,7 @@
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "LOCK_RETRY_INTERVAL_SECONDS is deprecated and has no effect: the lock interceptor that reads it is never registered by create_worker. Remove the import; it will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.constants",
       "removal_version": "4.0.0",
       "symbol": "LOCK_RETRY_INTERVAL_SECONDS"
@@ -757,6 +865,15 @@
       "symbol": "SIZING_RETENTION_DAYS"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CONTRACT_VALIDATION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.contracts.base",
+      "removal_version": "4.0.0",
+      "symbol": "CONTRACT_VALIDATION"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "ContractValidationError is deprecated; use application_sdk.contracts.ContractDeclarationError \u2014 will be removed in v4.0",
@@ -764,6 +881,15 @@
       "module": "application_sdk.contracts.base",
       "removal_version": "4.0",
       "symbol": "ContractValidationError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "PAYLOAD_SAFETY is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.contracts.base",
+      "removal_version": "4.0.0",
+      "symbol": "PAYLOAD_SAFETY"
     },
     {
       "kind": "class",
@@ -811,6 +937,42 @@
       "symbol": "effective_token_url"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CREDENTIAL_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.credentials.errors",
+      "removal_version": "4.0.0",
+      "symbol": "CREDENTIAL_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CREDENTIAL_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.credentials.errors",
+      "removal_version": "4.0.0",
+      "symbol": "CREDENTIAL_NOT_FOUND"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CREDENTIAL_PARSE_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.credentials.errors",
+      "removal_version": "4.0.0",
+      "symbol": "CREDENTIAL_PARSE_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CREDENTIAL_VALIDATION_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.credentials.errors",
+      "removal_version": "4.0.0",
+      "symbol": "CREDENTIAL_VALIDATION_ERROR"
+    },
+    {
       "kind": "function",
       "marker_via": "decorator",
       "message": "legacy_credential_ref() is deprecated and will be removed in v4.0. Use CredentialRef.resolve(input) instead.",
@@ -818,6 +980,15 @@
       "module": "application_sdk.credentials.ref",
       "removal_version": "4.0",
       "symbol": "legacy_credential_ref"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DISCOVERY_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.discovery",
+      "removal_version": "4.0.0",
+      "symbol": "DISCOVERY_ERROR"
     },
     {
       "kind": "class",
@@ -829,10 +1000,370 @@
       "symbol": "DiscoveryError"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "APP_ALREADY_REGISTERED is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "APP_ALREADY_REGISTERED"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "APP_CONTEXT_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "APP_CONTEXT_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "APP_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "APP_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "APP_NON_RETRYABLE is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "APP_NON_RETRYABLE"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "APP_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "APP_NOT_FOUND"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "BINDING_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "BINDING_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CONTRACT_VALIDATION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "CONTRACT_VALIDATION"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CREDENTIAL_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "CREDENTIAL_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CREDENTIAL_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "CREDENTIAL_NOT_FOUND"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CREDENTIAL_PARSE_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "CREDENTIAL_PARSE_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CREDENTIAL_VALIDATION_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "CREDENTIAL_VALIDATION_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CREDENTIAL_VAULT_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "CREDENTIAL_VAULT_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DISCOVERY_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "DISCOVERY_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "EVENT_BUS is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "EVENT_BUS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "EVENT_PUBLISH is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "EVENT_PUBLISH"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "EXECUTION_ACTIVITY_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "EXECUTION_ACTIVITY_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "EXECUTION_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "EXECUTION_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "EXECUTION_WORKER_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "EXECUTION_WORKER_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "HANDLER_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "HANDLER_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "PAYLOAD_SAFETY is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "PAYLOAD_SAFETY"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "PUBSUB_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "PUBSUB_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SECRET_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "SECRET_NOT_FOUND"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SECRET_STORE_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "SECRET_STORE_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SEGMENT_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "SEGMENT_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STATE_STORE_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STATE_STORE_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_AUTH is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_AUTH"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_CONFIG is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_CONFIG"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_DISK_FULL is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_DISK_FULL"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_EMPTY_UPLOAD is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_EMPTY_UPLOAD"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_GATEWAY_AUTH is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_GATEWAY_AUTH"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_GATEWAY_NO_ROUTE is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_GATEWAY_NO_ROUTE"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_HANDOFF_INCOMPLETE is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_HANDOFF_INCOMPLETE"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_INTEGRITY is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_INTEGRITY"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_NOT_FOUND"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_OPERATION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_OPERATION"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_PERMISSION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_PERMISSION"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_PREFLIGHT is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_PREFLIGHT"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_RELOCATION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_RELOCATION"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "TASK_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors",
+      "removal_version": "4.0.0",
+      "symbol": "TASK_NOT_FOUND"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "ErrorCode is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass instead \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors._legacy_codes",
+      "removal_version": "4.0.0",
+      "symbol": "ErrorCode"
+    },
+    {
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal._lock_errors.LockAcquisitionError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution._temporal._lock_errors",
       "removal_version": "4.0.0",
       "symbol": "LockAcquisitionError"
@@ -841,7 +1372,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal._lock_errors.MaxLocksInvalidError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution._temporal._lock_errors",
       "removal_version": "4.0.0",
       "symbol": "MaxLocksInvalidError"
@@ -850,7 +1381,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal._lock_errors.MissingScheduleToCloseTimeoutError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution._temporal._lock_errors",
       "removal_version": "4.0.0",
       "symbol": "MissingScheduleToCloseTimeoutError"
@@ -859,10 +1390,19 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal._lock_errors.RedisLockError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution._temporal._lock_errors",
       "removal_version": "4.0.0",
       "symbol": "RedisLockError"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.execution._temporal.activities.get_activity_options is deprecated and will be removed in v4.0.0: nothing in the SDK calls it. Declare activity options on @task(...) instead; the App builds the options it hands Temporal when it registers the task.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.activities",
+      "removal_version": "4.0.0",
+      "symbol": "get_activity_options"
     },
     {
       "kind": "constant",
@@ -874,10 +1414,19 @@
       "symbol": "TEMPORARY_PATH"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "WORKFLOW_OUTPUT_PATH_TEMPLATE is deprecated; use application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.activity_utils",
+      "removal_version": "4.0.0",
+      "symbol": "WORKFLOW_OUTPUT_PATH_TEMPLATE"
+    },
+    {
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal.interceptors.lock.RedisLockInterceptor has no effect: create_worker never registers it, nor the lock activities it schedules, so needs_lock does nothing in v3. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution._temporal.interceptors.lock",
       "removal_version": "4.0.0",
       "symbol": "RedisLockInterceptor"
@@ -886,7 +1435,7 @@
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal.interceptors.lock.RedisLockOutboundInterceptor has no effect: create_worker never registers it, nor the lock activities it schedules, so needs_lock does nothing in v3. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution._temporal.interceptors.lock",
       "removal_version": "4.0.0",
       "symbol": "RedisLockOutboundInterceptor"
@@ -913,7 +1462,7 @@
       "kind": "function",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal.lock_activities.acquire_distributed_lock has no effect: create_worker never registers it, so it never runs in v3. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution._temporal.lock_activities",
       "removal_version": "4.0.0",
       "symbol": "acquire_distributed_lock"
@@ -922,7 +1471,7 @@
       "kind": "function",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal.lock_activities.release_distributed_lock has no effect: create_worker never registers it, so it never runs in v3. Will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution._temporal.lock_activities",
       "removal_version": "4.0.0",
       "symbol": "release_distributed_lock"
@@ -1021,10 +1570,19 @@
       "kind": "function",
       "marker_via": "decorator",
       "message": "needs_lock has no effect: create_worker registers neither the lock interceptor nor the lock activities, so a decorated task runs with no concurrency limit. Remove the decorator; it will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.execution.decorators",
       "removal_version": "4.0.0",
       "symbol": "needs_lock"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "HANDLER_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0.0",
+      "symbol": "HANDLER_ERROR"
     },
     {
       "kind": "class",
@@ -1063,6 +1621,15 @@
       "symbol": "S3ObjectStore"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "run_app_handler_service is deprecated; use server_sdk.build_asgi_app with your own uvicorn.run instead \u2014 the consolidated host owns the run loop. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.handler.service",
+      "removal_version": "4.0.0",
+      "symbol": "run_app_handler_service"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "MessageHandler is deprecated; use SubscriptionConfig.handler in application_sdk.handler.contracts \u2014 it typed PubSub.subscribe handlers, which DaprPubSub never called. Will be removed in v4.0.0.",
@@ -1090,6 +1657,24 @@
       "symbol": "MessageHandler"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "create_dapr_secret_store is deprecated; construct DaprSecretStore(client, store_name=...) directly. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure._dapr.client",
+      "removal_version": "4.0.0",
+      "symbol": "create_dapr_secret_store"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "is_dapr_component_registered is deprecated; check `component_name in await get_dapr_component_types()` from application_sdk.infrastructure._dapr.http instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure._dapr.client",
+      "removal_version": "4.0.0",
+      "symbol": "is_dapr_component_registered"
+    },
+    {
       "kind": "method",
       "marker_via": "decorator",
       "message": "DaprPubSub.subscribe is deprecated and will be removed in v4.0.0. It never delivered a message: the handler is stored and nothing calls it. Declare a SubscriptionConfig (application_sdk.handler.contracts) and pass it to create_app_handler_service(subscriptions=...) instead.",
@@ -1108,6 +1693,15 @@
       "symbol": "DAPR_SECRET_STORE_COMPONENT"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "create_dapr_credential_vault is deprecated; construct DaprCredentialVault(client, ...) directly. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure._dapr.credential_vault",
+      "removal_version": "4.0.0",
+      "symbol": "create_dapr_credential_vault"
+    },
+    {
       "kind": "class",
       "marker_via": "decorator",
       "message": "RedisCapacityPool is deprecated and will be removed in v4.0.0. Nothing in the SDK configures or reads a capacity pool; bound concurrency inside the app (for example an asyncio.Semaphore) instead.",
@@ -1115,6 +1709,15 @@
       "module": "application_sdk.infrastructure._redis.capacity",
       "removal_version": "4.0.0",
       "symbol": "RedisCapacityPool"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "BINDING_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.bindings",
+      "removal_version": "4.0.0",
+      "symbol": "BINDING_ERROR"
     },
     {
       "kind": "class",
@@ -1189,6 +1792,15 @@
       "symbol": "get_capacity_pool"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CREDENTIAL_VAULT_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.credential_vault",
+      "removal_version": "4.0.0",
+      "symbol": "CREDENTIAL_VAULT_ERROR"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "CredentialVaultError is deprecated; use application_sdk.infrastructure.CredentialVaultUnavailableError \u2014 will be removed in v4.0",
@@ -1205,6 +1817,15 @@
       "module": "application_sdk.infrastructure.pubsub",
       "removal_version": "4.0.0",
       "symbol": "MessageHandler"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "PUBSUB_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.pubsub",
+      "removal_version": "4.0.0",
+      "symbol": "PUBSUB_ERROR"
     },
     {
       "kind": "class",
@@ -1232,6 +1853,33 @@
       "module": "application_sdk.infrastructure.pubsub",
       "removal_version": "4.0.0",
       "symbol": "subscribe"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SECRET_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.secrets",
+      "removal_version": "4.0.0",
+      "symbol": "SECRET_NOT_FOUND"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SECRET_STORE_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.secrets",
+      "removal_version": "4.0.0",
+      "symbol": "SECRET_STORE_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STATE_STORE_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.state",
+      "removal_version": "4.0.0",
+      "symbol": "STATE_STORE_ERROR"
     },
     {
       "kind": "class",
@@ -1297,6 +1945,15 @@
       "symbol": "UPSTREAM_OBJECT_STORE_NAME"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "memory_fraction is deprecated; call memory_usage_bytes() and memory_limit_bytes(), treat the fraction as unknown when either returns None or the limit is not positive, and otherwise divide usage by limit \u2014 it has no caller in the SDK. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.cgroup",
+      "removal_version": "4.0.0",
+      "symbol": "memory_fraction"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "LOG_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported log files. Will be removed in v4.0.0.",
@@ -1313,6 +1970,33 @@
       "module": "application_sdk.observability.logger_adaptor",
       "removal_version": "4.0.0",
       "symbol": "LOG_RETENTION_DAYS"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "AtlanLoggerAdapter.activity is deprecated; use AtlanLoggerAdapter.info and pass log_type='activity' if a reader needs the tag \u2014 it has no caller in the SDK. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.logger_adaptor",
+      "removal_version": "4.0.0",
+      "symbol": "activity"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "AtlanLoggerAdapter.objectstore_sink is deprecated; use AtlanLoggerAdapter.add_record \u2014 the SDK registers no sink by this name, so a record routed here skips the path production uses. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.logger_adaptor",
+      "removal_version": "4.0.0",
+      "symbol": "objectstore_sink"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "AtlanLoggerAdapter.otlp_sink is deprecated; use AtlanLoggerAdapter.add_record for the object store, and leave OTLP export to the SDK \u2014 no sink by this name is registered. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.logger_adaptor",
+      "removal_version": "4.0.0",
+      "symbol": "otlp_sink"
     },
     {
       "kind": "constant",
@@ -1333,6 +2017,15 @@
       "symbol": "METRICS_RETENTION_DAYS"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "compute_deltas is deprecated; use ActivityShareLedger for per-activity attribution \u2014 the whole-process delta has no caller in the SDK. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.resource_sampler",
+      "removal_version": "4.0.0",
+      "symbol": "compute_deltas"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "SIZING_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule \u2014 the SDK retention sweep never deleted exported sizing files. Will be removed in v4.0.0.",
@@ -1349,6 +2042,15 @@
       "module": "application_sdk.observability.sizing_sink",
       "removal_version": "4.0.0",
       "symbol": "SIZING_RETENTION_DAYS"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_trace_context is deprecated; use opentelemetry.trace.get_current_span().get_span_context() directly \u2014 it has no caller in the SDK. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.trace_context",
+      "removal_version": "4.0.0",
+      "symbol": "get_trace_context"
     },
     {
       "kind": "constant",
@@ -1534,10 +2236,127 @@
       "kind": "function",
       "marker_via": "decorator",
       "message": "run_health_server is deprecated; construct WorkerHealthServer (or call build_worker_health_server) and start it with `async with` \u2014 will be removed in v4.0.0.",
-      "migration_target": false,
+      "migration_target": true,
       "module": "application_sdk.server.health",
       "removal_version": "4.0.0",
       "symbol": "run_health_server"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_AUTH is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_AUTH"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_CONFIG is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_CONFIG"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_DISK_FULL is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_DISK_FULL"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_EMPTY_UPLOAD is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_EMPTY_UPLOAD"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_GATEWAY_AUTH is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_GATEWAY_AUTH"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_GATEWAY_NO_ROUTE is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_GATEWAY_NO_ROUTE"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_HANDOFF_INCOMPLETE is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_HANDOFF_INCOMPLETE"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_INTEGRITY is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_INTEGRITY"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_NOT_FOUND"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_OPERATION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_OPERATION"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_PERMISSION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_PERMISSION"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_PREFLIGHT is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_PREFLIGHT"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "STORAGE_RELOCATION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.errors",
+      "removal_version": "4.0.0",
+      "symbol": "STORAGE_RELOCATION"
     },
     {
       "kind": "class",
@@ -1610,6 +2429,15 @@
       "module": "application_sdk.templates.incremental_sql_metadata_extractor",
       "removal_version": "4.0.0",
       "symbol": "IncrementalSqlMetadataExtractor"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "WORKFLOW_OUTPUT_PATH_TEMPLATE is deprecated; use application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "WORKFLOW_OUTPUT_PATH_TEMPLATE"
     },
     {
       "kind": "method",
@@ -2271,46 +3099,46 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "auth_credentials_strategy is deprecated; use a strategy built from your app's own credential model \u2014 it generates the v2 server's credential dict. Will be removed in v4.0.",
+      "message": "auth_credentials_strategy is deprecated; use a strategy built from your app's own credential model \u2014 it generates the v2 server's credential dict. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "auth_credentials_strategy"
     },
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "event_data_strategy is deprecated; use a strategy built from application_sdk.handler.contracts.CloudEventEnvelope \u2014 it generates the v2 server's Dapr event payload. Will be removed in v4.0.",
+      "message": "event_data_strategy is deprecated; use a strategy built from application_sdk.handler.contracts.CloudEventEnvelope \u2014 it generates the v2 server's Dapr event payload. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "event_data_strategy"
     },
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "metadata_strategy is deprecated; use a strategy built from your app's own metadata model \u2014 it generates the v2 server's include/exclude-filter dict. Will be removed in v4.0.",
+      "message": "metadata_strategy is deprecated; use a strategy built from your app's own metadata model \u2014 it generates the v2 server's include/exclude-filter dict. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "metadata_strategy"
     },
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "payload_strategy is deprecated; use a strategy built from your app's typed Input contract \u2014 it generates the v2 server's credentials+metadata payload. Will be removed in v4.0.",
+      "message": "payload_strategy is deprecated; use a strategy built from your app's typed Input contract \u2014 it generates the v2 server's credentials+metadata payload. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "payload_strategy"
     },
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "workflow_event_strategy is deprecated; use a strategy built from your app's own event model \u2014 it generates the v2 server's workflow-start Event. Will be removed in v4.0.",
+      "message": "workflow_event_strategy is deprecated; use a strategy built from your app's own event model \u2014 it generates the v2 server's workflow-start Event. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.testing.hypothesis.strategies.server.fastapi",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "workflow_event_strategy"
     },
     {
@@ -3387,37 +4215,37 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "LastSyncDetails is deprecated; use application_sdk.common.last_sync.LastSyncDetails \u2014 the same class, re-homed out of the deprecated transformers package. Will be removed in v4.0.",
+      "message": "LastSyncDetails is deprecated; use application_sdk.common.last_sync.LastSyncDetails \u2014 the same class, re-homed out of the deprecated transformers package. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.transformers.common.last_sync",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "LastSyncDetails"
     },
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "resolve_last_sync_details is deprecated; use application_sdk.common.last_sync.resolve_last_sync_details \u2014 the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.",
+      "message": "resolve_last_sync_details is deprecated; use application_sdk.common.last_sync.resolve_last_sync_details \u2014 the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.transformers.common.last_sync",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "resolve_last_sync_details"
     },
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "set_last_sync_details_on_asset is deprecated; use application_sdk.common.last_sync.set_last_sync_details_on_asset \u2014 the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.",
+      "message": "set_last_sync_details_on_asset is deprecated; use application_sdk.common.last_sync.set_last_sync_details_on_asset \u2014 the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.transformers.common.last_sync",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "set_last_sync_details_on_asset"
     },
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "set_last_sync_details_on_assets_bulk is deprecated; use application_sdk.common.last_sync.set_last_sync_details_on_assets_bulk \u2014 the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.",
+      "message": "set_last_sync_details_on_assets_bulk is deprecated; use application_sdk.common.last_sync.set_last_sync_details_on_assets_bulk \u2014 the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.transformers.common.last_sync",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
       "symbol": "set_last_sync_details_on_assets_bulk"
     },
     {

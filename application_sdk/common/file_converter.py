@@ -15,6 +15,7 @@ from enum import Enum
 
 from typing_extensions import deprecated
 
+from application_sdk import _deprecation
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -74,19 +75,12 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the deprecated registry once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _file_converter_registry
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda _name: _file_converter_registry,
+)
 
 
 @deprecated(
@@ -179,7 +173,7 @@ def _convert_json_to_parquet(file_path: str) -> str | None:
         )
         return parquet_file_path
     except Exception:
-        logger.error("Error converting file to parquet: %s", file_path, exc_info=True)
+        logger.warning("Error converting file to parquet: %s", file_path, exc_info=True)
         return None
 
 
@@ -193,7 +187,7 @@ def _convert_parquet_to_json(file_path: str) -> str | None:
         df.to_json(json_file_path, orient="records", lines=True)
         return json_file_path
     except Exception:
-        logger.error("Error converting file to json: %s", file_path, exc_info=True)
+        logger.warning("Error converting file to json: %s", file_path, exc_info=True)
         return None
 
 

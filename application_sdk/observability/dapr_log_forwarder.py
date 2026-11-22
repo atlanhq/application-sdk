@@ -203,7 +203,7 @@ def _make_emitter() -> tuple[Any, Any]:
         # sink and periodic flush bind to that loop.
         logger = get_logger("dapr.runtime")
     # conformance: ignore[E004] logger setup itself failed; the logger being initialized cannot be used to report its own failure, so we fall back to the stderr emitter
-    except Exception:  # pragma: no cover - defensive: logging must never break daprd
+    except Exception:  # noqa: BLE001 — logger setup failed; falls back to the stderr emitter (see directive above)
         # conformance: ignore[E007] returns the stderr-fallback emitter itself; the SDK logger is unavailable here, so logging this failure through it is impossible
         return _stderr_fallback, None
 
@@ -211,8 +211,7 @@ def _make_emitter() -> tuple[Any, Any]:
         try:
             method = getattr(logger, _LEVEL_TO_METHOD.get(level, "info"), logger.info)
             method(message)
-        # conformance: ignore[E004] the SDK logger just failed while emitting this line; reporting the failure through the same logger is impossible, so we fall back to stderr
-        except Exception:
+        except Exception:  # noqa: BLE001 — the SDK logger just failed while emitting this line; reporting the failure through the same logger is impossible, so we fall back to stderr
             _stderr_fallback(level, message)
 
     async def _complete() -> None:
@@ -270,8 +269,7 @@ async def _drain_and_flush(complete: Any) -> None:
     if complete is not None:
         try:
             await complete()
-        # conformance: ignore[E004] best-effort drain of the very logger pipeline being flushed; failures are non-actionable and routing them back through that logger risks recursion
-        except Exception:  # noqa: S110 — best-effort drain
+        except Exception:  # noqa: S110, BLE001 — best-effort drain; best-effort drain of the very logger pipeline being flushed; failures are non-actionable and routing them back through that logger risks recursion
             pass
     try:
         from application_sdk.observability.observability import (  # noqa: PLC0415 — deferred: cold shutdown path
@@ -279,8 +277,7 @@ async def _drain_and_flush(complete: Any) -> None:
         )
 
         await AtlanObservability.flush_all()
-    # conformance: ignore[E004] best-effort flush of the observability buffer during shutdown; failures are non-actionable and cannot be safely reported through the buffer being flushed
-    except Exception:  # noqa: S110 — best-effort flush
+    except Exception:  # noqa: S110, BLE001 — best-effort flush; best-effort flush of the observability buffer during shutdown; failures are non-actionable and cannot be safely reported through the buffer being flushed
         pass
 
 
@@ -302,7 +299,7 @@ async def _periodic_drain_flush(complete: Any, interval: float) -> None:
         except asyncio.CancelledError:
             raise
         # conformance: ignore[E004,E014] periodic drain loop for the log-forwarding pipeline itself; must keep flushing across transient upload errors, deliberately swallowing them to stay alive, and cannot safely report them through the logger it drains
-        except Exception:  # noqa: S110 — keep flushing across transient errors
+        except Exception:  # noqa: S110, BLE001 — keep flushing across transient errors
             pass
 
 
@@ -355,8 +352,7 @@ async def _run(child_cmd: list[str]) -> int:
             try:
                 level, message = _format_line(line)
                 emit(level, message)
-            # conformance: ignore[E004] log-forwarding boundary: any failure formatting/emitting a line must never interrupt daprd's stream, so it falls back to a raw stderr write
-            except Exception:
+            except Exception:  # noqa: BLE001 — log-forwarding boundary: any failure formatting/emitting a line must never interrupt daprd's stream, so it falls back to a raw stderr write
                 # Forwarding must never interrupt the stream — fall back to raw.
                 # conformance: ignore[L005] deliberate stderr fallback when logger emit failed; routing through the logger that just failed is impossible
                 print(line.rstrip("\n"), file=sys.stderr, flush=True)  # noqa: T201

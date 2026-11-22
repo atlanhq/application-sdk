@@ -354,7 +354,7 @@ def _binds_logger(node: ast.stmt) -> bool:
 
 
 def _targets(node: ast.stmt) -> list[ast.expr]:
-    return list(node.targets) if isinstance(node, ast.Assign) else [node.target]  # type: ignore[attr-defined]
+    return list(node.targets) if isinstance(node, ast.Assign) else [node.target]  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
 
 
 def _logger_names(tree: ast.Module) -> set[str]:

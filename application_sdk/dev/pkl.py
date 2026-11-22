@@ -50,24 +50,27 @@ coexist and a bump is a fresh download rather than an overwrite. Same cache
 convention, download-on-first-use behaviour and no-checksum posture as the
 embedded daprd in ``application_sdk.dev._dapr`` — pkl publishes no per-asset
 digest, and this is the same HTTPS fetch of the same pinned release asset that
-the CI ``install-pkl`` action already performs.
+the CI ``install-pkl`` action already performs. The fetch itself — socket
+timeout, retries that skip a 4xx, atomic publish — is the one daprd uses
+(``application_sdk.dev._download``). A cached binary is used only if it runs
+and reports the pinned version; anything else is downloaded again.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import platform
 import re
-import stat
 import subprocess
 import sys
-import tempfile
-import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
+from application_sdk.dev._download import (
+    NETWORK_ERRORS,
+    fetch_release_asset,
+    fetch_to_file,
+    is_retryable_network_error,
+)
 from application_sdk.dev._pkl_errors import (
     PklDownloadError,
     UnsupportedPklPlatformError,
@@ -103,8 +106,13 @@ _ASSETS: dict[tuple[str, str], str] = {
     ("windows", "amd64"): "pkl-windows-amd64.exe",
 }
 
+# A stalled download must fail, not hang ``poe generate``; the release CDN
+# returns 503s in bursts lasting minutes (the reason CI's download goes through
+# ``with-retry.sh``), so a 5xx or dropped connection earns another attempt. A
+# 4xx — a pin with no such asset — fails on the first.
+_DOWNLOAD_TIMEOUT_SECONDS = 60.0
 _DOWNLOAD_MAX_ATTEMPTS = 3
-_DOWNLOAD_RETRY_SLEEP_S = 5.0
+_DOWNLOAD_BACKOFF_SECONDS = 5.0
 
 # Accepts pkl's own `--version` banner ("Pkl 0.32.1 (macOS 26.4, native)") and a
 # bare version, and tolerates a pre-release suffix so an rc pin still parses.
@@ -148,54 +156,70 @@ def asset_url(version: str = PKL_VERSION) -> str:
     return _RELEASE_ASSET_URL.format(version=version, asset=asset_name())
 
 
-def _download(url: str, target: Path) -> None:
-    """Fetch *url* to *target*, retrying the GitHub release CDN.
+def _fetch(url: str, dest: Path) -> None:
+    """Stream *url* into *dest*, bounded by a socket timeout."""
+    fetch_to_file(url, dest, timeout=_DOWNLOAD_TIMEOUT_SECONDS)
 
-    The CDN returns 503s in bursts lasting minutes — the reason CI's download
-    goes through ``with-retry.sh`` — so a single failed GET is not evidence the
-    pin is wrong. Downloads to a sibling temp file and renames, so an
-    interrupted fetch cannot leave a truncated binary in the cache for every
-    later run to execute.
+
+def _download(url: str, target: Path) -> None:
+    """Fetch *url* to *target* atomically, retrying what a retry can fix.
+
+    Raises :class:`PklDownloadError` carrying the number of attempts made — one
+    for a 4xx, which no retry will change.
     """
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp_fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), suffix=".part")
-    os.close(tmp_fd)
-    tmp_path = Path(tmp_name)
-    last: Exception | None = None
-    try:
-        for attempt in range(1, _DOWNLOAD_MAX_ATTEMPTS + 1):
-            try:
-                urllib.request.urlretrieve(url, tmp_name)
-                break
-            except (urllib.error.URLError, OSError) as exc:
-                last = exc
-                if attempt == _DOWNLOAD_MAX_ATTEMPTS:
-                    raise PklDownloadError(
-                        asset_url=url, attempts=_DOWNLOAD_MAX_ATTEMPTS
-                    ) from exc
-                _progress(
-                    f"pkl download failed (attempt {attempt}/"
-                    f"{_DOWNLOAD_MAX_ATTEMPTS}): {exc} — retrying in "
-                    f"{_DOWNLOAD_RETRY_SLEEP_S:.0f}s"
-                )
-                # conformance: ignore[P060] synchronous single-process dev tooling (pkl download) — one caller per machine, so no fleet retry storm; retry_async is async-only
-                time.sleep(_DOWNLOAD_RETRY_SLEEP_S)
-        else:  # pragma: no cover — the loop either breaks or raises
-            raise PklDownloadError(
-                asset_url=url, attempts=_DOWNLOAD_MAX_ATTEMPTS
-            ) from last
-        tmp_path.chmod(
-            tmp_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+    made = 1
+
+    def _on_retry(attempt: int, attempts: int, exc: BaseException) -> None:
+        nonlocal made
+        made = attempt + 1
+        _progress(
+            f"pkl download failed (attempt {attempt}/{attempts}): {exc} — "
+            f"retrying in {_DOWNLOAD_BACKOFF_SECONDS * attempt:.0f}s"
         )
-        tmp_path.replace(target)
-    finally:
-        tmp_path.unlink(missing_ok=True)
+
+    try:
+        fetch_release_asset(
+            url,
+            target,
+            timeout=_DOWNLOAD_TIMEOUT_SECONDS,
+            attempts=_DOWNLOAD_MAX_ATTEMPTS,
+            backoff_seconds=_DOWNLOAD_BACKOFF_SECONDS,
+            retryable=is_retryable_network_error,
+            fetch=_fetch,
+            on_retry=_on_retry,
+        )
+    except NETWORK_ERRORS as exc:
+        raise PklDownloadError(asset_url=url, attempts=made) from exc
     _progress(f"pkl {target.parent.name} cached at {target}")
 
 
+def _pkl_runs(binary: Path, version: str) -> bool:
+    """True when *binary* executes and reports *version*."""
+    try:
+        result = subprocess.run(  # fixed argv, our own cached binary
+            [str(binary), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and parse_version(result.stdout) == version
+
+
 def ensure_pkl(version: str = PKL_VERSION) -> Path:
-    """Return the path to the pinned pkl binary, downloading it if absent."""
+    """Return the path to the pinned pkl binary, downloading it if absent.
+
+    New downloads are published atomically, but a cache written before that —
+    or damaged since — can still hold a truncated binary at this path. An
+    existing file is therefore trusted only if it runs and reports *version*;
+    otherwise it is replaced.
+    """
     binary = _cache_dir(version) / _binary_name()
+    if binary.exists() and not _pkl_runs(binary, version):
+        _progress(f"Cached pkl at {binary} does not run; re-downloading")
+        binary.unlink(missing_ok=True)
     if not binary.exists():
         os_name, arch = platform_key()
         _progress(f"Downloading pkl {version} for {os_name}/{arch} …")

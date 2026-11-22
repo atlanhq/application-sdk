@@ -15,9 +15,6 @@ exist, so the fix has something to break.
 from __future__ import annotations
 
 import asyncio
-from unittest import mock
-
-import orjson
 
 from application_sdk.execution._temporal.preflight_gate import (
     GATE_TIMEOUT_DEFAULT_SECONDS,
@@ -32,7 +29,6 @@ from application_sdk.handler.contracts import (
     PreflightOutput,
     PreflightStatus,
 )
-from application_sdk.observability.logger_adaptor import CHECK_MATRIX_KEY
 
 _GATE = "application_sdk.execution._temporal.preflight_gate"
 
@@ -63,18 +59,10 @@ class _MisreportingHandler(DefaultHandler):
         )
 
 
-def _matrix(mock_logger) -> list[dict]:
-    rows = [
-        c.kwargs
-        for c in mock_logger.info.call_args_list
-        if c.args and c.args[0] == "Preflight gate outcome"
-    ]
-    assert len(rows) == 1, f"expected exactly 1 outcome event, got {len(rows)}"
-    return orjson.loads(rows[0][CHECK_MATRIX_KEY])
-
-
 class TestSelfReportedDurationsAreUnvalidated:
-    async def test_duration_far_above_the_budget_is_published_verbatim(self):
+    async def test_duration_far_above_the_budget_is_published_verbatim(
+        self, capture_preflight_outcomes
+    ):
         """The mechanism: a claim ~60x the budget reaches ClickHouse intact."""
         gate = build_preflight_gate_activity(
             _MisreportingHandler(_IMPOSSIBLE_DURATION_MS),
@@ -86,16 +74,18 @@ class TestSelfReportedDurationsAreUnvalidated:
         # activity lived far less than it reports.
         lived_at_most_ms = 30_000
         assert lived_at_most_ms < _IMPOSSIBLE_DURATION_MS
-        with mock.patch(f"{_GATE}.logger") as m:
-            await asyncio.wait_for(
-                gate(PreflightGateInput()), timeout=lived_at_most_ms / 1000
-            )
+        await asyncio.wait_for(
+            gate(PreflightGateInput()), timeout=lived_at_most_ms / 1000
+        )
 
-        assert _matrix(m)[0]["duration_ms"] == _IMPOSSIBLE_DURATION_MS
+        assert (
+            capture_preflight_outcomes.matrix[0]["duration_ms"]
+            == _IMPOSSIBLE_DURATION_MS
+        )
         # The row asserts 292.8s of work inside an activity that lived
         # milliseconds. Nothing in the gate objects.
 
-    async def test_no_warning_is_emitted_for_an_impossible_duration(self):
+    async def test_no_warning_is_emitted_for_an_impossible_duration(self, gate_records):
         """Nothing flags it, so the fleet had no signal the data was wrong."""
         gate = build_preflight_gate_activity(
             _MisreportingHandler(_IMPOSSIBLE_DURATION_MS),
@@ -103,12 +93,13 @@ class TestSelfReportedDurationsAreUnvalidated:
             mode=PreflightGateMode.SOFT,
             budget_seconds=5,
         )
-        with mock.patch(f"{_GATE}.logger") as m:
-            await gate(PreflightGateInput())
+        await gate(PreflightGateInput())
 
-        assert m.warning.call_args_list == []
+        assert gate_records("WARNING") == []
 
-    async def test_a_completed_run_cannot_exceed_the_default_budget(self):
+    async def test_a_completed_run_cannot_exceed_the_default_budget(
+        self, capture_preflight_outcomes
+    ):
         """Why the production rows are provably wrong, stated as an invariant.
 
         A completed outcome row means the activity finished, and the activity
@@ -121,13 +112,12 @@ class TestSelfReportedDurationsAreUnvalidated:
             mode=PreflightGateMode.SOFT,
             budget_seconds=GATE_TIMEOUT_DEFAULT_SECONDS,
         )
-        with mock.patch(f"{_GATE}.logger") as m:
-            # Finishing inside the budget is what a completed row means.
-            await asyncio.wait_for(
-                gate(PreflightGateInput()), timeout=GATE_TIMEOUT_DEFAULT_SECONDS
-            )
+        # Finishing inside the budget is what a completed row means.
+        await asyncio.wait_for(
+            gate(PreflightGateInput()), timeout=GATE_TIMEOUT_DEFAULT_SECONDS
+        )
 
-        reported_seconds = _matrix(m)[0]["duration_ms"] / 1000
+        reported_seconds = capture_preflight_outcomes.matrix[0]["duration_ms"] / 1000
         assert reported_seconds > GATE_TIMEOUT_DEFAULT_SECONDS
 
 

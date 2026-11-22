@@ -5,11 +5,13 @@
 - Current tests live in `tests/unit/`, which mirrors `application_sdk/`: `application_sdk/a/b/c.py` → `tests/unit/a/b/test_c.py` (so `_runtime/` → `tests/unit/_runtime/`, `execution/_temporal/interceptors/` → `tests/unit/execution/_temporal/interceptors/`). `tests/unit/test_unit_tree_mirrors_package.py` fails a test directory with no package counterpart; a deliberate exception goes in its `_NOT_MIRRORED` with what it tests instead.
 - Keep a test module under 1,500 lines. When one grows past that, split it by the area it covers and move shared handlers and factories into a support module beside it — `tests/unit/handler/test_service_*.py` share `_service_support.py`.
 - A unit test that takes ≥10s on its own (a throughput comparison, a 100k-key scale probe) gets `@pytest.mark.perf`. `addopts` excludes it from the 12-leg matrix; the `Unit Perf Tests` job runs it once, in one process, with `uv run pytest tests/unit -m perf`. Every other unit test runs under a 120s per-test `--timeout` in CI, and only the ubuntu 3.12 leg measures coverage.
+- An unconditional `@pytest.mark.skip` must name its ticket in the reason (`reason="waits on FND-1234"`); the hook in `tests/conftest.py` fails the test otherwise (FND-4286). Fix or delete a broken test instead of skipping it. `skipif` is not checked.
 - For how a *consumer app's* tests should be laid out, read `docs/agents/canonical-apps.md` and then the app itself — not an arbitrary `atlan-*-app`, which may be mid-migration or carry deprecated patterns.
 - When a fixture stands in for a **generated artifact** (`app/generated/**`, `atlan.yaml`, a served API envelope), build it from a real one and say in a comment which repo it was read from. A fixture with the shape inverted still passes — for a reason unrelated to its claim — and it flatters the code under test, which is APP-TESTS-001's self-certifying PR arriving through the fixture rather than the assertion. FND-1667 shipped one: a credential template written as `{"id": ...}` with no `config`, where the toolkit emits `config` and no `id`. Nothing caught it until someone ran the selector against a real tree.
 - When the generated artifact can be rendered here, render it instead of copying it. Each fixture listed in `tests/regen_fixtures.py` (today `tests/unit/handler/fixtures/generated_bigquery_credentials/`, rendered from `fixtures/bigquery_contract/app.pkl`) is toolkit output; `tests/unit/test_rendered_fixtures.py` renders each one again with the pinned pkl and fails when a copy is stale. To add one, write its contract and add an entry to `FIXTURES`. After changing a contract or `contract-toolkit/src`, run `uv run poe regen-test-fixtures` and review the diff. The Linux unit legs install pkl and set `SDK_TESTS_REQUIRE_PKL`, so the check cannot pass there by skipping. `tests/unit/validation/resources/artifact_schemas.json` is held to its toolkit example the same way, by `test_fixture_is_the_generated_example`.
 - `addopts` has `--strict-markers`: a mark not listed in `[tool.pytest.ini_options].markers` (or registered by a plugin) fails collection. Register a new mark there before using it.
 - No reruns and no flaky marker: CI runs each test once. Fix a flaky test in place.
+- The conformance package's own tests (`packages/conformance/tests/`) share helpers through `tests/_helpers.py`: `ids` / `active_ids` (all findings vs unsuppressed only — the runner gate's view), `write_py`, `scan_files(scan_all, tmp_path, files)`, `uv_lock`, `extract_node` and `sdk_root()`. Import them (`from tests._helpers import active_ids`) instead of copying a helper from the nearest test file. Seven drift guards (`test_contract_ledger_drift`, `test_dependency_audience`, `test_deprecations_manifest`, `test_public_errors_drift`, `test_removed_imports`, `test_sdk_type_aliases_drift`, `test_toolkit_baseline_drift`) get the monorepo root from `sdk_root()`, which fails under `CI` and skips only locally: a miss in CI means the layout changed, which is when the guard is needed. Other drift tests (for example `test_sdk_contract_fields_drift`) do not use it yet; a new path-based drift guard should.
 - For consumer apps built on this SDK, the conformance suite's T-series (`packages/conformance/conformance/docs/rules/tests.md`) enforces the agreed per-connector testing-tier architecture (unit + integration required, e2e recommended, UI optional except for top connectors) plus test-quality checks — assertion-free tests, uncollectable test files, disabled coverage gates, and more. Run it with `/remediate` or `uv run atlan-application-sdk-conformance detect --series T`.
 
 ## Shared State Under xdist
@@ -100,15 +102,49 @@ async def test_block_names_the_failing_check(capture_preflight_outcomes):
     assert capture_preflight_outcomes.matrix[0]["name"] == "credentialScopes"
 ```
 
+The capture patches nothing: it adds a loguru sink for the test and records the
+outcome rows the gate's real logger delivers to it. A passing assertion
+therefore proves the row reached a sink at that level with those bound fields,
+which a stand-in logger cannot — the adapter runs exactly as in production, so
+each row also carries the context it stamps (`app_name`, `source`, …).
+
 Suites that patch the logger with a `MagicMock` themselves can use
-`outcome_rows` / `outcome_level` / `single_outcome` over the mock instead. Both
-paths assert *exactly one* row, because returning the first match hides a double
-emission.
+`outcome_rows` / `outcome_level` / `single_outcome` over the mock instead; prefer
+the fixture. Both paths assert *exactly one* row, because returning the first
+match hides a double emission.
 
 Boundary: the capture covers rows the gate **activity** emits. The workflow
 wrapper's `skipped` / `no_verdict` rows go through Temporal's `workflow.logger`
-(`app/base.py`), which the capture does not patch — pin those paths against
+(`app/base.py`), which the capture does not read — pin those paths against
 `workflow.logger` directly.
+
+## Asserting Other Log Lines
+
+Assert a log line from the record a real sink received, not from a patched
+module logger. A `MagicMock` logger proves a method of that name was called; it
+cannot prove the record reached a sink at that level, rendered, with the bound
+fields that survive export. Two of these tests hid real export defects while
+they read a mock, and now pin them as strict `xfail`s.
+
+- `loguru_capture` (`tests/unit/conftest.py`) yields every raw loguru record
+  emitted during the test; filter on `record["extra"]["logger_name"]` and
+  `record["level"].name`.
+- `gate_records` (`tests/unit/execution/conftest.py`) is that filter for the
+  preflight gate's non-outcome lines: `gate_records("WARNING")`.
+- To check what is exported, run the record's `extra` through
+  `_build_extra_dict` — the allowlist the OTLP and NDJSON sinks apply.
+  A key it drops is counted on `log.extra_key.dropped`; to assert on that
+  counter, see the `drop_state` fixture in
+  `tests/unit/observability/test_log_extra_allowlist.py`.
+
+## Registry Isolation
+
+`AppRegistry` / `TaskRegistry` resets have one definition:
+`clean_app_registry` and `clean_task_registry` in
+`application_sdk.testing.fixtures`. The unit and integration conftests apply
+them to every test through an autouse fixture, so a test needs no reset of its
+own. Request them by name only where ordering matters — a fixture that
+registers an app must run after the reset.
 
 ## What SDK Review Checks for Tests
 

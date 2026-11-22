@@ -2384,15 +2384,16 @@ class TestPrimeSqlAuth:
             ("OperationalError", "(2013) Lost connection during query — timed out"),
         ],
     )
-    async def test_prime_timeout_raises_app_timeout_error(
+    async def test_prime_timeout_raises_a_source_timeout(
         self, error_type, error_message
     ):
         """Probe failures classified as timeouts must surface as a timeout
         — NOT ``AuthError`` — so the on-call's ``suggested_action`` is
         "check network reachability" rather than "run ACCOUNT UNLOCK".
         Pinned by application-sdk#1835 mothership comment-3287630230 (HIGH).
+        A ``SourceUnavailableError``, as every connect timeout is (FND-4298).
         """
-        from application_sdk.errors.leaves import AppTimeoutError
+        from application_sdk.errors.leaves import SourceUnavailableError
 
         app = SqlApp.__new__(SqlApp)
         app._app_name = "test-app"
@@ -2416,19 +2417,19 @@ class TestPrimeSqlAuth:
             patch.object(SqlApp, "extract_tables", new=AsyncMock()),
             patch.object(SqlApp, "extract_columns", new=AsyncMock()),
         ):
-            with pytest.raises(AppTimeoutError) as exc_info:
+            with pytest.raises(SourceUnavailableError) as exc_info:
                 await app.run(ExtractionInput(output_path="/tmp/test"))
 
         err = exc_info.value
+        assert isinstance(err, SqlProbeTimeoutError)
         assert err.operation == "prime_sql_auth"
-        # AppTimeoutError doesn't define a structured ``failure_reason``
-        # field — driver message is inlined into ``message`` instead.
+        # The leaf has no structured ``failure_reason`` field — the driver
+        # message is inlined into ``message`` instead.
         assert error_message in err.message
         assert err.suggested_action and "network reachability" in err.suggested_action
         # Routes to the customer, not Atlan. Only the driver's and the
         # socket's clocks can reach this branch, so the source owns the
-        # timeout — AppTimeoutError's APP_OWNER default would be wrong.
-        assert isinstance(err, SqlProbeTimeoutError)
+        # timeout.
         assert err.audience is Audience.USER
         assert err.effective_retryable is True
 
@@ -2639,7 +2640,8 @@ class TestPrimeFailureClassification:
     async def test_login_timeout_routes_to_the_customer(self):
         """The production case. An ODBC login timeout (SQLSTATE HYT00, rendered
         as "Login timeout expired") against a customer VPC endpoint is a
-        USER-owned, retryable probe timeout — not a generic source-unavailable.
+        USER-owned, retryable probe timeout — its own leaf, in the
+        SOURCE_UNAVAILABLE category every connect timeout uses (FND-4298).
         The classifier must recognise the driver phrasing even though neither
         the class name nor "timed out" appears in it."""
         from application_sdk.errors.categories import Audience, FailureCategory
@@ -2647,8 +2649,8 @@ class TestPrimeFailureClassification:
         err = SqlApp._classify_prime_failure(await self._probe(OperationalError()))
 
         assert isinstance(err, SqlProbeTimeoutError)
-        assert err.code == "TIMEOUT_SQL_PROBE"
-        assert err.category is FailureCategory.TIMEOUT
+        assert err.code == "SOURCE_UNAVAILABLE_SQL_PROBE_TIMEOUT"
+        assert err.category is FailureCategory.SOURCE_UNAVAILABLE
         assert err.audience is Audience.USER
         assert err.effective_retryable is True
 
@@ -3239,9 +3241,8 @@ class TestPrimeFailureClassification:
         )
 
     async def test_timeout_verdict_keeps_its_audience_across_the_wire(self):
-        """The probe-specific timeout leaf must rebuild as itself, not as the
-        base ``AppTimeoutError`` — the whole point of the leaf is its USER
-        audience override, and only the wire code carries it."""
+        """The probe-specific timeout leaf must rebuild as itself, not as a
+        base leaf — only the wire code carries which leaf it was."""
         result = await self._probe(TimeoutError("probe deadline exceeded"))
         rehydrated = PrimeAuthOutput.model_validate_json(result.model_dump_json())
 
@@ -3635,3 +3636,14 @@ def test_legacy_credential_ref_reexport_is_a_deprecated_alias(module_name: str) 
     module = importlib.import_module(module_name)
     with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
         assert module.legacy_credential_ref is ref.legacy_credential_ref
+
+
+def test_output_template_reexport_is_a_deprecated_alias() -> None:
+    """FND-4921 dropped the import; the name stays importable, warning, until v4.0.0."""
+    from application_sdk import constants
+    from application_sdk.templates import sql_app
+
+    assert "WORKFLOW_OUTPUT_PATH_TEMPLATE" not in vars(sql_app)
+    with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+        value = sql_app.WORKFLOW_OUTPUT_PATH_TEMPLATE
+    assert value == constants.WORKFLOW_OUTPUT_PATH_TEMPLATE

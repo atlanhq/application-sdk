@@ -5,10 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from application_sdk.errors.categories import Audience
+# Re-exported: importable from here before FND-4298 moved SqlProbeTimeoutError
+# off AppTimeoutError (Symbol Removal Check).
+from application_sdk.errors.categories import Audience as Audience
+from application_sdk.errors.leaves import AppTimeoutError as AppTimeoutError
 from application_sdk.errors.leaves import (
-    AppTimeoutError,
     DataIntegrityError,
+    SourceUnavailableError,
     UnimplementedError,
 )
 
@@ -68,25 +71,23 @@ class SqlClientClassNotSetError(UnimplementedError):
 
 
 @dataclass(kw_only=True)
-class SqlProbeTimeoutError(AppTimeoutError):
+class SqlProbeTimeoutError(SourceUnavailableError):
     """The SQL auth-cache prime probe ran out of time waiting on the source.
-
-    ``AppTimeoutError`` defaults to ``APP_OWNER`` because a timeout's locus is
-    usually ambiguous — a source network read, a Temporal activity deadline and
-    a heartbeat timeout route to three different people, and the base class
-    cannot tell them apart. Here it is not ambiguous, so this leaf picks, as
-    the base class docstring instructs.
 
     Only Python-level timeouts raised by the driver or the socket reach this
     error: connect timeout, login timeout, read deadline. In each one the clock
-    ran out waiting for the customer's source. The Temporal-deadline case that
-    would justify ``APP_OWNER`` cannot arrive — a start-to-close overrun kills
-    the activity from outside, so ``prime_sql_auth`` never returns and never
-    classifies (see its ``retry_max_attempts=1`` note).
+    ran out waiting for the customer's source. The Temporal-deadline case
+    cannot arrive — a start-to-close overrun kills the activity from outside,
+    so ``prime_sql_auth`` never returns and never classifies (see its
+    ``retry_max_attempts=1`` note).
+
+    ``SOURCE_UNAVAILABLE``, not ``TIMEOUT``: a source that does not answer in
+    time is reported the way the network probe and the SQL client report it
+    (ADR-0013, "A timeout waiting on the source"; FND-4298).
     """
 
-    code: ClassVar[str] = "TIMEOUT_SQL_PROBE"
-    audience: ClassVar[Audience] = Audience.USER
+    code: ClassVar[str] = "SOURCE_UNAVAILABLE_SQL_PROBE_TIMEOUT"
+    source_type: str | None = "sql"
     operation: str | None = "prime_sql_auth"
 
 

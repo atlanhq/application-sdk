@@ -17,7 +17,9 @@ from conformance.suite.checks._ast_common import (
     _parse_directives,
     collect_module_alias_targets,
     make_finding,
+    parse_module,
     register_alias_records,
+    safe_read_text,
 )
 from conformance.suite.checks._sdk_contract_mixins import SDK_TEMPLATE_CONTRACT_FIELDS
 from conformance.suite.checks.prescriptions._boundary_methods import (
@@ -91,9 +93,8 @@ def build_registry(paths: list[Path], root: Path) -> Registry:
     texts: list[tuple[Path, str, str]] = []
     parse_failures: list[str] = []
     for path in paths:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        text = safe_read_text(path)
+        if text is None:
             parse_failures.append(str(path.relative_to(root)))
             continue
         try:
@@ -120,7 +121,7 @@ def registry_from_texts(
 
     for path, rel, text in texts:
         try:
-            tree = ast.parse(text, filename=str(path))
+            tree = parse_module(text, filename=str(path))
         except SyntaxError:
             failures.append(rel)
             continue

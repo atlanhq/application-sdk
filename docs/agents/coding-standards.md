@@ -11,9 +11,19 @@
 2. **No useless f-strings** - Don't use `f"string"` if there are no `{placeholders}`
 3. **No Unicode in print statements** - Windows CI fails on emojis (`✓`, `❌`, `⚠️`). Use ASCII: `PASS`, `FAIL`, `WARNING`
 4. **Import sorting** - Imports must be sorted (ruff `I` rules; `uv run ruff check --fix` sorts them)
-5. **Type hints** - Pyright enforces type checking
-6. **Conventional commits** - Commit messages must follow conventional format (e.g., `fix:`, `feat:`, `chore:`)
+5. **Type hints** - Pyright enforces type checking. `reportArgumentType`, `reportAttributeAccessIssue` and `reportFunctionMemberAccess` are errors; findings that predate that are in `pyright_baseline.json`, which may only shrink
+6. **Suppress with `# pyright: ignore[<rule>]`, never `# type: ignore`** - `# type: ignore` is switched off (`enableTypeIgnoreComments = false`), and a `# pyright: ignore` that no longer suppresses anything is an error (`reportUnnecessaryTypeIgnoreComment`)
+7. **Conventional commits** - Commit messages must follow conventional format (e.g., `fix:`, `feat:`, `chore:`)
 7. **No customer names** - Never reference customer names, tenant names, run IDs, or any customer-identifiable information in code, comments, docstrings, commit messages, or PR descriptions. Use generic language: "a production incident", "a prior RCA".
+
+## Log Levels: WARNING Handled, ERROR Failed
+
+The customer-facing log view filters at ERROR, so an ERROR record reads as a
+failed run. Use ERROR only when the operation failed: the handler raises,
+exits, or returns a failure result. A failure the code caught and recovered
+from (a fallback, a best-effort close, a skipped item) is a WARNING with
+`exc_info=True`. Conformance L022 reports `logger.error()` in an `except` that
+does none of those. The full level table is in `docs/standards/logging.md`.
 
 ## Serialization & Type Systems
 
@@ -141,6 +151,9 @@ Every gated run emits a structured `Preflight gate outcome` event
 also stamps `gate_tier` and `warmup_outcome` on its rows (plus `warmup_duration_ms` /
 `warmup_transitions` once the wait has ended); every new row key must be added to
 `_KNOWN_EXTRA_KEYS`, or it is dropped before export and cannot be queried.
+`tests/unit/observability/test_log_extra_allowlist.py` scans every literal log
+field in `application_sdk` (keyword fields, literal `extra={...}` keys and
+`_safe_log` fields) and fails on one that is not allowlisted or prefixed.
 
 ### Logging contract
 
@@ -335,7 +348,7 @@ See [file-reference.md § App-to-app hand-off](../concepts/file-reference.md) an
 `ParquetFileWriter`, `JsonFileWriter`, `ParquetFileReader`, and `JsonFileReader`
 emit `DeprecationWarning` on construction and **will be removed in v4.0**.
 Migrate now — the replacement is fully supported and fully optimised
-(SHA-256 dedup + sidecars + parallel transfers via `_gather_with_semaphore`).
+(SHA-256 dedup + sidecars + parallel transfers via `_run_bounded`).
 
 ### Recommended: `RollingFileWriter`
 

@@ -8,7 +8,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.version import __version__ as _SDK_VERSION
 
 if TYPE_CHECKING:
-    from pyatlan_v9.client.aio import AsyncAtlanClient  # type: ignore[import]
+    from pyatlan_v9.client.aio import AsyncAtlanClient
 
     from application_sdk.app.context import AppContext
     from application_sdk.credentials.ref import CredentialRef
@@ -127,7 +127,7 @@ def create_async_atlan_client(
     Raises:
         AtlanCredentialTypeError: If ``cred`` is not a supported Atlan credential type.
     """
-    from pyatlan_v9.client.aio import (  # type: ignore[import]  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored)
+    from pyatlan_v9.client.aio import (  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored)
         AsyncAtlanClient,
     )
 
@@ -200,7 +200,7 @@ class AtlanClientMixin:
         cache_key = f"async_atlan_client:{credential.name}"
 
         # 1. Named cache — reused on every subsequent call within this execution.
-        cached = self.app_state.get(cache_key)  # type: ignore[attr-defined]
+        cached = self.app_state.get(cache_key)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
         if cached is not None:
             logger.debug(
                 "reusing cached Atlan async client credential=%s", credential.name
@@ -208,10 +208,10 @@ class AtlanClientMixin:
             return cached
 
         # 2. Validated hand-off — claim once, move to named slot, clear well-known key.
-        validated = self.app_state.get(_VALIDATED_ASYNC_CLIENT_KEY)  # type: ignore[attr-defined]
+        validated = self.app_state.get(_VALIDATED_ASYNC_CLIENT_KEY)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
         if validated is not None:
-            self.app_state.set(_VALIDATED_ASYNC_CLIENT_KEY, None)  # type: ignore[attr-defined]
-            self.app_state.set(cache_key, validated)  # type: ignore[attr-defined]
+            self.app_state.set(_VALIDATED_ASYNC_CLIENT_KEY, None)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+            self.app_state.set(cache_key, validated)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
             logger.debug(
                 "reusing validated Atlan async client credential=%s",
                 credential.name,
@@ -219,14 +219,14 @@ class AtlanClientMixin:
             return validated
 
         # 3. Resolve and create.
-        cred = await self.context.resolve_credential(credential)  # type: ignore[attr-defined]
+        cred = await self.context.resolve_credential(credential)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
         # Stamp ``x-atlan-app-*`` headers (BLDX-1246) so the tenant
         # gateway can attribute every pyatlan request back to this app
         # for per-app observability / quota separation. Sourced from
         # the AppContext that the framework already injects on the mixin.
-        extra_headers = _app_request_headers(getattr(self, "context", None))  # type: ignore[attr-defined]
+        extra_headers = _app_request_headers(getattr(self, "context", None))
         client = create_async_atlan_client(cred, extra_headers=extra_headers)
-        self.app_state.set(cache_key, client)  # type: ignore[attr-defined]
+        self.app_state.set(cache_key, client)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
         logger.debug(
             "Atlan async client created and cached credential=%s type=%s",
             credential.name,

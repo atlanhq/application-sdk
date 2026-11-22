@@ -980,8 +980,11 @@ auto-stamped and each row joins to the workflow outcome by run id:
 - Five scalar counts land as their own `LogAttributes`: `assets_total`, `assets_passed`,
   `assets_invalid`, `assets_orphaned`, `assets_undeserializable`.
 - Per-failure detail rides in one compact JSON attribute, `asset_validation_matrix` (bounded to a
-  fixed number of rows per axis so it can't grow unbounded); the full human-readable report is also
-  logged as a WARNING body, but only for flagged runs.
+  fixed number of rows per axis so it can't grow unbounded); the human-readable report, capped to the
+  same number of rows per axis, is also logged as a WARNING body, but only for flagged runs.
+- The scan runs in an isolated child process, and the event and the capped report are built there:
+  only those come back to the worker, never the full list of failures. A batch where every record
+  fails costs the worker the same memory as a clean one.
 - Complete counts ride in `asset_validation_summary`: one row per `(kind, type_name, detail)` over
   **every** failure in the batch (e.g. `invalid` / `Column` / `required_for_creation:schema_qualified_name`),
   so fleet-wide "which types fail which checks" queries are not limited by the matrix sample.

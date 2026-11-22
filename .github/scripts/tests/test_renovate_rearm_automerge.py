@@ -21,7 +21,7 @@ import renovate_rearm_automerge as rearm  # noqa: E402
 try:  # Vocabulary pin: the literal must match the classifier's enum value.
     from conformance.renovate.models import BlockingReason as _BlockingReason
 except ImportError:  # pragma: no cover - depends on the runner's environment
-    _BlockingReason = None  # type: ignore[assignment]
+    _BlockingReason = None
 
 
 def _write_repo_report(out_dir, slug: str, prs: list[dict]) -> None:

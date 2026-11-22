@@ -308,7 +308,7 @@ async def wait_for_dapr_sidecar(
     finally:
         try:
             _sidecar_wait_duration().record(loop.time() - start, {"outcome": outcome})
-        except Exception:  # noqa: S110 — best-effort observability; never block startup on metric emission
+        except Exception:  # noqa: S110, BLE001 — best-effort observability; never block startup on metric emission; best-effort metric emission must never block sidecar startup
             pass
 
 

@@ -1,4 +1,4 @@
-"""L006, L007, L017 — log-level rules."""
+"""L006, L007, L017, L022 — log-level rules."""
 
 from __future__ import annotations
 
@@ -442,8 +442,103 @@ def _is_throttled(node: ast.Call, loop: ast.For | ast.AsyncFor | ast.While) -> b
     return False
 
 
+# ── L022 handled-failure recognition ─────────────────────────────────────────
+
+_NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+# ``sys.exit(...)`` / ``os._exit(...)`` and the builtins end the process: the
+# failure is not handled, whatever the handler logged first.
+_EXIT_CALLS = frozenset({("sys", "exit"), ("os", "_exit")})
+_EXIT_BUILTINS = frozenset({"exit", "quit"})
+# ``status=<Enum>.FAILURE`` on a returned result object.
+_FAILURE_STATUS_NAMES = frozenset({"FAILURE", "FAILED", "ERROR"})
+
+
+def _handler_statements(handler: ast.ExceptHandler) -> list[ast.AST]:
+    """Every node of *handler*'s body, not descending into nested scopes."""
+    nodes: list[ast.AST] = []
+    stack: list[ast.AST] = [
+        stmt for stmt in handler.body if not isinstance(stmt, _NESTED_SCOPES)
+    ]
+    while stack:
+        node = stack.pop()
+        nodes.append(node)
+        stack.extend(
+            child
+            for child in ast.iter_child_nodes(node)
+            if not isinstance(child, _NESTED_SCOPES)
+        )
+    return nodes
+
+
+def _is_exit_call(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id in _EXIT_BUILTINS
+    return (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and (func.value.id, func.attr) in _EXIT_CALLS
+    )
+
+
+def _is_false(node: ast.expr | None) -> bool:
+    return isinstance(node, ast.Constant) and node.value is False
+
+
+def _is_failure_keyword(name: str | None, value: ast.expr | None) -> bool:
+    """``success=False``, ``status=X.FAILURE`` or ``status_code=<5xx>``."""
+    if name == "success":
+        return _is_false(value)
+    if name == "status":
+        return isinstance(value, ast.Attribute) and value.attr in _FAILURE_STATUS_NAMES
+    if name == "status_code":
+        return (
+            isinstance(value, ast.Constant)
+            and type(value.value) is int
+            and value.value >= 500
+        )
+    return False
+
+
+def _is_failure_result(value: ast.expr | None) -> bool:
+    """True if *value* is a result object that reports the failure to the caller.
+
+    An allowlist of local shapes: a call or dict literal carrying
+    ``success=False``, ``status=<Enum>.FAILURE|FAILED|ERROR`` or a 5xx
+    ``status_code``. A bare ``False``, ``None`` or default value is not one:
+    the caller gets a sentinel it may ignore, so the handler has absorbed the
+    failure.
+    """
+    if isinstance(value, ast.Call):
+        return any(_is_failure_keyword(kw.arg, kw.value) for kw in value.keywords)
+    if isinstance(value, ast.Dict):
+        return any(
+            isinstance(key, ast.Constant)
+            and isinstance(key.value, str)
+            and _is_failure_keyword(key.value, item)
+            for key, item in zip(value.keys, value.values)
+        )
+    return False
+
+
+def handler_propagates_failure(handler: ast.ExceptHandler) -> bool:
+    """True if *handler* raises, exits, or returns a failure result.
+
+    Any ``raise`` in the handler counts, conditional or not: the check reports
+    only handlers that cannot propagate the failure at all.
+    """
+    for node in _handler_statements(handler):
+        if isinstance(node, ast.Raise) or _is_exit_call(node):
+            return True
+        if isinstance(node, ast.Return) and _is_failure_result(node.value):
+            return True
+    return False
+
+
 class LevelMixin(_MixinBase):
-    """Rule methods for L006, L007, L017 (log-level category)."""
+    """Rule methods for L006, L007, L017, L022 (log-level category)."""
 
     # ── L006 InfoInTightLoop ──────────────────────────────────────────────────
 
@@ -472,7 +567,7 @@ class LevelMixin(_MixinBase):
         if isinstance(innermost, ast.While):
             # While loops are always flagged — bound is not statically obvious
             pass
-        elif loop_is_bounded(innermost, self._bounded_loop_caps):  # type: ignore[arg-type]
+        elif loop_is_bounded(innermost, self._bounded_loop_caps):
             return
         enclosing_loops_are_bounded = all(
             isinstance(loop, (ast.For, ast.AsyncFor))
@@ -533,3 +628,27 @@ class LevelMixin(_MixinBase):
                 "logger.exception() is not a sanctioned method (ADR-0011). "
                 "Replace with logger.error(..., exc_info=True).",
             )
+
+    # ── L022 HandledFailureLoggedAtError ──────────────────────────────────────
+
+    def _check_l022(self, node: ast.Call) -> None:
+        """Flag ``logger.error()`` in an except block that handles the failure.
+
+        ERROR means the operation failed, and the customer log view filters at
+        ERROR. A handler that neither raises, exits, nor returns a failure
+        result has absorbed the exception and carried on, so its record
+        belongs at WARNING. Only the innermost enclosing handler counts.
+        """
+        if not self._except_stack:
+            return
+        if get_logger_method(node, self._logging_module_names) != "error":
+            return
+        if handler_propagates_failure(self._except_stack[-1]):
+            return
+        self._add(
+            "L022",
+            node,
+            "logger.error() in an except block that neither raises nor returns "
+            "a failure — the failure was handled, so log it at WARNING. ERROR "
+            "means the operation failed.",
+        )

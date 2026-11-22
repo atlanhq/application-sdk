@@ -95,7 +95,7 @@ def _step_blocks_from_text(path: Path) -> list[tuple[int, list[str]]]:
         if not _REPOSITORY_LINE.match(line):
             continue
         start = next(i for i in range(idx, -1, -1) if _STEP_START.match(lines[i]))
-        indent = len(_STEP_START.match(lines[start]).group("indent"))  # type: ignore[union-attr]
+        indent = len(_STEP_START.match(lines[start]).group("indent"))  # pyright: ignore[reportOptionalMemberAccess]
         end = idx + 1
         while end < len(lines):
             stripped = lines[end].strip()

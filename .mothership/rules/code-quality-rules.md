@@ -30,7 +30,7 @@ What the reviewer still owns is the justification:
 
 ### Suppression comments require an inline justification (Important)
 
-`# noqa`, `# type: ignore`, `# pylint: disable`, `# mypy: ignore`,
+`# noqa`, `# pyright: ignore`, `# pylint: disable`,
 `# pragma: no cover` all bypass a quality gate. A bare suppression
 silently disables the check; an inline justification ("# noqa: PLC0415
 — lazy import: heavy dependency") preserves the decision history and
@@ -38,9 +38,14 @@ the next reader can validate it.
 
 **Flag any new suppression comment that:**
 - Lacks a same-line rationale after the directive: bare `# noqa`,
-  `# noqa: E501` (no reason), `# type: ignore` (no reason).
+  `# noqa: E501` (no reason), `# pyright: ignore[rule]` (no reason).
+- Uses `# type: ignore` at all. `[tool.pyright]` sets
+  `enableTypeIgnoreComments = false`, so it suppresses nothing (the
+  finding it was meant to hide still fails CI) and mypy codes in its
+  brackets mean nothing to pyright. Use `# pyright: ignore[<rule>]`.
 - Disables a category broadly when the actual issue is local:
-  blanket `# noqa` instead of `# noqa: <specific-code>`.
+  blanket `# noqa` instead of `# noqa: <specific-code>`, or a bare
+  `# pyright: ignore` instead of `# pyright: ignore[<rule>]`.
 - Adds `# pragma: no cover` on production code paths (acceptable
   for `if TYPE_CHECKING:` blocks or `__main__` guards; suspicious
   anywhere else).
@@ -50,11 +55,12 @@ the next reader can validate it.
 ```python
 # Acceptable
 import duckdb  # noqa: PLC0415 — lazy import: heavy dependency
-result: Any  # type: ignore[no-any-return] — upstream library returns dict
+conn.run(q)  # pyright: ignore[reportArgumentType] — driver stub types q as str only
 
 # Reject
 import duckdb  # noqa
-result: Any  # type: ignore
+conn.run(q)  # pyright: ignore
+conn.run(q)  # type: ignore[arg-type]
 ```
 
 **Severity:** Important. The suppression itself isn't a bug, but

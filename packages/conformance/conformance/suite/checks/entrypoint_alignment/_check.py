@@ -39,8 +39,8 @@ def _empty_directives() -> dict[int, _IgnoreDirective]:
 def _synthetic_node() -> ast.AST:
     """A dummy AST node at line 1 for cross-artifact findings with no code anchor."""
     node: ast.AST = ast.Constant(value=None)
-    node.lineno = 1  # type: ignore[attr-defined]
-    node.col_offset = 0  # type: ignore[attr-defined]
+    node.lineno = 1
+    node.col_offset = 0
     return node
 
 

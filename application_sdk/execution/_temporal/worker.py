@@ -138,6 +138,7 @@ async def read_core_poller_counts() -> dict[str, float] | None:
             timeout_s=TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS,
             max_bytes=TEMPORAL_CORE_METRICS_MAX_BYTES,
         )
+    # conformance: ignore[E004] an unreachable exporter is the expected "disabled" case; the poll-state observer warns once when the reading turns unknown
     except Exception:
         logger.debug(
             "Temporal-core metrics endpoint %s unreachable; poller count unknown",
@@ -172,7 +173,10 @@ async def read_core_poller_counts() -> dict[str, float] | None:
                 )
                 counts[key] = counts.get(key, 0.0) + sample.value
     except Exception:
-        logger.debug(
+        # Unlike an unreachable endpoint (exporter disabled, expected), a body
+        # the exporter served but this parser cannot read is a fault: it blinds
+        # zombie-worker detection, so it is logged where it will be seen.
+        logger.warning(
             "Could not parse Temporal-core metrics from %s; poller count unknown",
             url,
             exc_info=True,
@@ -416,7 +420,7 @@ class AppWorker:
         try:
             await self._start_metrics_push()
         except Exception:
-            logger.error(
+            logger.warning(
                 "Pushgateway pusher start failed — worker will run without metrics",
                 exc_info=True,
             )
@@ -448,7 +452,7 @@ class AppWorker:
         try:
             await self._start_metrics_push()
         except Exception:
-            logger.error(
+            logger.warning(
                 "Pushgateway pusher start failed — worker will run without metrics",
                 exc_info=True,
             )
@@ -1196,6 +1200,7 @@ def create_worker(
         try:
             await _log_worker_fatal_error(exc)
         except BaseException:
+            # conformance: ignore[L022] the worker's fatal crash record: the poll loop has already failed, this handler only lost the cause chain
             logger.error(
                 "Temporal worker poll loop failed fatally (cause chain "
                 "unavailable: rendering the exception raised %s)",

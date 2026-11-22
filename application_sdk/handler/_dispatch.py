@@ -204,7 +204,7 @@ def resolve_handler_op(
             return fn
     method: Callable[[Any], Awaitable[Any]] = getattr(handler, op)
 
-    async def call_handler(input: Any, ctx: HandlerContext) -> Any:
+    async def call_handler(input: object, ctx: HandlerContext) -> object:
         return await method(input)
 
     return call_handler

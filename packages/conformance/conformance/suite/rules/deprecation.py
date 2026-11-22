@@ -93,8 +93,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "Coverage limits (intentional, low-false-positive at WARN): deprecated\n"
             "*parameters* / *modes* are out of scope; method matching is\n"
-            "attribute-name-anchored (a same-named method on an unrelated object is a\n"
-            "known false-positive risk); re-export aliasing can produce false\n"
+            "attribute-name-anchored, except that a call on a receiver proven to be\n"
+            "a module (bound only by ``import x``, or by ``from pkg import x`` where\n"
+            "``pkg/x.py`` is in the app) is never matched, since it runs a module\n"
+            "function.  A same-named method on any other unrelated object remains a\n"
+            "known false-positive risk; re-export aliasing can produce false\n"
             "negatives.  All are suppressible with ``# conformance: ignore[B001]``.\n"
         ),
         remediation_reference=RemediationReference(
@@ -106,7 +109,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="B002",
         scope=RuleScope.SDK,
         name="MalformedDeprecationNotice",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         category="deprecation-hygiene",
         autofixable=False,
         orthogonal_gate="tests",
@@ -118,7 +121,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "— callers see 'deprecated' with no path forward, and B001 cannot carry a "
             "migration hint to the fleet. Enforcing 'names a replacement AND a removal "
             "version' on the SDK's own notices keeps the whole deprecation pipeline "
-            "actionable. WARN: the required wording is a guided edit, not mechanical."
+            "actionable. Customer impact: an app on a symbol whose notice names no "
+            "replacement or date gets no usable warning, and its next upgrade past "
+            "the removal breaks it. BLOCK since the SDK reached zero findings "
+            "(FND-4300): application_sdk._deprecation.warn_deprecated builds a "
+            "conforming notice from its arguments, so a new one is cheap to get right."
         ),
         short_description=(
             "A deprecation notice must name both a migration target and a removal "
@@ -134,9 +141,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "(``will be removed in v4.0``).\n"
             "\n"
             "Both are required so every deprecation is self-describing and B001 can\n"
-            "propagate concrete guidance to consumers.  Only symbol-level markers are\n"
-            "checked (decorator, or a class emitting ``DeprecationWarning`` from\n"
-            "``__init__`` / ``__init_subclass__``).\n"
+            "propagate concrete guidance to consumers.  Every notice is checked: a\n"
+            "``@deprecated`` message, a ``warnings.warn(..., DeprecationWarning)``\n"
+            "(a message held in a local variable or built from a module-level string\n"
+            "constant is read too), a ``warn_deprecated(...)`` call, an enum's\n"
+            "``__deprecated_members__`` and a ``_DEPRECATED_CONSTANTS`` shim.\n"
         ),
     ),
     RuleDefinition(
@@ -173,7 +182,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="B004",
         scope=RuleScope.SDK,
         name="UnmarkedDeprecationClaim",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         category="deprecation-hygiene",
         autofixable=False,
         since="0.5.0",
@@ -185,7 +194,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Flagging a deprecation claim that lacks a real marker closes that gap so "
             "every stated deprecation is also a detectable one. Detect-only: which "
             "marker to add (decorator vs warning) is a small design choice for the "
-            "author, routed to residue with a concrete suggestion."
+            "author, routed to residue with a concrete suggestion. Customer impact: "
+            "the manifest never lists the symbol, so B001 never warns the apps that "
+            "use it, and they break on the release that removes it. BLOCK since the "
+            "SDK reached zero findings (FND-4300)."
         ),
         short_description=(
             "A symbol's docstring claims deprecation but it carries no @deprecated / "
@@ -193,7 +205,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         full_description=(
             "Flags a function / method / class whose docstring opens with\n"
-            "``Deprecated`` (or carries a ``.. deprecated::`` directive) but has no\n"
+            "``Deprecated:`` (or carries a ``.. deprecated::`` directive) at the\n"
+            "docstring's own indentation but has no\n"
             "machine-readable marker — no ``@deprecated`` decorator and no\n"
             "``DeprecationWarning`` emitted from ``__init__`` / ``__init_subclass__``.\n"
             "Such a claim is invisible to consumers and to B001.  Detect-only: the\n"

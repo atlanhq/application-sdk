@@ -797,7 +797,7 @@ def main_block_lines(tree: ast.Module) -> frozenset[int]:
             if isinstance(comp, ast.Constant) and comp.value == "__main__":
                 for child in ast.walk(node):
                     if hasattr(child, "lineno"):
-                        lines.add(child.lineno)  # type: ignore[attr-defined]
+                        lines.add(child.lineno)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
                 break
     return frozenset(lines)
 
@@ -1209,7 +1209,7 @@ def collect_redacted_names(tree: ast.Module) -> frozenset[str]:
             self.generic_visit(node)
 
         # ``type password = str`` (Python ≥ 3.12) binds the alias object.
-        def visit_TypeAlias(self, node: ast.TypeAlias) -> None:  # type: ignore[attr-defined]
+        def visit_TypeAlias(self, node: ast.TypeAlias) -> None:  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
             record_target(node.name, False)
             self.generic_visit(node)
 

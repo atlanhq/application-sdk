@@ -12,8 +12,10 @@ from unittest import mock
 
 import orjson
 import pytest
+from pydantic import BaseModel, Field
 
 import application_sdk.outputs as outputs_module
+from application_sdk.app.registry import _running_app_name
 from application_sdk.contracts.base import Output, OutputStatus
 from application_sdk.execution._temporal.interceptors.outputs import (
     OutputActivityInboundInterceptor,
@@ -45,6 +47,30 @@ class _TaskOutput(Output):
     """A task-style typed result."""
 
     rows: int = 0
+
+
+class _AliasedOutput(Output):
+    """A workflow result with aliased fields and no ``populate_by_name``.
+
+    A required aliased field makes a ``model_dump()`` / ``model_validate()``
+    round trip raise; a defaulted one makes it silently reset to the default.
+    """
+
+    rows: int = 0
+    schema_name: str = Field(alias="schemaName")
+    table_name: str = Field(default="", alias="tableName")
+
+
+class _PlainModel(BaseModel):
+    """A model with no ``metrics`` / ``artifacts`` fields."""
+
+    name: str = ""
+
+
+class _IntMetricsModel(BaseModel):
+    """A model whose ``metrics`` field cannot hold the collector's map."""
+
+    metrics: int = 0
 
 
 @dataclass
@@ -519,6 +545,84 @@ class TestOutputWorkflowInboundInterceptor:
         assert result["metrics"]["workflow-metric"] == 999
         assert result["status"] == "done"
 
+    async def test_aliased_output_keeps_its_fields_when_outputs_merge(
+        self, interceptor, mock_next_inbound
+    ):
+        """An Output with an aliased field keeps every field and gains the outputs.
+
+        ``model_dump()`` emits field names, which a model without
+        ``populate_by_name`` rejects on ``model_validate``; the merge must not
+        depend on that round trip.
+        """
+
+        async def run(input):
+            get_outputs().add_metric(Metric(name="count", value=7))
+            return _AliasedOutput(rows=3, schemaName="sales", tableName="orders")
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert isinstance(result, _AliasedOutput)
+        assert result.schema_name == "sales"
+        assert result.table_name == "orders"
+        assert result.rows == 3
+        assert result.status == OutputStatus.SUCCESS
+        assert result.metrics == {"count": 7}
+
+    async def test_aliased_output_marked_partial_keeps_its_fields(
+        self, interceptor, mock_next_inbound
+    ):
+        """A run that skipped records is PARTIAL_SUCCESS without losing fields."""
+
+        async def run(input):
+            get_outputs().add_metric(Metric(name=SKIPPED_RECORDS_METRIC, value=2))
+            return _AliasedOutput(rows=3, schemaName="sales", tableName="orders")
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert isinstance(result, _AliasedOutput)
+        assert result.schema_name == "sales"
+        assert result.table_name == "orders"
+        assert result.rows == 3
+        assert result.status == OutputStatus.PARTIAL_SUCCESS
+        assert result.metrics == {SKIPPED_RECORDS_METRIC: 2}
+
+    async def test_model_without_output_fields_is_returned_unchanged(
+        self, interceptor, mock_next_inbound
+    ):
+        """A model that cannot carry outputs is returned as-is, never replaced."""
+        original = _PlainModel(name="x")
+
+        async def run(input):
+            get_outputs().add_metric(Metric(name="count", value=7))
+            return original
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert result is original
+
+    async def test_model_whose_output_field_rejects_the_map_is_returned_unchanged(
+        self, interceptor, mock_next_inbound
+    ):
+        """A ``metrics`` field of another type is never set to the collector map."""
+        original = _IntMetricsModel(metrics=1)
+
+        async def run(input):
+            get_outputs().add_metric(Metric(name="count", value=7))
+            return original
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert result is original
+        assert result.metrics == 1
+
 
 class TestOutputInterceptor:
     """Tests for the main OutputInterceptor class."""
@@ -810,3 +914,82 @@ class TestSkippedRecordsThroughInterceptors:
         with pytest.raises(ValueError, match="creator rejects"):
             await self._run_activity(transform)
         assert uploads == {}
+
+
+class TestSkippedPartsUseTheRunningApp:
+    """FND-4921: a skipped-records part uploads under the App that ran the task.
+
+    The task wrapper records the App's name in ``_running_app_name`` inside the
+    activity body; the part is persisted after the body returns. With no single
+    registered App and ``ATLAN_APPLICATION_NAME`` naming neither, the part must
+    still land under the App's run prefix, which is where
+    ``merge_skipped_records`` lists. Concurrent activities keep their own names.
+    """
+
+    @pytest.fixture(autouse=True)
+    def cleanup_state(self):
+        current_outputs.set(None)
+        yield
+        current_outputs.set(None)
+
+    @pytest.fixture
+    def uploaded(self, tmp_path):
+        keys: list[str] = []
+
+        async def upload_file(key, _local_path):
+            keys.append(key)
+
+        with (
+            mock.patch("application_sdk.storage.upload_file", upload_file),
+            mock.patch(
+                "application_sdk.app.registry.AppRegistry.list_apps", return_value=[]
+            ),
+            mock.patch("application_sdk.constants.APPLICATION_NAME", "env-app"),
+            mock.patch(
+                "application_sdk.execution._temporal.activity_utils.get_workflow_id",
+                return_value="wf-1",
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.activity_utils.get_workflow_run_id",
+                return_value="run-1",
+            ),
+            mock.patch(
+                "application_sdk.outputs.skipped._new_sink",
+                side_effect=lambda: SkippedRecordSink(
+                    tmp_path / f"{id(object())}.ndjson"
+                ),
+            ),
+        ):
+            yield keys
+
+    @staticmethod
+    async def _run_activity(app_name: str) -> None:
+        async def body(_input):
+            _running_app_name.set(app_name)  # what the task wrapper does
+            await asyncio.sleep(0)  # let a concurrent activity interleave
+            await skip_record(
+                {"name": "t", "schema": ""},
+                SkipReason.BLANK_IDENTITY,
+                record_id="t",
+                entity_type="Table",
+            )
+            return {"status": "success"}
+
+        nxt = mock.AsyncMock()
+        nxt.execute_activity = mock.AsyncMock(side_effect=body)
+        await OutputActivityInboundInterceptor(nxt).execute_activity(
+            MockExecuteActivityInput()
+        )
+
+    async def test_part_uploads_under_the_app_not_the_env_name(self, uploaded):
+        await self._run_activity("my-app")
+
+        assert len(uploaded) == 1
+        assert uploaded[0].startswith("artifacts/apps/my-app/workflows/wf-1/run-1/")
+        # Scoped to the activity: nothing leaks to the caller once it returns.
+        assert _running_app_name.get() == ""
+
+    async def test_concurrent_activities_keep_their_own_app(self, uploaded):
+        await asyncio.gather(*(self._run_activity(n) for n in ("app-a", "app-b")))
+
+        assert sorted(k.split("/")[2] for k in uploaded) == ["app-a", "app-b"]

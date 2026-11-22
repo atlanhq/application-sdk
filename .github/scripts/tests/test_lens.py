@@ -7091,7 +7091,7 @@ def test_state_from_a_newer_lens_with_unknown_fields_still_decodes():
     raw = json.loads(
         findings_mod.zlib.decompress(
             findings_mod.base64.b64decode(
-                re.search(r"<!-- [^:]+:(\S+) -->", body).group(1)  # type: ignore[union-attr]
+                re.search(r"<!-- [^:]+:(\S+) -->", body).group(1)  # pyright: ignore[reportOptionalMemberAccess]
             )
         )
     )

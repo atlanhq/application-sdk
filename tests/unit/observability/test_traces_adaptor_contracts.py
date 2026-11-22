@@ -76,12 +76,7 @@ class TestNothingKeptForLater:
     loop that built it. Nothing read those files; the adapter now only emits."""
 
     def test_construction_starts_no_flush_task(self) -> None:
-        # The once-per-process guard the old flush kept, cleared so a flush
-        # would start here if construction still started one.
         with (
-            mock.patch.object(
-                AtlanTracesAdapter, "_flush_task_started", False, create=True
-            ),
             mock.patch(
                 "application_sdk.observability.observability.observability_loop"
             ) as shared_loop,
@@ -117,7 +112,7 @@ class TestNothingKeptForLater:
                 "application_sdk.observability.observability._upload_to_observability_stores"
             ) as upload,
         ):
-            await adapter._flush_buffer(force=True)
+            await adapter._flush_buffer()
         upload.assert_not_called()
 
 
@@ -479,12 +474,34 @@ class TestSendToOtel:
         adapter.tracer = mock.MagicMock()
         adapter.tracer.start_span.side_effect = RuntimeError("otel down")
 
-        with caplog.at_level(logging.ERROR):
+        with caplog.at_level(logging.WARNING):
             adapter._send_to_otel(_record())
         assert any(
             "Error sending trace to OpenTelemetry" in rec.message
             for rec in caplog.records
         )
+
+    def test_repeated_send_failure_logs_one_warning(self, caplog) -> None:
+        """A tracer that fails on every span logs once per interval, not per span.
+
+        Each failure is handled (the span is dropped and the caller carries
+        on), so the record is a WARNING, and a broken exporter must not flood
+        the log at the application's own trace rate.
+        """
+        adapter = _adapter_with_otel_disabled()
+        adapter.tracer = mock.MagicMock()
+        adapter.tracer.start_span.side_effect = RuntimeError("otel down")
+
+        with caplog.at_level(logging.WARNING):
+            for _ in range(5):
+                adapter._send_to_otel(_record())
+        failures = [
+            rec
+            for rec in caplog.records
+            if "Error sending trace to OpenTelemetry" in rec.message
+        ]
+        assert [rec.levelno for rec in failures] == [logging.WARNING]
+        assert failures[0].exc_info is not None
 
     def test_str_to_span_kind_unknown_defaults_to_internal(self) -> None:
         from opentelemetry.trace import SpanKind
@@ -519,7 +536,7 @@ class TestLogToConsole:
         with mock.patch.object(
             tracer_mod, "get_logger", side_effect=RuntimeError("logger down")
         ):
-            with caplog.at_level(logging.ERROR):
+            with caplog.at_level(logging.WARNING):
                 adapter._log_to_console(record)
         assert any(
             "Error logging trace to console" in rec.message for rec in caplog.records
@@ -564,3 +581,48 @@ class TestGetTracesSingleton:
         assert first is second
         # Reset for any subsequent tests.
         tracer_mod._traces_instance = None
+
+
+# ---------------------------------------------------------------------------
+# Self-failure rate limit
+# ---------------------------------------------------------------------------
+
+
+class TestSelfFailureRateLimit:
+    @staticmethod
+    def _record(msg: str = "Error sending trace to OpenTelemetry") -> logging.LogRecord:
+        return logging.LogRecord(
+            "application_sdk.observability.self_failure",
+            logging.WARNING,
+            __file__,
+            1,
+            msg,
+            None,
+            None,
+        )
+
+    def test_suppressed_count_is_reported_on_the_next_record(self) -> None:
+        from application_sdk.observability.utils import _SelfFailureRateLimit
+
+        now = [0.0]
+        limit = _SelfFailureRateLimit(60.0, clock=lambda: now[0])
+
+        assert limit.filter(self._record()) is True
+        assert [limit.filter(self._record()) for _ in range(3)] == [False] * 3
+
+        now[0] = 61.0
+        record = self._record()
+        assert limit.filter(record) is True
+        assert record.getMessage() == (
+            "Error sending trace to OpenTelemetry "
+            "(3 similar failures suppressed since the last report)"
+        )
+
+    def test_messages_are_limited_independently(self) -> None:
+        from application_sdk.observability.utils import _SelfFailureRateLimit
+
+        limit = _SelfFailureRateLimit(60.0, clock=lambda: 0.0)
+
+        assert limit.filter(self._record("Error in log sink")) is True
+        assert limit.filter(self._record("Error buffering log")) is True
+        assert limit.filter(self._record("Error in log sink")) is False

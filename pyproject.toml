@@ -37,7 +37,7 @@ dependencies = [
     # python-multipart parses the object-store upload route's form. The rest of
     # [standard] (fastapi-cli, jinja2, email-validator, pydantic-settings, ...)
     # was never imported and shipped in every connector image.
-    "fastapi>=0.163.0,<0.164.0",
+    "fastapi>=0.165.0,<0.166.0",
     "uvicorn[standard]>=0.30.0,<1.0.0",
     "pyatlan>=11.7.1,<12",  # floor carries authlib~=1.9.1 (CVE-2026-96760) to consumers
     "httpx>=0.27.0,<0.29.0",
@@ -47,7 +47,7 @@ dependencies = [
     "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2
     # Arrives via pyatlan (~=1.9.1 on Python >=3.10). Published as well so the
     # api wheel's pyatlan extra can carry the same pin (test_api_distribution).
-    "authlib>=1.9.6,<2",  # CVE-2026-96760; GHSA-9qr6-8289-9j56, GHSA-f3fg-34g9-v7jx, GHSA-gp2m-377p-m4j3; GHSA-f7j6-p4qx-gq99; GHSA-cg3f-7pqx-v33v
+    "authlib>=1.9.9,<2",  # CVE-2026-96760; GHSA-9qr6-8289-9j56, GHSA-f3fg-34g9-v7jx, GHSA-gp2m-377p-m4j3; GHSA-f7j6-p4qx-gq99; GHSA-cg3f-7pqx-v33v
     # Transitive runtime deps, published for the same reason as certifi:
     # protobuf arrives via temporalio / opentelemetry-proto, pyjwt via
     # azure-identity -> msal.
@@ -221,20 +221,17 @@ dev = [
     # Exact pin, equal to the ruff-pre-commit rev in .pre-commit-config.yaml
     # (enforced by .github/scripts/tests/test_lint_guards.py), so `uv run ruff`
     # and the CI hook lint, format and sort imports identically.
-    "ruff==0.17.5",
-    # Exact pin, equal to the pyright-python rev in .pre-commit-config.yaml
-    # (enforced by .github/scripts/tests/test_check_pyright_baseline.py), so the
-    # .github/scripts baseline check and the pre-commit hook run one pyright.
+    "ruff==0.17.6",
+    # Exact pin: both pyright pre-commit hooks (check_pyright_baseline.py, for
+    # the SDK tree and for .github/scripts) run this pyright, and each baseline
+    # records it, so a bump must regenerate both baselines in the same PR.
     "pyright==1.1.414",
     "boto3-stubs>=1.38.6,<2.0.0",
     "poethepoet>=0.49.0,<1.0.0",
     "atlan-application-sdk-conformance",
-]
-# tools/migrate_v3's codemods and import rewriter, and their tests
-# (tests/unit/tools). Its own group so a Python it cannot install on skips
-# this group alone, not every dev tool with it. Goes when the tool does
-# (tools/migrate_v3/README.md, "Retirement").
-migrate-v3 = [
+    # tools/migrate_v3's codemods and import rewriter, and their tests
+    # (tests/unit/tools). Goes when the tool does (tools/migrate_v3/README.md,
+    # "Retirement").
     "libcst>=1.4.0,<2.0.0",
 ]
 test = [
@@ -373,6 +370,7 @@ exclude = [
     "application_sdk/__init__.py",
     "application_sdk/_build_info.py",
     "application_sdk/_context_errors.py",
+    "application_sdk/_deprecation.py",
     "application_sdk/_env.py",
     "application_sdk/_install.py",
     "application_sdk/_logging.py",
@@ -425,6 +423,7 @@ exclude = [
     "application_sdk/credentials/types.py",
     "application_sdk/credentials/utils.py",
     "application_sdk/errors/__init__.py",
+    "application_sdk/errors/_legacy_codes.py",
     "application_sdk/errors/base.py",
     "application_sdk/errors/categories.py",
     "application_sdk/errors/http.py",
@@ -471,11 +470,22 @@ exclude = [
     ".github/**",
     "tests",
 ]
+# `# type: ignore` is not read: it silences every rule on its line, and the
+# mypy codes in its brackets mean nothing to pyright. Suppress with
+# `# pyright: ignore[<rule>]`, which names the rule it silences (FND-4295).
+enableTypeIgnoreComments = false
+# A `# pyright: ignore[...]` that no longer suppresses anything is an error, so
+# a suppression cannot outlive the finding it was written for.
+reportUnnecessaryTypeIgnoreComment = "error"
 reportUnknownMemberType = "warning"
-reportAttributeAccessIssue = "warning"
+# These three catch real bugs (a wrong argument type, a missing attribute), so
+# they are errors. The findings that predate that are held to the repo-root
+# pyright_baseline.json, which only shrinks: `check_pyright_baseline.py
+# --scope sdk` (the pre-commit `pyright` hook) fails on any new one.
+reportAttributeAccessIssue = "error"
+reportFunctionMemberAccess = "error"
+reportArgumentType = "error"
 reportPossiblyUnboundVariable = "information"
-reportFunctionMemberAccess = "warning"
-reportArgumentType = "warning"
 reportGeneralTypeIssues = "warning"
 reportMissingImports = "warning"
 reportInvalidTypeForm = "warning"
@@ -579,6 +589,10 @@ server = 83
 exclude = ["*.md"]
 
 [tool.ruff.lint]
+# Imported loggers ruff should treat as loggers (BLE001 accepts a handler that
+# logs through one with exc_info=True). Module-local `logger = ...` bindings
+# are recognised by name already; an imported one needs naming here.
+logger-objects = ["application_sdk.observability.utils.self_failure_logger"]
 # explicit-preview-rules: only the preview rules listed in extend-select are
 # enabled — other preview rules remain off. This lets us opt into PLC0415
 # without inheriting every other preview rule's churn.
@@ -598,7 +612,15 @@ extend-select = [
     "S110",    # try-except-pass detected
     "S112",    # try-except-continue detected
     "LOG009",  # logger.warn() is deprecated — use .warning()
+    "BLE001",  # blind `except Exception` / `except BaseException` (FND-4294)
+    "RUF100",  # unused `noqa` — keeps every suppression live (FND-4294)
 ]
+# ANN401 (`typing.Any` in a signature) is deliberately NOT selected here: ~490
+# existing sites would make every run red. .github/scripts/check_ann401_baseline.py
+# holds application_sdk/ to .github/scripts/ann401_baseline.json, per file, and
+# that file is the only suppression: the check runs ruff --isolated, so an
+# ignore or per-file-ignores entry for ANN401 here would have no effect
+# (FND-4301, docs/standards/ci.md).
 
 [tool.ruff.lint.per-file-ignores]
 "application_sdk/main.py" = ["T201"]
@@ -625,12 +647,235 @@ extend-select = [
 ".github/scripts/tests/test_fetch_dataforge_source.py" = ["E402"]
 ".github/scripts/tests/test_resolve_e2e_source.py" = ["E402"]
 
+# Baseline (FND-4294). BLE001 and RUF100 were enabled with existing hits in
+# the files below. The list only shrinks: narrow a file's broad catches (or
+# give each a `# noqa: BLE001 — <reason>`), drop its dead noqa, and delete its
+# entry. Do not add files here; new code satisfies both rules.
+".claude/skills/capability-manifest/references/extractor.py" = ["BLE001"]
+"application_sdk/testing/_setup_routes.py" = ["RUF100"]
+"application_sdk/testing/full_dag/**" = ["RUF100"]
+"application_sdk/testing/integration/__init__.py" = ["RUF100"]
+"application_sdk/testing/parity/__main__.py" = ["RUF100"]
+"application_sdk/testing/preflight.py" = ["RUF100"]
+"application_sdk/testing/scale_data_generator/**" = ["RUF100"]
+"application_sdk/testing/setup_routes.py" = ["RUF100"]
+".github/actions/sdr-e2e/sdr_report.py" = ["BLE001"]
+".github/scripts/actions_cost_weekly.py" = ["RUF100"]
+".github/scripts/actions_minutes_report.py" = ["RUF100"]
+".github/scripts/assert_image_platforms.py" = ["RUF100"]
+".github/scripts/build_and_publish/_bap.py" = ["RUF100"]
+".github/scripts/build_and_publish/certify.py" = ["RUF100"]
+".github/scripts/build_and_publish/leak_scan.py" = ["RUF100"]
+".github/scripts/build_and_publish/publish.py" = ["RUF100"]
+".github/scripts/build_conformance_args.py" = ["RUF100"]
+".github/scripts/build_scorecard_args.py" = ["RUF100"]
+".github/scripts/check_conformance_lock.py" = ["RUF100"]
+".github/scripts/check_generated_freshness.py" = ["RUF100"]
+".github/scripts/check_mkdocs_script_hosts.py" = ["RUF100"]
+".github/scripts/check_symbol_removals.py" = ["RUF100"]
+".github/scripts/dataforge_source_lifecycle.py" = ["RUF100"]
+".github/scripts/detect_api_member.py" = ["RUF100"]
+".github/scripts/e2e_tenant_api.py" = ["RUF100"]
+".github/scripts/e2e_tenant_app.py" = ["RUF100"]
+".github/scripts/e2e_tenant_lease.py" = ["RUF100"]
+".github/scripts/fetch_conformance_sarif.py" = ["RUF100"]
+".github/scripts/fetch_dataforge_source.py" = ["BLE001"]
+".github/scripts/fleet_dashboards_collect.py" = ["RUF100"]
+".github/scripts/gate_check_verdict.py" = ["RUF100"]
+".github/scripts/gate_enforcement_scan.py" = ["RUF100"]
+".github/scripts/gen_api_files.py" = ["RUF100"]
+".github/scripts/git_auth.py" = ["RUF100"]
+".github/scripts/lens/__main__.py" = ["RUF100"]
+".github/scripts/lens/github.py" = ["RUF100"]
+".github/scripts/lens/llm.py" = ["RUF100"]
+".github/scripts/lens/review.py" = ["RUF100"]
+".github/scripts/poll_check_runs_gate.py" = ["RUF100"]
+".github/scripts/poll_dispatched_run.py" = ["RUF100"]
+".github/scripts/probe_api_wheels.py" = ["RUF100"]
+".github/scripts/probe_code_scanning.py" = ["RUF100"]
+".github/scripts/record_e2e_verdict.py" = ["RUF100"]
+".github/scripts/regenerate_contract.py" = ["RUF100"]
+".github/scripts/release_bump_debounce.py" = ["BLE001"]
+".github/scripts/release_candidate.py" = ["RUF100"]
+".github/scripts/renovate_pkl_sync.py" = ["RUF100"]
+".github/scripts/renovate_reap_refused_locks.py" = ["RUF100"]
+".github/scripts/renovate_rebase_conflicted.py" = ["RUF100"]
+".github/scripts/renovate_release_followup.py" = ["RUF100"]
+".github/scripts/renovate_uv_lock_bounded.py" = ["BLE001"]
+".github/scripts/rerun_deferred_gate.py" = ["RUF100"]
+".github/scripts/review_approval_reconcile.py" = ["RUF100"]
+".github/scripts/sync_marketplace_tags.py" = ["RUF100"]
+".github/scripts/test_command_comment.py" = ["RUF100"]
+".github/scripts/tests/test_actions_cost_weekly.py" = ["RUF100"]
+".github/scripts/tests/test_api_member_scripts.py" = ["RUF100"]
+".github/scripts/tests/test_assert_app_token_slug.py" = ["RUF100"]
+".github/scripts/tests/test_assert_image_platforms.py" = ["RUF100"]
+".github/scripts/tests/test_base_fetch_keeps_clone_depth.py" = ["RUF100"]
+".github/scripts/tests/test_base_image_native_builds.py" = ["RUF100"]
+".github/scripts/tests/test_build_and_publish_certify.py" = ["RUF100"]
+".github/scripts/tests/test_build_and_publish_certify_wiring.py" = ["RUF100"]
+".github/scripts/tests/test_build_compose_chain.py" = ["RUF100"]
+".github/scripts/tests/test_bump_pr_ci_gates.py" = ["RUF100"]
+".github/scripts/tests/test_check_allowlist.py" = ["RUF100"]
+".github/scripts/tests/test_check_api_surface.py" = ["RUF100"]
+".github/scripts/tests/test_check_conformance_lock.py" = ["RUF100"]
+".github/scripts/tests/test_check_mkdocs_script_hosts.py" = ["RUF100"]
+".github/scripts/tests/test_check_pyright_baseline.py" = ["RUF100"]
+".github/scripts/tests/test_check_test_write_hygiene.py" = ["RUF100"]
+".github/scripts/tests/test_check_uv_lock.py" = ["RUF100"]
+".github/scripts/tests/test_conformance_apt_packages.py" = ["RUF100"]
+".github/scripts/tests/test_conformance_release.py" = ["RUF100"]
+".github/scripts/tests/test_conformance_resync.py" = ["RUF100"]
+".github/scripts/tests/test_conformance_series_globs.py" = ["RUF100"]
+".github/scripts/tests/test_conformance_single_job.py" = ["RUF100"]
+".github/scripts/tests/test_conformance_wheel_gate.py" = ["RUF100"]
+".github/scripts/tests/test_conventional_commits_gates.py" = ["RUF100"]
+".github/scripts/tests/test_create_multiarch_manifest.py" = ["RUF100"]
+".github/scripts/tests/test_credential_leak_scan.py" = ["RUF100"]
+".github/scripts/tests/test_dataforge_lifecycle_wiring.py" = ["RUF100"]
+".github/scripts/tests/test_derive_deployment_name.py" = ["RUF100"]
+".github/scripts/tests/test_derive_e2e_image_tag.py" = ["RUF100"]
+".github/scripts/tests/test_detect_merge_queue.py" = ["RUF100"]
+".github/scripts/tests/test_discover_e2e_suites.py" = ["RUF100"]
+".github/scripts/tests/test_e2e_branch_recheck.py" = ["RUF100"]
+".github/scripts/tests/test_e2e_commit_verdict.py" = ["RUF100"]
+".github/scripts/tests/test_e2e_dispatch_guard.py" = ["RUF100"]
+".github/scripts/tests/test_e2e_dispatch_recheck.py" = ["RUF100"]
+".github/scripts/tests/test_e2e_label_consumption.py" = ["RUF100"]
+".github/scripts/tests/test_e2e_tenant_api.py" = ["RUF100"]
+".github/scripts/tests/test_e2e_tenant_app.py" = ["RUF100"]
+".github/scripts/tests/test_e2e_tenant_lease.py" = ["RUF100"]
+".github/scripts/tests/test_e2e_tenant_matrix_clouds.py" = ["RUF100"]
+".github/scripts/tests/test_gate_check_verdict.py" = ["RUF100"]
+".github/scripts/tests/test_gate_enforcement_scan.py" = ["RUF100"]
+".github/scripts/tests/test_gen_api_files.py" = ["RUF100"]
+".github/scripts/tests/test_gen_app_api.py" = ["RUF100"]
+".github/scripts/tests/test_gh_refs.py" = ["RUF100"]
+".github/scripts/tests/test_gha_expr.py" = ["RUF100"]
+".github/scripts/tests/test_git_auth.py" = ["RUF100"]
+".github/scripts/tests/test_harbor_release_tags.py" = ["RUF100"]
+".github/scripts/tests/test_image_build_git_token.py" = ["RUF100"]
+".github/scripts/tests/test_import_smoke.py" = ["RUF100"]
+".github/scripts/tests/test_install_apt_packages.py" = ["RUF100"]
+".github/scripts/tests/test_label_trigger_gates.py" = ["RUF100"]
+".github/scripts/tests/test_lens.py" = ["RUF100"]
+".github/scripts/tests/test_main_push_build_gate.py" = ["RUF100"]
+".github/scripts/tests/test_marketplace_publish_body.py" = ["RUF100"]
+".github/scripts/tests/test_no_bot_pr_labels.py" = ["RUF100"]
+".github/scripts/tests/test_notify_release_failure.py" = ["RUF100"]
+".github/scripts/tests/test_poll_check_runs_gate.py" = ["RUF100"]
+".github/scripts/tests/test_pr_test_command.py" = ["RUF100"]
+".github/scripts/tests/test_prepare_tenant_wiring.py" = ["RUF100"]
+".github/scripts/tests/test_private_git_deps_wiring.py" = ["RUF100"]
+".github/scripts/tests/test_probe_api_wheels.py" = ["RUF100"]
+".github/scripts/tests/test_probe_app_api_member.py" = ["RUF100"]
+".github/scripts/tests/test_publish_fleet_dashboard.py" = ["RUF100"]
+".github/scripts/tests/test_queue_entry_rechecks.py" = ["RUF100"]
+".github/scripts/tests/test_queue_gate_check_proof.py" = ["RUF100"]
+".github/scripts/tests/test_queue_tree_diff.py" = ["RUF100"]
+".github/scripts/tests/test_record_e2e_verdict.py" = ["RUF100"]
+".github/scripts/tests/test_regeneration_parity.py" = ["RUF100"]
+".github/scripts/tests/test_release_candidate.py" = ["RUF100"]
+".github/scripts/tests/test_release_candidate_gates.py" = ["RUF100"]
+".github/scripts/tests/test_renovate_approval_conditions.py" = ["RUF100"]
+".github/scripts/tests/test_renovate_artifact_gate.py" = ["RUF100"]
+".github/scripts/tests/test_renovate_auto_approve_fanin.py" = ["RUF100"]
+".github/scripts/tests/test_renovate_concurrency.py" = ["RUF100"]
+".github/scripts/tests/test_renovate_dashboard_stage.py" = ["RUF100"]
+".github/scripts/tests/test_renovate_fleet_scan.py" = ["RUF100"]
+".github/scripts/tests/test_renovate_reap_refused_locks.py" = ["RUF100"]
+".github/scripts/tests/test_renovate_rearm_automerge.py" = ["RUF100"]
+".github/scripts/tests/test_renovate_rebase_conflicted.py" = ["RUF100"]
+".github/scripts/tests/test_renovate_refusal_alarm.py" = ["RUF100"]
+".github/scripts/tests/test_renovate_release_thaw.py" = ["RUF100"]
+".github/scripts/tests/test_require_renovate_artifacts.py" = ["RUF100"]
+".github/scripts/tests/test_rerun_deferred_gate.py" = ["RUF100"]
+".github/scripts/tests/test_rerun_evicted_tests_run.py" = ["RUF100"]
+".github/scripts/tests/test_resolve_config_paths.py" = ["RUF100"]
+".github/scripts/tests/test_resolve_release_actor.py" = ["RUF100"]
+".github/scripts/tests/test_resync_approval_conditions.py" = ["RUF100"]
+".github/scripts/tests/test_scorecard_e2e_wiring.py" = ["RUF100"]
+".github/scripts/tests/test_select_dapr_components.py" = ["RUF100"]
+".github/scripts/tests/test_sign_bot_commits.py" = ["RUF100"]
+".github/scripts/tests/test_stamp_build_identity.py" = ["RUF100"]
+".github/scripts/tests/test_sweep_dashboard_repos.py" = ["RUF100"]
+".github/scripts/tests/test_sync_dapr_version.py" = ["RUF100"]
+".github/scripts/tests/test_sync_marketplace_tags.py" = ["RUF100"]
+".github/scripts/tests/test_test_command_comment.py" = ["RUF100"]
+".github/scripts/tests/test_validate_allowlist.py" = ["RUF100"]
+".github/scripts/tests/test_verify_test_gate.py" = ["RUF100"]
+".github/scripts/tests/test_vuln_scan_scope.py" = ["RUF100"]
+".github/scripts/tests/test_vuln_triage.py" = ["RUF100"]
+".github/scripts/tests/test_write_dapr_components.py" = ["RUF100"]
+"tests/conftest.py" = ["RUF100"]
+"tests/integration/clients/test_ssl_utils.py" = ["RUF100"]
+"tests/integration/storage/test_binding_sdr_workflow_publish.py" = ["BLE001"]
+"tests/integration/storage/test_emulator_azure.py" = ["BLE001"]
+"tests/integration/storage/test_emulator_gcs.py" = ["BLE001"]
+"tests/integration/storage/test_emulator_host_object_store.py" = ["BLE001"]
+"tests/integration/storage/test_emulator_large_payload.py" = ["BLE001"]
+"tests/integration/storage/test_emulator_preflight.py" = ["BLE001"]
+"tests/integration/storage/test_emulator_s3.py" = ["BLE001"]
+"tests/integration/storage/test_emulator_s3_assume_role.py" = ["BLE001"]
+"tests/integration/storage/test_emulator_sdr_atlan_upload.py" = ["BLE001"]
+"tests/integration/test_preflight_warmup.py" = ["BLE001"]
+"tests/integration/test_temporal_docker_auth.py" = ["BLE001", "RUF100"]
+"tests/socket_guard.py" = ["RUF100"]
+"tests/unit/app/test_base.py" = ["RUF100"]
+"tests/unit/app/test_upload_refs.py" = ["RUF100"]
+"tests/unit/clients/test_azure_auth.py" = ["BLE001"]
+"tests/unit/clients/test_sql_client.py" = ["RUF100"]
+"tests/unit/common/incremental/column_extraction/test_analysis.py" = ["BLE001"]
+"tests/unit/common/incremental/column_extraction/test_backfill.py" = ["BLE001"]
+"tests/unit/common/incremental/test_package_exports.py" = ["RUF100"]
+"tests/unit/common/test_atomic.py" = ["RUF100"]
+"tests/unit/common/test_atomic_write_sites.py" = ["RUF100"]
+"tests/unit/common/test_file_converter.py" = ["RUF100"]
+"tests/unit/common/test_last_sync.py" = ["RUF100"]
+"tests/unit/contracts/test_base.py" = ["RUF100"]
+"tests/unit/errors/test_app_subclassing.py" = ["BLE001"]
+"tests/unit/errors/test_back_compat.py" = ["BLE001"]
+"tests/unit/errors/test_http.py" = ["BLE001"]
+"tests/unit/execution/test_preflight_gate_classification.py" = ["BLE001"]
+"tests/unit/execution/test_progress_telemetry_exposition.py" = ["BLE001"]
+"tests/unit/execution/test_stall_failure.py" = ["RUF100"]
+"tests/unit/execution/test_worker.py" = ["RUF100"]
+"tests/unit/handler/test_import_boundary.py" = ["RUF100"]
+"tests/unit/infrastructure/test_pubsub.py" = ["RUF100"]
+"tests/unit/observability/test_background_loop.py" = ["RUF100"]
+"tests/unit/observability/test_logger_adaptor.py" = ["BLE001"]
+"tests/unit/observability/test_objectstore_metric_exporter.py" = ["BLE001", "RUF100"]
+"tests/unit/observability/test_observability_cleanup.py" = ["RUF100"]
+"tests/unit/observability/test_prometheus_enrichment.py" = ["BLE001"]
+"tests/unit/observability/test_segment_client.py" = ["BLE001", "RUF100"]
+"tests/unit/storage/formats/test_reader_isolation.py" = ["RUF100"]
+"tests/unit/storage/formats/test_writer_data_integrity.py" = ["BLE001"]
+"tests/unit/storage/test_rolling.py" = ["RUF100"]
+"tests/unit/templates/test_sql_app.py" = ["RUF100"]
+"tests/unit/templates/test_sql_app_transformed_declaration.py" = ["RUF100"]
+"tests/unit/test_api_distribution.py" = ["RUF100"]
+"tests/unit/test_constants.py" = ["RUF100"]
+"tests/unit/test_install_lazy_getattr.py" = ["RUF100"]
+"tests/unit/test_loop_stall_watchdog.py" = ["RUF100"]
+"tests/unit/test_main.py" = ["RUF100"]
+"tests/unit/testing/_cluster_fakes.py" = ["RUF100"]
+"tests/unit/testing/e2e/test_logs.py" = ["RUF100"]
+"tests/unit/testing/harness/cluster/test_kube_reads.py" = ["RUF100"]
+"tests/unit/testing/harness/temporal/test_temporal_reads.py" = ["BLE001"]
+"tests/unit/testing/integration/test_fixtures.py" = ["RUF100"]
+"tests/unit/testing/integration/test_output_schema.py" = ["RUF100"]
+"tests/unit/testing/test_fake_source.py" = ["BLE001", "RUF100"]
+"tests/unit/testing/test_retired_ci_tool_aliases.py" = ["RUF100"]
+"tests/unit/testing/test_zero_caller_deprecations.py" = ["RUF100"]
+"tests/unit/validation/test_artifact_posture.py" = ["RUF100"]
+"tests/unit/validation/test_interceptor.py" = ["RUF100"]
+
 [tool.uv]
-default-groups = ["dev", "migrate-v3", "test"]
+default-groups = ["dev", "test"]
 constraint-dependencies = [
     "python-multipart>=0.0.26",  # CVE-2026-24486, CVE-2026-40347
     "protobuf>=6.33.5",          # CVE-2026-0994
-    "authlib>=1.9.6",  # CVE-2026-96760 (signature bypass), CVE-2026-28802, GHSA-jj8c-mmj3-mmgv, GHSA-9qr6-8289-9j56, GHSA-f3fg-34g9-v7jx, GHSA-gp2m-377p-m4j3, GHSA-f7j6-p4qx-gq99, GHSA-cg3f-7pqx-v33v
+    "authlib>=1.9.9",  # CVE-2026-96760 (signature bypass), CVE-2026-28802, GHSA-jj8c-mmj3-mmgv, GHSA-9qr6-8289-9j56, GHSA-f3fg-34g9-v7jx, GHSA-gp2m-377p-m4j3, GHSA-f7j6-p4qx-gq99, GHSA-cg3f-7pqx-v33v
     "pyjwt>=2.12.0",             # CVE-2026-32597
     "python-dotenv>=1.2.2",      # CVE-2026-28684 (symlink file overwrite)
     "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2

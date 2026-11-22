@@ -13,7 +13,7 @@ import warnings
 from abc import ABC
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import (
@@ -22,6 +22,7 @@ from typing import (
     ClassVar,
     Literal,
     Never,
+    ParamSpec,
     Sequence,
     TypeVar,
     cast,
@@ -34,7 +35,8 @@ from temporalio import activity, workflow
 from temporalio.exceptions import ActivityError, FailureError
 from temporalio.exceptions import ApplicationError as _TemporalApplicationError
 
-from application_sdk._context_errors import (  # noqa: F401 — re-exported; defined in the api distribution
+from application_sdk import _deprecation
+from application_sdk._context_errors import (  # re-exported; defined in the api distribution
     AppContextError,
 )
 from application_sdk._runtime.offload import run_best_effort, run_in_thread
@@ -69,6 +71,7 @@ from application_sdk.constants import (
     ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
     COMMIT_SHA,
     LOCAL_WORKFLOW_ID,
+    _run_prefix,
 )
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
@@ -92,8 +95,9 @@ from application_sdk.contracts.storage import (
     VerifyRefsOutput,
 )
 from application_sdk.contracts.types import FileReference, StorageTier, StoreTarget
-from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE, ErrorCode
+from application_sdk.errors._legacy_codes import ErrorCode
 from application_sdk.errors.base import AppError as _NewAppError
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import WORKER_EVICTED_TYPE
 from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
@@ -237,6 +241,14 @@ async def _warn_on_invalid_transformed_assets(
     emitted from before the fold-in. This hook does **not** additionally emit
     ``ARTIFACT_VALIDATION_EVENT``: one hand-off, one row.
 
+    **Only a bounded outcome comes back from the scan** (FND-4088). The full
+    report is unbounded — every failure, twice — so the event's attribute map and
+    the capped ``format_report()`` text are built inside the isolated child by
+    :func:`~application_sdk.validation.assets.summarize_asset_validation`, and only
+    that :class:`~application_sdk.validation.assets.AssetValidationOutcome` is
+    pickled back. A batch that fails on every record costs this worker the cap,
+    not the batch.
+
     The scan runs via
     :func:`application_sdk._runtime.offload.run_best_effort`, for two reasons.
     It keeps the event loop and the activity's auto-heartbeat free while a large
@@ -313,30 +325,47 @@ async def _warn_on_invalid_transformed_assets(
     )
 
     from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
-        AssetArtifactReport,
         AssetBatchScope,
         ModelSource,
-        asset_validation_event_fields,
+        summarize_asset_validation,
         validate_artifact,
         validate_assets_as_artifact,
     )
 
+    # One path is ``upload``; a list is every declared part of an ``upload_refs``
+    # fan-in (see the docstring).
+    scope = AssetBatchScope(
+        upload_kind="upload" if isinstance(local_path, str) else "upload_refs",
+        parts_validated=len(targets),
+        parts_not_local=len(remote),
+    )
     # Best-effort: run_best_effort isolates the scan in a child process and, on
     # any native crash / timeout / error, logs a warning and returns None — the
     # upload is never blocked, failed, or crashed by the validation scaffold.
+    # summarize_asset_validation builds the event and the capped report text in
+    # the child, so only that bounded outcome is pickled back into this worker,
+    # never the full report (FND-4088).
     if len(targets) == 1 and check_referential_integrity and not creation_rules:
-        report = await run_best_effort(
+        outcome = await run_best_effort(
+            summarize_asset_validation,
             validate_artifact,
             targets[0],
             ModelSource(model=Asset),
+            app_name=app_name,
+            scope=scope,
+            max_items=_VALIDATION_MATRIX_MAX_ROWS,
             label="Transformed-asset validation",
             logger=_task_logger,
             timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
         )
     else:
-        report = await run_best_effort(
+        outcome = await run_best_effort(
+            summarize_asset_validation,
             validate_assets_as_artifact,
             targets,
+            app_name=app_name,
+            scope=scope,
+            max_items=_VALIDATION_MATRIX_MAX_ROWS,
             check_referential_integrity=check_referential_integrity,
             creation_rules=creation_rules,
             label="Transformed-asset validation",
@@ -344,14 +373,14 @@ async def _warn_on_invalid_transformed_assets(
             timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
         )
 
-    if report is None:
+    if outcome is None:
         # run_best_effort swallowed a native crash / timeout / error (it already
         # logged a warning). The "nothing to validate" cases (flag off, not a
         # transformed/ subtree) already returned above, so reaching here with
         # None means the scan itself failed — no counts to emit.
         return
 
-    if not isinstance(report, AssetArtifactReport):
+    if outcome.event_fields is None:
         # The wrapper resolved to an outcome without running the cell — it never
         # raises, so a broken plug-in or an unreadable artifact arrives as a plain
         # report instead of an exception. There are no asset-vocabulary counts to
@@ -361,40 +390,23 @@ async def _warn_on_invalid_transformed_assets(
         _task_logger.warning(
             "Transformed-asset validation produced no counts (%s: %s); "
             "handoff continues",
-            report.outcome,
-            report.reason or "no reason recorded",
+            outcome.outcome,
+            outcome.reason or "no reason recorded",
         )
         return
 
     # Emit the structured outcome on every validated upload (clean + flagged) so
     # the row is queryable and gives a denominator. Wrapped: a defect in the
-    # emit path (e.g. matrix encoding) must never break a real handoff.
+    # emit path must never break a real handoff.
     try:
-        assets = report.assets
-        flagged = not assets.ok
-        # The summary walks every failure (a broken batch can carry millions), so
-        # the projection is built off the event loop to keep heartbeats flowing.
-        fields = await run_in_thread(
-            asset_validation_event_fields,
-            assets,
-            app_name=app_name,
-            max_items=_VALIDATION_MATRIX_MAX_ROWS,
-            scope=AssetBatchScope(
-                # One path is ``upload``; a list is every declared part of an
-                # ``upload_refs`` fan-in (see the docstring).
-                upload_kind="upload" if isinstance(local_path, str) else "upload_refs",
-                parts_validated=len(targets),
-                parts_not_local=len(remote),
-            ),
-        )
-        _task_logger.info(ASSET_VALIDATION_EVENT, **fields)
-        if flagged:
+        _task_logger.info(ASSET_VALIDATION_EVENT, **outcome.event_fields)
+        if outcome.flagged:
             _task_logger.warning(
                 "Transformed-asset validation flagged issues before upload "
                 "(handoff continues): %s",
-                assets.format_report(max_items=_VALIDATION_MATRIX_MAX_ROWS),
+                outcome.flagged_report,
             )
-    except Exception:  # noqa: BLE001 — defense-in-depth must never break the upload
+    except Exception:  # defense-in-depth must never break the upload
         _task_logger.warning(
             "Transformed-asset validation outcome emission failed (handoff continues)",
             exc_info=True,
@@ -428,6 +440,7 @@ def _tag_ref_store(
 
 # Type variable for require() method
 T = TypeVar("T")
+_P = ParamSpec("_P")
 HT = TypeVar("HT", bound=HeartbeatDetails)
 
 # BLDX-878: inter-app calls deactivated pending review.
@@ -483,8 +496,7 @@ def _run_started_at_epoch() -> float:
     """
     try:
         start_time = workflow.info().start_time
-    # conformance: ignore[E004] probe for Temporal workflow context; the value only feeds an observability signal, so any failure degrades to "unknown run start"
-    except Exception:
+    except Exception:  # noqa: BLE001 — probe for Temporal workflow context; the value only feeds an observability signal, so any failure degrades to "unknown run start"
         return 0.0  # conformance: ignore[E007] workflow-context probe; "no run to measure" is the answer, and a log line here would fire per dispatch on every local run
     return start_time.timestamp() if start_time is not None else 0.0
 
@@ -527,7 +539,7 @@ def _format_build_identity() -> str:
 _BUILD_IDENTITY = _format_build_identity()
 
 
-def _safe_log(level: str, message: str, **attrs: Any) -> None:
+def _safe_log(level: str, message: str, **attrs: object) -> None:
     """Log using Temporal's workflow logger.
 
     Always runs in Temporal workflow context.
@@ -563,15 +575,19 @@ def _safe_log(level: str, message: str, **attrs: Any) -> None:
 # =============================================================================
 
 
-class AppError(_NewAppError):
+@dataclass(kw_only=True)
+class AppError(_LegacyErrorCodeMixin, _NewAppError):
     """Deprecated: use ``application_sdk.errors.AppError`` directly — removed in v4.0.
 
     Back-compat shim. Accepts a positional ``message`` argument and the legacy
     ``error_code`` keyword to avoid breaking existing raise sites.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
     code: ClassVar[str] = "APP"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("app_name", "app"),
+        ("run_id", "run_id"),
+    )
 
     def __init__(
         self,
@@ -591,29 +607,12 @@ class AppError(_NewAppError):
         _NewAppError.__init__(
             self, message=message, cause=cause, app_name=app_name, run_id=run_id
         )
-        self._legacy_error_code = error_code
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._legacy_error_code
-            if self._legacy_error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.app_name:
-            parts.append(f"app={self.app_name}")
-        if self.run_id:
-            parts.append(f"run_id={self.run_id}")
-        if self.cause:
-            parts.append(f"caused_by={self.cause}")
-        return " | ".join(parts)
+        self._set_legacy_error_code(error_code)
 
 
+@dataclass(kw_only=True)
 class NonRetryableError(AppError):
-    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.
+    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.0.
 
     Use this for failures that are deterministic and will never succeed on retry:
     - Authentication failures (invalid credentials)
@@ -632,12 +631,35 @@ class NonRetryableError(AppError):
             )
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_NON_RETRYABLE
     default_retryable: ClassVar[bool] = False
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        app_name: str | None = None,
+        run_id: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        # Warns when an error is raised, not when a subclass is defined, so
+        # importing an app that subclasses this never warns. Replaces the
+        # generic AppError notice with one naming this class.
+        _deprecation.warn_deprecated(
+            "NonRetryableError",
+            "a typed application_sdk.errors.AppError subclass with "
+            "default_retryable = False",
+            "4.0.0",
+        )
+        _NewAppError.__init__(
+            self, message=message, cause=cause, app_name=app_name, run_id=run_id
+        )
+        self._set_legacy_error_code(error_code)
 
+
+@dataclass(kw_only=True)
 class RetryableError(AppError):
-    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = True`` — removed in v4.0.
+    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = True`` — removed in v4.0.0.
 
     Extend this when raising an error directly from an ``@entrypoint`` method
     that signals a *transient* failure — one where retrying the entire workflow
@@ -665,8 +687,30 @@ class RetryableError(AppError):
             ...
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
     default_retryable: ClassVar[bool] = True
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        app_name: str | None = None,
+        run_id: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        # Warns when an error is raised, not when a subclass is defined, so
+        # importing an app that subclasses this never warns. Replaces the
+        # generic AppError notice with one naming this class.
+        _deprecation.warn_deprecated(
+            "RetryableError",
+            "a typed application_sdk.errors.AppError subclass with "
+            "default_retryable = True",
+            "4.0.0",
+        )
+        _NewAppError.__init__(
+            self, message=message, cause=cause, app_name=app_name, run_id=run_id
+        )
+        self._set_legacy_error_code(error_code)
 
 
 # =============================================================================
@@ -802,7 +846,7 @@ class TaskStateAccessor:
         with _app_state_lock:
             return _app_state.get(workflow_id, {}).get(key)
 
-    def set(self, key: str, value: Any) -> None:
+    def set(self, key: str, value: object) -> None:
         """Set in-memory state for the current app execution."""
         workflow_id = _get_execution_id_from_task()
         with _app_state_lock:
@@ -839,7 +883,7 @@ class AppStateAccessor:
         """
         return self._app.get_app_state(key)
 
-    def set(self, key: str, value: Any) -> None:
+    def set(self, key: str, value: object) -> None:
         """Set in-memory state for the current app execution.
 
         Args:
@@ -1218,7 +1262,6 @@ class App(ABC):
     #: app registered by an SDK older than this attribute).
     _app_build_id: ClassVar[str] = ""
     _app_metadata: AppMetadata
-    _original_run: Callable[..., Any]
     _input_type: type[Input]
     _output_type: type[Output]
 
@@ -1228,7 +1271,7 @@ class App(ABC):
     # _client: "WorkflowAppClient | None" = None
     _task_context: "TaskExecutionContext | None" = None
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
+    def __init_subclass__(cls, **kwargs: object) -> None:
         """Automatically register App subclasses.
 
         This is called when a class inherits from App. It:
@@ -1347,7 +1390,7 @@ class App(ABC):
     # Task-only methods (raise AppContextError if called outside @task methods)
     # =========================================================================
 
-    def heartbeat(self, *details: Any) -> None:
+    def heartbeat(self, *details: object) -> None:
         """Send a heartbeat with optional progress details.
 
         Only available in @task methods.
@@ -1403,10 +1446,10 @@ class App(ABC):
 
     async def run_in_thread(
         self,
-        func: Callable[..., Any],
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
+        func: Callable[_P, T],
+        *args: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> T:
         """Run a blocking function in a thread pool.
 
         Only available in @task methods. The offload is automatically wrapped in
@@ -1556,7 +1599,7 @@ class App(ABC):
         with _app_state_lock:
             return _app_state.get(execution_id, {}).get(key)
 
-    def set_app_state(self, key: str, value: Any) -> None:
+    def set_app_state(self, key: str, value: object) -> None:
         """Set in-memory state for the current app execution.
 
         Only available inside @task methods.
@@ -1773,7 +1816,9 @@ class App(ABC):
                 (single, "upstream" if single is upstream else "deployment", True)
             ]
 
-        run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.workflow_id}/{self.context.run_id}"
+        run_prefix = _run_prefix(
+            self._app_name, self.context.workflow_id, self.context.run_id
+        )
         app_prefix = input.tier.upload_prefix(
             run_prefix=run_prefix, app_name=self._app_name
         )
@@ -2740,8 +2785,7 @@ class App(ABC):
             async def _local_cleanup() -> None:
                 try:
                     await self.cleanup_files(CleanupInput())
-                # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-                except Exception:
+                except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
                     _safe_log(
                         "warning",
                         "cleanup_files task failed during on_complete",
@@ -2751,8 +2795,7 @@ class App(ABC):
             async def _storage_cleanup() -> None:
                 try:
                     await self.cleanup_storage(StorageCleanupInput())
-                # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-                except Exception:
+                except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
                     _safe_log(
                         "warning",
                         "cleanup_storage task failed during on_complete",
@@ -2773,8 +2816,7 @@ class App(ABC):
         # tests, and any subclass that calls super() outside a workflow).
         try:
             await AtlanObservability.flush_all()
-        # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-        except Exception:
+        except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
             _safe_log("warning", "flush_all() failed during on_complete", exc_info=True)
 
 
@@ -2823,7 +2865,7 @@ def _validate_interaction_signature(
     try:
         hints: dict[str, Any] = get_type_hints(fn)
     # conformance: ignore[E004,E009] get_type_hints probe; broad catch intentional — falls back to __annotations__ when forward refs are unresolvable
-    except Exception:
+    except Exception:  # noqa: BLE001 — get_type_hints probe; falls back to __annotations__ (see directive above)
         hints = getattr(fn, "__annotations__", {})
 
     if kind == "signal":
@@ -2990,11 +3032,11 @@ def _collect_interaction_relays(
         if signal_defn is not None:
             # Rebind the definition's fn to the relay so Temporal's _bind_method
             # passes wf_self (not an App instance) as the first arg.
-            relay.__temporal_signal_definition = replace(  # type: ignore[attr-defined]
+            relay.__temporal_signal_definition = replace(  # pyright: ignore[reportFunctionMemberAccess]
                 signal_defn, fn=relay
             )
         elif query_defn is not None:
-            relay.__temporal_query_definition = replace(  # type: ignore[attr-defined]
+            relay.__temporal_query_definition = replace(  # pyright: ignore[reportFunctionMemberAccess]
                 query_defn, fn=relay
             )
         else:
@@ -3004,7 +3046,7 @@ def _collect_interaction_relays(
             if update_defn.validator is not None:
                 new_validator = _build_validator_relay(update_defn.validator)
 
-            relay._defn = replace(  # type: ignore[attr-defined]
+            relay._defn = replace(  # pyright: ignore[reportFunctionMemberAccess]
                 update_defn, fn=relay, validator=new_validator
             )
             # Temporal's @workflow.update decorator also sets a `.validator`
@@ -3012,7 +3054,7 @@ def _collect_interaction_relays(
             # We don't need it for runtime dispatch — Temporal reads the
             # validator off the definition — but provide one so the relay
             # structurally matches UpdateMethodMultiParam.
-            relay.validator = lambda fn: fn  # type: ignore[attr-defined]
+            relay.validator = lambda fn: fn  # pyright: ignore[reportFunctionMemberAccess]
 
         relays[member_name] = relay
 
@@ -3046,13 +3088,12 @@ async def _merge_skipped_records(app_instance: "App") -> None:
                 skipped_count=skipped, unpersisted_count=unpersisted
             )
         )
-    # conformance: ignore[E004] fail-open by design (FND-4881): logged via _safe_log with exc_info=True and counted in skipped-records-unpersisted
-    except Exception:
+    except Exception:  # noqa: BLE001 — fail-open by design (FND-4881): logged via _safe_log with exc_info=True and counted in skipped-records-unpersisted
         _safe_log(
             "error",
             "Failed to merge skipped-record parts; the run has no "
             "skipped-records artifact (parts remain under the run prefix)",
-            skipped=skipped,
+            skipped_count=skipped,
             exc_info=True,
         )
         lost = skipped - unpersisted
@@ -3378,7 +3419,7 @@ async def _run_preflight_gate(
         start_to_close, schedule_to_close = gate_timeouts(budget, max_attempts)
         heartbeat_timeout, _ = gate_heartbeat_timings(start_to_close.total_seconds())
         gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — _no_verdict emits the NO_VERDICT row with exc_info and raises the block when the posture blocks
         _no_verdict(e, None, None)
         return
 
@@ -3401,7 +3442,7 @@ async def _run_preflight_gate(
     if not workflow.patched("preflight-gate-warmup"):
         try:
             await _dispatch_checks(None, None)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — _no_verdict emits the NO_VERDICT row with exc_info and raises the block when the posture blocks
             _no_verdict(e, None, None)
         return
 
@@ -3412,7 +3453,7 @@ async def _run_preflight_gate(
     first_poll: WarmupPoll | None = None
     try:
         first_poll = await _poll()
-    except Exception:
+    except Exception:  # noqa: BLE001 — _safe_log reports the probe failure at WARNING with exc_info; the gate fails open by design
         # The probe's own plumbing failed: run every tier, as before tiers, and
         # say so on that row. A broken probe must not cost the run its verdict.
         _safe_log(
@@ -3433,7 +3474,7 @@ async def _run_preflight_gate(
                 None,
                 None if seen is not None else WarmupWait(outcome=WarmupOutcome.BROKEN),
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — _no_verdict emits the NO_VERDICT row with exc_info and raises the block when the posture blocks
             _no_verdict(e, None, None)
         # Success: the activity already emitted the proceeded outcome event.
         return
@@ -3446,7 +3487,7 @@ async def _run_preflight_gate(
     )
     try:
         await _dispatch_checks(frozenset({CheckTier.PREFLIGHT}), first_wait)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — _no_verdict emits the NO_VERDICT row with exc_info and raises the block when the posture blocks
         _set_health_line("")
         _no_verdict(e, CheckTier.PREFLIGHT, first_wait)
         return
@@ -3480,7 +3521,7 @@ async def _run_preflight_gate(
             # started inside the ceiling can finish outside it, and a READY that
             # arrives late does not buy the WARMUP checks extra time.
             late_ready = seen.state is WarmupState.READY and workflow.now() >= deadline
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — _emit_row records the GATE_BROKEN row with exc_info; the gate fails open by design
         # The poll activity turns everything the probe does into a WarmupPoll,
         # so what reaches here is the gate's own plumbing: fail open.
         _set_health_line("")
@@ -3506,7 +3547,7 @@ async def _run_preflight_gate(
         ready = _wait(WarmupOutcome.READY)
         try:
             await _dispatch_checks(frozenset({CheckTier.WARMUP}), ready)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — _no_verdict emits the NO_VERDICT row with exc_info and raises the block when the posture blocks
             _no_verdict(e, CheckTier.WARMUP, ready)
         return
 
@@ -3559,8 +3600,7 @@ def _set_health_line(text: str) -> None:
     """
     try:
         workflow.set_current_details(text)
-    # conformance: ignore[E004] a status line must never fail the gate; logged at DEBUG with exc_info=True
-    except Exception:
+    except Exception:  # noqa: BLE001 — a status line must never fail the gate; logged at DEBUG with exc_info=True
         _safe_log("debug", "Could not set the gate's health line", exc_info=True)
 
 
@@ -3864,8 +3904,7 @@ def generate_workflow_class(
 
             _corr_ctx = get_correlation_context()
             correlation_id = _corr_ctx.correlation_id if _corr_ctx else run_id
-        # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-        except Exception:
+        except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
             _safe_log(
                 "warning",
                 "Failed to read correlation context, falling back to run_id",
@@ -3915,6 +3954,10 @@ def generate_workflow_class(
 
         try:
             if hasattr(input_data, "_log_summary"):
+                # The summary itself is not attached: ``_log_summary`` drops
+                # fields by name only, so a value such as a URL carrying
+                # userinfo would pass through unredacted to OTLP and the
+                # object-store log sink. It was never exported before either.
                 input_summary = input_data._log_summary()
                 if input_summary:
                     _safe_log(
@@ -3923,10 +3966,8 @@ def generate_workflow_class(
                         app_name=app_name,
                         run_id=str(run_id),
                         correlation_id=context.correlation_id,
-                        input=input_summary,
                     )
-        # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-        except Exception:
+        except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
             _safe_log("warning", "Failed to log input summary", exc_info=True)
 
         try:
@@ -4018,8 +4059,7 @@ def generate_workflow_class(
         finally:
             try:
                 await app_instance.on_complete()
-            # conformance: ignore[E004] finally-block cleanup handler; logged via _safe_log with exc_info=True; must not re-raise from finally
-            except Exception:
+            except Exception:  # noqa: BLE001 — finally-block cleanup handler; logged via _safe_log with exc_info=True; must not re-raise from finally
                 _safe_log(
                     "warning",
                     "on_complete() hook raised an unexpected exception",

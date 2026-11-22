@@ -31,7 +31,6 @@ from application_sdk.execution._temporal import activities as activities_module
 from application_sdk.execution._temporal.activities import (
     TaskContext,
     create_activity_from_task,
-    get_activity_options,
 )
 from application_sdk.execution._temporal.eviction_retry import (
     _is_worker_evicted,
@@ -289,28 +288,6 @@ class TestRetryPolicyWiresWorkerEvicted:
         temporal_policy = _to_temporal_retry_policy(policy)
         types = temporal_policy.non_retryable_error_types or []
         assert types.count(WORKER_EVICTED_TYPE) == 1
-
-    def test_get_activity_options_appends_worker_evicted_for_default_policy(
-        self,
-    ) -> None:
-        from application_sdk.app.task import TaskMetadata
-
-        meta = TaskMetadata(
-            name="t",
-            app_name="_a",
-            func=lambda: None,
-            input_type=_EvIn,
-            output_type=_EvOut,
-            timeout_seconds=60,
-            retry_max_attempts=3,
-            retry_max_interval_seconds=300,
-            heartbeat_timeout_seconds=60,
-            auto_heartbeat_seconds=10,
-            retry_policy=None,
-        )
-        opts = get_activity_options(meta)
-        types = opts["retry_policy"].non_retryable_error_types or []
-        assert WORKER_EVICTED_TYPE in types
 
 
 # ---------------------------------------------------------------------------

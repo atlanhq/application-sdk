@@ -260,8 +260,8 @@ class TestSyncFlushWorkflowGuard:
         """Async branch: nothing is scheduled on the (workflow) running loop."""
         flushed: list[bool] = []
 
-        async def _flush_buffer(force=False):
-            flushed.append(force)
+        async def _flush_buffer():
+            flushed.append(True)
 
         with (
             mock.patch(f"{_LOG_MODULE}.in_temporal_workflow", return_value=True),
@@ -279,8 +279,8 @@ class TestSyncFlushWorkflowGuard:
         """Positive control for the async branch."""
         flushed: list[bool] = []
 
-        async def _flush_buffer(force=False):
-            flushed.append(force)
+        async def _flush_buffer():
+            flushed.append(True)
 
         with (
             mock.patch(f"{_LOG_MODULE}.in_temporal_workflow", return_value=False),
@@ -310,8 +310,8 @@ class TestSyncFlushWorkflowGuard:
         """Positive control for the sync branch."""
         flushed: list[bool] = []
 
-        async def _flush_buffer(force=False):
-            flushed.append(force)
+        async def _flush_buffer():
+            flushed.append(True)
 
         with (
             mock.patch(f"{_LOG_MODULE}.in_temporal_workflow", return_value=False),

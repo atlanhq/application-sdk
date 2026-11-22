@@ -125,6 +125,6 @@ def is_replaying() -> bool:
         return False
     try:
         return bool(pred())
-    except Exception:  # conformance: ignore[E004] never-raises predicate on the logger-adapter hot path; logging here would recurse through the adapter that calls is_replaying()
+    except Exception:  # noqa: BLE001 — never-raises predicate on the logger-adapter hot path; logging here would recurse through the adapter that calls is_replaying()
         # conformance: ignore[E007] replay-detection failure safely degrades to "not replaying"; cannot log here (adapter recursion) in this sandbox-safe stdlib-only module
         return False

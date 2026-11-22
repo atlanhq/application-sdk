@@ -62,7 +62,7 @@ class Lazy(Generic[T]):
                 "Lazy wrapper requires a callable"
             )  # stdlib-interop: __init__ arg-check pattern
         self._fn = fn
-        self._cached: T = None  # type: ignore
+        self._cached: T = None  # pyright: ignore[reportAttributeAccessIssue]
         self._evaluated: bool = False
 
     def evaluate(self) -> T:
@@ -96,7 +96,7 @@ class Lazy(Generic[T]):
         This clears the cached value and allows the function to be
         called again on the next evaluate() call.
         """
-        self._cached = None  # type: ignore
+        self._cached = None  # pyright: ignore[reportAttributeAccessIssue]
         self._evaluated = False
 
     def __repr__(self) -> str:

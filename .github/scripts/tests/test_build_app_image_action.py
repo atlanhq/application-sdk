@@ -45,12 +45,12 @@ _BUILD_ACTION = _BUILD_ACTION_DIR / "action.yaml"
 _SDR_ACTION = _ACTIONS / "sdr-e2e" / "action.yaml"
 
 
-def _steps(action_yaml: Path) -> list[dict]:  # type: ignore[type-arg]
+def _steps(action_yaml: Path) -> list[dict]:
     parsed = yaml.safe_load(action_yaml.read_text(encoding="utf-8"))
     return parsed["runs"]["steps"]
 
 
-def _step(action_yaml: Path, name: str) -> dict:  # type: ignore[type-arg]
+def _step(action_yaml: Path, name: str) -> dict:
     for step in _steps(action_yaml):
         if step.get("name") == name:
             return step
@@ -225,7 +225,7 @@ def test_the_multi_platform_assert_is_gated_on_more_than_one_platform() -> None:
     assert names.index("Build and push PR image") < names.index(step["name"])
 
 
-def _reusable() -> dict:  # type: ignore[type-arg]
+def _reusable() -> dict:
     return yaml.safe_load(
         (_REPO_ROOT / ".github/workflows/tests-reusable.yaml").read_text(
             encoding="utf-8"
@@ -459,17 +459,17 @@ def test_buildx_cache_scope_is_unchanged() -> None:
 # connector Dockerfile ran.
 
 
-def _pull_request_workflow() -> dict:  # type: ignore[type-arg]
+def _pull_request_workflow() -> dict:
     return yaml.safe_load(
         (_REPO_ROOT / ".github/workflows/pull_request.yaml").read_text(encoding="utf-8")
     )
 
 
-def _sdk_base_job() -> dict:  # type: ignore[type-arg]
+def _sdk_base_job() -> dict:
     return _pull_request_workflow()["jobs"]["build-sdk-base-image"]
 
 
-def _sdk_base_build_step() -> dict:  # type: ignore[type-arg]
+def _sdk_base_build_step() -> dict:
     return next(
         s
         for s in _sdk_base_job()["steps"]
@@ -477,7 +477,7 @@ def _sdk_base_build_step() -> dict:  # type: ignore[type-arg]
     )
 
 
-def _legs(job: dict) -> dict:  # type: ignore[type-arg]
+def _legs(job: dict) -> dict:
     return {leg["arch"]: leg for leg in job["strategy"]["matrix"]["include"]}
 
 

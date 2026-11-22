@@ -21,6 +21,13 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 
+# The registry reset has one definition, in the shared testing fixtures; the
+# autouse ``clean_registries`` below only applies it to every integration test.
+from application_sdk.testing.fixtures import (  # noqa: F401
+    clean_app_registry,
+    clean_task_registry,
+)
+
 
 @pytest.fixture(autouse=True)
 def _integration_env_vars():
@@ -96,15 +103,11 @@ async def temporal_client(temporal_host):
 
 
 @pytest.fixture(autouse=True)
-def clean_registries():
+def clean_registries(
+    clean_app_registry,  # noqa: F811 — the imported fixture, requested by name
+    clean_task_registry,  # noqa: F811 — the imported fixture, requested by name
+) -> None:
     """Reset AppRegistry and TaskRegistry before and after each test."""
-    from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-    AppRegistry.reset()
-    TaskRegistry.reset()
-    yield
-    AppRegistry.reset()
-    TaskRegistry.reset()
 
 
 @pytest.fixture

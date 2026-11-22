@@ -8,6 +8,8 @@ import traceback
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from application_sdk import _deprecation
+from application_sdk.errors._legacy_codes import ErrorCode, legacy_code_for
 from application_sdk.errors.categories import Audience, FailureCategory
 
 if TYPE_CHECKING:
@@ -428,9 +430,104 @@ def safe_traceback(exc: BaseException | None, max_len: int = _TRACEBACK_MAX_LEN)
     return text
 
 
-# Backward-compat alias: the helper is load-bearing across clients/sql.py and
-# credentials/errors.py, so it is public. Kept for existing internal/test imports.
-_sanitize_cause_repr = sanitize_cause_repr
+class _DeprecatedDefaultErrorCode:
+    """``Cls.DEFAULT_ERROR_CODE``: the class's legacy ``AAF-*`` code, with a warning.
+
+    Classes no longer declare ``DEFAULT_ERROR_CODE``; the code comes from the
+    one table in ``errors._legacy_codes``. This descriptor keeps the name
+    readable on the class and on an instance until v4.0.0 (FND-4299).
+    """
+
+    def __get__(self, obj: object, owner: type) -> ErrorCode | None:
+        _deprecation.warn_deprecated(
+            "DEFAULT_ERROR_CODE",
+            "the error class's code ClassVar",
+            "4.0.0",
+            note="AAF-* codes are a second error vocabulary beside code",
+        )
+        return legacy_code_for(owner)
+
+
+class _LegacyErrorCodeMixin:
+    """The back-compat ``AAF-*`` surface of an ``AppError`` that had a legacy ``ErrorCode``.
+
+    Put it before the categorical leaf in the bases so its ``__str__`` wins
+    over ``AppError.__str__``. A subclass names the evidence ``str()`` prints
+    in ``_STR_FIELDS`` as ``(attribute, label)`` pairs. Its ``AAF-*`` code is
+    not declared on the class: ``errors._legacy_codes._CLASS_CODES`` records
+    it, once, and ``code`` is the class's only vocabulary (FND-4299).
+
+    The text is ``[AAF-…] message | label=value | … | caused_by=…``. Falsy
+    values are left out. The cause always goes through
+    :func:`sanitize_cause_repr`, because ``str(exc)`` reaches HTTP responses
+    (``detail=str(e)``) and logs, and a driver message can embed a connection
+    string. Before this mixin each class copied the body, and most copies
+    printed the cause raw (FND-4917).
+
+    ``DEFAULT_ERROR_CODE``, ``error_code`` and the ``error_code=`` keyword
+    still work and warn. A constructor that accepts the keyword hands it to
+    :meth:`_set_legacy_error_code`, the one place it is handled.
+
+    A plain class, not a dataclass, so ``_error_code`` never becomes a field
+    and never reaches ``to_failure_details().evidence``. Removed with
+    ``ErrorCode`` in v4.0.
+    """
+
+    DEFAULT_ERROR_CODE = _DeprecatedDefaultErrorCode()
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = ()
+    #: Per-instance override from the deprecated ``error_code=`` keyword. The
+    #: class's own code applies when it is ``None``.
+    _error_code: ErrorCode | None = None
+
+    # Supplied by AppError, which every user of this mixin also inherits.
+    message: str
+    cause: BaseException | None
+
+    def _set_legacy_error_code(self, error_code: ErrorCode | None) -> None:
+        """Record the deprecated ``error_code=`` keyword a constructor received.
+
+        ``None`` (the keyword's default) records nothing and does not warn.
+        """
+        if error_code is None:
+            return
+        # stacklevel 3: this helper, then the constructor, then the raise site.
+        _deprecation.warn_deprecated(
+            "the error_code= keyword of an SDK error",
+            "an AppError subclass whose code ClassVar names the failure",
+            "4.0.0",
+            note="AAF-* codes are a second error vocabulary beside code",
+            stacklevel=3,
+        )
+        self._error_code = error_code
+
+    def _legacy_code(self) -> ErrorCode | None:
+        """The per-instance override, else the class's ``AAF-*`` code. Never warns."""
+        if self._error_code is not None:
+            return self._error_code
+        return legacy_code_for(type(self))
+
+    @property
+    def error_code(self) -> ErrorCode | None:
+        """Deprecated legacy ``AAF-…`` code: the per-instance override, else the class's."""
+        _deprecation.warn_deprecated(
+            "error_code",
+            "the error's code (or qualified_code)",
+            "4.0.0",
+            note="AAF-* codes are a second error vocabulary beside code",
+        )
+        return self._legacy_code()
+
+    def __str__(self) -> str:
+        legacy = self._legacy_code()
+        head = f"[{legacy.code}] {self.message}" if legacy else self.message
+        parts = [head]
+        for attr, label in self._STR_FIELDS:
+            value = getattr(self, attr, None)
+            if value:
+                parts.append(f"{label}={value}")
+        if self.cause:
+            parts.append(f"caused_by={sanitize_cause_repr(self.cause)}")
+        return " | ".join(parts)
 
 
 @dataclass(kw_only=True)

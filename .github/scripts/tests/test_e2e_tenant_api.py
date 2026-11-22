@@ -221,7 +221,7 @@ def test_mint_error_reports_the_status_but_not_the_response_body(
             url=_TENANT,
             code=401,
             msg="Unauthorized",
-            hdrs=None,  # type: ignore[arg-type]
+            hdrs=None,  # pyright: ignore[reportArgumentType]
             fp=None,
         )
 

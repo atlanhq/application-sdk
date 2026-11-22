@@ -200,7 +200,9 @@ async def release_distributed_lock(
             return released
 
     except Exception:
-        logger.error("Redis error during lock release: %s", resource_id, exc_info=True)
+        logger.warning(
+            "Redis error during lock release: %s", resource_id, exc_info=True
+        )
         # Don't raise exception for lock release failures - log and return False
         # Lock release is best-effort and shouldn't fail the workflow
         return False

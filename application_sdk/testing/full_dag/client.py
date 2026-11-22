@@ -14,9 +14,9 @@ on access, so the symbol-removal gate can see the deprecation that
 
 from __future__ import annotations
 
-import importlib
-import warnings
 from typing import TYPE_CHECKING
+
+from application_sdk import _deprecation
 
 if TYPE_CHECKING:
     # Type checkers only: binds nothing at runtime, so every access below still
@@ -101,20 +101,12 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str) -> object:
-    """Serve the deprecated names once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    module, attr = _LAZY[name]
-    return getattr(importlib.import_module(module), attr)
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=_deprecation.lazy_resolver(_LAZY),
+)
 
 
 def __dir__() -> list[str]:

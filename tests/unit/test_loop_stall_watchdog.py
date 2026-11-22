@@ -3,8 +3,14 @@
 The scenarios that end a process run ``run_worker_mode`` in a child
 (``tests/unit/loop_stall_probe.py``), send it a real SIGTERM and read its exit
 code and stderr; the rest drive ``LoopStallWatchdog`` in-process against a
-private faulthandler and signal module. The bound is 3 s, so each timer runs
-3.75 s (the bound plus one re-arm interval).
+private faulthandler and signal module.
+
+The bound is 1.6 s, so each timer runs 2 s (the bound plus one re-arm
+interval). Every child scenario is sized off that timer: a block, drain or
+linger that must outlive it runs 0.5-1 s past it. The children run side by side
+in one test, so the set costs about one scenario's wall-clock rather than the
+sum of seven. Each child counts its timings from its own worker start, so
+running concurrently does not shift any margin.
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ import signal
 import subprocess
 import sys
 import textwrap
+from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
@@ -34,113 +41,176 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # A hang guard only: a stalled child exits within seconds, and a healthy one
 # finishes on its own schedule. Generous because it covers interpreter start-up.
 _CHILD_HANG_GUARD_SECONDS = 120
-_TIMER_HEADER = "Timeout (0:00:03.750000)!"
-
-_posix_signals = pytest.mark.skipif(
-    sys.platform == "win32", reason="asyncio has no signal handlers on Windows"
-)
+_BOUND_SECONDS = "1.6"
+# faulthandler omits the fraction of a whole-second timeout.
+_TIMER_HEADER = "Timeout (0:00:02)!"
 
 
-def _run_probe(
-    block: str,
-    *,
-    when: str,
-    sigterm_after: float,
-    drain: float = 0,
-    linger: float = 0,
-    timeout: str = "3",
-) -> subprocess.CompletedProcess[str]:
-    env = {
-        **os.environ,
-        "ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS": timeout,
-        # Keeps the post-drain deadline out of the shutdown these tests time.
-        "ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS": "0",
-    }
-    return subprocess.run(  # noqa: S603 — fixed argv: this interpreter + the in-repo probe module
-        [
+@dataclass(frozen=True)
+class _Probe:
+    """One child scenario: ``loop_stall_probe`` arguments and what must happen.
+
+    ``culprit`` names the blocking function the stack dump must show; ``None``
+    means the process must survive: exit 0, no dump, the clean-exit line.
+    """
+
+    block: str
+    when: str
+    sigterm_after: float
+    culprit: str | None
+    drain: float = 0
+    linger: float = 0
+    timeout: str = _BOUND_SECONDS
+
+    def argv(self) -> list[str]:
+        return [
             sys.executable,
             "-m",
             "tests.unit.loop_stall_probe",
-            block,
+            self.block,
             "--when",
-            when,
+            self.when,
             "--sigterm-after",
-            str(sigterm_after),
+            str(self.sigterm_after),
             "--drain",
-            str(drain),
+            str(self.drain),
             "--linger",
-            str(linger),
-        ],
-        cwd=_REPO_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=_CHILD_HANG_GUARD_SECONDS,
-        check=False,
-    )
+            str(self.linger),
+        ]
 
 
-@_posix_signals
-class TestStalledShutdownExits:
-    """A shutdown whose event loop stops running exits with every thread's stack."""
+_PROBES: dict[str, _Probe] = {
+    # A shutdown whose event loop stops running exits with every thread's
+    # stack. Frozen before the signal: the loop never runs its shutdown
+    # handler, so the process-level handler arms the timer from inside the
+    # blocked call.
+    "frozen before SIGTERM in a sleep": _Probe(
+        "sleep", when="before-sigterm", sigterm_after=1, culprit="_block_on_sleep"
+    ),
+    "frozen before SIGTERM on a lock": _Probe(
+        "lock", when="before-sigterm", sigterm_after=1, culprit="_block_on_lock"
+    ),
+    "frozen during the drain": _Probe(
+        "sleep", when="during-drain", sigterm_after=1, culprit="_block_on_sleep"
+    ),
+    # Nothing else is killed. Before shutdown a frozen loop is the liveness
+    # probe's job: blocked 2.5 s, past the 2 s timer, and free before the signal.
+    "steady-state block far past the bound": _Probe(
+        "sleep:2.5", when="steady", sigterm_after=3.5, culprit=None
+    ),
+    # A draining loop keeps re-arming, and asyncio's own SIGTERM handling still
+    # drives the drain with the watchdog's handler chained in front.
+    "drain longer than the bound": _Probe(
+        "none", when="steady", sigterm_after=1, drain=3, culprit=None
+    ),
+    # The process outlives the timer after the worker stops.
+    "clean shutdown leaves no timer armed": _Probe(
+        "none", when="steady", sigterm_after=1, linger=3, culprit=None
+    ),
+    # Blocked until 3.5 s; an armed timer would have fired at 3 s.
+    "zero turns it off": _Probe(
+        "sleep:3", when="before-sigterm", sigterm_after=1, culprit=None, timeout="0"
+    ),
+}
 
-    @pytest.mark.parametrize(
-        ("block", "culprit"),
-        [("sleep", "_block_on_sleep"), ("lock", "_block_on_lock")],
-    )
-    def test_loop_frozen_before_sigterm(self, block: str, culprit: str) -> None:
-        """The loop never runs its shutdown handler; the process-level handler
-        arms the timer from inside the blocked call."""
-        result = _run_probe(block, when="before-sigterm", sigterm_after=1.5)
 
-        assert result.returncode == 1, result.stderr
-        assert _TIMER_HEADER in result.stderr
-        assert f"in {culprit}" in result.stderr
-        assert "probe exited cleanly" not in result.stdout
+@dataclass(frozen=True)
+class _ProbeRun:
+    process: subprocess.Popen[bytes]
+    stdout_path: Path
+    stderr_path: Path
 
-    def test_loop_frozen_during_the_drain(self) -> None:
-        result = _run_probe("sleep", when="during-drain", sigterm_after=1)
-
-        assert result.returncode == 1, result.stderr
-        assert _TIMER_HEADER in result.stderr
-        assert "in _block_on_sleep" in result.stderr
-
-
-@_posix_signals
-class TestNothingElseIsKilled:
-    def test_steady_state_block_far_past_the_bound_survives(self) -> None:
-        """Before shutdown a frozen loop is the liveness probe's job."""
-        result = _run_probe("sleep:7", when="steady", sigterm_after=8)
-
-        assert result.returncode == 0, result.stderr
-        assert "Timeout (" not in result.stderr
-        assert "probe exited cleanly" in result.stdout
-
-    def test_drain_longer_than_the_bound_survives(self) -> None:
-        """A draining loop keeps re-arming, and asyncio's own SIGTERM handling
-        still drives the drain with the watchdog's handler chained in front."""
-        result = _run_probe("none", when="steady", sigterm_after=1, drain=7)
-
-        assert result.returncode == 0, result.stderr
-        assert "Timeout (" not in result.stderr
-        assert "probe exited cleanly" in result.stdout
-
-    def test_clean_shutdown_leaves_no_timer_armed(self) -> None:
-        """The process outlives the timer after the worker stops."""
-        result = _run_probe("none", when="steady", sigterm_after=1, linger=5)
-
-        assert result.returncode == 0, result.stderr
-        assert "Timeout (" not in result.stderr
-        assert "probe exited cleanly" in result.stdout
-
-    def test_zero_turns_it_off(self) -> None:
-        result = _run_probe(
-            "sleep:5", when="before-sigterm", sigterm_after=1.5, timeout="0"
+    def collect(self) -> tuple[int, str, str]:
+        returncode = self.process.wait(timeout=_CHILD_HANG_GUARD_SECONDS)
+        return (
+            returncode,
+            self.stdout_path.read_text(encoding="utf-8"),
+            self.stderr_path.read_text(encoding="utf-8"),
         )
 
-        assert result.returncode == 0, result.stderr
-        assert "Timeout (" not in result.stderr
-        assert "probe exited cleanly" in result.stdout
+
+def _start_probes(directory: Path) -> dict[str, _ProbeRun]:
+    """Start every child at once. Output goes to files rather than pipes, so a
+    child writing a large stack dump never blocks on a pipe nobody reads yet."""
+    runs: dict[str, _ProbeRun] = {}
+    try:
+        for index, (name, probe) in enumerate(_PROBES.items()):
+            env = {
+                **os.environ,
+                "ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS": probe.timeout,
+                # Keeps the post-drain deadline out of the shutdown these tests time.
+                "ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS": "0",
+            }
+            stdout_path = directory / f"probe-{index}.out"
+            stderr_path = directory / f"probe-{index}.err"
+            with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+                process = subprocess.Popen(  # noqa: S603 — fixed argv: this interpreter + the in-repo probe module
+                    probe.argv(),
+                    cwd=_REPO_ROOT,
+                    env=env,
+                    stdout=stdout,
+                    stderr=stderr,
+                )
+            runs[name] = _ProbeRun(process, stdout_path, stderr_path)
+    except BaseException:
+        _reap(runs)
+        raise
+    return runs
+
+
+def _reap(runs: dict[str, _ProbeRun]) -> None:
+    for run in runs.values():
+        if run.process.poll() is None:
+            run.process.kill()
+            run.process.wait()
+
+
+def _misbehaviour(
+    probe: _Probe, returncode: int, stdout: str, stderr: str
+) -> list[str]:
+    """What this child did that its scenario forbids; empty when it behaved."""
+    if probe.culprit is not None:
+        checks = [
+            (returncode == 1, f"exit code {returncode}, expected 1"),
+            (_TIMER_HEADER in stderr, f"no {_TIMER_HEADER!r} in stderr"),
+            (
+                f"in {probe.culprit}" in stderr,
+                f"stack dump does not name {probe.culprit}",
+            ),
+            ("probe exited cleanly" not in stdout, "process exited cleanly"),
+        ]
+    else:
+        checks = [
+            (returncode == 0, f"exit code {returncode}, expected 0"),
+            ("Timeout (" not in stderr, "the watchdog fired"),
+            ("probe exited cleanly" in stdout, "no clean-exit line"),
+        ]
+    return [problem for ok, problem in checks if not ok]
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="asyncio has no signal handlers on Windows"
+)
+def test_a_stalled_shutdown_exits_and_nothing_else_is_killed(tmp_path: Path) -> None:
+    """Each scenario in ``_PROBES``, run side by side and reported by name.
+
+    One test rather than seven: the children run concurrently, so the set costs
+    about one scenario's wall-clock instead of the sum. Every scenario is checked
+    before the test fails, and the failure names each one that misbehaved with
+    its stderr, so one bad scenario never hides another.
+    """
+    runs = _start_probes(tmp_path)
+    failures: list[str] = []
+    try:
+        for name, run in runs.items():
+            returncode, stdout, stderr = run.collect()
+            problems = _misbehaviour(_PROBES[name], returncode, stdout, stderr)
+            if problems:
+                failures.append(f"{name}: {'; '.join(problems)}\n{stderr}")
+    finally:
+        _reap(runs)
+
+    assert not failures, "\n\n".join(failures)
 
 
 @pytest.fixture

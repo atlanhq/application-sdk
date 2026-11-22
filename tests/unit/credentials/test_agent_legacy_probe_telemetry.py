@@ -15,10 +15,12 @@ value or a ref name, only field names.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
-from unittest.mock import patch
 
 import pytest
+from loguru import logger as _loguru_logger
 
 from application_sdk.credentials.agent import resolve_agent_credential
 from application_sdk.credentials.spec import AgentCredentialSpec
@@ -71,24 +73,58 @@ def _spec() -> AgentCredentialSpec:
     )
 
 
-def _telemetry_record(mock_logger) -> dict[str, Any]:
-    records = [
-        c
-        for c in mock_logger.warning.call_args_list
-        if "legacy single-key probe outcomes" in str(c.args[0])
-    ]
-    assert len(records) == 1, "exactly one telemetry record per resolution"
-    return records[0].kwargs["extra"]
+_AGENT_LOGGER = "application_sdk.credentials.agent"
+_TELEMETRY_MESSAGE = "legacy single-key probe outcomes"
+
+
+@contextmanager
+def _agent_warnings() -> Iterator[list[dict[str, Any]]]:
+    """WARNING records the agent module delivered to a real loguru sink."""
+    records: list[dict[str, Any]] = []
+
+    def _sink(message: Any) -> None:
+        record = message.record
+        if (
+            record["extra"].get("logger_name") == _AGENT_LOGGER
+            and record["level"].name == "WARNING"
+        ):
+            records.append(record)
+
+    sink_id = _loguru_logger.add(_sink, level="DEBUG", format="{message}")
+    try:
+        yield records
+    finally:
+        try:
+            _loguru_logger.remove(sink_id)
+        except ValueError:
+            pass  # an adapter initialised mid-test already removed every sink
+
+
+def _telemetry_record(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """The telemetry record's bound fields, as the sink received them."""
+    matches = [r for r in records if _TELEMETRY_MESSAGE in r["message"]]
+    assert len(matches) == 1, "exactly one telemetry record per resolution"
+    return matches[0]["extra"]
+
+
+_TELEMETRY_PREFIX = "atlan.agent_json."
 
 
 async def _resolve(store) -> tuple[dict[str, Any], BaseException | None]:
-    with patch("application_sdk.credentials.agent.logger") as mock_logger:
+    """The ``atlan.agent_json.*`` fields. The call site passes them as ``extra=``;
+    the adapter spreads that dict into the record's bound fields."""
+    record, raised = await _resolve_record(store)
+    return {k: v for k, v in record.items() if k.startswith(_TELEMETRY_PREFIX)}, raised
+
+
+async def _resolve_record(store) -> tuple[dict[str, Any], BaseException | None]:
+    with _agent_warnings() as records:
         try:
             await resolve_agent_credential(_spec(), store)  # type: ignore[arg-type]
             raised = None
         except SecretStoreError as exc:
             raised = exc
-    return _telemetry_record(mock_logger), raised
+    return _telemetry_record(records), raised
 
 
 class TestOutcomesPerField:
@@ -147,11 +183,16 @@ class TestExportSafety:
 
     async def test_extras_survive_the_object_store_export_filter(self) -> None:
         """The NDJSON sink an SDR uploads to Atlan keeps only allowlisted
-        extras; run the record's extras through that same filter."""
+        extras; run the record the sink received through that same filter."""
         from application_sdk.observability.logger_adaptor import _build_extra_dict
 
-        extra, _ = await _resolve(MixedStore(SecretStoreError("denied")))
-        assert _build_extra_dict(dict(extra)) == extra
+        record, _ = await _resolve_record(MixedStore(SecretStoreError("denied")))
+        assert "extra" not in record, "extra= must be spread, not bound as one field"
+        exported = _build_extra_dict(record)
+        telemetry = {k: v for k, v in record.items() if k.startswith(_TELEMETRY_PREFIX)}
+        assert telemetry
+        for key, value in telemetry.items():
+            assert exported.get(key) == value, key
 
     async def test_never_carries_values_or_ref_names(self) -> None:
         extra, _ = await _resolve(MixedStore(SecretStoreError("denied")))
@@ -168,9 +209,6 @@ async def test_declared_payload_logs_no_legacy_telemetry() -> None:
             "basic.username": {"value": PLAIN_USERNAME},
         }
     )
-    with patch("application_sdk.credentials.agent.logger") as mock_logger:
+    with _agent_warnings() as records:
         await resolve_agent_credential(spec, MixedStore(SecretStoreError("x")))  # type: ignore[arg-type]
-    assert not any(
-        "legacy single-key probe outcomes" in str(c.args[0])
-        for c in mock_logger.warning.call_args_list
-    )
+    assert not any(_TELEMETRY_MESSAGE in r["message"] for r in records)

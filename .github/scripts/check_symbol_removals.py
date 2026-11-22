@@ -345,6 +345,49 @@ def _signature(
     return tuple(names), tuple(required), tuple(kinds)
 
 
+def _module_getattr(tree: ast.Module) -> ast.AST | None:
+    """The module's PEP 562 ``__getattr__``, or ``None`` without one.
+
+    Either a ``def __getattr__`` or ``__getattr__ = deprecated_module_getattr(...)``
+    (``application_sdk._deprecation``'s factory). For the factory the call is
+    returned, so a walk over it sees the tables it was handed.
+    """
+    for node in tree.body:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "__getattr__"
+        ):
+            return node
+        if (
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(t, ast.Name) and t.id == "__getattr__" for t in node.targets
+            )
+            and _is_getattr_factory(node.value)
+        ):
+            return node.value
+    return None
+
+
+def _is_getattr_factory(node: ast.expr) -> bool:
+    """``deprecated_module_getattr(...)`` or ``_deprecation.deprecated_module_getattr(...)``.
+
+    Only the shared factory is known to serve the table it is handed; any other
+    callable assigned to ``__getattr__`` might raise for every name.
+    """
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    name = (
+        func.id
+        if isinstance(func, ast.Name)
+        else func.attr
+        if isinstance(func, ast.Attribute)
+        else None
+    )
+    return name == "deprecated_module_getattr"
+
+
 def _alias_names(tree: ast.Module) -> set[str]:
     """Names served by the module's PEP 562 deprecation shim.
 
@@ -353,12 +396,7 @@ def _alias_names(tree: ast.Module) -> set[str]:
     serves nothing, and a module that has the shim without the mapping is
     serving names this gate cannot enumerate (reported by the caller).
     """
-    has_getattr = any(
-        isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and n.name == "__getattr__"
-        for n in tree.body
-    )
-    if not has_getattr:
+    if _module_getattr(tree) is None:
         return set()
     names: set[str] = set()
     for node in tree.body:
@@ -391,11 +429,7 @@ def _lazy_names(tree: ast.Module) -> dict[str, tuple[str, str]]:
     at package-import time, so the name is surface exactly like an eager
     re-export.
     """
-    if not any(
-        isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and n.name == "__getattr__"
-        for n in tree.body
-    ):
+    if _module_getattr(tree) is None:
         return {}
     served: dict[str, tuple[str, str]] = {}
     for node in tree.body:
@@ -423,7 +457,7 @@ def _lazy_names(tree: ast.Module) -> dict[str, tuple[str, str]]:
                     for e in v.elts
                 )
             ):
-                served[k.value] = (v.elts[0].value, v.elts[1].value)  # type: ignore[union-attr]
+                served[k.value] = (v.elts[0].value, v.elts[1].value)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     return served
 
 
@@ -559,18 +593,18 @@ def _getattr_served(tree: ast.Module) -> frozenset[str] | None:
     allowlist is checkable; a static scan cannot run the getter. The runtime
     backstop is a test that every ``__all__`` name of such a module resolves.
     """
-    getter = next(
-        (
-            n
-            for n in tree.body
-            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and n.name == "__getattr__"
-        ),
-        None,
-    )
+    getter = _module_getattr(tree)
     if getter is None:
         return None
     read = {n.id for n in ast.walk(getter) if isinstance(n, ast.Name)}
+    # A factory-built getter is handed its helpers by name
+    # (``fallback=_lazy_export``); the allowlists they read are the getter's.
+    for node in tree.body:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name in read
+        ):
+            read |= {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
     served: set[str] = set()
     for node in tree.body:
         targets: Sequence[ast.expr]
@@ -739,6 +773,7 @@ def build_snapshot(root: Path, package: str = DEFAULT_PACKAGE) -> Snapshot:
         raise ValueError(f"no package {package!r} under {root}")
     snapshot = Snapshot(package=package)
     sources: dict[str, tuple[str, str]] = {}
+    class_bases: dict[str, list[tuple[str, str]]] = {}
     for file in iter_modules(package_root):
         try:
             text = file.read_text(encoding="utf-8")
@@ -752,12 +787,146 @@ def build_snapshot(root: Path, package: str = DEFAULT_PACKAGE) -> Snapshot:
         for symbol in extract_module(tree, module, package):
             snapshot.symbols[symbol.key] = symbol
         is_init = file.name == "__init__.py"
-        for bound, source in reexport_sources(
+        module_sources = reexport_sources(
             tree, f"{module}.__init__" if is_init else module, package
-        ).items():
+        )
+        for bound, source in module_sources.items():
             sources[f"{module}:{bound}"] = source
+        class_bases.update(_class_bases(tree, module, module_sources))
+    _add_inherited_methods(snapshot, class_bases, sources)
     _resolve_reexports(snapshot, sources)
     return snapshot
+
+
+def _class_bases(
+    tree: ast.Module, module: str, module_sources: dict[str, tuple[str, str]]
+) -> dict[str, list[tuple[str, str]]]:
+    """``{"module:Class": [(base module, base name), ...]}`` for top-level classes.
+
+    Only bases that name a class in this package resolve: one defined in the
+    same module, or one imported from inside the package. A base the AST cannot
+    place (``Exception``, ``pydantic.BaseModel``, ``mod.Cls``) is dropped, so
+    it contributes no members.
+    """
+    local = {
+        node.name for node in _module_scope(tree.body) if isinstance(node, ast.ClassDef)
+    }
+    result: dict[str, list[tuple[str, str]]] = {}
+    for node in _module_scope(tree.body):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        bases: list[tuple[str, str]] = []
+        for base in node.bases:
+            if not isinstance(base, ast.Name):
+                continue
+            if base.id in local:
+                bases.append((module, base.id))
+            elif base.id in module_sources:
+                bases.append(module_sources[base.id])
+        result[f"{module}:{node.name}"] = bases
+    return result
+
+
+def _linearize(
+    key: str,
+    parents: dict[str, list[str]],
+    memo: dict[str, list[str]],
+    active: frozenset[str] = frozenset(),
+) -> list[str]:
+    """C3 linearization of *key* over the bases the AST could resolve.
+
+    Falls back to a left-to-right depth-first order when C3 has no solution
+    (a hierarchy Python itself would reject) or a cycle appears, so a bad
+    hierarchy still yields an order rather than an exception.
+    """
+    if key in memo:
+        return memo[key]
+    if key in active:
+        return [key]
+    active = active | {key}
+    seqs = [list(_linearize(p, parents, memo, active)) for p in parents.get(key, [])]
+    seqs.append(list(parents.get(key, [])))
+    order = [key]
+    while any(seqs):
+        for seq in seqs:
+            if not seq:
+                continue
+            head = seq[0]
+            if not any(head in other[1:] for other in seqs):
+                break
+        else:
+            seen = set(order)
+            for seq in seqs:
+                for item in seq:
+                    if item not in seen:
+                        order.append(item)
+                        seen.add(item)
+            memo[key] = order
+            return order
+        order.append(head)
+        seqs = [s[1:] if s and s[0] == head else s for s in seqs]
+    memo[key] = order
+    return order
+
+
+def _add_inherited_methods(
+    snapshot: Snapshot,
+    class_bases: dict[str, list[tuple[str, str]]],
+    sources: dict[str, tuple[str, str]],
+) -> None:
+    """Record on each class the public methods it inherits from a package base.
+
+    Moving a method from several subclasses to a shared base (or mixin) keeps
+    ``Cls.method`` working on every one of them, so it must not read as a
+    removal. Each class gets a symbol for every method an ancestor defines and
+    it does not, carrying the first definer's signature in MRO order.
+
+    ``__init__`` is never inherited here. Which ``__init__`` runs depends on
+    things the AST cannot see: a ``@dataclass`` or a library base earlier in
+    the MRO generates its own, and that is what a caller gets. An ``__init__``
+    dropped from a class body therefore stays a finding; restore it on the
+    class to keep its signature on the surface.
+    """
+
+    def definition(ref: tuple[str, str]) -> str:
+        key = f"{ref[0]}:{ref[1]}"
+        seen: set[str] = set()
+        while key not in class_bases and key in sources and key not in seen:
+            seen.add(key)
+            nxt = sources[key]
+            key = f"{nxt[0]}:{nxt[1]}"
+        return key
+
+    parents = {
+        cls: [k for k in (definition(b) for b in bases) if k in class_bases]
+        for cls, bases in class_bases.items()
+    }
+    own: dict[str, dict[str, Symbol]] = {cls: {} for cls in class_bases}
+    for symbol in snapshot.symbols.values():
+        if symbol.kind != SymbolKind.METHOD:
+            continue
+        cls_name, _, member = symbol.qualname.partition(".")
+        cls = f"{symbol.module}:{cls_name}"
+        if cls in own:
+            own[cls][member] = symbol
+    memo: dict[str, list[str]] = {}
+    for cls in sorted(class_bases):
+        module, _, cls_name = cls.partition(":")
+        present = set(own[cls])
+        class_symbol = snapshot.symbols.get(cls)
+        for ancestor in _linearize(cls, parents, memo)[1:]:
+            for member, symbol in sorted(own[ancestor].items()):
+                if member in present or member == "__init__":
+                    continue
+                present.add(member)
+                inherited = replace(
+                    symbol,
+                    module=module,
+                    qualname=f"{cls_name}.{member}",
+                    deprecated=symbol.deprecated
+                    or (class_symbol is not None and class_symbol.deprecated),
+                )
+                snapshot.symbols.setdefault(inherited.key, inherited)
 
 
 def _resolve_reexports(snapshot: Snapshot, sources: dict[str, tuple[str, str]]) -> None:

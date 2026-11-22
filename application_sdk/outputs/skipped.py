@@ -64,6 +64,7 @@ import orjson
 from pydantic import BaseModel
 
 from application_sdk._logging import get_logger
+from application_sdk.errors.leaves import InternalError
 from application_sdk.outputs.models import Metric
 
 _logger = get_logger(__name__)
@@ -255,8 +256,18 @@ def reason_metric_name(reason: SkipReason) -> str:
     return f"{SKIPPED_RECORDS_METRIC}-{reason.value.replace('_', '-')}"
 
 
-class _RollbackFailedError(Exception):
+@dataclass(kw_only=True)
+class _RollbackFailedError(InternalError):
     """A failed append could not be rolled back; the file may end mid-line."""
+
+    code: ClassVar[str] = "INTERNAL_SKIPPED_RECORDS_ROLLBACK"
+    message: str = (
+        "A failed append to the skipped-records file could not be rolled back"
+    )
+    component: str | None = "skipped_records"
+    #: The worker-local file that may now end mid-line. The truncate's own
+    #: OSError can be descriptor-level and name no file, so it rides here.
+    path: str | None = None
 
 
 def _append_lines(path: Path, chunk: bytes) -> None:
@@ -277,7 +288,13 @@ def _append_lines(path: Path, chunk: bytes) -> None:
             try:
                 fh.truncate(start)
             except OSError as exc:
-                raise _RollbackFailedError(str(path)) from exc
+                raise _RollbackFailedError(
+                    message=(
+                        "A failed append to the skipped-records file could not "
+                        f"be rolled back: {path}"
+                    ),
+                    path=str(path),
+                ) from exc
             raise
 
 
@@ -366,10 +383,12 @@ class SkippedRecordSink:
             lost = self.kept
             self.kept = 0
             self._poisoned = True
+            # conformance: ignore[L022] the write failed and these records are lost from the run's file; fail-open keeps the run going (FND-4881)
             _logger.error(
                 "Failed to write skipped records and could not roll the local "
-                "file back; %d record(s) are counted but missing from the "
+                "file %s back; %d record(s) are counted but missing from the "
                 "run's skipped-records file",
+                self.path,
                 lost,
                 exc_info=True,
             )
@@ -378,6 +397,7 @@ class SkippedRecordSink:
         except Exception:
             # _append_lines rolled the file back, so earlier lines stay valid.
             self.kept -= lines
+            # conformance: ignore[L022] the write failed and these records are lost from the run's file; fail-open keeps the run going (FND-4881)
             _logger.error(
                 "Failed to write %d skipped record(s) to the local file; they "
                 "are counted but missing from the run's skipped-records file",
@@ -562,6 +582,7 @@ async def persist_activity_skips(sink: SkippedRecordSink) -> None:
         await upload_file(key, sink.path)
     # conformance: ignore[E004] fail-open by design (FND-4881): logged at ERROR and counted in skipped-records-unpersisted
     except Exception:
+        # conformance: ignore[L022] the persist failed and these records are lost from the run's file; fail-open keeps the run going (FND-4881)
         _logger.error(
             "Failed to persist %d skipped record(s); they are counted but "
             "missing from the run's skipped-records file",

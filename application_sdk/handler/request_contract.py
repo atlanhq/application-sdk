@@ -12,10 +12,13 @@ Ported from ``application_sdk.handler.service`` so both surfaces agree.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypeVar
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ValidationError
+
+from application_sdk.errors.leaves import InvalidInputError
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -23,7 +26,17 @@ if TYPE_CHECKING:
 ModelT = TypeVar("ModelT", bound=PydanticBaseModel)
 
 
-class RequestContractError(Exception):
+def _contract_failure_summary(cause: ValidationError) -> str:
+    """Name the fields that failed, never the values: a body is routinely a credential."""
+    fields = ", ".join(
+        ".".join(str(part) for part in error["loc"]) or "body"
+        for error in cause.errors(include_url=False, include_input=False)
+    )
+    return f"Request body does not fit {cause.title}: invalid {fields}."
+
+
+@dataclass(kw_only=True)
+class RequestContractError(InvalidInputError):
     """A request body did not fit its typed contract at ingress -> 422.
 
     The marker *is* the enforcement. The 422 handler is registered on this
@@ -36,16 +49,33 @@ class RequestContractError(Exception):
 
     So the default for a new endpoint is the safe one: a bare
     ``model_validate`` still yields a 500.
+
+    An :class:`InvalidInputError` (FND-4298), so a caller that catches
+    ``AppError`` sees it as the caller's fault. ``cause`` is the pydantic
+    failure, kept so the handler can name the fields; ``None`` when the body
+    never reached pydantic -- unparseable JSON, or a valid JSON scalar/array
+    where an object was required. ``message`` names the failing fields and
+    never their values.
     """
 
+    code: ClassVar[str] = "INVALID_INPUT_REQUEST_CONTRACT"
+
+    # Intentional: dataclass fields define the wire-evidence schema; custom __init__ keeps the positional-cause signature callers use.
     def __init__(
         self, cause: ValidationError | None = None, *, message: str | None = None
     ) -> None:
-        super().__init__(message if cause is None else str(cause))
-        #: The pydantic failure, kept so the handler can name the fields. None
-        #: when the body never reached pydantic -- unparseable JSON, or a valid
-        #: JSON scalar/array where an object was required.
-        self.cause = cause
+        if cause is not None:
+            message = _contract_failure_summary(cause)
+        InvalidInputError.__init__(
+            self,
+            message=message or "Request body does not fit its contract.",
+            cause=cause,
+        )
+
+    @property
+    def validation_error(self) -> ValidationError | None:
+        """The pydantic failure this error carries, or ``None``."""
+        return self.cause if isinstance(self.cause, ValidationError) else None
 
 
 def validate_request(model: type[ModelT], body: dict[str, Any]) -> ModelT:

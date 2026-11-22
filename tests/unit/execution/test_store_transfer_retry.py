@@ -7,13 +7,14 @@ gave up while the dependency was still recovering. What was short was the
 *spread*, so that is what these pin: the initial interval reaching Temporal,
 and the four framework store-transfer tasks declaring it.
 
-The interval is asserted on **both** dispatch paths —
-``_create_task_activity_wrapper`` (the workflow-side wrapper
+The interval is asserted on the dispatch path —
+``_create_task_activity_wrapper``, the workflow-side wrapper
 ``_wrap_instance_tasks`` installs, and the one that actually calls
-``execute_activity_with_eviction_retry``) and ``get_activity_options``. The
-first version of this fix plumbed only the second, so the widened spread never
-reached Temporal on the path every instance task takes; a declaration that
-resolves correctly but never reaches the wire has to fail here.
+``execute_activity_with_eviction_retry``. The first version of this fix was
+tested only against a second options builder no task dispatched through, so
+the widened spread never reached Temporal on the path every instance task
+takes; a declaration that resolves correctly but never reaches the wire has to
+fail here.
 """
 
 from datetime import timedelta
@@ -27,9 +28,8 @@ from application_sdk.app.base import (
     _STORE_TRANSFER_MAX_INTERVAL_SECONDS,
     _wrap_instance_tasks,
 )
-from application_sdk.app.task import TaskMetadata, get_task_metadata
+from application_sdk.app.task import get_task_metadata
 from application_sdk.contracts.base import Input, Output
-from application_sdk.execution._temporal.activities import get_activity_options
 
 _EVICTION_RETRY_PATH = (
     "application_sdk.execution._temporal.eviction_retry."
@@ -66,55 +66,14 @@ async def _wrapper_dispatch_kwargs(**wrapper_kwargs: object) -> dict[str, object
     return dict(mock_exec.call_args.kwargs)
 
 
-def _meta(**overrides: object) -> TaskMetadata:
-    base: dict[str, object] = {
-        "name": "t",
-        "app_name": "_a",
-        "func": lambda: None,
-        "input_type": _In,
-        "output_type": _Out,
-        "timeout_seconds": 60,
-        "heartbeat_timeout_seconds": 60,
-        "auto_heartbeat_seconds": 10,
-        "retry_policy": None,
-    }
-    base.update(overrides)
-    return TaskMetadata(**base)  # type: ignore[arg-type]
-
-
-class TestRetryInitialInterval:
-    def test_declared_initial_interval_reaches_temporal(self) -> None:
-        opts = get_activity_options(_meta(retry_initial_interval_seconds=10))
-        assert opts["retry_policy"].initial_interval == timedelta(seconds=10)
-
-    def test_default_initial_interval_is_one_second(self) -> None:
-        """The knob is additive: an undeclaring task keeps Temporal's default."""
-        opts = get_activity_options(_meta())
-        assert opts["retry_policy"].initial_interval == timedelta(seconds=1)
-
-    def test_full_policy_still_wins_over_the_scalar(self) -> None:
-        """``retry_policy`` takes precedence, as its docstring promises."""
-        from application_sdk.execution.retry import RetryPolicy
-
-        opts = get_activity_options(
-            _meta(
-                retry_initial_interval_seconds=10,
-                retry_policy=RetryPolicy(
-                    max_attempts=2, initial_interval=timedelta(seconds=3)
-                ),
-            )
-        )
-        assert opts["retry_policy"].initial_interval == timedelta(seconds=3)
-
-
 class TestRetryInitialIntervalOnTheWrapperPath:
-    """The same assertions, through the dispatch path instance tasks take.
+    """The interval, through the dispatch path instance tasks take.
 
-    ``get_activity_options`` is not the path a `@task` method on an App
-    instance goes through — ``_wrap_instance_tasks`` builds a
-    ``_create_task_activity_wrapper`` closure instead, and that closure builds
-    its own ``RetryPolicy``. Pinning only the first leaves the second free to
-    silently drop the interval, which is exactly what it did.
+    A `@task` method on an App instance dispatches through the
+    ``_create_task_activity_wrapper`` closure ``_wrap_instance_tasks``
+    installs, and that closure builds its own ``RetryPolicy``. Pinning only a
+    builder off this path left it free to silently drop the interval, which is
+    exactly what it did.
     """
 
     async def test_declared_initial_interval_reaches_temporal(self) -> None:
@@ -135,6 +94,37 @@ class TestRetryInitialIntervalOnTheWrapperPath:
             ),
         )
         assert kwargs["retry_policy"].initial_interval == timedelta(seconds=3)
+
+    async def test_scalar_declaration_builds_the_whole_policy(self) -> None:
+        """Without ``retry_policy``, every scalar reaches Temporal, and the
+        eviction invariant rides along."""
+        from application_sdk.errors.leaves import WORKER_EVICTED_TYPE
+
+        kwargs = await _wrapper_dispatch_kwargs()
+        rp = kwargs["retry_policy"]
+        assert rp.maximum_attempts == 3
+        assert rp.maximum_interval == timedelta(seconds=30)
+        assert rp.non_retryable_error_types == [WORKER_EVICTED_TYPE]
+
+    async def test_full_policy_reaches_temporal_field_for_field(self) -> None:
+        from application_sdk.errors.leaves import WORKER_EVICTED_TYPE
+        from application_sdk.execution.retry import RetryPolicy
+
+        kwargs = await _wrapper_dispatch_kwargs(
+            retry_policy=RetryPolicy(
+                max_attempts=7,
+                initial_interval=timedelta(seconds=2),
+                max_interval=timedelta(seconds=42),
+                backoff_coefficient=3.0,
+                non_retryable_errors=("ValueError",),
+            ),
+        )
+        rp = kwargs["retry_policy"]
+        assert rp.maximum_attempts == 7
+        assert rp.initial_interval == timedelta(seconds=2)
+        assert rp.maximum_interval == timedelta(seconds=42)
+        assert rp.backoff_coefficient == 3.0
+        assert rp.non_retryable_error_types == ["ValueError", WORKER_EVICTED_TYPE]
 
     async def test_wrap_instance_tasks_forwards_the_declaration(self) -> None:
         """End to end: `@task` declaration → wrapper → Temporal.

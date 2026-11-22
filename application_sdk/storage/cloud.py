@@ -762,8 +762,7 @@ async def _lookup_bucket_region(bucket: str) -> str:
                 if region:
                     return region
             return ""
-    # conformance: ignore[E004] best-effort lookup; any failure keeps the store as built and is logged
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — best-effort lookup; any failure keeps the store as built and is logged
         _log().warning("S3 bucket region lookup failed bucket=%s error=%s", bucket, exc)
         return ""
 

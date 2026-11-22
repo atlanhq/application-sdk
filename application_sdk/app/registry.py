@@ -2,10 +2,14 @@
 
 import os
 import types
-import warnings
 from collections.abc import Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar
+
+from typing_extensions import deprecated
+
+from application_sdk import _deprecation
 
 if TYPE_CHECKING:
     from application_sdk.app.entrypoint import EntryPointMetadata
@@ -15,13 +19,18 @@ if TYPE_CHECKING:
 from application_sdk.app.entrypoint import build_workflow_type_index
 from application_sdk.common.task_queue import task_queue_from_env
 from application_sdk.contracts.base import validate_is_contract
-from application_sdk.errors import (
-    APP_ALREADY_REGISTERED,
-    APP_NOT_FOUND,
-    TASK_NOT_FOUND,
-    ErrorCode,
-)
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import InvalidInputError
+
+#: SDK-internal: the registered name of the App whose task the current activity
+#: runs. Set by the task wrapper (``create_activity_from_task``) and scoped to
+#: the activity by ``OutputActivityInboundInterceptor``, so every run-scoped
+#: path built in the activity (``build_output_path``, ``run_temp_dir``) resolves
+#: to the App that owns the run, without the name being threaded through public
+#: signatures. Empty outside an activity (workflow code, the handler, tests).
+_running_app_name: ContextVar[str] = ContextVar("running_app_name", default="")
 
 
 @dataclass(frozen=True)
@@ -77,14 +86,13 @@ class AppMetadata:
         return f"{self.name}@{self.version}"
 
 
-class AppNotFoundError(InvalidInputError):
+@dataclass(kw_only=True)
+class AppNotFoundError(_LegacyErrorCodeMixin, InvalidInputError):
     """Deprecated: use ``application_sdk.app.registry.AppNotRegisteredError`` — removed in v4.0."""
 
-    #: Leaf instances never run this ``__init__``; the class default keeps the
-    #: inherited ``__str__`` working on them.
-    _legacy_error_code: ErrorCode = APP_NOT_FOUND
-
     code: ClassVar[str] = "INVALID_INPUT_APP_NOT_FOUND"
+    name: str | None = None
+    version: str | None = None
 
     def __init__(
         self,
@@ -93,11 +101,10 @@ class AppNotFoundError(InvalidInputError):
         *,
         error_code: ErrorCode | None = None,
     ) -> None:
-        warnings.warn(
-            "AppNotFoundError is deprecated; use application_sdk.app.registry.AppNotRegisteredError "
-            "— will be removed in v4.0",
-            DeprecationWarning,
-            stacklevel=2,
+        _deprecation.warn_deprecated(
+            "AppNotFoundError",
+            "application_sdk.app.registry.AppNotRegisteredError",
+            "4.0.0",
         )
         msg = (
             f"App '{name}' version '{version}' not found"
@@ -107,14 +114,7 @@ class AppNotFoundError(InvalidInputError):
         InvalidInputError.__init__(self, message=msg)
         self.name = name
         self.version = version
-        self._legacy_error_code = error_code or APP_NOT_FOUND
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return self._legacy_error_code
-
-    def __str__(self) -> str:
-        return f"[{self._legacy_error_code}] {self.message}"
+        self._set_legacy_error_code(error_code)
 
 
 @dataclass(kw_only=True)
@@ -142,37 +142,28 @@ def _app_not_registered(name: str, version: str | None = None) -> AppNotRegister
     return AppNotRegisteredError(message=message, name=name, version=version)
 
 
-class AppAlreadyRegisteredError(InvalidInputError):
+@dataclass(kw_only=True)
+class AppAlreadyRegisteredError(_LegacyErrorCodeMixin, InvalidInputError):
     """Deprecated: use ``application_sdk.app.registry.AppVersionAlreadyRegisteredError`` — removed in v4.0."""
 
-    #: Leaf instances never run this ``__init__``; the class default keeps the
-    #: inherited ``__str__`` working on them.
-    _legacy_error_code: ErrorCode = APP_ALREADY_REGISTERED
-
     code: ClassVar[str] = "INVALID_INPUT_APP_ALREADY_REGISTERED"
+    name: str | None = None
+    version: str | None = None
 
     def __init__(
         self, name: str, version: str, *, error_code: ErrorCode | None = None
     ) -> None:
-        warnings.warn(
-            "AppAlreadyRegisteredError is deprecated; use application_sdk.app.registry.AppVersionAlreadyRegisteredError "
-            "— will be removed in v4.0",
-            DeprecationWarning,
-            stacklevel=2,
+        _deprecation.warn_deprecated(
+            "AppAlreadyRegisteredError",
+            "application_sdk.app.registry.AppVersionAlreadyRegisteredError",
+            "4.0.0",
         )
         InvalidInputError.__init__(
             self, message=f"App '{name}' version '{version}' is already registered"
         )
         self.name = name
         self.version = version
-        self._legacy_error_code = error_code or APP_ALREADY_REGISTERED
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return self._legacy_error_code
-
-    def __str__(self) -> str:
-        return f"[{self._legacy_error_code}] {self.message}"
+        self._set_legacy_error_code(error_code)
 
 
 @dataclass(kw_only=True)
@@ -317,8 +308,19 @@ class AppRegistry:
         latest_version = sorted(versions.keys())[-1]
         return versions[latest_version]
 
+    @deprecated(
+        "AppRegistry.get_all_versions is deprecated; use AppRegistry.get(name, "
+        "version) for a known version or AppRegistry.get(name) for the latest. "
+        "No replacement enumerates every version, and it has no caller in the "
+        "SDK. Will be removed in v4.0.0."
+    )
     def get_all_versions(self, name: str) -> list[AppMetadata]:
         """Get all versions of an App.
+
+        .. deprecated:: 3.59
+            Use :meth:`get` with a version, or without one for the latest.
+            Nothing replaces enumerating every version. Will be removed in
+            v4.0.0.
 
         Args:
             name: App name.
@@ -345,9 +347,11 @@ class AppRegistry:
         Resolution order:
         1. ``prefer`` — caller-supplied name (e.g. ``self._app_name`` from an
            ``App`` instance that already owns its registered identity).
-        2. Registry — when exactly one app is registered, its name is
+        2. The App whose task the current activity runs, as the task wrapper
+           recorded it in ``_running_app_name``.
+        3. Registry — when exactly one app is registered, its name is
            unambiguous and more reliable than an env var.
-        3. ``APPLICATION_NAME`` env var (``ATLAN_APPLICATION_NAME``) — last
+        4. ``APPLICATION_NAME`` env var (``ATLAN_APPLICATION_NAME``) — last
            resort; defaults to ``"default"`` when unset.
 
         Args:
@@ -358,6 +362,9 @@ class AppRegistry:
         """
         if prefer:
             return prefer
+        running = _running_app_name.get()
+        if running:
+            return running
         apps = cls.get_instance().list_apps()
         if len(apps) == 1:
             return apps[0]
@@ -433,33 +440,27 @@ class AppRegistry:
         self._apps[name][version] = new_metadata
 
 
-class TaskNotFoundError(InvalidInputError):
+@dataclass(kw_only=True)
+class TaskNotFoundError(_LegacyErrorCodeMixin, InvalidInputError):
     """Deprecated: use ``application_sdk.app.registry.TaskNotRegisteredError`` — removed in v4.0."""
 
-    #: Leaf instances never run this ``__init__``; the class default keeps the
-    #: inherited ``__str__`` working on them.
-    _legacy_error_code: ErrorCode = TASK_NOT_FOUND
-
     code: ClassVar[str] = "INVALID_INPUT_TASK_NOT_FOUND"
+    task_name: str | None = None
 
     def __init__(
         self, app_name: str, task_name: str, *, error_code: ErrorCode | None = None
     ) -> None:
-        warnings.warn(
-            "TaskNotFoundError is deprecated; use application_sdk.app.registry.TaskNotRegisteredError "
-            "— will be removed in v4.0",
-            DeprecationWarning,
-            stacklevel=2,
+        _deprecation.warn_deprecated(
+            "TaskNotFoundError",
+            "application_sdk.app.registry.TaskNotRegisteredError",
+            "4.0.0",
         )
         InvalidInputError.__init__(
             self, message=f"Task '{task_name}' not found in app '{app_name}'"
         )
         self.app_name = app_name
         self.task_name = task_name
-        self._legacy_error_code = error_code or TASK_NOT_FOUND
-
-    def __str__(self) -> str:
-        return f"[{self._legacy_error_code}] {self.message}"
+        self._set_legacy_error_code(error_code)
 
 
 @dataclass(kw_only=True)
@@ -647,3 +648,29 @@ def resolve_pool_queue(pool: str) -> str | None:
         return explicit
     base_queue = os.environ.get("ATLAN_TASK_QUEUE", "") or (task_queue_from_env() or "")
     return f"{base_queue}-{pool}" if base_queue else None
+
+
+#: The AAF-* constants this module imported before FND-4299, kept importable
+#: from here with a warning until v4.0.0. Literal per entry: the surface gate
+#: and gen-deprecations read this table statically.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "APP_ALREADY_REGISTERED": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "APP_NOT_FOUND": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "TASK_NOT_FOUND": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda name: getattr(_legacy_codes, name),
+)

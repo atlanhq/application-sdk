@@ -27,6 +27,7 @@ from conformance.suite.checks.deprecation._ledger_schema import (
 )
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
+from tests._helpers import active_ids
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -51,11 +52,6 @@ def _scan(
     if ledger is None:
         ledger = ContractLedger(version=1, fields=[])
     return scan_contract_compat(paths, tmp_path, ledger, scope)
-
-
-def _ids(findings: list) -> list[str]:
-    """Return rule IDs of unsuppressed findings (matching runner gate semantics)."""
-    return [f.rule_id for f in findings if not f.suppressed]
 
 
 # ── Rule metadata ─────────────────────────────────────────────────────────────
@@ -99,13 +95,13 @@ class MyApp(App):
 def test_b005_field_removed_fires(tmp_path: Path) -> None:
     ledger = _make_ledger(ContractField("MyInput", "name", "str", "active"))
     findings = _scan(tmp_path, {"app.py": _EP_WITHOUT_FIELD}, ledger)
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_field_still_present_silent(tmp_path: Path) -> None:
     ledger = _make_ledger(ContractField("MyInput", "name", "str", "active"))
     findings = _scan(tmp_path, {"app.py": _EP_WITH_RUN}, ledger)
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 # ── B005: type changed ────────────────────────────────────────────────────────
@@ -133,7 +129,7 @@ def test_b005_type_changed_fires(tmp_path: Path) -> None:
 def test_b005_same_type_silent(tmp_path: Path) -> None:
     ledger = _make_ledger(ContractField("MyInput", "count", "int", "active"))
     findings = _scan(tmp_path, {"app.py": _EP_TYPE_INT}, ledger)
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 # ── B005: Optional normalization prevents false positives ─────────────────────
@@ -168,8 +164,12 @@ def test_b005_optional_and_union_none_equivalent(tmp_path: Path) -> None:
     ledger = _make_ledger(ContractField("MyInput", "name", "str | None", "active"))
     findings_opt = _scan(tmp_path / "opt", {"app.py": _EP_OPTIONAL}, ledger)
     findings_union = _scan(tmp_path / "union", {"app.py": _EP_UNION_NONE}, ledger)
-    assert "B005" not in _ids(findings_opt), "Optional[str] should match str | None"
-    assert "B005" not in _ids(findings_union), "str | None should match str | None"
+    assert "B005" not in active_ids(findings_opt), (
+        "Optional[str] should match str | None"
+    )
+    assert "B005" not in active_ids(findings_union), (
+        "str | None should match str | None"
+    )
 
 
 # ── B005: canonical type normalization (typing aliases + Annotated + Union) ───
@@ -239,8 +239,8 @@ def test_b005_list_capitalized_equivalent(tmp_path: Path) -> None:
     ledger = _make_ledger(ContractField("MyInput", "items", "list[str]", "active"))
     findings_cap = _scan(tmp_path / "cap", {"app.py": _EP_LIST_STR}, ledger)
     findings_low = _scan(tmp_path / "low", {"app.py": _EP_LIST_STR_LOWER}, ledger)
-    assert "B005" not in _ids(findings_cap), "List[str] should match list[str]"
-    assert "B005" not in _ids(findings_low), "list[str] should match list[str]"
+    assert "B005" not in active_ids(findings_cap), "List[str] should match list[str]"
+    assert "B005" not in active_ids(findings_low), "list[str] should match list[str]"
 
 
 def test_b005_dict_capitalized_equivalent(tmp_path: Path) -> None:
@@ -249,14 +249,16 @@ def test_b005_dict_capitalized_equivalent(tmp_path: Path) -> None:
         ContractField("MyInput", "mapping", "dict[str, int]", "active")
     )
     findings = _scan(tmp_path, {"app.py": _EP_DICT}, ledger)
-    assert "B005" not in _ids(findings), "Dict[str, int] should match dict[str, int]"
+    assert "B005" not in active_ids(findings), (
+        "Dict[str, int] should match dict[str, int]"
+    )
 
 
 def test_b005_annotated_strips_metadata(tmp_path: Path) -> None:
     """Annotated[int, ...] strips metadata and matches plain int."""
     ledger = _make_ledger(ContractField("MyInput", "count", "int", "active"))
     findings = _scan(tmp_path, {"app.py": _EP_ANNOTATED}, ledger)
-    assert "B005" not in _ids(findings), "Annotated[int, ...] should match int"
+    assert "B005" not in active_ids(findings), "Annotated[int, ...] should match int"
 
 
 def test_b005_union_three_way(tmp_path: Path) -> None:
@@ -265,7 +267,7 @@ def test_b005_union_three_way(tmp_path: Path) -> None:
         ContractField("MyInput", "value", "str | int | None", "active")
     )
     findings = _scan(tmp_path, {"app.py": _EP_UNION_THREE}, ledger)
-    assert "B005" not in _ids(findings), (
+    assert "B005" not in active_ids(findings), (
         "Union[str, int, None] should match str | int | None"
     )
 
@@ -306,7 +308,7 @@ class MyApp(App):
 def test_b005_entrypoint_decorator_input_fires(tmp_path: Path) -> None:
     ledger = _make_ledger(ContractField("ExtractInput", "url", "str", "active"))
     findings = _scan(tmp_path, {"app.py": _EP_DECORATOR_FIELD_REMOVED}, ledger)
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_entrypoint_decorator_output_fires(tmp_path: Path) -> None:
@@ -336,7 +338,7 @@ def test_task_contract_excluded(tmp_path: Path) -> None:
     # Remove the field from source — but it's a @task contract, so B005 must NOT fire
     src = _TASK_CONTRACT.replace("    data: str\n", "")
     findings = _scan(tmp_path, {"app.py": src}, ledger)
-    assert "B005" not in _ids(findings), (
+    assert "B005" not in active_ids(findings), (
         "@task contract changes must never trigger B005"
     )
 
@@ -347,14 +349,14 @@ def test_task_contract_excluded(tmp_path: Path) -> None:
 def test_b006_new_field_not_in_ledger_fires(tmp_path: Path) -> None:
     # Ledger is empty but contract has a field → B006
     findings = _scan(tmp_path, {"app.py": _EP_WITH_RUN})
-    assert "B006" in _ids(findings)
+    assert "B006" in active_ids(findings)
 
 
 def test_b006_field_recorded_silent(tmp_path: Path) -> None:
     ledger = _make_ledger(ContractField("MyInput", "name", "str", "active"))
     findings = _scan(tmp_path, {"app.py": _EP_WITH_RUN}, ledger)
-    assert "B006" not in _ids(findings)
-    assert "B005" not in _ids(findings)
+    assert "B006" not in active_ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 # ── B005 suppress via inline directive ────────────────────────────────────────
@@ -375,7 +377,7 @@ class MyApp(App):
 def test_b005_inline_suppress_clears(tmp_path: Path) -> None:
     ledger = _make_ledger(ContractField("MyInput", "name", "str", "active"))
     findings = _scan(tmp_path, {"app.py": _EP_SUPPRESSED}, ledger)
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 # ── Inheritance: in-repo base class (cross-file) ──────────────────────────────
@@ -420,7 +422,7 @@ def test_b005_inherited_field_across_files_not_flagged_removed(
         {"base.py": _BASE_FILE, "app.py": _SUBCLASS_FILE},
         ledger,
     )
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b006_inherited_field_across_files_tracked_silent(tmp_path: Path) -> None:
@@ -431,7 +433,7 @@ def test_b006_inherited_field_across_files_tracked_silent(tmp_path: Path) -> Non
         {"base.py": _BASE_FILE, "app.py": _SUBCLASS_FILE},
         ledger,
     )
-    assert "B006" not in _ids(findings)
+    assert "B006" not in active_ids(findings)
 
 
 def test_b006_inherited_field_not_yet_in_ledger_fires(tmp_path: Path) -> None:
@@ -476,8 +478,8 @@ def test_classvar_on_base_class_excluded_from_resolution(tmp_path: Path) -> None
     )
     # If TEMPLATE were (incorrectly) resolved as a field, it would be untracked
     # and fire B006. Only "name" is live and it is ledger-recorded, so no B005/B006.
-    assert "B006" not in _ids(findings)
-    assert "B005" not in _ids(findings)
+    assert "B006" not in active_ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 # ── Inheritance: diamond multiple inheritance ─────────────────────────────────
@@ -536,7 +538,7 @@ def test_diamond_inheritance_resolves_via_mro_not_last_visited_path(
     """
     ledger = _make_ledger(ContractField("D", "shared", "int", "active"))
     findings = _scan(tmp_path, _DIAMOND_FILES, ledger)
-    assert "B005" not in _ids(findings), (
+    assert "B005" not in active_ids(findings), (
         "D.shared must resolve to C's override (int) via MRO, not A's str"
     )
 
@@ -548,8 +550,8 @@ def test_diamond_inheritance_untouched_field_still_resolves(tmp_path: Path) -> N
         ContractField("D", "shared", "int", "active"),
     )
     findings = _scan(tmp_path, _DIAMOND_FILES, ledger)
-    assert "B005" not in _ids(findings)
-    assert "B006" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
+    assert "B006" not in active_ids(findings)
 
 
 # ── Inheritance: SDK-provided mixin resolved via static registry ─────────────
@@ -577,7 +579,7 @@ def test_b005_sdk_mixin_field_resolved_via_static_registry(tmp_path: Path) -> No
         ContractField("MyOutput", "connection_qualified_name", "str", "active")
     )
     findings = _scan(tmp_path, {"app.py": _EP_MIXIN_OUTPUT}, ledger)
-    assert "B005" not in _ids(findings), (
+    assert "B005" not in active_ids(findings), (
         "PublishInputMixin.connection_qualified_name must resolve via the SDK registry"
     )
 
@@ -608,7 +610,7 @@ def test_b005_sdk_template_inherited_field_type_change_fires(tmp_path: Path) -> 
         ContractField("DbtExtractOutput", "records_uploaded", "int", "active")
     )
     findings = _scan(tmp_path, {"app.py": source}, ledger)
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_sdk_template_inherited_fields_silent(tmp_path: Path) -> None:
@@ -618,7 +620,7 @@ def test_b005_sdk_template_inherited_fields_silent(tmp_path: Path) -> None:
         ContractField("DbtExtractOutput", "status", "OutputStatus", "active"),
     )
     findings = _scan(tmp_path, {"app.py": _SDK_TEMPLATE_OUTPUT}, ledger)
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 _SDK_TEMPLATE_INPUT = """\
@@ -649,7 +651,7 @@ def test_b005_sdk_template_input_inherited_field_type_change_fires(
         ContractField("DbtExtractInput", "credential_guid", "str", "active")
     )
     findings = _scan(tmp_path, {"app.py": source}, ledger)
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_sdk_template_input_inherited_fields_silent(tmp_path: Path) -> None:
@@ -660,7 +662,7 @@ def test_b005_sdk_template_input_inherited_fields_silent(tmp_path: Path) -> None
         ContractField("DbtExtractInput", "app_name", "str", "active"),
     )
     findings = _scan(tmp_path, {"app.py": _SDK_TEMPLATE_INPUT}, ledger)
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 _SDK_TEMPLATE_NESTED_OUTPUT = """\
@@ -693,7 +695,7 @@ def test_b005_sdk_template_chain_inherited_field_type_change_fires(
         ContractField("DbtIncrementalOutput", "records_uploaded", "int", "active")
     )
     findings = _scan(tmp_path, {"app.py": source}, ledger)
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_sdk_template_chain_inherited_fields_silent(tmp_path: Path) -> None:
@@ -711,7 +713,7 @@ def test_b005_sdk_template_chain_inherited_fields_silent(tmp_path: Path) -> None
         ContractField("DbtIncrementalOutput", "status", "OutputStatus", "active"),
     )
     findings = _scan(tmp_path, {"app.py": _SDK_TEMPLATE_NESTED_OUTPUT}, ledger)
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b006_sdk_mixin_field_not_yet_in_ledger_fires_and_notes_inherited(
@@ -880,7 +882,7 @@ def test_b005_same_named_contracts_in_two_modules_silent(tmp_path: Path) -> None
         },
         ledger,
     )
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_still_fires_when_the_name_is_unambiguous(tmp_path: Path) -> None:
@@ -893,7 +895,7 @@ def test_b005_still_fires_when_the_name_is_unambiguous(tmp_path: Path) -> None:
     findings = _scan(
         tmp_path, {"crawler/_input.py": _TWO_ENTRYPOINTS_SAME_NAME_A}, ledger
     )
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 _RENAMED_BUNDLE_INPUT = """\
@@ -1096,7 +1098,7 @@ def test_b005_sunset_field_may_be_absent(tmp_path: Path) -> None:
     """
     ledger = _make_ledger(ContractField("MyInput", "name", "str", "sunset"))
     findings = _scan(tmp_path, {"app.py": _EP_WITHOUT_FIELD}, ledger)
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_deprecated_field_must_still_be_present(tmp_path: Path) -> None:
@@ -1107,14 +1109,14 @@ def test_b005_deprecated_field_must_still_be_present(tmp_path: Path) -> None:
     """
     ledger = _make_ledger(ContractField("MyInput", "name", "str", "deprecated"))
     findings = _scan(tmp_path, {"app.py": _EP_WITHOUT_FIELD}, ledger)
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_active_field_must_still_be_present(tmp_path: Path) -> None:
     """The rule's whole point — an unmarked removal still fires."""
     ledger = _make_ledger(ContractField("MyInput", "name", "str", "active"))
     findings = _scan(tmp_path, {"app.py": _EP_WITHOUT_FIELD}, ledger)
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 _EP_LIFECYCLE = """\
@@ -1169,37 +1171,37 @@ def test_b005_sunset_requires_a_recorded_deprecation(
 def test_b005_widening_is_not_a_break(tmp_path: Path) -> None:
     """str -> str | list[...] keeps every payload that validated before."""
     findings = _scan_typed(tmp_path, "str | list[dict[str, object]]", "str")
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_narrowing_is_still_a_break(tmp_path: Path) -> None:
     """The mirror of the widening case must keep firing."""
     findings = _scan_typed(tmp_path, "str", "str | list[dict[str, object]]")
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_nested_list_widening_is_not_a_break(tmp_path: Path) -> None:
     """list[str] -> list[str | None] is producer-safe; every old item still validates."""
     findings = _scan_typed(tmp_path, "list[str | None]", "list[str]")
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_nested_list_narrowing_is_still_a_break(tmp_path: Path) -> None:
     """The inverse of nested list widening must keep firing."""
     findings = _scan_typed(tmp_path, "list[str]", "list[str | None]")
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_nested_dict_widening_is_not_a_break(tmp_path: Path) -> None:
     """dict[str, int] -> dict[str, int | None] is producer-safe on values."""
     findings = _scan_typed(tmp_path, "dict[str, int | None]", "dict[str, int]")
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_nested_dict_narrowing_is_still_a_break(tmp_path: Path) -> None:
     """The inverse of nested dict widening must keep firing."""
     findings = _scan_typed(tmp_path, "dict[str, int]", "dict[str, int | None]")
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_moving_off_any_in_place_is_not_a_break(tmp_path: Path) -> None:
@@ -1210,43 +1212,43 @@ def test_b005_moving_off_any_in_place_is_not_a_break(tmp_path: Path) -> None:
     below.
     """
     findings = _scan_typed(tmp_path, "dict[str, str] | None", "dict[str, Any] | None")
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_nested_any_replaced_in_place_is_not_a_break(tmp_path: Path) -> None:
     """list[Any] -> list[str] keeps the constructor; only the Any slot changes."""
     findings = _scan_typed(tmp_path, "list[str]", "list[Any]")
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_constructor_change_off_any_still_fires(tmp_path: Path) -> None:
     """dict[str, Any] -> list[str] is a payload break, not a P001 migration."""
     findings = _scan_typed(tmp_path, "list[str]", "dict[str, Any]")
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_constructor_change_off_any_union_still_fires(tmp_path: Path) -> None:
     """Same constructor-swap, with a None arm that used to look like 'off Any'."""
     findings = _scan_typed(tmp_path, "ConnectionRef | None", "dict[str, Any] | None")
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_nested_narrowing_off_any_still_fires(tmp_path: Path) -> None:
     """Replacing an inner container that held Any, not Any itself, is a break."""
     findings = _scan_typed(tmp_path, "dict[str, str]", "dict[str, list[Any]]")
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_a_swap_between_two_concrete_types_still_fires(tmp_path: Path) -> None:
     """No Any on either side and no widening — that is the real break."""
     findings = _scan_typed(tmp_path, "int", "str")
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_moving_onto_any_still_fires(tmp_path: Path) -> None:
     """The exemption is one-directional: concrete -> Any is not mandated."""
     findings = _scan_typed(tmp_path, "dict[str, Any]", "dict[str, str]")
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 _EP_ALIASED = """\
@@ -1285,7 +1287,7 @@ def test_b005_self_referential_type_alias_off_any_is_not_a_break(
         'Annotated[dict[str, "Filter"], MaxItems(1000)])'
     )
     findings = _scan_aliased(tmp_path, alias, "Filter", "dict[str, Any]")
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_type_alias_forms_off_any_are_not_a_break(tmp_path: Path) -> None:
@@ -1297,7 +1299,7 @@ def test_b005_type_alias_forms_off_any_are_not_a_break(tmp_path: Path) -> None:
         findings = _scan_aliased(
             tmp_path, alias, "Filter | None", "dict[str, Any] | None"
         )
-        assert "B005" not in _ids(findings), alias
+        assert "B005" not in active_ids(findings), alias
 
 
 def test_b005_type_alias_with_a_different_outer_shape_still_fires(
@@ -1306,18 +1308,18 @@ def test_b005_type_alias_with_a_different_outer_shape_still_fires(
     """Expanding the alias must not wave through a real constructor change."""
     alias = 'Filter = TypeAliasType("Filter", list[str])'
     findings = _scan_aliased(tmp_path, alias, "Filter", "dict[str, Any]")
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_chained_type_alias_off_any_is_not_a_break(tmp_path: Path) -> None:
     alias = "Inner = dict[str, str]\nFilter = Inner | None"
     findings = _scan_aliased(tmp_path, alias, "Filter", "dict[str, Any] | None")
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_plain_name_alias_is_not_expanded(tmp_path: Path) -> None:
     findings = _scan_aliased(tmp_path, "Ident = str", "Ident", "str")
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
     terminal_state = get_rule("B005").terminal_state or ""
     assert "`X = <name>`" in terminal_state
 
@@ -1330,7 +1332,7 @@ def test_b005_dense_alias_chain_stays_bounded(tmp_path: Path) -> None:
     start = time.monotonic()
     findings = _scan_aliased(tmp_path, "\n".join(lines), "A16", "dict[str, Any]")
     assert time.monotonic() - start < 2.0
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_chained_type_alias_with_a_different_outer_shape_still_fires(
@@ -1338,13 +1340,13 @@ def test_b005_chained_type_alias_with_a_different_outer_shape_still_fires(
 ) -> None:
     alias = "Inner = list[str]\nFilter = Inner | None"
     findings = _scan_aliased(tmp_path, alias, "Filter", "dict[str, Any] | None")
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_mutually_recursive_type_aliases_terminate(tmp_path: Path) -> None:
     alias = "A = list[B]\nB = list[A]"
     findings = _scan_aliased(tmp_path, alias, "A", "dict[str, Any]")
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 _EP_IMPORTED_ALIAS = """\
@@ -1375,7 +1377,7 @@ def test_b005_sdk_alias_imported_via_reexport_off_any_is_not_a_break(
         "FilterMap",
         "dict[str, Any]",
     )
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_sdk_alias_imported_from_defining_module_is_not_a_break(
@@ -1387,7 +1389,7 @@ def test_b005_sdk_alias_imported_from_defining_module_is_not_a_break(
         "FilterMap",
         "dict[str, Any]",
     )
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_renamed_sdk_alias_import_is_not_a_break(tmp_path: Path) -> None:
@@ -1397,7 +1399,7 @@ def test_b005_renamed_sdk_alias_import_is_not_a_break(tmp_path: Path) -> None:
         "Tags",
         "dict[str, Any]",
     )
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_sdk_alias_with_a_different_outer_shape_still_fires(
@@ -1409,7 +1411,7 @@ def test_b005_sdk_alias_with_a_different_outer_shape_still_fires(
         "FilterMap",
         "list[str]",
     )
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_alias_imported_from_outside_the_sdk_is_not_expanded(
@@ -1421,7 +1423,7 @@ def test_b005_alias_imported_from_outside_the_sdk_is_not_expanded(
         "FilterMap",
         "dict[str, Any]",
     )
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_unresolvable_sdk_import_still_fires(tmp_path: Path) -> None:
@@ -1431,7 +1433,7 @@ def test_b005_unresolvable_sdk_import_still_fires(tmp_path: Path) -> None:
         "NoSuchAlias",
         "dict[str, Any]",
     )
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 @pytest.mark.parametrize(
@@ -1461,7 +1463,7 @@ def test_b005_any_other_binding_of_the_name_disables_expansion(
         "FilterMap",
         "dict[str, list[str]]",
     )
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 @pytest.mark.parametrize("position", ["before", "after"])
@@ -1470,7 +1472,7 @@ def test_b005_any_star_import_disables_expansion(tmp_path: Path, position: str) 
     star = "from local_types import *"
     lines = f"{star}\n{sdk}" if position == "before" else f"{sdk}\n{star}"
     findings = _scan_imported(tmp_path, lines, "FilterMap", "dict[str, list[str]]")
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_class_body_rebinding_disables_expansion(tmp_path: Path) -> None:
@@ -1489,7 +1491,7 @@ class MyApp(App):
     async def run(self, input: MyInput) -> None:
         pass
 """
-    assert "B005" in _ids(_scan(tmp_path, {"app.py": src}, ledger))
+    assert "B005" in active_ids(_scan(tmp_path, {"app.py": src}, ledger))
 
 
 def test_b005_sdk_alias_bound_once_matching_the_ledger_is_not_a_break(
@@ -1502,13 +1504,13 @@ def test_b005_sdk_alias_bound_once_matching_the_ledger_is_not_a_break(
         "FilterMap",
         "dict[str, list[str]]",
     )
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_rebound_local_alias_is_not_expanded(tmp_path: Path) -> None:
     alias = "Filter = dict[str, str]\nFilter = str"
     findings = _scan_aliased(tmp_path, alias, "Filter", "dict[str, str]")
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_generic_sdk_alias_applies_its_type_arguments(tmp_path: Path) -> None:
@@ -1518,7 +1520,7 @@ def test_b005_generic_sdk_alias_applies_its_type_arguments(tmp_path: Path) -> No
         "BoundedDict[str, Any]",
         "dict[str, Any]",
     )
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_generic_sdk_alias_off_any_is_not_a_break(tmp_path: Path) -> None:
@@ -1528,7 +1530,7 @@ def test_b005_generic_sdk_alias_off_any_is_not_a_break(tmp_path: Path) -> None:
         "BoundedList[str]",
         "list[Any]",
     )
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_bare_generic_sdk_alias_defaults_its_parameters_to_any(
@@ -1540,7 +1542,7 @@ def test_b005_bare_generic_sdk_alias_defaults_its_parameters_to_any(
         "BoundedDict",
         "dict[Any, Any]",
     )
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_generic_sdk_alias_with_a_different_outer_shape_still_fires(
@@ -1552,7 +1554,7 @@ def test_b005_generic_sdk_alias_with_a_different_outer_shape_still_fires(
         "BoundedList[str]",
         "dict[str, Any]",
     )
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_generic_sdk_alias_with_a_changed_argument_still_fires(
@@ -1564,13 +1566,13 @@ def test_b005_generic_sdk_alias_with_a_changed_argument_still_fires(
         "BoundedDict[str, int]",
         "dict[str, str]",
     )
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_b005_generic_local_alias_applies_its_type_arguments(tmp_path: Path) -> None:
     alias = 'from typing import TypeVar\nT = TypeVar("T")\nTagged = dict[str, T]'
     findings = _scan_aliased(tmp_path, alias, "Tagged[int]", "dict[str, Any]")
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_generic_local_alias_with_a_changed_argument_still_fires(
@@ -1578,7 +1580,7 @@ def test_b005_generic_local_alias_with_a_changed_argument_still_fires(
 ) -> None:
     alias = 'from typing import TypeVar\nT = TypeVar("T")\nTagged = dict[str, T]'
     findings = _scan_aliased(tmp_path, alias, "Tagged[int]", "dict[str, str]")
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 def test_split_union_does_not_tear_nested_brackets() -> None:
@@ -1641,13 +1643,13 @@ def test_b005_inherited_type_change_is_not_this_apps_break(tmp_path: Path) -> No
     findings = _scan(
         tmp_path, {"app.py": _EP_INHERITED.format(ann="OutputStatus")}, ledger
     )
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_locally_declared_type_change_still_fires(tmp_path: Path) -> None:
     """The mirror: a field the app declares itself is the app's own change."""
     findings = _scan_typed(tmp_path, "OutputStatus", "str")
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 # ── Module-level contract aliases (FND-2605) ──────────────────────────────────
@@ -1718,7 +1720,7 @@ def test_aliased_contract_is_ledgered_under_the_declaring_class(
             "AppInputContract", "exclude_database_regex", "str | None", "active"
         ),
     )
-    assert _ids(_scan(tmp_path, _ALIAS_FILES, declaring)) == []
+    assert active_ids(_scan(tmp_path, _ALIAS_FILES, declaring)) == []
 
     # The mirror: entries keyed on the local rebinding satisfy nothing, which is
     # what makes the choice of key observable rather than vacuous.
@@ -1962,7 +1964,7 @@ def test_b005_sdk_retired_inherited_field_is_not_this_apps_break(
     findings = _scan_with_sdk_ledger(
         tmp_path, {"app.py": _SDK_TEMPLATE_INPUT}, ledger, _sdk_retired_credential_guid
     )
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 @pytest.mark.parametrize("sdk_retired", [True, False], ids=["sdk-sunset", "no-record"])
@@ -2003,7 +2005,7 @@ def test_b005_inherited_sdk_sunset_is_not_this_apps_skipped_deprecation(
     findings = _scan_with_sdk_ledger(
         tmp_path, {"app.py": _SDK_TEMPLATE_INPUT}, ledger, sdk_ledger
     )
-    assert ("B005" in _ids(findings)) is not sdk_retired
+    assert ("B005" in active_ids(findings)) is not sdk_retired
 
 
 _SDK_TASK_INPUT_APP = """\
@@ -2038,7 +2040,7 @@ def test_b005_sdk_retired_field_on_a_template_base_is_exempt(
     findings = _scan_with_sdk_ledger(
         tmp_path, {"app.py": _SDK_TASK_INPUT_APP.format(base=base)}, ledger, sdk_ledger
     )
-    assert ("B005" not in _ids(findings)) is exempt
+    assert ("B005" not in active_ids(findings)) is exempt
 
 
 def test_b005_sdk_retired_field_inherited_through_in_repo_base_is_exempt(
@@ -2054,7 +2056,7 @@ def test_b005_sdk_retired_field_inherited_through_in_repo_base_is_exempt(
         ledger,
         _sdk_retired_credential_guid,
     )
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_app_declared_field_removed_still_fires_after_sdk_retirement(
@@ -2233,7 +2235,7 @@ def test_b005_sdk_retired_input_base_field_is_not_this_apps_break(
     findings = _scan_with_sdk_ledger(
         tmp_path, {"app.py": _INPUT_BASED_APP}, ledger, _sdk_retired_workflow_slug
     )
-    assert "B005" not in _ids(findings)
+    assert "B005" not in active_ids(findings)
 
 
 def test_b005_app_field_removed_from_input_based_contract_still_fires(
@@ -2348,7 +2350,7 @@ def test_b005_new_required_field_on_existing_contract_fires(
     (finding,) = _required_findings(findings)
     assert "'MyInput.extra' is new and required" in finding.message
     assert "Give it a default" in finding.message
-    assert "B006" in _ids(findings)
+    assert "B006" in active_ids(findings)
 
 
 @pytest.mark.parametrize(
@@ -2366,8 +2368,8 @@ def test_b005_new_field_with_default_on_existing_contract_passes(
     tmp_path: Path, decl: str
 ) -> None:
     findings = _scan_required(tmp_path, decl, None)
-    assert "B005" not in _ids(findings)
-    assert "B006" in _ids(findings)
+    assert "B005" not in active_ids(findings)
+    assert "B006" in active_ids(findings)
 
 
 def test_b005_optional_field_becoming_required_fires(tmp_path: Path) -> None:
@@ -2378,7 +2380,7 @@ def test_b005_optional_field_becoming_required_fires(tmp_path: Path) -> None:
     (finding,) = _required_findings(findings)
     assert "'MyInput.extra' is required" in finding.message
     assert "records it as not required" in finding.message
-    assert "B006" not in _ids(findings)
+    assert "B006" not in active_ids(findings)
 
 
 @pytest.mark.parametrize(
@@ -2393,7 +2395,7 @@ def test_b005_requiredness_that_callers_already_meet_passes(
     findings = _scan_required(
         tmp_path, decl, ContractField("MyInput", "extra", "str", "active", recorded)
     )
-    assert _ids(findings) == []
+    assert active_ids(findings) == []
 
 
 def test_b005_new_contract_may_declare_required_fields(tmp_path: Path) -> None:
@@ -2403,8 +2405,8 @@ def test_b005_new_contract_may_declare_required_fields(tmp_path: Path) -> None:
         {"app.py": _EP_REQUIRED.format(decl="str")},
         _make_ledger(ContractField("OtherInput", "x", "str", "active", False)),
     )
-    assert "B005" not in _ids(findings)
-    assert "B006" in _ids(findings)
+    assert "B005" not in active_ids(findings)
+    assert "B006" in active_ids(findings)
 
 
 def test_b005_new_required_field_suppressible(tmp_path: Path) -> None:
@@ -2729,7 +2731,7 @@ def test_b005_still_fires_when_a_misattributed_field_was_retyped(
         *_rows("MinerInput", "shared", "mine_only"),
     )
     findings = _scan(tmp_path, _two_entrypoint_app(_CONTRACTS_EXPLICIT), ledger)
-    assert "B005" in _ids(findings)
+    assert "B005" in active_ids(findings)
 
 
 # ── Sibling entrypoint modules each declaring one shared class name ───────────
@@ -2918,7 +2920,7 @@ def test_b005_resolves_a_duplicated_class_by_the_module_imported_from(
         ContractField("MinerInput", "shared", "int", "active"),
     )
     findings = _scan(tmp_path, _declared_twice_app(_CONTRACTS_QUALIFIED), ledger)
-    assert not {"B005", "B006"} & set(_ids(findings))
+    assert not {"B005", "B006"} & set(active_ids(findings))
 
 
 def test_b005_still_fires_on_a_field_removed_behind_a_duplicated_class(
@@ -3037,4 +3039,4 @@ def test_b005_ignores_an_unrelated_class_sharing_the_contracts_name(
     findings = _scan(
         tmp_path, files, _make_ledger(*_rows("LineageInput", "contract_only"))
     )
-    assert not {"B005", "B006"} & set(_ids(findings))
+    assert not {"B005", "B006"} & set(active_ids(findings))

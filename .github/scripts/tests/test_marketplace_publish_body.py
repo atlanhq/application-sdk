@@ -26,7 +26,7 @@ def _minimal(**overrides: object) -> PublishRequest:
         "allowed_tenants": ("example-tenant",),
     }
     base.update(overrides)
-    return PublishRequest(**base)  # type: ignore[arg-type]
+    return PublishRequest(**base)
 
 
 # ── Required fields ──────────────────────────────────────────────────────────

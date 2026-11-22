@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ._source_cache import cached_walk
+
 # Directories excluded from discovery
 EXCLUDE_DIRS: frozenset[str] = frozenset(
     {
@@ -106,6 +108,19 @@ def discover_contract_repo(root: Path) -> list[Path]:
 
 
 def _walk_python(
+    root: Path, *, exclude_dirs: frozenset[str], skip_test_files: bool
+) -> list[Path]:
+    # Most checks discover the same tree: inside a run's source cache the walk
+    # is done once per (root, exclusions) rather than once per check.
+    return cached_walk(
+        ("python", root, exclude_dirs, skip_test_files),
+        lambda: _walk_python_uncached(
+            root, exclude_dirs=exclude_dirs, skip_test_files=skip_test_files
+        ),
+    )
+
+
+def _walk_python_uncached(
     root: Path, *, exclude_dirs: frozenset[str], skip_test_files: bool
 ) -> list[Path]:
     paths: list[Path] = []

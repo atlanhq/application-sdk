@@ -31,6 +31,11 @@ uv run atlan-application-sdk-conformance gen-rule-docs
 because the suite runs in consumer repos where that source is not available.
 Never hand-edit them: regenerate in the same PR as the SDK change, and each
 drift test under `tests/` fails until you do. Every generator takes `--check`.
+The drift tests for `deprecated_symbols.json`, `public_errors.json`,
+`sdk_type_aliases.json` and `toolkit_baseline.json` (plus the contract-ledger,
+dependency-audience and removed-imports guards) find the monorepo root with
+`tests/_helpers.py:sdk_root()`, which fails under `CI` rather than skipping.
+The `sdk_contract_fields.json` drift test does not use it yet and can still skip.
 
 | Table | Command |
 |---|---|
@@ -82,11 +87,21 @@ CONFORMANCE_SINCE=origin/main uv run atlan-application-sdk-conformance detect --
   run says `falling back to the whole-repository verdict` and does exactly
   that: stricter, never laxer. No `[INTRODUCED]` line is printed then, so a
   failure after that message is about the missing base, not about the change.
-- `--exit-zero` still forces exit 0.
+- `--exit-zero` still forces exit 0, unless `--gate-introduced` (or
+  `CONFORMANCE_GATE_INTRODUCED=true`) is set: then a blocking finding the
+  change introduces fails the run anyway. `--exit-zero` keeps excusing
+  what the base already carries, warnings, and a base that could not be
+  compared.
 
-`conformance-reusable.yaml` sets `CONFORMANCE_SINCE` to the base commit on
-`pull_request` and `merge_group` events. Push, scheduled and dispatched runs
-leave it empty and grade the whole repository.
+`conformance-reusable.yaml` sets `CONFORMANCE_SINCE` to the base commit and
+`CONFORMANCE_GATE_INTRODUCED=true` on `pull_request` and `merge_group`
+events. Push, scheduled and dispatched runs leave both unset and grade the
+whole repository.
+
+So a caller's soft mode (`exit-zero: true` in its `conformance.yaml`) now
+means one thing: the repository's existing backlog does not fail a run. It
+no longer lets a pull request add a blocking finding. A repo that needs the
+old behaviour back sets the repository variable `CONFORMANCE_SOFT_PRS=true`.
 
 ## Suppressing a finding
 

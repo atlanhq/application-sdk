@@ -83,6 +83,7 @@ from conformance.suite.checks._ast_common import (
     ParseFailure,
     detect_scope,
     parse_failure,
+    source_cache,
 )
 from conformance.suite.checks.preflight._lifetime import scan_removed_config
 from conformance.suite.introduced import BaseUnavailable, introduced_since
@@ -104,6 +105,12 @@ PARSE_FAILURE_ID = "conformance/parse-failure"
 # Default for ``--since``. CI sets it once on the job, so every per-series
 # ``detect`` step in that job gates on the change without each one passing it.
 SINCE_ENV = "CONFORMANCE_SINCE"
+
+# Default for ``--gate-introduced``. CI sets it on pull-request and
+# merge-queue runs, so a caller still passing ``--exit-zero`` (soft mode)
+# stops only the repository's backlog from failing, not the change's own
+# additions.
+GATE_INTRODUCED_ENV = "CONFORMANCE_GATE_INTRODUCED"
 
 # Per-file parse-failure annotations emitted before the aggregate one stands in
 # for the rest. GitHub keeps at most 10 annotations of each level per step and
@@ -553,14 +560,18 @@ def _collect(
     """
     all_findings: list[Finding] = []
     py_paths: set[Path] = set()
-    for check in active:
-        # Skip a whole check when none of its series' rules could be in scope
-        # (e.g. the all-APP D-series when scanning the SDK itself).
-        if not _series_in_scope(check.series, active_scope):
-            continue
-        paths = _drop_excluded(check.discover(root), root, excluded_prefixes)
-        py_paths |= _python_files(paths)
-        all_findings.extend(check.scan(paths, root))
+    # One read, one parse and one discovery walk per file for the whole pass,
+    # shared by every check (see _ast_common._source_cache). Scoped to this
+    # call: the --since base pass scans a different tree with its own cache.
+    with source_cache():
+        for check in active:
+            # Skip a whole check when none of its series' rules could be in
+            # scope (e.g. the all-APP D-series when scanning the SDK itself).
+            if not _series_in_scope(check.series, active_scope):
+                continue
+            paths = _drop_excluded(check.discover(root), root, excluded_prefixes)
+            py_paths |= _python_files(paths)
+            all_findings.extend(check.scan(paths, root))
 
     # --exclude also applies at the finding level: a check that discovers the
     # repo root (e.g. K029) reads files beneath it that _drop_excluded never
@@ -654,7 +665,8 @@ def _introduced_blocking(
     return adds
 
 
-def main(argv: list[str] | None = None) -> int:
+def _build_parser() -> argparse.ArgumentParser:
+    """Return the ``detect`` argument parser."""
     parser = argparse.ArgumentParser(description="Atlan conformance suite runner.")
     parser.add_argument("--repo", default=".", metavar="DIR")
     parser.add_argument(
@@ -714,7 +726,21 @@ def main(argv: list[str] | None = None) -> int:
             "The SARIF invocation.exitCode still reflects the real result so "
             "Security tab tracking is unaffected. "
             "Use during soft-enforcement rollouts where violations should be "
-            "observed and tracked but must not block merges."
+            "observed and tracked but must not block merges. "
+            "--gate-introduced narrows it: a blocking finding the change "
+            "itself adds still fails."
+        ),
+    )
+    parser.add_argument(
+        "--gate-introduced",
+        action="store_true",
+        default=os.getenv(GATE_INTRODUCED_ENV, "").strip().lower() == "true",
+        help=(
+            "With --since: a blocking finding the change introduces fails the "
+            "run even under --exit-zero. --exit-zero then excuses only what "
+            "the base already carries, warnings, and a base that could not "
+            "be compared. No effect without --since. "
+            f"Default: ${GATE_INTRODUCED_ENV}=true."
         ),
     )
     parser.add_argument(
@@ -732,6 +758,33 @@ def main(argv: list[str] | None = None) -> int:
             f"Default: ${SINCE_ENV}."
         ),
     )
+    return parser
+
+
+def _gate_exit_code(
+    *,
+    exit_zero: bool,
+    sarif_exit_code: int,
+    change_adds: list[Finding] | None,
+    introduced_gates: bool,
+    unanalysed: bool,
+) -> int:
+    """Return the process exit code. The SARIF keeps the whole-repo result.
+
+    * ``--exit-zero``: 0, unless ``--gate-introduced`` found the change added
+      a blocking finding.
+    * no ``--since`` answer (``change_adds is None``): the whole-repo verdict.
+    * otherwise: fail on what the change added, or on an unanalysed file.
+    """
+    if exit_zero:
+        return 1 if introduced_gates else 0
+    if change_adds is None:
+        return sarif_exit_code
+    return 1 if change_adds or unanalysed else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
     args = parser.parse_args(argv)
 
     requested: set[str] = set()
@@ -806,6 +859,11 @@ def main(argv: list[str] | None = None) -> int:
     unanalysed = bool(parse_failures) and parse_failures_gate
     # True only when --since turns a whole-repo failure into a pass.
     inherited_only = change_adds is not None and not change_adds and not unanalysed
+    # --gate-introduced: what the change added fails the run even in soft
+    # mode. Only a compared base can say what was added, so an unanswered
+    # --since (``change_adds is None``) leaves --exit-zero fully in force:
+    # soft mode must never start failing a repository for its backlog.
+    introduced_gates = bool(args.gate_introduced and change_adds)
 
     if os.getenv("GITHUB_ACTIONS") == "true":
         _emit_github_summary_annotations(
@@ -813,7 +871,7 @@ def main(argv: list[str] | None = None) -> int:
             args.rule or args.series,
             excluded_prefixes,
             # Inherited findings annotate as warnings: they do not fail the run.
-            exit_zero=args.exit_zero or inherited_only,
+            exit_zero=(args.exit_zero and not introduced_gates) or inherited_only,
             parse_failures=parse_failures,
             parse_failures_gate=parse_failures_gate,
         )
@@ -837,14 +895,14 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(payload)
 
-    sarif_exit_code: int = report.runs[0].invocations[0].exit_code  # type: ignore[assignment]
-    if args.exit_zero:
-        return 0
-    if change_adds is None:
-        return sarif_exit_code
-    # The SARIF above keeps the whole-repo result; only the process exit code
-    # answers the narrower question.
-    return 1 if change_adds or unanalysed else 0
+    sarif_exit_code: int = report.runs[0].invocations[0].exit_code  # pyright: ignore[reportAssignmentType]
+    return _gate_exit_code(
+        exit_zero=args.exit_zero,
+        sarif_exit_code=sarif_exit_code,
+        change_adds=change_adds,
+        introduced_gates=introduced_gates,
+        unanalysed=unanalysed,
+    )
 
 
 if __name__ == "__main__":

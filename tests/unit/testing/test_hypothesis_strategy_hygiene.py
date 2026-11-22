@@ -24,10 +24,6 @@ _REPO = Path(__file__).resolve().parents[3]
 _STRATEGIES = _REPO / "application_sdk" / "testing" / "hypothesis" / "strategies"
 _TESTS = _REPO / "tests"
 
-#: Unbounded integers FND-4286 bounds, together with un-skipping the JSON
-#: writer tests they break. Remove the entry when that lands.
-_UNBOUNDED_INTEGERS_PENDING = {"outputs/json_output.py"}
-
 #: The one module allowed to load a profile at import: it registers and loads
 #: the ``unit`` profile every unit test runs under. Any other conftest doing the
 #: same would replace it for the whole worker, so only this path is exempt.
@@ -85,7 +81,13 @@ def _is_deprecated(tree: ast.Module) -> bool:
         for node in tree.body
     )
     has_getattr = any(
-        isinstance(node, ast.FunctionDef) and node.name == "__getattr__"
+        (isinstance(node, ast.FunctionDef) and node.name == "__getattr__")
+        or (
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(t, ast.Name) and t.id == "__getattr__" for t in node.targets
+            )
+        )
         for node in tree.body
     )
     return has_mapping and has_getattr
@@ -97,6 +99,12 @@ def test_the_deprecation_scan_needs_a_served_non_empty_mapping() -> None:
         "def __getattr__(name): ...\n"
     )
     assert _is_deprecated(ast.parse(served))
+    factory = (
+        "_DEPRECATED_CONSTANTS = {'a': ('b', 'c')}\n"
+        "__getattr__ = _deprecation.deprecated_module_getattr("
+        "__name__, _DEPRECATED_CONSTANTS, remove_in='4.0.0')\n"
+    )
+    assert _is_deprecated(ast.parse(factory))
     assert not _is_deprecated(
         ast.parse("_DEPRECATED_CONSTANTS = {}\ndef __getattr__(n): ...\n")
     )
@@ -145,8 +153,6 @@ def _unbounded_integers(tree: ast.Module) -> list[int]:
 
 @pytest.mark.parametrize("module", _strategy_modules(), ids=_rel)
 def test_every_integer_strategy_is_bounded(module: Path) -> None:
-    if _rel(module) in _UNBOUNDED_INTEGERS_PENDING:
-        pytest.skip("bounded by FND-4286")
     lines = _unbounded_integers(ast.parse(module.read_text(encoding="utf-8")))
     assert not lines, (
         f"{_rel(module)}: st.integers() without both min_value and max_value "

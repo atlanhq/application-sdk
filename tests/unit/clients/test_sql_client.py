@@ -4,7 +4,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import (
@@ -24,7 +25,6 @@ from application_sdk.clients.sql_errors import (
     UnsupportedSqlCursorError,
 )
 from application_sdk.testing.hypothesis.strategies.clients.sql import (
-    mock_sql_query_result_strategy,
     sql_connection_string_strategy,
     sql_credentials_strategy,
     sql_error_strategy,
@@ -333,51 +333,56 @@ def test_connection_string_property_based(connection_string: str):
         assert sql_client.connection is None
 
 
-@given(query_result=mock_sql_query_result_strategy)
-@settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
-@pytest.mark.skip(reason="Failing due to KeyError: 'col1'")
-async def test_run_query_property_based(
-    sql_client: BaseSQLClient,
-    query_result: dict[str, Any],
-):
-    """Property-based test for query execution with various result structures"""
+_COLUMN_NAMES = ("COL1", "COL2", "COL3")
+
+# Non-empty batches of rows shaped to the cursor's columns: an empty batch is
+# how ``fetchmany`` signals the end, so it can only come last.
+_query_batches_strategy = st.lists(
+    st.lists(
+        st.tuples(*(st.text() for _ in _COLUMN_NAMES)),
+        min_size=1,
+        max_size=5,
+    ),
+    max_size=5,
+)
+
+
+@given(batches=_query_batches_strategy)
+@settings(max_examples=25)
+async def test_run_query_property_based(batches: list[list[tuple[str, ...]]]):
+    """Every fetched row comes back once, in order, keyed by lower-cased column."""
+    sql_client = _make_sql_client()
+    sql_client.engine = MagicMock()
     with (
-        patch("sqlalchemy.text") as mock_text,
+        patch("sqlalchemy.text"),
         patch(
             "application_sdk.clients.sql.run_in_thread",
             new_callable=AsyncMock,
         ) as mock_run_in_thread,
     ):
-        # Mock the query text
-        query = "SELECT * FROM test_table"
-        mock_text.return_value = query
-
-        # Create mock cursor with dynamic column descriptions
+        mock_connection = MagicMock()
         mock_cursor = MagicMock()
-        mock_cursor.cursor.description = [
-            MagicMock(name=col["name"]) for col in query_result["columns"]
+        descriptions = []
+        for name in _COLUMN_NAMES:
+            description = MagicMock()
+            description.name = name
+            descriptions.append(description)
+        mock_cursor.cursor.description = descriptions
+
+        mock_run_in_thread.side_effect = [
+            mock_connection,  # engine.connect
+            mock_cursor,  # connection.execute
+            *batches,  # fetchmany, one batch per call
+            [],  # fetchmany: end of data
+            None,  # close
         ]
 
-        # Set up the connection
-        sql_client.connection = MagicMock()
-        sql_client.connection.execute.return_value = mock_cursor
+        yielded: list[list[dict[str, Any]]] = []
+        async for batch in sql_client.run_query("SELECT * FROM test_table"):
+            yielded.append(batch)
 
-        # Mock run_in_thread to return cursor and then batches
-        mock_run_in_thread.side_effect = [mock_cursor] + query_result["batches"] + [[]]
-
-        # Run run_query and collect all results
-        results: list[dict[str, Any]] = []
-        async for batch in sql_client.run_query(query):
-            results.extend(batch)
-
-        # Verify the results
-        expected_results: list[dict[str, Any]] = []
-        for batch in query_result["batches"]:
-            expected_results.extend(batch)
-
-        assert len(results) == len(expected_results)
-        for result_row, expected_row in zip(results, expected_results):
-            assert all(result_row[key] == value for key, value in expected_row.items())
+    keys = [name.lower() for name in _COLUMN_NAMES]
+    assert yielded == [[dict(zip(keys, row)) for row in batch] for batch in batches]
 
 
 @given(error_type=sql_error_strategy)
@@ -631,38 +636,6 @@ def test_get_sqlalchemy_connection_string_iam_role_missing_role_arn(
     assert (
         exc_info.value.message == "aws_role_arn is required for IAM role authentication"
     )
-
-
-@pytest.mark.skip(reason="Skipping this test until the native deployment is ready")
-def test_get_sqlalchemy_connection_string_with_compiled_url(sql_client_with_db_config):
-    """Test connection string generation with compiled url"""
-    credentials = {
-        "extra": {
-            "compiled_url": "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
-        }
-    }
-    sql_client_with_db_config.resolved_credentials = credentials
-
-    conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
-    expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
-    assert conn_str == expected
-
-
-@pytest.mark.skip(reason="Skipping this test until the native deployment is ready")
-def test_get_sqlalchemy_connection_string_with_compiled_url_with_invalid_dialect(
-    sql_client_with_db_config,
-):
-    """Test connection string generation with compiled url with invalid dialect"""
-    credentials = {
-        "extra": {
-            "compiled_url": "postgresql+psycopg2://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
-        }
-    }
-    sql_client_with_db_config.resolved_credentials = credentials
-
-    conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
-    expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
-    assert conn_str == expected
 
 
 def test_get_sqlalchemy_connection_string_omits_none_parameters(

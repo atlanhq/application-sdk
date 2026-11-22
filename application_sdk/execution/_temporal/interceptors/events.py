@@ -304,8 +304,7 @@ def _enrich_event_metadata(event: Event) -> Event:
             event.metadata.workflow_type = workflow_info.workflow_type
             event.metadata.workflow_id = workflow_info.workflow_id
             event.metadata.workflow_run_id = workflow_info.run_id
-    # conformance: ignore[E004] probe to detect workflow context; exception is expected when called outside a workflow
-    except Exception:
+    except Exception:  # noqa: BLE001 — probe to detect workflow context; exception is expected when called outside a workflow
         logger.debug("Not in workflow context, cannot enrich event metadata")
 
     try:
@@ -318,8 +317,7 @@ def _enrich_event_metadata(event: Event) -> Event:
             event.metadata.workflow_id = activity_info.workflow_id
             event.metadata.workflow_run_id = activity_info.workflow_run_id
             event.metadata.workflow_state = WorkflowStates.RUNNING.value
-    # conformance: ignore[E004] probe to detect activity context; exception is expected when called outside an activity
-    except Exception:
+    except Exception:  # noqa: BLE001 — probe to detect activity context; exception is expected when called outside an activity
         logger.debug("Not in activity context, cannot enrich event metadata")
 
     if event.metadata.event_id is None:

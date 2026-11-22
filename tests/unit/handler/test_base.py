@@ -2,7 +2,7 @@
 
 import pytest
 
-from application_sdk.errors import HANDLER_ERROR, ErrorCode
+from application_sdk.errors._legacy_codes import HANDLER_ERROR, ErrorCode
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
@@ -28,14 +28,15 @@ class TestHandlerError:
 
     def test_default_error_code(self):
         err = HandlerError("something failed")
-        assert err.error_code is HANDLER_ERROR
-        assert isinstance(err.error_code, ErrorCode)
+        with pytest.warns(DeprecationWarning, match="error_code is deprecated"):
+            assert err.error_code is HANDLER_ERROR
 
     def test_with_custom_error_code(self):
-        custom = ErrorCode("HDL", 99)
-        err = HandlerError("auth failed", error_code=custom)
+        with pytest.warns(DeprecationWarning, match="ErrorCode is deprecated"):
+            custom = ErrorCode("HDL", 99)
+        with pytest.warns(DeprecationWarning, match="error_code= keyword"):
+            err = HandlerError("auth failed", error_code=custom)
         assert str(custom) in str(err)
-        assert err.error_code is custom
 
     def test_default_http_status(self):
         err = HandlerError("something failed")
