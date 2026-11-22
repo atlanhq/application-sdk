@@ -38,6 +38,14 @@ Repository layout (the same in every connector app)
 - .github/ is CI, mostly managed by the SDK's bootstrap.
 - Dockerfile, pyproject.toml, uv.lock and atlan.yaml sit at the root.
 
+Principles
+- <principles> lists the review principles that apply to these files. Each <principle> has an id: FP ids
+  (FP01, FP02, …) are fleet principles that hold for every connector app, RP ids (RP01, …) are this
+  repository's own. Its `for` attribute names the files it applies to.
+- Judge the change by them: put each principle's Ask questions to the code it applies to, leave what its
+  "Don't flag" line names to CI, and grade with its Severity line.
+- When a finding rests on a principle, name that principle's id in the comment's content.
+
 Scope
 - Focus on issues in newly added code (lines marked +). Deleted code is reference context only.
 - Do not comment on correct code or on files outside <review_files>.

@@ -11,6 +11,10 @@ lives), against a checkout of the BASE branch of the connector app under review
 (`--root`). The reviewer's own config is the one shipped beside this package
 (`.github/connector-reviewer/config.toml` in application-sdk) unless
 `--config-dir` says otherwise: an app repo cannot retune its own reviewer.
+The fleet principles come from `--principles-dir` (or
+`CONNECTOR_REVIEWER_PRINCIPLES_DIR`); a review does not start without them. The
+app's own principles, if any, are read from
+`<root>/.github/connector-reviewer/principles/` (connector_reviewer/principles.py).
 `--dry-run` prints the result as JSON and posts nothing — the way to try
 connector-reviewer on any PR, including a historical one. Exit code is 0 whenever
 connector-reviewer ran to a verdict or a deliberate skip; a non-zero exit means
@@ -32,8 +36,13 @@ from .event import USAGE_ERRORS, decide
 from .github import GitHub
 from .llm import Client
 from .lock import BUSY_NOTE, WORKFLOW_FILE, older_active_run
+from .principles import (
+    PrinciplesError,
+    PrincipleSet,
+    load_principles,
+    resolve_fleet_dir,
+)
 from .review import dismiss, recheck, render_summary, run, to_json
-from .rules import load_rules
 
 # The config that ships with this package: `.github/connector-reviewer/` of the
 # application-sdk checkout the package is run from, not of the repo under review.
@@ -57,6 +66,11 @@ def main(argv: list[str] | None = None) -> int:
         "--config-dir",
         default=None,
         help="default: the config shipped beside this package (.github/connector-reviewer)",
+    )
+    r.add_argument(
+        "--principles-dir",
+        default=None,
+        help="the fleet principles directory (default: $CONNECTOR_REVIEWER_PRINCIPLES_DIR)",
     )
     r.add_argument("--force", action="store_true")
     r.add_argument(
@@ -101,7 +115,16 @@ def main(argv: list[str] | None = None) -> int:
         for e in errs:
             print(f"connector-reviewer: config error: {e}", file=sys.stderr)
         return 2
-    rules = load_rules(cfg_dir)
+    # A review judges by the principles, so it does not start without them: a
+    # missing fleet directory stops the run here, before any request is made.
+    # A dismissal or a re-check reads no principle and needs none.
+    principles = PrincipleSet()
+    if dismissal is None and rechecking is None:
+        try:
+            principles = load_principles(resolve_fleet_dir(args.principles_dir), root)
+        except PrinciplesError as e:
+            print(f"connector-reviewer: config error: {e}", file=sys.stderr)
+            return 2
     gh = GitHub(args.repo)
 
     def react(content: str) -> None:
@@ -190,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
             number=args.pr,
             root=root,
             cfg=cfg,
-            rules=rules,
+            principles=principles,
             client_factory=client_factory,
             force=args.force,
             verify_budget=args.verify_budget,

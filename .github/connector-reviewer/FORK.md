@@ -97,6 +97,35 @@ Wording that followed from the removals: the compatibility flag of `code_comment
 | `config.toml` `[scope] exclude` | `.mothership/**`, `conformance/**/fixtures/**`, `tests/**/fixtures/**`, `tests/**/golden/**` | `app/generated/**`, `contract/PklProject.deps.json`, `.mothership/**`, `tests/**/fixtures/**`, `tests/**/golden/**`, `tests/**/__snapshots__/**` |
 | `search_code` tool description | example glob `application_sdk/**` | example glob `app/**` |
 
+### Principles instead of rule cards
+
+lens matches rule cards to files by glob: `rules.py`, `.github/lens/rules.toml` (an
+ordered list of globs, first match wins) and `.github/lens/cards/*.md`. This fork has
+none of the three. It has `principles.py`:
+
+| | lens (`rules.py`) | connector-reviewer (`principles.py`) |
+|---|---|---|
+| Unit | A card: free Markdown | A principle: front matter (`id`, optional `applies-to`), a `# Title`, and five fields (`Principle`, `Why`, `Ask` with at most three questions, `Don't flag`, `Severity`) |
+| Matched to a file by | The first glob in `rules.toml` that matches | Area, fixed in code (`area_of`): `app`, `generated` (`app/generated/**`, which is never `app`), `tests`, `contract`, `ci` (`.github/**`). No globs. A file outside all five gets only the principles with no `applies-to`. |
+| Sources | The config directory | Fleet principles (`FP01`…) from `--principles-dir` or `CONNECTOR_REVIEWER_PRINCIPLES_DIR`; repo principles (`RP01`…) from `<root>/.github/connector-reviewer/principles/` of the repo under review. Only files named `^[a-z]{2}\d{2}-.+\.md$` are read. |
+| Prompt block | `<review_rules>` holding `<rules card="…" for="…">` | `<principles>` holding `<principle id="…" title="…" for="…">` with the five fields; fleet first, then repo, each in id order; a repo principle carries `source="this repository"` and follows a line that says so |
+| A bad file | Not checked | Skipped, with a note in the summary (`PrincipleSet.notes` into `RunResult.notes`). The id must be `FP`/`RP` plus two digits for its source, match the file name, and be unique; an unknown front-matter key or area is an error; a file over 4,000 characters or a symlink is not read. |
+| Nothing to load | Reviews with no cards | A fleet directory that is not given, does not exist or holds no principle file is a configuration error: exit 2 before any GitHub or model request. A dismissal or a re-check loads no principles and is not affected. |
+
+Call sites that changed with it:
+
+- `review.run(principles=…)` and `agent.review_bundle(…, principles, …)` take a
+  `PrincipleSet` where lens takes a `RuleSet` (`rules=`).
+- `agent.build_rules_message` is `agent.build_principles_message`.
+- `agent.build_context` has no `rules` parameter (lens passes one and never reads it).
+- `REVIEW_SYSTEM` has a "Principles" section: what `<principles>` is, how to use the
+  fields, and that a finding resting on a principle names its id. Citing one is not
+  required and nothing in code checks it.
+- `config.raw_hash` is the hash of `config.toml` alone (lens adds `rules.toml`).
+- `glob_match` lives in `advisory.py`, its only user here (lens has it in `rules.py`).
+- The trace line per bundle lists the principle ids, where lens counts rule cards.
+- CLI: `--principles-dir` is new.
+
 ### Tests
 
 Removed from the copy because they assert on `.github/workflows/lens.yml` or on the

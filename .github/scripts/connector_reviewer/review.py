@@ -48,7 +48,7 @@ from .findings import BLOCKING, BODY_KEEP, SEVERITIES, Finding, PRState, merge_n
 from .github import GitHub, bot_login
 from .index import Index, Symbol, build_index, index_source
 from .llm import BudgetExhausted, Client, Ledger, LLMError
-from .rules import RuleSet
+from .principles import PrincipleSet
 from .select import DEFAULT_EXCLUDE, select_files
 from .tools import Workspace, parse_args
 from .triage import Triage, triage
@@ -272,7 +272,7 @@ def run(
     number: int,
     root: Path,
     cfg: Config,
-    rules: RuleSet,
+    principles: PrincipleSet,
     client_factory: Any,
     force: bool = False,
     verify_budget: bool = False,
@@ -302,7 +302,7 @@ def run(
         )
 
     # ---- admission (0 model calls) --------------------------------------
-    # Only a different MODEL is a different reviewer. A connector-reviewer config change (cards,
+    # Only a different MODEL is a different reviewer. A connector-reviewer config change (principles,
     # prompts, limits) does not re-open code an earlier round already passed: that
     # moved the goalposts on reviewed code. It applies from the next new commits.
     # `/review force` lifts the skip and round-cap rules: after new commits it
@@ -412,6 +412,8 @@ def run(
         run_url=run_url,
         blob_base=f"https://github.com/{gh.repo}/blob/{head}",
     )
+    # A principle file that was skipped is said in the summary, never silently.
+    res.notes.extend(principles.notes)
     if post:
         # Pending while it runs: the checks box links straight to the live log.
         gh.set_status(
@@ -476,10 +478,10 @@ def run(
                 "renames: " + ", ".join(f"{a}->{b}" for a, b in res.triage.renames)
             )
         for b in bundles:
-            cards = rules.render_for(b.paths).count("<rules card=")
+            applied = ", ".join(p.id for p in principles.for_paths(b.paths)) or "none"
             trace.line(
                 f"bundle {b.label!r}: {len(b.files)} file(s), {b.changed_lines} changed lines, "
-                f"~{b.diff_tokens()} diff tokens, {cards} rule card(s): {', '.join(b.paths)}"
+                f"~{b.diff_tokens()} diff tokens, principles {applied}: {', '.join(b.paths)}"
             )
         if not bundles:
             trace.line("no bundles: nothing substantive to line-review")
@@ -659,7 +661,7 @@ def run(
             client,
             ws,
             b,
-            rules,
+            principles,
             pr_meta,
             confirmed,
             cfg.limits,

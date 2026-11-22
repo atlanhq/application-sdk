@@ -41,7 +41,7 @@ from .llm import (
     estimate_tokens,
     prompt_view,
 )
-from .rules import RuleSet
+from .principles import PrincipleSet
 from .tools import TOOL_SCHEMAS, Workspace, parse_args, run_tool
 
 # The whole description of a normal PR: a declared behaviour change is often past
@@ -192,29 +192,28 @@ def suspect_paths(refusal: dict[str, Any]) -> list[str]:
 # ---- context -----------------------------------------------------------------
 
 
-def build_rules_message(bundle: Bundle, rules: RuleSet) -> str:
-    """The cards for this bundle, alone in their own message.
+def build_principles_message(bundle: Bundle, principles: PrincipleSet) -> str:
+    """The principles for this bundle, alone in their own message.
 
     Message order is the cache layout. Provider prompt caching matches the
     longest identical PREFIX (OpenAI caches automatically from 1,024 tokens),
     so what is stable goes first and what is PR-specific goes last:
       tools + system prompt  — byte-identical on every call connector-reviewer ever makes
-      rule cards             — identical for every PR touching the same area
+      principles             — the same text for every PR; only the files named differ
       the change itself      — unique
     and the tool loop only ever APPENDS, so every turn re-reads the previous
     turn's whole conversation from cache."""
-    card_text = rules.render_for(bundle.paths)
+    text = principles.render_for(bundle.paths)
     return (
-        "<review_rules>\n"
-        + (card_text or "(no path-specific rules)")
-        + "\n</review_rules>"
+        "<principles>\n"
+        + (text or "(no principle applies to these files)")
+        + "\n</principles>"
     )
 
 
 def build_context(
     ws: Workspace,
     bundle: Bundle,
-    rules: RuleSet,
     pr_meta: dict[str, Any],
     confirmed: list[Finding],
 ) -> str:
@@ -362,7 +361,7 @@ def review_bundle(
     client: Client,
     ws: Workspace,
     bundle: Bundle,
-    rules: RuleSet,
+    principles: PrincipleSet,
     pr_meta: dict[str, Any],
     confirmed: list[Finding],
     limits: AgentLimits,
@@ -374,10 +373,10 @@ def review_bundle(
     res = BundleResult(label=bundle.label)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": prompts.REVIEW_SYSTEM},
-        {"role": "user", "content": build_rules_message(bundle, rules)},
+        {"role": "user", "content": build_principles_message(bundle, principles)},
         {
             "role": "user",
-            "content": build_context(ws, bundle, rules, pr_meta, confirmed),
+            "content": build_context(ws, bundle, pr_meta, confirmed),
         },
     ]
     raw_comments: list[dict[str, Any]] = []

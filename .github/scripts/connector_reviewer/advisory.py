@@ -18,11 +18,11 @@ match one of its globs carries its note.
 
 from __future__ import annotations
 
+import fnmatch
 import re
 from dataclasses import dataclass
 
 from .diff import FileDiff
-from .rules import glob_match
 
 _MAX_NAMED = 3
 _PATHS = "{paths}"
@@ -41,6 +41,36 @@ class Advisory:
 
 # None yet: see the module docstring.
 ADVISORIES: tuple[Advisory, ...] = ()
+
+
+def _glob_to_re(glob: str) -> re.Pattern[str]:
+    """`**` crosses directories, `*` does not; `**/` may match zero dirs."""
+    out, i = "", 0
+    while i < len(glob):
+        if glob.startswith("**/", i):
+            out += "(?:.*/)?"
+            i += 3
+        elif glob.startswith("**", i):
+            out += ".*"
+            i += 2
+        elif glob[i] == "*":
+            out += "[^/]*"
+            i += 1
+        elif glob[i] == "?":
+            out += "[^/]"
+            i += 1
+        else:
+            out += re.escape(glob[i])
+            i += 1
+    return re.compile(f"^{out}$")
+
+
+def glob_match(path: str, glob: str) -> bool:
+    return (
+        bool(_glob_to_re(glob).match(path))
+        or fnmatch.fnmatch(path, glob)
+        and "/" not in glob
+    )
 
 
 def changed_paths(files: list[FileDiff]) -> list[str]:

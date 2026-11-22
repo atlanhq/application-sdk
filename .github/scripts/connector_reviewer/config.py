@@ -84,11 +84,7 @@ def load_config(config_dir: Path) -> Config:
     cfg.limits = AgentLimits(
         **{k: int(v) for k, v in a.items() if k in AgentLimits.__dataclass_fields__}
     )
-    cfg.raw_hash = hashlib.sha1(
-        raw + (config_dir / "rules.toml").read_bytes()
-        if (config_dir / "rules.toml").exists()
-        else raw
-    ).hexdigest()[:10]
+    cfg.raw_hash = hashlib.sha1(raw).hexdigest()[:10]
     return cfg
 
 
