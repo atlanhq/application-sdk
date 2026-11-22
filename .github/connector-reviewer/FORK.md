@@ -82,6 +82,21 @@ Wording that followed from the removals: the compatibility flag of `code_comment
 (`tools.COMMENT_ITEM`) and `RECHECK_SYSTEM` say "a deployed contract" where lens says
 "a public or released contract".
 
+### Connector profile
+
+| Where | lens | connector-reviewer |
+|---|---|---|
+| `prompts.REVIEW_SYSTEM`, first lines | "a senior code reviewer for the Atlan Application SDK" | `prompts.CONNECTOR_PROFILE` (the target is a connector app built on the Application SDK v3, and what a bad merge costs), then the scope sentence (review for regression risk, cost at customer scale, production failure and silent data loss, credential leaks, test integrity; not style, naming, generic best practice or what a CI gate enforces), then a "Repository layout" block. Everything from "Scope" down is lens's text, with the edits in the next three rows. |
+| `REVIEW_SYSTEM`, "Do not report what CI already enforces" | formatting, import order, …, naming style | The same list plus "conformance rules". |
+| `REVIEW_SYSTEM`, severity `high` | "broken public contract" | "broken contract" |
+| `REVIEW_SYSTEM`, severity `low (nit)` | "clearer name, simpler expression, a missing edge-case test" | "a small, concrete improvement within the review scope above — a simpler expression that removes a hazard, a missing edge-case test". Naming is out of scope here, so the example that asked for it is gone. |
+| `holistic.SYSTEM` (approach check) | No description of the target | `CONNECTOR_PROFILE` after its first line. "a public contract" in the concern list is "a contract (the Pkl contract, a workflow's or task's inputs and outputs, persisted state)". |
+| `bundle._module_key` | `application_sdk/x/y.py` and `tests/unit/x/test_y.py` cluster as `x` | `app/x/y.py` and `tests/{unit,integration,e2e}/[app/]x/test_y.py` cluster as `x`; everything under `contract/` is one cluster `contract`; a root `Dockerfile*` and `pyproject.toml` are one cluster `build`. |
+| `review.RISKY_PREFIXES`, `review._risk` | A flat tuple of SDK prefixes: a bundle is risky or it is not | Ordered tiers, riskiest first: `app/` (not `app/generated/`), `contract/`, `Dockerfile` and `pyproject.toml`, `.github/`, `tests/`, then everything else. `review.risk_rank(path)` gives a path's tier and a bundle ranks as its riskiest file. |
+| `select.DEFAULT_EXCLUDE` | — | Adds `**/*.jpeg`, `**/*.gif`, `**/*.ico`, `**/*.webp`. |
+| `config.toml` `[scope] exclude` | `.mothership/**`, `conformance/**/fixtures/**`, `tests/**/fixtures/**`, `tests/**/golden/**` | `app/generated/**`, `contract/PklProject.deps.json`, `.mothership/**`, `tests/**/fixtures/**`, `tests/**/golden/**`, `tests/**/__snapshots__/**` |
+| `search_code` tool description | example glob `application_sdk/**` | example glob `app/**` |
+
 ### Tests
 
 Removed from the copy because they assert on `.github/workflows/lens.yml` or on the

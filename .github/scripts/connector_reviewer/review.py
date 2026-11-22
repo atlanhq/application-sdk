@@ -1455,19 +1455,33 @@ def recheck(
     return res
 
 
-RISKY_PREFIXES = (
-    "application_sdk/credentials/",
-    "application_sdk/storage/",
-    "application_sdk/handler/",
-    "application_sdk/server/",
-    ".github/workflows/",
-    ".github/actions/",
+# Review order for the standard connector app layout, riskiest first. A path in
+# none of the tiers (docs, a README, atlan.yaml) ranks after all of them.
+RISKY_PREFIXES: tuple[tuple[str, ...], ...] = (
+    ("app/",),  # the connector's own source
+    ("contract/",),  # the Pkl contract
+    ("Dockerfile", "pyproject.toml"),  # the image and the dependencies
+    (".github/",),  # CI
+    ("tests/",),
 )
+# Generated from the contract, so never ranked as the connector's source.
+GENERATED_PREFIX = "app/generated/"
+
+
+def risk_rank(path: str) -> int:
+    """The tier of RISKY_PREFIXES `path` falls in (0 is the riskiest), or
+    `len(RISKY_PREFIXES)` for a path in none of them."""
+    if not path.startswith(GENERATED_PREFIX):
+        for rank, prefixes in enumerate(RISKY_PREFIXES):
+            if path.startswith(prefixes):
+                return rank
+    return len(RISKY_PREFIXES)
 
 
 def _risk(b: Bundle) -> tuple[int, int]:
-    risky = any(p.startswith(RISKY_PREFIXES) for p in b.paths)
-    return (0 if risky else 1, -b.changed_lines)
+    """A bundle ranks as its riskiest file; larger changes first within a tier."""
+    rank = min((risk_rank(p) for p in b.paths), default=len(RISKY_PREFIXES))
+    return (rank, -b.changed_lines)
 
 
 def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:
@@ -1477,7 +1491,7 @@ def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:
     ceiling) so every file still gets reviewed; only if that is not enough are
     the lowest-risk bundles set aside, and each skipped file is named in the
     summary. Ordering by risk means that whatever a short budget cuts is the
-    least important code, never the credentials path."""
+    least important code, never the connector's own source."""
     bundles = group(files)
     if len(bundles) > cfg.max_bundles:
         total = sum(b.diff_tokens() for b in bundles)

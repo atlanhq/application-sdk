@@ -25,6 +25,7 @@ from connector_reviewer import (
     holistic,
 )
 from connector_reviewer import agent as agent_mod
+from connector_reviewer import bundle as bundle_mod
 from connector_reviewer import context as reviewer_context
 from connector_reviewer import findings as findings_mod
 from connector_reviewer import review as review_mod
@@ -101,10 +102,10 @@ def fetch_many(client, keys):
 )
 
 DIFF = """\
-diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py
+diff --git a/app/storage/fetch.py b/app/storage/fetch.py
 index 1111111..2222222 100644
---- a/application_sdk/storage/fetch.py
-+++ b/application_sdk/storage/fetch.py
+--- a/app/storage/fetch.py
++++ b/app/storage/fetch.py
 @@ -1,3 +1,4 @@
 -def fetch(client, key):
 +def fetch(client, key, timeout=None):
@@ -120,11 +121,11 @@ index 1111111..2222222 100644
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    (tmp_path / "application_sdk" / "storage").mkdir(parents=True)
-    (tmp_path / "application_sdk" / "storage" / "fetch.py").write_text(SRC_V1)
+    (tmp_path / "app" / "storage").mkdir(parents=True)
+    (tmp_path / "app" / "storage" / "fetch.py").write_text(SRC_V1)
     (tmp_path / "tests" / "unit").mkdir(parents=True)
     (tmp_path / "tests" / "unit" / "test_fetch.py").write_text(
-        "from application_sdk.storage.fetch import fetch\n\ndef test_fetch():\n    assert fetch\n"
+        "from app.storage.fetch import fetch\n\ndef test_fetch():\n    assert fetch\n"
     )
     cfg = tmp_path / ".github" / "connector-reviewer"
     (cfg / "cards").mkdir(parents=True)
@@ -133,7 +134,7 @@ def repo(tmp_path: Path) -> Path:
     )
     (cfg / "cards" / "security.md").write_text("# security\n- Flag: secrets in logs.\n")
     (cfg / "rules.toml").write_text(
-        '[[path]]\nglob = "application_sdk/storage/**"\ncards = ["security", "python-correctness"]\n'
+        '[[path]]\nglob = "app/storage/**"\ncards = ["security", "python-correctness"]\n'
         '[[path]]\nglob = "**"\ncards = ["python-correctness"]\n'
     )
     return tmp_path
@@ -213,7 +214,7 @@ class Script:
 
 
 COMMENT = {
-    "path": "application_sdk/storage/fetch.py",
+    "path": "app/storage/fetch.py",
     "existing_code": "    return data.decode()",
     "severity": "high",
     "category": "bug",
@@ -233,7 +234,7 @@ class FakeGitHub:
     ):
         self.head, self.base = head, base
         self.diffs = diffs or {("b0", "h1"): DIFF}
-        self.files = files or {("application_sdk/storage/fetch.py", "h1"): SRC_V2}
+        self.files = files or {("app/storage/fetch.py", "h1"): SRC_V2}
         self.comments: list[dict[str, Any]] = []
         self.reviews: list[dict[str, Any]] = []
         self.statuses: list[dict[str, Any]] = []
@@ -311,7 +312,7 @@ def cfg_for(repo: Path) -> Config:
 
 def test_parse_diff_numbers_right_side_lines():
     fd = parse_unified_diff(DIFF)[0]
-    assert fd.path == "application_sdk/storage/fetch.py"
+    assert fd.path == "app/storage/fetch.py"
     assert fd.added_lines == {1, 3, 4}
     assert fd.commentable_lines == {1, 2, 3, 4}
     assert "    4 +    return data.decode()" in fd.render()
@@ -426,7 +427,7 @@ def test_select_skips_lockfiles_binaries_and_deletions():
         "diff --git a/gone.py b/gone.py\ndeleted file mode 100644\n--- a/gone.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n"
     )
     sel = select_files(parse_unified_diff(d))
-    assert [f.path for f in sel.reviewed] == ["application_sdk/storage/fetch.py"]
+    assert [f.path for f in sel.reviewed] == ["app/storage/fetch.py"]
     assert {p for p, _ in sel.skipped} == {"uv.lock", "img.png", "gone.py"}
 
 
@@ -439,21 +440,48 @@ def test_small_change_is_one_bundle_and_large_change_clusters_with_its_tests():
         return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1,{n} @@\n{body}"
 
     big = parse_unified_diff(
-        fd("application_sdk/storage/a.py", 80)
-        + fd("application_sdk/storage/b.py", 80)
+        fd("app/storage/a.py", 80)
+        + fd("app/storage/b.py", 80)
         + fd("tests/unit/storage/test_a.py", 80)
-        + fd("application_sdk/credentials/c.py", 80)
+        + fd("app/credentials/c.py", 80)
     )
     # Fits one bundle's budget: one bundle, whatever the file count.
     assert len(group(big)) == 1
     # Over budget: module clusters, each test with its source.
     bundles = {b.label: b.paths for b in group(big, max_diff_tokens=1000)}
     assert set(bundles["storage"]) == {
-        "application_sdk/storage/a.py",
-        "application_sdk/storage/b.py",
+        "app/storage/a.py",
+        "app/storage/b.py",
         "tests/unit/storage/test_a.py",
     }
-    assert bundles["credentials"] == ["application_sdk/credentials/c.py"]
+    assert bundles["credentials"] == ["app/credentials/c.py"]
+
+
+@pytest.mark.parametrize(
+    ("path", "key"),
+    [
+        ("app/extract/tables.py", "extract"),
+        ("app/main.py", "main"),
+        ("app/generated/models.py", "generated"),
+        # A test joins the source it tests, whatever tier it is in, and whether
+        # or not tests/ mirrors the `app/` root.
+        ("tests/unit/extract/test_tables.py", "extract"),
+        ("tests/integration/extract/test_tables.py", "extract"),
+        ("tests/unit/app/extract/test_tables.py", "extract"),
+        ("tests/unit/test_main.py", "main"),
+        ("tests/e2e/test_crawl.py", "crawl"),
+        # The contract is one cluster, and so are the root build files.
+        ("contract/app.pkl", "contract"),
+        ("contract/types/Credential.pkl", "contract"),
+        ("Dockerfile", "build"),
+        ("pyproject.toml", "build"),
+        (".github/workflows/tests.yaml", ".github/workflows"),
+        ("atlan.yaml", "atlan"),
+        ("docs/setup/auth.md", "docs/setup"),
+    ],
+)
+def test_module_keys_follow_the_connector_app_layout(path, key):
+    assert bundle_mod._module_key(path) == key
 
 
 # ---- index & tools --------------------------------------------------------------------
@@ -472,19 +500,17 @@ def test_index_maps_new_and_src_layout_tests(repo: Path):
         "packages/conformance/tests/test_rules.py"
     ]
     # A file the PR deletes leaves the index.
-    idx = build_index(repo, overrides={"application_sdk/storage/fetch.py": ""})
+    idx = build_index(repo, overrides={"app/storage/fetch.py": ""})
     assert not idx.definitions("fetch")
 
 
 def test_index_answers_callers_and_tests_without_a_shell(repo: Path):
-    idx = build_index(repo, overrides={"application_sdk/storage/fetch.py": SRC_V2})
-    s = idx.enclosing("application_sdk/storage/fetch.py", 4)
+    idx = build_index(repo, overrides={"app/storage/fetch.py": SRC_V2})
+    s = idx.enclosing("app/storage/fetch.py", 4)
     assert s and s.name == "fetch" and "timeout=None" in s.signature
     # test_fetch only references fetch (`assert fetch`), it never calls it: not a caller.
     assert [c.name for c in idx.callers_of("fetch")] == ["load_all"]
-    assert idx.tests_for["application_sdk/storage/fetch.py"] == [
-        "tests/unit/test_fetch.py"
-    ]
+    assert idx.tests_for["app/storage/fetch.py"] == ["tests/unit/test_fetch.py"]
 
 
 def test_tools_are_bounded_and_refuse_secrets_and_traversal(repo: Path):
@@ -492,10 +518,10 @@ def test_tools_are_bounded_and_refuse_secrets_and_traversal(repo: Path):
     ws = Workspace(root=repo, head_text={}, diffs={}, index=build_index(repo))
     assert "ERROR" in read_file(ws, ".env")
     assert "ERROR" in read_file(ws, "../outside.py")
-    assert "application_sdk/storage/fetch.py:1:" in search_code(ws, "def fetch")
+    assert "app/storage/fetch.py:1:" in search_code(ws, "def fetch")
     assert "ERROR" in search_code(ws, "ab")
     out = find_symbol(ws, "fetch")
-    assert "DEFINED application_sdk/storage/fetch.py:1-3" in out and "load_all" in out
+    assert "DEFINED app/storage/fetch.py:1-3" in out and "load_all" in out
 
 
 # ---- rules ------------------------------------------------------------------------------
@@ -503,12 +529,12 @@ def test_tools_are_bounded_and_refuse_secrets_and_traversal(repo: Path):
 
 def test_first_matching_path_entry_decides_the_cards(repo: Path):
     rules = load_rules(repo / ".github" / "connector-reviewer")
-    assert rules.cards_for("application_sdk/storage/fetch.py") == [
+    assert rules.cards_for("app/storage/fetch.py") == [
         "security",
         "python-correctness",
     ]
     assert rules.cards_for("docs/x.md") == ["python-correctness"]
-    text = rules.render_for(["application_sdk/storage/fetch.py", "docs/x.md"])
+    text = rules.render_for(["app/storage/fetch.py", "docs/x.md"])
     assert (
         text.count('card="python-correctness"') == 1
     )  # rendered once, tagged with both files
@@ -701,7 +727,7 @@ def test_reported_cost_is_booked_and_reservations_released():
 
 def _ws(repo: Path) -> tuple[Workspace, Any]:
     files = parse_unified_diff(DIFF)
-    head = {"application_sdk/storage/fetch.py": SRC_V2}
+    head = {"app/storage/fetch.py": SRC_V2}
     ws = Workspace(
         root=repo,
         head_text=head,
@@ -909,8 +935,8 @@ def test_first_round_puts_every_finding_in_the_summary_and_opens_no_thread(repo:
     assert "client.get returns None for a missing key" in details
     assert "**Suggested change:**" in details and "```python" in details
     assert "data.decode() if data is not None else None" in details
-    link = "https://github.com/o/r/blob/h1/application_sdk/storage/fetch.py#L4"
-    assert f"[`application_sdk/storage/fetch.py:4`]({link})" in body
+    link = "https://github.com/o/r/blob/h1/app/storage/fetch.py#L4"
+    assert f"[`app/storage/fetch.py:4`]({link})" in body
     st = PRState.decode(body)
     # review + reflect + approach, each booked at the cost LiteLLM reported.
     assert st and st.round == 1 and st.ledger["calls"] == 3
@@ -959,12 +985,12 @@ def test_a_fix_that_removes_the_quoted_code_resolves_for_free(repo: Path):
     )
     gh.head = "h2"
     gh.diffs[("h1", "h2")] = (
-        "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
-        "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+        "diff --git a/app/storage/fetch.py b/app/storage/fetch.py\n"
+        "--- a/app/storage/fetch.py\n+++ b/app/storage/fetch.py\n"
         "@@ -4 +4 @@\n-    return data.decode()\n+    return data.decode() if data is not None else None\n"
     )
     gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
-    gh.files[("application_sdk/storage/fetch.py", "h2")] = fixed
+    gh.files[("app/storage/fetch.py", "h2")] = fixed
     script = Script()  # round 2 reviews only the delta; the model finds nothing new
     res = run(
         gh=gh,
@@ -1006,7 +1032,7 @@ def test_later_rounds_only_admit_blocking_findings(repo: Path):
     gh.head = "h2"
     gh.diffs[("h1", "h2")] = gh.diffs[("b0", "h1")]
     gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
-    gh.files[("application_sdk/storage/fetch.py", "h2")] = (
+    gh.files[("app/storage/fetch.py", "h2")] = (
         SRC_V2_NEXT  # a real code change, not a byte-identical file
     )
     nit = dict(
@@ -1115,6 +1141,89 @@ def test_shipped_config_loads_and_validates():
     assert cfg.cap_usd_per_pr <= 1.0
 
 
+def test_shipped_config_excludes_what_an_app_repo_never_needs_reviewed():
+    cfg = load_config(Path(__file__).resolve().parents[2] / "connector-reviewer")
+    exclude = tuple(review_mod.DEFAULT_EXCLUDE) + tuple(cfg.exclude)
+
+    def changed(path: str) -> str:
+        return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-a\n+b\n"
+
+    skipped = [
+        "uv.lock",
+        "contract/PklProject.deps.json",
+        "CHANGELOG.md",
+        "app/generated/models.py",
+        "app/generated/nested/inputs.py",
+        "tests/unit/__snapshots__/test_x.ambr",
+        "tests/unit/snapshots/out.json",
+        "tests/integration/fixtures/source.json",
+        "docs/images/setup.png",
+        "docs/images/flow.jpeg",
+        "docs/images/demo.gif",
+    ]
+    reviewed = [
+        "app/extract/tables.py",
+        "contract/app.pkl",
+        "tests/unit/extract/test_tables.py",
+        "Dockerfile",
+        "pyproject.toml",
+        "atlan.yaml",
+        ".github/workflows/tests.yaml",
+    ]
+    sel = select_files(
+        parse_unified_diff("".join(changed(p) for p in skipped + reviewed)),
+        exclude=exclude,
+    )
+    assert [fd.path for fd in sel.reviewed] == reviewed
+    assert sel.skipped == [(p, "excluded by pattern") for p in skipped]
+    # Nothing here is keyed on application-sdk's own tree.
+    assert not any("conformance" in p or "sdk" in p for p in exclude)
+
+
+def test_the_prompts_describe_a_connector_app_and_what_a_bad_merge_costs():
+    from connector_reviewer import prompts  # noqa: PLC0415
+
+    for prompt in (prompts.REVIEW_SYSTEM, holistic.SYSTEM):
+        flat = " ".join(prompt.split())
+        assert "an Atlan connector app" in flat
+        assert "built on the Atlan Application SDK v3" in flat
+        assert "Temporal workflows and tasks, Dapr, async" in flat
+        assert "publishes assets and lineage to Atlan" in flat
+        assert "silent under-extraction turns into asset deletes downstream" in flat
+        assert "a contract break corrupts in-flight workflows" in flat
+        assert "grows with the customer's source size fails at scale" in flat
+        assert "PR description" in flat or "<description>" in flat
+    review = " ".join(prompts.REVIEW_SYSTEM.split())
+    assert (
+        "Review for regression risk, cost at customer scale, production failure and "
+        "silent data loss, credential leaks, and test integrity." in review
+    )
+    assert (
+        "Do not review style, naming, generic best practice, or anything conformance "
+        "or another CI gate enforces." in review
+    )
+    for part in (
+        "app/generated/",
+        "contract/",
+        "tests/unit",
+        "tests/e2e",
+        "atlan.yaml",
+    ):
+        assert part in review
+    # The structural instructions lens gives are all still there.
+    for kept in (
+        "existing_code must be copied VERBATIM",
+        "A finding that cannot name its scenario is not a finding",
+        "- critical:",
+        "- high:",
+        "- medium:",
+        "- low (nit):",
+        "find_symbol / read_file",
+        "Report findings with ONE code_comment call",
+    ):
+        assert kept in review
+
+
 def test_config_without_prices_is_refused():
     assert validate(Config()) != []
 
@@ -1126,9 +1235,7 @@ def test_every_turn_extends_the_previous_turn_so_the_prefix_stays_cached(repo: P
     ws, bundle = _ws(repo)
     script = Script(
         response([tool_call("find_symbol", {"name": "fetch"})]),
-        response(
-            [tool_call("read_file", {"file_path": "application_sdk/storage/fetch.py"})]
-        ),
+        response([tool_call("read_file", {"file_path": "app/storage/fetch.py"})]),
         response([tool_call("task_done", {"state": "DONE"})]),
     )
     client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
@@ -1273,7 +1380,7 @@ def test_approach_check_runs_once_per_pr_and_is_advisory(repo: Path):
     gh.head = "h2"
     gh.diffs[("h1", "h2")] = gh.diffs[("b0", "h1")]
     gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
-    gh.files[("application_sdk/storage/fetch.py", "h2")] = (
+    gh.files[("app/storage/fetch.py", "h2")] = (
         SRC_V2_NEXT  # a real code change, not a byte-identical file
     )
     second = Script()
@@ -1326,8 +1433,8 @@ def test_turn_budget_scales_with_bundle_size_and_is_capped():
 def test_large_bundle_plans_first_in_the_same_cached_conversation(repo: Path):
     body = "".join(f"+    x{i} = {i}\n" for i in range(80))
     big = parse_unified_diff(
-        "diff --git a/application_sdk/storage/big.py b/application_sdk/storage/big.py\n"
-        "--- a/application_sdk/storage/big.py\n+++ b/application_sdk/storage/big.py\n"
+        "diff --git a/app/storage/big.py b/app/storage/big.py\n"
+        "--- a/app/storage/big.py\n+++ b/app/storage/big.py\n"
         f"@@ -0,0 +1,80 @@\n{body}"
     )
     ws = Workspace(
@@ -1444,7 +1551,7 @@ def test_approach_input_is_capped(repo: Path):
 
 # ---- event gate ----------------------------------------------------------------------------------------------
 
-REPO = "atlanhq/application-sdk"
+REPO = "atlanhq/atlan-example-app"
 
 
 def _pr_event(action="synchronize", draft=False, head_repo=REPO):
@@ -1760,9 +1867,7 @@ def test_a_file_mixing_real_and_mechanical_hunks_keeps_only_the_real_ones():
 def test_a_hundred_file_mechanical_pr_costs_no_review_calls(repo: Path):
     gh = FakeGitHub()
     diff = "".join(
-        _file_diff(
-            f"application_sdk/m{i}.py", [f"y = get_x({i})"], [f"y = fetch_x({i})"]
-        )
+        _file_diff(f"app/m{i}.py", [f"y = get_x({i})"], [f"y = fetch_x({i})"])
         for i in range(100)
     )
     gh.diffs[("b0", "h1")] = diff
@@ -1800,22 +1905,81 @@ def _bundle_files(prefix, n, lines=40):
     )
 
 
+@pytest.mark.parametrize(
+    ("path", "rank"),
+    [
+        ("app/extract/tables.py", 0),
+        ("app/main.py", 0),
+        ("contract/app.pkl", 1),
+        ("Dockerfile", 2),
+        ("Dockerfile.dev", 2),
+        ("pyproject.toml", 2),
+        (".github/workflows/tests.yaml", 3),
+        ("tests/unit/extract/test_tables.py", 4),
+        # In no tier: generated code is not the connector's source, and a
+        # nested pyproject.toml is not the app's.
+        ("app/generated/models.py", 5),
+        ("docs/pyproject.toml", 5),
+        ("atlan.yaml", 5),
+        ("README.md", 5),
+    ],
+)
+def test_risk_tiers_follow_the_connector_app_layout(path, rank):
+    assert review_mod.risk_rank(path) == rank
+
+
+def test_bundles_are_reviewed_in_risk_order_app_first_tests_last():
+    """Highest first: app/ (not generated), contract/, Dockerfile and
+    pyproject.toml, .github/, then tests/; anything else after them."""
+    prefixes = [
+        "docs/x",
+        "tests/unit/zz",
+        ".github/workflows",
+        "contract",
+        "app/extract",
+    ]
+    files = parse_unified_diff(
+        "".join(_bundle_files(prefix, 3, lines=150) for prefix in prefixes)
+        # As large as the clusters around it, so it is not packed into one of them.
+        + _file_diff(
+            "Dockerfile",
+            [f"    old{j}" for j in range(450)],
+            [f"    new{j} = compute({j})" for j in range(450)],
+        )
+        + _bundle_files("app/generated", 3, lines=150)
+    )
+    cfg = Config(price=PRICE, max_bundles=50)
+    order = [
+        review_mod._risk(b)[0] for b in plan_bundles(files, cfg, RunResult("reviewed"))
+    ]
+    assert order == sorted(order) and set(order) == {0, 1, 2, 3, 4, 5}
+    # A bundle ranks as its riskiest file: a test packed with its source is app.
+    mixed = review_mod.Bundle(
+        "extract",
+        parse_unified_diff(
+            _file_diff("tests/unit/extract/test_a.py", ["a"], ["b"])
+            + _file_diff("app/extract/a.py", ["a"], ["b"])
+        ),
+    )
+    assert review_mod._risk(mixed)[0] == 0
+
+
 def test_riskiest_bundles_are_reviewed_first_and_packing_comes_before_skipping():
     files = parse_unified_diff(
-        _bundle_files("tools/a", 3, lines=150)
-        + _bundle_files("application_sdk/credentials", 2, lines=150)
+        _bundle_files("tests/unit/a", 3, lines=150)
+        + _bundle_files("app/credentials", 2, lines=150)
         + _bundle_files("docs/x", 3, lines=150)
     )
     cfg = Config(price=PRICE)
     res = RunResult("reviewed")
     bundles = plan_bundles(files, cfg, res)
-    assert bundles[0].paths[0].startswith("application_sdk/credentials/")
+    assert bundles[0].paths[0].startswith("app/credentials/")
     cfg.max_bundles = 1
     res = RunResult("reviewed")
     bundles = plan_bundles(files, cfg, res)
     reviewed = {p for b in bundles for p in b.paths}
     # Re-packed larger first; whatever is still over the cap is the lowest-risk code, and named.
-    assert any(p.startswith("application_sdk/credentials/") for p in reviewed)
+    assert any(p.startswith("app/credentials/") for p in reviewed)
     assert all("lowest-risk" in why for _, why in res.skipped_files)
 
 
@@ -1846,7 +2010,7 @@ def test_a_partly_failed_run_keeps_what_it_reviewed_and_retries_only_the_rest(
 ):
     gh = FakeGitHub()
     gh.diffs[("b0", "h1")] = _bundle_files(
-        "application_sdk/credentials", 1, lines=350
+        "app/credentials", 1, lines=350
     ) + _bundle_files("docs/x", 1, lines=350)
 
     def by_bundle(body):
@@ -1888,9 +2052,7 @@ def test_a_partly_failed_run_keeps_what_it_reviewed_and_retries_only_the_rest(
     ]
     assert review_sets and all('<file path="docs/x/f0.py">' in m for m in review_sets)
     # The file that WAS reviewed last time is not paid for again.
-    assert all(
-        '<file path="application_sdk/credentials/f0.py">' not in m for m in review_sets
-    )
+    assert all('<file path="app/credentials/f0.py">' not in m for m in review_sets)
     assert res.state.pending_files == []
 
 
@@ -2823,7 +2985,7 @@ def test_the_job_log_traces_every_phase_turn_and_tool_call(repo: Path, capsys):
     ):
         assert f"connector-reviewer · {phase}" in log, phase
     assert "decision: REVIEW round 1 — first review" in log
-    assert "selected  application_sdk/storage/fetch.py" in log
+    assert "selected  app/storage/fetch.py" in log
     assert (
         "→ find_symbol(fetch)" in log and "→ code_comment(1 comment(s) high×1)" in log
     )
@@ -2882,8 +3044,8 @@ LOGGER_V2 = LOGGER_V1.replace(
 )
 
 LOGGER_DIFF = (
-    "diff --git a/application_sdk/app/safelog.py b/application_sdk/app/safelog.py\n"
-    "--- a/application_sdk/app/safelog.py\n+++ b/application_sdk/app/safelog.py\n"
+    "diff --git a/app/core/safelog.py b/app/core/safelog.py\n"
+    "--- a/app/core/safelog.py\n+++ b/app/core/safelog.py\n"
     "@@ -17,1 +17,2 @@\n"
     "-        getattr(self._backend(), level)(message, **kwargs)\n"
     '+        exc_info = kwargs.pop("exc_info", False)\n'
@@ -2893,31 +3055,31 @@ LOGGER_DIFF = (
 
 @pytest.fixture
 def logger_repo(repo: Path) -> Path:
-    app = repo / "application_sdk" / "app"
+    app = repo / "app" / "core"
     app.mkdir(parents=True, exist_ok=True)
     (app / "safelog.py").write_text(LOGGER_V1)
     (app / "adaptor.py").write_text(
         'class PatternAdapter:\n    """The adapter the PR says it copies."""\n'
         "    def process(self, msg, kwargs):\n        return msg, kwargs\n"
     )
-    (repo / "application_sdk" / "storage" / "user.py").write_text(
-        "from application_sdk.app.safelog import SafeLogger\n\n"
+    (repo / "app" / "storage" / "user.py").write_text(
+        "from app.core.safelog import SafeLogger\n\n"
         'def upload(log):\n    log.info("uploading {name}", name="x")\n'
     )
     (repo / "tests" / "integration").mkdir(parents=True, exist_ok=True)
     (repo / "tests" / "integration" / "test_a_int.py").write_text(
-        "from application_sdk.app.safelog import SafeLogger\n"
+        "from app.core.safelog import SafeLogger\n"
     )
     (repo / "tests" / "unit" / "app").mkdir(parents=True, exist_ok=True)
     (repo / "tests" / "unit" / "app" / "test_safelog.py").write_text(
-        "from application_sdk.app.safelog import SafeLogger\n\ndef test_log():\n    SafeLogger()._log\n"
+        "from app.core.safelog import SafeLogger\n\ndef test_log():\n    SafeLogger()._log\n"
     )
     return repo
 
 
 def _logger_ws(root: Path) -> tuple[Workspace, list]:
     files = parse_unified_diff(LOGGER_DIFF)
-    head = {"application_sdk/app/safelog.py": LOGGER_V2}
+    head = {"app/core/safelog.py": LOGGER_V2}
     ws = Workspace(
         root=root,
         head_text=head,
@@ -2945,10 +3107,7 @@ def test_calls_are_followed_through_thin_wrappers_and_nothing_is_called_public_a
     ws, files = _logger_ws(logger_repo)
     block = reviewer_context.build(ws, files, "")
     assert "via info/error" in block
-    assert (
-        'application_sdk/storage/user.py:4  log.info("uploading {name}", name="x")'
-        in block
-    )
+    assert 'app/storage/user.py:4  log.info("uploading {name}", name="x")' in block
     # A connector app has no public Python API: neither the line review nor the
     # approach check is told a change is one.
     assert "PUBLIC API" not in block
@@ -2971,9 +3130,7 @@ def test_code_the_pr_says_it_follows_is_included(logger_repo: Path):
     block = reviewer_context.build(
         ws, files, "This matches the existing PatternAdapter behaviour."
     )
-    assert (
-        '<pattern name="PatternAdapter" path="application_sdk/app/adaptor.py"' in block
-    )
+    assert '<pattern name="PatternAdapter" path="app/core/adaptor.py"' in block
     assert "def process(self, msg, kwargs)" in block
 
 
@@ -2983,7 +3140,7 @@ def test_an_incomplete_fix_on_unchanged_code_is_a_capped_low_suggestion(
     ws, files = _logger_ws(logger_repo)
     bundle = group(files)[0]
     leftover = {
-        "path": "application_sdk/app/safelog.py",
+        "path": "app/core/safelog.py",
         "existing_code": '            self._backend().debug("probe failed", exc_info=True)',
         "severity": "high",
         "category": "bug",
@@ -3034,20 +3191,20 @@ def test_test_only_findings_are_capped_at_low_unless_security():
 
 # The PR's own change (base...head): one line in fetch.py.
 PR_DIFF = (
-    "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
-    "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+    "diff --git a/app/storage/fetch.py b/app/storage/fetch.py\n"
+    "--- a/app/storage/fetch.py\n+++ b/app/storage/fetch.py\n"
     "@@ -1,3 +1,3 @@\n-def fetch(client, key):\n+def fetch(client, key, timeout=None):\n"
     '     """Fetch one object."""\n     return client.get(key)\n'
 )
 # reviewed_head..head after `git merge main`: the author's line, a line main added to the
 # same file, and a file only main changed.
 MERGED_DIFF = (
-    "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
-    "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+    "diff --git a/app/storage/fetch.py b/app/storage/fetch.py\n"
+    "--- a/app/storage/fetch.py\n+++ b/app/storage/fetch.py\n"
     "@@ -1,3 +1,4 @@\n-def fetch(client, key):\n+def fetch(client, key, timeout=None):\n"
     '     """Fetch one object."""\n+    MAIN_ONLY = 1\n     return client.get(key)\n'
-    "diff --git a/application_sdk/common/other.py b/application_sdk/common/other.py\n"
-    "--- a/application_sdk/common/other.py\n+++ b/application_sdk/common/other.py\n"
+    "diff --git a/app/common/other.py b/app/common/other.py\n"
+    "--- a/app/common/other.py\n+++ b/app/common/other.py\n"
     "@@ -1 +1 @@\n-x = 1\n+x = 2\n"
 )
 
@@ -3056,8 +3213,8 @@ def test_only_the_prs_own_change_is_kept_after_a_base_merge():
     kept, dropped, demoted = review_mod.only_pr_changes(
         parse_unified_diff(MERGED_DIFF), parse_unified_diff(PR_DIFF)
     )
-    assert [f.path for f in kept] == ["application_sdk/storage/fetch.py"]
-    assert dropped == ["application_sdk/common/other.py"]  # only main changed it
+    assert [f.path for f in kept] == ["app/storage/fetch.py"]
+    assert dropped == ["app/common/other.py"]  # only main changed it
     assert demoted == 1  # main's line in the PR's file is context now, not a change
     fd = kept[0]
     assert fd.added_lines == {1}  # just the author's line
@@ -3067,7 +3224,7 @@ def test_only_the_prs_own_change_is_kept_after_a_base_merge():
 def test_a_re_review_after_merging_main_reviews_only_the_authors_change(repo: Path):
     gh = FakeGitHub()
     gh.diffs[("b0", "h1")] = PR_DIFF
-    gh.files[("application_sdk/storage/fetch.py", "h1")] = SRC_V1.replace(
+    gh.files[("app/storage/fetch.py", "h1")] = SRC_V1.replace(
         "key):", "key, timeout=None):"
     )
     rules = RuleSet([], {})
@@ -3082,8 +3239,8 @@ def test_a_re_review_after_merging_main_reviews_only_the_authors_change(repo: Pa
     gh.head = "h2"
     gh.diffs[("h1", "h2")] = MERGED_DIFF
     gh.diffs[("b0", "h2")] = PR_DIFF
-    gh.files[("application_sdk/storage/fetch.py", "h2")] = (
-        gh.files[("application_sdk/storage/fetch.py", "h1")].replace(
+    gh.files[("app/storage/fetch.py", "h2")] = (
+        gh.files[("app/storage/fetch.py", "h1")].replace(
             '    """Fetch one object."""\n',
             '    """Fetch one object."""\n    MAIN_ONLY = 1\n',
         )
@@ -3106,7 +3263,7 @@ def test_a_re_review_after_merging_main_reviews_only_the_authors_change(repo: Pa
     ]
     for r in reviews:
         files_block = r["messages"][2]["content"].split("<review_files>", 1)[1]
-        assert "application_sdk/common/other.py" not in files_block
+        assert "app/common/other.py" not in files_block
         assert "+    MAIN_ONLY" not in files_block
 
 
@@ -3163,7 +3320,7 @@ def test_the_label_is_shown_on_the_verdict_summary_and_log(repo: Path, capsys):
     gh.head = "h2"
     gh.diffs[("h1", "h2")] = gh.diffs[("b0", "h1")]
     gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
-    gh.files[("application_sdk/storage/fetch.py", "h2")] = SRC_V2_NEXT
+    gh.files[("app/storage/fetch.py", "h2")] = SRC_V2_NEXT
     capsys.readouterr()
     res = run(
         gh=gh,
@@ -3220,7 +3377,7 @@ def test_re_review_reads_only_its_own_sticky_comment_among_other_bot_comments(
     gh.head = "h2"
     gh.diffs[("h1", "h2")] = gh.diffs[("b0", "h1")]
     gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
-    gh.files[("application_sdk/storage/fetch.py", "h2")] = SRC_V2_NEXT
+    gh.files[("app/storage/fetch.py", "h2")] = SRC_V2_NEXT
     script = Script()
     res = run(
         gh=gh,
@@ -3310,7 +3467,7 @@ def test_round_history_is_bounded(repo: Path):
     gh.head = "h2"
     gh.diffs[("h1", "h2")] = gh.diffs[("b0", "h1")]
     gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
-    gh.files[("application_sdk/storage/fetch.py", "h2")] = SRC_V2_NEXT
+    gh.files[("app/storage/fetch.py", "h2")] = SRC_V2_NEXT
     res = run(
         gh=gh,
         number=1,
@@ -3344,7 +3501,7 @@ def test_a_huge_pr_still_fits_in_one_comment_and_keeps_every_finding():
     fs = []
     for i in range(150):
         f = Finding(
-            f"application_sdk/m{i % 12}/f{i}.py",
+            f"app/m{i % 12}/f{i}.py",
             i + 1,
             findings_mod.SEVERITIES[i % 4],
             "bug",
@@ -3421,7 +3578,7 @@ def test_the_run_is_linked_from_the_status_the_verdict_and_the_history(repo: Pat
 # ---- a finding off the diff is still a finding -----------------------------------------------------------------
 
 OFF_DIFF = {
-    "path": "application_sdk/storage/fetch.py",
+    "path": "app/storage/fetch.py",
     "existing_code": "    return [fetch(client, k) for k in keys]",  # line 8: not in the diff
     "severity": "low",
     "category": "bug",
@@ -3642,8 +3799,8 @@ def test_a_first_review_with_findings_posts_only_the_summary(repo: Path):
 
 HELPER = 'def get_or_none(client, key):\n    return client.get(key) or b""\n'
 HELPER_DIFF = (
-    "diff --git a/application_sdk/storage/helper.py b/application_sdk/storage/helper.py\n"
-    "new file mode 100644\n--- /dev/null\n+++ b/application_sdk/storage/helper.py\n"
+    "diff --git a/app/storage/helper.py b/app/storage/helper.py\n"
+    "new file mode 100644\n--- /dev/null\n+++ b/app/storage/helper.py\n"
     '@@ -0,0 +1,2 @@\n+def get_or_none(client, key):\n+    return client.get(key) or b""\n'
 )
 
@@ -3653,8 +3810,8 @@ def _round_two_elsewhere(gh):
     gh.head = "h2"
     gh.diffs[("h1", "h2")] = HELPER_DIFF
     gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")] + HELPER_DIFF
-    gh.files[("application_sdk/storage/fetch.py", "h2")] = SRC_V2
-    gh.files[("application_sdk/storage/helper.py", "h2")] = HELPER
+    gh.files[("app/storage/fetch.py", "h2")] = SRC_V2
+    gh.files[("app/storage/helper.py", "h2")] = HELPER
 
 
 def test_a_fix_in_another_file_is_still_rechecked(repo: Path):
@@ -3686,10 +3843,7 @@ def test_a_fix_in_another_file_is_still_rechecked(repo: Path):
     assert res.resolved_verified == [fid]
     verify = next(r for r in script.requests if "<changes_this_round>" in json.dumps(r))
     sent = json.dumps(verify)
-    assert (
-        f'finding id=\\"{fid}\\"' in sent
-        and "application_sdk/storage/helper.py" in sent
-    )
+    assert f'finding id=\\"{fid}\\"' in sent and "app/storage/helper.py" in sent
     assert "quoted_when_raised" in sent
 
 
@@ -3823,9 +3977,7 @@ def test_verify_checks_every_open_finding_in_batches(repo: Path):
     """The re-check stopped at 20: anything past it was never re-checked."""
     ws, _ = _ws(repo)
     fs = [
-        Finding(
-            "application_sdk/storage/fetch.py", 1, "low", "bug", f"t{i}", "b", f"x{i}"
-        )
+        Finding("app/storage/fetch.py", 1, "low", "bug", f"t{i}", "b", f"x{i}")
         for i in range(25)
     ]
     script = Script(
@@ -4106,7 +4258,7 @@ def test_a_dismissal_keeps_the_location_links(repo: Path):
         gh, 1, [low.id], "tracked separately", actor="reviewer", pr_author="author"
     )
     body = gh.comments[0]["body"]
-    assert "https://github.com/o/r/blob/h1/application_sdk/storage/fetch.py#L4" in body
+    assert "https://github.com/o/r/blob/h1/app/storage/fetch.py#L4" in body
 
 
 # ---- verify sees the paths the PR removes ----------------------------------------
@@ -4165,7 +4317,7 @@ def test_verify_is_told_which_paths_no_longer_exist(repo: Path):
 
 def test_verify_gets_no_removed_block_when_nothing_was_removed(repo: Path):
     ws, _ = _ws(repo)
-    f = Finding("application_sdk/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
+    f = Finding("app/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
     script = Script(response([tool_call("verdicts", {"items": []})]))
     client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
 
@@ -4276,7 +4428,7 @@ def test_verify_sees_the_enclosing_symbol_as_it_is_on_the_base_branch(repo: Path
     from one against an earlier commit of this PR."""
     ws, _ = _ws(repo)
     f = Finding(
-        "application_sdk/storage/fetch.py",
+        "app/storage/fetch.py",
         4,
         "high",
         "compatibility",
@@ -4288,7 +4440,7 @@ def test_verify_sees_the_enclosing_symbol_as_it_is_on_the_base_branch(repo: Path
     user, _ = _verify_user(ws, f)
 
     block = user.split("<at_base_branch>\n", 1)[1].split("\n</at_base_branch>", 1)[0]
-    assert block.splitlines()[0] == "application_sdk/storage/fetch.py: fetch"
+    assert block.splitlines()[0] == "app/storage/fetch.py: fetch"
     assert "def fetch(client, key):" in block
     assert "return client.get(key)" in block
     assert "decode" not in block  # the base copy, not the head's
@@ -4297,9 +4449,9 @@ def test_verify_sees_the_enclosing_symbol_as_it_is_on_the_base_branch(repo: Path
 def test_a_symbol_the_pr_adds_is_absent_on_base(repo: Path):
     files = parse_unified_diff(DIFF)
     head = {
-        "application_sdk/storage/fetch.py": SRC_V2
+        "app/storage/fetch.py": SRC_V2
         + "\n\ndef fetch_many(client, keys):\n    return list(map(fetch, keys))\n",
-        "application_sdk/storage/new.py": "def brand_new():\n    return 1\n",
+        "app/storage/new.py": "def brand_new():\n    return 1\n",
     }
     ws = Workspace(
         root=repo,
@@ -4308,7 +4460,7 @@ def test_a_symbol_the_pr_adds_is_absent_on_base(repo: Path):
         index=build_index(repo, overrides=head),
     )
     in_new_symbol = Finding(
-        "application_sdk/storage/fetch.py",
+        "app/storage/fetch.py",
         12,
         "high",
         "bug",
@@ -4316,17 +4468,15 @@ def test_a_symbol_the_pr_adds_is_absent_on_base(repo: Path):
         "b",
         "return list(map(fetch, keys))",
     )
-    in_new_file = Finding(
-        "application_sdk/storage/new.py", 2, "high", "bug", "t", "b", "return 1"
-    )
+    in_new_file = Finding("app/storage/new.py", 2, "high", "bug", "t", "b", "return 1")
 
     user, _ = _verify_user(ws, in_new_symbol)
     assert (
         "<at_base_branch>\nabsent on base: fetch_many in "
-        "application_sdk/storage/fetch.py\n</at_base_branch>"
+        "app/storage/fetch.py\n</at_base_branch>"
     ) in user
     user, _ = _verify_user(ws, in_new_file)
-    assert "<at_base_branch>\nabsent on base: application_sdk/storage/new.py" in user
+    assert "<at_base_branch>\nabsent on base: app/storage/new.py" in user
 
 
 def _base_and_head_ws(tmp_path: Path, rel: str, base: str, head: str) -> Workspace:
@@ -4342,7 +4492,7 @@ def _base_and_head_ws(tmp_path: Path, rel: str, base: str, head: str) -> Workspa
 
 
 def test_a_module_level_finding_gets_the_base_lines_around_its_quote(tmp_path: Path):
-    rel = "application_sdk/keys.py"
+    rel = "app/keys.py"
     ws = _base_and_head_ws(
         tmp_path,
         rel,
@@ -4367,7 +4517,7 @@ def test_a_pr_only_quote_in_a_long_base_symbol_gets_the_matching_window(
 ):
     """The quote exists only at the head, so it cannot be found in the base
     copy; the window is taken at the same offset into the symbol, not its top."""
-    rel = "application_sdk/long.py"
+    rel = "app/long.py"
     body = "".join(f"    x_{i} = {i}\n" for i in range(200))
     base = f"def long():\n{body}    return 0\n"
     head = base.replace("    x_150 = 150\n", "    x_150 = 'new'\n")
@@ -4396,7 +4546,7 @@ def test_the_prompts_state_the_base_branch_rule():
 def test_a_moot_verdict_closes_the_finding_and_is_not_a_spiral(repo: Path):
     ws, _ = _ws(repo)
     f = Finding(
-        "application_sdk/storage/fetch.py",
+        "app/storage/fetch.py",
         4,
         "high",
         "compatibility",
@@ -4437,7 +4587,7 @@ def test_a_verify_cut_off_is_not_read_as_nothing_fixed(repo: Path):
     """A verify reply with no verdict was taken as "none fixed", so findings the
     PR had fixed were reported open round after round, with nothing said."""
     ws, _ = _ws(repo)
-    f = Finding("application_sdk/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
+    f = Finding("app/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
     concern = ("A1", {"title": "skipped not refused", "why": "w"})
     script = Script(_cut_off_reply())
     client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
@@ -4451,7 +4601,7 @@ def test_a_verify_cut_off_is_not_read_as_nothing_fixed(repo: Path):
 def test_a_verdict_reply_at_the_cap_is_still_read(repo: Path):
     """Using every token is only a cut-off when no verdict came back."""
     ws, _ = _ws(repo)
-    f = Finding("application_sdk/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
+    f = Finding("app/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
     reply = response(
         [tool_call("verdicts", {"items": [{"id": f.id, "status": "fixed"}]})], out=8000
     )
@@ -4466,7 +4616,7 @@ def test_a_verdict_reply_at_the_cap_is_still_read(repo: Path):
 
 def test_verify_keeps_its_budget_unless_opted_in(repo: Path):
     ws, _ = _ws(repo)
-    f = Finding("application_sdk/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
+    f = Finding("app/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
     script = Script(
         response([tool_call("verdicts", {"items": []})]),
         response([tool_call("verdicts", {"items": []})]),
@@ -4567,7 +4717,7 @@ def test_a_responses_api_cut_off_is_read_from_its_incomplete_status(repo: Path):
     """The shipped config uses Responses, which reports the cap as status
     `incomplete`. Fewer tokens than the cap, so only the status can flag it."""
     ws, _ = _ws(repo)
-    f = Finding("application_sdk/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
+    f = Finding("app/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
     status, headers, text = _responses_reply([REASONING], output=500, reasoning=500)
     body = json.loads(text)
     body["status"] = "incomplete"
@@ -4624,9 +4774,7 @@ def _round_two_merge_only(gh):
     gh.head = "h2"
     gh.diffs[("h1", "h2")] = ""
     gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
-    gh.files[("application_sdk/storage/fetch.py", "h2")] = gh.files[
-        ("application_sdk/storage/fetch.py", "h1")
-    ]
+    gh.files[("app/storage/fetch.py", "h2")] = gh.files[("app/storage/fetch.py", "h1")]
 
 
 def test_a_round_that_changes_no_pr_file_says_nothing_was_rechecked(repo: Path):
@@ -4745,7 +4893,7 @@ def test_force_rechecks_open_findings_after_a_merge_only_push(repo: Path):
 
 # ---- compatibility claims on code this PR itself added (FND-4163) ------------------------
 
-MARKER = "application_sdk/storage/_marker.py"
+MARKER = "app/storage/_marker.py"
 MARKER_V1 = """\
 def hash_fingerprinted(path):
     lo, hi = _bracket(path)
@@ -4884,8 +5032,8 @@ def _fetch_pr_with_base(diff: str = DIFF, head_src: str = SRC_V2) -> FakeGitHub:
     return FakeGitHub(
         diffs={("b0", "h1"): diff},
         files={
-            ("application_sdk/storage/fetch.py", "h1"): head_src,
-            ("application_sdk/storage/fetch.py", "b0"): SRC_V1,
+            ("app/storage/fetch.py", "h1"): head_src,
+            ("app/storage/fetch.py", "b0"): SRC_V1,
         },
     )
 
@@ -4959,27 +5107,27 @@ def test_pr_additions_reads_the_merge_base_and_fails_closed():
     files = parse_unified_diff(
         _added_file_diff(MARKER, MARKER_V1)
         + DIFF
-        + "diff --git a/application_sdk/x.py b/application_sdk/x.py\n"
-        "--- a/application_sdk/x.py\n+++ b/application_sdk/x.py\n@@ -1 +1 @@\n-a = 1\n+a = 2\n"
+        + "diff --git a/app/x.py b/app/x.py\n"
+        "--- a/app/x.py\n+++ b/app/x.py\n@@ -1 +1 @@\n-a = 1\n+a = 2\n"
     )
     head = {
         MARKER: MARKER_V1,
-        "application_sdk/storage/fetch.py": SRC_V2_NEXT,
-        "application_sdk/x.py": "class A:\n    def m(self):\n        pass\n",
+        "app/storage/fetch.py": SRC_V2_NEXT,
+        "app/x.py": "class A:\n    def m(self):\n        pass\n",
     }
-    base = {"application_sdk/storage/fetch.py": SRC_V1}
+    base = {"app/storage/fetch.py": SRC_V1}
     got = pr_additions(files, head.get, base.get)
     assert got.paths == [MARKER]
     # fetch.py: only the new function; x.py: its merge-base copy is unreadable, so nothing.
-    assert got.symbols == {"application_sdk/storage/fetch.py": ["fetch_many"]}
+    assert got.symbols == {"app/storage/fetch.py": ["fetch_many"]}
     assert "absent on merge base" in got.added(MARKER, None)
     idx = build_index(Path("/nonexistent"), overrides=head)
-    new_fn = idx.enclosing("application_sdk/storage/fetch.py", 11)
-    old_fn = idx.enclosing("application_sdk/storage/fetch.py", 3)
-    assert got.added("application_sdk/storage/fetch.py", new_fn).startswith(
+    new_fn = idx.enclosing("app/storage/fetch.py", 11)
+    old_fn = idx.enclosing("app/storage/fetch.py", 3)
+    assert got.added("app/storage/fetch.py", new_fn).startswith(
         "absent on merge base: fetch_many"
     )
-    assert got.added("application_sdk/storage/fetch.py", old_fn) == ""
+    assert got.added("app/storage/fetch.py", old_fn) == ""
 
 
 # ---- /review recheck ----------------------------------------------------------------------
@@ -5266,7 +5414,7 @@ def test_recheck_on_shipped_code_reports_it_present_on_the_merge_base(repo: Path
     [f] = res.state.findings
     _, script = _recheck(gh, repo, [f.id], "", Script(_verdict(f.id, "open", "still")))
     user = script.requests[0]["messages"][1]["content"]
-    assert "- present on merge base: fetch in application_sdk/storage/fetch.py" in user
+    assert "- present on merge base: fetch in app/storage/fetch.py" in user
     assert "callers of fetch at the PR head" in user and "load_all" in user
 
 
@@ -5325,12 +5473,12 @@ def test_the_baseline_reads_python_files_past_the_head_text_cap():
     files = parse_unified_diff(DIFF)
     gh = FakeGitHub(
         files={
-            ("application_sdk/storage/fetch.py", "h1"): SRC_V2_NEXT,
-            ("application_sdk/storage/fetch.py", "b0"): SRC_V1,
+            ("app/storage/fetch.py", "h1"): SRC_V2_NEXT,
+            ("app/storage/fetch.py", "b0"): SRC_V1,
         }
     )
     got = review_mod.pr_added(gh, "b0", "h1", files, head_text={})
-    assert got.symbols == {"application_sdk/storage/fetch.py": ["fetch_many"]}
+    assert got.symbols == {"app/storage/fetch.py": ["fetch_many"]}
 
 
 def _evidence(repo: Path, f: Finding, base: str | None) -> Any:
@@ -5342,7 +5490,7 @@ def _evidence(repo: Path, f: Finding, base: str | None) -> Any:
 
 def _compat_on_fetch(evidence: str) -> Finding:
     return Finding(
-        "application_sdk/storage/fetch.py",
+        "app/storage/fetch.py",
         4,
         "high",
         "bug",
@@ -5357,7 +5505,7 @@ def test_recheck_evidence_treats_an_unparseable_merge_base_as_unknown(repo: Path
     ev = _evidence(repo, _compat_on_fetch("return data.decode()"), "def broken(:\n")
     assert not ev.absent_on_merge_base
     assert ev.facts[0] == (
-        "merge-base copy of application_sdk/storage/fetch.py could not be parsed"
+        "merge-base copy of app/storage/fetch.py could not be parsed"
     )
 
 
@@ -5383,26 +5531,26 @@ def serve(source):
 """
 
 SCOPED_HEAD = {
-    "application_sdk/handler/routes.py": ROUTES,
+    "app/handler/routes.py": ROUTES,
     # A same-named `hook` called from another module: not the closure above.
-    "application_sdk/testing/e2e/base.py": (
+    "app/testing/e2e/base.py": (
         "class BaseE2ETest:\n    def config_name(self):\n        return self.hook()\n"
     ),
     "app/main.py": (
-        "from application_sdk.handler.routes import handler_compute_manifest\n\n"
+        "from app.handler.routes import handler_compute_manifest\n\n"
         "def build():\n    return handler_compute_manifest(None)\n"
     ),
     # F-b0cde5: the call names the alias, not the symbol.
     "app/aliased.py": (
-        "from application_sdk.handler.routes import handler_compute_manifest as hcm\n\n"
+        "from app.handler.routes import handler_compute_manifest as hcm\n\n"
         "def build():\n    return hcm(None)\n"
     ),
     # Calls the name without importing it: some other handler_compute_manifest.
     "app/other.py": "def run():\n    return handler_compute_manifest()\n",
-    "application_sdk/storage/store.py": (
+    "app/storage/store.py": (
         "class Store:\n    def get(self, key):\n        return key.strip()\n"
     ),
-    "application_sdk/storage/use.py": (
+    "app/storage/use.py": (
         "from .store import Store\n\n"
         "def read():\n    return Store().get('k')\n\n"
         "def typed(s: 'Store | None'):\n    return s.get('k')\n\n"
@@ -5411,7 +5559,7 @@ SCOPED_HEAD = {
         "class Cached(Store):\n    def get(self, key):\n        return super().get(key)\n"
     ),
     # F-3f69d2: a method of a local class escapes through the instance.
-    "application_sdk/handler/factory.py": (
+    "app/handler/factory.py": (
         "def factory():\n    class Runner:\n        def run(self):\n"
         "            return 1\n    return Runner()\n"
     ),
@@ -5436,9 +5584,7 @@ def _scoped_evidence(path: str, quote: str) -> Any:
 def test_recheck_evidence_lists_no_outside_callers_for_a_nested_symbol():
     """FND-4341: a closure's bare name colliding with a call elsewhere is not a
     caller; the evidence names the enclosing function's real callers instead."""
-    ev = _scoped_evidence(
-        "application_sdk/handler/routes.py", 'return config.get("name")'
-    )
+    ev = _scoped_evidence("app/handler/routes.py", 'return config.get("name")')
     facts = [x for x in ev.facts if "caller" in x]
     assert facts == [
         "local symbol: handler_compute_manifest.resolve.hook is defined inside "
@@ -5447,8 +5593,8 @@ def test_recheck_evidence_lists_no_outside_callers_for_a_nested_symbol():
         "elsewhere unrelated: no import reaches it)",
         "callers of handler_compute_manifest at the PR head (3 in its file or "
         "importing it; 1 same-name call elsewhere unrelated: no import reaches "
-        "it): app/aliased.py:3 build, app/main.py:3 build, "
-        "application_sdk/handler/routes.py:9 serve",
+        "it): app/aliased.py:3 build, app/handler/routes.py:9 serve, "
+        "app/main.py:3 build",
     ]
     assert not any("e2e/base.py" in x or "app/other.py" in x for x in ev.facts)
 
@@ -5457,20 +5603,20 @@ def test_recheck_evidence_keeps_a_method_caller_through_a_relative_import():
     """A method is listed only where the call's receiver is tied to its class:
     `C()`, an annotation, or super() in a subclass. A `.get()` on any other
     receiver is a count, even in a file that imports the class (F-fc5325)."""
-    ev = _scoped_evidence("application_sdk/storage/store.py", "return key.strip()")
+    ev = _scoped_evidence("app/storage/store.py", "return key.strip()")
     assert [x for x in ev.facts if "caller" in x] == [
         # dict.get in routes.py, config.py and use.py's lookup: counted, not listed.
         "callers of Store.get at the PR head (3 on a receiver typed as Store; 3 more "
         ".get() calls on a receiver the index cannot type): "
-        "application_sdk/storage/use.py:3 read, application_sdk/storage/use.py:6 typed, "
-        "application_sdk/storage/use.py:13 Cached.get"
+        "app/storage/use.py:3 read, app/storage/use.py:6 typed, "
+        "app/storage/use.py:13 Cached.get"
     ]
 
 
 def test_recheck_evidence_treats_a_local_class_method_as_a_method():
     """F-3f69d2: `factory.Runner.run` is reachable wherever the instance goes,
     so it is not "local to factory"; `r.run()` elsewhere is an untyped count."""
-    ev = _scoped_evidence("application_sdk/handler/factory.py", "return 1")
+    ev = _scoped_evidence("app/handler/factory.py", "return 1")
     assert [x for x in ev.facts if "caller" in x] == [
         "callers of factory.Runner.run at the PR head (0 on a receiver typed as "
         "Runner; 1 more .run() call on a receiver the index cannot type): none"
@@ -5548,11 +5694,9 @@ def test_recheck_evidence_shows_the_base_symbol_when_the_quote_is_new_in_the_pr(
     """The quote is new in the PR, so it is not on the merge base, but `fetch`
     shipped: <at_merge_base> shows `fetch` as the merge base has it."""
     ev = _evidence(repo, _compat_on_fetch("data = client.get(key)"), SRC_V1)
-    assert ev.facts[0] == (
-        "present on merge base: fetch in application_sdk/storage/fetch.py"
-    )
+    assert ev.facts[0] == ("present on merge base: fetch in app/storage/fetch.py")
     lines = ev.at_merge_base.splitlines()
-    assert lines[0] == "application_sdk/storage/fetch.py: fetch"
+    assert lines[0] == "app/storage/fetch.py: fetch"
     assert "def fetch(client, key):" in ev.at_merge_base
     assert "return client.get(key)" in ev.at_merge_base
     assert "load_all" not in ev.at_merge_base  # the symbol, not a window
@@ -5562,13 +5706,13 @@ def test_recheck_evidence_shows_the_base_symbol_when_the_quote_is_new_in_the_pr(
 # puts the base-branch result back. Against round 1's commit that reads as a change.
 SRC_RESTORED = SRC_V2.replace("    return data.decode()\n", "    return data\n")
 RESTORE_ROUND_DIFF = (
-    "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
-    "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+    "diff --git a/app/storage/fetch.py b/app/storage/fetch.py\n"
+    "--- a/app/storage/fetch.py\n+++ b/app/storage/fetch.py\n"
     "@@ -3,2 +3,2 @@\n     data = client.get(key)\n-    return data.decode()\n+    return data\n"
 )
 RESTORE_PR_DIFF = (
-    "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
-    "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+    "diff --git a/app/storage/fetch.py b/app/storage/fetch.py\n"
+    "--- a/app/storage/fetch.py\n+++ b/app/storage/fetch.py\n"
     "@@ -1,3 +1,4 @@\n-def fetch(client, key):\n+def fetch(client, key, timeout=None):\n"
     '     """Fetch one object."""\n-    return client.get(key)\n'
     "+    data = client.get(key)\n+    return data\n"
@@ -5596,9 +5740,9 @@ def _restoring_round_two(repo: Path, verdict: str) -> tuple[RunResult, Script, s
     gh.head = "h2"
     gh.diffs[("h1", "h2")] = RESTORE_ROUND_DIFF
     gh.diffs[("b0", "h2")] = RESTORE_PR_DIFF
-    gh.files[("application_sdk/storage/fetch.py", "h2")] = SRC_RESTORED
+    gh.files[("app/storage/fetch.py", "h2")] = SRC_RESTORED
     fid = Finding(
-        "application_sdk/storage/fetch.py",
+        "app/storage/fetch.py",
         0,
         "high",
         REGRESSION_CLAIM["category"],
@@ -5647,7 +5791,7 @@ def test_a_new_blocking_finding_moot_against_the_base_branch_is_not_published(
     assert res.state.open_findings(findings_mod.BLOCKING) == []
     user = _new_check_request(script)
     block = user.split("<at_base_branch>\n", 1)[1].split("\n</at_base_branch>", 1)[0]
-    assert block.splitlines()[0] == "application_sdk/storage/fetch.py: fetch"
+    assert block.splitlines()[0] == "app/storage/fetch.py: fetch"
     assert "return client.get(key)" in block
 
 
@@ -5684,9 +5828,7 @@ def _check_new(repo: Path, transport, findings: list[Finding], cap: float = 1.0)
 
 
 def _new_high(n: int = 0) -> Finding:
-    return Finding(
-        "application_sdk/storage/fetch.py", 4, "high", "bug", f"t{n}", "b", f"x{n}"
-    )
+    return Finding("app/storage/fetch.py", 4, "high", "bug", f"t{n}", "b", f"x{n}")
 
 
 @pytest.mark.parametrize(
@@ -5848,7 +5990,7 @@ def test_recheck_on_a_non_workflow_file_makes_no_visibility_lookup(repo: Path):
         (".github/actions/a/b/action.yaml", True),
         (".github/workflows/nested/ci.yml", False),
         (".github/actions/setup/other.yml", False),
-        ("application_sdk/app.py", False),
+        ("app/main.py", False),
     ],
 )
 def test_checkout_target_facts_only_read_actions_files(path, actions):
@@ -6232,8 +6374,8 @@ def test_a_turn_zero_refusal_names_the_first_prompts_files_and_hunks(repo: Path)
     kinds = [s["kind"] for s in r["suspects"]]
     assert kinds[:2] == ["pr_description", "context"] and "diff" in kinds
     diff = next(s for s in r["suspects"] if s["kind"] == "diff")
-    assert diff["files"] == {"application_sdk/storage/fetch.py": ["1-4"]}
-    assert agent_mod.suspect_paths(r)[-1] == "application_sdk/storage/fetch.py"
+    assert diff["files"] == {"app/storage/fetch.py": ["1-4"]}
+    assert agent_mod.suspect_paths(r)[-1] == "app/storage/fetch.py"
     # Counts and locations only: no line of the PR's code is in the record.
     assert "data.decode()" not in json.dumps(r)
 
@@ -6284,7 +6426,7 @@ def test_a_refused_review_does_not_tell_the_author_to_retry_and_reports_the_susp
     body = next(c["body"] for c in gh.comments if SUMMARY_MARKER in c["body"])
     assert "Review incomplete" in body
     assert "Comment `/review` to retry" not in body
-    assert "refused again" in body and "`application_sdk/storage/fetch.py`" in body
+    assert "refused again" in body and "`app/storage/fetch.py`" in body
 
     rep = report.build(res)
     (b,) = [b for b in rep["bundles"] if b.get("refusal")]
@@ -6292,7 +6434,7 @@ def test_a_refused_review_does_not_tell_the_author_to_retry_and_reports_the_susp
     assert len(b["refusal"]["error"]) > 300
     md = report.markdown(rep, 1)
     assert "Refused by the model provider" in md and "provider_rejected" in md
-    assert "application_sdk/storage/fetch.py" in md
+    assert "app/storage/fetch.py" in md
 
 
 def test_a_refusal_beside_a_transport_failure_still_offers_a_retry_for_the_other_part():

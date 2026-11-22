@@ -288,7 +288,7 @@ TOOL_SCHEMAS = [
     ),
     _fn(
         "search_code",
-        f"Fixed-string search across the repo (max {SEARCH_MAX_MATCHES} matches). Use path_glob to narrow, e.g. 'application_sdk/**'.",
+        f"Fixed-string search across the repo (max {SEARCH_MAX_MATCHES} matches). Use path_glob to narrow, e.g. 'app/**'.",
         {
             "search_text": {"type": "string"},
             "path_glob": {"type": "string"},

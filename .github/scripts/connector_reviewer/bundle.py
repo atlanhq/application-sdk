@@ -5,9 +5,11 @@ and never varies between runs:
 
 - A PR that fits one bundle's budget (`max_files`, `max_diff_tokens`) is one
   bundle: the whole change in one context, the cheapest possible review.
-- Otherwise files cluster by their module directory — a test file joins the
-  cluster of the source it tests (`tests/unit/x/test_y.py` ↔ `x/y.py`) — and
-  clusters are packed into as few bundles as the limits allow.
+- Otherwise files cluster by their module directory in the standard connector
+  app layout — a test file joins the cluster of the source it tests
+  (`tests/unit/x/test_y.py` ↔ `app/x/y.py`), the contract is one cluster, and
+  so are the root build files — and clusters are packed into as few bundles as
+  the limits allow.
 - No bundle passes `max_files` or `max_diff_tokens`, so no single sub-review
   can blow its context.
 
@@ -41,22 +43,31 @@ class Bundle:
         return sum(estimate_tokens(f.render()) for f in self.files)
 
 
+# Directories of tests/ that name a tier or mirror the source root, not a module.
+_TEST_TIERS = ("unit", "integration", "e2e", "functional", "app")
+_BUILD_KEY = "build"
+
+
 def _module_key(path: str) -> str:
+    """The cluster a file belongs to, in the standard connector app layout."""
     p = PurePosixPath(path)
     parts = list(p.parts)
     if parts and parts[0] == "tests":
-        # tests/unit/storage/test_batch.py -> storage ; tests/test_x.py -> tests
-        rest = [
-            x
-            for x in parts[1:-1]
-            if x not in ("unit", "integration", "e2e", "functional")
-        ]
+        # tests/unit/extract/test_tables.py -> extract ; tests/unit/test_main.py -> main
+        rest = [x for x in parts[1:-1] if x not in _TEST_TIERS]
         stem = p.stem.removeprefix("test_")
         return "/".join(rest) or stem
-    if parts and parts[0] == "application_sdk":
+    if parts and parts[0] == "app":
+        # app/extract/tables.py -> extract ; app/main.py -> main
         return "/".join(parts[1:-1]) or p.stem
+    if parts and parts[0] == "contract":
+        return "contract"
     if len(parts) >= 3 and parts[0] == ".github":
         return "/".join(parts[:2])
+    if len(parts) == 1 and (
+        p.name.startswith("Dockerfile") or p.name == "pyproject.toml"
+    ):
+        return _BUILD_KEY
     return "/".join(parts[:-1]) or p.stem
 
 

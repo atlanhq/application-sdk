@@ -38,11 +38,15 @@ later_round_min_severity = "high" # after round 1, only critical/high may be new
 max_bundles = 8
 concurrency = 4
 max_changed_files = 60
+# On top of select.DEFAULT_EXCLUDE (uv.lock and other lockfiles, CHANGELOG.md, generated
+# code, snapshots, images). Paths are those of the standard connector app layout.
 exclude = [
+  "app/generated/**",               # generated from the Pkl contract
+  "contract/PklProject.deps.json",  # the contract's resolved dependencies (a lockfile)
   ".mothership/**",
-  "conformance/**/fixtures/**",
   "tests/**/fixtures/**",
   "tests/**/golden/**",
+  "tests/**/__snapshots__/**",
 ]
 
 [stages]
