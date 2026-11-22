@@ -3261,7 +3261,14 @@ local function getInputPyField(k: String, u: Config.UIElement): String =
     "\(k): str = \"\""
   else if (u is Config.ConditionalInput)
     (let (ci = u as Config.ConditionalInput)
-      if (ci.outputValueType == "object")
+      if (ci.stringMap && ci.outputValueType != "object")
+        throw("ConditionalInput '\(k)' sets stringMap but its outputValueType is "
+          + "\"\(ci.outputValueType)\"; stringMap applies only to outputValueType = \"object\".")
+      else if (ci.outputValueType == "object" && ci.stringMap)
+        // Flat string map (e.g. dsnTreeMap: DSN -> connection qualified name).
+        // `str` values avoid the SDK's AAF-CTR-002 rejection of `Any`.
+        getPyDefaultFactoryField(k, "Annotated[dict[str, str], MaxItems(1000)]", "dict")
+      else if (ci.outputValueType == "object")
         getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
       else
         "\(k): str = \"\(if (ci.default != null) ci.default!!.toString() else "")\"")
@@ -3279,7 +3286,15 @@ local function needsJsonObjectStringCoercion(u: Config.UIElement): Boolean =
   || u is Config.DsnTreeMap
   || u is Config.SqlTree
   || u is Config.AgentSelector
-  || (u is Config.ConditionalInput && (u as Config.ConditionalInput).outputValueType == "object")
+  || (u is Config.ConditionalInput && (u as Config.ConditionalInput).outputValueType == "object"
+    && !(u as Config.ConditionalInput).stringMap)
+
+/// Object conditionals typed as a flat string map get their own lenient
+/// coercion validator (see `ConditionalInput.stringMap`).
+local function needsStringMapCoercion(u: Config.UIElement): Boolean =
+  u is Config.ConditionalInput
+  && (u as Config.ConditionalInput).outputValueType == "object"
+  && (u as Config.ConditionalInput).stringMap
 
 local function pyQuotedCsv(values: List<String>): String =
   values.fold("", (acc: String, value: String) ->
@@ -3364,8 +3379,37 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     "                return parsed\n" +
     "        return value\n\n"
   else ""
+  local stringMapCoercionFields: List<String> = (new Listing {
+    for (k, u in uiConfig.properties) {
+      when (u.includeInInput && !skipFields.contains(toPyName(k)) && needsStringMapCoercion(u)) {
+        toPyName(k)
+      }
+    }
+  }).toList()
+  local stringMapCoercionBlock: String = if (!stringMapCoercionFields.isEmpty)
+    "    @field_validator(\(pyQuotedCsv(stringMapCoercionFields)), mode=\"before\")\n" +
+    "    @classmethod\n" +
+    "    def _coerce_string_maps(cls, value: Any) -> Any:\n" +
+    "        if value is None:\n" +
+    "            return {}\n" +
+    "        if not isinstance(value, str):\n" +
+    "            return value\n" +
+    "        stripped = value.strip()\n" +
+    "        if not stripped:\n" +
+    "            return {}\n" +
+    "        try:\n" +
+    "            parsed = orjson.loads(stripped)\n" +
+    "        except orjson.JSONDecodeError:\n" +
+    "            parsed = None\n" +
+    "        if isinstance(parsed, dict):\n" +
+    "            return parsed\n" +
+    "        logger.debug(\"String-map input was not a JSON object; using an empty map.\")\n" +
+    "        return {}\n\n"
+  else ""
+  local coercionFieldsPresent: Boolean =
+    !objectStringCoercionFields.isEmpty || !stringMapCoercionFields.isEmpty
   local objectStringCoercionSeparator: String =
-    if (!uiFieldLines.isEmpty && !objectStringCoercionBlock.isEmpty) "\n" else ""
+    if (!uiFieldLines.isEmpty && coercionFieldsPresent) "\n" else ""
   local credFieldLine: String = if (credentialFieldName != null && !skipFields.contains(credentialFieldName!!))
     "    \(credentialFieldName!!): CredentialRef | None = None\n"
   else ""
@@ -3408,7 +3452,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     "    \"\"\"Object-store key holding this micro-batch's events; AE always sets it.\"\"\"\n"
   else ""
   local usesAnnotated: Boolean = uiFieldLines.contains("Annotated[")
-  local usesAny: Boolean = uiFieldLines.contains("dict[str, Any]") || !objectStringCoercionFields.isEmpty
+  local usesAny: Boolean = uiFieldLines.contains("dict[str, Any]") || coercionFieldsPresent
   local usesClassVar: Boolean = hasPublishStep && hasPublishInputFields
   local typingImports: List<String> = (new Listing {
     when (usesAnnotated) {
@@ -3427,12 +3471,12 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   // sanctioned JSON entrypoint (conformance O001). Emitted as a third-party
   // import only when the JSON-object-string coercion validator is generated.
   local thirdPartyImportLines: String =
-    (if (!objectStringCoercionFields.isEmpty) "import orjson\n" else "")
+    (if (coercionFieldsPresent) "import orjson\n" else "")
   local pydanticImports: List<String> = (new Listing {
     when (uiFieldLines.contains(" = Field(")) {
       "Field"
     }
-    when (!objectStringCoercionFields.isEmpty) {
+    when (coercionFieldsPresent) {
       "field_validator"
     }
   }).toList()
@@ -3454,7 +3498,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
       "from application_sdk.contracts.types import \(sdkTypeImports.join(", "))\n"
     else "") +
     (if (!credFieldLine.isEmpty) "from application_sdk.credentials.ref import CredentialRef\n" else "") +
-    (if (!objectStringCoercionFields.isEmpty)
+    (if (coercionFieldsPresent)
       "from application_sdk.observability.logger_adaptor import get_logger\n"
     else "") +
     "from application_sdk.templates.contracts import ExtractionInput\n"
@@ -3462,7 +3506,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   // its benign "not valid JSON" fallback is observable (conformance E007) rather
   // than silently swallowed. The message never logs the value itself.
   local loggerModuleLine: String =
-    if (!objectStringCoercionFields.isEmpty) "logger = get_logger(__name__)\n\n\n" else ""
+    if (coercionFieldsPresent) "logger = get_logger(__name__)\n\n\n" else ""
   local inputImportBlock: String =
     "from __future__ import annotations\n\n" +
     (if (!stdlibImportLines.isEmpty) stdlibImportLines + "\n" else "") +
@@ -3483,6 +3527,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     uiFieldLines +
     objectStringCoercionSeparator +
     objectStringCoercionBlock +
+    stringMapCoercionBlock +
     credFieldLine +
     publishFieldBlock +
     streamingFieldBlock
