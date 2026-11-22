@@ -253,7 +253,7 @@ def _body(lines: list[str]) -> tuple[str, dict[str, list[str]]]:
 def parse_principle(text: str, source: str) -> Principle:
     """One principle from the text of its file. Raises ValueError, with the
     reason, for a file that does not follow the format."""
-    lines = text.lstrip("﻿").replace("\r\n", "\n").split("\n")
+    lines = text.lstrip("\ufeff").replace("\r\n", "\n").split("\n")
     meta, body_start = _front_matter(lines)
     pid = meta.get("id", "").strip("'\"")
     prefix = ID_PREFIX[source]

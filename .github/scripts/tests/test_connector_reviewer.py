@@ -1,9 +1,12 @@
 """Tests for connector-reviewer, the fixed-cost PR reviewer (.github/scripts/connector_reviewer).
 
 The model is scripted and GitHub is faked: every test runs offline and
-asserts on connector-reviewer's own mechanisms — anchoring, the index, rule matching,
-grouping, the $ ledger, the bounded loop, reflection, and the round rules
-that make a PR's reviews converge.
+asserts on connector-reviewer's own mechanisms — anchoring, the index, the
+principles and how they are matched to files, grouping, the $ ledger, the
+bounded loop, reflection, and the round rules that make a PR's reviews converge.
+
+Ported from test_lens.py; `.github/connector-reviewer/FORK.md` says which of
+lens's tests were kept, adapted or dropped, and why.
 """
 
 from __future__ import annotations

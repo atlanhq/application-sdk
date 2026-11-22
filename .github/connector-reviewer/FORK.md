@@ -213,6 +213,35 @@ back for its own file: the trigger list, never checking out the PR head, the
 `run-name` and no `concurrency:` block (`lock.run_name`), `timeout-minutes` equal to
 `lock.JOB_TIMEOUT`, the token permissions, and the run-report upload.
 
+## Module by module
+
+Where a lens fix lands in this copy. "Names" means only the renames in the table
+above; "typing" means only the annotations described under Typing.
+
+| Module | Against lens at the fork point |
+|---|---|
+| `baseline.py`, `diff.py`, `index.py` | Identical, byte for byte. A lens patch applies as it is. |
+| `findings.py`, `lock.py`, `report.py` | Names. |
+| `triage.py` | Typing (one annotation). |
+| `tools.py` | Typing (one annotation), and two description strings (`compatibility`, `search_code`). |
+| `trace.py` | Names, typing. |
+| `select.py` | `DEFAULT_EXCLUDE` only. |
+| `config.py` | Docstring, `raw_hash`, typing. |
+| `bundle.py` | `_module_key` and the module docstring. |
+| `llm.py` | Names (the gateway key variable, the User-Agent, log text), typing. |
+| `github.py` | Names, typing, and four methods removed with the approval step. |
+| `event.py` | Names, typing, and the recheck paragraph of the docstring. |
+| `holistic.py` | The prompt's opening and one concern; no `<public_api>` block; typing. |
+| `context.py` | No `_public` / `public_api`; `build` returns a string. |
+| `advisory.py` | Rewritten as the empty extension point; holds `glob_match`. |
+| `agent.py` | Names; principles where lens has rules; no released-surface block; typing. |
+| `prompts.py` | The review prompt's opening, "Repository layout" and "Principles" sections; the removals; typing. |
+| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing. |
+| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`. |
+| `__init__.py` | Docstring. |
+| `principles.py`, `typed.py` | New here. |
+| `approve.py`, `surface.py`, `rules.py` | Not here. |
+
 ## Not changed, and worth knowing before the next change
 
 These are lens's behaviour, carried over as it is. Later changes to this fork are
