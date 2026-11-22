@@ -12,9 +12,10 @@ lives), against a checkout of the BASE branch of the connector app under review
 (`.github/connector-reviewer/config.toml` in application-sdk) unless
 `--config-dir` says otherwise: an app repo cannot retune its own reviewer.
 The fleet principles come from `--principles-dir` (or
-`CONNECTOR_REVIEWER_PRINCIPLES_DIR`); a review does not start without them. The
-app's own principles, if any, are read from
-`<root>/.github/connector-reviewer/principles/` (connector_reviewer/principles.py).
+`CONNECTOR_REVIEWER_PRINCIPLES_DIR`): in CI, `.github/connector-reviewer/principles/`
+of the application-sdk checkout. A review does not start without them. The app's
+own principles, if any, are read from `<root>/.github/connector-reviewer/principles/`
+of the repo under review (connector_reviewer/principles.py).
 `--dry-run` prints the result as JSON and posts nothing — the way to try
 connector-reviewer on any PR, including a historical one. Exit code is 0 whenever
 connector-reviewer ran to a verdict or a deliberate skip; a non-zero exit means
@@ -70,7 +71,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument(
         "--principles-dir",
         default=None,
-        help="the fleet principles directory (default: $CONNECTOR_REVIEWER_PRINCIPLES_DIR)",
+        help="the fleet principles directory: .github/connector-reviewer/principles of "
+        "an application-sdk checkout (default: $CONNECTOR_REVIEWER_PRINCIPLES_DIR)",
     )
     r.add_argument("--force", action="store_true")
     r.add_argument(

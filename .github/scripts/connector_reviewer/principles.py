@@ -17,14 +17,23 @@ short Markdown file:
     Don't flag: <what CI already enforces, citing conformance rule ids in backticks>
     Severity: <what makes it high; otherwise medium>
 
+A field's text may wrap over several lines; a question is usually one line.
+Blank lines between the fields are allowed and not needed.
+
 Two sources, one format:
 
-- **fleet principles** (`FP01`…) hold for every connector app. They are read
-  from the directory given by `--principles-dir` or the
-  `CONNECTOR_REVIEWER_PRINCIPLES_DIR` environment variable;
+- **fleet principles** (`FP01`…) hold for every connector app. They live in
+  application-sdk at `.github/connector-reviewer/principles/`, beside the
+  reviewer's config, and are read from the directory given by
+  `--principles-dir` or the `CONNECTOR_REVIEWER_PRINCIPLES_DIR` environment
+  variable (in CI, that directory of the application-sdk checkout);
 - **repo principles** (`RP01`…) are one repository's own. They are read from
   `<root>/.github/connector-reviewer/principles/` on the base branch of the
   repo under review, when that directory exists.
+
+The two paths end the same way on purpose. They are different directories of
+different repositories, and when they are the same directory (the reviewer is
+pointed at application-sdk itself) it is read once, as the fleet's.
 
 Only a file named `^[a-z]{2}\\d{2}-.+\\.md$` is a principle; a `README.md`
 beside them is not read. `applies-to` names areas, which are fixed and coarse
@@ -54,9 +63,10 @@ REPO_DIR = ".github/connector-reviewer/principles"
 FILE_NAME = re.compile(r"^[a-z]{2}\d{2}-.+\.md$")
 ID_PREFIX = {"fleet": "FP", "repo": "RP"}
 MAX_ASKS = 3
-# A principle is a few sentences. The cap keeps a stray document dropped in the
-# directory out of every prompt.
-MAX_FILE_CHARS = 4000
+# A principle is a few wrapped sentences and at most three questions, well
+# under half of this. The cap keeps a stray document dropped in the directory
+# out of every prompt.
+MAX_FILE_CHARS = 8000
 
 _FRONT_MATTER_KEYS = ("id", "applies-to")
 # The five fields, in the order they are rendered. The apostrophe may be typed
@@ -345,6 +355,8 @@ def load_principles(fleet: Path | None, root: Path) -> PrincipleSet:
         out.notes.append(
             f"`{REPO_DIR}` is a symlink, so this repository's principles were not read."
         )
+    elif repo.is_dir() and repo.resolve() == fleet.resolve():
+        pass  # the repo under review is the one that holds the fleet's: read once
     elif repo.is_dir():
         out.repo, _ = _load_dir(repo, "repo", out.notes)
     return out

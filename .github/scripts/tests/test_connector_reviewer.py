@@ -645,6 +645,84 @@ def test_a_principle_tolerates_a_curly_apostrophe_crlf_and_a_wrapped_question():
     assert parse_principle(inline, "fleet").ask == p.ask
 
 
+# The shape of the fleet's real files: every paragraph wraps over several lines,
+# each question is one long physical line, and no blank line separates the fields.
+FP17 = """\
+---
+id: FP17
+applies-to: [app, tests]
+---
+# A retry never repeats a write
+
+Principle: A task that Temporal retries leaves the same result as one that ran
+once. A write is keyed so a second attempt replaces the first, and a partial
+write is never left for the next step to read.
+Why: A retried task that appends doubles what the next step reads, and nothing
+downstream can tell a duplicate from a real second record.
+Ask:
+- If this task is retried after it has written half its output, does the second attempt overwrite that output or add to it, and how does the step that reads it tell the difference from a complete run?
+- Is the key of each write derived from the input alone, or from a clock, a counter or a random value that changes on the retry and so makes the second attempt write beside the first?
+- Does a test run the task twice against the same input and assert that the output, its record count and its checksum are the same as after one run, and not only that no error was raised?
+Don't flag: A missing retry policy or heartbeat, which `P014` and `P021`
+already enforce, or a non-deterministic call inside a workflow body, which
+`P003` rejects in CI.
+Severity: High when a retry can publish duplicate or partial records to Atlan;
+otherwise medium, and low for a write that is already keyed by its input and
+only lacks the test.
+"""
+
+
+def test_a_principle_shaped_like_the_fleets_files_is_read_whole(tmp_path: Path):
+    fleet = (
+        tmp_path / "application-sdk" / ".github" / "connector-reviewer" / "principles"
+    )
+    fleet.mkdir(parents=True)
+    (fleet / "fp17-a-retry-never-repeats-a-write.md").write_text(FP17)
+    (fleet / "README.md").write_text("# Fleet principles\n")
+    principles = load_principles(fleet, tmp_path / "atlan-example-app")
+    assert principles.notes == []
+    [p] = principles.fleet
+    assert (p.id, p.title, p.applies_to) == (
+        "FP17",
+        "A retry never repeats a write",
+        ("app", "tests"),
+    )
+    # A wrapped paragraph is one paragraph, whole.
+    assert p.principle.startswith("A task that Temporal retries leaves the same result")
+    assert p.principle.endswith("never left for the next step to read.")
+    assert p.why.endswith("can tell a duplicate from a real second record.")
+    assert p.dont_flag == (
+        "A missing retry policy or heartbeat, which `P014` and `P021` already "
+        "enforce, or a non-deterministic call inside a workflow body, which `P003` "
+        "rejects in CI."
+    )
+    assert p.severity.endswith("already keyed by its input and only lacks the test.")
+    # Three questions, each kept as the one line it was written as.
+    written = [ln[2:] for ln in FP17.splitlines() if ln.startswith("- ")]
+    assert list(p.ask) == written and len(written) == 3
+    assert all(len(q) > 180 for q in p.ask)  # far past any wrap width
+    assert p.ask[0].startswith("If this task is retried") and p.ask[2].endswith(
+        "raised?"
+    )
+    rendered = principles.render_for(["app/extract/tables.py"])
+    assert (
+        rendered.count("\n- ") == 3 and "Don't flag: A missing retry policy" in rendered
+    )
+
+
+def test_the_fleet_directory_is_not_read_again_as_the_repos_own(tmp_path: Path):
+    """Both live at `.github/connector-reviewer/principles/`: the fleet's in
+    application-sdk, a repo's own in that repo. Pointed at application-sdk itself,
+    the reviewer reads the one directory once, as the fleet's, and does not
+    report every FP file as a malformed repo principle."""
+    fleet = tmp_path / ".github" / "connector-reviewer" / "principles"
+    fleet.mkdir(parents=True)
+    (fleet / "fp01-never-publish-undeclared-loss.md").write_text(FP01)
+    principles = load_principles(fleet, tmp_path)
+    assert [p.id for p in principles.fleet] == ["FP01"]
+    assert principles.repo == [] and principles.notes == []
+
+
 @pytest.mark.parametrize(
     ("path", "area"),
     [
@@ -815,7 +893,7 @@ def test_a_malformed_principle_file_is_skipped_with_a_note_and_never_crashes(
     (fleet / "fp04-wrong-name.md").write_text(FP02.replace("FP02", "FP05"))
     (fleet / "fp02-duplicate.md").write_text(FP02)
     (fleet / "fp06-binary.md").write_bytes(b"\xff\xfe\x00 not text")
-    (fleet / "fp07-huge.md").write_text(FP02.replace("FP02", "FP07") + "x" * 5000)
+    (fleet / "fp07-huge.md").write_text(FP02.replace("FP02", "FP07") + "x" * 9000)
     (fleet / "fp08-`tick`.md").write_text("no front matter")
     _repo_principle(repo, "rp01-posing-as-fleet.md", RP01.replace("RP01", "FP09"))
     _repo_principle(repo, "rp02-good.md", RP01.replace("RP01", "RP02"))
@@ -835,7 +913,7 @@ def test_a_malformed_principle_file_is_skipped_with_a_note_and_never_crashes(
         "`fp06-binary.md` does not follow the principle format and was not used: it is "
         "not UTF-8 text.",
         "`fp07-huge.md` does not follow the principle format and was not used: it is "
-        "longer than 4000 characters.",
+        "longer than 8000 characters.",
         # A backtick in a file name cannot close the code span it is shown in.
         "`fp08-?tick?.md` does not follow",
         "Repo principle file `rp01-posing-as-fleet.md` does not follow the principle "
@@ -2653,7 +2731,7 @@ def test_preflight_says_what_answered_an_unexpected_status_and_redacts_keys():
     assert "sk-abc123XYZ" not in key and "sk-…" in key
 
 
-def test_every_gateway_request_carries_the_lens_user_agent(monkeypatch):
+def test_every_gateway_request_carries_the_reviewer_user_agent(monkeypatch):
     """Cloudflare bans Python's default urllib signature (error 1010): every
     completion and metadata request must identify itself as connector-reviewer."""
     import urllib.request  # noqa: PLC0415 - patched below
@@ -3822,7 +3900,7 @@ def test_re_review_reads_only_its_own_sticky_comment_among_other_bot_comments(
         principles=principles,
         client_factory=_factory(_review_script()),
     )
-    lens_body = gh.comments[0]["body"]
+    summary_body = gh.comments[0]["body"]
     coverage = (
         "☂️ Code Coverage\ncurrent status: ✅\nupdated for commit: 0000000 by action🐍"
     )
@@ -3852,7 +3930,9 @@ def test_re_review_reads_only_its_own_sticky_comment_among_other_bot_comments(
     assert {f.id for f in first.state.findings} <= {
         f.id for f in res.state.findings
     }  # prior findings carried over
-    assert gh.comments[2]["body"] != lens_body and "round 2" in gh.comments[2]["body"]
+    assert (
+        gh.comments[2]["body"] != summary_body and "round 2" in gh.comments[2]["body"]
+    )
     assert (
         gh.comments[0]["body"] == coverage and gh.comments[1]["body"] == forged
     )  # untouched
