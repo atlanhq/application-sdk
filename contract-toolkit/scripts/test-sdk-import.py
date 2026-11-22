@@ -5,7 +5,9 @@ package (an ``__init__.py`` beside it), the SDK names ``src/SdkNames.pkl``
 copies by hand must match the installed SDK, and every default in a generated
 ``_e2e_substitutions.py`` must pass the matching field of the ``_input.py``
 generated beside it. The connector constants ``src/Connectors.pkl`` copies by
-hand must match pyatlan's ``AtlanConnectorType``.
+hand must match pyatlan's ``AtlanConnectorType``. A ``stringMap``
+ConditionalInput's generated validator must coerce and refuse the documented
+value matrix (``check_string_map_matrix``).
 
 Importing ``_input.py`` also proves it is valid Python and that the SDK's
 payload-safety check accepts it: ``Input.__init_subclass__`` refuses an
@@ -237,6 +239,70 @@ def check_substitution_round_trip(subs_path: Path) -> list[str]:
             errors.append(
                 f"{rel}: '{name}' now passes; remove its _KNOWN_DISAGREEMENTS "
                 f"entry ({issue})"
+            )
+    return errors
+
+
+# ConditionalInput(stringMap = true) in the `full` example. App.pkl and
+# NativeApp.pkl emit the same validator text (pinned by
+# tests/conditional_string_map_test.pkl), so this covers both paths.
+_STRING_MAP_INPUT = EXAMPLES_DIR / "full" / "app" / "generated" / "_input.py"
+_STRING_MAP_FIELD = "dsn_mapping"
+_QN = "default/snowflake/1/DB"
+# (input value, expected field value) — or None as expected for "refused".
+_STRING_MAP_CASES: list[tuple[object, dict[str, str] | None]] = [
+    ({"DSN": _QN}, {"DSN": _QN}),
+    (json.dumps({"DSN": _QN}), {"DSN": _QN}),
+    ({}, {}),
+    ("{}", {}),
+    ("", {}),
+    ("   ", {}),
+    (None, {}),
+    ("false", {}),
+    ("[]", {}),
+    ("1", {}),
+    ("not json", {}),
+    ({"DSN": {"host": "h"}}, None),
+    ({"DSN": 1}, None),
+    ({"DSN": None}, None),
+]
+
+
+def check_string_map_matrix() -> list[str]:
+    """Run the generated ``stringMap`` validator against real values.
+
+    The pkl tests only match emitted source. This instantiates the generated
+    contract, so a change that keeps the text plausible but breaks coercion
+    (``"[]"`` no longer becoming ``{}``) or typing (a non-string value no
+    longer refused) fails here.
+    """
+    from pydantic import ValidationError
+
+    mod, err = _load_module(_STRING_MAP_INPUT)
+    if mod is None:
+        return [f"{_STRING_MAP_INPUT}: cannot load ({err})"]
+    cls = getattr(mod, "AppInputContract", None)
+    if cls is None or _STRING_MAP_FIELD not in cls.model_fields:
+        return [f"{_STRING_MAP_INPUT}: AppInputContract.{_STRING_MAP_FIELD} not found"]
+
+    errors: list[str] = []
+    for value, expected in _STRING_MAP_CASES:
+        try:
+            got = getattr(cls(**{_STRING_MAP_FIELD: value}), _STRING_MAP_FIELD)
+        except ValidationError as exc:
+            mine = [e for e in exc.errors() if e["loc"][:1] == (_STRING_MAP_FIELD,)]
+            if expected is not None or not mine:
+                errors.append(
+                    f"{_STRING_MAP_FIELD}={value!r}: refused, expected {expected!r}"
+                )
+            continue
+        if expected is None:
+            errors.append(
+                f"{_STRING_MAP_FIELD}={value!r}: accepted as {got!r}, expected refusal"
+            )
+        elif got != expected:
+            errors.append(
+                f"{_STRING_MAP_FIELD}={value!r}: got {got!r}, expected {expected!r}"
             )
     return errors
 
@@ -585,6 +651,15 @@ def main() -> int:
     if not round_trip_errors:
         logger.info("  OK: every substitution default passes its input field")
 
+    logger.info(":: Validating the stringMap ConditionalInput value matrix...")
+    string_map_errors = check_string_map_matrix()
+    for err in string_map_errors:
+        logger.error("FAIL: %s", err)
+    if not string_map_errors:
+        logger.info(
+            "  OK: %d stringMap cases behave as documented", len(_STRING_MAP_CASES)
+        )
+
     logger.info(":: Comparing SdkNames.pkl with the SDK...")
     name_errors = check_sdk_names(input_files)
     for err in name_errors:
@@ -600,18 +675,27 @@ def main() -> int:
         logger.info("  OK: Connectors.pkl matches pyatlan")
 
     total = len(input_files) + len(e2e_files)
-    if failed or init_errors or name_errors or round_trip_errors or connector_errors:
+    if (
+        failed
+        or init_errors
+        or name_errors
+        or round_trip_errors
+        or connector_errors
+        or string_map_errors
+    ):
         logger.error(
             "%d/%d files failed import test; %d missing __init__.py; "
             "%d SdkNames.pkl mismatch(es); "
             "%d substitution default(s) rejected by _input.py; "
-            "%d Connectors.pkl mismatch(es).",
+            "%d Connectors.pkl mismatch(es); "
+            "%d stringMap case(s) wrong.",
             failed,
             total,
             len(init_errors),
             len(name_errors),
             len(round_trip_errors),
             len(connector_errors),
+            len(string_map_errors),
         )
         return 1
 
