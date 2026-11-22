@@ -28,7 +28,6 @@ DEFAULT_EXCLUDE = (
     "**/*.jpg",
     "**/*.snap",
     "**/snapshots/**",
-    "docs/agents/sdk-capabilities.md",
     ".worktrees/**",
 )
 

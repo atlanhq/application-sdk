@@ -26,7 +26,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import approve, report, trace
+from . import report, trace
 from .config import load_config, validate
 from .event import USAGE_ERRORS, decide
 from .github import GitHub
@@ -65,15 +65,7 @@ def main(argv: list[str] | None = None) -> int:
         help="give the verify call its opt-in output budget (agent.verify_max_tokens_opt_in)",
     )
     r.add_argument("--dry-run", action="store_true")
-    a = sub.add_parser(
-        "approve",
-        help="act on the review's approval decision (the workflow's last step)",
-    )
-    a.add_argument("--repo", required=True)
-    a.add_argument("--decision", required=True)
     args = ap.parse_args(argv)
-    if args.cmd == "approve":
-        return approve.run_step(args.repo, args.decision)
 
     comment_id = 0
     dismissal = None
@@ -170,12 +162,6 @@ def main(argv: list[str] | None = None) -> int:
             verify_budget=rechecking.verify_budget,
         )
         print(f"connector-reviewer: {res.action} {res.reason}".strip())
-        if live:
-            approve.write_decision(
-                os.environ.get("CONNECTOR_REVIEWER_APPROVAL_PATH"),
-                args.pr,
-                approve.decision_for(res),
-            )
         react("confused" if res.action != "rechecked" or res.incomplete else "rocket")
         return 1 if res.failed else 0
     if dismissal is not None:
@@ -191,12 +177,6 @@ def main(argv: list[str] | None = None) -> int:
             run_url=run_url,
         )
         print(f"connector-reviewer: {res.action} {res.reason}".strip())
-        if live:
-            approve.write_decision(
-                os.environ.get("CONNECTOR_REVIEWER_APPROVAL_PATH"),
-                args.pr,
-                approve.decision_for(res),
-            )
         react("rocket" if res.action == "dismissed" else "confused")
         return 0
     # A "running" note while the review is in progress, with a link to the live log. It is
@@ -226,14 +206,6 @@ def main(argv: list[str] | None = None) -> int:
         react("confused")
         raise
     _best_effort(gh.delete_comment, progress_id)
-    if live:
-        # The approval happens in the workflow's last step, which alone holds the
-        # code-owner token (connector_reviewer/approve.py); this step only decides.
-        approve.write_decision(
-            os.environ.get("CONNECTOR_REVIEWER_APPROVAL_PATH"),
-            args.pr,
-            approve.decision_for(res),
-        )
     if args.dry_run:
         print(to_json(res))
         if res.action == "reviewed":

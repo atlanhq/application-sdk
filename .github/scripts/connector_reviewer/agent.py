@@ -231,11 +231,6 @@ def build_context(
             "against this intent; flag code that does not achieve it.\n"
             f"{pr_meta['understanding']}\n</pr_understanding>"
         )
-    if pr_meta.get("released_surface_removals"):
-        parts.append(
-            "<released_surface_removals>\n"
-            f"{pr_meta['released_surface_removals']}\n</released_surface_removals>"
-        )
     if pr_meta.get("paths_added"):
         parts.append(
             f"<paths_added_by_this_pr>\n{pr_meta['paths_added']}\n</paths_added_by_this_pr>"
@@ -244,9 +239,9 @@ def build_context(
         parts.append(
             f"<symbols_added_by_this_pr>\n{pr_meta['symbols_added']}\n</symbols_added_by_this_pr>"
         )
-    # Callers (followed through thin wrappers), ranked tests, public-API flags,
-    # each changed function in full, and repo code the change or the PR names.
-    ctx_block, _api = context.build(
+    # Callers (followed through thin wrappers), ranked tests, each changed
+    # function in full, and repo code the change or the PR names.
+    ctx_block = context.build(
         ws, bundle.files, f"{pr_meta.get('title') or ''}\n{pr_meta.get('body') or ''}"
     )
     if ctx_block:

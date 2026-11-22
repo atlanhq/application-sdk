@@ -2,15 +2,18 @@
 
 An audit of lens's first real review (application-sdk #3987) found the model had been given
 10 of the 64 lines of the function it was reviewing, none of the code the PR
-said it was copying, callers that were only thin wrappers, a test list cut to
-the wrong four files, and no hint that a public API was changing. Each builder
-here closes one of those gaps, deterministically and within a token budget:
+said it was copying, callers that were only thin wrappers, and a test list cut
+to the wrong four files. Each builder here closes one of those gaps,
+deterministically and within a token budget:
 
 - ``changed_functions``   the whole changed function, changed lines marked;
 - ``referenced_patterns`` repo symbols the change or the PR text names;
 - ``call_sites``          real call sites, followed through thin wrappers;
-- ``ranked_tests``        the tests most likely to matter, in order;
-- ``public_api``          which changed behaviour is public, and its reach.
+- ``ranked_tests``        the tests most likely to matter, in order.
+
+lens has a sixth, ``public_api``, which flags a changed symbol under
+``application_sdk/`` as public API. A connector app has no public Python API,
+so this fork has no such flag.
 
 Nothing here calls a model; it reads the index and the PR-head text only.
 """
@@ -401,48 +404,12 @@ def ranked_tests(ws: Workspace, fd: FileDiff, names: list[str]) -> list[str]:
     return sorted(set(found), key=rank)[:TESTS_MAX]
 
 
-# ---- 6. public API ------------------------------------------------------------------
-
-
-def _public(s: Symbol) -> bool:
-    if not s.path.startswith("application_sdk/"):
-        return False
-    module_private = any(
-        part.startswith("_") and part != "__init__.py" for part in s.path.split("/")
-    )
-    return not module_private and not any(
-        p.startswith("_") for p in s.qualname.split(":")[-1].split(".")
-    )
-
-
-def public_api(ws: Workspace, s: Symbol, reach: Reach) -> str:
-    """One line when a changed symbol is part of the public API, directly or
-    through the public wrappers it is reached by — so the approach check must
-    weigh the blast radius, and must say what it could not see."""
-    if _public(s):
-        exposed = s.qualname.split(":")[-1]
-    else:
-        wrappers = [w for w in reach.via if not w.startswith("_")]
-        if (
-            not wrappers
-            or s.path.startswith("tests/")
-            or not s.path.startswith("application_sdk/")
-        ):
-            return ""
-        exposed = "/".join(wrappers) + f" (via {s.name})"
-    return (
-        f"PUBLIC API behaviour change: {exposed} — call sites in this repo: {reach.count()}. "
-        "Consumers in other repositories were NOT checked."
-    )
-
-
 # ---- the <context> block --------------------------------------------------------------
 
 
-def build(ws: Workspace, files: list[FileDiff], pr_text: str) -> tuple[str, list[str]]:
-    """The context block for a bundle, and its public-API lines (for the approach check)."""
+def build(ws: Workspace, files: list[FileDiff], pr_text: str) -> str:
+    """The context block for a bundle."""
     out: list[str] = []
-    api_lines: list[str] = []
     for fd in files:
         if not fd.path.endswith(".py"):
             continue
@@ -461,10 +428,6 @@ def build(ws: Workspace, files: list[FileDiff], pr_text: str) -> tuple[str, list
             )
             for path, n, code in reach.sites:
                 out.append(f"    {path}:{n}  {code}")
-            line = public_api(ws, s, reach)
-            if line:
-                out.append(f"  ⚠ {line}")
-                api_lines.append(line)
     others = [p for p in ws.diffs if p not in {f.path for f in files}]
     if others:
         out.append(
@@ -491,4 +454,4 @@ def build(ws: Workspace, files: list[FileDiff], pr_text: str) -> tuple[str, list
             + pats
             + "\n</referenced_code>"
         )
-    return "\n\n".join(blocks), api_lines
+    return "\n\n".join(blocks)

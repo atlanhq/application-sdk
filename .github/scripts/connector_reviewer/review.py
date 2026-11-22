@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import advisory, baseline, holistic, prompts, surface, trace
+from . import advisory, baseline, holistic, prompts, trace
 from .agent import AgentLimits, BundleResult, review_bundle, suspect_paths
 from .baseline import PRAdditions
 from .bundle import Bundle, group
@@ -306,7 +306,7 @@ def run(
     # prompts, limits) does not re-open code an earlier round already passed: that
     # moved the goalposts on reviewed code. It applies from the next new commits.
     # `/review force` lifts the skip and round-cap rules: after new commits it
-    # reviews just those (the cheap way to get an approval back after a small push);
+    # reviews just those (the cheap way to get a green status back after a small push);
     # on an unchanged head it re-reviews the whole PR under the current config.
     # Either way it re-checks every open finding, even when no PR file changed.
     same_reviewer = state.model == cfg.model
@@ -533,25 +533,11 @@ def run(
                 gh.set_status(head, *verdict_status(res), url)
             return res
 
-    # ---- the last release's public names this PR takes away ---------------
-    # Once per round, shared by the verify call and every bundle: a removal is a
-    # break only if the name shipped, which neither can tell from a diff.
-    with trace.group("3b · released surface (last release vs PR head)"):
-        released = surface.released_surface_removals(
-            root, full_files, head_text, lambda p: gh.file_at(p, head)
-        )
-        trace.line(
-            released.replace("\n", "; ")[:400]
-            if released
-            else "skipped: the PR changes no package module"
-        )
-    pr_meta["released_surface_removals"] = released
-
     # ---- what this PR itself added, against the merge base (FND-4163) -------
     # An incremental round sees only the commits since the last review, so code
     # an earlier commit of this PR added reads as pre-existing. A compatibility
     # claim about it is capped in code (agent.calibrate); both prompts are told.
-    with trace.group("3c · added by this PR (merge base vs PR head)"):
+    with trace.group("3b · added by this PR (merge base vs PR head)"):
         added = pr_added(gh, base, head, full_files, head_text)
         trace.line(
             f"{len(added.paths)} added path(s), "
@@ -600,7 +586,6 @@ def run(
                     round_diff(verify_files, to_verify),
                     concerns,
                     removed=removed_paths(full_files),
-                    released=released,
                     added=added,
                     max_tokens=res.verify_max_tokens,
                 )
@@ -719,7 +704,6 @@ def run(
             res,
             changes=all_files if touched else full_files,
             removed=removed_paths(full_files),
-            released=released,
             added=added,
             max_tokens=res.verify_max_tokens or cfg.limits.verify_max_tokens,
         )
@@ -921,7 +905,6 @@ def _check_new_against_base(
     *,
     changes: list[FileDiff],
     removed: str,
-    released: str,
     added: PRAdditions,
     max_tokens: int,
 ) -> list[Finding]:
@@ -951,7 +934,6 @@ def _check_new_against_base(
                 batch,
                 round_diff(changes, batch),
                 removed=removed,
-                released=released,
                 added=added,
                 max_tokens=max_tokens,
                 new=True,
@@ -1005,7 +987,6 @@ def _book(ledger: Ledger, spent: Ledger) -> None:
 
 # ---- /review recheck -------------------------------------------------------------
 
-CAPABILITIES_DOC = "docs/agents/sdk-capabilities.md"
 RECHECK_REASON_KEEP = 300
 
 
@@ -1015,10 +996,6 @@ class RecheckEvidence:
     absent_on_merge_base: bool
     code_now: str
     at_merge_base: str
-
-
-def _private(parts: list[str]) -> bool:
-    return any(p.startswith("_") and not p.startswith("__") for p in parts)
 
 
 def _caller_facts(idx: Index, sym: Symbol, added: PRAdditions) -> list[str]:
@@ -1074,10 +1051,9 @@ def recheck_evidence(
     f: Finding,
     added: PRAdditions,
     merge_base_text: Callable[[str], str | None],
-    capabilities: str,
 ) -> RecheckEvidence:
     """What git and the repository say about one finding's subject, with no
-    model call: merge-base existence, callers, privacy, the capability manifest."""
+    model call: merge-base existence and callers."""
     text = ws.text(f.path) or ""
     lines = text.splitlines()
     at = locate_in_text(text, f.evidence)
@@ -1137,22 +1113,6 @@ def recheck_evidence(
                 # that the PR changed its behaviour can be checked against it.
                 got = base_symbol_excerpt(ws.root, base_path, base, f, sym, at)
                 at_base = f"{base_path}: {dotted}\n{got}" if got else ""
-    module = f.path[:-3].replace("/", ".") if f.path.endswith(".py") else f.path
-    private = _private(f.path.removesuffix(".py").split("/")) or _private(
-        dotted.split(".") if dotted else []
-    )
-    facts.append(
-        f"{'private' if private else 'public'}: module {module}"
-        + (f", symbol {dotted}" if dotted else "")
-    )
-    listed = module in capabilities or (
-        bool(sym) and f"{module}.{sym.name}" in capabilities
-    )
-    facts.append(
-        f"{'listed' if listed else 'not listed'} in {CAPABILITIES_DOC}"
-        if capabilities
-        else f"{CAPABILITIES_DOC} not found on the base branch"
-    )
     if sym is not None:
         facts += _caller_facts(ws.index, sym, added)
     return RecheckEvidence(facts, absent, code_now, at_base or "(none)")
@@ -1314,9 +1274,10 @@ def recheck(
 ) -> RunResult:
     """`/review recheck [verify-budget] F-… [reason]`: re-judge open findings with repo-aware evidence.
 
-    Deterministic first: the evidence (merge-base existence, callers, privacy,
-    the capability manifest, the visibility of a workflow's checkout targets) is gathered with no model call, and a compatibility
-    finding whose subject is absent on the merge base is resolved on that alone.
+    Deterministic first: the evidence (merge-base existence, callers, the
+    visibility of a workflow's checkout targets) is gathered with no model call,
+    and a compatibility finding whose subject is absent on the merge base is
+    resolved on that alone.
     Anything else gets one model call, from what is left of the PR's $ cap.
     It is not a round: `state.round` and `reviewed_head` do not move, so the
     round cap never blocks it and the next `/review` still reviews any new commits.
@@ -1377,8 +1338,6 @@ def recheck(
             diffs={fd.path: fd for fd in full_files},
             index=build_index(root, overrides=head_text),
         )
-        caps = root / CAPABILITIES_DOC
-        capabilities = caps.read_text(encoding="utf-8") if caps.is_file() else ""
         ask: list[tuple[Finding, RecheckEvidence]] = []
         seen_visibility: dict[str, str | None] = {}
 
@@ -1388,7 +1347,7 @@ def recheck(
             return seen_visibility[name]
 
         for f in targets:
-            ev = recheck_evidence(ws, f, added, read_base, capabilities)
+            ev = recheck_evidence(ws, f, added, read_base)
             ev.facts += checkout_target_facts(
                 f.path, [f.evidence, ev.code_now], visibility
             )
@@ -1772,15 +1731,14 @@ def _verify(
     concerns: list[tuple[str, dict[str, Any]]] | None = None,
     *,
     removed: str = "",
-    released: str = "",
     added: PRAdditions | None = None,
     max_tokens: int = AgentLimits.verify_max_tokens,
 ) -> Verified:
     """Every open finding, VERIFY_BATCH at a time, and the open approach concerns
-    (with the first batch). The paths the PR removes, the last release's public
-    names it removes (`surface`), then the round's changes, lead each call, so the batches share one cached prefix. Returns the ids
-    judged fixed, and the ids no verdict came back for because a call ran out
-    of output budget first."""
+    (with the first batch). The paths the PR removes, what it adds, then the
+    round's changes, lead each call, so the batches share one cached prefix.
+    Returns the ids judged fixed, and the ids no verdict came back for because a
+    call ran out of output budget first."""
     batches = [
         open_[i : i + VERIFY_BATCH] for i in range(0, len(open_), VERIFY_BATCH)
     ] or [[]]
@@ -1793,7 +1751,6 @@ def _verify(
             changes,
             concerns if n == 0 else None,
             removed=removed,
-            released=released,
             added=added,
             max_tokens=max_tokens,
         )
@@ -1813,7 +1770,6 @@ def _verify_batch(
     concerns: list[tuple[str, dict[str, Any]]] | None = None,
     *,
     removed: str = "",
-    released: str = "",
     added: PRAdditions | None = None,
     max_tokens: int = AgentLimits.verify_max_tokens,
     new: bool = False,
@@ -1825,10 +1781,6 @@ def _verify_batch(
         if removed
         else []
     )
-    if released:
-        items.append(
-            f"<released_surface_removals>\n{released}\n</released_surface_removals>"
-        )
     items += added_blocks(added)
     if changes:
         items.append(f"<changes_this_round>\n{changes}\n</changes_this_round>")

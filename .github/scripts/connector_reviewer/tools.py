@@ -232,7 +232,7 @@ COMMENT_ITEM = {
         "category": {"type": "string", "enum": list(CATEGORIES)},
         "compatibility": {
             "type": "boolean",
-            "description": "true when the harm lands on something that existed BEFORE this PR: existing callers, a public or released contract, stored or persisted data, workflow replay, wire values. false for a defect in what the new code itself does.",
+            "description": "true when the harm lands on something that existed BEFORE this PR: existing callers, a deployed contract, stored or persisted data, workflow replay, wire values. false for a defect in what the new code itself does.",
         },
         "title": {"type": "string", "description": "One line, under 90 characters."},
         "content": {

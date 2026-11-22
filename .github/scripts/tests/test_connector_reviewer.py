@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -33,7 +32,6 @@ from connector_reviewer.agent import BundleResult
 from connector_reviewer.bundle import group
 from connector_reviewer.config import Config, load_config, validate
 from connector_reviewer.diff import (
-    FileDiff,
     anchor,
     parse_unified_diff,
     snippet_in_text,
@@ -2933,7 +2931,7 @@ def test_the_whole_changed_function_is_shown_with_changed_lines_marked(
     logger_repo: Path,
 ):
     ws, files = _logger_ws(logger_repo)
-    block, _ = reviewer_context.build(ws, files, "")
+    block = reviewer_context.build(ws, files, "")
     fn = block.split("<changed_functions>", 1)[1]
     # The leftover same-pattern line (unchanged, outside the hunk) is now in view...
     assert 'self._backend().debug("probe failed", exc_info=True)' in fn
@@ -2941,20 +2939,22 @@ def test_the_whole_changed_function_is_shown_with_changed_lines_marked(
     assert '+         exc_info = kwargs.pop("exc_info", False)' in fn
 
 
-def test_calls_are_followed_through_thin_wrappers_and_flag_the_public_api(
+def test_calls_are_followed_through_thin_wrappers_and_nothing_is_called_public_api(
     logger_repo: Path,
 ):
     ws, files = _logger_ws(logger_repo)
-    block, api = reviewer_context.build(ws, files, "")
+    block = reviewer_context.build(ws, files, "")
     assert "via info/error" in block
     assert (
         'application_sdk/storage/user.py:4  log.info("uploading {name}", name="x")'
         in block
     )
-    assert api and api[0].startswith(
-        "PUBLIC API behaviour change: info/error (via _log)"
-    )
-    assert "Consumers in other repositories were NOT checked" in api[0]
+    # A connector app has no public Python API: neither the line review nor the
+    # approach check is told a change is one.
+    assert "PUBLIC API" not in block
+    assert "<public_api>" not in build_input(ws, files, {}, 8000)
+    for prompt in (review_mod.prompts.REVIEW_SYSTEM, holistic.SYSTEM):
+        assert "PUBLIC API" not in prompt and "public_api" not in prompt
 
 
 def test_tests_are_ranked_unit_before_integration(logger_repo: Path):
@@ -2968,7 +2968,7 @@ def test_tests_are_ranked_unit_before_integration(logger_repo: Path):
 
 def test_code_the_pr_says_it_follows_is_included(logger_repo: Path):
     ws, files = _logger_ws(logger_repo)
-    block, _ = reviewer_context.build(
+    block = reviewer_context.build(
         ws, files, "This matches the existing PatternAdapter behaviour."
     )
     assert (
@@ -3028,12 +3028,6 @@ def test_test_only_findings_are_capped_at_low_unless_security():
     )
     kept, _ = agent_mod.calibrate([a, b], lim)
     assert [k.severity for k in kept] == ["low", "critical"]
-
-
-def test_the_approach_check_is_told_about_public_api_changes(logger_repo: Path):
-    ws, files = _logger_ws(logger_repo)
-    text = build_input(ws, files, {"title": "t", "body": "b"}, max_input_tokens=6000)
-    assert "<public_api>" in text and "info/error (via _log)" in text
 
 
 # ---- re-review after merging the base branch into the PR ---------------------------------------------------
@@ -3424,201 +3418,6 @@ def test_the_run_is_linked_from_the_status_the_verdict_and_the_history(repo: Pat
     assert f"[Run log]({url})" in gh.posted[-1]
 
 
-# ---- the code-owner approval (connector_reviewer/approve.py, the workflow's last step) ------------------------------------------
-
-from connector_reviewer import approve as approve_mod  # noqa: E402
-
-
-class _ApproveGH:
-    """The App-token client: reads and dismissals only. It must never approve."""
-
-    def __init__(
-        self, *, head="h1", state="open", draft=False, author="someone", reviews=()
-    ):
-        self._pr = {
-            "head": {"sha": head},
-            "state": state,
-            "draft": draft,
-            "user": {"login": author},
-        }
-        self._reviews = list(reviews)
-        self.dismissed: list[int] = []
-
-    def pr(self, n):
-        return self._pr
-
-    def reviews(self, n):
-        return self._reviews
-
-    def dismiss_review(self, n, review_id, message):
-        self.dismissed.append(review_id)
-
-    def approve(self, *a):  # pragma: no cover - must not be reached
-        raise AssertionError("the App token must never post the approval")
-
-
-class _Approver:
-    """The code owner's client: used for the APPROVE call only."""
-
-    def __init__(self):
-        self.approved: list[tuple[str, str]] = []
-
-    def approve(self, n, head, body):
-        self.approved.append((head, body))
-
-    def __getattr__(
-        self, name
-    ):  # pragma: no cover - any other call is a leak of the PAT's quota
-        raise AssertionError(f"the approver token was used for {name}")
-
-
-def _lens_approval(i, head, login="atlan-ci"):
-    return {
-        "id": i,
-        "user": {"login": login},
-        "state": "APPROVED",
-        "commit_id": head,
-        "body": approve_mod.SIGNATURE + " — every finding …",
-    }
-
-
-def _res(findings=(), *, action="reviewed", incomplete=(), pending=(), failed=False):
-    st = PRState(
-        reviewed_head="h1",
-        round=2,
-        findings=list(findings),
-        pending_files=list(pending),
-    )
-    return RunResult(
-        action,
-        state=st,
-        incomplete=list(incomplete),
-        preflight_error="down" if failed else "",
-    )
-
-
-def test_approval_is_decided_only_when_every_finding_at_every_level_is_closed():
-    nit = Finding("a.py", 1, "low", "style", "t", "b", "e")
-    assert approve_mod.decision_for(_res()) == {
-        "action": "approve",
-        "head": "h1",
-        "round": 2,
-    }
-    assert approve_mod.decision_for(_res([nit]))["action"] == "withdraw"  # an open nit
-    nit.status = "fixed"
-    assert approve_mod.decision_for(_res([nit]))["action"] == "approve"
-    assert (
-        approve_mod.decision_for(_res(incomplete=["b: fatal"]))["action"] == "withdraw"
-    )
-    assert approve_mod.decision_for(_res(pending=["x.py"]))["action"] == "withdraw"
-    # a failed review sets the status to error: an earlier approval must not survive it
-    assert approve_mod.decision_for(_res(failed=True))["action"] == "withdraw"
-    assert approve_mod.decision_for(_res(action="skipped"))["action"] == "none"
-    # a /review dismiss that closes the last finding makes the reviewed head ready
-    assert approve_mod.decision_for(_res(action="dismissed"))["action"] == "approve"
-
-
-def test_a_ready_head_is_approved_by_the_code_owner_token_only():
-    gh, owner = _ApproveGH(), _Approver()
-    out = approve_mod.apply(
-        gh, owner, {"pr": 1, "action": "approve", "head": "h1", "round": 2}
-    )
-    assert out == "approved h1 as atlan-ci"
-    [(head, body)] = owner.approved
-    assert head == "h1" and body.startswith(approve_mod.SIGNATURE) and "round 2" in body
-
-
-@pytest.mark.parametrize(
-    "gh, why",
-    [
-        (_ApproveGH(head="h2"), "head moved"),
-        (_ApproveGH(draft=True), "closed or a draft"),
-        (_ApproveGH(state="closed"), "closed or a draft"),
-        (_ApproveGH(author="atlan-ci"), "authored this PR"),
-        (_ApproveGH(reviews=[_lens_approval(5, "h1")]), "already approved"),
-    ],
-)
-def test_no_approval_unless_every_condition_holds(gh, why):
-    owner = _Approver()
-    out = approve_mod.apply(
-        gh, owner, {"pr": 1, "action": "approve", "head": "h1", "round": 2}
-    )
-    assert why in out and owner.approved == []
-
-
-def test_withdraw_dismisses_only_lens_approvals_by_the_code_owner():
-    human = {
-        "id": 7,
-        "user": {"login": "a-reviewer"},
-        "state": "APPROVED",
-        "commit_id": "h1",
-        "body": "LGTM",
-    }
-    other_bot = dict(_lens_approval(8, "h1"), body="**SDK reviewer's verdict:** ready")
-    gh = _ApproveGH(
-        reviews=[_lens_approval(5, "h0"), _lens_approval(6, "h1"), human, other_bot]
-    )
-    out = approve_mod.apply(
-        gh, _Approver(), {"pr": 1, "action": "withdraw", "head": "h1"}
-    )
-    assert gh.dismissed == [5, 6] and "withdrew 2" in out
-
-
-def test_the_step_never_fails_a_finished_review(tmp_path, monkeypatch, capsys):
-    p = tmp_path / "d.json"
-    assert approve_mod.run_step("o/r", str(p)) == 0  # no decision file
-    approve_mod.write_decision(
-        str(p), 1, {"action": "approve", "head": "h1", "round": 1}
-    )
-    monkeypatch.delenv("APPROVER_TOKEN", raising=False)
-    assert approve_mod.run_step("o/r", str(p)) == 0
-    assert "no APPROVER_TOKEN" in capsys.readouterr().out
-
-    class Boom(GitHubError):
-        pass
-
-    def raising(*a, **k):
-        raise Boom("403")
-
-    monkeypatch.setenv("APPROVER_TOKEN", "t")
-    monkeypatch.setattr(approve_mod, "apply", raising)
-    assert approve_mod.run_step("o/r", str(p)) == 0
-    assert (
-        "::warning::connector-reviewer approve: could not act"
-        in capsys.readouterr().out
-    )
-
-
-def test_the_review_writes_the_decision_for_the_last_step(monkeypatch, tmp_path):
-    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test, patched below
-
-    _CliGitHub.reactions, _CliGitHub.comments, _CliGitHub.live = [], [], {}
-    monkeypatch.setattr(cli, "GitHub", _CliGitHub)
-    monkeypatch.setattr(cli, "run", lambda **kw: _res())
-    out = tmp_path / "approval.json"
-    monkeypatch.setenv("CONNECTOR_REVIEWER_APPROVAL_PATH", str(out))
-    root = str(Path(__file__).resolve().parents[3])
-    cli.main(
-        [
-            "review",
-            "--repo",
-            "o/r",
-            "--root",
-            root,
-            "--event-name",
-            "issue_comment",
-            "--event-path",
-            _event_file(tmp_path),
-        ]
-    )
-    assert json.loads(out.read_text()) == {
-        "pr": 7,
-        "action": "approve",
-        "head": "h1",
-        "round": 2,
-    }
-
-
 # ---- a finding off the diff is still a finding -----------------------------------------------------------------
 
 OFF_DIFF = {
@@ -3839,34 +3638,6 @@ def test_a_first_review_with_findings_posts_only_the_summary(repo: Path):
     assert "**Details**" in gh.comments[0]["body"]
 
 
-def test_a_failed_review_still_leaves_a_withdraw_decision(monkeypatch, tmp_path):
-    """The review step exits 1 on a model/transport failure; the decision is written
-    first, so the always() approval step withdraws an approval the error status contradicts."""
-    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test, patched below
-
-    _CliGitHub.reactions, _CliGitHub.comments, _CliGitHub.live = [], [], {}
-    monkeypatch.setattr(cli, "GitHub", _CliGitHub)
-    monkeypatch.setattr(cli, "run", lambda **kw: _res(failed=True))
-    out = tmp_path / "approval.json"
-    monkeypatch.setenv("CONNECTOR_REVIEWER_APPROVAL_PATH", str(out))
-    root = str(Path(__file__).resolve().parents[3])
-    code = cli.main(
-        [
-            "review",
-            "--repo",
-            "o/r",
-            "--root",
-            root,
-            "--event-name",
-            "issue_comment",
-            "--event-path",
-            _event_file(tmp_path),
-        ]
-    )
-    assert code == 1
-    assert json.loads(out.read_text())["action"] == "withdraw"
-
-
 # ---- the review loop: re-check, threads, spirals, config changes, the description --------------------------------
 
 HELPER = 'def get_or_none(client, key):\n    return client.get(key) or b""\n'
@@ -4039,7 +3810,10 @@ def test_the_whole_description_reaches_the_reviewer(repo: Path):
     assert "DECLARED: kwargs are context fields now." in ctx
     from connector_reviewer import prompts  # noqa: PLC0415
 
-    assert "unless <description> declares it as intended" in prompts.REVIEW_SYSTEM
+    assert (
+        "<description> declares as intended is the author's decision"
+        in prompts.REVIEW_SYSTEM
+    )
 
 
 # ---- review findings on the loop fixes ---------------------------------------------------------------------------
@@ -4476,239 +4250,6 @@ def test_a_rename_from_an_earlier_round_is_still_listed(repo: Path):
     )
 
 
-# ---- removals judged against the last release (FND-3340) -----------------------------
-
-
-def _git(cwd: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
-
-
-RELEASED_THING = "def shipped(): ...\n\ndef call(a, b=1): ...\n"
-
-
-@pytest.fixture
-def released_checkout(tmp_path: Path) -> Path:
-    """connector-reviewer's checkout, as the workflow makes it: the base branch at depth 1 with
-    no tags. `origin` has released v1.0.0 (with `shipped`), a later rc, and moved
-    on; the checkout must fetch the stable tag itself to have a baseline."""
-    origin = tmp_path / "origin"
-    (origin / "application_sdk").mkdir(parents=True)
-    _git(tmp_path, "init", "-q", "-b", "main", "origin")
-    _git(origin, "config", "user.email", "t@example.com")
-    _git(origin, "config", "user.name", "t")
-    (origin / "application_sdk" / "__init__.py").write_text("")
-    (origin / "application_sdk" / "thing.py").write_text(RELEASED_THING)
-    _git(origin, "add", "-A")
-    _git(origin, "commit", "-qm", "release")
-    _git(origin, "tag", "v1.0.0")
-    (origin / "application_sdk" / "later.py").write_text("def unreleased(): ...\n")
-    _git(origin, "add", "-A")
-    _git(origin, "commit", "-qm", "next")
-    _git(origin, "tag", "v1.1.0-rc1")
-    _git(tmp_path, "clone", "-q", "--depth=1", "--no-tags", origin.as_uri(), "root")
-    root = tmp_path / "root"
-    assert not subprocess.run(
-        ["git", "tag"], cwd=root, capture_output=True, text=True
-    ).stdout, "the checkout must start tagless, as in the workflow"
-    return root
-
-
-def _released(root: Path, files: list[FileDiff], head: dict[str, str]) -> str:
-    return review_mod.surface.released_surface_removals(root, files, head, head.get)
-
-
-def _removal_finding() -> Finding:
-    return Finding(
-        "application_sdk/testing/warming.py",
-        1,
-        "critical",
-        "compatibility",
-        "Public name WarmingSource removed without deprecation",
-        "WarmingSource was public and is gone with no deprecated alias.",
-        "class SourceState: ...",
-    )
-
-
-def _verify_input(repo: Path, f: Finding, released: str) -> str:
-    ws, _ = _ws(repo)
-    script = Script(response([tool_call("verdicts", {"items": []})]))
-    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
-    review_mod._verify(client, ws, [f], "--- a.py", released=released)
-    return script.requests[0]["messages"][1]["content"]
-
-
-def test_a_name_added_and_reshaped_within_the_pr_is_not_a_released_removal(
-    released_checkout: Path, repo: Path
-):
-    """The incident shape: a module new in this PR whose names were reshaped
-    between commits. Nothing in it shipped, so the block lists nothing, and the
-    verify call is told so and can close the removal finding."""
-    files = [FileDiff(path="application_sdk/testing/warming.py", status="added")]
-    head = {"application_sdk/testing/warming.py": "class SourceState: ...\n"}
-
-    released = _released(released_checkout, files, head)
-
-    assert released == (
-        "baseline v1.0.0: none (no public name that shipped in v1.0.0 and is still "
-        "on the base branch is removed or narrowed by this PR)"
-    )
-    user = _verify_input(repo, _removal_finding(), released)
-    assert f"<released_surface_removals>\n{released}\n</released_surface_removals>" in (
-        user
-    )
-    assert user.index("<released_surface_removals>") < user.index(
-        "<changes_this_round>"
-    )
-    assert "released_surface_removals" in review_mod.prompts.VERIFY_SYSTEM
-
-
-def test_a_released_name_removed_without_deprecation_is_listed(
-    released_checkout: Path, repo: Path
-):
-    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
-    head = {
-        "application_sdk/thing.py": "def renamed(): ...\n\ndef call(a, *, b=1): ...\n"
-    }
-
-    released = _released(released_checkout, files, head)
-
-    lines = released.splitlines()
-    assert lines[0] == "baseline v1.0.0"
-    assert "removed: application_sdk.thing:shipped" in lines
-    assert any(
-        line.startswith("narrowed: application_sdk.thing:call — parameter(s) hardened")
-        for line in lines
-    )
-    assert "renamed" not in released  # added, not removed
-    user = _verify_input(repo, _removal_finding(), released)
-    assert "removed: application_sdk.thing:shipped" in user
-
-
-def test_a_released_name_kept_as_a_deprecated_alias_is_not_listed(
-    released_checkout: Path,
-):
-    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
-    head = {
-        "application_sdk/thing.py": RELEASED_THING.replace(
-            "def shipped", "@deprecated('use renamed; removed in v2.0.0')\ndef shipped"
-        )
-    }
-    assert "none" in _released(released_checkout, files, head)
-
-
-def test_deleting_or_renaming_away_a_released_module_lists_its_names(
-    released_checkout: Path,
-):
-    deleted = [FileDiff(path="application_sdk/thing.py", status="deleted")]
-    assert "removed: application_sdk.thing:shipped" in _released(
-        released_checkout, deleted, {"application_sdk/thing.py": ""}
-    )
-    moved = [
-        FileDiff(
-            path="application_sdk/things.py",
-            old_path="application_sdk/thing.py",
-            status="renamed",
-        )
-    ]
-    released = _released(
-        released_checkout, moved, {"application_sdk/things.py": RELEASED_THING}
-    )
-    assert "removed: application_sdk.thing:shipped" in released
-
-
-def test_base_branch_drift_in_a_module_the_pr_does_not_touch_is_not_listed(
-    released_checkout: Path,
-):
-    """The checkout is the base branch, not the release: a name the base branch
-    removed since the release is not this PR's removal."""
-    (released_checkout / "application_sdk" / "thing.py").write_text("")
-    files = [FileDiff(path="application_sdk/testing/warming.py", status="added")]
-    released = _released(
-        released_checkout, files, {"application_sdk/testing/warming.py": "X = 1\n"}
-    )
-    assert "application_sdk.thing:shipped" not in released
-
-
-def _base_branch_removes_shipped(root: Path) -> None:
-    """A commit on the base branch after the tag: `shipped` is gone there."""
-    (root / "application_sdk" / "thing.py").write_text("def call(a, b=1): ...\n")
-    _git(
-        root,
-        "-c",
-        "user.email=t@example.com",
-        "-c",
-        "user.name=t",
-        "commit",
-        "-qam",
-        "drop",
-    )
-
-
-def test_a_removal_the_base_branch_made_is_not_the_prs_in_a_module_it_edits(
-    released_checkout: Path,
-):
-    """Release has thing.shipped; the base branch removed it after the tag; the
-    PR edits thing.py for an unrelated reason. The name is gone at the head, but
-    not by this PR, so nothing is listed."""
-    _base_branch_removes_shipped(released_checkout)
-    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
-    head = {"application_sdk/thing.py": "def call(a, b=1): ...\n\nX = 1\n"}
-
-    released = _released(released_checkout, files, head)
-
-    assert released.startswith("baseline v1.0.0: none"), released
-
-
-def test_a_released_name_still_on_the_base_branch_removed_by_the_pr_is_listed(
-    released_checkout: Path,
-):
-    """The converse: the base branch still has `shipped`; the PR removes it."""
-    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
-    head = {"application_sdk/thing.py": "def call(a, b=1): ...\n\nX = 1\n"}
-
-    released = _released(released_checkout, files, head)
-
-    assert released.splitlines() == [
-        "baseline v1.0.0",
-        "removed: application_sdk.thing:shipped",
-    ]
-
-
-def test_a_pr_that_changes_no_package_module_gets_no_block(tmp_path: Path):
-    files = parse_unified_diff(RENAME_DIFF)
-    assert (
-        review_mod.surface.released_surface_removals(
-            tmp_path, files, {}, lambda p: None
-        )
-        == ""
-    )
-
-
-@pytest.mark.parametrize(
-    ("head", "reason"),
-    [
-        ({"application_sdk/thing.py": "def broken(:\n"}, "cannot parse"),
-        ({}, "could not read application_sdk/thing.py"),  # head text unreadable
-    ],
-)
-def test_a_snapshot_failure_falls_back_without_raising(
-    released_checkout: Path, head: dict[str, str], reason: str
-):
-    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
-    released = _released(released_checkout, files, head)
-    assert released.startswith(f"{review_mod.surface.UNAVAILABLE}: ")
-    assert reason in released
-
-
-def test_no_release_tag_falls_back_without_raising(repo: Path):
-    """`repo` is not a git checkout: no tag, no origin to list one from."""
-    files = parse_unified_diff(DIFF)
-    released = review_mod.surface.released_surface_removals(
-        repo, files, {"application_sdk/storage/fetch.py": SRC_V2}, lambda p: None
-    )
-    assert released.startswith(f"{review_mod.surface.UNAVAILABLE}: ")
-
-
 def _review_context(script: Script) -> str:
     """The line review's user context (it opens with <background>)."""
     return next(
@@ -4716,71 +4257,6 @@ def _review_context(script: Script) -> str:
         for r in script.requests
         for m in r["messages"]
         if isinstance(m.get("content"), str) and m["content"].startswith("<background>")
-    )
-
-
-def test_run_gives_the_block_to_every_bundle_and_to_verify(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
-):
-    """Through `run`: computed once per round, then threaded into the line
-    review's context and the verify call, as `<paths_removed_by_this_pr>` is."""
-    calls: list[str] = []
-
-    def fake(root, files, head_text, fetch):
-        calls.append(fetch("application_sdk/storage/fetch.py") or "")
-        return "baseline v9.9.9\nremoved: application_sdk.storage.fetch:gone"
-
-    monkeypatch.setattr(review_mod.surface, "released_surface_removals", fake)
-    gh = FakeGitHub()
-    rules = load_rules(repo / ".github" / "connector-reviewer")
-    first_script = _review_script()
-    first = run(
-        gh=gh,
-        number=1,
-        root=repo,
-        cfg=cfg_for(repo),
-        rules=rules,
-        client_factory=_factory(first_script),
-    )
-    block = (
-        "<released_surface_removals>\nbaseline v9.9.9\n"
-        "removed: application_sdk.storage.fetch:gone\n</released_surface_removals>"
-    )
-    assert block in _review_context(first_script)
-    assert calls == [SRC_V2], "head text is read at the PR head, once per round"
-
-    assert first.state.findings, "round 1 must leave a finding open to re-check"
-    _round_two_elsewhere(gh)
-    script = Script(response([tool_call("verdicts", {"items": []})]))
-    run(
-        gh=gh,
-        number=1,
-        root=repo,
-        cfg=cfg_for(repo),
-        rules=rules,
-        client_factory=_factory(script),
-    )
-    verify = next(r for r in script.requests if "<changes_this_round>" in json.dumps(r))
-    assert block in verify["messages"][1]["content"]
-    assert len(calls) == 2
-
-
-def test_run_survives_a_checkout_with_no_release(repo: Path):
-    """The real computation over a non-git root: the review still runs, and the
-    reviewer is told the baseline is unavailable rather than nothing."""
-    gh = FakeGitHub()
-    script = _review_script()
-    res = run(
-        gh=gh,
-        number=1,
-        root=repo,
-        cfg=cfg_for(repo),
-        rules=load_rules(repo / ".github" / "connector-reviewer"),
-        client_factory=_factory(script),
-    )
-    assert res.action == "reviewed"
-    assert f"<released_surface_removals>\n{review_mod.surface.UNAVAILABLE}: " in (
-        _review_context(script)
     )
 
 
@@ -4909,7 +4385,10 @@ def test_the_prompts_state_the_base_branch_rule():
     for prompt in (review_mod.prompts.REVIEW_SYSTEM, review_mod.prompts.VERIFY_SYSTEM):
         flat = " ".join(prompt.split())
         assert "Commits in an open PR are unreleased" in flat
-        assert "against the base branch and the last release" in flat
+        assert (
+            "against the base branch, never against this PR's own earlier commits"
+            in flat
+        )
         assert "only an intermediate commit of this PR could have produced" in flat
     assert "<at_base_branch>" in review_mod.prompts.VERIFY_SYSTEM
 
@@ -5592,7 +5071,6 @@ def test_recheck_resolves_the_f23084f_shape_citing_the_merge_base(repo: Path):
     # Booked against the PR's $ cap.
     assert st.ledger["spent_usd"] > before.ledger["spent_usd"]
     assert gh.statuses[-1]["state"] == "success"
-    assert approve_mod.decision_for(res)["action"] == "approve"
     # The author's text reaches the model only as an escaped, labelled claim.
     [req] = script.requests
     user = req["messages"][1]["content"]
@@ -5602,7 +5080,6 @@ def test_recheck_resolves_the_f23084f_shape_citing_the_merge_base(repo: Path):
     )
     assert "untrusted" in req["messages"][0]["content"]
     assert f"- absent on merge base: {MARKER}" in user
-    assert "- private: module application_sdk.storage._marker" in user
 
 
 def test_recheck_keeps_a_finding_the_evidence_does_not_overturn(repo: Path):
@@ -5790,7 +5267,6 @@ def test_recheck_on_shipped_code_reports_it_present_on_the_merge_base(repo: Path
     _, script = _recheck(gh, repo, [f.id], "", Script(_verdict(f.id, "open", "still")))
     user = script.requests[0]["messages"][1]["content"]
     assert "- present on merge base: fetch in application_sdk/storage/fetch.py" in user
-    assert "- public: module application_sdk.storage.fetch, symbol fetch" in user
     assert "callers of fetch at the PR head" in user and "load_all" in user
 
 
@@ -5860,7 +5336,7 @@ def test_the_baseline_reads_python_files_past_the_head_text_cap():
 def _evidence(repo: Path, f: Finding, base: str | None) -> Any:
     ws, _ = _ws(repo)
     return review_mod.recheck_evidence(
-        ws, f, review_mod.baseline.PRAdditions(), lambda p: base, ""
+        ws, f, review_mod.baseline.PRAdditions(), lambda p: base
     )
 
 
@@ -5953,7 +5429,7 @@ def _scoped_evidence(path: str, quote: str) -> Any:
     )
     f = Finding(path, 1, "high", "bug", "t", "b", quote)
     return review_mod.recheck_evidence(
-        ws, f, review_mod.baseline.PRAdditions(), lambda p: None, ""
+        ws, f, review_mod.baseline.PRAdditions(), lambda p: None
     )
 
 
@@ -6201,7 +5677,6 @@ def _check_new(repo: Path, transport, findings: list[Finding], cap: float = 1.0)
         res,
         changes=[],
         removed="",
-        released="",
         added=review_mod.baseline.PRAdditions(),
         max_tokens=8000,
     )
@@ -6846,12 +6321,43 @@ index 1111111..2222222 100644
 """
 
 
-def test_a_dependency_change_gets_a_scan_advisory_not_a_finding(repo: Path):
-    """The trivy/grype scan rule asks for something only the PR description can
-    show, and verify judges only code, so a finding for it could never close. A
-    dependency-only diff with no scan in its description therefore draws no finding
-    and does carry a non-blocking advisory note in the summary, which survives a
-    later re-render."""
+# Not shipped: the fork has no advisory of its own (advisory.ADVISORIES is empty).
+BUILD_ADVISORY = advisory.Advisory(
+    globs=("**/Dockerfile*", "**/pyproject.toml"),
+    note="this PR changes a build file ({paths}): say why in the description.",
+)
+
+
+def test_the_fork_ships_no_advisory(repo: Path):
+    """lens's one advisory (a trivy/grype scan reminder citing an SDK doc) is not
+    carried over: a dependency change in an app repo draws no note."""
+    assert advisory.ADVISORIES == ()
+    assert advisory.notes(["pyproject.toml", "Dockerfile", "uv.lock"]) == []
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname = "x"\ndependencies = ["dnspython>=2.8"]\n'
+    )
+    gh = FakeGitHub(
+        diffs={("b0", "h1"): PYPROJECT_DIFF},
+        files={("pyproject.toml", "h1"): (repo / "pyproject.toml").read_text()},
+    )
+    res = run(
+        gh=cast(GitHub, gh),
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "connector-reviewer"),
+        client_factory=_factory(Script()),
+    )
+    assert res.state is not None and res.state.advisories == []
+    assert "**Advisory**" not in gh.comments[0]["body"]
+
+
+def test_an_advisory_is_a_summary_note_not_a_finding(repo: Path, monkeypatch):
+    """An advisory asks for something only the PR description can show, and verify
+    judges only code, so a finding for it could never close. A matching diff
+    therefore draws no finding and does carry a non-blocking note in the summary,
+    which survives a later re-render."""
+    monkeypatch.setattr(advisory, "ADVISORIES", (BUILD_ADVISORY,))
     (repo / "pyproject.toml").write_text(
         '[project]\nname = "x"\ndependencies = ["dnspython>=2.8"]\n'
     )
@@ -6875,10 +6381,8 @@ def test_a_dependency_change_gets_a_scan_advisory_not_a_finding(repo: Path):
     body = summary["body"]
     assert "Ready to merge" in body
     assert "**Advisory** (does not block)" in body
-    advisory = body.split("**Advisory** (does not block)")[1].split("\n")[0]
-    assert (
-        "trivy" in advisory and "grype" in advisory and "`pyproject.toml`" in advisory
-    )
+    note = body.split("**Advisory** (does not block)")[1].split("\n")[0]
+    assert "changes a build file (`pyproject.toml`)" in note
     # A later round, dismiss or recheck re-renders from stored state: the note stays.
     back = PRState.decode(body)
     assert back is not None and back.advisories == res.state.advisories
@@ -6886,7 +6390,8 @@ def test_a_dependency_change_gets_a_scan_advisory_not_a_finding(repo: Path):
     assert "**Advisory** (does not block)" in again
 
 
-def test_a_code_only_change_gets_no_scan_advisory(repo: Path):
+def test_a_change_no_advisory_matches_gets_no_note(repo: Path, monkeypatch):
+    monkeypatch.setattr(advisory, "ADVISORIES", (BUILD_ADVISORY,))
     gh = FakeGitHub()
     res = run(
         gh=cast(GitHub, gh),
@@ -6900,7 +6405,7 @@ def test_a_code_only_change_gets_no_scan_advisory(repo: Path):
     assert "**Advisory**" not in gh.comments[0]["body"]
 
 
-def test_state_from_a_newer_lens_with_unknown_fields_still_decodes():
+def test_state_from_a_newer_reviewer_with_unknown_fields_still_decodes():
     """A field added by a later connector-reviewer (or dropped by a revert) must not make every
     PR's stored state unreadable."""
     st = PRState(
@@ -6933,9 +6438,10 @@ rename to container.build
 """
 
 
-def test_renaming_a_dockerfile_away_still_gets_the_scan_advisory(repo: Path):
+def test_renaming_a_file_away_still_matches_its_advisory(repo: Path, monkeypatch):
     """A rename's diff entry carries its destination as the path; the Dockerfile it
     renames away still changed, so its former name must count."""
+    monkeypatch.setattr(advisory, "ADVISORIES", (BUILD_ADVISORY,))
     gh = FakeGitHub(
         diffs={("b0", "h1"): DOCKERFILE_RENAME_DIFF},
         files={("container.build", "h1"): "FROM scratch\n"},
@@ -6956,7 +6462,14 @@ def test_renaming_a_dockerfile_away_still_gets_the_scan_advisory(repo: Path):
 def test_a_path_holding_backticks_cannot_break_out_of_its_code_span():
     """Paths come from the PR, so a backtick in one must not close the code span and
     let the rest render as Markdown in connector-reviewer's own summary."""
-    [note] = advisory.notes(["Dockerfile`**spoof**`x"])
+    [note] = advisory.notes(["Dockerfile`**spoof**`x"], (BUILD_ADVISORY,))
     assert "`` Dockerfile`**spoof**`x ``" in note
-    [note] = advisory.notes(["a/Dockerfile\n## heading"])
+    [note] = advisory.notes(["a/Dockerfile\n## heading"], (BUILD_ADVISORY,))
     assert "\n" not in note
+
+
+def test_an_advisory_names_a_few_paths_and_counts_the_rest():
+    paths = [f"svc{i}/Dockerfile" for i in range(5)]
+    [note] = advisory.notes(paths, (BUILD_ADVISORY,))
+    assert "`svc0/Dockerfile`, `svc1/Dockerfile`, `svc2/Dockerfile` and 2 more" in note
+    assert "svc3" not in note
