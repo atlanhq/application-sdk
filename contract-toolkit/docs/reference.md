@@ -4269,7 +4269,8 @@ Do not use it for nested selections; use `treeSelection` on an apitree for those
 
 **Caveats.**
 
-- Evaluation fails if `stringMap = true` is set on a conditional whose `outputValueType` is not `"object"`.
+- Evaluation fails if `stringMap = true` is set on a conditional whose `outputValueType` is not `"object"`, including a field with `includeInInput = false`.
+- Evaluation fails if `stringMap = true` and `treeSelection = true` are both set (`Widgets.ConditionalInput`): they declare conflicting types (`dict[str, str]` vs `TreeSelection`).
 - The default (`false`) keeps the existing `dict[str, Any]` type and the shared coercion, so existing contracts generate byte-identical output.
 ---
 

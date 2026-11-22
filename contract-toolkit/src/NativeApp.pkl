@@ -3261,10 +3261,9 @@ local function getInputPyField(k: String, u: Config.UIElement): String =
     "\(k): str = \"\""
   else if (u is Config.ConditionalInput)
     (let (ci = u as Config.ConditionalInput)
-      if (ci.stringMap && ci.outputValueType != "object")
-        throw("ConditionalInput '\(k)' sets stringMap but its outputValueType is "
-          + "\"\(ci.outputValueType)\"; stringMap applies only to outputValueType = \"object\".")
-      else if (ci.outputValueType == "object" && ci.stringMap)
+      // A stringMap on any other outputValueType is refused by
+      // _stringMapWidgetCheck, forced before this renders.
+      if (ci.outputValueType == "object" && ci.stringMap)
         // Flat string map (e.g. dsnTreeMap: DSN -> connection qualified name).
         // `str` values avoid the SDK's AAF-CTR-002 rejection of `Any`.
         getPyDefaultFactoryField(k, "Annotated[dict[str, str], MaxItems(1000)]", "dict")
@@ -3339,6 +3338,21 @@ local extractionInputProvidedFields: Listing<String> = new Listing {
 /// typed SDK fields such as agent_json, credential_guid, connection, filters,
 /// and output path fields. UI fields that collide with those parent fields are
 /// deliberately skipped so the parent declarations win.
+/// Refuses `stringMap` on a ConditionalInput whose `outputValueType` is not
+/// "object". Runs over every uiConfig property, including those with
+/// `includeInInput = false`, so a contradictory declaration never passes
+/// silently just because the field is not rendered into `_input.py`.
+local _stringMapWidgetCheck: Any =
+  let (bad = uiConfig.properties
+    .filter((_, u) -> u is Config.ConditionalInput
+      && (u as Config.ConditionalInput).stringMap
+      && (u as Config.ConditionalInput).outputValueType != "object")
+    .map((k, u) -> Pair(k, "'\(k)' (outputValueType = \"\((u as Config.ConditionalInput).outputValueType)\")"))
+    .values.toList())
+  if (bad.isEmpty) null
+  else throw("ConditionalInput \(bad.join(", ")) sets stringMap; "
+    + "stringMap applies only to outputValueType = \"object\".")
+
 local function generateInputClassPy(): FileOutput = new FileOutput {
   local skipFields: Set<String> = extractionInputProvidedFields.toList().toSet()
   local uiFieldLines: String = (new Listing {
@@ -3518,6 +3532,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     // two before the class itself — matches ruff/isort canonical spacing.
     (if (!loggerModuleLine.isEmpty) "\n" else "\n\n")
   text =
+    let (_ = _stringMapWidgetCheck)
     "# AUTO-GENERATED from app.pkl — DO NOT EDIT MANUALLY.\n" +
     "# To regenerate: make generate\n" +
     inputImportBlock +

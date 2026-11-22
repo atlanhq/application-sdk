@@ -167,7 +167,24 @@ facts {
 
   ["stringMap on a string-valued conditional is refused (NativeApp.pkl)"] {
     module.catch(() -> forceAll(nativeWith(true, "string")))
-      .contains("ConditionalInput 'dsn_mapping' sets stringMap but its outputValueType is \"string\"")
+      .contains("ConditionalInput 'dsn-mapping' (outputValueType = \"string\") sets stringMap")
+  }
+
+  // The refusal must not depend on the field being rendered into _input.py.
+  ["stringMap refusal also covers a field excluded from the input (NativeApp.pkl)"] {
+    module.catch(() -> forceAll((nativeWith(true, "string")) {
+      uiConfig { tasks { ["Configuration"] { inputs { ["dsn-mapping"] { includeInInput = false } } } } }
+    })).contains("ConditionalInput 'dsn-mapping' (outputValueType = \"string\") sets stringMap")
+  }
+
+  // treeSelection would win and render TreeSelection, dropping dict[str, str] silently.
+  ["stringMap together with treeSelection is refused (App.pkl)"] {
+    module.catch(() -> forceAll((appWith(true, "object")) {
+      uiConfig { tasks { ["Configuration"] { inputs { ["dsn-mapping"] {
+        baseWidgetType = "apitree"
+        treeSelection = true
+      } } } } }
+    })).contains("ConditionalInput 'dsn-mapping' sets both stringMap and treeSelection")
   }
 
   // Control for the refusals: the same contracts with stringMap off generate.
@@ -175,4 +192,16 @@ facts {
     forceAll(appWith(false, "string")).containsKey(appInputPath)
     forceAll(nativeWith(false, "string")).containsKey(nativeInputPath)
   }
+
+  // scripts/test-sdk-import.py validates the App.pkl output at runtime (the
+  // `full` example); identical validator text extends that to NativeApp.pkl.
+  ["App.pkl and NativeApp.pkl emit the same _coerce_string_maps validator"] {
+    validatorBlock(appOnPy) == validatorBlock(nativeOnPy)
+    validatorBlock(appOnPy).contains("return {}")
+  }
 }
+
+local function validatorBlock(py: String): String =
+  let (start = py.indexOf("    @field_validator(\"dsn_mapping\", mode=\"before\")"))
+  let (rest = py.drop(start))
+  rest.take(rest.indexOf("using an empty map.\")\n        return {}\n") + 40)

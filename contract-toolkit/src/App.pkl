@@ -5764,15 +5764,24 @@ local _treeSelectionWidgetCheck: Any =
     + "treeSelection applies only to baseWidgetType = \"apitree\".")
 
 local _stringMapWidgetCheck: Any =
-  let (bad = (uiConfig?.properties ?? Map())
-    .filter((_, u) -> u is Widgets.ConditionalInput
-      && (u as Widgets.ConditionalInput).stringMap
-      && (u as Widgets.ConditionalInput).outputValueType != "object")
+  let (stringMaps = (uiConfig?.properties ?? Map())
+    .filter((_, u) -> u is Widgets.ConditionalInput && (u as Widgets.ConditionalInput).stringMap))
+  let (badType = stringMaps
+    .filter((_, u) -> (u as Widgets.ConditionalInput).outputValueType != "object")
     .map((k, u) -> Pair(k, "'\(k)' (outputValueType = \"\((u as Widgets.ConditionalInput).outputValueType)\")"))
     .values.toList())
-  if (bad.isEmpty) null
-  else throw("ConditionalInput \(bad.join(", ")) sets stringMap; "
-    + "stringMap applies only to outputValueType = \"object\".")
+  let (badTree = stringMaps
+    .filter((_, u) -> (u as Widgets.ConditionalInput).treeSelection)
+    .keys.toList().sort().map((k) -> "'\(k)'"))
+  if (!badType.isEmpty)
+    throw("ConditionalInput \(badType.join(", ")) sets stringMap; "
+      + "stringMap applies only to outputValueType = \"object\".")
+  // treeSelection would win in widgetInputField and render TreeSelection, so the
+  // requested dict[str, str] would be dropped silently. The two types conflict.
+  else if (!badTree.isEmpty)
+    throw("ConditionalInput \(badTree.join(", ")) sets both stringMap and treeSelection; "
+      + "they declare conflicting types (dict[str, str] vs TreeSelection). Set only one.")
+  else null
 
 local _treeFilterModeCheck: Any =
   let (bad = filterWidgets

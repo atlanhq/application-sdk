@@ -1579,6 +1579,7 @@ class ConditionalInput extends UIElement {
   /// validation. The config JSON, manifest and wire format do not change.
   ///
   /// Evaluation fails if this is set while `outputValueType` is not `"object"`.
+  /// Evaluation also fails if `treeSelection` is set too: the types conflict.
   /// Default `false` keeps the existing `dict[str, Any]` type and coercion.
   hidden stringMap: Boolean = false
 
