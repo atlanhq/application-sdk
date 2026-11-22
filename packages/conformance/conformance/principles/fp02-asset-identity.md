@@ -7,8 +7,8 @@ applies-to: [app, contract]
 Principle: A qualified name is the asset. For the same source object, connection and settings, a
 run after this change produces the same qualified name, type and parent links as a run before it,
 unless the PR sets out to change them and says what happens to assets already published.
-Why: A changed string is a new asset. Downstream the old asset is deleted and a new one created,
-everything linked to the old one is orphaned, and a collision makes two source objects overwrite
+Why: A changed string is a new asset. The next run publishes a duplicate, the old asset is orphaned
+or removed along with everything linked to it, and a collision makes two source objects overwrite
 each other.
 Ask:
 - Does the diff change anything that feeds a qualified name or other unique key: a segment, its order, case, escaping, trimming, a number or date format, a default, or the field it is read from?
