@@ -7229,14 +7229,19 @@ def _scoped_evidence(path: str, quote: str) -> Any:
 
 def test_recheck_evidence_lists_no_outside_callers_for_a_nested_symbol():
     """FND-4341: a closure's bare name colliding with a call elsewhere is not a
-    caller; the evidence names the enclosing function's real callers instead."""
+    caller; the evidence names the enclosing function's real callers instead.
+    F-8ed060: `hook` is bound in `resolve`, the nearest enclosing function, not
+    in `handler_compute_manifest`; the facts walk up one function at a time."""
     ev = _scoped_evidence("app/handler/routes.py", 'return config.get("name")')
     facts = [x for x in ev.facts if "caller" in x]
     assert facts == [
         "local symbol: handler_compute_manifest.resolve.hook is defined inside "
+        "handler_compute_manifest.resolve, so no code outside it can call it by "
+        "name (callers inside handler_compute_manifest.resolve: none; 1 same-name "
+        "call elsewhere unrelated: no import reaches it)",
+        "local symbol: handler_compute_manifest.resolve is defined inside "
         "handler_compute_manifest, so no code outside it can call it by name "
-        "(callers inside handler_compute_manifest: none; 1 same-name call "
-        "elsewhere unrelated: no import reaches it)",
+        "(callers inside handler_compute_manifest: none)",
         "callers of handler_compute_manifest at the PR head (3 in its file or "
         "importing it; 1 same-name call elsewhere unrelated: no import reaches "
         "it): app/aliased.py:3 build, app/handler/routes.py:9 serve, "
@@ -10375,3 +10380,117 @@ def test_salvaging_tool_arguments_reads_braces_inside_strings_as_text(
     """F-bdcf59: the salvage counted every brace, so `}` inside a string closed
     the object early, the slice failed to parse, and the arguments were lost."""
     assert parse_args(raw) == expected
+
+
+def _index_of(files: dict[str, str]) -> Index:
+    return build_index(Path("/nonexistent"), overrides=files)
+
+
+def test_a_nested_symbol_is_local_to_its_nearest_enclosing_function():
+    """F-8ed060: `helper` is bound in `middle`; a `helper()` call in `outer`
+    cannot reach it (it raises NameError there), so it is not a caller."""
+    idx = _index_of(
+        {
+            "app/nest.py": (
+                "def outer():\n"
+                "    def middle():\n"
+                "        def helper():\n"
+                "            return 1\n"
+                "        return helper()\n"
+                "    return helper()\n"
+            )
+        }
+    )
+    got = idx.scoped_callers(idx.symbols["app.nest:outer.middle.helper"])
+    assert got.local_to is not None
+    assert got.local_to.qualname == "app.nest:outer.middle"
+    assert [c.qualname for c in got.callers] == ["app.nest:outer.middle"]
+    assert got.unrelated == 1
+
+
+SCOPED_MODULE_FUNCTION = {
+    "app/store.py": "def fetch(key):\n    return key\n",
+    "app/client_use.py": (
+        "from app import store\n\n"
+        "def unrelated(client):\n    return client.fetch('k')\n\n"
+        "def related():\n    return store.fetch('k')\n"
+    ),
+    "app/dotted.py": "import app.store\n\ndef go():\n    return app.store.fetch('k')\n",
+    "app/aliased.py": "import app.store as st\n\ndef go():\n    return st.fetch('k')\n",
+    "app/bare.py": "from app.store import fetch\n\ndef go():\n    return fetch('k')\n",
+    # The module is imported, but the bare name `fetch` is not bound here.
+    "app/modonly.py": "import app.store\n\ndef go():\n    return fetch('k')\n",
+}
+
+
+def test_a_module_function_caller_must_bind_the_name_or_call_it_on_its_module():
+    """F-510a00: a file that imports the module for something else and calls
+    `client.fetch()` on an unrelated object is not a caller of `store.fetch`."""
+    idx = _index_of(SCOPED_MODULE_FUNCTION)
+    got = idx.scoped_callers(idx.symbols["app.store:fetch"])
+    assert sorted(c.qualname for c in got.callers) == [
+        "app.aliased:go",
+        "app.bare:go",
+        "app.client_use:related",
+        "app.dotted:go",
+    ]
+    assert got.unrelated == 2  # client.fetch() and the unbound bare fetch()
+
+
+def test_an_index_saved_before_call_refs_resolves_callers_by_file_as_before():
+    idx = _index_of(SCOPED_MODULE_FUNCTION)
+    for s in idx.symbols.values():
+        s.call_refs = []
+    got = idx.scoped_callers(idx.symbols["app.store:fetch"])
+    assert "app.client_use:unrelated" in [c.qualname for c in got.callers]
+
+
+INHERITED_METHOD = {
+    "app/base.py": (
+        "class Base:\n    def run(self):\n        return 1\n\n"
+        "class Child(Base):\n    pass\n\n"
+        "class GrandChild(Child):\n    def other(self):\n        return self.run()\n\n"
+        "class Override(Base):\n    def run(self):\n        return 2\n"
+    ),
+    "app/use_child.py": (
+        "from app.base import Child\n\ndef use(x: Child):\n    return x.run()\n"
+    ),
+    "app/use_grandchild.py": (
+        "from app.base import GrandChild\n\ndef use():\n    return GrandChild().run()\n"
+    ),
+    "app/use_override.py": (
+        "from app.base import Override\n\ndef use(x: Override):\n    return x.run()\n"
+    ),
+}
+
+
+def test_a_call_on_a_subclass_that_inherits_the_method_is_a_caller():
+    """F-2d76d2: `x: Child` then `x.run()` dispatches to `Base.run` when Child
+    does not override it; it used to be counted as untyped."""
+    idx = _index_of(INHERITED_METHOD)
+    got = idx.scoped_callers(idx.symbols["app.base:Base.run"])
+    assert sorted(c.qualname for c in got.callers) == [
+        "app.base:GrandChild.other",
+        "app.use_child:use",
+        "app.use_grandchild:use",
+    ]
+    # A subclass that overrides run() dispatches to its own.
+    assert got.untyped == 1
+
+
+def test_a_relative_import_in_a_test_maps_it_to_its_source():
+    """F-92d36b: `from ..fetch import fetch` in app/tests/ names `app.fetch`;
+    the module part alone (`fetch`) matched nothing."""
+    idx = _index_of(
+        {
+            "app/fetch.py": "def fetch():\n    return 1\n",
+            "app/tests/test_fetch.py": "from ..fetch import fetch\n",
+            "app/tests/test_pkg.py": "from .. import fetch\n",
+            "app/tests/unit/test_deep.py": "from ...fetch import fetch\n",
+        }
+    )
+    assert sorted(idx.tests_for["app/fetch.py"]) == [
+        "app/tests/test_fetch.py",
+        "app/tests/test_pkg.py",
+        "app/tests/unit/test_deep.py",
+    ]
