@@ -239,7 +239,7 @@
       "platformAutomerge": true
     },
     {
-      "description": "Local dev image majors are reviewed, never auto-merged (FND-5353), the same carve-out as the preset's action-major rule and the pyatlan major rule above. A major such as postgres 18 to 19 can change the on-disk format or the server's defaults, and green CI does not show it: no CI job starts this stack. Separate from the rule above so that rule's positive matchUpdateTypes stay the lane's only definition.",
+      "description": "Local dev image majors are reviewed, never auto-merged (FND-5353), the same carve-out as the preset's action-major rule and the pyatlan major rule above. A major such as postgres 18 to 19 can change the on-disk format or the server's defaults, and green CI does not show it: no CI job starts this stack. Turning automerge off is not enough on its own: the approval gate judges paths, not update types, so atlan-ci's Code Owner approval would still reach the major and its merger need not review it. The gate withholds that approval when a file admitted only by the caller's extra_dep_file_pattern changes on a renovate/major-* branch (FND-5353, extra_paths_on_major in .github/scripts/renovate_approval_conditions.py). That detection depends on the groupName above spanning majors, which test_renovate_release_age_policy.py checks. Separate from the rule above so that rule's positive matchUpdateTypes stay the lane's only definition.",
       "matchManagers": [
         "docker-compose"
       ],

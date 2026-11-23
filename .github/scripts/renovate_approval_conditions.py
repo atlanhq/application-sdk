@@ -153,6 +153,12 @@ VULN_AGENT_REPOS = frozenset({"atlanhq/application-sdk"})
 #: Renovate's own artifact-update status context (condition f).
 ARTIFACT_CONTEXT = "renovate/artifacts"
 
+#: Head-ref prefix Renovate gives a grouped major (separateMajorMinor puts the
+#: group's majors on ``renovate/major-<groupSlug>``). Condition (d), part 3: a
+#: path approvable only through the caller's ``extra_dep_file_pattern`` is not
+#: approvable on such a branch (FND-5353). See :func:`extra_paths_on_major`.
+RENOVATE_MAJOR_BRANCH_PREFIX = "renovate/major-"
+
 #: Head-ref prefix of every release bump PR (``bump-version-main``,
 #: ``-conformance``, ``-contract-toolkit``). Shared with bump_pr_opt_in.py.
 BUMP_BRANCH_PREFIX = "bump-version"
@@ -509,6 +515,39 @@ def non_dep_files(filenames: list[str], extra_pattern: str = "") -> list[str]:
         f
         for f in filenames
         if f and not f.startswith(DOT_GITHUB_PREFIX) and not compiled.fullmatch(f)
+    ]
+
+
+def extra_paths_on_major(
+    filenames: list[str], extra_pattern: str, head_ref: str
+) -> list[str]:
+    """Condition (d), part 3: repo-declared paths changed on a major branch.
+
+    Returns the changed files that are approvable ONLY through the caller's
+    ``extra_dep_file_pattern`` (not under ``.github/`` and not matched by
+    :data:`DEP_FILE_RE`), when the PR's head is a Renovate grouped-major branch.
+    A non-empty list withholds the approval, so a human Code Owner reviews it.
+
+    Why (FND-5353): the extra pattern is how a repo declares its own
+    dep-managed paths, such as application-sdk's ``local/`` compose files. The
+    repo's Renovate config auto-merges their non-major bumps and leaves majors
+    to a human, but this gate judges paths, not update types: without this, a
+    postgres 18 to 19 bump would collect atlan-ci's Code Owner approval like a
+    digest bump, and the human who merges it would not need to review it.
+
+    Detection is by branch name, which holds only for grouped majors. A lane
+    whose files the extra pattern admits must therefore set a ``groupName``
+    that spans majors; test_renovate_release_age_policy.py checks that for the
+    local dev images lane. Scoped to the extra pattern on purpose: the built-in
+    allowlist's majors (actions, PyPI) keep their current behaviour.
+    """
+    if not extra_pattern or not head_ref.startswith(RENOVATE_MAJOR_BRANCH_PREFIX):
+        return []
+    built_in = re.compile(DEP_FILE_RE)
+    return [
+        f
+        for f in filenames
+        if f and not f.startswith(DOT_GITHUB_PREFIX) and not built_in.fullmatch(f)
     ]
 
 
@@ -1211,6 +1250,22 @@ def process_pr(
         print("Skipping.")
         return False
     print(f"PR #{pr}: all changed files are dependency-related.")
+
+    # ...a repo-declared path on a major branch goes to a human...
+    head: dict[str, Any] = meta.get("head") or {}
+    head_ref = str(head.get("ref") or "")
+    major_offenders = extra_paths_on_major(
+        [f.filename for f in changed_files], extra_pattern, head_ref
+    )
+    if major_offenders:
+        print(
+            f"PR #{pr}: major update ({head_ref}) changes repo-declared "
+            "dependency files, which need a human Code Owner review:"
+        )
+        for name in major_offenders:
+            print(f"  {name}")
+        print("Skipping.")
+        return False
 
     # ...and any workflow file among them must carry a pin-only diff.
     workflow_offenders = non_pin_only_workflows(changed_files)

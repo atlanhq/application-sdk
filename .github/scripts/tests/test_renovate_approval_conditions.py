@@ -500,6 +500,71 @@ def _sdk_caller_extra_pattern() -> str:
     return patterns[0]
 
 
+LOCAL_COMPOSE = "local/temporal-auth/docker-compose.yml"
+LOCAL_PATTERN = r"local/[^/]+/(docker-)?compose[^/]*\.ya?ml"
+
+
+def _meta_on(ref: str) -> dict:
+    meta = pr_payload()
+    meta["head"]["ref"] = ref
+    return meta
+
+
+class TestRepoDeclaredPathsOnMajors:
+    """Condition (d), part 3 (FND-5353): a path approvable only through the
+    caller's extra_dep_file_pattern goes to a human on a grouped-major branch,
+    because the gate judges paths, and a major bump is the same path."""
+
+    def test_extra_path_on_major_branch_is_reported(self):
+        assert gate.extra_paths_on_major(
+            [LOCAL_COMPOSE], LOCAL_PATTERN, "renovate/major-local-dev-images"
+        ) == [LOCAL_COMPOSE]
+
+    @pytest.mark.parametrize(
+        "ref", ["renovate/local-dev-images", "renovate/postgres-19.0", ""]
+    )
+    def test_extra_path_off_major_branch_is_not(self, ref):
+        assert gate.extra_paths_on_major([LOCAL_COMPOSE], LOCAL_PATTERN, ref) == []
+
+    def test_built_in_paths_on_a_major_branch_are_unchanged(self):
+        # Action and PyPI majors keep today's behaviour: scoped to the extra
+        # pattern on purpose.
+        files = [".github/workflows/ci.yaml", "uv.lock", "pyproject.toml"]
+        assert (
+            gate.extra_paths_on_major(
+                files, LOCAL_PATTERN, "renovate/major-github-actions"
+            )
+            == []
+        )
+
+    def test_no_extra_pattern_means_no_change(self):
+        assert (
+            gate.extra_paths_on_major(["uv.lock"], "", "renovate/major-pyatlan") == []
+        )
+
+    def test_major_local_image_bump_is_not_approved(self, monkeypatch, capsys):
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"EXTRA_DEP_PATTERN": LOCAL_PATTERN},
+            meta=_meta_on("renovate/major-local-dev-images"),
+            files=file_payload(LOCAL_COMPOSE),
+        )
+        assert fake.approved_prs == []
+        assert "need a human Code Owner review" in log
+        assert LOCAL_COMPOSE in log
+
+    def test_non_major_local_image_bump_is_approved(self, monkeypatch, capsys):
+        _code, fake, _log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"EXTRA_DEP_PATTERN": LOCAL_PATTERN},
+            meta=_meta_on("renovate/local-dev-images"),
+            files=file_payload(LOCAL_COMPOSE),
+        )
+        assert fake.approved_prs == ["7"]
+
+
 class TestSdkCallerExtraPattern:
     """application-sdk's caller widens the allowlist for its own dep-managed
     paths. Read from the real workflow file, so a pattern edit is tested."""
