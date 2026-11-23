@@ -169,7 +169,13 @@ def _post(client: TestClient, route: str, mode: str) -> Any:
 def test_an_app_error_detail_is_redacted(client: TestClient, route: str) -> None:
     resp = _post(client, route, "app-error")
     assert resp.status_code == 401
-    assert resp.json() == {"detail": REDACTED}
+    body = resp.json()
+    # The typed body (detail, message, error) is covered in
+    # test_typed_route_errors.py; here every text field in it is redacted.
+    assert set(body) == {"detail", "message", "error"}
+    assert body["detail"] == REDACTED
+    assert body["message"] == REDACTED
+    assert body["error"]["message"] == REDACTED
 
 
 @pytest.mark.parametrize("route", ["auth", "metadata"])
