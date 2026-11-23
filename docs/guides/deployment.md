@@ -80,6 +80,10 @@ ENV ATLAN_CONTRACT_GENERATED_DIR=app/generated
 - `ATLAN_CONTRACT_GENERATED_DIR` defaults to `app/generated` — override only if your directory layout differs.
 - Keep app code in `app/` (importable as the `app` package). The handler auto-discovers `app.handler:MyHandler` if you name it correctly.
 
+### Dapr sidecar ports
+
+The base image's entrypoint starts `daprd` in the same container as the app. Its HTTP API (`3500`), gRPC API (`50001`) and internal gRPC API (`50002`) listen on `127.0.0.1` only, so they cannot be reached from the pod IP. The API exposes the pod's secret stores and object-store binding with no authentication, so do not put these ports in a Service, a probe or a sidecar on another network namespace. Only daprd's metrics (`3100`) listen on all interfaces, for Prometheus.
+
 ---
 
 ## Kubernetes Topology

@@ -36,6 +36,16 @@
 #                                     app has exited, before killing it (default: 30).
 #                                     The app's shutdown budget (ATLAN_SHUTDOWN_GRACE_SECONDS)
 #                                     keeps up to 30s of the pod grace for this step.
+#
+# Listen addresses (fixed, not configurable):
+#   daprd's HTTP API, gRPC API and internal gRPC API bind to 127.0.0.1 only.
+#   The app is the only client and reaches them over loopback; on the pod IP
+#   they would hand any workload in the cluster the pod's secret stores and
+#   storage identity, with no auth in front. Metrics keep daprd's default
+#   (0.0.0.0) so Prometheus can still scrape them.
+#   [::1] is deliberately not listed: with IPv6 disabled in the pod, daprd
+#   1.18 fails that bind and its HTTP API never serves. The SDK connects to
+#   http://localhost:<port>, which falls back from ::1 to 127.0.0.1.
 
 set -eu
 
@@ -130,6 +140,7 @@ echo "[entrypoint]   app-port:        ${DAPR_APP_PORT}"
 echo "[entrypoint]   dapr-http-port:  ${DAPR_HTTP_PORT}"
 echo "[entrypoint]   dapr-grpc-port:  ${DAPR_GRPC_PORT}"
 echo "[entrypoint]   dapr-internal-grpc-port: ${DAPR_INTERNAL_GRPC_PORT}"
+echo "[entrypoint]   listen-address:  127.0.0.1 (HTTP, gRPC and internal gRPC APIs)"
 echo "[entrypoint]   components-path: ${DAPR_COMPONENTS_PATH}"
 echo "[entrypoint]   log-level:       ${DAPR_LOG_LEVEL}"
 echo "[entrypoint]   metrics-port:    ${DAPR_METRICS_PORT}"
@@ -172,6 +183,8 @@ ${DAPR_LOG_FORWARDER} daprd \
     --dapr-http-port "${DAPR_HTTP_PORT}" \
     --dapr-grpc-port "${DAPR_GRPC_PORT}" \
     --dapr-internal-grpc-port "${DAPR_INTERNAL_GRPC_PORT}" \
+    --dapr-listen-addresses 127.0.0.1 \
+    --dapr-internal-grpc-listen-address 127.0.0.1 \
     --resources-path "${DAPR_COMPONENTS_PATH}" \
     --log-level "${DAPR_LOG_LEVEL}" \
     --metrics-port "${DAPR_METRICS_PORT}" \
