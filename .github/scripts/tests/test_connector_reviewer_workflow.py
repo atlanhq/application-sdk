@@ -41,7 +41,8 @@ JOB_TIMEOUT_MINUTES = 45
 #: a review needs; `contents: write` in particular would let it push.
 TOKEN_PERMISSIONS = {
     "permission-contents": "read",
-    "permission-pull-requests": "read",
+    # GitHub needs pull-requests write to comment on a pull request.
+    "permission-pull-requests": "write",
     "permission-issues": "write",
     "permission-statuses": "write",
     "permission-actions": "read",
