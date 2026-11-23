@@ -10112,9 +10112,13 @@ def _lock(source: str, version: str = "3.40.0", extra: str = "") -> str:
     "lock, ref, label",
     [
         (_lock('{ registry = "https://pypi.org/simple" }'), "v3.40.0", "v3.40.0"),
-        # The registry firewall that mirrors PyPI is a registry too.
+        # The org's registry firewall that mirrors PyPI is a known registry too.
         (
-            _lock('{ registry = "https://firewall.example/pypi/simple/" }', "3.58.1"),
+            _lock(
+                '{ registry = "https://factory.endorlabs.com/v1/namespaces/'
+                'atlan.atlanhq/firewall/pypi/simple/" }',
+                "3.58.1",
+            ),
             "v3.58.1",
             "v3.58.1",
         ),
@@ -10193,6 +10197,27 @@ def test_the_sdk_pin_resolves_to_a_tag_or_a_commit(lock: str, ref: str, label: s
             "not a released version",
         ),
         (_lock("{ }"), "empty source"),
+        # Another index could serve different contents under the same version.
+        (
+            _lock('{ registry = "https://firewall.example/pypi/simple/" }'),
+            "not PyPI or its mirror",
+        ),
+        (
+            _lock('{ registry = "http://pypi.org/simple" }'),
+            "not PyPI or its mirror",
+        ),
+        (
+            _lock('{ registry = "https://pypi.org.evil.example/simple" }'),
+            "not PyPI or its mirror",
+        ),
+        # An unparseable git URL falls back instead of aborting the review.
+        (
+            _lock(
+                '{ git = "https://[bad/atlanhq/application-sdk'
+                '#e633c5b1fb7d0a1b2c3d4e5f60718293a4b5c6d7" }'
+            ),
+            "malformed",
+        ),
         # Two different pins (a split resolution): which one runs is unknown.
         (
             _lock(
@@ -10216,6 +10241,10 @@ def test_the_sdk_pin_resolves_to_a_tag_or_a_commit(lock: str, ref: str, label: s
         "dev-version",
         "junk-version",
         "empty-source",
+        "unknown-registry",
+        "http-registry",
+        "lookalike-registry",
+        "malformed-git-url",
         "two-pins",
     ],
 )
@@ -10247,11 +10276,12 @@ def test_the_sdk_ref_cli_writes_the_step_output_and_always_exits_zero(
     assert "SDK source not available: the app has no uv.lock" in capsys.readouterr().out
 
 
-def _sdk_checkout(tmp_path: Path) -> Path:
+def _sdk_checkout(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A fake application-sdk checkout: `application_sdk/` and, beside it, files
-    the tools must never reach. In a sibling of `tmp_path`, which the `repo`
-    fixture uses as the app's root: the app's own search must not see it."""
-    base = tmp_path.with_name(tmp_path.name + "-sdk")
+    the tools must never reach. In its own pytest-managed directory, apart from
+    `tmp_path`, which the `repo` fixture uses as the app's root: the app's own
+    search must not see it."""
+    base = tmp_path_factory.mktemp("sdk")
     root = base / "sdk-src"
     pkg = root / "application_sdk" / "outputs"
     pkg.mkdir(parents=True)
@@ -10286,8 +10316,10 @@ def _sdk_ws(repo: Path, sdk_root: Path | None) -> Workspace:
     )
 
 
-def test_the_tools_read_the_sdk_source_under_its_prefix(repo: Path, tmp_path: Path):
-    ws = _sdk_ws(repo, _sdk_checkout(tmp_path))
+def test_the_tools_read_the_sdk_source_under_its_prefix(
+    repo: Path, tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+):
+    ws = _sdk_ws(repo, _sdk_checkout(tmp_path_factory))
 
     text = read_file(ws, "sdk:application_sdk/outputs/__init__.py")
     assert text.startswith("File: sdk:application_sdk/outputs/__init__.py")
@@ -10325,14 +10357,16 @@ def test_the_tools_read_the_sdk_source_under_its_prefix(repo: Path, tmp_path: Pa
     ],
 )
 def test_the_sdk_tools_refuse_escapes_and_secret_paths(
-    repo: Path, tmp_path: Path, path: str
+    repo: Path, tmp_path: Path, path: str, tmp_path_factory: pytest.TempPathFactory
 ):
-    ws = _sdk_ws(repo, _sdk_checkout(tmp_path))
+    ws = _sdk_ws(repo, _sdk_checkout(tmp_path_factory))
     assert read_file(ws, path).startswith("ERROR: cannot read")
 
 
-def test_the_sdk_tools_refuse_symlinks_out_of_the_package(repo: Path, tmp_path: Path):
-    root = _sdk_checkout(tmp_path)
+def test_the_sdk_tools_refuse_symlinks_out_of_the_package(
+    repo: Path, tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+):
+    root = _sdk_checkout(tmp_path_factory)
     pkg = root / "application_sdk"
     (pkg / "link.py").symlink_to(root.parent / "outside.py")
     (pkg / "linked_dir").symlink_to(root.parent, target_is_directory=True)
@@ -10369,9 +10403,12 @@ def test_without_the_sdk_source_the_prefix_says_so_and_nothing_else_changes(
 
 
 def test_the_sdk_index_is_built_once_and_only_when_asked(
-    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
 ):
-    ws = _sdk_ws(repo, _sdk_checkout(tmp_path))
+    ws = _sdk_ws(repo, _sdk_checkout(tmp_path_factory))
     built: list[str] = []
     real = tools_mod.index_source
 
@@ -10392,19 +10429,24 @@ def test_the_sdk_index_is_built_once_and_only_when_asked(
 
 
 def test_the_sdk_index_stops_at_its_time_limit(
-    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
 ):
     monkeypatch.setattr(tools_mod, "SDK_INDEX_SECONDS", -1.0)
-    ws = _sdk_ws(repo, _sdk_checkout(tmp_path))
+    ws = _sdk_ws(repo, _sdk_checkout(tmp_path_factory))
     reply = find_symbol(ws, "sdk:ParquetOutput")
     assert "No definition of 'ParquetOutput'" in reply
-    assert "partial: it stopped at its time limit" in reply
+    assert "partial: the index stopped at its time limit" in reply
 
 
-def test_the_sdk_source_falls_back_with_a_reason(tmp_path: Path):
+def test_the_sdk_source_falls_back_with_a_reason(
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+):
     app = tmp_path / "app"
     app.mkdir()
-    checkout = _sdk_checkout(tmp_path)
+    checkout = _sdk_checkout(tmp_path_factory)
 
     # No lock: no pin, whatever is on disk.
     sdk, note = SdkSource.open(str(checkout), app)
@@ -10432,6 +10474,7 @@ def test_the_cli_passes_the_sdk_source_or_why_it_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    tmp_path_factory: pytest.TempPathFactory,
 ):
     monkeypatch.delenv("CONNECTOR_REVIEWER_SDK_SOURCE", raising=False)
     # A local run without the flag or the variable: as before, no note.
@@ -10448,7 +10491,7 @@ def test_the_cli_passes_the_sdk_source_or_why_it_is_missing(
     assert "SDK source not available: the app has no uv.lock" in capsys.readouterr().err
 
     (repo / "uv.lock").write_text(_lock('{ registry = "https://pypi.org/simple" }'))
-    checkout = _sdk_checkout(tmp_path)
+    checkout = _sdk_checkout(tmp_path_factory)
     code, seen = _cli_review(
         monkeypatch, ["--root", str(repo), "--sdk-source", str(checkout)]
     )
@@ -10482,10 +10525,12 @@ def test_a_review_without_the_sdk_source_runs_as_before_and_says_so(repo: Path):
     assert "sdk:" not in sent[0]["content"]
 
 
-def test_a_review_reads_the_sdk_source_when_the_model_asks(repo: Path, tmp_path: Path):
+def test_a_review_reads_the_sdk_source_when_the_model_asks(
+    repo: Path, tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+):
     """A scripted review: the model reads an SDK file through the prefix, and
     the file's text comes back to it as the tool reply."""
-    sdk = SdkSource(root=_sdk_checkout(tmp_path), label="v3.40.0")
+    sdk = SdkSource(root=_sdk_checkout(tmp_path_factory), label="v3.40.0")
     script = Script(
         response(
             [
@@ -10551,3 +10596,18 @@ def test_a_git_pins_version_never_reaches_the_step_output_or_the_prompt(
     # A label set by hand is escaped in the prompt all the same.
     block = SdkSource(root=tmp_path, label='x" injected="1').prompt_block()
     assert '<sdk_source version="x&quot; injected=&quot;1">' in block
+
+
+def test_an_sdk_search_past_the_file_cap_says_it_is_partial(
+    repo: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """lens F-4b844c: a miss in a file past the cap is not a real miss. The
+    search and the lookup say the SDK source is partial instead of reporting a
+    clean miss."""
+    monkeypatch.setattr(tools_mod, "SDK_MAX_FILES", 1)
+    ws = _sdk_ws(repo, _sdk_checkout(tmp_path_factory))
+    out = search_code(ws, "no-such-text-anywhere", path_glob="sdk:application_sdk/**")
+    assert "No matches" in out
+    assert "the SDK source is partial: it lists only the first 1 files" in out

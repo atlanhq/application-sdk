@@ -146,6 +146,7 @@ class SdkSource:
     _files: list[str] | None = field(default=None, repr=False)
     _index: Index | None = field(default=None, repr=False)
     index_partial: bool = False
+    files_truncated: bool = False
     _lock: threading.Lock = field(
         default_factory=threading.Lock, repr=False, compare=False
     )
@@ -206,8 +207,20 @@ class SdkSource:
                 if self._allowed(rel):
                     out.append(rel)
                 if len(out) >= SDK_MAX_FILES:
+                    # A miss past the cap is not a real miss: searches and
+                    # lookups say the list is partial (`partial_note`).
+                    self.files_truncated = True
                     return out
         return out
+
+    def partial_note(self) -> str:
+        """What a search or lookup over the SDK must say about its coverage."""
+        parts: list[str] = []
+        if self.files_truncated:
+            parts.append(f"it lists only the first {SDK_MAX_FILES} files")
+        if self.index_partial:
+            parts.append("the index stopped at its time limit")
+        return f" (the SDK source is partial: {'; '.join(parts)})" if parts else ""
 
     def index(self) -> Index:
         """The SDK's symbol index, built on the first `find_symbol("sdk:…")`
@@ -378,8 +391,11 @@ def search_code(
                 total += 1
                 if len(hits) < SEARCH_MAX_MATCHES:
                     hits.append(f"{shown}{rel}:{i}: {line.strip()[:200]}")
+    partial = ws.sdk.partial_note() if (sdk_glob is not None and ws.sdk) else ""
     if not hits:
-        return f"No matches for {search_text!r}."
+        return f"No matches for {search_text!r}{partial}."
+    if partial:
+        hits.insert(0, f"SDK source{partial}")
     more = (
         f"\n… {total - len(hits)} more matches not shown; narrow with path_glob."
         if total > len(hits)
@@ -426,11 +442,7 @@ def sdk_symbol(sdk: SdkSource, name: str) -> str:
     Its tests are not checked out, so none are listed."""
     name = name.strip().split(".")[-1].split(":")[-1]
     idx = sdk.index()
-    partial = (
-        " (the SDK index is partial: it stopped at its time limit)"
-        if sdk.index_partial
-        else ""
-    )
+    partial = sdk.partial_note()
     defs = idx.definitions(name, limit=4) if name else []
     if not defs:
         return f"No definition of {name!r} in the SDK source ({sdk.label}){partial}."

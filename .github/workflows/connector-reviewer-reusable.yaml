@@ -110,6 +110,7 @@ jobs:
       # of its own. A ref that does not exist fails only this step: the review
       # then runs without the SDK source and its summary says so.
       - name: Check out the SDK source at the pinned version (read as data)
+        # sdk-checkout-ref-exempt: the app's own pinned SDK version, read as data by the reviewer's tools and never imported or run; the ref is validated (vX.Y.Z tag or 40-hex commit) in connector_reviewer/sdk_source.py
         if: steps.sdk-ref.outputs.ref != ''
         continue-on-error: true
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

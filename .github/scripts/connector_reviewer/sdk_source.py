@@ -6,7 +6,8 @@ judging it from memory. This module answers one question from the app's
 `uv.lock` (on the trusted base checkout, never the pull request's): which ref of
 `atlanhq/application-sdk` to check out.
 
-- A registry pin (PyPI, or the registry firewall that mirrors it) of version
+- A registry pin from PyPI, or the org's registry firewall that mirrors it
+  (`_KNOWN_REGISTRIES`; any other index falls back), of version
   `X.Y.Z` or `X.Y.ZrcN` is the release tag `vX.Y.Z` / `vX.Y.ZrcN`, the tag scheme
   application-sdk's releases use.
 - A git pin of `github.com/atlanhq/application-sdk` is the locked commit: uv
@@ -115,14 +116,22 @@ def _pin_of(entry: dict[str, object]) -> SdkPin | str:
         return f"{PACKAGE} in uv.lock has no version or source"
     source = cast(dict[str, object], raw_source)
     if "registry" in source:
+        if not _known_registry(source.get("registry")):
+            # Another index could serve different contents under the same
+            # version, so the release tag would not be what the app runs.
+            return f"{PACKAGE} comes from a registry that is not PyPI or its mirror"
         if not _RELEASE.fullmatch(version):
             return f"{PACKAGE} {version!r} is not a released version with a tag"
         return SdkPin(ref=f"v{version}", version=version, kind="release")
     git = source.get("git")
     if isinstance(git, str):
-        url = urllib.parse.urlsplit(git)
+        try:
+            url = urllib.parse.urlsplit(git)
+            host = url.hostname
+        except ValueError:
+            return f"{PACKAGE}'s git source in uv.lock is malformed"
         repo = url.path.strip("/").removesuffix(".git")
-        if url.scheme != "https" or url.hostname != "github.com" or repo != REPOSITORY:
+        if url.scheme != "https" or host != "github.com" or repo != REPOSITORY:
             return f"{PACKAGE} is pinned to a git source other than {REPOSITORY}"
         commit = url.fragment
         if not _COMMIT.fullmatch(commit):
@@ -131,6 +140,30 @@ def _pin_of(entry: dict[str, object]) -> SdkPin | str:
         return SdkPin(ref=commit, version=shown, kind="git")
     kinds = ", ".join(sorted(source)) or "empty"
     return f"{PACKAGE} comes from a {kinds} source, not a release or a git commit"
+
+
+# Registries whose `atlan-application-sdk` is the PyPI release, so a version
+# maps to application-sdk's own release tag: PyPI, and the org's registry
+# firewall, which mirrors it. Exact host and path prefix; anything else falls back.
+_KNOWN_REGISTRIES = (
+    ("pypi.org", "/simple"),
+    ("factory.endorlabs.com", "/v1/namespaces/atlan.atlanhq/firewall/pypi/simple"),
+)
+
+
+def _known_registry(raw: object) -> bool:
+    if not isinstance(raw, str):
+        return False
+    try:
+        url = urllib.parse.urlsplit(raw)
+        host = url.hostname
+    except ValueError:
+        return False
+    path = url.path.rstrip("/")
+    return url.scheme == "https" and any(
+        host == h and (path == p or path.startswith(p + "/"))
+        for h, p in _KNOWN_REGISTRIES
+    )
 
 
 def resolve_root(root: Path) -> Resolution:
