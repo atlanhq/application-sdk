@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-from . import advisory, baseline, exempt, holistic, prompts, trace
+from . import advisory, baseline, exempt, holistic, prompts, skeptic, trace
 from . import context as code_context
 from . import facts as code_facts
 from .agent import AgentLimits, BundleResult, review_bundle, suspect_paths
@@ -63,7 +63,7 @@ from .index import Index, Symbol, build_index, index_source
 from .llm import BudgetExhausted, Client, Ledger, LLMError
 from .principles import PrincipleSet
 from .select import DEFAULT_EXCLUDE, Selection, excluded, select_files
-from .tools import Workspace, parse_args, secret_diff
+from .tools import SdkSource, Workspace, parse_args, secret_diff
 from .triage import Triage, triage
 from .typed import EMPTY, objects
 
@@ -71,6 +71,10 @@ SUMMARY_MARKER = "<!-- connector-reviewer-summary -->"
 # The share of a round's budget held for the approach check, which runs on a
 # ledger of its own alongside the line review.
 APPROACH_SHARE = 0.15
+# The share held for the skeptic pass on new blocking findings (skeptic.py), on a
+# ledger of its own the same way. Only spend is booked: an unused share stays in
+# the PR's cap for later rounds.
+SKEPTIC_SHARE = 0.10
 COMMENT_LIMIT = 64_000  # GitHub's cap is 65,536 characters; keep a margin
 MAX_HISTORY = 20  # rounds kept in the state and shown in the summary
 
@@ -97,6 +101,8 @@ class RunResult:
     # New blocking findings this round's base-branch check judged fixed or moot:
     # dropped before publishing (see _check_new_against_base).
     new_dropped: list[str] = field(default_factory=list)
+    # One skeptic check per new blocking finding (skeptic.py): what each concluded.
+    skeptic: list[skeptic.Outcome] = field(default_factory=list)
     skipped_files: list[tuple[str, str]] = field(default_factory=list)
     bundles: list[BundleResult] = field(default_factory=list)
     ledger: Ledger | None = None
@@ -496,10 +502,14 @@ def run(
     post: bool = True,
     run_url: str = "",
     on_pending: Callable[[str], None] | None = None,
+    sdk: SdkSource | None = None,
+    sdk_note: str = "",
 ) -> RunResult:
     """One review round. `on_pending(head)` is called right after the
     `pending` status is set on `head`, so the caller can record which head
-    `finalize` must check if this run never posts a verdict."""
+    `finalize` must check if this run never posts a verdict. `sdk` is the
+    pinned SDK source the tools can read; `sdk_note` says why it is missing
+    when one was asked for (FND-5331)."""
     t_start = time.monotonic()
     pr = gh.pr(number)
     head = pr["head"]["sha"]
@@ -698,6 +708,8 @@ def run(
     state.exempt = {}
     # A principle file that was skipped is said in the summary, never silently.
     res.notes.extend(principles.notes)
+    if sdk_note:
+        res.notes.append(sdk_note)
     if post:
         # Pending while it runs: the checks box links straight to the live log.
         gh.set_status(
@@ -805,6 +817,7 @@ def run(
         head_text=head_text,
         diffs={fd.path: fd for fd in full_files},
         index=idx,
+        sdk=sdk,
     )
     round_cap = ledger.remaining * (cfg.first_round_share if round_no == 1 else 1.0)
     # The approach check runs alongside the line review, on a ledger of its own
@@ -812,8 +825,13 @@ def run(
     # bundle's share and leave that bundle unfinished.
     run_approach = bool(cfg.approach and (not state.approach or force) and sel.reviewed)
     approach_cap = round_cap * APPROACH_SHARE if run_approach else 0.0
-    round_ledger = Ledger(cap_usd=round_cap - approach_cap)
+    # The skeptic pass, likewise, on a ledger of its own: a refutation check can
+    # never spend a bundle's share, and a bundle can never leave it none.
+    run_skeptic = bool(cfg.skeptic.enabled and bundles)
+    skeptic_cap = round_cap * SKEPTIC_SHARE if run_skeptic else 0.0
+    round_ledger = Ledger(cap_usd=round_cap - approach_cap - skeptic_cap)
     approach_ledger = Ledger(cap_usd=approach_cap)
+    skeptic_ledger = Ledger(cap_usd=skeptic_cap)
     client: Client = client_factory(round_ledger)
     pr_meta = {"title": pr.get("title"), "body": pr.get("body")}
 
@@ -1054,10 +1072,13 @@ def run(
     elif approach_client is not None and getattr(approach_client, "fell_back", ""):
         res.notes.append(approach_client.fell_back)
 
+    skeptic_client: Client | None = None
+
     def all_calls() -> list[dict[str, Any]]:
         own = list(getattr(client, "calls", []))
         side = list(getattr(approach_client, "calls", [])) if approach_client else []
-        return own + side
+        sk = list(getattr(skeptic_client, "calls", [])) if skeptic_client else []
+        return own + side + sk
 
     res.calls = all_calls()
     fresh: list[Finding] = []
@@ -1090,6 +1111,37 @@ def run(
         )
         res.calls = all_calls()  # the check's call too
     res.new_findings = merge_new(state, fresh, round_no=round_no)
+    # ---- skeptic: one refutation attempt per NEW blocking finding ----------
+    # After merge_new, so a finding carried over from an earlier round (a known
+    # id) is never re-litigated; before the verdict, so a refuted finding no
+    # longer blocks. The objects are the state's own: a change lands there.
+    to_doubt = skeptic.candidates(res.new_findings)
+    if run_skeptic and to_doubt:
+        t_sk = time.monotonic()
+        sk_client: Client = client_factory(skeptic_ledger)
+        skeptic_client = sk_client
+        with trace.group(
+            f"6c · skeptic: {len(to_doubt)} new blocking finding(s), "
+            f"its own budget ${skeptic_cap:.4f}"
+        ):
+            res.skeptic = skeptic.run_all(
+                sk_client,
+                ws,
+                res.new_findings,
+                cfg.skeptic,
+                lambda f: _cited_principle(principles, f),
+                cfg.concurrency,
+            )
+            tally = skeptic.counts(res.skeptic)
+            trace.line(
+                "skeptic: " + ", ".join(f"{k} {v}" for k, v in tally.items() if v)
+            )
+        res.timings_ms["skeptic"] = int((time.monotonic() - t_sk) * 1000)
+        res.calls = all_calls()
+    elif to_doubt:
+        trace.line(
+            f"skeptic: off in config; {len(to_doubt)} new blocking finding(s) not checked"
+        )
     res.unplaced = [f for f in res.new_findings if not f.line]
     res.spiral = spiral_paths(state, res.new_findings, round_no)
     for path, rounds in res.spiral:
@@ -1119,6 +1171,7 @@ def run(
     # ---- state -----------------------------------------------------------
     _book(ledger, round_ledger)
     _book(ledger, approach_ledger)
+    _book(ledger, skeptic_ledger)
     failed_paths: list[str] = []
     bundle_paths = {b.label: b.paths for b in bundles}
     for b in res.bundles:
@@ -1161,8 +1214,13 @@ def run(
             "resolved": len(res.resolved_free) + len(res.resolved_verified),
             "blocking": len(state.open_findings(BLOCKING)),
             "incomplete": bool(res.failed or res.incomplete or state.unread),
-            "usd": round(round_ledger.spent_usd + approach_ledger.spent_usd, 4),
-            "calls": round_ledger.calls + approach_ledger.calls,
+            "usd": round(
+                round_ledger.spent_usd
+                + approach_ledger.spent_usd
+                + skeptic_ledger.spent_usd,
+                4,
+            ),
+            "calls": round_ledger.calls + approach_ledger.calls + skeptic_ledger.calls,
             "run": run_url,
         }
     )
@@ -2664,6 +2722,19 @@ _FENCE = {
 }
 
 
+def _cited_principle(principles: PrincipleSet, f: Finding) -> str:
+    """The principle `f` cites, rendered as the line review saw it; "" for none."""
+    for p in principles.for_paths([f.path]):
+        if p.id == f.rule_id:
+            return p.render([f.path])
+    return ""
+
+
+def _contested(f: Finding) -> str:
+    """The contested mark shown after a finding's title; "" when not contested."""
+    return f" ⚖️ contested — {f.contested}" if f.contested else ""
+
+
 def _principle(f: Finding) -> str:
     """The principle a finding rests on, as shown in the summary: its id (FPnn
     from the fleet set, RPnn from the repository's own), or a note that it is a
@@ -2700,10 +2771,15 @@ def _details(f: Finding, blob_base: str, chars: int | None = None) -> str:
 
     out = [
         f"<details><summary>{_SEV_ICON[f.severity]} {f.id} · {f.severity} · {f.category} · "
-        f"{_principle(f)} — {f.title}</summary>\n",
+        f"{_principle(f)} — {f.title}{_contested(f)}</summary>\n",
         f"**Where:** {_where(f, blob_base)}\n",
-        cap(f.body.strip()),
     ]
+    if f.contested:
+        out.append(
+            "**⚖️ Contested:** raised as blocking; an independent check refuted it against the "
+            f"code, so it is medium and does not block. Its reason: {f.contested}\n"
+        )
+    out.append(cap(f.body.strip()))
     if f.scenario.strip():
         out.append(f"\n**When it fails:** {cap(f.scenario.strip())}")
     if f.suggestion.strip() and chars != 0:
@@ -2834,7 +2910,7 @@ def render_summary(res: RunResult) -> str:
         lines.append("| id | where | principle | finding |\n|---|---|---|---|")
         for f in items:
             lines.append(
-                f"| {f.id} | {_where(f, res.blob_base)} | {_principle(f)} | {f.title} |"
+                f"| {f.id} | {_where(f, res.blob_base)} | {_principle(f)} | {f.title}{_contested(f)} |"
             )
         lines.append("")
     opened = st.open_findings()

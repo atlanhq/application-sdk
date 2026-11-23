@@ -358,6 +358,108 @@ Tests: `FakeGitHub` has empty history reads by default
 (`pr_commit_messages`, `recent_commits`, `commit_patches`), so every other test runs
 as before.
 
+### Skeptic pass on new blocking findings (FND-5332)
+
+lens publishes every finding the line review keeps after its fact-check. Here a new
+critical or high finding first faces one independent model call that tries to refute it
+(`skeptic.py`). A false blocker costs an author a blocked pull request, and the Release
+Gate will require this verdict.
+
+| | |
+|---|---|
+| Which findings | New this round (`review.run`, right after `merge_new`, so a finding carried over from an earlier round, a known id, is never re-checked), open, critical or high, and made by the model (`origin == "llm"`). Medium and low are never checked. In a later round it runs after `_check_new_against_base`. |
+| What the skeptic gets | The finding (where, severity, category, title, body, quoted code, failure scenario), the principle it cites rendered as the line review saw it, the file's diff (200 lines at most), 40 lines of head code around it, and the read-only lookups `find_symbol`, `search_code`, `read_file`, `read_diff`. No `code_comment`, no `task_done`. |
+| Its instruction | Try to refute the finding against the actual code; refute only when the code shows the defect cannot happen as described; default to upheld when uncertain. It answers with `skeptic_verdict`: upheld, or refuted with a reason and up to three `{path, line, quote}`. |
+| Refuted | Accepted only with a reason and at least one quote of at least 12 non-space characters (`skeptic.QUOTE_MIN`: `return` occurs in every file) that `diff.locate_in_text` finds in the head text of the file it names (`Workspace.text`, so a path outside the repository is no evidence). The location recorded is where the quote was found, not the line the model claims. The finding drops to medium, and `Finding.contested` holds the reason (one line, no tag, no `\|`, at most 300 characters). It is not deleted: the summary shows "⚖️ contested — <reason>" after its title in the severity table and in its details, with a line that says it was raised as blocking. The status is then "not ready" (an open medium), never "changes requested" for it, and not green until it is fixed or dismissed, unless the head is waived (`/review waive <reason>`: `verdict_status` returns `success` for a waived head before it reads open findings, so the contested finding stays open under a green status); the pull request's author may now dismiss it, which `dismiss` refuses an author only for a critical or high finding. Critical and security findings can be lowered too, unlike `reflect`, which never removes them. |
+| Upheld, or no usable answer | Nothing changes. The outcome is recorded: `upheld`, `error` (a failed call), `budget` (the call could not be reserved), `malformed` (an unknown verdict, a refutation without a reason or without a quote found in the repository, or no verdict after the last turn) or `skipped` (past `max_findings`). A skeptic failure never makes the review incomplete. |
+| Bounds | `[skeptic]` in config.toml: `enabled`, `max_lookups` (lookups per check, counted per tool call, not per turn: one response can ask for several, and only those within the remaining allowance run; each one past it is answered "Lookup limit reached" and the next turn is the forced verdict, after which the check stops; so at most `max_lookups` lookups and `max_lookups` + 1 calls), `max_tokens` (per call) and `max_findings` (checks per round). Each value must have its TOML type, and an unknown key is refused (`config._skeptic`, `Config.load_errors`), so `enable = false` cannot leave it on unnoticed. Checks run `[scope] concurrency` at a time, after the line review. |
+| Budget | A ledger of its own carved out of the round's, `review.SKEPTIC_SHARE` (10%), the way the approach check has `APPROACH_SHARE`: when the skeptic is on and the round has bundles, the line review gets 10% less. Only spend is booked into the PR's ledger (`by_stage["skeptic"]`), so an unused share stays in the PR's cap. A call that cannot be reserved is not sent and the finding keeps its severity. |
+| Log and report | One job-log line per outcome (`skeptic F-… high: refuted → medium, contested (1 lookup(s), 9.0s): …`), a count line, `timings_ms["skeptic"]`, `RunResult.skeptic`, and in the run report `skeptic.counts` (every outcome, zeros included) and `skeptic.checks` (id, severity, outcome, reason, evidence locations, lookups, error, seconds; never the quoted code). Its requests are listed after the approach check's. |
+| State | `Finding.contested` is a new field with a default, so a state written before it decodes (`PRState.decode` keeps only known fields and fills the rest). |
+
+Cost, estimated from the shipped prices (not yet measured on a live pull request): one
+check reads about 5,000 to 10,000 prompt tokens per call and writes up to `max_tokens`,
+for about $0.005 a call and at most four calls, so about $0.01 to $0.02 per blocking
+finding. Checks run `[scope] concurrency` at a time, so the added wall time after the line
+review is one check (one to four sequential calls) per wave of `concurrency` checks: with
+the shipped `concurrency = 4` and `max_findings = 6`, up to four new blocking findings take
+one check's time, and five or six queue into a second wave and take about two. A round with
+no new blocking finding makes no call.
+
+Tests: `Script` routes a request that offers `skeptic_verdict` to its own replies
+(`skeptic=`, then upheld), so existing tests script the line review as before. Three
+existing tests now count the skeptic call of their new high finding:
+`test_first_round_puts_every_finding_in_the_summary_and_opens_no_thread`,
+`test_every_request_is_recorded_with_counts_only_and_reported` and
+`test_the_approach_check_runs_alongside_the_line_review`.
+
+### The SDK source at the version the app pins (FND-5331)
+
+lens reviews application-sdk itself, so the code it reads is the SDK. This fork
+reviews a connector app, and many connector bugs are a misuse of the SDK
+(outputs, publish nodes, typed errors, storage). It can read the application-sdk
+source at the exact version the app pins, read-only, beside the app. lens has no
+equivalent.
+
+- **Which version.** `sdk_source.py` reads the app's `uv.lock` from the trusted
+  base checkout (never the pull request's) with `tomllib`. A registry pin of
+  `X.Y.Z` or `X.Y.ZrcN` is the release tag `vX.Y.Z` (the scheme of every
+  application-sdk release tag). A git pin of `github.com/atlanhq/application-sdk`
+  is the locked commit uv writes after `#`. Anything else is no ref, with a
+  reason: the package absent, two different pins, an editable or path source, a
+  git pin of another repository, a version with no tag (a dev or post release),
+  or a lock that does not parse. Both ref shapes are checked against a strict
+  pattern before they are written as a step output. A git pin's version is only
+  shown, never checked out, and is left out of the label unless it is plain
+  version characters: a TOML string can hold a newline (a second line in
+  `$GITHUB_OUTPUT`) or a quote (out of the prompt's attribute). The prompt
+  escapes the label as well.
+- **Workflow.** `python -m connector_reviewer sdk-ref --root repo` writes `ref`
+  and `label` to `$GITHUB_OUTPUT` and always exits 0. A third checkout, of
+  `atlanhq/application-sdk` at that ref, runs only when `ref` is not empty
+  (`if:` on the step output). It is sparse (`/application_sdk/`), into `sdk-src/`,
+  with `persist-credentials: false` and the job's read-only token. Both steps
+  have `continue-on-error: true`: a ref that does not exist fails only the
+  checkout. The Review step always gets `CONNECTOR_REVIEWER_SDK_SOURCE`
+  (`--sdk-source`), the checkout's path, whether or not it exists.
+- **Tools.** One prefix on the existing tools, not new tools: a `file_path` of
+  `read_file`, a `path_glob` of `search_code`, or a `name` of `find_symbol` that
+  starts `sdk:` goes to the SDK source (`tools.SdkSource`), e.g.
+  `sdk:application_sdk/outputs/__init__.py`. Every hit and definition carries the
+  prefix, so it can be handed back to `read_file`. Why a prefix: the tool
+  schemas, part of the cached prompt prefix, do not change; the approach check,
+  which takes a subset of the same schemas and the same `run_tool`, needs no
+  change of its own to use the prefix later (today it is not told about it, see
+  Prompt); and the model already knows the three tools. Without the prefix every tool is the app only,
+  as before. `Workspace.text` and `Workspace.files` stay the app only too: the
+  context and facts code walks them, and must not count SDK callers or slow
+  down.
+- **Safety.** The same path guard as the app (`_safe_rel`: no absolute path, no
+  `..`, no secret-bearing path), then an allowlist: only `application_sdk/` is
+  reachable, so a stray file beside it is not. A symlink is refused, and a file
+  must resolve inside `application_sdk/`, so a symlinked directory cannot lead
+  out. The walk does not follow links. Files over 1 MB are not read.
+- **Cost.** Nothing is walked or indexed until the model asks. The file list is
+  built on the first `sdk:` search or `find_symbol`; the index (`index_source`
+  over the SDK's Python files, about 1 s for 460 files at v3.58) on the first
+  `find_symbol("sdk:…")`, once, under a lock, since bundles share one Workspace.
+  It stops at 20 s and says the index is partial. A search over the SDK took
+  about 0.06 s. Its tests are not checked out, so `find_symbol` lists no tests
+  for an SDK symbol.
+- **Prompt.** `REVIEW_SYSTEM` is unchanged. When the source is there, the line
+  review's context message has an `<sdk_source version="…">` block (from
+  `SdkSource.prompt_block`, rendered in `agent.build_context`): the version, the
+  three calls, and when to use them (to check how an SDK API the diff calls
+  behaves before claiming the app misuses it; the SDK is reference, never under
+  review). The approach check, verify and re-check are not told.
+- **Fallback.** Without the source, the prompt and the tools are as before, and a
+  `sdk:` call answers that the source is not available. When it was asked for
+  (the variable or the flag, as in CI) and is not usable, `review.run` adds a
+  note, "SDK source not available: <reason>", to the summary, and the job log says
+  the same. A local run without either changes nothing and adds no note.
+- **Open.** A live review on a connector pull request that reads SDK source, and
+  its cost and time against today's reviews (the ticket's last two items).
+
 ## Module by module
 
 Where a lens fix lands in this copy. "Names" means only the renames in the table
@@ -367,13 +469,13 @@ above; "typing" means only the annotations described under Typing.
 |---|---|
 | `baseline.py`, `diff.py`, `index.py` | Identical, byte for byte. A lens patch applies as it is. |
 | `lock.py` | Names. |
-| `report.py` | Names; bundle time, forced final turn and dropped uncited findings; the incomplete list from `incomplete_reasons`. |
-| `findings.py` | Names; `PRState.waiver`, `exempt`, `unread`, `facts`. |
+| `report.py` | Names; bundle time, forced final turn and dropped uncited findings; the incomplete list from `incomplete_reasons`; the skeptic counts and checks (FND-5332). |
+| `findings.py` | Names; `PRState.waiver`, `exempt`, `unread`, `facts`; `Finding.contested`. |
 | `triage.py` | Typing (one annotation). |
-| `tools.py` | Two description strings (`compatibility`, `search_code`), the comment's optional `principle` field, and `task_done`'s optional `regression` and `history`. |
+| `tools.py` | Two description strings (`compatibility`, `search_code`), the comment's optional `principle` field, and `task_done`'s optional `regression` and `history`; `SdkSource`, `Workspace.sdk` and the `sdk:` prefix in `read_file`, `search_code` and `find_symbol`, with the path checks factored into `_safe_rel` and `_read_inside` (FND-5331). |
 | `trace.py` | Names, typing. |
 | `select.py` | `DEFAULT_EXCLUDE`, and `excluded` (the pattern match, public for `review.changed_tests`). |
-| `config.py` | Docstring, `raw_hash`, typing; the `[access]`, `[exempt]` and `[facts]` tables. |
+| `config.py` | Docstring, `raw_hash`, typing; the `[access]`, `[exempt]`, `[facts]` and `[skeptic]` tables. |
 | `bundle.py` | `_module_key` and the module docstring. |
 | `llm.py` | Names (the gateway key variable, the User-Agent, log text), typing. |
 | `github.py` | Names, typing, four methods removed with the approval step; `can_push`, `safe_body`, `status_of`, `pr_commit_messages`, `recent_commits` and `commit_patches` added. |
@@ -381,12 +483,12 @@ above; "typing" means only the annotations described under Typing.
 | `holistic.py` | The prompt's opening and one concern; no `<public_api>` block; typing. |
 | `context.py` | No `_public` / `public_api`; `build` returns a string. |
 | `advisory.py` | Rewritten as the empty extension point; holds `glob_match`. |
-| `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313); the facts blocks and the `task_done` answers (FND-5312). |
+| `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313); the facts blocks and the `task_done` answers (FND-5312); the `<sdk_source>` block (FND-5331). |
 | `prompts.py` | The review prompt's opening, "Repository layout", "Principles" and "Facts" sections; the removals; typing. |
-| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312), with `_whole_files` joining a file reviewed in parts back into one diff before its facts are computed. |
-| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it. |
+| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312), with `_whole_files` joining a file reviewed in parts back into one diff before its facts are computed; the skeptic pass, `SKEPTIC_SHARE` and the contested mark (FND-5332); `run`'s `sdk` and `sdk_note` (FND-5331). |
+| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it; the `sdk-ref` sub-command and `--sdk-source` (FND-5331). |
 | `__init__.py` | Docstring. |
-| `principles.py`, `typed.py`, `exempt.py`, `finalize.py`, `facts.py` | New here. |
+| `principles.py`, `typed.py`, `exempt.py`, `finalize.py`, `facts.py`, `skeptic.py`, `sdk_source.py` | New here. |
 | `approve.py`, `surface.py`, `rules.py` | Not here. |
 
 ## Fixed in both copies (FND-5323)

@@ -73,6 +73,9 @@ class Finding:
     )
     dismissed_by: str = ""  # GitHub login of whoever ran `/review dismiss`
     dismiss_reason: str = ""
+    # Why a skeptic check refuted this finding (skeptic.py), "" when it did not.
+    # A contested finding was raised as blocking and now stands at medium.
+    contested: str = ""
 
     def fingerprint(self) -> str:
         ev = " ".join((self.evidence or "").split())[:160]
