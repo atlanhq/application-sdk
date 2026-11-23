@@ -357,6 +357,39 @@ Tests: `FakeGitHub` has empty history reads by default
 (`pr_commit_messages`, `recent_commits`, `commit_patches`), so every other test runs
 as before.
 
+### Skeptic pass on new blocking findings (FND-5332)
+
+lens publishes every finding the line review keeps after its fact-check. Here a new
+critical or high finding first faces one independent model call that tries to refute it
+(`skeptic.py`). A false blocker costs an author a blocked pull request, and the Release
+Gate will require this verdict.
+
+| | |
+|---|---|
+| Which findings | New this round (`review.run`, right after `merge_new`, so a finding carried over from an earlier round, a known id, is never re-checked), open, critical or high, and made by the model (`origin == "llm"`). Medium and low are never checked. In a later round it runs after `_check_new_against_base`. |
+| What the skeptic gets | The finding (where, severity, category, title, body, quoted code, failure scenario), the principle it cites rendered as the line review saw it, the file's diff (200 lines at most), 40 lines of head code around it, and the read-only lookups `find_symbol`, `search_code`, `read_file`, `read_diff`. No `code_comment`, no `task_done`. |
+| Its instruction | Try to refute the finding against the actual code; refute only when the code shows the defect cannot happen as described; default to upheld when uncertain. It answers with `skeptic_verdict`: upheld, or refuted with a reason and up to three `{path, line, quote}`. |
+| Refuted | Accepted only with a reason and at least one quote that `diff.snippet_in_text` finds in the head text of the file it names (`Workspace.text`, so a path outside the repository is no evidence). The finding drops to medium, and `Finding.contested` holds the reason (one line, no tag, no `\|`, at most 300 characters). It is not deleted: the summary shows "⚖️ contested — <reason>" after its title in the severity table and in its details, with a line that says it was raised as blocking. The status is then "not ready" (an open medium), never "changes requested" for it. |
+| Upheld, or no usable answer | Nothing changes. The outcome is recorded: `upheld`, `error` (a failed call), `budget` (the call could not be reserved), `malformed` (an unknown verdict, a refutation without a reason or without a quote found in the repository, or no verdict after the last turn) or `skipped` (past `max_findings`). A skeptic failure never makes the review incomplete. |
+| Bounds | `[skeptic]` in config.toml: `enabled`, `max_lookups` (lookups per check, then the verdict is forced: at most `max_lookups` + 1 calls), `max_tokens` (per call) and `max_findings` (checks per round). Each value must have its TOML type, and an unknown key is refused (`config._skeptic`, `Config.load_errors`), so `enable = false` cannot leave it on unnoticed. Checks run `[scope] concurrency` at a time, after the line review. |
+| Budget | A ledger of its own carved out of the round's, `review.SKEPTIC_SHARE` (10%), the way the approach check has `APPROACH_SHARE`: when the skeptic is on and the round has bundles, the line review gets 10% less. Only spend is booked into the PR's ledger (`by_stage["skeptic"]`), so an unused share stays in the PR's cap. A call that cannot be reserved is not sent and the finding keeps its severity. |
+| Log and report | One job-log line per outcome (`skeptic F-… high: refuted → medium, contested (1 lookup(s), 9.0s): …`), a count line, `timings_ms["skeptic"]`, `RunResult.skeptic`, and in the run report `skeptic.counts` (every outcome, zeros included) and `skeptic.checks` (id, severity, outcome, reason, evidence locations, lookups, error, seconds; never the quoted code). Its requests are listed after the approach check's. |
+| State | `Finding.contested` is a new field with a default, so a state written before it decodes (`PRState.decode` keeps only known fields and fills the rest). |
+
+Cost, estimated from the shipped prices (not yet measured on a live pull request): one
+check reads about 5,000 to 10,000 prompt tokens per call and writes up to `max_tokens`,
+for about $0.005 a call and at most four calls, so about $0.01 to $0.02 per blocking
+finding. Checks run in parallel, so the added wall time is one check's: one to four
+sequential calls after the line review. A round with no new blocking finding makes no
+call.
+
+Tests: `Script` routes a request that offers `skeptic_verdict` to its own replies
+(`skeptic=`, then upheld), so existing tests script the line review as before. Three
+existing tests now count the skeptic call of their new high finding:
+`test_first_round_puts_every_finding_in_the_summary_and_opens_no_thread`,
+`test_every_request_is_recorded_with_counts_only_and_reported` and
+`test_the_approach_check_runs_alongside_the_line_review`.
+
 ## Module by module
 
 Where a lens fix lands in this copy. "Names" means only the renames in the table
@@ -366,13 +399,13 @@ above; "typing" means only the annotations described under Typing.
 |---|---|
 | `baseline.py`, `diff.py`, `index.py` | Identical, byte for byte. A lens patch applies as it is. |
 | `lock.py` | Names. |
-| `report.py` | Names; bundle time, forced final turn and dropped uncited findings; the incomplete list from `incomplete_reasons`. |
-| `findings.py` | Names; `PRState.waiver`, `exempt`, `unread`, `facts`; `decode` reads the last state marker. |
+| `report.py` | Names; bundle time, forced final turn and dropped uncited findings; the incomplete list from `incomplete_reasons`; the skeptic counts and checks (FND-5332). |
+| `findings.py` | Names; `PRState.waiver`, `exempt`, `unread`, `facts`; `Finding.contested`; `decode` reads the last state marker. |
 | `triage.py` | Typing (one annotation). |
 | `tools.py` | Typing (one annotation), two description strings (`compatibility`, `search_code`), the comment's optional `principle` field, and `task_done`'s optional `regression` and `history`. |
 | `trace.py` | Names, typing. |
 | `select.py` | `DEFAULT_EXCLUDE`, the secret skip, and `excluded` (the pattern match, public for `review.changed_tests`). |
-| `config.py` | Docstring, `raw_hash`, typing; the `[access]`, `[exempt]` and `[facts]` tables. |
+| `config.py` | Docstring, `raw_hash`, typing; the `[access]`, `[exempt]`, `[facts]` and `[skeptic]` tables. |
 | `bundle.py` | `_module_key` and the module docstring. |
 | `llm.py` | Names (the gateway key variable, the User-Agent, log text), typing. |
 | `github.py` | Names, typing, four methods removed with the approval step; `can_push`, `safe_body`, `status_of`, `pr_commit_messages`, `recent_commits` and `commit_patches` added. |
@@ -382,10 +415,10 @@ above; "typing" means only the annotations described under Typing.
 | `advisory.py` | Rewritten as the empty extension point; holds `glob_match`. |
 | `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313); the facts blocks and the `task_done` answers (FND-5312). |
 | `prompts.py` | The review prompt's opening, "Repository layout", "Principles" and "Facts" sections; the removals; typing. |
-| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312). |
+| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312); the skeptic pass, `SKEPTIC_SHARE` and the contested mark (FND-5332). |
 | `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it. |
 | `__init__.py` | Docstring. |
-| `principles.py`, `typed.py`, `exempt.py`, `finalize.py`, `facts.py` | New here. |
+| `principles.py`, `typed.py`, `exempt.py`, `finalize.py`, `facts.py`, `skeptic.py` | New here. |
 | `approve.py`, `surface.py`, `rules.py` | Not here. |
 
 ## Fixed here, still open in lens
