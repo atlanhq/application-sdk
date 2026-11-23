@@ -554,6 +554,30 @@ class TestRepoDeclaredPathsOnMajors:
         assert "need a human Code Owner review" in log
         assert LOCAL_COMPOSE in log
 
+    @pytest.mark.parametrize("ref", [None, ""])
+    def test_missing_head_ref_fails_closed(self, monkeypatch, capsys, ref):
+        meta = pr_payload()
+        if ref is not None:
+            meta["head"]["ref"] = ref
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"EXTRA_DEP_PATTERN": LOCAL_PATTERN},
+            meta=meta,
+            files=file_payload(LOCAL_COMPOSE),
+        )
+        assert fake.approved_prs == []
+        assert "missing head ref" in log
+
+    def test_missing_head_ref_without_extra_pattern_is_unchanged(
+        self, monkeypatch, capsys
+    ):
+        # Callers with no extra pattern never read the ref, so nothing changes.
+        _code, fake, _log = run_main(
+            monkeypatch, capsys=capsys, files=file_payload("uv.lock")
+        )
+        assert fake.approved_prs == ["7"]
+
     def test_non_major_local_image_bump_is_approved(self, monkeypatch, capsys):
         _code, fake, _log = run_main(
             monkeypatch,

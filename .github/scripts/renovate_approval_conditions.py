@@ -1254,6 +1254,11 @@ def process_pr(
     # ...a repo-declared path on a major branch goes to a human...
     head: dict[str, Any] = meta.get("head") or {}
     head_ref = str(head.get("ref") or "")
+    if extra_pattern and not head_ref:
+        # Without the ref, a major cannot be told from a digest bump, so fail
+        # closed rather than read the PR as non-major (lens F-fabc66).
+        print(f"PR #{pr}: missing head ref — skipping.")
+        return False
     major_offenders = extra_paths_on_major(
         [f.filename for f in changed_files], extra_pattern, head_ref
     )
