@@ -2,6 +2,26 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.60.0] - 2026-11-17
+
+### Features
+
+- grade a pull request on the blocking findings it introduces [FND-5029] (#4947) ([082384b](https://github.com/atlanhq/application-sdk/commit/082384b))
+- Release Gate refuses a release PR pinned to an unreleased SDK [FND-5027] (#4939) ([b4303f0](https://github.com/atlanhq/application-sdk/commit/b4303f0))
+
+### Bug fixes
+
+- derive every rule's help link from its id, pinned to the release tag [FND-4662] (#4959) ([34f2212](https://github.com/atlanhq/application-sdk/commit/34f2212))
+- verify canonical_reference paths and symbols against the reference apps nightly [FND-4665] (#4953) ([3628478](https://github.com/atlanhq/application-sdk/commit/3628478))
+- fold duplicated scan_path, SDR-app and SDK-alias helpers into _ast_common [FND-4669] (#4949) ([deef6d4](https://github.com/atlanhq/application-sdk/commit/deef6d4))
+- split silent_swallow and dependency_conformance by rule, ratchet C901/PLR0915 [FND-4668] (#4948) ([686ea76](https://github.com/atlanhq/application-sdk/commit/686ea76))
+- align the ruff config with the root's rule set [FND-4670] (#4944) ([affeb51](https://github.com/atlanhq/application-sdk/commit/affeb51))
+- register checks from a module tuple, scan checkouts under excluded-name dirs, default rule mechanism to static [FND-4945] (#4936) ([9480e2c](https://github.com/atlanhq/application-sdk/commit/9480e2c))
+
+### Other changes
+
+- chore(testing): deprecate orphaned Hypothesis strategies, merge the SQL duplicate, bound every integer [FND-4292] (#4958) ([01c2817](https://github.com/atlanhq/application-sdk/commit/01c2817))
+
 ## [0.59.0] - 2026-11-17
 
 ### Features
