@@ -1,3 +1,4 @@
+# conformance: ignore[L002] stdlib logging on purpose: certify runs this checker against an app checkout without the SDK installed (FND-4675), so get_logger is not importable here.
 """
 Validates that a connector has been fully migrated to v3.
 
