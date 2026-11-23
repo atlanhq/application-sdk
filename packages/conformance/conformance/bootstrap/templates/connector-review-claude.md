@@ -36,13 +36,16 @@ CONFORMANCE_SINCE=origin/main uv run atlan-application-sdk-conformance detect \
 
 ## After opening a pull request: the connector reviewer
 
-Every pull request that changes behaviour is reviewed by the connector reviewer.
-It judges the change against principles, not a rule list, and it does not
-repeat what conformance or CI already checks.
+Every pull request that changes behaviour should be reviewed by the connector
+reviewer. It judges the change against principles, not a rule list, and it does
+not repeat what conformance or CI already checks.
 
 - Ask for a review by commenting `/review` on the pull request. It reviews only
   when asked. After a new push, comment `/review` again: only the new commits
   are reviewed.
+- `/review force` reviews again even when the head commit was already reviewed
+  or the pull request is exempt, and redoes the approach check. The cost cap
+  per pull request still holds.
 - The result is one summary comment and a `connector-reviewer` status on the
   head commit.
 - Read the principles before changing code they cover. The fleet principles are
@@ -64,6 +67,17 @@ repeat what conformance or CI already checks.
   `/review waive <reason>`. The reason is recorded on the pull request.
 - Do not edit bootstrap-managed files under `.github/` in this repository.
   Change them in application-sdk; a resync brings them here.
+
+### What an agent may do
+
+An agent working on a pull request may run conformance, push fixes, comment
+`/review` after a push, fix the findings, and comment `/review recheck` with
+the evidence when it believes a finding is wrong.
+
+Dismissing a finding and waiving the review are decisions for a person. Post
+`/review dismiss` or `/review waive` only when a person has made that decision
+and given the reason, and use their reason. Use `/review force` only when a
+person asks for it.
 
 The repository's CI configuration remains authoritative for enforcement.
 <!-- END APPLICATION SDK CONNECTOR REVIEW -->

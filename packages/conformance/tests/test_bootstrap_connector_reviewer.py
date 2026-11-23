@@ -389,6 +389,7 @@ def test_block_describes_the_connector_reviewer() -> None:
     assert "## After opening a pull request: the connector reviewer\n" in _BLOCK
     for phrase in (
         "commenting `/review` on the pull request",
+        "- `/review force` reviews again",
         "a `connector-reviewer` status on the\n  head commit",
         "`/review dismiss F-xxxxxx <reason>`",
         "`/review recheck F-xxxxxx <what changed, or why it is wrong>`",
@@ -398,6 +399,23 @@ def test_block_describes_the_connector_reviewer() -> None:
         "The repository's CI configuration remains authoritative for enforcement.",
     ):
         assert phrase in _BLOCK, phrase
+
+
+def test_block_says_what_an_agent_may_do() -> None:
+    """An agent may ask for a review and dispute a finding with evidence.
+
+    Dismissing and waiving record a person's decision, and force spends past
+    the reviewer's admission rules, so an agent does none of them on its own.
+    """
+    section = _BLOCK.split("### What an agent may do\n", 1)[1]
+    flat = " ".join(section.split())
+    for phrase in (
+        "comment `/review` after a push",
+        "comment `/review recheck` with the evidence",
+        "Dismissing a finding and waiving the review are decisions for a person.",
+        "Use `/review force` only when a person asks for it.",
+    ):
+        assert phrase in flat, phrase
 
 
 # The previous reviewer's vocabulary. Its review levels were named L1 to L4
