@@ -347,23 +347,21 @@ TOOL_SCHEMAS = [
 
 def parse_args(raw: str) -> dict[str, Any]:
     """Tool arguments as a dict. A malformed payload is salvaged by taking the
-    first balanced JSON object in it;
+    first JSON object in it (read by the JSON decoder, so a brace inside a
+    string is text, not structure);
     anything else is an empty dict and the tool reports the error."""
     try:
         v = json.loads(raw or "{}")
         return v if isinstance(v, dict) else {}
     except json.JSONDecodeError:
         start = (raw or "").find("{")
-        depth = 0
-        for i in range(max(start, 0), len(raw or "")):
-            depth += {"{": 1, "}": -1}.get(raw[i], 0)
-            if depth == 0 and start >= 0:
-                try:
-                    v = json.loads(raw[start : i + 1])
-                    return v if isinstance(v, dict) else {}
-                except json.JSONDecodeError:
-                    return {}
-        return {}
+        if start < 0:
+            return {}
+        try:
+            v, _ = json.JSONDecoder().raw_decode(raw, start)
+        except json.JSONDecodeError:
+            return {}
+        return v if isinstance(v, dict) else {}
 
 
 def run_tool(ws: Workspace, name: str, args: dict[str, Any]) -> str:

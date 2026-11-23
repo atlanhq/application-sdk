@@ -7150,7 +7150,7 @@ from lens import __main__ as cli  # noqa: E402
 from lens import bundle as bundle_mod  # noqa: E402
 from lens import llm as llm_mod  # noqa: E402
 from lens import report as report_mod  # noqa: E402
-from lens.tools import read_diff  # noqa: E402
+from lens.tools import parse_args, read_diff  # noqa: E402
 
 # Not shaped like `sk-…`: a gateway key need not be, and the pattern alone would miss it.
 OPAQUE_KEY = "gw_live_4f9a1c77d2e0b35a"
@@ -7688,3 +7688,25 @@ def test_quoted_git_paths_are_decoded():
         "--- a/docs/my file.md\n+++ b/docs/my file.md\n@@ -1 +1 @@\n-a\n+b\n"
     )
     assert plain.path == "docs/my file.md"
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ('args: {"search_text": "foo } bar"}', {"search_text": "foo } bar"}),
+        (
+            'x {"search_text": "a { b", "path_glob": "*.py"} y',
+            {"search_text": "a { b", "path_glob": "*.py"},
+        ),
+        ('{"name": "say \\"}\\" here"} trailing', {"name": 'say "}" here'}),
+        ('{"name": "fetch"', {}),  # cut short: nothing to salvage
+        ("no object at all", {}),
+        ('["a list"] {"name": "x"}', {"name": "x"}),
+    ],
+)
+def test_salvaging_tool_arguments_reads_braces_inside_strings_as_text(
+    raw: str, expected: dict[str, Any]
+):
+    """F-bdcf59: the salvage counted every brace, so `}` inside a string closed
+    the object early, the slice failed to parse, and the arguments were lost."""
+    assert parse_args(raw) == expected
