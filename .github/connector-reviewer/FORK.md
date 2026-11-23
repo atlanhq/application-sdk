@@ -206,7 +206,10 @@ Deleted, by reason:
 
 The last four of those guarded the shipped rules and cards: against a glob that
 matches nothing, and against citing a path or a conformance rule that does not
-exist. Nothing in this package guards the fleet principles that way.
+exist. The fleet principles have their own guard instead:
+`test_connector_reviewer_principles.py` loads the shipped files with this package's
+loader, requires that none is skipped, holds each to the documented format, and checks
+that every conformance rule id it cites exists and runs on app repos.
 
 The change that adds the connector-reviewer workflow must bring the workflow guards
 back for its own file: the trigger list, never checking out the PR head, the

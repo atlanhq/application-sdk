@@ -80,7 +80,8 @@ as `E020`, and anything else that is out of scope>
 Severity: <what makes a violation high; otherwise medium>
 ```
 
-The rules, which `load()` in `.github/scripts/connector_reviewer_principles.py` enforces:
+The rules for the files in this directory, which
+`.github/scripts/tests/test_connector_reviewer_principles.py` enforces:
 
 - The file is named `<id in lower case>-<slug>.md`, for example
   `fp01-undeclared-loss.md`.
@@ -121,19 +122,17 @@ things hold across all of them:
 | `contract` | `contract/` |
 | `ci` | `.github/` |
 
-## Reading them in code
+## How the reviewer reads them
 
-```python
-from conformance import principles
+The loader is `.github/scripts/connector_reviewer/principles.py`. For each review it
+loads this directory, then the principles of the repository under review, and gives
+the model the ones whose areas the pull request touches: fleet principles first, then
+the repository's own.
 
-for p in principles.load(principles.FLEET_DIR):
-    print(p.id, p.title, p.areas, p.ask)
-```
-
-`load()` takes any directory in this format, so it reads a repo's own principles too.
-It uses the standard library only. A file that breaks the format raises `ValueError`
-naming the file and the problem. `Principle.areas` is empty when the file has no
-`applies-to`; `Principle.applies_to(area)` answers for both cases.
+The loader is a little more forgiving than the rules above (it accepts blank lines
+between fields, for example), so that one slip in an app's own principle does not
+stop a review. A file it cannot read is skipped, and the review's summary says which
+file and why. The files here are held to the stricter rules by the test.
 
 ## Adding or changing a principle
 
