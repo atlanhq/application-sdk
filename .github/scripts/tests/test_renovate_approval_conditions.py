@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -482,6 +483,56 @@ class TestDepFileAllowlist:
 
     def test_empty_filenames_are_ignored(self):
         assert gate.non_dep_files(["", "uv.lock"]) == []
+
+
+def _sdk_caller_extra_pattern() -> str:
+    """The extra_dep_file_pattern application-sdk's own caller passes."""
+    caller = (
+        Path(__file__).resolve().parents[2] / "workflows" / "renovate-auto-approve.yml"
+    )
+    jobs = yaml.safe_load(caller.read_text())["jobs"]
+    patterns = [
+        job["with"]["extra_dep_file_pattern"]
+        for job in jobs.values()
+        if "extra_dep_file_pattern" in job.get("with", {})
+    ]
+    assert len(patterns) == 1, patterns
+    return patterns[0]
+
+
+class TestSdkCallerExtraPattern:
+    """application-sdk's caller widens the allowlist for its own dep-managed
+    paths. Read from the real workflow file, so a pattern edit is tested."""
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "local/temporal-auth/docker-compose.yml",
+            "local/temporal-auth/docker-compose.yaml",
+            "local/other-stack/compose.yml",
+            "packages/conformance/conformance/bootstrap/templates/tests.yaml",
+            "packages/conformance/conformance/data/relationship_directions.json",
+        ],
+    )
+    def test_dep_managed_paths_are_approvable(self, path):
+        assert gate.non_dep_files([path], _sdk_caller_extra_pattern()) == []
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            # The local dev images lane (FND-5353) must not reach the
+            # production Dockerfile, a root compose file, or anything else
+            # under local/.
+            "Dockerfile",
+            "docker-compose.yml",
+            "local/temporal-auth/nginx.conf",
+            "local/temporal-auth/init.sql",
+            "local/a/b/docker-compose.yml",
+            "local/docker-compose.yml",
+        ],
+    )
+    def test_other_paths_still_need_a_human(self, path):
+        assert gate.non_dep_files([path], _sdk_caller_extra_pattern()) == [path]
 
 
 # ---------------------------------------------------------------------------

@@ -220,6 +220,54 @@
       "enabled": false
     },
     {
+      "description": "Local dev images lane (FND-5353): group the images in the local/ compose files (postgres, nginx and temporalio/auto-setup in local/temporal-auth/docker-compose.yml, the local Temporal-with-auth stack) into one PR and auto-merge it on green. Before this, no rule armed auto-merge for the docker-compose manager, and the approval gate's file allowlist did not cover the compose file, so every digest and tag bump (11 PRs in ten days) waited for a person to approve and merge a file no shipped artifact or CI job reads. The caller .github/workflows/renovate-auto-approve.yml now lists local/*/compose files in extra_dep_file_pattern, so atlan-ci approves once required checks pass. Repo-local and scoped by matchFileNames, never the fleet preset: connector repos ship production Dockerfiles, which the org baseline treats as control-plane files, and this must not make them auto-merge. The production Dockerfile here is the dockerfile manager and is not matched either. The group spans majors so separateMajorMinor puts a major on its own renovate/major-local-dev-images branch, and the next rule takes it back out of auto-merge.",
+      "matchManagers": [
+        "docker-compose"
+      ],
+      "matchFileNames": [
+        "local/**"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch",
+        "digest"
+      ],
+      "groupName": "local dev images",
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Local dev image majors are reviewed, never auto-merged (FND-5353), the same carve-out as the preset's action-major rule and the pyatlan major rule above. A major such as postgres 18 to 19 can change the on-disk format or the server's defaults, and green CI does not show it: no CI job starts this stack. Separate from the rule above so that rule's positive matchUpdateTypes stay the lane's only definition.",
+      "matchManagers": [
+        "docker-compose"
+      ],
+      "matchFileNames": [
+        "local/**"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false,
+      "platformAutomerge": false
+    },
+    {
+      "description": "Release-age hold for local dev image tag bumps (FND-5353): 7 days, the org baseline's full window. Container images are third-party and are not one of the 3-day exception lanes recorded in docs/standards/ci.md ('Renovate release-age windows'), so they take the baseline. All three images are on Docker Hub, which gives each tag a releaseTimestamp (its tag_last_pushed), so the default timestamp-required behaviour delays these rather than suppressing them. Digest updates (same tag, new digest) are deliberately not listed: Renovate has no per-digest timestamp, and under timestamp-required a hold on them could hold them for good instead of delaying them. They are upstream rebuilds of a tag that has already passed this hold, the same reason the preset's github-actions hold leaves digests out. Positive matchUpdateTypes, the same shape as every other hold in these configs.",
+      "matchManagers": [
+        "docker-compose"
+      ],
+      "matchFileNames": [
+        "local/**"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
+      "minimumReleaseAge": "7 days"
+    },
+    {
       "description": "Leave the Dockerfile's golden base (cgr.dev/atlan.com/app-framework-golden) untracked. The registry is private and Renovate has no credentials for it, so every lookup fails and logs a warning (application-sdk PR 2049). The tag stays mutable on purpose: Chainguard rebuilds it as package fixes land, and an untracked digest pin would freeze those fixes out. The release build's SLSA provenance records the digest each app-runtime-base release shipped on. The policy is written down next to the FROM line in the Dockerfile and in docs/standards/build-security.md. Disabled by depName here rather than listed in ignoreDeps, so the reason sits with the rule.",
       "matchDepNames": [
         "cgr.dev/atlan.com/app-framework-golden"
