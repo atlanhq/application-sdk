@@ -106,7 +106,12 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: read # the diff and head-side file text, as data
-          permission-pull-requests: read # the pull request, its commits and files
+          # Write, not read: GitHub refuses a comment on a pull request (even
+          # through the Issues API) unless the App token holds pull-requests
+          # write, as lens.yml does. Read-only here failed the first live run
+          # with HTTP 403 on the summary and the lock's busy note. The reviewer
+          # has no tool that changes a pull request; contents stays read.
+          permission-pull-requests: write # PR comments; the pull request, its commits and files
           permission-issues: write # the sticky summary and reactions (PR comments are Issues-scope)
           permission-statuses: write # the `connector-reviewer` commit status
           permission-actions: read # the lock: is an older review of this PR still running?
