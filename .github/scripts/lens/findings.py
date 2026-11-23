@@ -112,19 +112,38 @@ class PRState:
             f for f in self.findings if f.status == "open" and f.severity in severities
         ]
 
-    def encode(self, body_keep: int = BODY_KEEP) -> str:
+    def encode(
+        self,
+        body_keep: int = BODY_KEEP,
+        *,
+        evidence_keep: int | None = None,
+        drop_resolved: int = 0,
+    ) -> str:
         """The state as a hidden comment block, kept small: a GitHub comment holds at most
         65,536 characters. Only what a later round reads is stored. An open finding keeps
         its quoted code (free resolution matches it), a capped body (the verify call
         reads it) and a capped suggested change (the summary shows it; there is no
         inline comment holding it). A resolved finding keeps only what the Resolved
-        table shows."""
+        table shows.
+
+        The last resorts, for a state too big for a comment even so: `evidence_keep`
+        cuts an open finding's quoted code to its leading whole lines within that many
+        characters (a line cut in half would no longer match the code it quotes), and
+        `drop_resolved` leaves out that many of the oldest resolved findings."""
         data = asdict(self)
+        if drop_resolved > 0:
+            resolved = [i for i, f in enumerate(self.findings) if f.status != "open"]
+            gone = set(resolved[:drop_resolved])
+            data["findings"] = [
+                f for i, f in enumerate(data["findings"]) if i not in gone
+            ]
         for f in data["findings"]:
             f["scenario"] = ""
             if f["status"] == "open":
                 f["body"] = f["body"][:body_keep]
                 f["suggestion"] = f["suggestion"][:body_keep]
+                if evidence_keep is not None:
+                    f["evidence"] = _leading_lines(f["evidence"], evidence_keep)
             else:
                 f["body"] = f["suggestion"] = ""
                 f["evidence"] = f["evidence"][:EVIDENCE_KEEP_RESOLVED]
@@ -150,6 +169,20 @@ class PRState:
             Finding(**_known(Finding, f)) for f in raw.get("findings", [])
         ]
         return cls(**_known(cls, raw))
+
+
+def _leading_lines(text: str, limit: int) -> str:
+    """The leading whole lines of `text` that fit in `limit` characters, and
+    always the first line: matching is line by line, so a quote cut mid-line
+    would stop matching code that is still there."""
+    out: list[str] = []
+    used = 0
+    for line in text.splitlines():
+        if out and used + len(line) + 1 > limit:
+            break
+        out.append(line)
+        used += len(line) + 1
+    return "\n".join(out)
 
 
 def _known(cls: type, raw: dict[str, Any]) -> dict[str, Any]:

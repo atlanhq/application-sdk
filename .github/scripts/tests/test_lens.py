@@ -7497,3 +7497,66 @@ def test_a_single_hunk_over_the_cap_goes_alone_and_is_never_cut():
     [alone] = [b for b in bundles if "application_sdk/storage/big.py" in b.paths]
     assert alone.paths == ["application_sdk/storage/big.py"]
     assert alone.files[0].additions == 200
+
+
+def _noise(rnd: Any, n: int) -> str:
+    """Random letters: they compress worst, a harder case than real code."""
+    import string  # noqa: PLC0415
+
+    return "".join(rnd.choices(string.ascii_letters + string.digits, k=n))
+
+
+def _big_state(open_n: int, resolved_n: int) -> PRState:
+    import random  # noqa: PLC0415
+
+    rnd = random.Random(7)
+    fs: list[Finding] = []
+    for i in range(open_n + resolved_n):
+        f = Finding(
+            f"application_sdk/m{i % 9}/f{i}.py",
+            i + 1,
+            "medium",
+            "bug",
+            _noise(rnd, 100),
+            _noise(rnd, 600),
+            "\n".join(f"    v{i}_{k} = {_noise(rnd, 70)}" for k in range(12)),
+        )
+        if i >= open_n:
+            f.status, f.fixed_round, f.fixed_by = "fixed", 2, "verified"
+        fs.append(f)
+    return PRState(round=4, findings=fs, ledger={"spent_usd": 0.7, "cap_usd": 1.0})
+
+
+def test_a_state_too_big_at_body_keep_zero_still_fits_and_keeps_every_open_finding():
+    """F-b8783f: bodies were the only thing shortened, so enough long quoted code
+    made even the leanest summary pass GitHub's limit; the edit would be refused
+    and the next run would read the previous state."""
+    st = _big_state(150, 0)
+    assert len(st.encode(body_keep=0)) > review_mod.COMMENT_LIMIT  # the real case
+    body = render_summary(RunResult("reviewed", mode="full", state=st))
+    assert len(body) <= review_mod.COMMENT_LIMIT
+    back = PRState.decode(body)
+    assert back is not None
+    assert [f.id for f in back.findings] == [f.id for f in st.findings]
+    assert back.ledger == st.ledger and back.round == 4
+    for kept, orig in zip(back.findings, st.findings):
+        # Whole leading lines only: free resolution still matches the code.
+        assert kept.evidence and orig.evidence.startswith(kept.evidence)
+        assert orig.evidence.splitlines()[: len(kept.evidence.splitlines())] == (
+            kept.evidence.splitlines()
+        )
+        assert snippet_in_text(orig.evidence, kept.evidence)
+
+
+def test_the_oldest_resolved_findings_go_before_any_open_one():
+    st = _big_state(120, 400)
+    body = render_summary(RunResult("reviewed", mode="full", state=st))
+    assert len(body) <= review_mod.COMMENT_LIMIT
+    back = PRState.decode(body)
+    assert back is not None
+    open_ids = [f.id for f in st.findings if f.status == "open"]
+    assert [f.id for f in back.findings if f.status == "open"] == open_ids
+    kept_resolved = [f.id for f in back.findings if f.status != "open"]
+    all_resolved = [f.id for f in st.findings if f.status != "open"]
+    assert 0 < len(kept_resolved) < len(all_resolved)
+    assert kept_resolved == all_resolved[-len(kept_resolved) :]  # the newest stay

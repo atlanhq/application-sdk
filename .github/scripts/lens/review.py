@@ -47,6 +47,7 @@ from .diff import (
 from .findings import (
     BLOCKING,
     BODY_KEEP,
+    EVIDENCE_KEEP_RESOLVED,
     SEVERITIES,
     STATE_MARKER,
     Finding,
@@ -2290,7 +2291,57 @@ def render_summary(res: RunResult) -> str:
             if len(body) <= COMMENT_LIMIT:
                 return body
     lean = _no_state_marker("\n".join(_without_resolved(lines)) + "\n")
-    return lean + st.encode(body_keep=0)
+    body = lean + st.encode(body_keep=0)
+    if len(body) <= COMMENT_LIMIT:
+        return body
+    # The marker, the title and the verdict.
+    top = "\n".join(lines[: lines.index(verdict) + 1]) + "\n"
+    return _fit_state(lean, _no_state_marker(top), st)
+
+
+STATE_TOO_LARGE = (
+    "\n> ⚠️ This pull request's review state is too large for one comment: the "
+    "tables are not shown, and stored quoted code is shortened. Every open "
+    "finding and its id are still tracked.\n"
+)
+
+
+def _fit_state(lean: str, top: str, st: PRState) -> str:
+    """The summary when even the lean view and the stored bodies at 0 are over
+    the limit: GitHub would refuse the edit, and the next run would read the
+    previous state. Cut in this order until it fits: open findings' quoted code
+    to its leading lines (whole lines, so free resolution still matches), the
+    view to its first lines, the quoted code to its first line, then the oldest
+    resolved findings. Open findings and their ids are never dropped."""
+    body = ""
+    for text, keep in (
+        (lean, EVIDENCE_KEEP_RESOLVED),
+        (top + STATE_TOO_LARGE, EVIDENCE_KEEP_RESOLVED),
+        (top + STATE_TOO_LARGE, 0),
+    ):
+        body = text + st.encode(body_keep=0, evidence_keep=keep)
+        if len(body) <= COMMENT_LIMIT:
+            return body
+
+    def dropping(n: int) -> str:
+        return (
+            top
+            + STATE_TOO_LARGE
+            + st.encode(body_keep=0, evidence_keep=0, drop_resolved=n)
+        )
+
+    # The fewest oldest resolved findings to leave out (a bisection: the size
+    # only shrinks as more are left out).
+    lo, hi = 1, sum(1 for f in st.findings if f.status != "open")
+    if hi == 0 or len(dropping(hi)) > COMMENT_LIMIT:
+        return dropping(hi) if hi else body
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if len(dropping(mid)) <= COMMENT_LIMIT:
+            hi = mid
+        else:
+            lo = mid + 1
+    return dropping(lo)
 
 
 def _no_state_marker(text: str) -> str:
