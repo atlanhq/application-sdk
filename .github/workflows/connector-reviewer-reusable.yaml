@@ -58,10 +58,11 @@ jobs:
   review:
     name: Connector reviewer
     runs-on: ubuntu-latest
+    # Must equal JOB_TIMEOUT in connector_reviewer/lock.py: the lock treats an
+    # older review of the same pull request as still running for this long.
     # lens, the same engine at the same model effort, measured a median of
     # about 4 minutes and a longest run of 13 on application-sdk (2026-11).
-    # 30 leaves room without a stuck run holding a runner for the 6-hour default.
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       # The calling repository's default branch: the trusted base the reviewer
       # indexes, and where the app's own principles are read from. In its own
@@ -83,7 +84,6 @@ jobs:
           ref: ${{ job.workflow_sha }}
           sparse-checkout: |
             .github/scripts/connector_reviewer
-            .github/scripts/connector_reviewer_principles.py
             .github/connector-reviewer
           sparse-checkout-cone-mode: false
           path: sdk
