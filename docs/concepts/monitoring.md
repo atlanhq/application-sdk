@@ -435,6 +435,14 @@ for dashboards and alerts:
 | `activity.started` | INFO | `activity.started <ActivityType>` |
 | `activity.ended` | INFO / WARNING / ERROR | same three shapes as `workflow.ended` |
 
+`workflow.started` and `workflow.ended` are logged once per run even when the run spans several
+workflow-instance lifetimes (a cache eviction, or a worker restart that hands the run to another
+worker). `workflow.started` comes from the lifetime that runs the first workflow task live;
+`workflow.ended` comes from the lifetime that finishes the run live. A lifetime that rebuilds the run
+by replaying history logs no `started`, and eviction teardown logs no `ended`. The `(<ms>ms)` duration
+and `temporal.workflow.duration_ms` are history time measured from the run's first workflow task, so
+they stay correct when the finishing worker did not see the start.
+
 The body after the token is a **human-readable summary, not a contract** — it names the subject and,
 on failure, folds in the first line of the exception message (truncated) and the root-cause frame, so
 a line stays diagnosable in renderers that drop structured attributes. Match on the token prefix and
