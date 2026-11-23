@@ -47,6 +47,7 @@ from connector_reviewer.agent import BundleResult
 from connector_reviewer.bundle import group
 from connector_reviewer.config import TRUSTED_APPS, Config, load_config, validate
 from connector_reviewer.diff import (
+    FileDiff,
     anchor,
     parse_unified_diff,
     snippet_in_text,
@@ -10249,3 +10250,62 @@ def test_approach_lookups_are_capped_per_call_not_per_turn(repo: Path):
     assert ac.lookups == 2 and not ac.ran
     assert len(calls) == 2
     assert "call approach_verdict now" in calls[-1]["messages"][-1]["content"]
+
+
+def _long_function_ws(
+    repo: Path, changed: list[int]
+) -> tuple[Workspace, list[FileDiff]]:
+    """A 800-line function whose lines `changed` (file line numbers) were edited."""
+    path = "app/storage/long.py"
+    body = [f"    x{n} = {n}" for n in range(2, 801)]
+    for n in changed:
+        body[n - 2] = f"    x{n} = -{n}"
+    head = {path: "def long_one():\n" + "\n".join(body) + "\n"}
+    diff = f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n" + "".join(
+        f"@@ -{n},1 +{n},1 @@\n-    x{n} = {n}\n+    x{n} = -{n}\n" for n in changed
+    )
+    files = parse_unified_diff(diff)
+    ws = Workspace(
+        root=repo,
+        head_text=head,
+        diffs={f.path: f for f in files},
+        index=build_index(repo, overrides=head),
+    )
+    return ws, files
+
+
+def test_a_long_function_shows_a_window_around_every_change(repo: Path):
+    """F-4a882d: one window from the first change to the last (lines 60-740 for
+    changes at 100 and 700) was cut by the line budget before the later change."""
+    ws, files = _long_function_ws(repo, [100, 700])
+    out = reviewer_context.changed_functions(ws, files)
+    assert "  100 +     x100 = -100" in out
+    assert "  700 +     x700 = -700" in out
+    assert out.count("<function ") == 2
+    assert 'lines="60-140"' in out and 'lines="660-740"' in out
+
+
+def test_nearby_changes_in_a_long_function_share_one_window(repo: Path):
+    ws, files = _long_function_ws(repo, [100, 150])
+    out = reviewer_context.changed_functions(ws, files)
+    assert out.count("<function ") == 1 and 'lines="60-190"' in out
+
+
+def test_a_named_file_under_a_dot_directory_keeps_its_leading_dot(repo: Path):
+    """F-d02f0e: `lstrip("./")` turned `.github/scripts/helper.py` into
+    `github/scripts/helper.py`, which matches no indexed path."""
+    head = {
+        ".github/scripts/helper.py": "class RetryHelper:\n    def run(self):\n        return 1\n"
+    }
+    ws = Workspace(
+        root=repo, head_text=head, diffs={}, index=build_index(repo, overrides=head)
+    )
+    files = parse_unified_diff(DIFF)
+    out = reviewer_context.referenced_patterns(
+        ws, files, "This copies what .github/scripts/helper.py already does."
+    )
+    assert 'path=".github/scripts/helper.py"' in out
+    out = reviewer_context.referenced_patterns(
+        ws, files, "This copies what ./.github/scripts/helper.py already does."
+    )
+    assert 'path=".github/scripts/helper.py"' in out
