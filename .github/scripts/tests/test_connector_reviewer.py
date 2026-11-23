@@ -1572,7 +1572,8 @@ def test_first_round_puts_every_finding_in_the_summary_and_opens_no_thread(repo:
     assert SUMMARY_MARKER in body and "Changes requested" in body
     fid = state_of(res).findings[0].id
     details = body.split("**Details**")[1]
-    assert f"{fid} · high · bug — decode() on a None result" in details
+    assert f"{fid} · high · bug · " in details
+    assert " — decode() on a None result" in details
     assert "client.get returns None for a missing key" in details
     assert "**Suggested change:**" in details and "```python" in details
     assert "data.decode() if data is not None else None" in details
@@ -3320,6 +3321,25 @@ def test_status_is_green_only_when_every_finding_is_closed(repo: Path):
 
 
 # ---- the verdict, by level --------------------------------------------------------------------------------
+
+
+def test_the_summary_shows_which_principle_each_finding_rests_on():
+    """The live test could not tell which principles the reviewer used: the
+    cited id was stored but never shown. Fleet (FP) and repo (RP) ids both show;
+    a concrete bug, which needs no principle, says so."""
+    fs = [
+        Finding("a.py", 3, "high", "bug", "Retry widened", "b", "e1", rule_id="RP08"),
+        Finding("a.py", 9, "medium", "bug", "Page dropped", "b", "e2", rule_id="FP01"),
+        Finding("b.py", 1, "high", "bug", "Wrong field", "b", "e3"),
+    ]
+    body = render_summary(
+        RunResult("reviewed", mode="full", state=PRState(round=1, findings=fs))
+    )
+    assert "| id | where | principle | finding |" in body
+    assert "| `RP08` | Retry widened |" in body
+    assert "| `FP01` | Page dropped |" in body
+    assert "| — (concrete bug) | Wrong field |" in body
+    assert "· `RP08` — Retry widened</summary>" in body
 
 
 def test_summary_counts_and_groups_every_level_including_nits():

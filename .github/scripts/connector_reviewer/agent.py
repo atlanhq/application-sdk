@@ -555,7 +555,8 @@ def review_bundle(
     placed = [f for f in placed if f.severity != "low"] + nits
     for f in placed:
         trace.line(
-            f"[{bundle.label}] finding {f.id} {f.severity} {f.category} {f.path}:{f.line or '-'} {trace.short(f.title, 80)!r}"
+            f"[{bundle.label}] finding {f.id} {f.severity} {f.category} "
+            f"principle={f.rule_id or '-'} {f.path}:{f.line or '-'} {trace.short(f.title, 80)!r}"
         )
     trace.line(
         f"[{bundle.label}] done: stop={res.stop} turns={res.turns}"
