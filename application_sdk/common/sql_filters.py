@@ -573,6 +573,14 @@ def prepare_query(
             validate_filter_no_sql_injection(temp_table_regex)
             # FND-5216: the same structural check the typed contracts run.
             validate_filter_regex_syntax(temp_table_regex)
+        elif temp_table_regex:
+            # A truthy non-string would skip the checks above and still be
+            # stringified into the quoted literal by ``.format`` below.
+            # conformance: ignore[E012] Mirrors the typed contract's Pydantic type error; ValueError matches every other rejection on this path
+            raise ValueError(
+                "temp-table regex must be a string, got "
+                f"{type(temp_table_regex).__name__}"
+            )
         if temp_table_regex and temp_table_regex_sql is not None:
             temp_table_regex_sql = strip_sql_block_comments(
                 temp_table_regex_sql

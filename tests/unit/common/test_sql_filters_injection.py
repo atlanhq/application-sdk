@@ -493,3 +493,27 @@ class TestRawPathRegexStructureCheck:
             temp_table_regex_sql=_TEMP_TABLE_FRAGMENT,
         )
         assert result is not None
+
+
+class TestTempTableRegexNonString:
+    @pytest.mark.parametrize(
+        "value", [["x' OR 1=1 -- "], {"x' OR 1=1 -- ": []}, 1, True]
+    )
+    def test_truthy_non_string_raises_before_interpolation(self, value: object) -> None:
+        with pytest.raises(ValueError, match=r"must be a string") as exc_info:
+            prepare_query(
+                "SELECT 1 WHERE 1=1 {temp_table_regex_sql}",
+                {"metadata": {"temp-table-regex": value}},
+                temp_table_regex_sql=_TEMP_TABLE_FRAGMENT,
+            )
+        assert "OR 1=1" not in str(exc_info.value)
+
+    @pytest.mark.parametrize("value", [None, "", [], {}])
+    def test_falsy_value_renders_no_fragment(self, value: object) -> None:
+        result = prepare_query(
+            "SELECT 1 WHERE 1=1 {temp_table_regex_sql}",
+            {"metadata": {"temp-table-regex": value}},
+            temp_table_regex_sql=_TEMP_TABLE_FRAGMENT,
+        )
+        assert result is not None
+        assert "REGEXP" not in result
