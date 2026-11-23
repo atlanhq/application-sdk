@@ -7575,7 +7575,7 @@ def test_approach_lookups_are_capped_per_call_not_per_turn(repo: Path):
     )
     calls: list[dict[str, Any]] = []
 
-    def transport(body):
+    def transport(body: dict[str, Any]) -> tuple[int, dict[str, str], str]:
         calls.append(json.loads(json.dumps(body)))
         return two  # never volunteers a verdict
 

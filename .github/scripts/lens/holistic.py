@@ -196,7 +196,7 @@ def check(
     client: Client,
     ws: Workspace,
     files: list[FileDiff],
-    pr_meta: dict,
+    pr_meta: dict[str, Any],
     *,
     max_input_tokens: int = 8000,
     max_lookups: int = 4,
