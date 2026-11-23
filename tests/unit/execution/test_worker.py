@@ -947,6 +947,43 @@ class TestCreateWorker:
             create_worker(client, passthrough_modules={"my_custom_module"})
 
         assert len(sandbox_configs) == 1
+        assert "my_custom_module" in sandbox_configs[0].restrictions.passthrough_modules
+
+    def test_app_package_is_sandboxed_and_host_libraries_pass_through(self) -> None:
+        """The app's own package is re-imported in the sandbox; libraries are not.
+
+        create_worker used to pass every registered app module through, so
+        app workflow code ran as host code that the sandbox never checked.
+        """
+
+        class _SandboxedApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        runners: list = []
+
+        def capture_worker(*args, **kwargs):
+            runners.append(kwargs["workflow_runner"])
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client)
+
+        passthrough = runners[0].restrictions.passthrough_modules
+        app_package = _SandboxedApp.__module__.partition(".")[0]
+        assert app_package == "tests"
+        assert app_package not in passthrough
+        assert _SandboxedApp.__module__ not in passthrough
+        # A third-party library the host already imported passes through.
+        assert "pydantic" in passthrough and "pytest" in passthrough
+        # No package-root entry: the templates stay sandboxed.
+        assert "application_sdk" not in passthrough
+        assert "application_sdk.templates" not in passthrough
+        assert "application_sdk.app" in passthrough
 
 
 class TestAppWorker:

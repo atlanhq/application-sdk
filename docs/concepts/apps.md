@@ -1215,17 +1215,26 @@ overrides the attribute at deploy time, and only the literal `hard` enforces. Se
 See [FileReference & App.upload()](file-reference.md) for what a `FileReference` is and how it moves,
 and the contract toolkit's `examples/artifact-schemas/` for a full worked contract.
 
-## Passthrough Modules
+## Workflow Sandbox and Passthrough Modules
 
-If your app imports third-party libraries that must be available inside the Temporal sandbox, declare them as a class-level attribute:
+Workflow code (`run()`, `@entrypoint` methods, `@signal` / `@query` / `@update` handlers, and every helper they call) runs inside Temporal's workflow sandbox. For every workflow run the worker re-imports your app's own package in the sandbox, so Temporal checks that code for non-determinism. A wall-clock read (`datetime.now()`), a random UUID (`uuid.uuid4()`), `os.environ` / `os.getenv`, `tempfile`, `open()` or any other I/O there fails the **workflow task**. Temporal retries a failed workflow task, so the run waits until a fixed build is deployed, then continues.
+
+- Use the SDK's deterministic seam in workflow code: `self.now()`, `self.uuid()`, `from application_sdk.app import sleep`.
+- Read environment variables at module level. Import-time reads are allowed in the sandbox, and the value is fixed for the life of the process.
+- Do file and network I/O in a `@task`. Activities run outside the sandbox.
+- `os.path` calls are allowed on every Python version.
+
+Third-party libraries your app imports are passed through automatically: the worker passes through every library already imported when it starts, so they are not re-imported for each run. The SDK's own packages are passed through too, except `application_sdk.templates`, whose `run()` bodies are workflow code and are checked like yours.
+
+Declare `passthrough_modules` only for a library that workflow code imports lazily (inside a function) and that cannot be re-imported in the sandbox:
 
 ```python
 class MyConnector(App):
-    passthrough_modules = {"my_connector", "third_party_lib"}
+    passthrough_modules = {"third_party_lib"}
     ...
 ```
 
-The type is `ClassVar[set[str] | None]` — use a set literal, not a list. In v2, passthrough modules were passed to the `Worker` constructor. In v3, they live on the `App` subclass as a `ClassVar`. Do **not** pass `passthrough_modules` as a class-kwarg — it is not accepted by `App.__init_subclass__`.
+The type is `ClassVar[set[str] | None]` — use a set literal, not a list. In v2, passthrough modules were passed to the `Worker` constructor. In v3, they live on the `App` subclass as a `ClassVar`. Do **not** pass `passthrough_modules` as a class-kwarg — it is not accepted by `App.__init_subclass__`. Do **not** list your app's own package: a passed-through module is never checked, so that turns the sandbox off for your workflow code.
 
 ## Customizing SQL Queries
 
