@@ -62,6 +62,68 @@ trusted_apps = [
   "atlan-connectivity-release-train",
 ]
 
+[exempt]
+# Pull requests that are not reviewed: `/review` answers "Exempt: <class>" with a success
+# status and makes no model call. `/review force` reviews one anyway. Decided in code
+# (connector_reviewer/exempt.py) from who opened the pull request, its branch, who wrote
+# each commit and which files changed.
+#
+# Dependency update: opened by one of dependency_bots, on a branch that starts with one of
+# dependency_branches, and EVERY commit is by one of dependency_bots.
+dependency_bots = ["atlan-app-fleet[bot]", "renovate[bot]", "dependabot[bot]"]
+dependency_branches = ["renovate/", "dependabot/"]
+# Conformance resync: opened by one of resync_bots, every commit by one of them, and every
+# changed file matches bootstrap_managed.
+resync_bots = ["atlan-conformance-sync[bot]"]
+# Version bump: the branch starts with one of these. It still needs `/gate-check`.
+version_bump_branches = ["bump-version"]
+# What `atlan-application-sdk-conformance bootstrap` writes, removes or merges into in a
+# connector repo. A managed workflow is named one by one, so the app's own workflows are
+# not covered. test_connector_reviewer.py reads the destination lists out of
+# packages/conformance/conformance/bootstrap/render.py and fails when one is missing here.
+bootstrap_managed = [
+  ".github/workflows/conformance.yaml",
+  ".github/workflows/conformance-upload-sarif.yaml",
+  ".github/workflows/checks.yml",
+  ".github/workflows/commits.yaml",
+  ".github/workflows/release-gate.yaml",
+  ".github/workflows/connector-review-gate.yaml",
+  ".github/workflows/release.yaml",
+  ".github/workflows/tag-and-publish.yaml",
+  ".github/workflows/vulnerability-scan.yml",
+  ".github/workflows/build-and-publish.yaml",
+  ".github/workflows/stale.yml",
+  ".github/workflows/generated-freshness.yaml",
+  ".github/workflows/test-commands.yaml",
+  ".github/workflows/tests.yaml",
+  # Shims bootstrap once wrote and now removes.
+  ".github/workflows/docstring-coverage.yaml",
+  ".github/workflows/auto-fix.yml",
+  ".github/workflows/update-dashboard.yml",
+  ".github/workflows/renovate-auto-approve.yml",
+  ".github/workflows/porter-bundle-cnab.yaml",
+  ".github/dependabot.yml",
+  ".github/dependabot.yaml",
+  ".github/actions/run-conformance-detect/**",
+  ".github/scripts/build_conformance_args.py",
+  ".github/scripts/probe_code_scanning.py",
+  ".github/scripts/connector_review_gate.py",
+  ".github/scripts/release_gate.py",
+  ".github/ci-system-deps.txt",
+  ".github/connector-reviewer/principles/README.md",
+  ".claude/**",
+  "scripts/fetch-review-rules.sh",
+  "scripts/write-connector-review-marker.sh",
+  ".mothership/**",
+  "CLAUDE.md",
+  "AGENTS.md",
+  "renovate.json",
+  "contract_schema.lock.json",
+  ".gitignore",
+]
+# Docs only (no list): every changed file ends in .md or is under docs/, and none is under
+# .github/connector-reviewer/ or .claude/, or named CLAUDE.md or AGENTS.md at any depth.
+
 [stages]
 reflect = true   # filter-only fact check of each bundle's comments
 verify = true    # one call per round checking still-open findings in touched files

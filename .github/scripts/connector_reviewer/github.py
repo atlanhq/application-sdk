@@ -139,6 +139,26 @@ class GitHub:
             return base64.b64decode(blob["content"]).decode("utf-8", "replace")
         return None
 
+    def pr_commit_authors(self, number: int) -> list[str]:
+        """The GitHub login of each commit's author, in order; "" for a commit
+        GitHub could not attribute to an account. GitHub lists at most 250
+        commits of a pull request, so compare the length with the pull
+        request's own `commits` count before trusting "every commit"."""
+        out: list[str] = []
+        page = 1
+        while True:
+            batch: list[dict[str, Any]] = (
+                self._call(
+                    "GET",
+                    f"/repos/{self.repo}/pulls/{number}/commits?per_page=100&page={page}",
+                )
+                or []
+            )
+            out += [str((c.get("author") or EMPTY).get("login") or "") for c in batch]
+            if len(batch) < 100:
+                return out
+            page += 1
+
     def can_push(self, login: str) -> bool:
         """Whether `login` holds Write, Maintain or Admin on this repository,
         read live from the collaborator-permission API.

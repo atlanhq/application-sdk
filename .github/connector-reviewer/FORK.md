@@ -235,6 +235,34 @@ connector profile. From here on the engine behaves differently, each on purpose.
 | Where the state is read from | The first state marker in the summary | The last one (`PRState.decode`). Text above the state comes from a model or a commenter; only what `encode` appended last is the state. Reasons are stored through `event.plain`, which cannot open an HTML comment. lens reads the first marker, so this is also a fix lens does not have. |
 | Order in the CLI | Decide from the event, then load the config | `event.addressed` first drops a comment that is not `/review` before any config or request; then the config (it holds `trusted_apps`), then `decide`. |
 
+### Exempt pull requests (FND-5311)
+
+lens reviews every pull request it is asked about. Here `exempt.classify`, a pure
+function of facts GitHub reports, names four classes that are not reviewed:
+
+| Class | Holds when |
+|---|---|
+| dependency update | the author is in `dependency_bots`, the branch starts with one of `dependency_branches`, and every commit's author is in `dependency_bots` |
+| conformance resync | the author is in `resync_bots`, every commit is by one of them, and every changed file matches `bootstrap_managed` |
+| version bump | the branch starts with one of `version_bump_branches`. The summary reminds that it still needs `/gate-check` |
+| docs only | every changed file ends in `.md` or is under `docs/`, and none is under `.github/connector-reviewer/` or `.claude/`, or named `CLAUDE.md` or `AGENTS.md` at any depth |
+
+- The lists are the `[exempt]` table of `config.toml` (`exempt.ExemptConfig`).
+- `review.run` asks before admission, when the request is not forced and the pull
+  request has never been reviewed (`state.round == 0`). An exempt pull request gets
+  no model call, a summary that says `Exempt: <class>` and why, and status `success`
+  with `exempt: <class>`. `PRState.exempt` records it for one head.
+- `/review force` reviews it anyway, and after that it is never exempt again: a
+  plain `/review` must not paper over what a forced review found.
+- "Every commit" needs the commit list (`GitHub.pr_commit_authors`). If it cannot be
+  read, or is shorter than the pull request's own count (GitHub lists at most 250),
+  the authors are unknown and the bot classes do not hold.
+- A test reads bootstrap's destination registries out of
+  `packages/conformance/conformance/bootstrap/render.py` as text and fails when one
+  is not covered by `bootstrap_managed`.
+- `run` fetches each diff once (`diff()` memoises `gh.diff`), since the exempt check
+  and the review both need the pull request's whole diff.
+
 ## Module by module
 
 Where a lens fix lands in this copy. "Names" means only the renames in the table
@@ -262,7 +290,7 @@ above; "typing" means only the annotations described under Typing.
 | `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing. |
 | `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`. |
 | `__init__.py` | Docstring. |
-| `principles.py`, `typed.py` | New here. |
+| `principles.py`, `typed.py`, `exempt.py` | New here. |
 | `approve.py`, `surface.py`, `rules.py` | Not here. |
 
 ## Not changed, and worth knowing before the next change

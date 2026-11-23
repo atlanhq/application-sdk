@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-from . import advisory, baseline, holistic, prompts, trace
+from . import advisory, baseline, exempt, holistic, prompts, trace
 from .agent import AgentLimits, BundleResult, review_bundle, suspect_paths
 from .baseline import PRAdditions
 from .bundle import Bundle, group
@@ -45,7 +45,7 @@ from .diff import (
     snippet_in_text,
 )
 from .findings import BLOCKING, BODY_KEEP, SEVERITIES, Finding, PRState, merge_new
-from .github import GitHub, bot_login
+from .github import GitHub, GitHubError, bot_login
 from .index import Index, Symbol, build_index, index_source
 from .llm import BudgetExhausted, Client, Ledger, LLMError
 from .principles import PrincipleSet
@@ -305,6 +305,26 @@ def run(
             f"model={cfg.model} api={cfg.api} effort={cfg.reasoning_effort} config={cfg.raw_hash} force={force}"
         )
 
+    # ---- exempt pull requests (0 model calls) ----------------------------
+    # Decided in code from who opened it, its branch, its commits and its files.
+    # Only a pull request the reviewer has never reviewed can be exempt: once a
+    # forced review has looked at it, a plain `/review` must not paper over what
+    # that review found.
+    diffs: dict[tuple[str, str], str] = {}
+
+    def diff(a: str, b: str) -> str:
+        if (a, b) not in diffs:
+            diffs[(a, b)] = gh.diff(a, b)
+        return diffs[(a, b)]
+
+    if not force and state.round == 0:
+        found = exemption(gh, number, pr, diff(base, head), cfg)
+        if found is not None:
+            trace.line(f"decision: EXEMPT — {found.kind}: {found.why}")
+            return _exempt(
+                gh, number, head, state, found, bool(prior_summary), post, run_url
+            )
+
     # ---- admission (0 model calls) --------------------------------------
     # Only a different MODEL is a different reviewer. A connector-reviewer config change (principles,
     # prompts, limits) does not re-open code an earlier round already passed: that
@@ -377,14 +397,14 @@ def run(
         ancestry=ancestry,
     )
     if retry_only:
-        full_files = parse_unified_diff(gh.diff(base, head))
+        full_files = parse_unified_diff(diff(base, head))
         all_files = [fd for fd in full_files if fd.path in set(state.pending_files)]
         range_base = base
     else:
         range_base = state.reviewed_head if incremental else base
-        all_files = parse_unified_diff(gh.diff(range_base, head))
+        all_files = parse_unified_diff(diff(range_base, head))
         full_files = (
-            all_files if not incremental else parse_unified_diff(gh.diff(base, head))
+            all_files if not incremental else parse_unified_diff(diff(base, head))
         )
         if incremental:
             # A merge of the base branch into the PR also "descends" from the last
@@ -416,8 +436,10 @@ def run(
         run_url=run_url,
         blob_base=f"https://github.com/{gh.repo}/blob/{head}",
     )
-    # A real review replaces a waive: the verdict is the reviewer's again.
+    # A real review replaces a waive, and an exemption: the verdict is the
+    # reviewer's again.
     state.waiver = {}
+    state.exempt = {}
     # A principle file that was skipped is said in the summary, never silently.
     res.notes.extend(principles.notes)
     if post:
@@ -903,6 +925,91 @@ def dismiss(
             number, "connector-reviewer: nothing was dismissed.\n\n" + "\n".join(lines)
         )
     return res
+
+
+def exemption(
+    gh: GitHub, number: int, pr: dict[str, Any], diff_text: str, cfg: Config
+) -> exempt.Exemption | None:
+    """The class this pull request is exempt under, or None.
+
+    Gathers what `exempt.classify` needs: the author, the branch, the author
+    of every commit, and every path the diff touches (a rename's old path
+    included). A commit list that cannot be read, or that is shorter than the
+    pull request says it is, is "not known", which is never exempt."""
+    author = str((pr.get("user") or EMPTY).get("login") or "")
+    head_ref = str((pr.get("head") or EMPTY).get("ref") or "")
+    try:
+        authors = gh.pr_commit_authors(number)
+    except GitHubError as e:
+        trace.line(f"exempt: the commit list could not be read ({trace.short(e, 120)})")
+        authors = []
+    total = pr.get("commits")
+    if isinstance(total, int) and total != len(authors):
+        trace.line(
+            f"exempt: {len(authors)} of {total} commits listed: authors not known"
+        )
+        authors = []
+    paths = advisory.changed_paths(parse_unified_diff(diff_text))
+    return exempt.classify(
+        author=author,
+        head_ref=head_ref,
+        commit_authors=authors,
+        paths=paths,
+        cfg=cfg.exempt,
+    )
+
+
+def _exempt(
+    gh: GitHub,
+    number: int,
+    head: str,
+    state: PRState,
+    found: exempt.Exemption,
+    had_summary: bool,
+    post: bool,
+    run_url: str,
+) -> RunResult:
+    """Record the exemption and publish it: the summary, the verdict at the
+    bottom when a summary was already there, and a `success` status."""
+    state.exempt = {
+        "class": found.kind,
+        "why": found.why,
+        "reminder": found.reminder,
+        "head": head,
+    }
+    res = RunResult(
+        "exempt",
+        reason=f"{found.kind}: {found.why}",
+        mode="exempt",
+        mode_label=f"exempt · {found.kind}",
+        state=state,
+        run_url=run_url,
+        head=head,
+    )
+    if post:
+        url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
+        if had_summary:
+            gh.comment(number, verdict_brief(res, url))
+        gh.set_status(head, *verdict_status(res), url)
+    return res
+
+
+def active_exemption(st: PRState, head: str) -> dict[str, Any] | None:
+    """The exemption that covers `head`, or None. Like a waive, it covers one
+    commit: a later commit is classified again when someone asks."""
+    ex = st.exempt or {}
+    return ex if head and ex.get("class") and ex.get("head") == head else None
+
+
+def _exempt_line(st: PRState) -> str:
+    ex = st.exempt or {}
+    if not ex.get("class"):
+        return ""
+    reminder = f" {ex['reminder']}" if ex.get("reminder") else ""
+    return (
+        f"✅ **Exempt: {ex['class']}** — {ex.get('why', '')}. It was not reviewed."
+        f"{reminder} Comment `/review force` to review it anyway."
+    )
 
 
 def waive(
@@ -2103,6 +2210,8 @@ def _run_title(res: RunResult, round_no: int) -> str:
         return f"re-check after round {round_no} · {label.removeprefix('recheck · ')}"
     if res.mode == "waive":
         return f"waive after round {round_no} · {label.removeprefix('waive · ')}"
+    if res.mode == "exempt":
+        return label.replace("exempt · ", "not reviewed · exempt: ")
     return f"round {round_no} · {label}"
 
 
@@ -2267,6 +2376,8 @@ def render_summary(res: RunResult) -> str:
         )
     else:
         verdict = "✅ **Ready to merge** — every finding is resolved"
+    # Not reviewed at all: the exemption is the verdict.
+    verdict = _exempt_line(st) or verdict
     lines = [
         SUMMARY_MARKER,
         f"### connector-reviewer summary · updated after round {st.round} ({res.mode_label or res.mode})",
@@ -2591,6 +2702,9 @@ def verdict_status(res: RunResult) -> tuple[str, str]:
             "success",
             f"waived by @{waived.get('by', '?')}: {waived.get('reason', '')}",
         )
+    exempted = active_exemption(st, res.head or st.reviewed_head)
+    if exempted:
+        return "success", f"exempt: {exempted['class']}"
     if res.incomplete:
         return "error", f"review incomplete — {res.incomplete[0][:90]}"
     blocking = st.open_findings(BLOCKING)

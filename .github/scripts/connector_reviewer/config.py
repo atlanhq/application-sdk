@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .agent import AgentLimits
+from .exempt import ExemptConfig
 from .llm import Price
 
 TRUSTED_APPS = (
@@ -48,6 +49,8 @@ class Config:
     exclude: list[str] = field(default_factory=list)
     # GitHub Apps whose `/review` comments are honoured (event.trusted_app).
     trusted_apps: list[str] = field(default_factory=lambda: list(TRUSTED_APPS))
+    # Which pull requests are not reviewed at all (exempt.classify).
+    exempt: ExemptConfig = field(default_factory=ExemptConfig)
     limits: AgentLimits = field(default_factory=AgentLimits)
     raw_hash: str = ""
 
@@ -92,6 +95,14 @@ def load_config(config_dir: Path) -> Config:
     cfg.preflight = bool(st.get("preflight", cfg.preflight))
     access = data.get("access", {})
     cfg.trusted_apps = [str(x) for x in access.get("trusted_apps", cfg.trusted_apps)]
+    ex = data.get("exempt", {})
+    cfg.exempt = ExemptConfig(
+        **{
+            k: [str(x) for x in v]
+            for k, v in ex.items()
+            if k in ExemptConfig.__dataclass_fields__
+        }
+    )
     a = data.get("agent", {})
     cfg.limits = AgentLimits(
         **{k: int(v) for k, v in a.items() if k in AgentLimits.__dataclass_fields__}

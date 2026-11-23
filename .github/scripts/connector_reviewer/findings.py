@@ -109,6 +109,10 @@ class PRState:
     # ({"by", "reason", "head"}). Empty when nothing is waived. A real review
     # clears it.
     waiver: dict[str, Any] = field(default_factory=dict)
+    # Why this pull request was not reviewed, and for which head sha
+    # ({"class", "why", "reminder", "head"}); see exempt.py. A real review
+    # clears it.
+    exempt: dict[str, Any] = field(default_factory=dict)
     history: list[dict[str, Any]] = field(default_factory=list)
 
     def open_findings(self, severities: tuple[str, ...] = SEVERITIES) -> list[Finding]:
