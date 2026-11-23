@@ -75,6 +75,11 @@ def pr_number(event_name: str, event: dict[str, Any]) -> int:
         return int(issue.get("number") or 0) if "pull_request" in issue else 0
     if event_name in ("pull_request", "pull_request_target"):
         return int((event.get("pull_request") or EMPTY).get("number") or 0)
+    if event_name == "workflow_dispatch":
+        # A manual dispatch names the pull request in its `pr` input, as a
+        # string. Without this, a cancelled dispatch left its status pending.
+        raw = str((event.get("inputs") or EMPTY).get("pr") or "").strip().lstrip("#")
+        return int(raw) if raw.isdigit() else 0
     return 0
 
 
