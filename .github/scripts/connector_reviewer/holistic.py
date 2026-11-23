@@ -137,7 +137,7 @@ def build_input(
     syms: list[str] = []
     for f in files:
         seen: set[str] = set()
-        for line in sorted(f.added_lines):
+        for line in sorted(f.changed_lines):  # a deletion counts too
             s = ws.index.enclosing(f.path, line)
             if s and s.qualname not in seen:
                 seen.add(s.qualname)

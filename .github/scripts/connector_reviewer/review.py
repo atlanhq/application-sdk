@@ -42,6 +42,8 @@ from .diff import (
     FileDiff,
     Hunk,
     Line,
+    anchor,
+    in_removed_lines,
     locate_in_text,
     parse_unified_diff,
     snippet_in_text,
@@ -60,7 +62,7 @@ from .github import GitHub, GitHubError, bot_login
 from .index import Index, Symbol, build_index, index_source
 from .llm import BudgetExhausted, Client, Ledger, LLMError
 from .principles import PrincipleSet
-from .select import DEFAULT_EXCLUDE, Selection, excluded, select_files
+from .select import DEFAULT_EXCLUDE, excluded, select_files
 from .tools import Workspace, parse_args, secret_diff
 from .triage import Triage, triage
 from .typed import EMPTY, objects
@@ -319,8 +321,9 @@ def renamed_away(files: list[FileDiff]) -> list[FileDiff]:
 
 
 # The reasons `select.select_files` and `plan_bundles` give for a file the review
-# meant to read and did not. Anything else skipped (binary, deletion only,
-# excluded by pattern, may hold secrets) is left out on purpose.
+# meant to read and did not. Anything else skipped (binary, a deleted test file,
+# a deleted file too large to read, excluded by pattern, may hold secrets) is
+# left out on purpose.
 # A test file deleted outright that weakens an expectation, in a round with no
 # line review to hand the facts to: nothing in the change can be commented on.
 WEAKENED_UNREVIEWED = "deleted test: weakens expectations, no line to review"
@@ -331,37 +334,6 @@ def unread_skips(skipped: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """The skipped files that are unread source: too large, past the bundle cap,
     or a deleted test that weakens expectations with no line review to see it."""
     return [(p, why) for p, why in skipped if why.startswith(UNREAD_REASONS)]
-
-
-# Why selection skips a file that still has lines a review can comment on.
-_NOTHING_ADDED = ("no added lines", "deletion only")
-
-
-def _review_weakened_tests(
-    sel: Selection, files: list[FileDiff], weakened: set[str]
-) -> None:
-    """Move a test file that weakens an expectation from skipped to reviewed
-    when it has a line to comment on (a context line around a removed
-    assertion). Selection skips a change with no added line, and that is
-    exactly a removed assertion or test; the line review must see it and its
-    facts. A test deleted outright has no such line and stays skipped."""
-    if not weakened:
-        return
-    by_path = {fd.path: fd for fd in files}
-    keep: list[tuple[str, str]] = []
-    for path, why in sel.skipped:
-        fd = by_path.get(path)
-        if (
-            path in weakened
-            and why in _NOTHING_ADDED
-            and fd is not None
-            and fd.status != "deleted"
-            and fd.commentable_lines
-        ):
-            sel.reviewed.append(fd)
-        else:
-            keep.append((path, why))
-    sel.skipped[:] = keep
 
 
 def _no_verdict(
@@ -390,9 +362,8 @@ def compute_facts(
     commit messages take up to three pages).
 
     `tests_changed` are the test files this round changed, taken before file
-    selection: a deleted test file and a test change that only removes lines
-    are skipped by selection ("deletion only", "no added lines"), and they are
-    exactly the weakened expectations FP15 asks about."""
+    selection: a deleted test file is skipped by selection ("deletion only"),
+    and it is exactly a weakened expectation FP15 asks about."""
     fx = code_facts.Facts()
     if cfg.facts.regression:
         fx.symbols = code_facts.regression_symbols(ws, files)
@@ -696,11 +667,18 @@ def run(
 
     # ---- free resolution: the quoted code is gone ------------------------
     touched = {fd.path for fd in all_files}
+    pr_diffs = {fd.path: fd for fd in full_files}
     for f in state.open_findings():
         text = head_text.get(f.path)
         if text is None and f.path not in touched:
             continue  # file untouched since: finding still stands
         if not text or not snippet_in_text(text, f.evidence):
+            pr_fd = pr_diffs.get(f.path)
+            if pr_fd is not None and in_removed_lines(pr_fd, f.evidence):
+                # A finding about code the PR removes quotes what is absent at
+                # the head by design: absence is not a fix while the PR still
+                # removes it. Verify judges it.
+                continue
             f.status, f.fixed_round, f.fixed_by = "fixed", round_no, "code-gone"
             res.resolved_free.append(f.id)
 
@@ -712,13 +690,12 @@ def run(
     # ---- scope -----------------------------------------------------------
     sel = select_files(all_files, exclude=tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude))
     # The weakened-expectation facts are read from the round's test files before
-    # selection, which skips a deleted test and a change that only removes lines.
+    # selection, which skips a test file deleted outright.
     tests_changed = changed_tests(all_files, cfg)
     weakened = (
         code_facts.weakened_expectations(tests_changed) if cfg.facts.regression else []
     )
     weakened_paths = {e.path for e in weakened}
-    _review_weakened_tests(sel, all_files, weakened_paths)
     res.skipped_files = sel.skipped
 
     # Mechanical change is proven and set aside before any model call (triage.py):
@@ -2167,6 +2144,22 @@ def _current_line(ws: Workspace, f: Finding, text: str) -> int:
     return locate_in_text(text, f.evidence)  # 0 = the quote is gone; never guess a line
 
 
+REMOVED_NOTE = (
+    "(the quoted code is code this PR removes, and the finding is about that "
+    "removal: its absence is not a fix"
+)
+
+
+def _removed_site(ws: Workspace, f: Finding) -> int | None:
+    """For a finding that quotes code the PR still removes: the PR-head line its
+    deletion sits at (0 when the file is deleted whole). None otherwise."""
+    fd = ws.diffs.get(f.path)
+    if fd is None or not in_removed_lines(fd, f.evidence):
+        return None
+    span = anchor(fd, f.evidence)
+    return span[0] if span else 0
+
+
 BASE_EXCERPT_LINES = 120  # a longer base symbol is shown as a window, like <code_now>
 
 
@@ -2352,6 +2345,10 @@ def _verify_batch(
         text = ws.text(f.path) or ""
         lines = text.splitlines()
         at = _current_line(ws, f, text)
+        # Code the PR removes is absent at the head by design: show where it
+        # was removed, and say so, so absence is not read as a fix.
+        removed_at = None if at else _removed_site(ws, f)
+        at = at or removed_at or 0
         sym = ws.index.enclosing(f.path, at) if at else None
         lo, hi = (
             (sym.start, sym.end)
@@ -2365,6 +2362,12 @@ def _verify_batch(
             if at
             else "(the quoted code is not in this file any more)"
         )
+        if removed_at is not None:
+            code = (
+                f"{REMOVED_NOTE}; the site it was removed from, as it is now:)\n{code}"
+                if at
+                else f"{REMOVED_NOTE}; the PR deletes the whole file)"
+            )
         items.append(
             f'<finding id="{f.id}" path="{f.path}"{mark}>\n{f.title}. {f.body}\n'
             f"<quoted_when_raised>\n{f.evidence}\n</quoted_when_raised>\n"

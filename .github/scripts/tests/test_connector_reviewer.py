@@ -48,6 +48,7 @@ from connector_reviewer.bundle import group
 from connector_reviewer.config import TRUSTED_APPS, Config, load_config, validate
 from connector_reviewer.diff import (
     anchor,
+    in_removed_lines,
     parse_unified_diff,
     snippet_in_text,
 )
@@ -587,15 +588,17 @@ def test_a_file_added_back_at_a_renamed_path_keeps_its_head_text(tmp_path: Path)
     assert ".github/workflows/old-name.yml" not in capped
 
 
-def test_select_skips_lockfiles_binaries_and_deletions():
+def test_select_skips_lockfiles_and_binaries_and_reviews_deletions():
+    """A file deleted outright is a change under review now (FND-5314): it used
+    to be skipped as "deletion only" and never seen."""
     d = DIFF + (
         "diff --git a/uv.lock b/uv.lock\n--- a/uv.lock\n+++ b/uv.lock\n@@ -1 +1 @@\n-a\n+b\n"
         "diff --git a/img.png b/img.png\nBinary files a/img.png and b/img.png differ\n"
         "diff --git a/gone.py b/gone.py\ndeleted file mode 100644\n--- a/gone.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n"
     )
     sel = select_files(parse_unified_diff(d))
-    assert [f.path for f in sel.reviewed] == ["app/storage/fetch.py"]
-    assert {p for p, _ in sel.skipped} == {"uv.lock", "img.png", "gone.py"}
+    assert [f.path for f in sel.reviewed] == ["app/storage/fetch.py", "gone.py"]
+    assert {p for p, _ in sel.skipped} == {"uv.lock", "img.png"}
 
 
 def test_small_change_is_one_bundle_and_large_change_clusters_with_its_tests():
@@ -4530,7 +4533,9 @@ def test_a_round_that_only_deletes_lines_is_rechecked(repo: Path):
     assert res.verify_skipped == [] and res.resolved_verified == [fid]
     (verify,) = _verify_requests(script)
     assert "-    client.dispose()" in verify
-    # Selection skips a change with no added line; that is not unread source.
+    # The deletion is line-reviewed too (FND-5314), and nothing is unread.
+    (block,) = _review_files_blocks(script)
+    assert "-    client.dispose()" in block
     assert state_of(res).unread == {} and not res.incomplete
 
 
@@ -9926,11 +9931,10 @@ def test_a_history_fact_that_fires_reaches_the_prompt(repo: Path, frozen_now: No
 
 
 def test_a_deleted_test_or_a_removed_assertion_reaches_the_facts(repo: Path):
-    """Selection skips a deleted test file ("deletion only") and a test change
-    that only removes lines ("no added lines"); the weakened-expectation facts
-    are read from the round's diff before selection, so neither is missed. The
-    test that only lost an assertion still has lines to comment on, so it is
-    line-reviewed too."""
+    """Selection skips a deleted test file ("deletion only"); the
+    weakened-expectation facts are read from the round's diff before
+    selection, so it is not missed. The test that only lost an assertion is a
+    deletion-only change, so it is line-reviewed too."""
     deleted = _udiff(
         "tests/unit/test_gone.py",
         ["-def test_gone():", "-    assert fetch(None, 'k') == b'v'"],
@@ -10349,3 +10353,330 @@ def test_a_facts_value_of_the_wrong_type_is_refused(tmp_path: Path):
     assert cfg.facts.history is False and cfg.facts.history_days == 14
     assert cfg.load_errors == []
     assert not any(e.startswith("facts.") for e in validate(cfg))
+
+
+# ---- a change made only of deletions is reviewed (FND-5314) --------------------------------------
+
+
+# The live case: a PR that only removed the engine dispose before each retry
+# was skipped ("no added lines"), made 0 model calls and went green.
+CLIENT_V1 = """\
+class Client:
+    async def run(self, query):
+        for attempt in range(3):
+            if self.engine:
+                await self.engine.dispose()
+            try:
+                return await self._execute(query)
+            except OSError:
+                continue
+"""
+CLIENT_V2 = CLIENT_V1.replace(
+    "            if self.engine:\n                await self.engine.dispose()\n", ""
+)
+DISPOSE_DIFF = _udiff(
+    "app/client.py",
+    [
+        " class Client:",
+        "     async def run(self, query):",
+        "         for attempt in range(3):",
+        "-            if self.engine:",
+        "-                await self.engine.dispose()",
+        "             try:",
+        "                 return await self._execute(query)",
+        "             except OSError:",
+    ],
+)
+REMOVED_DISPOSE = (
+    "            if self.engine:\n                await self.engine.dispose()"
+)
+
+
+def _dispose_finding(evidence: str = REMOVED_DISPOSE) -> dict[str, Any]:
+    return {
+        "path": "app/client.py",
+        "existing_code": evidence,
+        "severity": "high",
+        "category": "bug",
+        "title": "Retries no longer dispose the engine",
+        "content": "A failed attempt leaves a broken pooled connection in the engine, "
+        "so every retry reuses it and fails the same way.",
+        "suggestion_code": REMOVED_DISPOSE,
+    }
+
+
+def _script_with(comment: dict[str, Any]) -> Script:
+    return Script(
+        response(
+            [
+                tool_call("code_comment", {"comments": [comment]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+
+
+def _deletion_repo(repo: Path) -> Any:
+    """The fixture repo at the base (the engine disposed before each retry), and
+    a PR that only removes the dispose."""
+    (repo / "app" / "client.py").write_text(CLIENT_V1)
+    return fake_github(
+        diffs={("b0", "h1"): DISPOSE_DIFF},
+        files={("app/client.py", "h1"): CLIENT_V2},
+    )
+
+
+def test_a_deletion_is_anchored_at_its_border_and_counts_as_changed():
+    [fd] = parse_unified_diff(DISPOSE_DIFF)
+    assert fd.added_lines == set()
+    assert fd.deletion_sites == {3, 4}  # the lines either side of the removal
+    assert fd.changed_lines == {3}  # attributed to the line before it
+    # Removed code, quoted plainly, with its marker or as rendered to the
+    # model, is placed at the line the deletion is attributed to.
+    assert anchor(fd, REMOVED_DISPOSE) == (3, 3)
+    assert anchor(fd, "-                await self.engine.dispose()") == (3, 3)
+    rendered = (
+        "      -            if self.engine:\n"
+        "      -                await self.engine.dispose()"
+    )
+    assert anchor(fd, rendered) == (3, 3)
+    # Context and removed lines quoted together match the LEFT side.
+    assert anchor(fd, "for attempt in range(3):\n    if self.engine:") == (3, 3)
+    # Context at the border is placed where it is.
+    assert anchor(fd, "            try:") == (4, 4)
+    assert in_removed_lines(fd, "await self.engine.dispose()")
+    assert not in_removed_lines(fd, "            try:")
+    # A unary minus is code, not a diff marker.
+    assert anchor(fd, "      x = -1") is None
+
+
+def test_quoted_removed_code_beats_the_same_text_left_as_context_elsewhere():
+    """The removed text can also survive elsewhere in the diff (a second
+    dispose in another method): the quote is about the removal."""
+    two_hunks = DISPOSE_DIFF + (
+        "@@ -40,4 +38,4 @@\n"
+        "     async def close(self):\n"
+        "-        pass\n"
+        "+        self.closed = True\n"
+        "         if self.engine:\n"
+        "             await self.engine.dispose()\n"
+    )
+    [fd] = parse_unified_diff(two_hunks)
+    assert anchor(fd, "await self.engine.dispose()") == (3, 3)
+
+
+@pytest.mark.parametrize(
+    ("evidence", "line"),
+    [
+        (REMOVED_DISPOSE, 3),
+        # The removed lines with their diff marker, as the model may copy them.
+        (
+            "-            if self.engine:\n-                await self.engine.dispose()",
+            3,
+        ),
+        # The context right after the removal.
+        ("            try:\n                return await self._execute(query)", 4),
+    ],
+)
+def test_a_pr_that_only_removes_lines_is_reviewed_and_its_finding_blocks(
+    repo: Path, capsys: pytest.CaptureFixture[str], evidence: str, line: int
+):
+    gh = _deletion_repo(repo)
+    script = _script_with(_dispose_finding(evidence))
+    capsys.readouterr()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    log = capsys.readouterr().err
+    assert "app/client.py" not in dict(res.skipped_files)
+    assert "selected  app/client.py (modified, +0/-2)" in log
+    assert "no bundles" not in log
+    msg = script.requests[0]["messages"][2]["content"]
+    assert '<file path="app/client.py">' in msg
+    assert "-                await self.engine.dispose()" in msg
+    # The function that only lost lines is a changed function.
+    assert 'name="Client.run"' in msg
+    # The approach check runs: there is something to review.
+    assert len(script.approach_requests) == 1
+    [f] = state_of(res).findings
+    assert (f.path, f.line, f.scope, f.severity) == (
+        "app/client.py",
+        line,
+        "changed",
+        "high",
+    )
+    assert gh.statuses[-1]["state"] == "failure"
+    assert "1 blocking" in gh.statuses[-1]["description"]
+
+
+def test_a_finding_on_removed_code_survives_an_unrelated_push_and_goes_to_verify(
+    repo: Path,
+):
+    """Its quote is absent at the head by design, so "the quoted code is gone"
+    must not close it for free: verify judges it, told why the code is absent."""
+    gh = _deletion_repo(repo)
+    gh.diffs[("b0", "h1")] = DISPOSE_DIFF + DIFF
+    gh.files[("app/storage/fetch.py", "h1")] = SRC_V2
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(_script_with(_dispose_finding())),
+    )
+    [f] = state_of(first).findings
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = _udiff(
+        "app/storage/fetch.py",
+        [
+            "     return data.decode()",
+            "+",
+            "+def fetch_many(client, keys):",
+            "+    return {k: fetch(client, k) for k in keys}",
+        ],
+        old=4,
+        new=4,
+    )
+    gh.diffs[("b0", "h2")] = DISPOSE_DIFF + DIFF
+    gh.files[("app/client.py", "h2")] = CLIENT_V2
+    gh.files[("app/storage/fetch.py", "h2")] = SRC_V2_NEXT
+    script = Script(
+        response([tool_call("verdicts", {"items": [{"id": f.id, "status": "open"}]})])
+    )
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+
+    assert res.mode == "incremental"
+    assert f.id not in res.resolved_free
+    (verify,) = _verify_requests(script)
+    assert review_mod.REMOVED_NOTE in verify
+    assert [g.status for g in state_of(res).findings] == ["open"]
+    assert gh.statuses[-1]["state"] == "failure"
+
+
+LEGACY_DIFF = _udiff(
+    "app/auth/legacy.py",
+    ["-def legacy_token(user):", "-    return sign(user, ttl=60)"],
+    status="deleted",
+)
+
+
+def test_a_deleted_source_file_is_reviewed_and_its_finding_blocks(repo: Path):
+    """A file deleted whole has no PR-head line, so its finding is reported in
+    the summary (line 0), as a change, not as unchanged code."""
+    (repo / "app" / "auth").mkdir()
+    (repo / "app" / "auth" / "legacy.py").write_text(
+        "def legacy_token(user):\n    return sign(user, ttl=60)\n"
+    )
+    gh = fake_github(diffs={("b0", "h1"): LEGACY_DIFF})
+    script = _script_with(
+        {
+            "path": "app/auth/legacy.py",
+            "existing_code": "def legacy_token(user):",
+            "severity": "high",
+            "category": "bug",
+            "title": "legacy_token is deleted while app/auth/login.py still imports it",
+            "content": "Every login raises ImportError at import time.",
+        }
+    )
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    assert "app/auth/legacy.py" not in dict(res.skipped_files)
+    msg = script.requests[0]["messages"][2]["content"]
+    assert "-def legacy_token(user):" in msg
+    [f] = state_of(res).findings
+    assert (f.line, f.scope, f.severity) == (0, "changed", "high")
+    assert gh.statuses[-1]["state"] == "failure"
+    assert "legacy_token is deleted" in gh.comments[0]["body"]
+
+
+def test_selection_reviews_deletions_and_keeps_every_skip_it_had_a_reason_for():
+    lock_only_removes = (
+        "diff --git a/uv.lock b/uv.lock\n--- a/uv.lock\n+++ b/uv.lock\n"
+        "@@ -1,2 +1,1 @@\n a\n-b\n"
+    )
+    generated = _udiff("app/generated/models.py", ["-X = 1"], status="deleted")
+    secret = _udiff(".env", [" A=1", "-B=2"])
+    renamed_secret = (
+        "diff --git a/.env b/app/settings.py\nrename from .env\n"
+        "rename to app/settings.py\n--- a/.env\n+++ b/app/settings.py\n"
+        "@@ -1,2 +1,1 @@\n A=1\n-B=2\n"
+    )
+    deleted_test = _udiff(
+        "tests/unit/test_gone.py", ["-def test_gone():"], status="deleted"
+    )
+    pure_rename = (
+        "diff --git a/app/a.py b/app/b.py\nsimilarity index 100%\n"
+        "rename from app/a.py\nrename to app/b.py\n"
+    )
+    sel = select_files(
+        parse_unified_diff(
+            DISPOSE_DIFF
+            + LEGACY_DIFF
+            + lock_only_removes
+            + generated
+            + secret
+            + renamed_secret
+            + deleted_test
+            + pure_rename
+        )
+    )
+    assert [f.path for f in sel.reviewed] == ["app/client.py", "app/auth/legacy.py"]
+    assert dict(sel.skipped) == {
+        "uv.lock": "excluded by pattern",
+        "app/generated/models.py": "excluded by pattern",
+        ".env": "may hold secrets: not sent to the model",
+        "app/settings.py": "may hold secrets: not sent to the model",
+        "tests/unit/test_gone.py": "deletion only",
+        "app/b.py": "no line changed",
+    }
+
+
+def test_a_deleted_file_too_large_to_read_is_skipped_but_not_unread():
+    """Deleting a large module was skipped before; making it unread source would
+    turn every such PR to `error` until waived."""
+    sel = select_files(parse_unified_diff(LEGACY_DIFF), max_changed_lines_per_file=1)
+    assert sel.skipped == [
+        ("app/auth/legacy.py", "deleted, 2 lines: too large to line-review")
+    ]
+    assert review_mod.unread_skips(sel.skipped) == []
+    # A modified file over the cap is still unread source.
+    big = select_files(parse_unified_diff(DISPOSE_DIFF), max_changed_lines_per_file=1)
+    assert review_mod.unread_skips(big.skipped) == [
+        ("app/client.py", "over 1 changed lines")
+    ]
+
+
+def test_a_hunk_that_only_removes_imports_is_not_mechanical():
+    """Removing an import can drop a re-export or a registration done on import."""
+    removed = _udiff(
+        "app/handlers/__init__.py",
+        [" import os", "-from app.handlers.s3 import register  # noqa: F401", " X = 1"],
+    )
+    t = triage(parse_unified_diff(removed), {}, {})
+    assert [f.path for f in t.reviewed] == ["app/handlers/__init__.py"]
+    assert t.mechanical == {}
+    # An import swapped for another is still proven mechanical.
+    swapped = _udiff("app/x.py", ["-import os", "+import sys"])
+    t = triage(parse_unified_diff(swapped), {}, {})
+    assert t.reviewed == [] and t.mechanical == {"imports only": ["app/x.py"]}

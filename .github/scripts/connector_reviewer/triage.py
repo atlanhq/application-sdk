@@ -11,8 +11,10 @@ here is a proof, not a heuristic guess:
   reviewer to find.
 - **Whitespace-only** hunk (any file): the changed lines are equal once
   whitespace is normalised.
-- **Import-only** hunk (Python): every changed line is an import. Unused or
-  missing imports are ruff/pyright territory, not judgment.
+- **Import-only** hunk (Python): every changed line is an import, and one is
+  added. Unused or missing imports are ruff/pyright territory, not judgment.
+  A pure deletion is never mechanical here: removing only imports can drop a
+  re-export or a side-effect import.
 - **Mechanical rename**: every changed line differs from its old version
   only by token swaps drawn from one small set that recurs across files
   (`get_x → fetch_x` in 35 files). Reviewed as one line, not 35 files.
@@ -112,9 +114,12 @@ def hunk_whitespace_only(h: Hunk) -> bool:
 
 
 def hunk_imports_only(h: Hunk) -> bool:
+    """Every changed line is an import, and at least one is added. A hunk that
+    only removes imports is not proven mechanical: it can drop a re-export
+    (a deleted `__init__.py`) or an import kept for its side effect."""
     rem, add = _sides(h)
     changed = [x for x in rem + add if x.strip()]
-    return bool(changed) and all(_IMPORT.match(x) for x in changed)
+    return any(x.strip() for x in add) and all(_IMPORT.match(x) for x in changed)
 
 
 def line_swaps(old: str, new: str) -> list[tuple[str, str]] | None:
