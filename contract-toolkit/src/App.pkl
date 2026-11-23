@@ -4082,6 +4082,11 @@ local function widgetInputField(u: Widgets.UIElement): InputsPkg.InputField =
         // _treeSelectionWidgetCheck, which also covers fields not emitted here.
         if (ci.treeSelection && ci.baseWidgetType == "apitree")
           new InputsPkg.TreeSelectionField { coerceJsonString = ci.outputValueType == "object" }
+        else if (ci.stringMap && ci.outputValueType == "object")
+          // Flat string map (e.g. dsnTreeMap). Coerced by the lenient
+          // `_coerce_string_maps` validator, not the shared one; a stringMap
+          // with any other outputValueType is refused by _stringMapWidgetCheck.
+          new InputsPkg.MapField { values = new InputsPkg.StringField {} }
         else if (ci.outputValueType == "object")
           new InputsPkg.JsonObjectField { coerceJsonString = true }
         else
@@ -4158,8 +4163,40 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     inputNestedClasses.fold("", (acc: String, o: InputsPkg.ObjectField) -> acc + InputsPkg.renderClass(o) + "\n\n")
   // Everything the module declares, for import detection.
   local fieldText: String = fieldLines + nestedClassText
+  local stringMapCoercionFields: List<String> = (new Listing {
+    for (k, u in props) {
+      when (u.includeInInput && !skipFields.contains(toPyFieldName(k))
+        && u is Widgets.ConditionalInput
+        && (u as Widgets.ConditionalInput).stringMap
+        && (u as Widgets.ConditionalInput).outputValueType == "object") {
+        toPyFieldName(k)
+      }
+    }
+  }).toList()
+  local stringMapCoercionBlock: String = if (!stringMapCoercionFields.isEmpty)
+    "    @field_validator(\(pyQuotedCsv(stringMapCoercionFields)), mode=\"before\")\n" +
+    "    @classmethod\n" +
+    "    def _coerce_string_maps(cls, value: Any) -> Any:\n" +
+    "        if value is None:\n" +
+    "            return {}\n" +
+    "        if not isinstance(value, str):\n" +
+    "            return value\n" +
+    "        stripped = value.strip()\n" +
+    "        if not stripped:\n" +
+    "            return {}\n" +
+    "        try:\n" +
+    "            parsed = orjson.loads(stripped)\n" +
+    "        except orjson.JSONDecodeError:\n" +
+    "            parsed = None\n" +
+    "        if isinstance(parsed, dict):\n" +
+    "            return parsed\n" +
+    "        logger.debug(\"String-map input was not a JSON object; using an empty map.\")\n" +
+    "        return {}\n\n"
+  else ""
+  local coercionFieldsPresent: Boolean =
+    !objectStringCoercionFields.isEmpty || !stringMapCoercionFields.isEmpty
   local objectStringCoercionSeparator: String =
-    if (!fieldLines.isEmpty && !objectStringCoercionBlock.isEmpty) "\n" else ""
+    if (!fieldLines.isEmpty && coercionFieldsPresent) "\n" else ""
   local credFieldLine: String = if (credentialFieldName != null && !skipFields.contains(credentialFieldName!!))
     "    \(credentialFieldName!!): CredentialRef | None = None\n"
   else ""
@@ -4226,11 +4263,12 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     fieldLines +
     objectStringCoercionSeparator +
     objectStringCoercionBlock +
+    stringMapCoercionBlock +
     credFieldLine +
     publishFieldBlock +
     streamingFieldBlock
   local usesAnnotated: Boolean = fieldText.contains("Annotated[")
-  local usesAny: Boolean = fieldText.contains("dict[str, Any]") || !objectStringCoercionFields.isEmpty
+  local usesAny: Boolean = fieldText.contains("dict[str, Any]") || coercionFieldsPresent
   local usesLiteral: Boolean = fieldText.contains("Literal[")
   local usesClassVar: Boolean = includePublishInputFields
   local typingImports: List<String> = (new Listing {
@@ -4253,7 +4291,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   // sanctioned JSON entrypoint (conformance O001). Emitted as a third-party
   // import only when the JSON-object-string coercion validator is generated.
   local thirdPartyImportLines: String =
-    (if (!objectStringCoercionFields.isEmpty) "import orjson\n" else "")
+    (if (coercionFieldsPresent) "import orjson\n" else "")
   local pydanticImports: List<String> = (new Listing {
     when (!nestedClassText.isEmpty) {
       "BaseModel"
@@ -4262,7 +4300,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     when (fieldText.contains(" = Field(")) {
       "Field"
     }
-    when (!objectStringCoercionFields.isEmpty) {
+    when (coercionFieldsPresent) {
       "field_validator"
     }
   }).toList()
@@ -4287,7 +4325,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
       "from application_sdk.contracts.types import \(sdkTypeImports.join(", "))\n"
     else "") +
     (if (!credFieldLine.isEmpty) "from application_sdk.credentials.ref import CredentialRef\n" else "") +
-    (if (!objectStringCoercionFields.isEmpty)
+    (if (coercionFieldsPresent)
       "from application_sdk.observability.logger_adaptor import get_logger\n"
     else "") +
     (if (inputBaseClass == "Input") "from application_sdk.contracts.base import Input\n"
@@ -4296,7 +4334,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   // its benign "not valid JSON" fallback is observable (conformance E007) rather
   // than silently swallowed. The message never logs the value itself.
   local loggerModuleLine: String =
-    if (!objectStringCoercionFields.isEmpty) "logger = get_logger(__name__)\n\n\n" else ""
+    if (coercionFieldsPresent) "logger = get_logger(__name__)\n\n\n" else ""
   // In any order: `PyFormatPkg.format` sorts and groups them as ruff does.
   local inputImportBlock: String =
     "from __future__ import annotations\n" +
@@ -4464,7 +4502,9 @@ local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
       fmtSubsField(pyName, "str", "default=\"\(escapePyStr(if (dd.default != null) dd.default!! else ""))\"", k)
   else if (u is Widgets.ConditionalInput)
     let (ci = u as Widgets.ConditionalInput)
-    if (ci.outputValueType == "object")
+    if (ci.outputValueType == "object" && ci.stringMap)
+      fmtSubsField(pyName, "dict[str, str] | None", "default=None", k)
+    else if (ci.outputValueType == "object")
       fmtSubsField(pyName, "dict[str, Any] | None", "default=None", k)
     else if (ci.baseWidgetType == "radio" && ci.baseEnum != null && !ci.baseEnum!!.isEmpty)
       // A ConditionalInput's value space is the union of `baseEnum` and every
@@ -5723,6 +5763,26 @@ local _treeSelectionWidgetCheck: Any =
   else throw("ConditionalInput \(bad.join(", ")) sets treeSelection; "
     + "treeSelection applies only to baseWidgetType = \"apitree\".")
 
+local _stringMapWidgetCheck: Any =
+  let (stringMaps = (uiConfig?.properties ?? Map())
+    .filter((_, u) -> u is Widgets.ConditionalInput && (u as Widgets.ConditionalInput).stringMap))
+  let (badType = stringMaps
+    .filter((_, u) -> (u as Widgets.ConditionalInput).outputValueType != "object")
+    .map((k, u) -> Pair(k, "'\(k)' (outputValueType = \"\((u as Widgets.ConditionalInput).outputValueType)\")"))
+    .values.toList())
+  let (badTree = stringMaps
+    .filter((_, u) -> (u as Widgets.ConditionalInput).treeSelection)
+    .keys.toList().sort().map((k) -> "'\(k)'"))
+  if (!badType.isEmpty)
+    throw("ConditionalInput \(badType.join(", ")) sets stringMap; "
+      + "stringMap applies only to outputValueType = \"object\".")
+  // treeSelection would win in widgetInputField and render TreeSelection, so the
+  // requested dict[str, str] would be dropped silently. The two types conflict.
+  else if (!badTree.isEmpty)
+    throw("ConditionalInput \(badTree.join(", ")) sets both stringMap and treeSelection; "
+      + "they declare conflicting types (dict[str, str] vs TreeSelection). Set only one.")
+  else null
+
 local _treeFilterModeCheck: Any =
   let (bad = filterWidgets
     .filter((_, u) -> !(isTreeWidget(u) && setsTreeSelection(u)) && !(u is Widgets.TextInput))
@@ -5846,6 +5906,7 @@ output =
   let (_e2eOverridesOutputCheck = _e2eOverridesCheck)
   let (_bundleInputNameCheck = _bundleInputClassNameCheck)
   let (_treeSelectionCheck = _treeSelectionWidgetCheck)
+  let (_stringMapCheck = _stringMapWidgetCheck)
   let (_treeFilterCheck = _treeFilterModeCheck)
   let (_e2eCredOutput = generateE2ECredentialPy())
   let (_e2eSubsOutput = generateE2ESubstitutionsPy())

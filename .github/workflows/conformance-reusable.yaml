@@ -521,7 +521,7 @@ jobs:
       - name: "Set up uv"
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.7"
+          version: "0.13.8"
 
       # Private atlanhq git deps: a read-only fleet App token scoped to the
       # private repos the app names (none named: no mint). It only reaches
@@ -560,7 +560,7 @@ jobs:
         if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != ''
         # A failed mint leaves the token empty; see the guard below.
         continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}

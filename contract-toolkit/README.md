@@ -644,13 +644,15 @@ placeholders when migrating it. See `docs/reference.md`.
 
 `dict[str, Any]` fails the SDK's payload-safety check at import (`AAF-CTR-002`). For a tree selection, set `treeSelection = true` on `APITree` or an apitree `ConditionalInput`: the field is generated as the SDK's payload-safe `TreeSelection`, which keeps the widget's nested-dict value (`{"SAP": {"MM": {}}}`) unchanged in the app and on the wire. Only the Python type changes; the workflow config and manifest do not. Requires the first SDK release after 3.43.0 (which adds `TreeSelection`), so raise the app's SDK floor in the same change. On an extraction app's `include-filter` / `exclude-filter`, the flag makes the generated class extend the SDK's `TreeSelectionExtractionInput`, whose filters are `TreeSelection | str` (see the reference).
 
+For an object-valued `ConditionalInput` whose widget stores a flat string map — such as a `div` base that a condition swaps to `dsnTreeMap` (DSN name → connection qualified name) — set `stringMap = true`: the field is generated as `Annotated[dict[str, str], MaxItems(1000)]`, which passes the payload-safety check. Its own `mode="before"` validator decodes a JSON-object string and turns a blank or any non-object string (e.g. `"false"`) into `{}`; non-string map values are refused. Only the Python type changes; the workflow config and manifest do not. See [String-map conditionals](docs/reference.md#string-map-conditionals-stringmap).
+
 ### Complex & Utility
 
 | Class | Widget | Python Type |
 |---|---|---|
 | `Widgets.NestedInput` | `nested` | `dict[str, Any]` |
 | `Widgets.InfoBanner` | `infoBanner` | omitted |
-| `Widgets.ConditionalInput` | configurable | `str` or `dict` |
+| `Widgets.ConditionalInput` | configurable | `str` or `dict`; `dict[str, str]` with `stringMap = true` |
 | `Widgets.AgentSelector` | `agent` | `dict[str, Any]` |
 | `Widgets.CloudProvider` | `CloudProvider` | `str` |
 | `Widgets.CustomWidget` | `<widgetName>` | `str` |

@@ -2408,7 +2408,7 @@ form looks the same:
 | `AgentSelector` | `agent` | `dict[str, Any]` | `agentConfigEntries` — use `Listing<Any>` with `Mapping` for nested objects needing `"default"` keys |
 | `InfoBanner` | `infoBanner` | omitted by default | Static markdown banner with `bannerType`, `content`, optional `iconName`, `hideBannerIcon`, and `linkConfig`. Defaults to `includeInManifest=false` and `includeInInput=false`. Use `widgetName = "InfoBanner"` for credential banners that need that casing. |
 | `Switcher` | `switcher` | `bool` | Boolean switch with `switchTitle`, `defaultSelection`, optional `begin`, and `toastConfig`. Can be used in credential configs through `NamedWidget`. |
-| `ConditionalInput` | configurable | `str` or `dict` | `baseWidgetType` (default `"radio"`), `conditions`, sqltree/connection/credential-specific properties, generic InfoBanner props, and `outputValueType` for object-returning branches |
+| `ConditionalInput` | configurable | `str` or `dict` | `baseWidgetType` (default `"radio"`), `conditions`, sqltree/connection/credential-specific properties, generic InfoBanner props, `outputValueType` for object-returning branches, and `stringMap` (see [String-map conditionals](#string-map-conditionals-stringmap)) |
 | `CustomWidget` | `<widgetName>` | `str` | Escape hatch for bespoke frontend components. `widgetName` picks the component; `props` pass through verbatim into the `ui` object. Use sparingly — prefer typed widgets. |
 
 ##### SageV2 warmup
@@ -4224,6 +4224,54 @@ from application_sdk.contracts.types import TreeSelection
   Its filters are `TreeSelection | str` and keep every level of the tree. A JSON-object string, the form the Automation Engine sends, is decoded into the tree, so `'{"cat": {"ns": {"t": {}}}}'` arrives as a dict. `None`, regex strings and legacy quoted-CSV strings are handled as in `ExtractionInput`. The SQL-injection check still applies, including its nesting-depth limit (trees deeper than 5 levels are refused). A `FilterMap`-shaped value (`{"db": ["schema"]}`, its JSON string, or a list) is refused: its values are regex patterns, not selected nodes. In this mode every filter widget must be a tree widget that sets `treeSelection`, or a `TextInput` (a regex fills the `str` arm); any other filter widget fails evaluation. The class is for apps that read the filters themselves: `SqlMetadataExtractor` and `SqlApp` refuse it with `SqlTreeFilterInputUnsupportedError`, because their task inputs keep two levels. Setting the flag on these widgets was ignored before, so a contract that already sets it changes base class on upgrade. See [`examples/tree-filters/`](../examples/tree-filters/).
 - **Minimum versions for the filter case:** the first contract-toolkit release after 0.33.0 (on 0.33.0 and earlier the flag is ignored on these two widgets, with no error), and the first SDK release that includes `TreeSelectionExtractionInput` (3.47.0 and earlier do not; on those the generated `_input.py` fails at import with `ImportError`). Raise the SDK floor to that release in the same change that sets the flag.
 
+
+---
+
+## String-map conditionals (`stringMap`)
+
+`stringMap: Boolean = false` on `ConditionalInput` (both `Widgets.ConditionalInput` and `Config.ConditionalInput`), for a field with `outputValueType = "object"`.
+
+**Why.** An object-valued conditional renders `Annotated[dict[str, Any], MaxItems(1000)]`. The SDK refuses `Any` (`PayloadSafetyError [AAF-CTR-002]`), so the generated `_input.py` does not import. When the widget behind the conditional stores a flat string-to-string map, `stringMap = true` types the field as `Annotated[dict[str, str], MaxItems(1000)]` instead.
+
+**When to use it.** The conditional's value is a single-level map whose values are strings. The typical case is a `div` base whose condition swaps in the `dsnTreeMap` widget, which stores `{"<dsn name>": "<connection qualified name>"}`:
+
+```pkl
+["odbc-dsn-config-mapping"] = new Config.ConditionalInput {
+  title = ""
+  baseWidgetType = "div"
+  outputValueType = "object"
+  stringMap = true
+  default = "{}"
+  conditions {
+    new Config.Condition {
+      property = "enable-odbc-connectivity-mapping"
+      value = "true"
+      overrideUi = new Mapping { ["widget"] = "dsnTreeMap" }
+    }
+  }
+}
+```
+
+Do not use it for nested selections; use `treeSelection` on an apitree for those.
+
+**What changes in generated output.**
+
+- The field type becomes `Annotated[dict[str, str], MaxItems(1000)]`.
+- The field leaves the shared `_coerce_json_object_strings` validator and gets its own `mode="before"` validator, `_coerce_string_maps`:
+  - a dict passes through unchanged (and is then type-checked);
+  - a JSON-object string is decoded into a dict;
+  - `None`, a blank string, a string that is not valid JSON, or valid JSON that is not an object (`"false"`, `"[]"`, `"1"`) becomes `{}`, with a debug log that never includes the value.
+
+  Saved configs where a stray scalar ended up in the map field keep validating, as an empty map.
+- A map with a non-string value (`{"dsn": {"host": "h"}}`, `{"dsn": 1}`) fails validation.
+
+**What does not change.** The workflow config JSON (`{name}.json`), the manifest, and the wire format. The flag affects only the Python input model.
+
+**Caveats.**
+
+- Evaluation fails if `stringMap = true` is set on a conditional whose `outputValueType` is not `"object"`, including a field with `includeInInput = false`.
+- Evaluation fails if `stringMap = true` and `treeSelection = true` are both set (`Widgets.ConditionalInput`): they declare conflicting types (`dict[str, str]` vs `TreeSelection`).
+- The default (`false`) keeps the existing `dict[str, Any]` type and the shared coercion, so existing contracts generate byte-identical output.
 ---
 
 ## Post-processing generated output (`contract/post-generate.sh`)

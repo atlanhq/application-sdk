@@ -34,6 +34,8 @@
           "legacy_timeout": "{{legacy_timeout}}",
           "old_batch_mode": "{{old_batch_mode}}",
           "schemas": "{{schemas}}",
+          "enable_dsn_mapping": "{{enable-dsn-mapping}}",
+          "dsn_mapping": "{{dsn-mapping}}",
           "preflight_check": "{{preflight-check}}"
         }
       },
