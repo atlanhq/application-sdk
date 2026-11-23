@@ -10309,3 +10309,46 @@ def test_a_named_file_under_a_dot_directory_keeps_its_leading_dot(repo: Path):
         ws, files, "This copies what ./.github/scripts/helper.py already does."
     )
     assert 'path=".github/scripts/helper.py"' in out
+
+
+QUOTED_PATHS_DIFF = r"""diff --git "a/app/a\"b.py" "b/app/a\"b.py"
+--- "a/app/a\"b.py"
++++ "b/app/a\"b.py"
+@@ -1 +1 @@
+-x = 1
++x = 2
+diff --git "a/app/caf\303\251.py" "b/app/caf\303\251.py"
+deleted file mode 100644
+--- "a/app/caf\303\251.py"
++++ /dev/null
+@@ -1 +0,0 @@
+-y = 1
+diff --git a/app/old name.py "b/app/new\tname.py"
+similarity index 100%
+rename from app/old name.py
+rename to "app/new\tname.py"
+diff --git "a/docs/r\303\251sum\303\251.png" "b/docs/r\303\251sum\303\251.png"
+Binary files "a/docs/r\303\251sum\303\251.png" and "b/docs/r\303\251sum\303\251.png" differ
+"""
+
+
+def test_quoted_git_paths_are_decoded():
+    """F-8f1fc1: Git C-quotes a path holding a quote, a control character or a
+    non-ASCII byte. Only the outer quotes were stripped, so `a\\"b.py` kept its
+    backslash and `\\303\\251` stayed octal: the workspace looked up a file that
+    does not exist and an inline comment named an invalid path."""
+    files = parse_unified_diff(QUOTED_PATHS_DIFF)
+    assert [(f.path, f.status) for f in files] == [
+        ('app/a"b.py', "modified"),
+        ("app/café.py", "deleted"),
+        ("app/new\tname.py", "renamed"),
+        ("docs/résumé.png", "modified"),
+    ]
+    assert files[2].old_path == "app/old name.py"
+    assert files[3].is_binary
+    # A path with a space but nothing to quote is read as before.
+    [plain] = parse_unified_diff(
+        "diff --git a/docs/my file.md b/docs/my file.md\n"
+        "--- a/docs/my file.md\n+++ b/docs/my file.md\n@@ -1 +1 @@\n-a\n+b\n"
+    )
+    assert plain.path == "docs/my file.md"
