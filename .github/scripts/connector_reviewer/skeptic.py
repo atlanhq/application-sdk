@@ -13,8 +13,9 @@ the read-only tools, tries to show from the code that the finding is wrong.
   finding blocking.
 
 Bounded like the approach check (holistic.py): new critical and high findings
-only, at most `max_findings` per round, each call at most `max_lookups`
-lookups and then a forced verdict, `concurrency` at a time, on a ledger of its
+only, at most `max_findings` per round, each check at most `max_lookups`
+lookups in all (one response may ask for several; each counts) and then a
+forced verdict, `concurrency` at a time, on a ledger of its
 own carved out of the round's (review.SKEPTIC_SHARE).
 """
 
@@ -253,7 +254,9 @@ def check(
     ]
     try:
         for turn in range(cfg.max_lookups + 1):
-            last = turn == cfg.max_lookups
+            # The final turn: the turns are used up, or the lookups are (one
+            # response can ask for several, so turns alone do not bound them).
+            last = turn == cfg.max_lookups or out.lookups >= cfg.max_lookups
             if last:
                 messages.append(
                     {
@@ -278,12 +281,14 @@ def check(
                     _parse_verdict(ws, out, args)
                     out.seconds = round(time.monotonic() - t0, 1)
                     return out
-                if name in _LOOKUPS and not last:
+                if name in _LOOKUPS and not last and out.lookups < cfg.max_lookups:
                     out.lookups += 1
                     reply = run_tool(ws, name, args)
                     trace.line(
                         f"[skeptic {f.id}] lookup {out.lookups}: {name}({trace.args_summary(name, args)}) ← {len(reply)} chars"
                     )
+                elif name in _LOOKUPS:
+                    reply = "Lookup limit reached: call skeptic_verdict."
                 else:
                     reply = "Unavailable: call skeptic_verdict."
                 messages.append(
@@ -300,6 +305,8 @@ def check(
                         "content": "Call a lookup tool or skeptic_verdict.",
                     }
                 )
+            if last:
+                break
         out.outcome, out.error = "malformed", "no verdict returned"
     except BudgetExhausted as e:
         out.outcome, out.error = "budget", str(e)[:200]

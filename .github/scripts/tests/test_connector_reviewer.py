@@ -10447,6 +10447,74 @@ def test_the_skeptic_may_look_up_code_before_it_answers(repo: Path):
     assert (o.outcome, o.lookups) == ("refuted", 1)
 
 
+def _lookups(n: int) -> Any:
+    """One response that asks for `n` lookups at once."""
+    return response(
+        [tool_call("search_code", {"search_text": f"term{i}"}, i) for i in range(n)]
+    )
+
+
+def _tool_replies(request: dict[str, Any]) -> list[str]:
+    msgs = cast(list[dict[str, Any]], request["messages"])
+    return [str(m.get("content")) for m in msgs if m.get("role") == "tool"]
+
+
+def test_skeptic_lookups_are_capped_per_call_not_per_turn(repo: Path):
+    """F-468537: one response asking for four lookups under max_lookups=3 used
+    to run all four. Only three run; the fourth is answered "lookup limit
+    reached", and the next turn is the final one."""
+    cfg = cfg_for(repo)
+    cfg.skeptic.max_lookups = 3
+    script = _review_script()
+    script.skeptic = [_lookups(4)]  # then upheld
+    res, _ = _skeptic_run(repo, script, cfg)
+
+    [o] = res.skeptic
+    assert (o.outcome, o.lookups) == ("upheld", 3)
+    assert len(script.skeptic_requests) == 2
+    final = script.skeptic_requests[1]
+    replies = _tool_replies(final)
+    assert len(replies) == 4
+    assert replies[-1] == "Lookup limit reached: call skeptic_verdict."
+    assert not any("Lookup limit reached" in r for r in replies[:3])
+    msgs = cast(list[dict[str, Any]], final["messages"])
+    assert msgs[-1]["content"] == "Lookups are exhausted: call skeptic_verdict now."
+
+
+def test_skeptic_stops_after_the_forced_turn_once_lookups_are_spent(repo: Path):
+    """Two lookups per response under max_lookups=3: two run, then one (and one
+    is refused), then the final turn. A skeptic that still gives no verdict is
+    not asked again, and the finding keeps its severity."""
+    cfg = cfg_for(repo)
+    cfg.skeptic.max_lookups = 3
+    script = _review_script()
+    script.skeptic = [_lookups(2) for _ in range(5)]  # never volunteers a verdict
+    res, _ = _skeptic_run(repo, script, cfg)
+
+    [o] = res.skeptic
+    assert (o.outcome, o.lookups) == ("malformed", 3)
+    assert o.error == "no verdict returned"
+    assert len(script.skeptic_requests) == 3
+    msgs = cast(list[dict[str, Any]], script.skeptic_requests[-1]["messages"])
+    assert msgs[-1]["content"] == "Lookups are exhausted: call skeptic_verdict now."
+    assert state_of(res).findings[0].severity == "high"
+
+
+@pytest.mark.parametrize("reason", ["", "   \n "], ids=["empty", "blank"])
+def test_a_refutation_without_a_reason_keeps_the_severity(repo: Path, reason: str):
+    """F-3cdd62: the quote is valid and in the file, so only the missing reason
+    rejects the refutation."""
+    script = _review_script()
+    script.skeptic = [_refuted(reason=reason)]
+    res, gh = _skeptic_run(repo, script)
+
+    [f] = state_of(res).findings
+    assert f.severity == "high" and f.contested == ""
+    [o] = res.skeptic
+    assert (o.outcome, o.error) == ("malformed", "refuted without a reason")
+    assert "Changes requested" in gh.comments[0]["body"]
+
+
 def test_gate_and_closed_findings_are_not_skeptic_candidates():
     from connector_reviewer import skeptic  # noqa: PLC0415 - module under test
 
