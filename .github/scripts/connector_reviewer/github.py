@@ -35,6 +35,19 @@ class GitHubError(RuntimeError):
     pass
 
 
+COMMAND = "/review"
+
+
+def safe_body(body: str) -> str:
+    """`body` as the reviewer may post it: never opening with the `/review`
+    command. The reviewer posts as an App on the trusted list, so a comment of
+    its own that started with the command would ask for a review of itself.
+    No template starts that way; this holds the line if one ever does."""
+    if body.lstrip().lower().startswith(COMMAND):
+        return "connector-reviewer: " + body.lstrip()
+    return body
+
+
 class GitHub:
     def __init__(
         self, repo: str, token: str | None = None, transport: Any = None
@@ -126,6 +139,19 @@ class GitHub:
             return base64.b64decode(blob["content"]).decode("utf-8", "replace")
         return None
 
+    def can_push(self, login: str) -> bool:
+        """Whether `login` holds Write, Maintain or Admin on this repository,
+        read live from the collaborator-permission API.
+
+        `user.permissions.push` is true exactly for those roles and for a
+        custom role built on Write; Read and Triage are false. A reply without
+        the field reads as no access. A failed call raises GitHubError and the
+        caller refuses: authorisation never fails open."""
+        q = urllib.parse.quote(login, safe="")
+        data = self._call("GET", f"/repos/{self.repo}/collaborators/{q}/permission")
+        perms = ((data or EMPTY).get("user") or EMPTY).get("permissions") or EMPTY
+        return perms.get("push") is True
+
     def repo_visibility(self, owner_repo: str) -> str | None:
         """Another repository's `visibility` (public | private | internal) as the
         GitHub API reports it to connector-reviewer's token, or None when the lookup fails (a
@@ -200,13 +226,17 @@ class GitHub:
     def comment(self, number: int, body: str) -> int:
         """Posts a PR comment; returns its id (0 if GitHub did not say)."""
         out = self._call(
-            "POST", f"/repos/{self.repo}/issues/{number}/comments", {"body": body}
+            "POST",
+            f"/repos/{self.repo}/issues/{number}/comments",
+            {"body": safe_body(body)},
         )
         return int((out or EMPTY).get("id") or 0)
 
     def edit_comment(self, comment_id: int, body: str) -> None:
         self._call(
-            "PATCH", f"/repos/{self.repo}/issues/comments/{comment_id}", {"body": body}
+            "PATCH",
+            f"/repos/{self.repo}/issues/comments/{comment_id}",
+            {"body": safe_body(body)},
         )
 
     def delete_comment(self, comment_id: int) -> None:
@@ -223,10 +253,12 @@ class GitHub:
                 out = self._call(
                     "PATCH",
                     f"/repos/{self.repo}/issues/comments/{c['id']}",
-                    {"body": body},
+                    {"body": safe_body(body)},
                 )
                 return str((out or EMPTY).get("html_url") or c.get("html_url") or "")
         out = self._call(
-            "POST", f"/repos/{self.repo}/issues/{number}/comments", {"body": body}
+            "POST",
+            f"/repos/{self.repo}/issues/{number}/comments",
+            {"body": safe_body(body)},
         )
         return str((out or EMPTY).get("html_url") or "")

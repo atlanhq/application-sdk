@@ -30,10 +30,11 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from . import report, trace
 from .config import load_config, validate
-from .event import USAGE_ERRORS, decide
+from .event import FORK_REFUSAL, addressed, decide, is_fork
 from .github import GitHub
 from .llm import Client
 from .lock import BUSY_NOTE, WORKFLOW_FILE, older_active_run
@@ -43,7 +44,7 @@ from .principles import (
     load_principles,
     resolve_fleet_dir,
 )
-from .review import dismiss, recheck, render_summary, run, to_json
+from .review import dismiss, recheck, render_summary, run, to_json, waive
 
 # The config that ships with this package: `.github/connector-reviewer/` of the
 # application-sdk checkout the package is run from, not of the repo under review.
@@ -83,30 +84,16 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
-    comment_id = 0
-    dismissal = None
-    rechecking = None
+    event: dict[str, Any] = {}
     if args.event_name:
         event = json.loads(Path(args.event_path).read_text()) if args.event_path else {}
-        d = decide(args.event_name, event, args.repo)
-        if not d.run:
-            print(f"connector-reviewer: not running — {d.reason}")
-            if d.reason in USAGE_ERRORS and d.comment_id and not args.dry_run:
-                gh = GitHub(args.repo)
-                gh.comment(d.pr, f"connector-reviewer: {d.reason}")
-                gh.react(d.comment_id, "confused")
+        if not addressed(args.event_name, event):
+            # Most comments on a pull request are not for the reviewer: stop
+            # before reading the config or calling GitHub.
+            print(
+                "connector-reviewer: not running — comment is not addressed to /review"
+            )
             return 0
-        dismissal = d if d.dismiss else None
-        rechecking = d if d.recheck else None
-        args.pr, args.force, comment_id = d.pr, args.force or d.force, d.comment_id
-        args.verify_budget = args.verify_budget or d.verify_budget
-        trace.line(
-            f"trigger: {args.event_name} on PR #{d.pr}"
-            + (" (force)" if d.force else "")
-            + (" (verify-budget)" if d.verify_budget else "")
-        )
-    if not args.pr:
-        ap.error("--pr or --event-name is required")
     live = not args.dry_run
 
     root = Path(args.root).resolve()
@@ -117,17 +104,50 @@ def main(argv: list[str] | None = None) -> int:
         for e in errs:
             print(f"connector-reviewer: config error: {e}", file=sys.stderr)
         return 2
+    gh = GitHub(args.repo)
+
+    comment_id = 0
+    dismissal = None
+    rechecking = None
+    waiving = None
+    if args.event_name:
+        # Who may ask is decided from the commenter's live permission on the
+        # repository and the trusted Apps in the config (event.py).
+        d = decide(
+            args.event_name,
+            event,
+            args.repo,
+            trusted_apps=cfg.trusted_apps,
+            can_push=gh.can_push,
+        )
+        if not d.run:
+            print(f"connector-reviewer: not running — {d.reason}")
+            if d.reply and d.comment_id and live:
+                gh.comment(d.pr, f"connector-reviewer: {d.reason}")
+                gh.react(d.comment_id, "confused")
+            return 0
+        dismissal = d if d.dismiss else None
+        rechecking = d if d.recheck else None
+        waiving = d if d.waive else None
+        args.pr, args.force, comment_id = d.pr, args.force or d.force, d.comment_id
+        args.verify_budget = args.verify_budget or d.verify_budget
+        trace.line(
+            f"trigger: {args.event_name} on PR #{d.pr} by @{d.actor or '?'}"
+            + (" (force)" if d.force else "")
+            + (" (verify-budget)" if d.verify_budget else "")
+        )
+    if not args.pr:
+        ap.error("--pr or --event-name is required")
     # A review judges by the principles, so it does not start without them: a
     # missing fleet directory stops the run here, before any request is made.
     # A dismissal or a re-check reads no principle and needs none.
     principles = PrincipleSet()
-    if dismissal is None and rechecking is None:
+    if dismissal is None and rechecking is None and waiving is None:
         try:
             principles = load_principles(resolve_fleet_dir(args.principles_dir), root)
         except PrinciplesError as e:
             print(f"connector-reviewer: config error: {e}", file=sys.stderr)
             return 2
-    gh = GitHub(args.repo)
 
     def react(content: str) -> None:
         if live and comment_id:
@@ -170,7 +190,28 @@ def main(argv: list[str] | None = None) -> int:
         )
         return client
 
+    # A fork's branch is not in this repository: refuse, whoever asked and however.
+    if is_fork(gh.pr(args.pr), args.repo):
+        print(f"connector-reviewer: not running — {FORK_REFUSAL}")
+        if live and comment_id:
+            gh.comment(args.pr, f"connector-reviewer: {FORK_REFUSAL}.")
+        react("confused")
+        return 0
+
     run_url = _run_url()
+    if waiving is not None:
+        # No model call and nothing to watch: no progress note.
+        res = waive(
+            gh,
+            args.pr,
+            waiving.waive_reason,
+            actor=waiving.actor,
+            post=live,
+            run_url=run_url,
+        )
+        print(f"connector-reviewer: {res.action} {res.reason}".strip())
+        react("rocket" if res.action == "waived" else "confused")
+        return 0
     if rechecking is not None:
         # One model call at most, and the verdict follows at once: no progress note.
         res = recheck(

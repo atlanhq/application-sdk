@@ -216,6 +216,25 @@ back for its own file: the trigger list, never checking out the PR head, the
 `run-name` and no `concurrency:` block (`lock.run_name`), `timeout-minutes` equal to
 `lock.JOB_TIMEOUT`, the token permissions, and the run-report upload.
 
+## Behaviour that differs from lens
+
+The sections above are the fork itself: the same engine under another name, with a
+connector profile. From here on the engine behaves differently, each on purpose.
+
+### Who may ask, trusted Apps, forks and waive (FND-5310)
+
+| | lens | connector-reviewer |
+|---|---|---|
+| Who may comment a command | `author_association` is OWNER, MEMBER or COLLABORATOR | The commenter's live role on the repository is Write, Maintain or Admin, read from `GET /repos/{repo}/collaborators/{login}/permission` (`GitHub.can_push`, passed to `event.decide` as `can_push`). A member with only Read is refused. A failed lookup is a refusal. `.github/scripts/pr_test_command.py` does the same. |
+| Bots | Every bot is refused | A bot is honoured when it is a trusted App: `performed_via_github_app.slug` is on `[access] trusted_apps` in `config.toml` and the author is `<slug>[bot]` (`event.trusted_app`). It has the rights of a person with Write. Every other bot is refused with no reply. |
+| A refusal | Silent, except a usage error | `Decision.reply` says whether to answer: yes for a usage error and for a person without the role, no for a bot. |
+| A fork | Not checked | `event.is_fork`: the CLI refuses a pull request whose head is in another repository, with a short reply, whatever the command. |
+| Waive | No such command | `/review waive <reason>` (`review.waive`): no model call; `PRState.waiver` records who, why and the head sha; a history row; status `success` "waived by @login: reason" on that head; the summary says it was waived and that open findings were not resolved. Any real review clears it (`run`), so `/review force` on the same head puts the verdict back. `verdict_status` is green only for the head the waive names. The pull request's author may waive. |
+| Dismiss | The author cannot dismiss a critical or high finding | The same rule, and it holds for a trusted App that authored the pull request. |
+| The reviewer triggering itself | Cannot happen: bots are refused | Its App is on the trusted list, so `github.safe_body` guards every comment it posts: none may open with `/review`. |
+| Where the state is read from | The first state marker in the summary | The last one (`PRState.decode`). Text above the state comes from a model or a commenter; only what `encode` appended last is the state. Reasons are stored through `event.plain`, which cannot open an HTML comment. lens reads the first marker, so this is also a fix lens does not have. |
+| Order in the CLI | Decide from the event, then load the config | `event.addressed` first drops a comment that is not `/review` before any config or request; then the config (it holds `trusted_apps`), then `decide`. |
+
 ## Module by module
 
 Where a lens fix lands in this copy. "Names" means only the renames in the table
@@ -224,7 +243,8 @@ above; "typing" means only the annotations described under Typing.
 | Module | Against lens at the fork point |
 |---|---|
 | `baseline.py`, `diff.py`, `index.py` | Identical, byte for byte. A lens patch applies as it is. |
-| `findings.py`, `lock.py`, `report.py` | Names. |
+| `lock.py`, `report.py` | Names. |
+| `findings.py` | Names; `PRState.waiver`; `decode` reads the last state marker. |
 | `triage.py` | Typing (one annotation). |
 | `tools.py` | Typing (one annotation), and two description strings (`compatibility`, `search_code`). |
 | `trace.py` | Names, typing. |
@@ -232,8 +252,8 @@ above; "typing" means only the annotations described under Typing.
 | `config.py` | Docstring, `raw_hash`, typing. |
 | `bundle.py` | `_module_key` and the module docstring. |
 | `llm.py` | Names (the gateway key variable, the User-Agent, log text), typing. |
-| `github.py` | Names, typing, and four methods removed with the approval step. |
-| `event.py` | Names, typing, and the recheck paragraph of the docstring. |
+| `github.py` | Names, typing, four methods removed with the approval step; `can_push` and `safe_body` added. |
+| `event.py` | Rewritten around who may ask (FND-5310); the command grammar is lens's plus `waive`. |
 | `holistic.py` | The prompt's opening and one concern; no `<public_api>` block; typing. |
 | `context.py` | No `_public` / `public_api`; `build` returns a string. |
 | `advisory.py` | Rewritten as the empty extension point; holds `glob_match`. |
@@ -250,9 +270,6 @@ above; "typing" means only the annotations described under Typing.
 These are lens's behaviour, carried over as it is. Later changes to this fork are
 expected to revisit them:
 
-- `event.decide` still lets any OWNER, MEMBER or COLLABORATOR trigger a review, and
-  the PR author still cannot dismiss a blocking finding. The authorization model is
-  lens's.
 - `agent.calibrate` still caps a finding in a test file at low unless its category
   is `security`. The review scope here includes test integrity, so a principle whose
   `Severity` says "high" for a test change is capped by this rule.

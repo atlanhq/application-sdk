@@ -30,20 +30,20 @@ from connector_reviewer import (
 from connector_reviewer import agent as agent_mod
 from connector_reviewer import bundle as bundle_mod
 from connector_reviewer import context as reviewer_context
+from connector_reviewer import event as event_mod
 from connector_reviewer import findings as findings_mod
 from connector_reviewer import review as review_mod
 from connector_reviewer.advisory import glob_match
 from connector_reviewer.agent import BundleResult
 from connector_reviewer.bundle import group
-from connector_reviewer.config import Config, load_config, validate
+from connector_reviewer.config import TRUSTED_APPS, Config, load_config, validate
 from connector_reviewer.diff import (
     anchor,
     parse_unified_diff,
     snippet_in_text,
 )
-from connector_reviewer.event import decide
 from connector_reviewer.findings import Finding, PRState, merge_new
-from connector_reviewer.github import GitHub, GitHubError
+from connector_reviewer.github import GitHub, GitHubError, safe_body
 from connector_reviewer.holistic import build_input
 from connector_reviewer.index import Index, build_index
 from connector_reviewer.llm import (
@@ -78,6 +78,22 @@ from connector_reviewer.tools import Workspace, find_symbol, read_file, search_c
 from connector_reviewer.triage import ast_identical, triage
 
 PRICE = Price(1.0, 0.1, 4.0)
+
+
+def decide(event_name: str, event: dict[str, Any], repo: str, **kw: Any):
+    """`event.decide` as a person with Write on the repository meets it, with the
+    shipped trusted Apps. The authorisation tests pass their own `can_push`."""
+    kw.setdefault("can_push", lambda login: True)
+    kw.setdefault("trusted_apps", TRUSTED_APPS)
+    return event_mod.decide(event_name, event, repo, **kw)
+
+
+# A pull request whose branch is in the repository itself, as the CLI stubs return it.
+SAME_REPO_PR = {
+    "head": {"sha": "abc", "ref": "feature", "repo": {"full_name": "o/r"}},
+    "base": {"sha": "b0", "repo": {"full_name": "o/r"}},
+    "user": {"login": "author"},
+}
 
 SRC_V1 = '''\
 def fetch(client, key):
@@ -1040,7 +1056,11 @@ def _cli_review(monkeypatch: pytest.MonkeyPatch, argv: list[str]):
 
     class NoGitHub:
         def __init__(self, repo: Path):
-            seen["github"] = True
+            pass
+
+        def pr(self, number):
+            seen["github"] = True  # the first request the CLI makes
+            return SAME_REPO_PR
 
         def delete_comment(self, comment_id):  # pragma: no cover - id is 0
             raise AssertionError("a dry run posts no progress note to delete")
@@ -1063,7 +1083,7 @@ def test_the_cli_fails_before_any_request_without_the_fleet_principles(
 ):
     monkeypatch.delenv("CONNECTOR_REVIEWER_PRINCIPLES_DIR", raising=False)
     code, seen = _cli_review(monkeypatch, ["--root", str(repo)])
-    assert code == 2 and seen == {}  # no GitHub client, no review, no model call
+    assert code == 2 and seen == {}  # no GitHub request, no review, no model call
     assert "config error: no fleet principles directory" in capsys.readouterr().err
     missing = str(repo / "no-such-directory")
     code, seen = _cli_review(
@@ -2142,17 +2162,21 @@ def _pr_event(action="synchronize", draft=False, head_repo=REPO):
     }
 
 
-def _comment(body, assoc="MEMBER", user_type="User", on_pr=True):
-    issue = {"number": 7, **({"pull_request": {}} if on_pr else {})}
-    return {
-        "action": "created",
-        "issue": issue,
-        "comment": {
-            "body": body,
-            "author_association": assoc,
-            "user": {"type": user_type},
-        },
+def _comment(body, assoc="MEMBER", user_type="User", on_pr=True, login="dev", app=None):
+    issue = {
+        "number": 7,
+        "user": {"login": "author"},
+        **({"pull_request": {}} if on_pr else {}),
     }
+    comment: dict[str, Any] = {
+        "id": 555,
+        "body": body,
+        "author_association": assoc,
+        "user": {"type": user_type, "login": login},
+    }
+    if app is not None:
+        comment["performed_via_github_app"] = {"slug": app}
+    return {"action": "created", "issue": issue, "comment": comment}
 
 
 @pytest.mark.parametrize("name", ["pull_request", "pull_request_target"])
@@ -2173,8 +2197,6 @@ def test_maintainer_comment_triggers_and_force_is_parsed():
 @pytest.mark.parametrize(
     "event",
     [
-        _comment("/review", assoc="CONTRIBUTOR"),
-        _comment("/review", assoc="NONE"),
         _comment("/review", user_type="Bot"),
         _comment("please /review"),
         _comment("/review", on_pr=False),
@@ -2183,7 +2205,280 @@ def test_maintainer_comment_triggers_and_force_is_parsed():
     ],
 )
 def test_untrusted_or_unaddressed_comments_do_not_trigger(event):
-    assert not decide("issue_comment", event, REPO).run
+    d = decide("issue_comment", event, REPO)
+    assert not d.run and not d.reply  # and nothing is said back
+
+
+# ---- who may ask: live permission, trusted Apps, forks (FND-5310) ------------------
+
+
+def _roles(**push: bool):
+    """A `can_push` that knows the given logins and records who it was asked about."""
+    asked: list[str] = []
+
+    def can_push(login: str) -> bool:
+        asked.append(login)
+        return push[login]
+
+    return can_push, asked
+
+
+@pytest.mark.parametrize(
+    "assoc", ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "NONE"]
+)
+def test_the_live_permission_decides_not_the_author_association(assoc):
+    """`MEMBER` is any member of the organisation, even one with only Read here;
+    the role on this repository is what counts, whatever the association says."""
+    can_push, asked = _roles(writer=True, reader=False)
+    ok = decide(
+        "issue_comment",
+        _comment("/review", assoc=assoc, login="writer"),
+        REPO,
+        can_push=can_push,
+    )
+    assert ok.run and ok.actor == "writer"
+    no = decide(
+        "issue_comment",
+        _comment("/review", assoc=assoc, login="reader"),
+        REPO,
+        can_push=can_push,
+    )
+    assert not no.run and no.reason == event_mod.ROLE_REFUSAL
+    assert no.reply and no.pr == 7 and no.comment_id == 555  # told why, once
+    assert asked == ["writer", "reader"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "/review",
+        "/review force",
+        "/review dismiss F-1a2b3c fine",
+        "/review recheck F-1a2b3c",
+        "/review waive shipping the fix first",
+    ],
+)
+def test_every_command_needs_write_access(body):
+    can_push, _ = _roles(reader=False)
+    d = decide("issue_comment", _comment(body, login="reader"), REPO, can_push=can_push)
+    assert not d.run and d.reason == event_mod.ROLE_REFUSAL
+    assert not (d.dismiss or d.recheck or d.waive or d.force)
+
+
+def test_a_permission_lookup_that_fails_is_a_refusal_never_a_pass():
+    def broken(login: str) -> bool:
+        raise GitHubError("GET /collaborators/dev/permission: HTTP 502")
+
+    d = decide("issue_comment", _comment("/review"), REPO, can_push=broken)
+    assert not d.run and d.reason == event_mod.ROLE_UNKNOWN and d.reply
+    # No lookup at all (nothing to ask) is a refusal too, as is a comment with no login.
+    assert not event_mod.decide("issue_comment", _comment("/review"), REPO).run
+    assert not decide("issue_comment", _comment("/review", login=""), REPO).run
+
+
+def test_the_client_reads_write_access_from_the_collaborator_permission_api():
+    seen: list[str] = []
+
+    def transport(method: str, path: str, body: Any, accept: str):
+        seen.append(f"{method} {path}")
+        role = {"writer": True, "reader": False}.get(path.split("/")[-2])
+        if role is None:
+            return 404, '{"message": "Not Found"}'
+        perms = {"pull": True, "push": role, "admin": False}
+        return 200, json.dumps({"permission": "x", "user": {"permissions": perms}})
+
+    gh = GitHub("o/r", token="t", transport=transport)
+    assert gh.can_push("writer") is True and gh.can_push("reader") is False
+    assert seen[0] == "GET /repos/o/r/collaborators/writer/permission"
+    with pytest.raises(GitHubError):  # not a collaborator: the caller refuses
+        gh.can_push("stranger")
+    # A reply without the field is no access.
+    empty = GitHub("o/r", token="t", transport=lambda *a: (200, "{}"))
+    assert empty.can_push("writer") is False
+
+
+@pytest.mark.parametrize("app", TRUSTED_APPS)
+def test_a_trusted_app_may_ask_with_no_role_lookup(app):
+    def never(login: str) -> bool:
+        raise AssertionError("an App has no collaborator role to read")
+
+    event = _comment("/review force", user_type="Bot", login=f"{app}[bot]", app=app)
+    d = decide("issue_comment", event, REPO, can_push=never)
+    assert d.run and d.force and d.actor == f"{app}[bot]"
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        # A bot GitHub attributes to no App.
+        _comment("/review", user_type="Bot", login="atlan-app-fleet[bot]"),
+        # An App that is not on the list.
+        _comment("/review", user_type="Bot", login="some-app[bot]", app="some-app"),
+        # A listed App, but the comment's author is another account.
+        _comment("/review", user_type="Bot", login="evil[bot]", app="atlan-app-fleet"),
+        _comment(
+            "/review", user_type="Bot", login="atlan-app-fleet", app="atlan-app-fleet"
+        ),
+        # A listed login, attributed to an App that is not listed.
+        _comment("/review", user_type="Bot", login="atlan-app-fleet[bot]", app="evil"),
+        # A person whose comment merely carries an App attribution is judged as a person.
+        _comment("/review", login="reader", app="atlan-app-fleet"),
+        _comment("/review", user_type="Bot", login="x[bot]", app="Not A Slug"),
+    ],
+)
+def test_any_other_bot_is_refused_without_a_reply(event):
+    can_push, _ = _roles(reader=False)
+    d = decide("issue_comment", event, REPO, can_push=can_push)
+    assert not d.run
+    if event["comment"]["user"]["type"] == "Bot":
+        assert d.reason == event_mod.BOT_REFUSAL and not d.reply  # no reply loop
+
+
+def test_trusted_apps_come_from_the_config():
+    shipped = load_config(Path(__file__).resolve().parents[2] / "connector-reviewer")
+    assert (
+        tuple(shipped.trusted_apps)
+        == TRUSTED_APPS
+        == (
+            "atlan-app-fleet",
+            "atlan-conformance-sync",
+            "connectivity-ai",
+            "mothership-ai",
+            "atlan-connectivity-release-train",
+        )
+    )
+    event = _comment(
+        "/review", user_type="Bot", login="mothership-ai[bot]", app="mothership-ai"
+    )
+    assert decide("issue_comment", event, REPO, trusted_apps=["mothership-ai"]).run
+    assert not decide("issue_comment", event, REPO, trusted_apps=[]).run
+
+
+def test_the_reviewers_own_comments_never_start_with_the_command():
+    """The reviewer posts as a trusted App, so a comment of its own that opened
+    with `/review` would ask for a review of itself."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415
+    from connector_reviewer import lock  # noqa: PLC0415
+
+    f = Finding("app/a.py", 3, "high", "bug", "/review this title", "b", "x = 1")
+    st = PRState(round=1, reviewed_head="h1", findings=[f])
+    st.waiver = {"by": "dev", "reason": "/review waive again", "head": "h1"}
+    res = RunResult("reviewed", mode="full", state=st, new_findings=[f], head="h1")
+    bodies = [
+        cli.PROGRESS_NOTE,
+        cli.FAILED_NOTE,
+        lock.BUSY_NOTE,
+        render_summary(res),
+        review_mod.verdict_brief(res, "https://x"),
+        *(
+            f"connector-reviewer: {r}"
+            for r in (*event_mod.USAGE_ERRORS, event_mod.ROLE_REFUSAL)
+        ),
+        f"connector-reviewer: {event_mod.FORK_REFUSAL}.",
+    ]
+    for body in bodies:
+        assert not body.lstrip().lower().startswith("/review"), body[:60]
+        assert safe_body(body) == body
+    # And if a body ever did, the one place that posts would not send it as written.
+    assert safe_body("/review force").startswith("connector-reviewer: /review")
+    assert safe_body("  /Review dismiss F-1 x").startswith("connector-reviewer: ")
+    sent: list[Any] = []
+    gh = GitHub(
+        "o/r", token="t", transport=lambda m, p, b, a: (sent.append(b), (201, "{}"))[1]
+    )
+    gh.comment(1, "/review")
+    gh.edit_comment(2, "/review force")
+    assert [b["body"] for b in sent] == [
+        "connector-reviewer: /review",
+        "connector-reviewer: /review force",
+    ]
+
+
+def test_the_state_is_read_from_the_last_marker_in_the_summary():
+    """Text above the state (a finding's title, a reason someone typed) cannot
+    stand in for it: the state is whatever `encode` appended last."""
+    forged = PRState(round=9, reviewed_head="forged").encode()
+    real = PRState(round=2, reviewed_head="h1")
+    body = f"{SUMMARY_MARKER}\n| F-1 | {forged} |\n{real.encode()}"
+    assert decode_state(body).reviewed_head == "h1"
+    # A reason is stored as one line that cannot open a comment or a tag.
+    d = decide("issue_comment", _comment("/review waive <!-- x --> ok"), REPO)
+    assert d.waive_reason == "‹!-- x --› ok"
+
+
+def _cli_event(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, event: dict[str, Any], gh_class
+):
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test, patched below
+
+    _CliGitHub.reactions, _CliGitHub.comments, _CliGitHub.live = [], [], {}
+    monkeypatch.setattr(cli, "GitHub", gh_class)
+    monkeypatch.setattr(
+        cli, "run", lambda **kw: pytest.fail("the review must not start")
+    )
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    path = tmp_path / "event.json"
+    path.write_text(json.dumps(event))
+    argv = ["review", "--repo", "o/r", "--root", str(tmp_path)]
+    return cli.main([*argv, "--event-name", "issue_comment", "--event-path", str(path)])
+
+
+def test_the_cli_tells_a_person_without_write_access_and_stays_silent_to_a_bot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    class ReadOnly(_CliGitHub):
+        def can_push(self, login: str) -> bool:
+            return False
+
+    assert _cli_event(monkeypatch, tmp_path, _comment("/review"), ReadOnly) == 0
+    assert _CliGitHub.comments == [f"connector-reviewer: {event_mod.ROLE_REFUSAL}"]
+    assert _CliGitHub.reactions == ["confused"]
+    bot = _comment("/review", user_type="Bot", login="some-app[bot]", app="some-app")
+    assert _cli_event(monkeypatch, tmp_path, bot, ReadOnly) == 0
+    assert _CliGitHub.comments == [] and _CliGitHub.reactions == []
+
+
+def test_a_comment_that_is_not_for_the_reviewer_costs_no_config_and_no_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    class Untouchable:
+        def __init__(self, repo):
+            raise AssertionError("no GitHub client for a comment that is not /review")
+
+    assert (
+        _cli_event(monkeypatch, tmp_path, _comment("looks good to me"), Untouchable)
+        == 0
+    )
+    assert not event_mod.addressed("issue_comment", _comment("please /review"))
+    assert event_mod.addressed("issue_comment", _comment("/REVIEW force"))
+    assert event_mod.addressed("workflow_dispatch", {"inputs": {"pr": "7"}})
+
+
+@pytest.mark.parametrize("body", ["/review", "/review force", "/review waive urgent"])
+def test_a_pull_request_from_a_fork_is_refused_with_a_short_reply(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, body
+):
+    class Forked(_CliGitHub):
+        def pr(self, number):
+            return dict(
+                SAME_REPO_PR, head={"sha": "abc", "repo": {"full_name": "someone/r"}}
+            )
+
+    assert _cli_event(monkeypatch, tmp_path, _comment(body), Forked) == 0
+    assert _CliGitHub.comments == [f"connector-reviewer: {event_mod.FORK_REFUSAL}."]
+    assert _CliGitHub.reactions == ["eyes", "confused"]
+
+
+def test_a_head_repository_that_cannot_be_read_counts_as_a_fork():
+    assert not event_mod.is_fork(SAME_REPO_PR, "o/r")
+    assert event_mod.is_fork(dict(SAME_REPO_PR, head={"sha": "a", "repo": None}), "o/r")
+    assert event_mod.is_fork(dict(SAME_REPO_PR, head={"sha": "a"}), "o/r")
+    assert event_mod.is_fork(
+        {"head": {"repo": {"full_name": "x/r"}}, "base": {}}, "o/r"
+    )
+    assert not event_mod.is_fork(
+        {"head": {"repo": {"full_name": "o/r"}}, "base": {}}, "o/r"
+    )
 
 
 # ---- re-review admission -------------------------------------------------------------------------------------
@@ -2966,6 +3261,7 @@ class _CliGitHub:
     reactions: list[str] = []
     comments: list[str] = []  # every comment ever posted, in order
     live: dict[int, str] = {}  # comments still on the PR, by id
+    statuses: list[tuple[str, str, str]] = []
 
     def __init__(self, repo: Path):
         pass
@@ -2991,6 +3287,15 @@ class _CliGitHub:
     def run_jobs(self, run_id):  # pragma: no cover - no runs, so never asked
         return []
 
+    def can_push(self, login: str) -> bool:
+        return True
+
+    def pr(self, number):
+        return SAME_REPO_PR
+
+    def set_status(self, sha, state, description, target_url=""):
+        _CliGitHub.statuses.append((sha, state, description))
+
 
 def _event_file(tmp_path: Path, body="/review"):
     ev = {
@@ -3000,7 +3305,7 @@ def _event_file(tmp_path: Path, body="/review"):
             "id": 555,
             "body": body,
             "author_association": "MEMBER",
-            "user": {"type": "User"},
+            "user": {"type": "User", "login": "dev"},
         },
     }
     p = tmp_path / "event.json"
@@ -4289,6 +4594,199 @@ def test_a_reviewer_can_dismiss_a_finding_and_the_pr_becomes_ready(repo: Path):
     assert gh.statuses[-1]["sha"] == "h1"  # the reviewed head, never an unreviewed one
 
 
+def test_a_trusted_app_that_authored_the_pr_cannot_dismiss_its_own_blocking_finding(
+    repo: Path,
+):
+    """The dismiss rule is lens's and holds for an App as for a person."""
+    gh, f = _reviewed(repo)
+    bot = "atlan-app-fleet[bot]"
+    d = decide(
+        "issue_comment",
+        _dismiss_event(f"/review dismiss {f.id} fine", actor=bot, author=bot)
+        | {
+            "comment": {
+                "id": 7,
+                "body": f"/review dismiss {f.id} fine",
+                "user": {"type": "Bot", "login": bot},
+                "performed_via_github_app": {"slug": "atlan-app-fleet"},
+            }
+        },
+        "o/r",
+    )
+    assert d.run and (d.actor, d.pr_author) == (bot, bot)
+    res = review_mod.dismiss(
+        gh, 1, d.dismiss, d.dismiss_reason, actor=d.actor, pr_author=d.pr_author
+    )
+    assert res.action == "skipped" and "can't dismiss a blocking finding" in res.reason
+    # Another trusted App, like another person, can.
+    other = review_mod.dismiss(
+        gh, 1, [f.id], "agreed", actor="mothership-ai[bot]", pr_author=bot
+    )
+    assert other.action == "dismissed"
+
+
+# ---- /review waive (FND-5310) ---------------------------------------------------------
+
+
+def test_waive_is_parsed_and_needs_a_reason():
+    d = decide(
+        "issue_comment",
+        _dismiss_event(
+            "/review waive hotfix, findings tracked in FND-1", actor="author"
+        ),
+        "o/r",
+    )
+    assert d.run and d.waive and not (d.dismiss or d.recheck or d.force)
+    assert d.waive_reason == "hotfix, findings tracked in FND-1"
+    assert (d.actor, d.pr_author) == ("author", "author")  # the author may waive
+    for bad in ("/review waive", "/review waive   "):
+        no = decide("issue_comment", _dismiss_event(bad), "o/r")
+        assert not no.run and no.reason == event_mod.WAIVE_USAGE and no.reply
+    long = decide("issue_comment", _dismiss_event("/review waive " + "x" * 400), "o/r")
+    assert len(long.waive_reason) == 300
+
+
+def test_a_waive_turns_the_head_green_and_says_who_and_why(repo: Path):
+    gh, f = _reviewed(repo)
+    assert gh.statuses[-1]["state"] == "failure"
+    res = review_mod.waive(gh, 1, "hotfix first, fix tracked", actor="author")
+    assert res.action == "waived" and not res.calls  # no model call
+    assert gh.statuses[-1] == {
+        "sha": "h1",
+        "state": "success",
+        "description": "waived by @author: hotfix first, fix tracked",
+        "url": "https://github.test/c/1",
+    }
+    body = gh.comments[0]["body"]
+    st = decode_state(body)
+    assert st.waiver == {
+        "by": "author",
+        "reason": "hotfix first, fix tracked",
+        "head": "h1",
+    }
+    assert st.history[-1]["mode"] == "waive" and st.history[-1]["head"] == "h1"
+    assert "waive · by @author" in body.split("🕘 Round history")[1]
+    assert "🟣 **Waived** by @author at `h1` — hotfix first, fix tracked" in body
+    assert "1 open finding(s) were **not resolved**" in body
+    # The finding is still open and still shown: a waive resolves nothing.
+    assert [x.status for x in st.findings] == ["open"] and f.id in body
+    assert "❌ **Changes requested**" in body
+    assert "waive after round 1 · by @author" in gh.posted[-1]
+    assert "waived by @author" in gh.posted[-1]
+
+
+def test_a_waive_before_any_review_creates_the_summary(repo: Path):
+    gh = fake_github()
+    res = review_mod.waive(gh, 1, "reviewer is down", actor="dev")
+    assert res.action == "waived" and len(gh.comments) == 1 and gh.posted == []
+    assert gh.statuses[-1]["state"] == "success" and gh.statuses[-1]["sha"] == "h1"
+    assert "There were no open findings." in gh.comments[0]["body"]
+
+
+def test_a_long_reason_fits_githubs_status_description():
+    sent: list[Any] = []
+    gh = GitHub(
+        "o/r", token="t", transport=lambda m, p, b, a: (sent.append(b), (201, "{}"))[1]
+    )
+    st = PRState(reviewed_head="h1")
+    st.waiver = {"by": "dev", "reason": "r" * 300, "head": "h1"}
+    gh.set_status("h1", *verdict_status(RunResult("waived", state=st, head="h1")))
+    assert sent[0]["state"] == "success" and len(sent[0]["description"]) == 140
+    assert sent[0]["description"].startswith("waived by @dev: rrr")
+
+
+def test_a_waive_belongs_to_one_head_a_push_is_not_covered(repo: Path):
+    gh, f = _reviewed(repo)
+    review_mod.waive(gh, 1, "hotfix", actor="dev")
+    # A new commit: nothing sets a status on it until someone asks.
+    _round_two_elsewhere(gh)
+    assert [s["sha"] for s in gh.statuses if s["state"] == "success"] == ["h1"]
+    st = decode_state(gh.comments[0]["body"])
+    assert review_mod.active_waiver(st, "h1") and not review_mod.active_waiver(st, "h2")
+    # Reviewing the new head puts the reviewer's verdict back and drops the waive.
+    script = Script(
+        response([tool_call("verdicts", {"items": [{"id": f.id, "status": "open"}]})]),
+        response([tool_call("task_done", {"state": "DONE"})]),
+    )
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    assert res.action == "reviewed" and state_of(res).waiver == {}
+    assert gh.statuses[-1]["sha"] == "h2" and gh.statuses[-1]["state"] == "failure"
+    assert "Waived" not in gh.comments[0]["body"]
+
+
+def test_a_waived_head_stays_green_until_force_reviews_it_again(repo: Path):
+    gh, f = _reviewed(repo)
+    review_mod.waive(gh, 1, "hotfix", actor="dev")
+    # Asking again without force: the head was reviewed, nothing changes.
+    again = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(Script()),
+    )
+    assert again.action == "skipped" and gh.statuses[-1]["state"] == "success"
+    # A dismissal on the waived head keeps the waive: the status still says so.
+    low = Finding("app/storage/fetch.py", 1, "low", "bug", "nit", "b", "def fetch")
+    st = decode_state(gh.comments[0]["body"])
+    st.findings.append(low)
+    gh.comments[0]["body"] = SUMMARY_MARKER + "\n" + st.encode()
+    review_mod.dismiss(gh, 1, [low.id], "noise", actor="dev", pr_author="author")
+    assert gh.statuses[-1]["description"].startswith("waived by @dev")
+    # `/review force` reviews the same head: a real verdict replaces the waive.
+    gh.status = "identical"  # what the compare API says for the same commit
+    forced = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(_review_script()),
+        force=True,
+    )
+    assert forced.action == "reviewed" and state_of(forced).waiver == {}
+    assert gh.statuses[-1]["sha"] == "h1" and gh.statuses[-1]["state"] == "failure"
+    assert "Waived" not in gh.comments[0]["body"]
+
+
+def test_the_cli_routes_waive_without_a_review_or_a_model_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test, patched below
+
+    seen: dict[str, Any] = {}
+
+    def fake_waive(gh, number, reason, **kw):
+        seen.update(kw, number=number, reason=reason)
+        return RunResult("waived")
+
+    monkeypatch.setattr(cli, "waive", fake_waive)
+    monkeypatch.delenv("CONNECTOR_REVIEWER_PRINCIPLES_DIR", raising=False)  # not needed
+    event = _comment("/review waive the fix is urgent", login="author")
+    assert _cli_event(monkeypatch, tmp_path, event, _CliGitHub) == 0
+    assert (seen["number"], seen["reason"], seen["actor"]) == (
+        7,
+        "the fix is urgent",
+        "author",
+    )
+    assert _CliGitHub.reactions == ["eyes", "rocket"]
+    assert not any(c.startswith("⏳") for c in _CliGitHub.comments)  # no progress note
+    # Without a reason: a usage reply, and nothing is waived.
+    seen.clear()
+    assert _cli_event(monkeypatch, tmp_path, _comment("/review waive"), _CliGitHub) == 0
+    assert seen == {} and _CliGitHub.comments == [
+        f"connector-reviewer: {event_mod.WAIVE_USAGE}"
+    ]
+
+
 def test_the_pr_author_cannot_dismiss_a_blocking_finding(repo: Path):
     gh, f = _reviewed(repo)
     assert f.severity == "high"
@@ -5346,6 +5844,9 @@ def test_cli_forwards_verify_budget_to_the_review(
         def __init__(self, repo: Path):
             pass
 
+        def pr(self, number):
+            return SAME_REPO_PR
+
         def delete_comment(self, comment_id):  # pragma: no cover - id is 0
             raise AssertionError("a dry run posts no progress note to delete")
 
@@ -6059,7 +6560,7 @@ def test_the_cli_routes_recheck_without_a_review_round(
     assert (
         cli.main([*argv, "--event-path", _event_file(tmp_path, "/review recheck")]) == 0
     )
-    assert _CliGitHub.comments == [f"connector-reviewer: {cli.USAGE_ERRORS[1]}"]
+    assert _CliGitHub.comments == [f"connector-reviewer: {event_mod.RECHECK_USAGE}"]
     assert _CliGitHub.reactions == ["confused"]
 
 
@@ -6637,7 +7138,7 @@ def test_github_repo_visibility_treats_a_network_error_as_unknown():
     _call does not convert; the lookup still never raises."""
     import urllib.error  # noqa: PLC0415 - only this test needs it
 
-    def transport(method, path, body, accept):
+    def transport(method: str, path: str, body: Any, accept: str):
         if path == "/repos/o/dns":
             raise urllib.error.URLError("Name or service not known")
         raise TimeoutError("timed out")
@@ -6650,7 +7151,7 @@ def test_github_repo_visibility_treats_a_network_error_as_unknown():
 def test_github_repo_visibility_reads_the_api_and_never_raises():
     calls: list[str] = []
 
-    def transport(method, path, body, accept):
+    def transport(method: str, path: str, body: Any, accept: str):
         calls.append(f"{method} {path}")
         if path == "/repos/o/pub":
             return 200, json.dumps({"visibility": "public"})

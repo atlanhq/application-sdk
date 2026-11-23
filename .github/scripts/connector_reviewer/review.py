@@ -416,6 +416,8 @@ def run(
         run_url=run_url,
         blob_base=f"https://github.com/{gh.repo}/blob/{head}",
     )
+    # A real review replaces a waive: the verdict is the reviewer's again.
+    state.waiver = {}
     # A principle file that was skipped is said in the summary, never silently.
     res.notes.extend(principles.notes)
     if post:
@@ -852,6 +854,7 @@ def dismiss(
         mode_label=label,
         state=state,
         run_url=run_url,
+        head=state.reviewed_head,
         blob_base=(
             f"https://github.com/{gh.repo}/blob/{state.reviewed_head}"
             if state.reviewed_head
@@ -900,6 +903,104 @@ def dismiss(
             number, "connector-reviewer: nothing was dismissed.\n\n" + "\n".join(lines)
         )
     return res
+
+
+def waive(
+    gh: GitHub,
+    number: int,
+    reason: str,
+    *,
+    actor: str,
+    post: bool = True,
+    run_url: str = "",
+) -> RunResult:
+    """`/review waive <reason>`: set the verdict aside for the current head.
+
+    No model call and no review. Who, why and the head sha go into the state
+    and the round history; the `connector-reviewer` status on that head turns
+    `success` with "waived by @login: reason"; the summary says the pull
+    request was waived and that its open findings were not resolved.
+
+    A waive belongs to one head. A new commit has no status of its own, and a
+    later review of the same head (`/review force`) clears the waive and puts
+    the reviewer's verdict back (`run`). Anyone who may ask for a review may
+    waive, the pull request's author included: event.py decides who that is."""
+    state, prior = find_state(gh, number)
+    state = state or PRState()
+    head = str(((gh.pr(number) or EMPTY).get("head") or EMPTY).get("sha") or "")
+    if not head:
+        return RunResult(
+            "skipped",
+            reason="the pull request's head could not be read: nothing was waived",
+        )
+    state.waiver = {"by": actor, "reason": reason, "head": head}
+    label = f"waive · by @{actor}"
+    res = RunResult(
+        "waived",
+        mode="waive",
+        mode_label=label,
+        state=state,
+        run_url=run_url,
+        head=head,
+        blob_base=(
+            f"https://github.com/{gh.repo}/blob/{state.reviewed_head}"
+            if state.reviewed_head
+            else ""
+        ),
+    )
+    state.history.append(
+        {
+            "round": state.round,
+            "head": head[:12],
+            "base": "",
+            "mode": "waive",
+            "label": label,
+            "new": 0,
+            "resolved": 0,
+            "blocking": len(state.open_findings(BLOCKING)),
+            "incomplete": False,
+            "usd": 0.0,
+            "calls": 0,
+            "run": run_url,
+        }
+    )
+    del state.history[:-MAX_HISTORY]
+    trace.line(f"waive by @{actor} at {head[:9]}: {trace.short(reason, 120)}")
+    if not post:
+        return res
+    url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
+    if prior:  # a new summary is already the bottom comment
+        gh.comment(number, verdict_brief(res, url))
+    gh.set_status(head, *verdict_status(res), url)
+    return res
+
+
+def active_waiver(st: PRState, head: str) -> dict[str, Any] | None:
+    """The waive that covers `head`, or None. A waive covers one commit."""
+    w = st.waiver or {}
+    return w if head and w.get("head") == head else None
+
+
+def _waiver_lines(st: PRState) -> list[str]:
+    """What the summary says while a waive is on record."""
+    w = st.waiver or {}
+    if not w.get("head"):
+        return []
+    left = len(st.open_findings())
+    unresolved = (
+        f"{left} open finding(s) were **not resolved**; they are listed below."
+        if left
+        else "There were no open findings."
+    )
+    return [
+        f"🟣 **Waived** by @{w.get('by', '?')} at `{str(w['head'])[:7]}` — "
+        f"{w.get('reason', '')}",
+        "",
+        f"The reviewer's verdict was set aside for that commit. {unresolved} "
+        "A later commit is not covered: it has no status until it is reviewed "
+        "or waived. Without the waive, the verdict is:",
+        "",
+    ]
 
 
 def _check_new_against_base(
@@ -1314,6 +1415,7 @@ def recheck(
         state=state,
         ledger=ledger,
         run_url=run_url,
+        head=state.reviewed_head,
         blob_base=(
             f"https://github.com/{gh.repo}/blob/{state.reviewed_head}"
             if state.reviewed_head
@@ -1984,7 +2086,7 @@ def _history_section(st: PRState) -> list[str]:
             run_kind += " · ⚠️ incomplete"
         log = f"[run]({h['run']})" if h.get("run") else "—"
         out.append(
-            f"| {'after ' if h.get('mode') == 'dismiss' else ''}{h['round']} | {run_kind} | {span} | {h.get('new', 0)} | {h.get('resolved', 0)} "
+            f"| {'after ' if h.get('mode') in ('dismiss', 'waive') else ''}{h['round']} | {run_kind} | {span} | {h.get('new', 0)} | {h.get('resolved', 0)} "
             f"| {h.get('blocking', '—')} | ${float(h.get('usd', 0)):.3f} | {log} |"
         )
     out.append("\n</details>")
@@ -1999,6 +2101,8 @@ def _run_title(res: RunResult, round_no: int) -> str:
         return f"dismissal after round {round_no} · {label.removeprefix('dismiss · ')}"
     if res.mode == "recheck":
         return f"re-check after round {round_no} · {label.removeprefix('recheck · ')}"
+    if res.mode == "waive":
+        return f"waive after round {round_no} · {label.removeprefix('waive · ')}"
     return f"round {round_no} · {label}"
 
 
@@ -2166,6 +2270,7 @@ def render_summary(res: RunResult) -> str:
     lines = [
         SUMMARY_MARKER,
         f"### connector-reviewer summary · updated after round {st.round} ({res.mode_label or res.mode})",
+        *_waiver_lines(st),
         verdict,
         *_spiral_lines(res),
         "",
@@ -2474,10 +2579,18 @@ def verdict_status(res: RunResult) -> tuple[str, str]:
     dismissed with a reason. Any open finding keeps it red; the description says
     whether it is blocking or only medium/low. The approach check is advisory and
     never turns it red. An incomplete review is `error`, never green: part of
-    the change was not looked at."""
+    the change was not looked at. A head that was waived (`waive`) is green
+    whatever the reviewer found, and says who waived it."""
     st = res.state or PRState()
     led = st.ledger or {}
     cost = f"${float(led.get('spent_usd', 0)):.2f}"
+    waived = active_waiver(st, res.head or st.reviewed_head)
+    if waived:
+        # A waive is the way past a verdict, an incomplete one included.
+        return (
+            "success",
+            f"waived by @{waived.get('by', '?')}: {waived.get('reason', '')}",
+        )
     if res.incomplete:
         return "error", f"review incomplete — {res.incomplete[0][:90]}"
     blocking = st.open_findings(BLOCKING)

@@ -19,6 +19,14 @@ from pathlib import Path
 from .agent import AgentLimits
 from .llm import Price
 
+TRUSTED_APPS = (
+    "atlan-app-fleet",
+    "atlan-conformance-sync",
+    "connectivity-ai",
+    "mothership-ai",
+    "atlan-connectivity-release-train",
+)
+
 
 @dataclass
 class Config:
@@ -38,6 +46,8 @@ class Config:
     approach: bool = True
     preflight: bool = True
     exclude: list[str] = field(default_factory=list)
+    # GitHub Apps whose `/review` comments are honoured (event.trusted_app).
+    trusted_apps: list[str] = field(default_factory=lambda: list(TRUSTED_APPS))
     limits: AgentLimits = field(default_factory=AgentLimits)
     raw_hash: str = ""
 
@@ -80,6 +90,8 @@ def load_config(config_dir: Path) -> Config:
     cfg.verify = bool(st.get("verify", cfg.verify))
     cfg.approach = bool(st.get("approach", cfg.approach))
     cfg.preflight = bool(st.get("preflight", cfg.preflight))
+    access = data.get("access", {})
+    cfg.trusted_apps = [str(x) for x in access.get("trusted_apps", cfg.trusted_apps)]
     a = data.get("agent", {})
     cfg.limits = AgentLimits(
         **{k: int(v) for k, v in a.items() if k in AgentLimits.__dataclass_fields__}

@@ -105,6 +105,10 @@ class PRState:
     pending_files: list[str] = field(
         default_factory=list
     )  # left unreviewed by a failure
+    # `/review waive`: who set the verdict aside, why, and for which head sha
+    # ({"by", "reason", "head"}). Empty when nothing is waived. A real review
+    # clears it.
+    waiver: dict[str, Any] = field(default_factory=dict)
     history: list[dict[str, Any]] = field(default_factory=list)
 
     def open_findings(self, severities: tuple[str, ...] = SEVERITIES) -> list[Finding]:
@@ -133,11 +137,15 @@ class PRState:
 
     @classmethod
     def decode(cls, comment_body: str) -> "PRState | None":
-        m = _STATE_RE.search(comment_body or "")
-        if not m:
+        # The LAST marker: `encode` appends the state after everything else in
+        # the summary, and text shown above it (a finding's title, a dismissal
+        # or waive reason) comes from a model or a commenter. Reading the first
+        # one would let such text stand in for the state.
+        found = _STATE_RE.findall(comment_body or "")
+        if not found:
             return None
         try:
-            raw = json.loads(zlib.decompress(base64.b64decode(m.group(1))))
+            raw = json.loads(zlib.decompress(base64.b64decode(found[-1])))
         except (ValueError, zlib.error):
             return None
         # A field a newer connector-reviewer added (or a revert dropped) must not make every

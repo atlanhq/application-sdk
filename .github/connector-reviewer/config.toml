@@ -49,6 +49,19 @@ exclude = [
   "tests/**/__snapshots__/**",
 ]
 
+[access]
+# Who may comment `/review` (and its sub-commands): anyone with the Write, Maintain or Admin
+# role on the repository, read live from GitHub, and these GitHub Apps. A comment counts as an
+# App's only when GitHub attributes it to the App (performed_via_github_app.slug) and its
+# author is that App's bot account, "<slug>[bot]". Every other bot is ignored.
+trusted_apps = [
+  "atlan-app-fleet",
+  "atlan-conformance-sync",
+  "connectivity-ai",
+  "mothership-ai",
+  "atlan-connectivity-release-train",
+]
+
 [stages]
 reflect = true   # filter-only fact check of each bundle's comments
 verify = true    # one call per round checking still-open findings in touched files
