@@ -57,6 +57,8 @@ BOOTSTRAP_MANAGED = (
     ".github/workflows/generated-freshness.yaml",
     ".github/workflows/test-commands.yaml",
     ".github/workflows/tests.yaml",
+    # The connector-reviewer shim: a resync that only updates it is still a resync.
+    ".github/workflows/connector-reviewer.yaml",
     # Shims bootstrap once wrote and now removes.
     ".github/workflows/docstring-coverage.yaml",
     ".github/workflows/auto-fix.yml",

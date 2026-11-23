@@ -4750,6 +4750,27 @@ MANAGED_PATHS = [
 ]
 
 
+def test_a_resync_that_only_updates_the_reviewer_shim_is_exempt():
+    """Bootstrap writes `.github/workflows/connector-reviewer.yaml` (FND-5317). A
+    resync that touches only that shim is a resync, in code and in the shipped
+    config alike."""
+    shim = [".github/workflows/connector-reviewer.yaml"]
+    assert ".github/workflows/connector-reviewer.yaml" in exempt_mod.BOOTSTRAP_MANAGED
+    found = _classify(
+        author=RESYNC,
+        head_ref="conformance/resync",
+        commit_authors=[RESYNC],
+        paths=shim,
+    )
+    assert found is not None and found.kind == exempt_mod.RESYNC
+    shipped = load_config(Path(__file__).resolve().parents[2] / "connector-reviewer")
+    assert exempt_mod.is_managed(shim[0], shipped.exempt)
+    # The app's own workflows are still its own.
+    assert not exempt_mod.is_managed(
+        ".github/workflows/connector-review.yaml", shipped.exempt
+    )
+
+
 def test_a_conformance_resync_is_exempt_when_every_file_is_bootstrap_managed():
     found = _classify(
         author=RESYNC,
@@ -4880,8 +4901,10 @@ def _bootstrap_destinations() -> list[str]:
     out.append(f".github/workflows/{values['SARIF_UPLOAD_WORKFLOW']}")
     out += list(values["RETIRED_FILES"])
     out += [dest for dest, _ in values["MANAGED_ACTION_FILES"]]
-    out += [dest for dest, _, _ in values["MANAGED_CONNECTOR_REVIEW_FILES"]]
-    out += list(values["RETIRED_CONNECTOR_REVIEW_FILES"])
+    # The connector-review registries are being retired from bootstrap (FND-5317):
+    # read them when they are there, so this guard holds before and after.
+    out += [dest for dest, _, _ in values.get("MANAGED_CONNECTOR_REVIEW_FILES") or ()]
+    out += list(values.get("RETIRED_CONNECTOR_REVIEW_FILES") or ())
     return out
 
 
