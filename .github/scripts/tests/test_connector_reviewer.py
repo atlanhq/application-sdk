@@ -10138,7 +10138,8 @@ def _refuted(
                 {
                     "verdict": "refuted",
                     "reason": reason,
-                    "evidence": [{"path": path, "line": 3, "quote": quote}],
+                    # A wrong line: the location recorded is where the quote is found.
+                    "evidence": [{"path": path, "line": 99, "quote": quote}],
                 },
             )
         ]
@@ -10271,6 +10272,7 @@ def _no_verdict_turns(n: int) -> list[Any]:
             "malformed",
         ),
         ([_refuted(path="../../etc/passwd")], "malformed"),  # not a repository file
+        ([_refuted(quote="return")], "malformed"),  # too short to prove anything
         (_no_verdict_turns(4), "malformed"),  # max_lookups + 1 turns, no verdict
     ],
     ids=[
@@ -10279,6 +10281,7 @@ def _no_verdict_turns(n: int) -> list[Any]:
         "quote-not-in-file",
         "no-evidence",
         "outside-repo",
+        "quote-too-short",
         "no-verdict",
     ],
 )

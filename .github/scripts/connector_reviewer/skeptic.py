@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import trace
-from .diff import snippet_in_text
+from .diff import locate_in_text
 from .findings import BLOCKING, Finding
 from .llm import BudgetExhausted, Client, LLMError, assistant_turn
 from .prompts import CONNECTOR_PROFILE
@@ -37,6 +37,9 @@ from .typed import EMPTY, objects
 CONTESTED_SEVERITY = "medium"
 REASON_KEEP = 300  # characters of the skeptic's reason kept on the finding
 QUOTE_MAX = 400  # characters of one evidence quote that are checked
+# A quote must carry at least this many non-space characters to count: `return`
+# or `)` occurs in every file and proves nothing.
+QUOTE_MIN = 12
 CONTEXT_LINES = 40  # head lines shown around the finding's line
 DIFF_LINES = 200  # lines of the finding's file diff shown
 
@@ -201,7 +204,9 @@ def build_input(ws: Workspace, f: Finding, principle: str) -> str:
 
 def _parse_verdict(ws: Workspace, out: Outcome, args: dict[str, Any]) -> None:
     """Fill `out` from a skeptic_verdict call. A refutation stands only with a
-    reason and at least one quote that really is in the file it names."""
+    reason and at least one quote of `QUOTE_MIN`+ non-space characters that
+    really is in the file it names. The location recorded is where the quote is
+    found, not the line the model claims."""
     verdict = args.get("verdict")
     reason = clean(str(args.get("reason") or ""))
     if verdict == "upheld":
@@ -214,11 +219,12 @@ def _parse_verdict(ws: Workspace, out: Outcome, args: dict[str, Any]) -> None:
     for ev in objects(args.get("evidence")):
         path = str(ev.get("path") or "")
         quote = str(ev.get("quote") or "")[:QUOTE_MAX]
-        text = ws.text(path) if path and quote.strip() else None
-        if text and snippet_in_text(text, quote):
-            line = ev.get("line")
-            ok_line = isinstance(line, int) and not isinstance(line, bool) and line > 0
-            found.append(f"{path}:{line}" if ok_line else path)
+        if not path or len("".join(quote.split())) < QUOTE_MIN:
+            continue
+        text = ws.text(path)
+        line = locate_in_text(text, quote) if text else 0
+        if line:
+            found.append(f"{path}:{line}")
     if not reason:
         out.outcome, out.error = "malformed", "refuted without a reason"
     elif not found:
