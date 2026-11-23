@@ -362,7 +362,8 @@ def history(
     """History facts for `files` (in review order) against the base branch's
     recent commits. Every cap is hard: `history_max_files` files,
     `history_commits_per_file` commits each and `history_max_commits` patches in
-    all, read four at a time and abandoned once `history_seconds` have passed."""
+    all, read four at a time; no new read starts once `history_seconds` have
+    passed (one in flight finishes, or hits the client's timeout)."""
     out = History()
     deadline = _clock() + max(cfg.history_seconds, 1)
     since = (_now() - timedelta(days=cfg.history_days)).strftime("%Y-%m-%dT%H:%M:%SZ")

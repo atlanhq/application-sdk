@@ -344,20 +344,22 @@ def place(ws: Workspace, bundle: Bundle, raw: dict[str, Any]) -> Finding | None:
 
 
 def cite(
-    found: list[Finding], applicable: set[str]
+    found: list[Finding], principles: PrincipleSet
 ) -> tuple[list[Finding], list[Finding]]:
     """Every finding rests on a principle or is a concrete bug; the rest are
     dropped, here in code.
 
-    A finding's `rule_id` stands only when it names a principle in
-    `applicable` (the ids that apply to its bundle's files). When the field is
-    missing or names another principle, an applicable id written in the title
-    or content is taken instead. A finding left with no principle is kept only
+    A finding's `rule_id` stands only when it names a principle that applies
+    to the finding's own file (a bundle can mix areas: FP01 for `app/` does not
+    apply to a test beside it). When the field is missing or names another
+    principle, an applicable id written in the title or content is taken
+    instead. A finding left with no principle is kept only
     when its category is in CONCRETE_CATEGORIES.
     Returns (kept, dropped)."""
     kept: list[Finding] = []
     dropped: list[Finding] = []
     for f in found:
+        applicable = {p.id for p in principles.for_paths([f.path])}
         if f.rule_id not in applicable:
             named = _PRINCIPLE_ID.findall(f"{f.title} {f.body}")
             f.rule_id = next((i for i in named if i in applicable), "")
@@ -520,9 +522,7 @@ def review_bundle(
         )
     )
     # Before the fact-check, so a finding that is dropped anyway costs no tokens there.
-    placed, res.uncited = cite(
-        placed, {p.id for p in principles.for_paths(bundle.paths)}
-    )
+    placed, res.uncited = cite(placed, principles)
     for f in res.uncited:
         trace.line(
             f"[{bundle.label}] dropped {f.id} ({f.category}): names no principle that applies "

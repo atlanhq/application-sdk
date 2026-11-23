@@ -60,8 +60,8 @@ from .github import GitHub, GitHubError, bot_login
 from .index import Index, Symbol, build_index, index_source
 from .llm import BudgetExhausted, Client, Ledger, LLMError
 from .principles import PrincipleSet
-from .select import DEFAULT_EXCLUDE, select_files
-from .tools import Workspace, parse_args
+from .select import DEFAULT_EXCLUDE, excluded, select_files
+from .tools import Workspace, parse_args, secret_diff
 from .triage import Triage, triage
 from .typed import EMPTY, objects
 
@@ -301,14 +301,22 @@ def compute_facts(
     ws: Workspace,
     files: list[FileDiff],
     cfg: Config,
+    tests_changed: list[FileDiff] | None = None,
 ) -> code_facts.Facts:
     """The regression and history facts for the files under review, in review
     order. No model call; the history half makes at most
-    1 + `history_max_files` + `history_max_commits` GitHub requests."""
+    1 + `history_max_files` + `history_max_commits` GitHub requests.
+
+    `tests_changed` are the test files this round changed, taken before file
+    selection: a deleted test file and a test change that only removes lines
+    are skipped by selection ("deletion only", "no added lines"), and they are
+    exactly the weakened expectations FP15 asks about."""
     fx = code_facts.Facts()
     if cfg.facts.regression:
         fx.symbols = code_facts.regression_symbols(ws, files)
-        fx.expectations = code_facts.weakened_expectations(files)
+        fx.expectations = code_facts.weakened_expectations(
+            files if tests_changed is None else tests_changed
+        )
         fx.regression_read = True
     if cfg.facts.history and files:
         names = {
@@ -333,6 +341,22 @@ def compute_facts(
         fx.history.requests += 1
         fx.history_read = True
     return fx
+
+
+def changed_tests(files: list[FileDiff], cfg: Config) -> list[FileDiff]:
+    """The Python test files in `files`, deleted ones included, minus what is
+    never read: a change that may hold secrets, and anything the exclude
+    patterns name (fixtures, golden files, snapshots)."""
+    exclude = tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude)
+    return [
+        fd
+        for fd in files
+        if fd.path.endswith(".py")
+        and code_context._is_test(fd.path)
+        and not fd.is_binary
+        and not secret_diff(fd)
+        and not excluded(fd.path, exclude)
+    ]
 
 
 def _approach(
@@ -704,7 +728,14 @@ def run(
         t_facts = time.monotonic()
         with trace.group("3c · facts: regression and history (computed in code)"):
             fx = compute_facts(
-                gh, number, pr, base, ws, [fd for b in bundles for fd in b.files], cfg
+                gh,
+                number,
+                pr,
+                base,
+                ws,
+                [fd for b in bundles for fd in b.files],
+                cfg,
+                tests_changed=changed_tests(all_files, cfg),
             )
             res.timings_ms["facts"] = int((time.monotonic() - t_facts) * 1000)
             trace.line(f"regression: {fx.regression_line()}")

@@ -4931,7 +4931,9 @@ def test_every_destination_bootstrap_manages_is_covered_by_the_globs():
     fails first."""
     cfg = load_config(Path(__file__).resolve().parents[2] / "connector-reviewer").exempt
     destinations = _bootstrap_destinations()
-    assert len(destinations) > 25  # the registries were really read
+    # The registries were really read. 25 is what is left once FND-5317 retires
+    # the connector-review registries (31 before), so the floor sits below it.
+    assert len(destinations) >= 20
     missing = [d for d in destinations if not exempt_mod.is_managed(d, cfg)]
     assert not missing, (
         f"bootstrap manages these, but [exempt] bootstrap_managed does not cover them: {missing}"
@@ -8712,8 +8714,10 @@ def _finding(
     )
 
 
-def test_a_finding_without_an_applicable_principle_is_dropped_unless_it_is_a_bug():
-    applicable = {"FP01", "FP02"}
+def test_a_finding_without_an_applicable_principle_is_dropped_unless_it_is_a_bug(
+    repo: Path,
+):
+    applicable = principles_of(repo)  # FP01 (app, contract) and FP02 (everywhere)
     kept, dropped = agent_mod.cite(
         [
             _finding("bug"),
@@ -8732,6 +8736,22 @@ def test_a_finding_without_an_applicable_principle_is_dropped_unless_it_is_a_bug
         ("other", "FP02"),  # an applicable id written in the content counts
     ]
     assert [f.category for f in dropped] == ["maintainability", "test"]
+
+
+def test_a_principle_must_apply_to_the_findings_own_file(repo: Path):
+    """A bundle can hold `app/` code and its test. FP01 covers `app` and
+    `contract`, so it does not stand for a finding in the test file, and the
+    test-file cap is not lifted by it."""
+    principles = principles_of(repo)
+    on_test = _finding("test", rule_id="FP01", path="tests/unit/test_x.py")
+    on_app = _finding("performance", rule_id="FP01", path="app/x.py")
+    everywhere = _finding("test", rule_id="FP02", path="tests/unit/test_x.py")
+    kept, dropped = agent_mod.cite([on_test, on_app, everywhere], principles)
+    assert [(f.path, f.rule_id) for f in kept] == [
+        ("app/x.py", "FP01"),
+        ("tests/unit/test_x.py", "FP02"),
+    ]
+    assert dropped == [on_test]
 
 
 def test_the_line_review_drops_uncited_findings_before_the_fact_check(repo: Path):
@@ -9419,6 +9439,43 @@ def test_a_history_fact_that_fires_reaches_the_prompt(repo: Path, frozen_now: No
         "**History** — 1 × lines restored that a recent commit removed"
         in gh.comments[0]["body"]
     )
+
+
+def test_a_deleted_test_or_a_removed_assertion_reaches_the_facts(repo: Path):
+    """Selection skips a deleted test file ("deletion only") and a test change
+    that only removes lines ("no added lines"); the weakened-expectation facts
+    are read from the round's diff before selection, so neither is missed."""
+    deleted = _udiff(
+        "tests/unit/test_gone.py",
+        ["-def test_gone():", "-    assert fetch(None, 'k') == b'v'"],
+        status="deleted",
+    )
+    trimmed = _udiff(
+        "tests/unit/test_fetch.py",
+        [
+            " def test_fetch():",
+            "-    assert fetch(None, 'k') is not None",
+            "     assert fetch",
+        ],
+    )
+    gh = fake_github(diffs={("b0", "h1"): DIFF + deleted + trimmed})
+    script = _review_script()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    skipped = dict(res.skipped_files)
+    assert skipped["tests/unit/test_gone.py"] == "deletion only"
+    assert skipped["tests/unit/test_fetch.py"] == "no added lines"
+    msg = script.requests[0]["messages"][2]["content"]
+    assert "test removed: tests/unit/test_gone.py:1 `test_gone`" in msg
+    assert "assertion removed: tests/unit/test_fetch.py:2" in msg
+    body = gh.comments[0]["body"]
+    assert "weakened expectations: 2 assertion removed, 1 test removed" in body
 
 
 def test_facts_can_be_turned_off_and_cost_no_request(repo: Path):
