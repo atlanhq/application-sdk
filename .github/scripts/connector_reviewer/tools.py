@@ -248,6 +248,10 @@ COMMENT_ITEM = {
             "type": "boolean",
             "description": "true when the harm lands on something that existed BEFORE this PR: existing callers, a deployed contract, stored or persisted data, workflow replay, wire values. false for a defect in what the new code itself does.",
         },
+        "principle": {
+            "type": "string",
+            "description": "The id of the <principle> this finding rests on (FP01, RP02, …), one that applies to this file. Omit only for a concrete bug or security defect; any other finding without a principle is dropped.",
+        },
         "title": {"type": "string", "description": "One line, under 90 characters."},
         "content": {
             "type": "string",
@@ -325,7 +329,17 @@ TOOL_SCHEMAS = [
     _fn(
         "task_done",
         "Call when every file in <review_files> has had its pass.",
-        {"state": {"type": "string", "enum": ["DONE", "FAILED"]}},
+        {
+            "state": {"type": "string", "enum": ["DONE", "FAILED"]},
+            "regression": {
+                "type": "string",
+                "description": "One or two sentences: can this change break behaviour that works today, and would a test in the right tier catch it? Rest it on <regression_facts>.",
+            },
+            "history": {
+                "type": "string",
+                "description": "Only when <history_facts> is present, one or two sentences: is this going back and forth, and does the PR say why?",
+            },
+        },
         ["state"],
     ),
 ]

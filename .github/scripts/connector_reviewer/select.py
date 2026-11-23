@@ -50,6 +50,11 @@ def _match(path: str, patterns: tuple[str, ...] | list[str]) -> bool:
     )
 
 
+def excluded(path: str, patterns: tuple[str, ...] | list[str]) -> bool:
+    """Whether `path` matches one of the exclude patterns, as `select_files` reads them."""
+    return _match(path, patterns)
+
+
 def select_files(
     files: list[FileDiff],
     *,

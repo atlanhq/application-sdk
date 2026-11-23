@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import json
 import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -30,6 +32,7 @@ from . import context, prompts, trace
 from .baseline import PRAdditions
 from .bundle import Bundle
 from .diff import anchor, locate_in_text
+from .facts import Facts
 from .findings import BLOCKING, Finding
 from .llm import (
     BudgetExhausted,
@@ -48,6 +51,16 @@ from .typed import EMPTY
 # The whole description of a normal PR: a declared behaviour change is often past
 # the first paragraphs. It sits in the cached prefix, so each turn pays for it once.
 PR_BODY_CHARS = 4000
+
+# What the per-bundle time limit is measured with. Tests replace it with a fake
+# clock; nothing else should.
+_clock: Callable[[], float] = time.monotonic
+
+# A finding that names no principle must be one of these to stand: a concrete
+# defect in what the code does, or a security defect.
+CONCRETE_CATEGORIES = ("bug", "security")
+ANSWER_KEEP = 400  # characters of a regression or history answer kept for the summary
+_PRINCIPLE_ID = re.compile(r"\b[FR]P\d{2}\b")
 
 
 @dataclass
@@ -73,6 +86,9 @@ class AgentLimits:
     plan_max_tokens: int = 8_000
     second_pass: int = 0  # 1 enables
     second_pass_min_lines: int = 300
+    # Wall-clock seconds a bundle may spend before its final turn is forced
+    # (plan turn included). It cuts the long tail; 0 turns it off.
+    bundle_time_limit_s: int = 120
 
     def turn_budget(self, n_files: int, changed_lines: int) -> int:
         extra = self.turns_per_extra_file * max(n_files - 1, 0) + changed_lines // max(
@@ -99,6 +115,15 @@ class BundleResult:
     sources: list[dict[str, Any]] = field(default_factory=list)
     # Set when the model provider refused a request (stop == "refused").
     refusal: dict[str, Any] = field(default_factory=dict)
+    # Why the final turn was forced ("turn budget", "context ceiling", "bundle
+    # budget share", "time limit"), or "" when the model finished by itself.
+    forced: str = ""
+    seconds: float = 0.0  # wall time of the whole bundle, reflect included
+    # Findings dropped because they named no principle that applies to their
+    # file and were not a concrete bug (see `cite`).
+    uncited: list[Finding] = field(default_factory=list)
+    # The model's answers to the regression and history questions, from task_done.
+    answers: dict[str, str] = field(default_factory=dict)
 
 
 # ---- prompt manifest -----------------------------------------------------------
@@ -246,6 +271,16 @@ def build_context(
     )
     if ctx_block:
         parts.append(ctx_block)
+    # Regression and history facts, computed in code (facts.py). A history block
+    # is there only when a history fact fired for these files.
+    facts = pr_meta.get("facts")
+    if isinstance(facts, Facts):
+        for block in (
+            facts.regression_block(bundle.paths),
+            facts.history_block(bundle.paths),
+        ):
+            if block:
+                parts.append(block)
 
     if confirmed:
         lines = [f"- [{f.id}] {f.path}: {f.title}" for f in confirmed[:30]]
@@ -279,6 +314,7 @@ def place(ws: Workspace, bundle: Bundle, raw: dict[str, Any]) -> Finding | None:
         evidence=evidence,
         suggestion=str(raw.get("suggestion_code") or ""),
         compatibility=raw.get("compatibility") is True,
+        rule_id=str(raw.get("principle") or "").strip().upper()[:8],
     )
     if not f.body or not evidence.strip():
         return None
@@ -307,6 +343,33 @@ def place(ws: Workspace, bundle: Bundle, raw: dict[str, Any]) -> Finding | None:
     return f  # line 0: reported in the summary, not inline
 
 
+def cite(
+    found: list[Finding], principles: PrincipleSet
+) -> tuple[list[Finding], list[Finding]]:
+    """Every finding rests on a principle or is a concrete bug; the rest are
+    dropped, here in code.
+
+    A finding's `rule_id` stands only when it names a principle that applies
+    to the finding's own file (a bundle can mix areas: FP01 for `app/` does not
+    apply to a test beside it). When the field is missing or names another
+    principle, an applicable id written in the title or content is taken
+    instead. A finding left with no principle is kept only
+    when its category is in CONCRETE_CATEGORIES.
+    Returns (kept, dropped)."""
+    kept: list[Finding] = []
+    dropped: list[Finding] = []
+    for f in found:
+        applicable = {p.id for p in principles.for_paths([f.path])}
+        if f.rule_id not in applicable:
+            named = _PRINCIPLE_ID.findall(f"{f.title} {f.body}")
+            f.rule_id = next((i for i in named if i in applicable), "")
+        if f.rule_id or f.category in CONCRETE_CATEGORIES:
+            kept.append(f)
+        else:
+            dropped.append(f)
+    return kept, dropped
+
+
 def calibrate(
     found: list[Finding],
     limits: "AgentLimits",
@@ -318,7 +381,9 @@ def calibrate(
     - Unchanged code (the incomplete-fix exception) is a suggestion: capped at
       low, at most `max_unchanged` per bundle — a pointer, never a rabbit hole.
     - A finding only in a test file is test hygiene: capped at low, unless it is
-      a security finding (a real credential in a fixture is still critical).
+      a security finding (a real credential in a fixture is still critical) or
+      rests on a principle (`rule_id`, checked by `cite`), whose Severity line
+      then grades it.
     - A compatibility claim about a file or symbol this PR itself added
       (`added`, measured against the merge base) is capped at medium: nothing
       before this PR could depend on it, so it cannot block merge. It stays
@@ -341,6 +406,7 @@ def calibrate(
         elif (
             context._is_test(f.path)
             and f.category != "security"
+            and not f.rule_id
             and f.severity in ("critical", "high", "medium")
         ):
             notes.append(f"{f.id}: {f.severity} → low (test-only)")
@@ -385,6 +451,10 @@ def review_bundle(
     raw_comments: list[dict[str, Any]] = []
     res.sources = initial_sources(bundle, pr_meta, messages[2]["content"])
     res.turn_budget = limits.turn_budget(len(bundle.files), bundle.changed_lines)
+    started = _clock()
+    deadline = (
+        started + limits.bundle_time_limit_s if limits.bundle_time_limit_s > 0 else None
+    )
     try:
         if limits.plan and bundle.changed_lines >= limits.plan_min_lines:
             trace.line(
@@ -402,11 +472,13 @@ def review_bundle(
             limits,
             res.turn_budget,
             budget_usd,
+            deadline,
         )
         if (
             limits.second_pass
             and res.stop == "done"
             and bundle.changed_lines >= limits.second_pass_min_lines
+            and (deadline is None or _clock() < deadline)
         ):
             before = len(raw_comments)
             messages.append({"role": "user", "content": prompts.SECOND_PASS})
@@ -420,6 +492,7 @@ def review_bundle(
                 limits,
                 max(res.turn_budget // 2, 3),
                 budget_usd,
+                deadline,
             )
             res.second_pass_added = len(raw_comments) - before
     except BudgetExhausted as e:
@@ -448,6 +521,13 @@ def review_bundle(
             else ""
         )
     )
+    # Before the fact-check, so a finding that is dropped anyway costs no tokens there.
+    placed, res.uncited = cite(placed, principles)
+    for f in res.uncited:
+        trace.line(
+            f"[{bundle.label}] dropped {f.id} ({f.category}): names no principle that applies "
+            f"to its file and is not a concrete bug — {trace.short(f.title, 80)!r}"
+        )
     if reflect and placed and res.stop != "budget":
         placed = _reflect(client, bundle, placed, limits, res)
         trace.line(
@@ -483,6 +563,7 @@ def review_bundle(
     )
     res.findings = [f for f in placed if f.line]
     res.unplaced = [f for f in placed if not f.line]
+    res.seconds = round(_clock() - started, 1)
     return res
 
 
@@ -517,6 +598,7 @@ def _loop(
     limits: AgentLimits,
     turn_budget: int,
     budget_usd: float | None = None,
+    deadline: float | None = None,
 ) -> None:
     turns = empty = 0
     final = False
@@ -533,13 +615,20 @@ def _loop(
             if k.endswith(f":{bundle.label}")
         )
         broke = budget_usd is not None and spent >= budget_usd * 0.85
-        if (turns >= turn_budget or over or broke) and not final:
+        # The long tail: a bundle past its time limit answers with what it has.
+        late = deadline is not None and _clock() >= deadline
+        if (turns >= turn_budget or over or broke or late) and not final:
             final = True
             why = (
                 "turn budget"
                 if turns >= turn_budget
-                else ("context ceiling" if over else "bundle budget share")
+                else "context ceiling"
+                if over
+                else "bundle budget share"
+                if broke
+                else "time limit"
             )
+            res.forced = why
             trace.line(
                 f"[{bundle.label}] final turn forced ({why}): only code_comment/task_done now"
             )
@@ -587,6 +676,10 @@ def _loop(
             elif name == "task_done":
                 done = True
                 reply = "OK"
+                for key in ("regression", "history"):
+                    answer = " ".join(str(args.get(key) or "").split())
+                    if answer:
+                        res.answers[key] = answer[:ANSWER_KEEP]
             elif final:
                 reply = "Unavailable on the final turn: call code_comment or task_done."
             else:

@@ -2,6 +2,11 @@
 
     python -m connector_reviewer review --repo atlanhq/atlan-example-app --pr 1234 --root <app checkout> [--force] [--verify-budget] [--dry-run]
     python -m connector_reviewer review --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
+    python -m connector_reviewer finalize --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
+
+`finalize` runs after the review step whatever its outcome (`if: always()`): a
+run that crashed, was cancelled or timed out leaves its `pending` status as
+`error` instead (connector_reviewer/finalize.py).
 
 Sub-commands of the `/review` comment (`/review force`, `/review verify-budget`,
 `/review dismiss`, `/review recheck`) are parsed and documented in connector_reviewer/event.py.
@@ -30,11 +35,19 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from . import report, trace
 from .config import load_config, validate
-from .event import USAGE_ERRORS, decide
-from .github import GitHub
+from .event import FORK_REFUSAL, addressed, decide, is_fork
+from .finalize import (
+    FAILED_NOTE,
+    PROGRESS_NOTE,
+    finalize,
+    pr_number,
+    progress_with_head,
+)
+from .github import GitHub, GitHubError
 from .llm import Client, register_secret
 from .lock import BUSY_NOTE, WORKFLOW_FILE, older_active_run
 from .principles import (
@@ -43,7 +56,15 @@ from .principles import (
     load_principles,
     resolve_fleet_dir,
 )
-from .review import dismiss, recheck, render_summary, run, to_json
+from .review import (
+    dismiss,
+    incomplete_reasons,
+    recheck,
+    render_summary,
+    run,
+    to_json,
+    waive,
+)
 
 # The config that ships with this package: `.github/connector-reviewer/` of the
 # application-sdk checkout the package is run from, not of the repo under review.
@@ -81,32 +102,29 @@ def main(argv: list[str] | None = None) -> int:
         help="give the verify call its opt-in output budget (agent.verify_max_tokens_opt_in)",
     )
     r.add_argument("--dry-run", action="store_true")
+    f = sub.add_parser(
+        "finalize",
+        help="after the review step, whatever its outcome: turn this run's leftover "
+        "pending status into error",
+    )
+    f.add_argument("--repo", required=True)
+    f.add_argument("--pr", type=int)
+    f.add_argument("--event-name")
+    f.add_argument("--event-path")
     args = ap.parse_args(argv)
+    if args.cmd == "finalize":
+        return _finalize(args)
 
-    comment_id = 0
-    dismissal = None
-    rechecking = None
+    event: dict[str, Any] = {}
     if args.event_name:
         event = json.loads(Path(args.event_path).read_text()) if args.event_path else {}
-        d = decide(args.event_name, event, args.repo)
-        if not d.run:
-            print(f"connector-reviewer: not running — {d.reason}")
-            if d.reason in USAGE_ERRORS and d.comment_id and not args.dry_run:
-                gh = GitHub(args.repo)
-                gh.comment(d.pr, f"connector-reviewer: {d.reason}")
-                gh.react(d.comment_id, "confused")
+        if not addressed(args.event_name, event):
+            # Most comments on a pull request are not for the reviewer: stop
+            # before reading the config or calling GitHub.
+            print(
+                "connector-reviewer: not running — comment is not addressed to /review"
+            )
             return 0
-        dismissal = d if d.dismiss else None
-        rechecking = d if d.recheck else None
-        args.pr, args.force, comment_id = d.pr, args.force or d.force, d.comment_id
-        args.verify_budget = args.verify_budget or d.verify_budget
-        trace.line(
-            f"trigger: {args.event_name} on PR #{d.pr}"
-            + (" (force)" if d.force else "")
-            + (" (verify-budget)" if d.verify_budget else "")
-        )
-    if not args.pr:
-        ap.error("--pr or --event-name is required")
     live = not args.dry_run
 
     # First thing with a key in reach: an error raised before a client exists is
@@ -120,17 +138,50 @@ def main(argv: list[str] | None = None) -> int:
         for e in errs:
             print(f"connector-reviewer: config error: {e}", file=sys.stderr)
         return 2
+    gh = GitHub(args.repo)
+
+    comment_id = 0
+    dismissal = None
+    rechecking = None
+    waiving = None
+    if args.event_name:
+        # Who may ask is decided from the commenter's live permission on the
+        # repository and the trusted Apps in the config (event.py).
+        d = decide(
+            args.event_name,
+            event,
+            args.repo,
+            trusted_apps=cfg.trusted_apps,
+            can_push=gh.can_push,
+        )
+        if not d.run:
+            print(f"connector-reviewer: not running — {d.reason}")
+            if d.reply and d.comment_id and live:
+                gh.comment(d.pr, f"connector-reviewer: {d.reason}")
+                gh.react(d.comment_id, "confused")
+            return 0
+        dismissal = d if d.dismiss else None
+        rechecking = d if d.recheck else None
+        waiving = d if d.waive else None
+        args.pr, args.force, comment_id = d.pr, args.force or d.force, d.comment_id
+        args.verify_budget = args.verify_budget or d.verify_budget
+        trace.line(
+            f"trigger: {args.event_name} on PR #{d.pr} by @{d.actor or '?'}"
+            + (" (force)" if d.force else "")
+            + (" (verify-budget)" if d.verify_budget else "")
+        )
+    if not args.pr:
+        ap.error("--pr or --event-name is required")
     # A review judges by the principles, so it does not start without them: a
     # missing fleet directory stops the run here, before any request is made.
     # A dismissal or a re-check reads no principle and needs none.
     principles = PrincipleSet()
-    if dismissal is None and rechecking is None:
+    if dismissal is None and rechecking is None and waiving is None:
         try:
             principles = load_principles(resolve_fleet_dir(args.principles_dir), root)
         except PrinciplesError as e:
             print(f"connector-reviewer: config error: {e}", file=sys.stderr)
             return 2
-    gh = GitHub(args.repo)
 
     def react(content: str) -> None:
         if live and comment_id:
@@ -173,7 +224,28 @@ def main(argv: list[str] | None = None) -> int:
         )
         return client
 
+    # A fork's branch is not in this repository: refuse, whoever asked and however.
+    if is_fork(gh.pr(args.pr), args.repo):
+        print(f"connector-reviewer: not running — {FORK_REFUSAL}")
+        if live and comment_id:
+            gh.comment(args.pr, f"connector-reviewer: {FORK_REFUSAL}.")
+        react("confused")
+        return 0
+
     run_url = _run_url()
+    if waiving is not None:
+        # No model call and nothing to watch: no progress note.
+        res = waive(
+            gh,
+            args.pr,
+            waiving.waive_reason,
+            actor=waiving.actor,
+            post=live,
+            run_url=run_url,
+        )
+        print(f"connector-reviewer: {res.action} {res.reason}".strip())
+        react("rocket" if res.action == "waived" else "confused")
+        return 0
     if rechecking is not None:
         # One model call at most, and the verdict follows at once: no progress note.
         res = recheck(
@@ -212,6 +284,11 @@ def main(argv: list[str] | None = None) -> int:
     # failure note if connector-reviewer itself crashes, so it never lingers as a stale "running".
     progress_id = _progress(gh, args.pr, run_url) if live else 0
 
+    def record_head(sha: str) -> None:
+        # The head this run set `pending` on, on its progress note: if the PR is
+        # pushed to while the run is going, finalize still finds that head.
+        _best_effort(gh.edit_comment, progress_id, progress_with_head(run_url, sha))
+
     try:
         res = run(
             gh=gh,
@@ -224,8 +301,17 @@ def main(argv: list[str] | None = None) -> int:
             verify_budget=args.verify_budget,
             post=live,
             run_url=run_url,
+            on_pending=record_head,
         )
     except Exception:
+        # The pending status this run set must not outlive it. The workflow's
+        # `finalize` step does the same for a run that is killed outright.
+        # Finalize first: it reads the head this run recorded on the progress
+        # note, which the failure note below replaces.
+        try:
+            finalize(gh, args.pr, run_url)
+        except Exception as e:  # noqa: BLE001 - must never mask the real failure
+            print(f"connector-reviewer: finalize failed: {e}", file=sys.stderr)
         _best_effort(
             gh.edit_comment,
             progress_id,
@@ -261,11 +347,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     for n in res.notes:
         print(f"connector-reviewer: note: {n}", file=sys.stderr)
-    for r in res.incomplete:
+    for r in incomplete_reasons(res):
         print(f"connector-reviewer: incomplete: {r}", file=sys.stderr)
     react(
         "confused"
-        if res.failed or res.incomplete
+        if res.failed or incomplete_reasons(res)
         else ("+1" if res.action == "skipped" else "rocket")
     )
     # A model/transport failure turns the job red. A deliberate budget stop does
@@ -273,15 +359,36 @@ def main(argv: list[str] | None = None) -> int:
     return 1 if res.failed else 0
 
 
-PROGRESS_NOTE = (
-    "⏳ **connector-reviewer is reviewing this PR** — [watch the run live]({url}).\n\n"
-    "<sub>This note is removed when the verdict is posted. If it is still here after the run "
-    "ends, the run was cancelled or timed out: see the log, then comment `/review` again.</sub>"
-)
-FAILED_NOTE = (
-    "❌ **connector-reviewer failed before it could post a verdict** — see {url}. "
-    "Comment `/review` to retry."
-)
+def _finalize(args: argparse.Namespace) -> int:
+    """`finalize`: no config, no principles, no model; GitHub only. Exit 0 when it
+    ran, whether or not it had anything to fix; 1 when GitHub could not be read."""
+    number = args.pr or 0
+    if not number and args.event_name and args.event_path:
+        event = json.loads(Path(args.event_path).read_text())
+        number = pr_number(args.event_name, event)
+    run_url = _run_url()
+    if not number or not run_url:
+        print("connector-reviewer: finalize — no pull request or no run to attribute")
+        return 0
+    try:
+        done = finalize(GitHub(args.repo), number, run_url)
+    except GitHubError as e:
+        print(f"connector-reviewer: finalize failed: {e}", file=sys.stderr)
+        return 1
+    print(
+        f"connector-reviewer: finalize #{number} — "
+        + (
+            f"status on {', '.join(h[:9] for h in done.errored)} set to error"
+            if done.status_set
+            else "no pending status of this run"
+        )
+        + (
+            f"; {len(done.notes_fixed)} progress note(s) rewritten"
+            if done.notes_fixed
+            else ""
+        )
+    )
+    return 0
 
 
 def _run_url() -> str:

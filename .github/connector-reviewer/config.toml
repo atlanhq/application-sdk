@@ -49,6 +49,104 @@ exclude = [
   "tests/**/__snapshots__/**",
 ]
 
+[access]
+# Who may comment `/review` (and its sub-commands): anyone with the Write, Maintain or Admin
+# role on the repository, read live from GitHub, and these GitHub Apps. A comment counts as an
+# App's only when GitHub attributes it to the App (performed_via_github_app.slug) and its
+# author is that App's bot account, "<slug>[bot]". Every other bot is ignored.
+trusted_apps = [
+  "atlan-app-fleet",
+  "atlan-conformance-sync",
+  "connectivity-ai",
+  "mothership-ai",
+  "atlan-connectivity-release-train",
+]
+
+[exempt]
+# Pull requests that are not reviewed: `/review` answers "Exempt: <class>" with a success
+# status and makes no model call. `/review force` reviews one anyway. Decided in code
+# (connector_reviewer/exempt.py) from who opened the pull request, its branch, who wrote
+# each commit and which files changed.
+#
+# Dependency update: opened by one of dependency_bots, on a branch that starts with one of
+# dependency_branches, and EVERY commit is by one of dependency_bots.
+dependency_bots = ["atlan-app-fleet[bot]", "renovate[bot]", "dependabot[bot]"]
+dependency_branches = ["renovate/", "dependabot/"]
+# Conformance resync: opened by one of resync_bots, every commit by one of them, and every
+# changed file matches bootstrap_managed.
+resync_bots = ["atlan-conformance-sync[bot]"]
+# Version bump: the branch starts with one of these. It still needs `/gate-check`.
+version_bump_branches = ["bump-version"]
+# What `atlan-application-sdk-conformance bootstrap` writes, removes or merges into in a
+# connector repo. A managed workflow is named one by one, so the app's own workflows are
+# not covered. test_connector_reviewer.py reads the destination lists out of
+# packages/conformance/conformance/bootstrap/render.py and fails when one is missing here.
+bootstrap_managed = [
+  ".github/workflows/conformance.yaml",
+  ".github/workflows/conformance-upload-sarif.yaml",
+  ".github/workflows/checks.yml",
+  ".github/workflows/commits.yaml",
+  ".github/workflows/release-gate.yaml",
+  ".github/workflows/connector-review-gate.yaml",
+  ".github/workflows/release.yaml",
+  ".github/workflows/tag-and-publish.yaml",
+  ".github/workflows/vulnerability-scan.yml",
+  ".github/workflows/build-and-publish.yaml",
+  ".github/workflows/stale.yml",
+  ".github/workflows/generated-freshness.yaml",
+  ".github/workflows/test-commands.yaml",
+  ".github/workflows/tests.yaml",
+  # The connector-reviewer shim: a resync that only updates it is still a resync.
+  ".github/workflows/connector-reviewer.yaml",
+  # Shims bootstrap once wrote and now removes.
+  ".github/workflows/docstring-coverage.yaml",
+  ".github/workflows/auto-fix.yml",
+  ".github/workflows/update-dashboard.yml",
+  ".github/workflows/renovate-auto-approve.yml",
+  ".github/workflows/porter-bundle-cnab.yaml",
+  ".github/dependabot.yml",
+  ".github/dependabot.yaml",
+  ".github/actions/run-conformance-detect/**",
+  ".github/scripts/build_conformance_args.py",
+  ".github/scripts/probe_code_scanning.py",
+  ".github/scripts/connector_review_gate.py",
+  ".github/scripts/release_gate.py",
+  ".github/ci-system-deps.txt",
+  ".github/connector-reviewer/principles/README.md",
+  ".claude/**",
+  "scripts/fetch-review-rules.sh",
+  "scripts/write-connector-review-marker.sh",
+  ".mothership/**",
+  "CLAUDE.md",
+  "AGENTS.md",
+  "renovate.json",
+  "contract_schema.lock.json",
+  ".gitignore",
+]
+# Docs only (no list): every changed file ends in .md or is under docs/, and none is under
+# .github/connector-reviewer/ or .claude/, or named CLAUDE.md or AGENTS.md at any depth.
+
+[facts]
+# Computed in code and handed to the line review's prompt (connector_reviewer/facts.py); no
+# model stage. Regression: each changed function's callers outside the tests, the tests that
+# name it by tier, and every existing test expectation the PR weakened or removed (no request).
+# History: lines the PR restores that a recent base-branch commit removed, lines it removes
+# that one added, a revert, and a function changed churn_changes times in history_days days
+# (this PR included). Read through the GitHub REST API, at most
+# 3 + history_max_files + history_max_commits requests, four at a time. Reading history
+# returns after history_seconds at the latest: no request starts after it, and one still in
+# flight is abandoned. A failed read means fewer facts, never an incomplete review. Each
+# value must have its TOML type (true/false, a whole number): a quoted value is refused.
+regression = true
+history = true
+history_days = 30
+history_max_files = 8
+history_commits_per_file = 5
+history_max_commits = 20
+history_min_lines = 2
+churn_changes = 3
+history_seconds = 20
+
 [stages]
 reflect = true   # filter-only fact check of each bundle's comments
 verify = true    # one call per round checking still-open findings in touched files
@@ -79,6 +177,11 @@ max_nits = 5              # low-severity (nit) findings kept per bundle
 plan = 1
 plan_min_lines = 60
 plan_max_tokens = 8000
+# Wall-clock limit per bundle, plan turn included: past it the next turn is the final one
+# (code_comment/task_done only), so one slow bundle cannot hold the whole review. The
+# final turn and the fact-check still run after it, about one call each. 0 turns it off.
+# Bundles still run `[scope] concurrency` at a time; the approach check runs beside them.
+bundle_time_limit_s = 120
 # Second pass ("what did you miss?") on large bundles. Off until the replay bench shows it
 # finds real defects the first pass misses at an acceptable cost.
 second_pass = 0
