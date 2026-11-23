@@ -1,15 +1,7 @@
 <!-- BEGIN APPLICATION SDK CONNECTOR REVIEW -->
-## Mandatory pre-commit review (L2-L4 rules; L1 before the PR and in PR CI)
+## Mandatory before opening a pull request: conformance on your change
 
-Before any `git commit`, run the `connector-review` skill for the applicable
-L2-L4 rules. It is local review guidance, not a marker-based commit gate.
-
-Shared L2/L4 rules are fetched into `.mothership/.cache/review-rulesets/` and
-L3 rules live in `.mothership/review-rulesets/connector-app/`.
-
-## Mandatory before opening a pull request: L1 conformance on your change
-
-L1 is the conformance suite. PR CI grades a pull request on what it changes:
+PR CI runs the conformance suite and grades a pull request on what it changes:
 it fails on a blocking finding the change adds and not on one `main` already
 carries. Run the same check locally and get it green before you open or
 update a pull request, so CI is never where you learn of it:
@@ -41,6 +33,37 @@ CONFORMANCE_SINCE=origin/main uv run atlan-application-sdk-conformance detect \
 - An older conformance package ignores `CONFORMANCE_SINCE` and grades the
   whole repository. That verdict is stricter, never laxer; if it fails only
   on findings you did not add, say so in the pull request.
+
+## After opening a pull request: the connector reviewer
+
+Every pull request that changes behaviour is reviewed by the connector reviewer.
+It judges the change against principles, not a rule list, and it does not
+repeat what conformance or CI already checks.
+
+- Ask for a review by commenting `/review` on the pull request. It reviews only
+  when asked. After a new push, comment `/review` again: only the new commits
+  are reviewed.
+- The result is one summary comment and a `connector-reviewer` status on the
+  head commit.
+- Read the principles before changing code they cover. The fleet principles are
+  in application-sdk at `.github/connector-reviewer/principles/`
+  (https://github.com/atlanhq/application-sdk/tree/main/.github/connector-reviewer/principles).
+  This repository's own are in `.github/connector-reviewer/principles/`.
+- Fix each finding. If a finding is wrong, close it with
+  `/review dismiss F-xxxxxx <reason>` and give the real reason. Never dismiss a
+  finding to get a green result. The author of a pull request cannot dismiss a
+  high or critical finding on it.
+- `/review recheck F-xxxxxx <what changed, or why it is wrong>` asks the
+  reviewer to look at one finding again.
+- The approach check at the top of the summary is advice. Act on it or leave it.
+- No review is needed for: dependency bumps from Renovate, bootstrap resync pull
+  requests, version-bump pull requests (those need `/gate-check`), and
+  docs-only changes that do not touch the principle files, `CLAUDE.md`,
+  `AGENTS.md` or `.claude/`.
+- If the reviewer is unavailable, anyone with write access can comment
+  `/review waive <reason>`. The reason is recorded on the pull request.
+- Do not edit bootstrap-managed files under `.github/` in this repository.
+  Change them in application-sdk; a resync brings them here.
 
 The repository's CI configuration remains authoritative for enforcement.
 <!-- END APPLICATION SDK CONNECTOR REVIEW -->

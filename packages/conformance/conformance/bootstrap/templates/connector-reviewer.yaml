@@ -1,0 +1,56 @@
+name: Connector Reviewer
+# The reviewer finds an older review of the same pull request by this run name
+# (its lock), so keep the two in sync. Quoted: unquoted, YAML reads " #" as the
+# start of a comment and the pull request number is lost.
+run-name: "connector-reviewer #${{ github.event.issue.number || inputs.pr }}"
+
+# Managed shim (FND-5317). The connector reviewer is an AI review of a pull
+# request, judged against principles: application-sdk's fleet principles plus
+# this repository's own in .github/connector-reviewer/principles/. It reviews
+# only when asked: a `/review` comment from someone with write access, or a
+# manual dispatch.
+#
+# The logic lives in application-sdk (connector-reviewer-reusable.yaml). This
+# file only subscribes to the events, which fire in this repository only, and
+# passes the three secrets the reviewer needs.
+#
+# `issue_comment` runs THIS file from the default branch, so a pull request
+# cannot edit its own reviewer. The reusable workflow never checks out or runs
+# pull-request code: it reads the diff through the API as data.
+#
+# No `concurrency:` block, on purpose. The reviewer holds its own lock: a
+# running review finishes and a second request for the same pull request is
+# dropped. A group here would cancel or queue it instead.
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to review
+        required: true
+      force:
+        description: Review again even if this commit was already reviewed
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    # Cheap pre-filter so ordinary comments do not start a runner. Who may ask
+    # is decided inside the reviewer, in tested code.
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request && startsWith(github.event.comment.body, '/review'))
+    uses: atlanhq/application-sdk/.github/workflows/connector-reviewer-reusable.yaml@main
+    permissions:
+      contents: read
+    # Only these three, not `inherit`: the reusable is handed nothing it does
+    # not use.
+    secrets:
+      FLEET_APP_ID: ${{ secrets.FLEET_APP_ID }}
+      FLEET_APP_PRIVATE_KEY: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+      CONNECTOR_REVIEWER_GATEWAY_KEY: ${{ secrets.CONNECTOR_REVIEWER_GATEWAY_KEY }}

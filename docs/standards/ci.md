@@ -438,6 +438,20 @@ contains(github.event.pull_request.labels.*.name, 'e2e') &&
 enforces that term and fails any workflow or scaffold that subscribes to
 `labeled`. Both the gates and the input go once the fleet has resynced.
 
+**Review is requested by comment too, in a workflow of its own.** In connector
+repos `/review` asks the connector reviewer for an AI review of the pull
+request, judged against application-sdk's fleet principles and the
+repository's own (`.github/connector-reviewer/principles/` in each). It is not
+a test command: the scaffolded `connector-reviewer.yaml` handles it, calling
+`connector-reviewer-reusable.yaml`, on `issue_comment` and `workflow_dispatch`
+only. The result is one summary comment and a `connector-reviewer` status on
+the head commit. Unlike `test-commands.yaml` it has no `concurrency:` group:
+the reviewer holds its own lock, found by the run name, so a running review
+finishes and a second request is dropped. It replaces the review gate that ran
+on every pull request and review event (`connector-review-gate.yaml`, retired
+in FND-5317; `bootstrap` removes it and its script, and C002 reports a copy
+still on disk).
+
 ## Bot-opened PRs are never labelled
 
 **Rule:** a lane that opens PRs from a bot (the conformance resync lane,
@@ -605,7 +619,7 @@ then skips every step, or runs a script that passes at once, is billed a full
 runner minute. In a reusable that every connector calls, that minute is paid on
 every PR, push and merge-group run across the fleet (FND-3320:
 `renovate-artifacts` in `tests-reusable.yaml`, and the merge-group no-ops in
-`commits.yaml`, `release-gate.yaml` and `connector-review-gate.yaml`).
+`commits.yaml` and `release-gate.yaml`).
 
 **It is safe for a required check** as long as the job `name:` is a static
 string. A job-level skip still files its check run, with conclusion `skipped`,
@@ -650,14 +664,13 @@ enter the queue until its required checks are green on its head, so a check
 whose inputs are identical on the queue commit can only repeat that verdict,
 and every repeat bills a runner across the fleet (FND-3321).
 
-Seven bootstrap callers declare `merge_group:`. Each check is either
+Six bootstrap callers declare `merge_group:`. Each check is either
 base-sensitive or not:
 
 | Caller → job | Base-sensitive? | On a queue entry | Why |
 | --- | --- | --- | --- |
 | `commits.yaml` → Conventional Commits | No | Skipped (FND-3320) | The PR title and commit messages do not change when the PR is combined with the base. |
 | `release-gate.yaml` → Release Gate | No | Skipped (FND-3320) | It reads the head commit's `gate-check` status (FND-3839). A release PR without a passed one fails on the PR and never enters the queue. |
-| `connector-review-gate.yaml` → Connector Review | No | Skipped (FND-3320) | It reads PR reviews, which the queue does not change. |
 | `tests.yaml` → unit, integration | Yes | Skipped when the queue tree equals the PR head tree, the head already contains the queue's base, and github-actions[bot]'s newest `gate-check` status on that head is `success` (FND-4344). Otherwise always runs | Behaviour of the merged code. Integration is skipped on the PR when a queue is detected, so the queue run is the one that gates, except on a release PR: `/gate-check` already ran the whole suite on the head commit, and refuses a head that is behind its base. |
 | `conformance.yaml` → Conformance Gate | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | The suite reads only the tree. |
 | `checks.yml` → Pre-commit | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | Lint and type checks read only the tree. A base change can break them (a renamed symbol), so a different tree re-runs them. |
@@ -887,7 +900,7 @@ Medians come from `actions_minutes_report.py`. Moved to `ubuntu-slim`:
   `update-fleet-dashboards.yaml`, FND-3337).
 * `commits.yaml`, `conformance-upload-sarif-reusable.yaml`, `stale.yml`,
   `tag-and-release.yaml`, `release-version-bump.yaml`: their one job each.
-* Bootstrap templates: `connector-review-gate.yaml`, `release-gate.yaml`.
+* Bootstrap template: `release-gate.yaml`.
 
 Short fleet jobs that stay on `ubuntu-latest`:
 
