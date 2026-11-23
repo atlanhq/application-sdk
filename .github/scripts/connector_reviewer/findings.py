@@ -141,10 +141,9 @@ class PRState:
 
     @classmethod
     def decode(cls, comment_body: str) -> "PRState | None":
-        # The LAST marker: `encode` appends the state after everything else in
-        # the summary, and text shown above it (a finding's title, a dismissal
-        # or waive reason) comes from a model or a commenter. Reading the first
-        # one would let such text stand in for the state.
+        # The reviewer appends the state block after everything else, so the
+        # last match is the real one. Text earlier in the comment comes from
+        # the model and the pull request, and must never be read as state.
         found = _STATE_RE.findall(comment_body or "")
         if not found:
             return None

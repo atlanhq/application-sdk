@@ -13,6 +13,7 @@ import fnmatch
 from dataclasses import dataclass
 
 from .diff import FileDiff
+from .tools import secret_path
 
 DEFAULT_EXCLUDE = (
     "uv.lock",
@@ -62,6 +63,11 @@ def select_files(
             skipped.append((fd.path, "binary"))
         elif fd.status == "deleted" or not fd.added_lines and not fd.commentable_lines:
             skipped.append((fd.path, "deletion only"))
+        elif secret_path(fd.path):
+            # Before any other rule: its diff is never sent to the model. The
+            # tools refuse to read such a file, and a review must not hand over
+            # in a prompt what a tool call would be refused.
+            skipped.append((fd.path, "may hold secrets: not sent to the model"))
         elif _match(fd.path, exclude):
             skipped.append((fd.path, "excluded by pattern"))
         elif fd.additions + fd.deletions > max_changed_lines_per_file:

@@ -63,7 +63,7 @@ SECRET_GLOBS = (
 SAFE_ENV = (".env.example", ".env.sample", ".env.template")
 
 
-def _secret_path(p: str) -> bool:
+def secret_path(p: str) -> bool:
     name = p.rsplit("/", 1)[-1]
     if name in SAFE_ENV:
         return False
@@ -86,7 +86,7 @@ class Workspace:
             not rel
             or rel.startswith("/")
             or ".." in Path(rel).parts
-            or _secret_path(rel)
+            or secret_path(rel)
         ):
             return None
         return rel
@@ -211,6 +211,11 @@ def find_symbol(ws: Workspace, name: str) -> str:
 def read_diff(ws: Workspace, path_array: list[str]) -> str:
     out: list[str] = []
     for p in path_array[:5]:
+        if secret_path(p):
+            # `ws.diffs` holds every changed file, including ones selection
+            # skipped, so the guard is applied here too.
+            out.append(f'<file path="{p}">\nnot available: may hold secrets\n</file>')
+            continue
         fd = ws.diffs.get(p)
         out.append(
             f'<file path="{p}">\n{fd.render(max_lines=200) if fd else "not changed in this PR"}\n</file>'

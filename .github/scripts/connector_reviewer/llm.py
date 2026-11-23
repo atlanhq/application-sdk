@@ -72,10 +72,28 @@ class ContentRejected(FatalRequestError):
 PROVIDER_REJECTED = "provider_rejected"
 
 
+# Secret values this process holds (the gateway key). `redact` masks each one
+# wherever it appears, whatever its shape: a key need not start with `sk-`, and a
+# gateway or proxy can echo the submitted key back in an error body.
+_SECRETS: set[str] = set()
+# A value shorter than this is not treated as a secret: masking it would blank
+# ordinary words out of every error message.
+_MIN_SECRET_CHARS = 8
+
+
+def register_secret(value: str) -> None:
+    """Have `redact` mask `value` from now on. Called with the gateway key."""
+    if len(value) >= _MIN_SECRET_CHARS:
+        _SECRETS.add(value)
+
+
 def redact(text: str) -> str:
-    """An error body as it may be recorded: whitespace collapsed and any
-    key-shaped token masked. Never truncated: a cut-off error body is what made a
-    refused request undiagnosable (the run report is the place to read it whole)."""
+    """An error body as it may be recorded: whitespace collapsed, every registered
+    secret and any key-shaped token masked. Never truncated: a cut-off error body
+    is what made a refused request undiagnosable (the run report is the place to
+    read it whole)."""
+    for secret in sorted(_SECRETS, key=len, reverse=True):
+        text = text.replace(secret, "[key]")
     return re.sub(r"sk-[A-Za-z0-9._-]+", "sk-…", " ".join(text.split()))
 
 
@@ -427,6 +445,7 @@ class Client:
             base_url or os.environ.get("MODEL_GATEWAY_BASE_URL") or ""
         ).rstrip("/")
         self.api_key = api_key or os.environ.get("CONNECTOR_REVIEWER_GATEWAY_KEY") or ""
+        register_secret(self.api_key)
         self.timeout_s = timeout_s
         self.max_retries = max_retries
         self.max_consecutive_failures = max_consecutive_failures
@@ -588,10 +607,12 @@ class Client:
         try:
             status, text = self._meta("/v1/models")
         except (LLMError, TimeoutError, urllib.error.URLError, OSError) as e:
-            return f"gateway unreachable: {e}"
+            return f"gateway unreachable: {redact(str(e))}"
         self._diagnose("/v1/models", status, text)
         if status == 401:
-            return f"the gateway key was rejected (HTTP 401: {text[:160]})"
+            # Redacted: this reason is published in the pull request's summary,
+            # and a gateway or proxy can echo the submitted key in a 401 body.
+            return f"the gateway key was rejected (HTTP 401: {redact(text)[:160]})"
         if status == 200:
             try:
                 ids = {m.get("id") for m in json.loads(text).get("data", [])}

@@ -293,6 +293,25 @@ above; "typing" means only the annotations described under Typing.
 | `principles.py`, `typed.py`, `exempt.py` | New here. |
 | `approve.py`, `surface.py`, `rules.py` | Not here. |
 
+## Fixed here, still open in lens
+
+lens reviewed this fork and found defects in code that came over unchanged. These
+are fixed in this copy only; lens still has them. Port each one to lens before
+re-syncing either copy from the other.
+
+| Where | What changed |
+|---|---|
+| `llm.py` | `redact` also masks the gateway key itself (`register_secret`), whatever its shape, not only `sk-…` tokens. The preflight's 401 and "unreachable" reasons are redacted, because they are published in the summary. |
+| `select.py` | A path that may hold secrets (`tools.secret_path`) is skipped before any other rule, so its diff never enters a bundle. |
+| `tools.py` | `_secret_path` is public as `secret_path`. `read_diff` refuses such a path. |
+| `findings.py`, `review.py` | `PRState.decode` reads the last state block in the comment, and the summary text can no longer contain a state marker. |
+| `config.py` | `validate` refuses a price or cap that is NaN or infinite, and a negative cache price. |
+| `agent.py` | `place` only accepts a path from the bundle it was given. |
+
+Two more fixes are in code that is new here: `principles.load_principles` refuses a
+fleet directory in which no principle could be read, and `typed.objects` returns
+nothing for a value that is not a list.
+
 ## Not changed, and worth knowing before the next change
 
 These are lens's behaviour, carried over as it is. Later changes to this fork are
