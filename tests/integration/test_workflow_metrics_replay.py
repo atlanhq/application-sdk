@@ -39,6 +39,8 @@ from application_sdk.execution._temporal.interceptors.metrics import (
     MetricsInterceptor,
 )
 
+pytestmark = pytest.mark.integration
+
 # The workflow sleeps this long on its own clock, so every run's recorded
 # duration has a known floor.
 _TIMER_S = 1.0
