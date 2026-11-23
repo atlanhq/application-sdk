@@ -52,6 +52,20 @@ def _match(path: str, patterns: tuple[str, ...] | list[str]) -> bool:
     )
 
 
+def model_visible(
+    files: list[FileDiff], exclude: tuple[str, ...] | list[str] = DEFAULT_EXCLUDE
+) -> list[FileDiff]:
+    """The changed files whose diff a prompt may carry: never a change that may
+    hold secrets (either side of a rename), whatever `exclude` says, and never
+    a file the exclude patterns name.
+
+    Selection already applies both to the line review. Every other prompt that
+    shows a diff (the approach check, verify, the base-branch check of a new
+    finding) gets its files from a wider list (the whole PR, the round's range)
+    and must pass it through here first."""
+    return [fd for fd in files if not secret_diff(fd) and not _match(fd.path, exclude)]
+
+
 def select_files(
     files: list[FileDiff],
     *,

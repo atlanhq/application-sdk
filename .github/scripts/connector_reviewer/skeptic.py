@@ -31,6 +31,7 @@ from .diff import locate_in_text
 from .findings import BLOCKING, Finding
 from .llm import BudgetExhausted, Client, LLMError, assistant_turn
 from .prompts import CONNECTOR_PROFILE
+from .select import model_visible
 from .tools import TOOL_SCHEMAS, Workspace, parse_args, run_tool
 from .typed import EMPTY, objects
 
@@ -187,7 +188,9 @@ def build_input(ws: Workspace, f: Finding, principle: str) -> str:
     if principle:
         parts.append(f"<cited_principle>\n{principle}\n</cited_principle>")
     fd = ws.diffs.get(f.path)
-    if fd is not None:
+    # Every diff a prompt carries goes through `model_visible` (FND-5327): a
+    # finding is only ever on a reviewed file, but this path must not rely on it.
+    if fd is not None and model_visible([fd]):
         parts.append(
             f'<file_diff path="{f.path}">\n{fd.render(max_lines=DIFF_LINES)}\n</file_diff>'
         )

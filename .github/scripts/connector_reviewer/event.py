@@ -32,6 +32,9 @@ connector-reviewer reviews only when asked — a push never spends money on its 
 - `/review waive <reason>`: set the reviewer's verdict aside for the current head
   commit, with who and why on record. No model call. Anyone who may ask may
   waive, the PR author included; the reason is required.
+- Any other word after `/review` (a typo of `force`, a command that does not
+  exist) gets a usage reply and starts nothing: a full review costs money, and
+  a mistyped command must not buy one.
 - `workflow_dispatch` with a PR number: run (maintainers, from the Actions tab).
 - Anything else, including every `pull_request*` event: do not run.
 
@@ -104,7 +107,14 @@ VERIFY_BUDGET = "verify-budget"
 DISMISS_USAGE = "usage: `/review dismiss F-1a2b3c [F-…] <reason>` — at least one finding id and a reason"
 RECHECK_USAGE = "usage: `/review recheck [verify-budget] F-1a2b3c [F-…] [reason]` — at least one finding id"
 WAIVE_USAGE = "usage: `/review waive <reason>` — a reason is required"
-USAGE_ERRORS = (DISMISS_USAGE, RECHECK_USAGE, WAIVE_USAGE)
+REVIEW_USAGE = (
+    "usage: `/review [force] [verify-budget]` to review, or "
+    "`/review dismiss|recheck|waive …` — that command is not one of these, "
+    "so nothing was started"
+)
+USAGE_ERRORS = (DISMISS_USAGE, RECHECK_USAGE, WAIVE_USAGE, REVIEW_USAGE)
+# What may follow `/review` in a plain review request.
+REVIEW_OPTIONS = ("force", VERIFY_BUDGET)
 ROLE_REFUSAL = (
     "only people with the Write, Maintain or Admin role on this repository "
     "can ask for a review"
@@ -278,7 +288,22 @@ def decide(
                 pr_author=pr_author,
                 reply=not reason,
             )
-        options = [w.lower() for w in words[1:3]]
+        # Options come from the command's own line only: a note on the lines
+        # below a bare `/review` ("/review\nplease look at the retry") is a
+        # message to the reviewers, not an option, and still reviews.
+        first_line = str(comment.get("body") or "").strip().splitlines()[0].split()
+        options = [w.lower() for w in first_line[1:]]
+        if any(w not in REVIEW_OPTIONS for w in options):
+            # Not a word this command knows: tell the commenter, review nothing.
+            return Decision(
+                False,
+                number,
+                reason=REVIEW_USAGE,
+                comment_id=comment_id,
+                actor=actor,
+                pr_author=pr_author,
+                reply=True,
+            )
         force = bool(options) and options[0] == "force"
         return Decision(
             True,

@@ -32,6 +32,7 @@ from . import trace
 from .diff import FileDiff
 from .llm import BudgetExhausted, Client, LLMError, assistant_turn, estimate_tokens
 from .prompts import CONNECTOR_PROFILE
+from .select import DEFAULT_EXCLUDE, model_visible
 from .tools import TOOL_SCHEMAS, Workspace, parse_args, run_tool
 from .typed import EMPTY, objects
 
@@ -194,8 +195,13 @@ def check(
     max_lookups: int = 4,
     max_tokens: int = 16000,  # reasoning tokens count against this
     max_concerns: int = 2,
+    exclude: tuple[str, ...] | list[str] = DEFAULT_EXCLUDE,
 ) -> ApproachCheck:
     out = ApproachCheck()
+    # A later round hands over the whole PR's diff, which selection never
+    # filtered: a change that may hold secrets, or an excluded file, is dropped
+    # here, before anything of it is rendered into the prompt.
+    files = model_visible(files, exclude)
     if not files:
         return out
     messages: list[dict[str, Any]] = [

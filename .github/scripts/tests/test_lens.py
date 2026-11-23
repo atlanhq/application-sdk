@@ -7820,6 +7820,354 @@ def test_a_hunk_that_only_removes_imports_is_not_mechanical():
     }
 
 
+# ---- no secret reaches any prompt (FND-5327) -----------------------------------------
+#
+# Selection and `read_diff` refused a file that may hold secrets, but the approach
+# check (a later round hands it the whole PR's diff), verify's round diff, the
+# base-branch check of a new finding and `/lens recheck` did not. Reproduced
+# live: round 1 a PR of only `.env` (no model call), round 2 a one-line code
+# change, and the approach check's first prompt held the `.env` diff.
+
+# Fake values: what must never be in a request body.
+BASE_TOKEN = "tok-base-0c41-not-real"
+BASE_PASSWORD = "pw-base-9d2e-not-real"
+R1_TOKEN = "tok-r1-5e1f-not-real"
+R1_PASSWORD = "pw-r1-77aa-not-real"
+R3_TOKEN = "tok-r3-a3b9-not-real"
+SECRET_VALUES = (BASE_TOKEN, BASE_PASSWORD, R1_TOKEN, R1_PASSWORD, R3_TOKEN)
+SETTINGS = "app/settings.cfg"  # where the rename scenario moves `.env` to
+
+
+def _env(token: str, password: str) -> str:
+    # Quoted, so the file even parses as Python: a base copy that parses is
+    # shown. The comment is a line a finding can quote without quoting a value.
+    return (
+        f'# example settings\nEXAMPLE_TOKEN="{token}"\n'
+        f'EXAMPLE_DB_PASSWORD="{password}"\n'
+    )
+
+
+def _diff_of(path: str, old: str | None, new: str, old_path: str | None = None) -> str:
+    """A unified diff of one whole file: added (`old` None), modified, or renamed
+    from `old_path` with changes."""
+    a = old_path or path
+    head = [f"diff --git a/{a} b/{path}"]
+    if old is None:
+        head += ["new file mode 100644", "--- /dev/null"]
+    elif old_path:
+        head += ["similarity index 50%", f"rename from {a}", f"rename to {path}"]
+        head += [f"--- a/{a}"]
+    else:
+        head += [f"--- a/{a}"]
+    head += [f"+++ b/{path}"]
+    olds = (old or "").splitlines()
+    news = new.splitlines()
+    body = [f"@@ -{1 if olds else 0},{len(olds)} +1,{len(news)} @@"]
+    body += [f"-{x}" for x in olds] + [f"+{x}" for x in news]
+    return "\n".join(head + body) + "\n"
+
+
+SRC_V2_DIFF = _diff_of("application_sdk/storage/fetch.py", SRC_V1, SRC_V2)
+SRC_NEXT_RANGE = _diff_of("application_sdk/storage/fetch.py", SRC_V2, SRC_V2_NEXT)
+SRC_NEXT_DIFF = _diff_of("application_sdk/storage/fetch.py", SRC_V1, SRC_V2_NEXT)
+
+COMMENT_NEXT = {
+    "path": "application_sdk/storage/fetch.py",
+    "existing_code": "    return {k: fetch(client, k) for k in keys}",
+    "severity": "high",
+    "category": "bug",
+    "title": "fetch_many raises on the first missing key",
+    "content": "fetch decodes None for a missing key, so one missing key fails the batch.",
+}
+
+
+class SecretRecorder:
+    """A transport that keeps every request body as sent, from every client the
+    run creates (the approach check runs on a client of its own), and replays
+    the approach check's replies and the rest from separate queues."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self.approach: list[Any] = []
+        self.rest: list[Any] = []
+
+    def __call__(self, body: dict[str, Any]) -> Any:
+        self.sent.append(json.dumps(body))
+        queue = self.approach if _is_approach(body) else self.rest
+        if queue:
+            return queue.pop(0)
+        if _is_approach(body):
+            return response(
+                [tool_call("approach_verdict", {"verdict": "sound", "problem": "p"})]
+            )
+        return response([tool_call("task_done", {"state": "DONE"})])
+
+    def leaked(self) -> list[str]:
+        return [v for v in SECRET_VALUES if any(v in s for s in self.sent)]
+
+    def look_for_the_secret(self) -> None:
+        """The approach check searches for the variable and reads both paths,
+        as the live run did: a lookup reply must not carry the value either."""
+        self.approach += [
+            response(
+                [
+                    tool_call("search_code", {"search_text": "EXAMPLE_TOKEN"}, 0),
+                    tool_call("read_file", {"file_path": ".env"}, 1),
+                    tool_call("read_file", {"file_path": SETTINGS}, 2),
+                ]
+            ),
+            response(
+                [tool_call("approach_verdict", {"verdict": "sound", "problem": "p"})]
+            ),
+        ]
+
+
+def _secret_scenario(repo: Path, kind: str) -> tuple[Any, dict[int, tuple[str, str]]]:
+    """The fake GitHub and, per round, (range diff, whole-PR diff).
+
+    `change`: round 1 adds `.env`, round 3 changes it again. `rename`: the base
+    branch has `.env`, round 1 renames it to SETTINGS with a change, round 3
+    changes SETTINGS (in that round's range, an ordinary change). Round 2 is a
+    code change, round 3 one more."""
+    base_env = _env(BASE_TOKEN, BASE_PASSWORD)
+    r1_env = _env(R1_TOKEN, R1_PASSWORD)
+    r3_env = _env(R3_TOKEN, R1_PASSWORD)
+    gh = FakeGitHub()
+    files: dict[tuple[str, str], str] = {}
+    gh.files = files
+    if kind == "change":
+        path = ".env"
+        r1 = _diff_of(path, None, r1_env)
+        r3_range = _diff_of(path, r1_env, r3_env)
+        r3_pr = _diff_of(path, None, r3_env)
+    else:
+        (repo / ".env").write_text(base_env)  # the base checkout
+        files[(".env", "b0")] = base_env  # the merge base, read by recheck
+        path = SETTINGS
+        r1 = _diff_of(path, base_env, r1_env, old_path=".env")
+        r3_range = _diff_of(path, r1_env, r3_env)
+        r3_pr = _diff_of(path, base_env, r3_env, old_path=".env")
+    for head, env in (("h1", r1_env), ("h2", r1_env), ("h3", r3_env)):
+        files[(path, head)] = env
+    for head, src in (("b0", SRC_V1), ("h1", SRC_V1), ("h2", SRC_V2)):
+        files[("application_sdk/storage/fetch.py", head)] = src
+    files[("application_sdk/storage/fetch.py", "h3")] = SRC_V2_NEXT
+    rounds = {
+        1: (r1, r1),
+        2: (SRC_V2_DIFF, r1 + SRC_V2_DIFF),
+        3: (r3_range + SRC_NEXT_RANGE, r3_pr + SRC_NEXT_DIFF),
+    }
+    gh.diffs = {("b0", "h1"): r1}
+    return gh, rounds
+
+
+def _review_reply(comment: dict[str, Any]) -> list[Any]:
+    """A line review that raises `comment`, then the fact-check that keeps it."""
+    return [
+        response(
+            [
+                tool_call("code_comment", {"comments": [comment]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    ]
+
+
+@pytest.mark.parametrize("kind", ["change", "rename"])
+def test_a_secret_file_reaches_no_prompt_in_any_round(repo: Path, kind: str):
+    """Round 1 is the secret file alone: no model call. Round 2 is a code change,
+    so the approach check runs for the first time, on the whole PR's diff.
+    Round 3 changes the secret file again (`/lens force`, so the approach check
+    runs again) and raises a new blocking finding: verify, the base-branch check
+    and the line review all see that round's range. Then `/lens recheck`. Not
+    one request body carries a secret value."""
+    gh, rounds = _secret_scenario(repo, kind)
+    rec = SecretRecorder()
+    rules = load_rules(repo / ".github" / "lens")
+
+    def review(head: str, prev: str, n: int, *, force: bool = False) -> RunResult:
+        gh.head = head
+        gh.diffs[(prev, head)] = rounds[n][0]
+        gh.diffs[("b0", head)] = rounds[n][1]
+        return run(
+            gh=gh,
+            number=1,
+            root=repo,
+            cfg=cfg_for(repo),
+            rules=rules,
+            client_factory=_factory(rec),
+            force=force,
+        )
+
+    first = review("h1", "b0", 1)
+    assert rec.sent == []  # nothing else in the PR: no model call
+    assert any("may hold secrets" in why for _, why in first.skipped_files)
+
+    rec.look_for_the_secret()
+    rec.rest += _review_reply(COMMENT)
+    second = review("h2", "h1", 2)
+    assert second.mode == "incremental"
+    assert second.state is not None
+    assert (second.state.approach or {}).get("problem") == "p"  # the check ran
+
+    rec.look_for_the_secret()
+    rec.rest += [response([tool_call("task_done", {"state": "DONE"})])]  # verify
+    rec.rest += _review_reply(COMMENT_NEXT)
+    third = review("h3", "h2", 3, force=True)
+    assert third.mode == "incremental"
+    assert any("may hold secrets" in why for _, why in third.skipped_files)
+
+    review_mod.recheck(
+        gh=gh,
+        number=1,
+        ids=[second.state.findings[0].id],
+        reason="",
+        root=repo,
+        cfg=cfg_for(repo),
+        client_factory=_factory(rec),
+        actor="author",
+    )
+
+    # Every path that builds a prompt ran: the approach check twice, verify,
+    # the base-branch check of a new finding, and the recheck.
+    assert sum("approach_verdict" in s for s in rec.sent) >= 4
+    assert sum("<changes_this_round>" in s for s in rec.sent) >= 2
+    assert any("<at_merge_base>" in s for s in rec.sent)
+    assert rec.leaked() == []
+
+
+def test_a_finding_on_a_file_renamed_from_env_shows_no_base_copy(repo: Path):
+    """Verify's <at_base_branch> reads the base checkout at a renamed file's old
+    path, and `/lens recheck` reads the merge base there: for a file renamed
+    from `.env`, that is the secret file itself. Nor is its PR-head text read:
+    it is the `.env` content under an ordinary name."""
+    gh, rounds = _secret_scenario(repo, "rename")
+    f = Finding(SETTINGS, 1, "medium", "bug", "t", "b", "# example settings")
+    f.id = "F-5ec0de"
+    st = PRState(round=1, reviewed_head="h1", model=cfg_for(repo).model, findings=[f])
+    gh.comments.append(
+        {
+            "id": 1,
+            "body": SUMMARY_MARKER + st.encode(),
+            "user": {"login": "atlan-app-fleet[bot]"},
+        }
+    )
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")], gh.diffs[("b0", "h2")] = rounds[2]
+    rec = SecretRecorder()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=_factory(rec),
+    )
+    assert res.mode == "incremental"
+    verify = [s for s in rec.sent if "<at_base_branch>" in s]
+    assert verify and "may hold secrets" in verify[0]
+    review_mod.recheck(
+        gh=gh,
+        number=1,
+        ids=[f.id],
+        reason="",
+        root=repo,
+        cfg=cfg_for(repo),
+        client_factory=_factory(rec),
+        actor="author",
+    )
+    assert any("<at_merge_base>" in s for s in rec.sent)
+    assert rec.leaked() == []
+
+
+def test_model_visible_drops_secrets_and_excluded_files():
+    from lens.select import DEFAULT_EXCLUDE, model_visible  # noqa: PLC0415
+
+    files = parse_unified_diff(
+        _diff_of(".env", None, _env(R1_TOKEN, R1_PASSWORD))
+        + _diff_of(SETTINGS, "A=1\n", "A=2\n", old_path="config/.env.prod")
+        + _diff_of(".env.example", None, "EXAMPLE_TOKEN=\n")
+        + _diff_of("uv.lock", "a\n", "b\n")
+        + _diff_of("fixtures/big.json", "{}\n", "[]\n")
+        + SRC_V2_DIFF
+    )
+    exclude = (*DEFAULT_EXCLUDE, "fixtures/**")
+    kept = [fd.path for fd in model_visible(files, exclude)]
+    assert kept == [".env.example", "application_sdk/storage/fetch.py"]
+    # No exclude list lets a secret through, an empty one included.
+    assert [fd.path for fd in model_visible(files, ())] == [
+        ".env.example",
+        "uv.lock",
+        "fixtures/big.json",
+        "application_sdk/storage/fetch.py",
+    ]
+
+
+def test_a_later_rounds_change_to_a_file_renamed_from_env_is_still_a_secret():
+    """The round's range shows the renamed file as an ordinary change."""
+    pr = parse_unified_diff(_diff_of(SETTINGS, "A=1\n", "A=2\n", old_path=".env"))
+    [later] = parse_unified_diff(_diff_of(SETTINGS, "A=2\n", "A=3\n"))
+    [kept] = review_mod.secret_origin([later], pr)
+    assert kept.old_path == ".env" and kept.hunks == later.hunks
+    assert review_mod.select_files([kept]).reviewed == []
+
+
+def test_the_round_diff_and_the_approach_input_never_render_a_secret(repo: Path):
+    files = parse_unified_diff(
+        _diff_of(".env", None, _env(R1_TOKEN, R1_PASSWORD)) + SRC_V2_DIFF
+    )
+    text = review_mod.round_diff(files, [])
+    assert "application_sdk/storage/fetch.py" in text and R1_TOKEN not in text
+    rec = SecretRecorder()
+    client = _factory(rec)(Ledger(1.0))
+    ws, _ = _ws(repo)
+    ac = holistic.check(client, ws, files, {"title": "t", "body": ""})
+    assert ac.ran and rec.sent and rec.leaked() == []
+    # A PR of nothing but the secret file has no approach check to run.
+    rec.sent.clear()
+    holistic.check(client, ws, files[:1], {"title": "t", "body": ""})
+    assert rec.sent == []
+
+
+# Every function that renders a diff into text. A prompt built from a diff must
+# take its files through `select.model_visible` (or, for the line review,
+# `select_files`); a new one fails here until it is checked and listed.
+_DIFF_RENDERERS = {
+    "agent.py": {"initial_sources", "build_context", "_reflect"},
+    "bundle.py": {
+        "diff_tokens",
+        "group",
+        "_split",
+        "_parts",
+    },  # token estimates, no prompt
+    "holistic.py": {"build_input"},
+    "review.py": {"round_diff"},
+    "tools.py": {"read_diff"},
+}
+
+
+def test_every_diff_rendered_into_a_prompt_is_a_known_path():
+    import ast  # noqa: PLC0415
+
+    pkg = Path(__file__).resolve().parents[1] / "lens"
+    found: dict[str, set[str]] = {}
+    for src in sorted(pkg.glob("*.py")):
+        tree = ast.parse(src.read_text())
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            for node in ast.walk(fn):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "render"
+                    and fn.name != "render"
+                ):
+                    found.setdefault(src.name, set()).add(fn.name)
+    assert found == _DIFF_RENDERERS
+
+
 # ---- ported from connector-reviewer (FND-5323): secrets, state block, prices, placement -------
 
 import math  # noqa: E402
