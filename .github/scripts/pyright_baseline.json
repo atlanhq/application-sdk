@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 454,
-    "warning": 5578
+    "warning": 5577
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -177,9 +177,6 @@
     },
     ".github/scripts/lens/surface.py": {
       "error:reportArgumentType": 1,
-      "warning:reportUnknownMemberType": 1
-    },
-    ".github/scripts/lens/tools.py": {
       "warning:reportUnknownMemberType": 1
     },
     ".github/scripts/lens/trace.py": {

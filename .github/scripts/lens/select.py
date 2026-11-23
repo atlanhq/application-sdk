@@ -13,6 +13,7 @@ import fnmatch
 from dataclasses import dataclass
 
 from .diff import FileDiff
+from .tools import secret_diff
 
 DEFAULT_EXCLUDE = (
     "uv.lock",
@@ -46,6 +47,20 @@ def _match(path: str, patterns: tuple[str, ...] | list[str]) -> bool:
     )
 
 
+def model_visible(
+    files: list[FileDiff], exclude: tuple[str, ...] | list[str] = DEFAULT_EXCLUDE
+) -> list[FileDiff]:
+    """The changed files whose diff a prompt may carry: never a change that may
+    hold secrets (either side of a rename), whatever `exclude` says, and never
+    a file the exclude patterns name.
+
+    Selection already applies both to the line review. Every other prompt that
+    shows a diff (the approach check, verify, the base-branch check of a new
+    finding) gets its files from a wider list (the whole PR, the round's range)
+    and must pass it through here first."""
+    return [fd for fd in files if not secret_diff(fd) and not _match(fd.path, exclude)]
+
+
 def select_files(
     files: list[FileDiff],
     *,
@@ -59,6 +74,11 @@ def select_files(
             skipped.append((fd.path, "binary"))
         elif fd.status == "deleted" or not fd.added_lines and not fd.commentable_lines:
             skipped.append((fd.path, "deletion only"))
+        elif secret_diff(fd):
+            # Before any other rule: its diff is never sent to the model. The
+            # tools refuse to read such a file, and a review must not hand over
+            # in a prompt what a tool call would be refused.
+            skipped.append((fd.path, "may hold secrets: not sent to the model"))
         elif _match(fd.path, exclude):
             skipped.append((fd.path, "excluded by pattern"))
         elif fd.additions + fd.deletions > max_changed_lines_per_file:
