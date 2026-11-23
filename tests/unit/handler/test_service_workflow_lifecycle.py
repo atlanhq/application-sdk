@@ -21,6 +21,11 @@ from tests.unit.handler._service_support import (
     _TestHandler,
 )
 
+# The task queue every lifecycle-route service below is built with. A fake
+# describe() must report it, or the route treats the workflow as another
+# app's and answers 404 (FND-5215).
+_OWNED_QUEUE = "lifecycle-test-queue"
+
 # ---------------------------------------------------------------------------
 # BLDX-1129: tests targeting the bug class — runtime-only inline imports,
 # swallowed exceptions, contract drift between handler service and its
@@ -279,6 +284,7 @@ class TestStopWorkflowEndpoint:
             app_name="stop-test",
             app_class=_StopApp,
             temporal_host="temporal:7233",
+            task_queue=_OWNED_QUEUE,
         )
         return svc
 
@@ -288,6 +294,9 @@ class TestStopWorkflowEndpoint:
         try:
             svc = self._make_routed_client()
             mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(
+                return_value=MagicMock(task_queue=_OWNED_QUEUE)
+            )
             mock_handle.terminate = AsyncMock(return_value=None)
             mock_client = MagicMock()
             mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
@@ -313,6 +322,9 @@ class TestStopWorkflowEndpoint:
         try:
             svc = self._make_routed_client()
             mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(
+                return_value=MagicMock(task_queue=_OWNED_QUEUE)
+            )
             import temporalio.service
 
             mock_handle.terminate = AsyncMock(
@@ -345,6 +357,9 @@ class TestStopWorkflowEndpoint:
         try:
             svc = self._make_routed_client()
             mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(
+                return_value=MagicMock(task_queue=_OWNED_QUEUE)
+            )
             mock_handle.terminate = AsyncMock(
                 side_effect=RuntimeError("connection refused: 10.0.0.42:7233")
             )
@@ -386,6 +401,7 @@ class TestGetWorkflowStatusEndpoint:
             app_name="status-test",
             app_class=_StatusApp,
             temporal_host="temporal:7233",
+            task_queue=_OWNED_QUEUE,
         )
 
     def _teardown(self) -> None:
@@ -402,6 +418,7 @@ class TestGetWorkflowStatusEndpoint:
             svc = self._setup()
             now = datetime.now(UTC)
             desc = MagicMock()
+            desc.task_queue = _OWNED_QUEUE
             desc.status.name = "RUNNING"
             desc.execution_time = now - timedelta(seconds=10)
             desc.close_time = None
@@ -430,6 +447,7 @@ class TestGetWorkflowStatusEndpoint:
             svc = self._setup()
             start = datetime(2024, 1, 1, tzinfo=UTC)
             desc = MagicMock()
+            desc.task_queue = _OWNED_QUEUE
             desc.status.name = "COMPLETED"
             desc.execution_time = start
             desc.close_time = start + timedelta(seconds=42)
@@ -455,6 +473,7 @@ class TestGetWorkflowStatusEndpoint:
         try:
             svc = self._setup()
             desc = MagicMock()
+            desc.task_queue = _OWNED_QUEUE
             desc.status = None
             desc.execution_time = None
             desc.close_time = None
@@ -541,6 +560,7 @@ class TestGetResultEndpoint:
             app_name="res-test",
             app_class=_ResApp,
             temporal_host="temporal:7233",
+            task_queue=_OWNED_QUEUE,
         )
 
     def _teardown(self) -> None:
@@ -555,6 +575,7 @@ class TestGetResultEndpoint:
         try:
             svc = self._setup()
             desc = MagicMock()
+            desc.task_queue = _OWNED_QUEUE
             desc.status.name = "RUNNING"
             mock_handle = MagicMock()
             mock_handle.describe = AsyncMock(return_value=desc)
@@ -577,6 +598,7 @@ class TestGetResultEndpoint:
         try:
             svc = self._setup()
             desc = MagicMock()
+            desc.task_queue = _OWNED_QUEUE
             desc.status.name = "COMPLETED"
             mock_handle = MagicMock()
             mock_handle.describe = AsyncMock(return_value=desc)
@@ -612,6 +634,7 @@ class TestGetResultEndpoint:
         try:
             svc = self._setup()
             desc = MagicMock()
+            desc.task_queue = _OWNED_QUEUE
             desc.status.name = temporal_status
             mock_handle = MagicMock()
             mock_handle.describe = AsyncMock(return_value=desc)
@@ -636,6 +659,7 @@ class TestGetResultEndpoint:
         try:
             svc = self._setup()
             desc = MagicMock()
+            desc.task_queue = _OWNED_QUEUE
             desc.status.name = "EXOTIC_STATE"
             mock_handle = MagicMock()
             mock_handle.describe = AsyncMock(return_value=desc)
@@ -660,6 +684,7 @@ class TestGetResultEndpoint:
         try:
             svc = self._setup()
             desc = MagicMock()
+            desc.task_queue = _OWNED_QUEUE
             desc.workflow_type = "res-test"  # single implicit entrypoint
             mock_handle = MagicMock()
             mock_handle.describe = AsyncMock(return_value=desc)
@@ -695,6 +720,7 @@ class TestGetResultEndpoint:
         try:
             svc = self._setup()
             desc = MagicMock()
+            desc.task_queue = _OWNED_QUEUE
             desc.workflow_type = "res-test"
             mock_handle = MagicMock()
             mock_handle.describe = AsyncMock(return_value=desc)
@@ -761,6 +787,119 @@ class TestGetResultEndpoint:
         assert response.status_code == 503
 
 
+class TestLifecycleRoutesRefuseOtherAppsWorkflows:
+    """FND-5215: the Temporal namespace is shared across apps, so a workflow ID
+    can name another app's run. /stop, /result and /status must answer 404 for
+    a workflow on any task queue but this app's, never terminate it or read
+    its result, and give the same answer as a workflow that does not exist."""
+
+    _ROUTES = [
+        ("post", "/workflows/v1/stop/wf-other/run-1"),
+        ("get", "/workflows/v1/result/wf-other"),
+        ("get", "/workflows/v1/result/wf-other?wait=true"),
+        ("get", "/workflows/v1/status/wf-other/run-1"),
+    ]
+
+    def _setup(self):
+        from application_sdk.app.base import App
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+        class _OwnerApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        return create_app_handler_service(
+            _TestHandler(),
+            app_name="owner-test",
+            app_class=_OwnerApp,
+            temporal_host="temporal:7233",
+            task_queue=_OWNED_QUEUE,
+        )
+
+    def _teardown(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _call(self, svc, method: str, path: str, mock_client):
+        from unittest.mock import AsyncMock
+
+        with patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        ):
+            client = TestClient(svc, raise_server_exceptions=False)
+            return getattr(client, method)(path)
+
+    @pytest.mark.parametrize(("method", "path"), _ROUTES)
+    def test_other_apps_queue_is_404_and_never_acted_on(
+        self, method: str, path: str
+    ) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        try:
+            svc = self._setup()
+            desc = MagicMock()
+            desc.task_queue = "another-app-queue"
+            desc.status.name = "COMPLETED"
+            desc.workflow_type = "another-app:run"
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
+            mock_handle.terminate = AsyncMock(return_value=None)
+            mock_handle.result = AsyncMock(return_value={"secret": "other-app"})
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+            response = self._call(svc, method, path, mock_client)
+
+            assert response.status_code == 404
+            assert response.json()["detail"] == "Workflow not found: wf-other"
+            assert "another-app" not in response.text
+            mock_handle.describe.assert_awaited_once()
+            mock_handle.terminate.assert_not_awaited()
+            mock_handle.result.assert_not_awaited()
+        finally:
+            self._teardown()
+
+    @pytest.mark.parametrize(("method", "path"), _ROUTES)
+    def test_foreign_404_matches_a_missing_workflow(
+        self, method: str, path: str
+    ) -> None:
+        """The refusal must not confirm that the ID exists in the namespace."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        import temporalio.service
+
+        try:
+            svc = self._setup()
+            foreign = MagicMock()
+            foreign.describe = AsyncMock(
+                return_value=MagicMock(task_queue="another-app-queue")
+            )
+            missing = MagicMock()
+            missing.describe = AsyncMock(
+                side_effect=temporalio.service.RPCError(
+                    "not found",
+                    status=temporalio.service.RPCStatusCode.NOT_FOUND,
+                    raw_grpc_status=None,
+                )
+            )
+            responses = []
+            for handle in (foreign, missing):
+                mock_client = MagicMock()
+                mock_client.get_workflow_handle = MagicMock(return_value=handle)
+                responses.append(self._call(svc, method, path, mock_client))
+
+            assert [r.status_code for r in responses] == [404, 404]
+            assert responses[0].json() == responses[1].json()
+        finally:
+            self._teardown()
+
+
 class TestGetResultMultiEntrypointOutputType:
     """Regression: /result must resolve per-entrypoint output_type from
     desc.workflow_type, not use the app's first-registered type or None.
@@ -797,6 +936,7 @@ class TestGetResultMultiEntrypointOutputType:
             app_name="multi-ep-test",
             app_class=_MultiEpApp,
             temporal_host="temporal:7233",
+            task_queue=_OWNED_QUEUE,
         )
 
     def _teardown(self) -> None:
@@ -824,6 +964,8 @@ class TestGetResultMultiEntrypointOutputType:
             svc = self._setup()
 
             desc = MagicMock()
+
+            desc.task_queue = _OWNED_QUEUE
             desc.status.name = "COMPLETED"
             desc.workflow_type = f"multi-ep-test:{ep_name}"
 
@@ -872,6 +1014,8 @@ class TestGetResultMultiEntrypointOutputType:
             svc = self._setup()
 
             desc = MagicMock()
+
+            desc.task_queue = _OWNED_QUEUE
             desc.workflow_type = "multi-ep-test:beta"
 
             mock_handle = MagicMock()
