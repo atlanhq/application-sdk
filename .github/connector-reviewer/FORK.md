@@ -110,7 +110,7 @@ none of the three. It has `principles.py`:
 | Sources | The config directory | Fleet principles (`FP01`…) from `--principles-dir` or `CONNECTOR_REVIEWER_PRINCIPLES_DIR`. They live in application-sdk at `.github/connector-reviewer/principles/`, and CI points the reviewer at that directory of its application-sdk checkout; there is no default. Repo principles (`RP01`…) from `<root>/.github/connector-reviewer/principles/` of the repo under review. When the two are the same directory it is read once, as the fleet's. Only files named `^[a-z]{2}\d{2}-.+\.md$` are read. |
 | Prompt block | `<review_rules>` holding `<rules card="…" for="…">` | `<principles>` holding `<principle id="…" title="…" for="…">` with the five fields; fleet first, then repo, each in id order; a repo principle carries `source="this repository"` and follows a line that says so |
 | A bad file | Not checked | Skipped, with a note in the summary (`PrincipleSet.notes` into `RunResult.notes`). The id must be `FP`/`RP` plus two digits for its source, match the file name, and be unique; an unknown front-matter key or area is an error; a file over 8,000 characters or a symlink is not read. A field may wrap over several lines, and blank lines between fields are optional. |
-| Nothing to load | Reviews with no cards | A fleet directory that is not given, does not exist or holds no principle file is a configuration error: exit 2 before any GitHub or model request. A dismissal or a re-check loads no principles and is not affected. |
+| Nothing to load | Reviews with no cards | A fleet directory that is not given, does not exist, holds no principle file, or holds only principle files none of which could be read is a configuration error: exit 2 before any GitHub or model request. A dismissal or a re-check loads no principles and is not affected. |
 
 Call sites that changed with it:
 
@@ -136,7 +136,8 @@ is not, and `.github/scripts/pyright_baseline.json` is unchanged. None of this
 changes behaviour, with the two exceptions noted:
 
 - `typed.py` is new: `EMPTY`, a read-only typed empty mapping, and `objects()`, the
-  JSON objects of an untrusted list. `(x.get("user") or {}).get("login")` in lens is
+  JSON objects of an untrusted list (nothing for a value that is not a list, so a
+  scalar where the model should send a list cannot raise). `(x.get("user") or {}).get("login")` in lens is
   `(x.get("user") or EMPTY).get("login")` here (`agent.py`, `event.py`, `github.py`,
   `holistic.py`, `llm.py`, `review.py`), and `[c for c in items if isinstance(c, dict)]`
   is `objects(items)` (`holistic._parse_verdict`, `review.verdict_items`,
@@ -236,7 +237,7 @@ connector profile. From here on the engine behaves differently, each on purpose.
 | Waive | No such command | `/review waive <reason>` (`review.waive`): no model call; `PRState.waiver` records who, why and the head sha; a history row; status `success` "waived by @login: reason" on that head; the summary says it was waived and that open findings were not resolved. Any real review clears it (`run`), so `/review force` on the same head puts the verdict back. `verdict_status` is green only for the head the waive names. The pull request's author may waive. |
 | Dismiss | The author cannot dismiss a critical or high finding | The same rule, and it holds for a trusted App that authored the pull request. |
 | The reviewer triggering itself | Cannot happen: bots are refused | Its App is on the trusted list, so `github.safe_body` guards every comment it posts: none may open with `/review`. |
-| Where the state is read from | The first state marker in the summary | The last one (`PRState.decode`). Text above the state comes from a model or a commenter; only what `encode` appended last is the state. Reasons are stored through `event.plain`, which cannot open an HTML comment. lens reads the first marker, so this is also a fix lens does not have. |
+| A stored reason (dismiss, waive) | As the comment wrote it | Through `event.plain`, which cannot open an HTML comment. (Both copies read the last state block in the comment, and neither summary can spell out a state marker: FND-5323.) |
 | Order in the CLI | Decide from the event, then load the config | `event.addressed` first drops a comment that is not `/review` before any config or request; then the config (it holds `trusted_apps`), then `decide`. |
 
 ### Exempt pull requests (FND-5311)
@@ -367,11 +368,11 @@ above; "typing" means only the annotations described under Typing.
 | `baseline.py`, `diff.py`, `index.py` | Identical, byte for byte. A lens patch applies as it is. |
 | `lock.py` | Names. |
 | `report.py` | Names; bundle time, forced final turn and dropped uncited findings; the incomplete list from `incomplete_reasons`. |
-| `findings.py` | Names; `PRState.waiver`, `exempt`, `unread`, `facts`; `decode` reads the last state marker. |
+| `findings.py` | Names; `PRState.waiver`, `exempt`, `unread`, `facts`. |
 | `triage.py` | Typing (one annotation). |
-| `tools.py` | Typing (one annotation), two description strings (`compatibility`, `search_code`), the comment's optional `principle` field, and `task_done`'s optional `regression` and `history`. |
+| `tools.py` | Two description strings (`compatibility`, `search_code`), the comment's optional `principle` field, and `task_done`'s optional `regression` and `history`. |
 | `trace.py` | Names, typing. |
-| `select.py` | `DEFAULT_EXCLUDE`, the secret skip, and `excluded` (the pattern match, public for `review.changed_tests`). |
+| `select.py` | `DEFAULT_EXCLUDE`, and `excluded` (the pattern match, public for `review.changed_tests`). |
 | `config.py` | Docstring, `raw_hash`, typing; the `[access]`, `[exempt]` and `[facts]` tables. |
 | `bundle.py` | `_module_key` and the module docstring. |
 | `llm.py` | Names (the gateway key variable, the User-Agent, log text), typing. |
@@ -382,32 +383,40 @@ above; "typing" means only the annotations described under Typing.
 | `advisory.py` | Rewritten as the empty extension point; holds `glob_match`. |
 | `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313); the facts blocks and the `task_done` answers (FND-5312). |
 | `prompts.py` | The review prompt's opening, "Repository layout", "Principles" and "Facts" sections; the removals; typing. |
-| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312). |
+| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312), with `_whole_files` joining a file reviewed in parts back into one diff before its facts are computed. |
 | `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it. |
 | `__init__.py` | Docstring. |
 | `principles.py`, `typed.py`, `exempt.py`, `finalize.py`, `facts.py` | New here. |
 | `approve.py`, `surface.py`, `rules.py` | Not here. |
 
-## Fixed here, still open in lens
+## Fixed in both copies (FND-5323)
 
-lens reviewed this fork and found defects in code that came over unchanged. These
-are fixed in this copy only; lens still has them. Port each one to lens before
-re-syncing either copy from the other.
+lens reviewed this fork and raised defects in code that came over unchanged. None
+of these is a difference any more: each was fixed in lens and in this copy alike,
+and a later lens fix to the same code ports as usual.
 
-| Where | What changed |
-|---|---|
-| `llm.py` | `redact` also masks the gateway key itself (`register_secret`, any non-empty value), whatever its shape, not only `sk-…` tokens. The preflight's 401 and "unreachable" reasons are redacted, because they are published in the summary. |
-| `__main__.py` | Registers the key from the environment first thing, so an error raised before a client exists is masked too. |
-| `report.py` | Redacts every error again on the way to the Actions log and the uploaded report. |
-| `select.py` | A change that may hold secrets (`tools.secret_diff`: either side of a rename) is skipped before any other rule, so its diff never enters a bundle. |
-| `tools.py` | `_secret_path` is public as `secret_path`; `secret_diff` checks both sides of a rename. `read_diff` refuses such a change. |
-| `findings.py`, `review.py` | `PRState.decode` reads the last state block in the comment, and the summary text can no longer contain a state marker. |
-| `config.py` | `validate` refuses a price or cap that is NaN or infinite, and a negative cache price. |
-| `agent.py` | `place` only accepts a path from the bundle it was given. |
+- The fork's own fixes, ported to lens: `redact` masks the gateway key itself
+  (`register_secret`) and the CLI registers it first thing; the preflight's 401 and
+  "unreachable" reasons and the run report's errors are redacted; a change that may
+  hold secrets (`tools.secret_diff`, either side of a rename) is skipped at
+  selection and refused by `read_diff`; `PRState.decode` reads the last state block
+  and the summary cannot spell out a state marker; `validate` refuses a NaN or
+  infinite price or cap and a negative cache price; `place` only accepts a path
+  from its own bundle.
+- The 17 defects found in both: the reservation counts a prompt's upper bound and a
+  possibly billed failed attempt is booked before a retry (`llm.py`); a file over
+  the bundle token cap is split at hunk boundaries (`bundle.py`); a state too big
+  for one comment is cut until it fits (`findings.py`, `review._fit_state`); the
+  approach check caps lookups per call (`holistic.py`); a long function shows a
+  window around every change, and a named path keeps its leading dot
+  (`context.py`); quoted Git paths are decoded (`diff.py`); tool-argument salvage
+  reads braces inside strings as text (`tools.py`); scoped callers use the nearest
+  enclosing function, the call's receiver and inherited methods, and relative test
+  imports are resolved (`index.py`); triage never drops a keyword or literal flip,
+  a Python re-indent, an import line with a statement after it, or the same edit
+  under different context (`triage.py`).
 
-Two more fixes are in code that is new here: `principles.load_principles` refuses a
-fleet directory in which no principle could be read, and `typed.objects` returns
-nothing for a value that is not a list.
+Every finding of that review was judged a real defect; none was set aside.
 
 ## Not changed, and worth knowing before the next change
 
