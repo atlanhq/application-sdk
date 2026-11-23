@@ -1962,6 +1962,28 @@ def list_scope():
     assert "L022" in _ids(src)
 
 
+def test_l022_still_fires_for_helper_with_a_success_return_path() -> None:
+    # One branch returns a typed failure, but another returns success, so the
+    # call is not proof that the caller receives a failure.
+    src = """
+from application_sdk.observability import get_logger
+logger = get_logger(__name__)
+
+def make_outcome(event):
+    if event.retryable:
+        return OutcomeRecord(status=OutcomeStatus.SUCCEEDED)
+    return OutcomeRecord(status=OutcomeStatus.FAILED)
+
+def sync_event(event):
+    try:
+        publish(event)
+    except Exception:
+        logger.error("sync failed", exc_info=True)
+        return make_outcome(event)
+"""
+    assert "L022" in _ids(src)
+
+
 def test_l022_judges_the_innermost_handler() -> None:
     # The outer handler raises; the inner one, which holds the call, does not.
     handler = (
