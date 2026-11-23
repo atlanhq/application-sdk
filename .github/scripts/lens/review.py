@@ -59,8 +59,8 @@ from .github import GitHub, bot_login
 from .index import Index, Symbol, build_index, index_source
 from .llm import BudgetExhausted, Client, Ledger, LLMError
 from .rules import RuleSet
-from .select import DEFAULT_EXCLUDE, select_files
-from .tools import Workspace, parse_args
+from .select import DEFAULT_EXCLUDE, model_visible, select_files
+from .tools import Workspace, parse_args, secret_diff, secret_path
 from .triage import Triage, triage
 
 SUMMARY_MARKER = "<!-- lens-summary -->"
@@ -285,12 +285,16 @@ def head_side_text(
     `max_files` changed files. An old path the PR puts a file back at is never
     marked removed, wherever that file sits in the diff: inside the cap it has
     its head text, and past it it reads as any uncapped file does.
+
+    A change that may hold secrets is never fetched: a file renamed from `.env`
+    carries the `.env` content under an ordinary name, and anything in this map
+    can reach a prompt through a lookup (read, search, the index).
     """
     head_text: dict[str, str] = {}
     for fd in files[:max_files]:
         if fd.status == "deleted":
             head_text[fd.path] = ""
-        elif not fd.is_binary:
+        elif not fd.is_binary and not secret_diff(fd):
             head_text[fd.path] = gh.file_at(fd.path, head) or ""
     for fd in renamed_away(files):
         head_text[str(fd.old_path)] = ""
@@ -311,6 +315,35 @@ def renamed_away(files: list[FileDiff]) -> list[FileDiff]:
         and fd.old_path != fd.path
         and fd.old_path not in at_head
     ]
+
+
+def secret_origin(files: list[FileDiff], pr: list[FileDiff]) -> list[FileDiff]:
+    """`files` (a round's range), where a file the whole PR renamed from a path
+    that may hold secrets keeps that rename source.
+
+    In a later round's range such a file reads as an ordinary change of its new
+    path, while its content is still the secret file's. Carrying the source over
+    lets `secret_diff` refuse it in every prompt, as it does in the PR's diff."""
+    origin = {fd.path: fd.old_path for fd in pr if fd.old_path and secret_diff(fd)}
+    return [
+        FileDiff(
+            path=fd.path,
+            old_path=origin[fd.path],
+            status=fd.status,
+            is_binary=fd.is_binary,
+            hunks=fd.hunks,
+        )
+        if fd.path in origin and not secret_diff(fd)
+        else fd
+        for fd in files
+    ]
+
+
+def exclude_patterns(cfg: Config) -> tuple[str, ...]:
+    """The exclude patterns selection applies to the line review: the defaults
+    and the repository's own. Every other prompt that shows a diff applies them
+    too (`select.model_visible`)."""
+    return tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude)
 
 
 def find_state(gh: GitHub, number: int) -> tuple[PRState | None, str]:
@@ -475,6 +508,9 @@ def run(
             for fd in full_files
             if fd.path in set(state.pending_files) and fd.path not in have
         ]
+    # Whether a change may hold secrets is judged against the whole PR's diff:
+    # a later round's range shows a file renamed from `.env` as an ordinary one.
+    all_files = secret_origin(all_files, full_files)
 
     round_no = state.round + 1
     res = RunResult(
@@ -678,7 +714,7 @@ def run(
                     client,
                     ws,
                     to_verify,
-                    round_diff(verify_files, to_verify),
+                    round_diff(verify_files, to_verify, exclude_patterns(cfg)),
                     concerns,
                     removed=removed_paths(full_files),
                     released=released,
@@ -722,7 +758,11 @@ def run(
     if cfg.approach and (not state.approach or force) and sel.reviewed:
         with trace.group("5 · approach check (once per PR)"):
             ac = holistic.check(
-                client, ws, full_files if incremental else sel.reviewed, pr_meta
+                client,
+                ws,
+                full_files if incremental else sel.reviewed,
+                pr_meta,
+                exclude=exclude_patterns(cfg),
             )
             if ac.ran:
                 state.approach = holistic.to_state(ac, head)
@@ -803,6 +843,7 @@ def run(
             released=released,
             added=added,
             max_tokens=res.verify_max_tokens or cfg.limits.verify_max_tokens,
+            exclude=exclude_patterns(cfg),
         )
         res.calls = list(getattr(client, "calls", []))  # the check's call too
     res.new_findings = merge_new(state, fresh, round_no=round_no)
@@ -1002,6 +1043,7 @@ def _check_new_against_base(
     released: str,
     added: PRAdditions,
     max_tokens: int,
+    exclude: tuple[str, ...] = DEFAULT_EXCLUDE,
 ) -> list[Finding]:
     """`fresh` without the new blocking findings that are moot or fixed against
     the base branch.
@@ -1027,7 +1069,7 @@ def _check_new_against_base(
                 client,
                 ws,
                 batch,
-                round_diff(changes, batch),
+                round_diff(changes, batch, exclude),
                 removed=removed,
                 released=released,
                 added=added,
@@ -1181,7 +1223,8 @@ def recheck_evidence(
         facts.append(why)
         absent = True
     else:
-        base = merge_base_text(base_path)
+        # A file renamed from `.env`: its merge-base copy is the secret file itself.
+        base = None if secret_path(base_path) else merge_base_text(base_path)
         if base is None:
             facts.append(f"merge-base copy of {base_path} could not be read")
         elif (names := baseline.dotted_names(base_path, base)) is None:
@@ -1677,6 +1720,7 @@ def head_reader(
         if fd.path.endswith(".py")
         and fd.status in ("modified", "renamed")
         and fd.path not in head_text
+        and not secret_diff(fd)
     ]
     allowed = set(extra[:BASELINE_EXTRA_FILES])
     if len(extra) > len(allowed):
@@ -1708,9 +1752,17 @@ def added_blocks(added: PRAdditions | None) -> list[str]:
     return out
 
 
-def round_diff(files: list[FileDiff], open_: list[Finding]) -> str:
+def round_diff(
+    files: list[FileDiff],
+    open_: list[Finding],
+    exclude: tuple[str, ...] | list[str] = DEFAULT_EXCLUDE,
+) -> str:
     """What changed this round, for the verify call: files holding an open finding
-    first, then the rest, within a fixed budget (a cached, bounded prompt)."""
+    first, then the rest, within a fixed budget (a cached, bounded prompt).
+
+    `files` is the round's range or the whole PR, never filtered by selection,
+    so a change that may hold secrets and an excluded file are dropped here."""
+    files = model_visible(files, exclude)
     owners = {f.path for f in open_}
     out, used = [], 0
     for fd in sorted(files, key=lambda d: (d.path not in owners, d.path)):
@@ -1766,6 +1818,9 @@ def at_base_branch(
     rel = (
         fd.old_path if fd and fd.status == "renamed" and fd.old_path else f.path
     ) or ""
+    if rel and secret_path(rel):
+        # A file renamed from `.env`: the base copy is the secret file itself.
+        return f"(the base copy of {rel} is not shown: it may hold secrets)"
     root = ws.root.resolve()
     path = (root / rel).resolve()
     if not rel or root not in path.parents or not path.is_file():
