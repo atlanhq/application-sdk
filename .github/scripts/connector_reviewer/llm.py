@@ -997,51 +997,72 @@ class Client:
                 status, headers, text = 0, {}, f"transport: {e}"
             latency_ms = int((time.monotonic() - t0) * 1000)
             if status == 200:
-                self._record(True)
-                data = json.loads(text)
-                choice: dict[str, Any]
-                msg: dict[str, Any]
-                usage: dict[str, Any]
-                if self.api == "responses":
-                    _, _, usage, msg, finish = self._parse_responses(data)
-                    choice = {"message": msg, "finish_reason": finish}
+                # Parsed before anything is booked: a 200 whose body is not a
+                # completion (truncated, not JSON, the wrong shape) may still have
+                # been generated and billed, so it takes the failed-attempt path
+                # below as a cut stream does: its hold is settled, never released.
+                try:
+                    # Not narrowed by isinstance: a body that is not an object
+                    # (a list, a string, null) fails on `.get` below instead.
+                    data = json.loads(text)
+                    choice: dict[str, Any]
+                    msg: dict[str, Any]
+                    usage: dict[str, Any]
+                    if self.api == "responses":
+                        _, _, usage, msg, finish = self._parse_responses(data)
+                        choice = {"message": msg, "finish_reason": finish}
+                    else:
+                        choice = (data.get("choices") or [{}])[0]
+                        msg = choice.get("message") or {}
+                        usage = data.get("usage") or {}
+                    if not all(isinstance(x, dict) for x in (msg, usage)):
+                        raise TypeError("not a completion")
+                    reported = None
+                    for k, v in headers.items():
+                        if k.lower() == PRICE_HEADER:
+                            reported = gateway_cost(v, usage)
+                    cost = self.actual_cost(usage, reported)
+                except (
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                    KeyError,
+                    IndexError,
+                ) as e:
+                    status, text = (
+                        0,
+                        f"malformed HTTP 200 response ({type(e).__name__})",
+                    )
                 else:
-                    choice = (data.get("choices") or [{}])[0]
-                    msg = choice.get("message") or {}
-                    usage = data.get("usage") or {}
-                reported = None
-                for k, v in headers.items():
-                    if k.lower() == PRICE_HEADER:
-                        reported = gateway_cost(v, usage)
-                cost = self.actual_cost(usage, reported)
-                self.ledger.book(stage, cost, usage)
-                self._note_call(
-                    stage=stage,
-                    api=self.api,
-                    status=200,
-                    attempt=attempt,
-                    latency_ms=latency_ms,
-                    input=int(usage.get("prompt_tokens") or 0),
-                    cached=int(
-                        (usage.get("prompt_tokens_details") or EMPTY).get(
-                            "cached_tokens"
-                        )
-                        or 0
-                    ),
-                    output=int(usage.get("completion_tokens") or 0),
-                    reasoning=int(usage.get("reasoning_tokens") or 0),
-                    cost=round(cost, 6),
-                    tool_calls=len(msg.get("tool_calls") or []),
-                    effort=self.reasoning_effort or "",
-                )
-                return Completion(
-                    content=msg.get("content") or "",
-                    tool_calls=msg.get("tool_calls") or [],
-                    usage=usage,
-                    cost=cost,
-                    finish_reason=choice.get("finish_reason") or "",
-                    message=msg,
-                )
+                    self._record(True)
+                    self.ledger.book(stage, cost, usage)
+                    self._note_call(
+                        stage=stage,
+                        api=self.api,
+                        status=200,
+                        attempt=attempt,
+                        latency_ms=latency_ms,
+                        input=int(usage.get("prompt_tokens") or 0),
+                        cached=int(
+                            (usage.get("prompt_tokens_details") or EMPTY).get(
+                                "cached_tokens"
+                            )
+                            or 0
+                        ),
+                        output=int(usage.get("completion_tokens") or 0),
+                        reasoning=int(usage.get("reasoning_tokens") or 0),
+                        cost=round(cost, 6),
+                        tool_calls=len(msg.get("tool_calls") or []),
+                        effort=self.reasoning_effort or "",
+                    )
+                    return Completion(
+                        content=msg.get("content") or "",
+                        tool_calls=msg.get("tool_calls") or [],
+                        usage=usage,
+                        cost=cost,
+                        finish_reason=choice.get("finish_reason") or "",
+                        message=msg,
+                    )
             # A content refusal is bundle-local: it is a failed request, but it must not
             # open the breaker on bundles whose prompts were never refused. Each bundle
             # stops at its first refusal, so this costs at most one request per bundle.

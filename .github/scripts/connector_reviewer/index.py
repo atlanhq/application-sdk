@@ -244,6 +244,7 @@ class Index:
         # overrides it dispatches to its own, and so do its subclasses).
         classes = [owner, *self._inheritors(owner, sym.name)]
         names = {k.name for k in classes}
+        quals = {k.qualname for k in classes}
 
         def class_names(path: str) -> set[str]:
             out: set[str] = set()
@@ -264,7 +265,9 @@ class Index:
             if k is None:
                 return False
             bases = set(re.findall(r"\w+", k.signature.partition("(")[2]))
-            return k.name in names or bool(bases & names)
+            # The class itself by its qualified name: two functions can each
+            # define a `Local`, and the other one's `self.run()` is not a caller.
+            return k.qualname in quals or bool(bases & names)
 
         found = [
             c
