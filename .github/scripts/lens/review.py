@@ -207,6 +207,52 @@ def only_pr_changes(
     return kept, dropped, demoted
 
 
+def base_merged_in(gh: GitHub, base: str, reviewed_head: str, head: str) -> str:
+    """Why `reviewed_head..head` is taken to carry base-branch changes, or ""
+    when it carries none.
+
+    The range carries base-branch changes only when a merge brought them in,
+    which moves the merge base with the base branch. Without one, every change
+    in the range is the author's, including a line restored to what the base
+    branch has and a commit that only deletes.
+
+    A merge base that cannot be read (a rate limit, a missing SHA) is not proof
+    of a merge: taking it as one could drop an author's restoration from review
+    with nothing marking the run incomplete. The whole range is reviewed
+    instead; at worst a merged-in base change is reviewed too, which costs a
+    little and hides nothing."""
+    before = gh.merge_base(base, reviewed_head)
+    after = gh.merge_base(base, head)
+    if not before or not after:
+        trace.line(
+            "the merge base could not be read: reviewing the whole range "
+            "since the last review, as if no base merge happened"
+        )
+        return ""
+    if before != after:
+        return f"the merge base moved from {before[:7]} to {after[:7]}"
+    return ""
+
+
+def author_files_in_range(
+    incremental: list[FileDiff], pr: list[FileDiff], finding_paths: set[str]
+) -> dict[str, FileDiff]:
+    """After a base merge: the whole `reviewed_head..head` diff of every file
+    the author may have changed, by path, for verify.
+
+    `only_pr_changes` keeps only lines the PR adds against the base branch, so
+    it also sets aside an author's restoration of base lines and an author's
+    deletion. Verify must still see those. A file in the range counts when the
+    PR changes it or an open finding sits in it; a file the base merge alone
+    changed may count too, which costs one verify call, never a missed fix."""
+    pr_paths = {fd.path for fd in pr}
+    return {
+        fd.path: fd
+        for fd in incremental
+        if fd.hunks and (fd.path in pr_paths or fd.path in finding_paths)
+    }
+
+
 def _sev_at_least(sev: str, floor: str) -> bool:
     return (
         SEVERITIES.index(sev) <= SEVERITIES.index(floor)
@@ -405,6 +451,8 @@ def run(
         model_changed=bool(state.model) and state.model != cfg.model,
         ancestry=ancestry,
     )
+    # After a base merge, the author's own range diff of each file verify must see.
+    verify_range: dict[str, FileDiff] = {}
     if retry_only:
         full_files = parse_unified_diff(gh.diff(base, head))
         all_files = [fd for fd in full_files if fd.path in set(state.pending_files)]
@@ -415,10 +463,22 @@ def run(
         full_files = (
             all_files if not incremental else parse_unified_diff(gh.diff(base, head))
         )
-        if incremental:
+        merged_in = (
+            base_merged_in(gh, base, state.reviewed_head, head) if incremental else ""
+        )
+        if merged_in:
             # A merge of the base branch into the PR also "descends" from the last
             # reviewed head, so reviewed_head..head carries the base branch's changes
-            # too. Keep only what is part of THIS PR's own change.
+            # too. Line review keeps only what is part of THIS PR's own change;
+            # verify still sees each file the author may have changed, whole.
+            trace.line(f"base branch merged in since the last review: {merged_in}")
+            verify_range = {
+                p: fd
+                for p, fd in author_files_in_range(
+                    all_files, full_files, {f.path for f in state.open_findings()}
+                ).items()
+                if p not in state.pending_files
+            }
             all_files, merged_paths, merged_lines = only_pr_changes(
                 all_files, full_files
             )
@@ -427,6 +487,10 @@ def run(
                     f"excluded changes that came from merging the base branch: "
                     f"{len(merged_paths)} file(s), {merged_lines} line(s)"
                 )
+        elif incremental:
+            # No merge: every change since the last review is the author's, a
+            # restoration of base lines and a pure deletion included.
+            trace.line("no base-branch merge since the last review")
         # Files a previous run failed to review ride along with the new commits.
         have = {fd.path for fd in all_files}
         all_files += [
@@ -604,8 +668,13 @@ def run(
         # A round that changed no PR file (a merge from the base branch alone) has
         # nothing new to judge, so it skips verify — unless `/lens force` asked for a
         # re-check, which then judges the open items against the whole PR's change.
-        recheck = bool(touched) or force
-        verify_files = all_files if touched else full_files
+        # A file the author changed counts even when line review set its change
+        # aside with a base merge's (a restoration of base lines, a deletion).
+        round_files = list(
+            {**{fd.path: fd for fd in all_files}, **verify_range}.values()
+        )
+        recheck = bool(round_files) or force
+        verify_files = round_files if round_files else full_files
         if not recheck:
             res.verify_skipped = [f.id for f in state.open_findings()] + [
                 cid for cid, _ in open_concerns(state)

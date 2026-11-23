@@ -17,6 +17,7 @@ Ask:
 Don't flag: log mechanics conformance reports: f-strings and concatenation (`L001`, `L011`),
 `info` in a tight loop (`L006`), `print` (`L005`), log level (`L022`), preflight messages and
 actions (`F007`), placeholders left in text (`O005`), form keys that never reach the run (`K019`).
-Do not flag wording taste, or comments far from the diff.
+Do not flag wording taste, comments far from the diff, or a `debug`-level log line (production
+logs at INFO and above, so a per-item `debug` line adds no volume there).
 Severity: High when a customer is told something false, or an unbounded label can overload the
 metrics store. Medium for jargon, stale comments and noisy logs.

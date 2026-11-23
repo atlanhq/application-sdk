@@ -42,6 +42,8 @@ from connector_reviewer import github as github_mod
 from connector_reviewer import llm as llm_mod
 from connector_reviewer import report as report_mod
 from connector_reviewer import review as review_mod
+from connector_reviewer import sdk_source as sdk_source_mod
+from connector_reviewer import tools as tools_mod
 from connector_reviewer.advisory import glob_match
 from connector_reviewer.agent import BundleResult
 from connector_reviewer.bundle import group
@@ -85,6 +87,7 @@ from connector_reviewer.review import (
 from connector_reviewer.select import select_files
 from connector_reviewer.tools import (
     COMMENT_ITEM,
+    SdkSource,
     Workspace,
     find_symbol,
     read_diff,
@@ -287,15 +290,28 @@ def response(
     return 200, {"x-gateway-model-price": price}, json.dumps(body)
 
 
-def _is_approach(body: dict[str, Any]) -> bool:
+def _offers(body: dict[str, Any], tool: str) -> bool:
     # Chat tools nest the name under "function"; Responses tools are flat.
     tools: list[dict[str, Any]] = body.get("tools") or []
 
-    def name(tool: dict[str, Any]) -> Any:
-        fn: dict[str, Any] = tool.get("function") or {}
-        return tool.get("name") or fn.get("name")
+    def name(t: dict[str, Any]) -> Any:
+        fn: dict[str, Any] = t.get("function") or {}
+        return t.get("name") or fn.get("name")
 
-    return any(name(t) == "approach_verdict" for t in tools)
+    return any(name(t) == tool for t in tools)
+
+
+def _is_approach(body: dict[str, Any]) -> bool:
+    return _offers(body, "approach_verdict")
+
+
+def _is_skeptic(body: dict[str, Any]) -> bool:
+    return _offers(body, "skeptic_verdict")
+
+
+UPHELD = response(
+    [tool_call("skeptic_verdict", {"verdict": "upheld", "reason": "The code does it."})]
+)
 
 
 class Script:
@@ -303,15 +319,22 @@ class Script:
 
     The approach check runs concurrently with bundle reviews, so its call is
     routed to its own reply (`approach`) instead of the ordered queue — the
-    queue then scripts the bundle loop deterministically."""
+    queue then scripts the bundle loop deterministically. The skeptic pass
+    (one check per new blocking finding, in parallel) is routed the same way:
+    `skeptic` replies in order, then each further skeptic call is upheld. A
+    reply may be a callable taking the request body."""
 
-    def __init__(self, *responses: Any, approach: Any = None):
+    def __init__(
+        self, *responses: Any, approach: Any = None, skeptic: list[Any] | None = None
+    ):
         self.responses: list[Any] = list(responses)
         self.requests: list[dict[str, Any]] = []
         self.approach_requests: list[dict[str, Any]] = []
+        self.skeptic_requests: list[dict[str, Any]] = []
         self.approach: Any = approach or response(
             [tool_call("approach_verdict", {"verdict": "sound"})]
         )
+        self.skeptic: list[Any] = list(skeptic or [])
 
     def __call__(self, body: dict[str, Any]) -> Any:
         snap = json.loads(
@@ -320,6 +343,10 @@ class Script:
         if _is_approach(body):
             self.approach_requests.append(snap)
             return self.approach
+        if _is_skeptic(body):
+            self.skeptic_requests.append(snap)
+            r = self.skeptic.pop(0) if self.skeptic else UPHELD
+            return r(body) if callable(r) else r
         self.requests.append(snap)
         if not self.responses:
             return response([tool_call("task_done", {"state": "DONE"})])
@@ -379,6 +406,8 @@ class FakeGitHub:
         self.history: dict[str, list[dict[str, Any]]] = {}  # path -> commits
         self.patches: dict[str, dict[str, str]] = {}  # sha -> path -> patch
         self.history_reads: list[str] = []
+        # (base, ref) -> merge base; the base's own sha unless a test scripts a merge.
+        self.merge_bases: dict[tuple[str, str], str] = {}
 
     def pr(self, n):
         return {
@@ -411,7 +440,7 @@ class FakeGitHub:
         return self.status
 
     def merge_base(self, a, b):
-        return self.base
+        return self.merge_bases.get((a, b), self.base)
 
     def file_at(self, path, ref):
         return self.files.get((path, ref))
@@ -1580,9 +1609,10 @@ def test_first_round_puts_every_finding_in_the_summary_and_opens_no_thread(repo:
     link = "https://github.com/o/r/blob/h1/app/storage/fetch.py#L4"
     assert f"[`app/storage/fetch.py:4`]({link})" in body
     st = decode_state(body)
-    # review + reflect + approach, each booked at the cost LiteLLM reported.
-    assert st and st.round == 1 and st.ledger["calls"] == 3
-    assert st.ledger["spent_usd"] == pytest.approx(0.006)
+    # review + reflect + approach + the skeptic check of the one new high finding,
+    # each booked at the cost LiteLLM reported.
+    assert st and st.round == 1 and st.ledger["calls"] == 4
+    assert st.ledger["spent_usd"] == pytest.approx(0.008)
     assert st.findings[0].suggestion  # kept: the next round's summary still shows it
 
 
@@ -3843,11 +3873,13 @@ def test_every_request_is_recorded_with_counts_only_and_reported(
         client_factory=factory,
     )
     # The approach check runs alongside the line review on a client of its own;
-    # its requests are listed after the line review's.
+    # its requests are listed after the line review's, and the skeptic check of
+    # the new high finding (its own client too) last.
     assert [c["stage"].split(":")[0] for c in res.calls] == [
         "review",
         "reflect",
         "approach",
+        "skeptic",
     ]
     for c in res.calls:
         assert {
@@ -3863,7 +3895,7 @@ def test_every_request_is_recorded_with_counts_only_and_reported(
         assert not any(
             isinstance(v, str) and len(v) > 200 for v in c.values()
         )  # no prompt or code text
-    assert len(logged) == 3 and all(
+    assert len(logged) == 4 and all(
         line.startswith("connector-reviewer: call") for line in logged
     )
     assert set(res.timings_ms) >= {
@@ -3876,9 +3908,14 @@ def test_every_request_is_recorded_with_counts_only_and_reported(
     }
 
     rep = report.write(res, 1, str(tmp_path / "run.json"), str(tmp_path / "summary.md"))
-    assert rep["totals"]["requests"] == 3 and rep["totals"][
+    assert rep["totals"]["requests"] == 4 and rep["totals"][
         "cost_usd"
-    ] == pytest.approx(0.006)
+    ] == pytest.approx(0.008)
+    assert rep["skeptic"]["counts"]["upheld"] == 1
+    assert (
+        "**Skeptic (new blocking findings):** upheld 1"
+        in (tmp_path / "summary.md").read_text()
+    )
     assert (
         rep["bundles"][0]["stop"] == "done"
         and rep["new_findings"][0]["severity"] == "high"
@@ -4252,6 +4289,17 @@ MERGED_DIFF = (
 )
 
 
+def _merge_main_into_round_two(
+    gh: Any, range_diff: str = MERGED_DIFF, pr_diff: str = PR_DIFF
+) -> None:
+    """Round two's head merges main: main moved on to b1 and the PR's merge base
+    moved with it (the last reviewed head forked from b0)."""
+    gh.head, gh.base = "h2", "b1"
+    gh.merge_bases[("b1", "h1")] = "b0"
+    gh.diffs[("h1", "h2")] = range_diff
+    gh.diffs[("b1", "h2")] = pr_diff
+
+
 def test_only_the_prs_own_change_is_kept_after_a_base_merge():
     kept, dropped, demoted = review_mod.only_pr_changes(
         parse_unified_diff(MERGED_DIFF), parse_unified_diff(PR_DIFF)
@@ -4279,9 +4327,7 @@ def test_a_re_review_after_merging_main_reviews_only_the_authors_change(repo: Pa
         principles=principles,
         client_factory=_factory(Script()),
     )
-    gh.head = "h2"
-    gh.diffs[("h1", "h2")] = MERGED_DIFF
-    gh.diffs[("b0", "h2")] = PR_DIFF
+    _merge_main_into_round_two(gh)
     gh.files[("app/storage/fetch.py", "h2")] = (
         gh.files[("app/storage/fetch.py", "h1")].replace(
             '    """Fetch one object."""\n',
@@ -4308,6 +4354,256 @@ def test_a_re_review_after_merging_main_reviews_only_the_authors_change(repo: Pa
         files_block = r["messages"][2]["content"].split("<review_files>", 1)[1]
         assert "app/common/other.py" not in files_block
         assert "+    MAIN_ONLY" not in files_block
+
+
+# ---- a restoration of base lines is the author's change, not a base merge (FND-5314) ----------
+
+# The base branch disposes the client before the fetch; the PR at h1 dropped those
+# two lines, and h2 puts them back, so the file matches the base branch there again.
+RESTORE_PR_DIFF_H1 = (
+    "diff --git a/app/storage/fetch.py b/app/storage/fetch.py\n"
+    "--- a/app/storage/fetch.py\n+++ b/app/storage/fetch.py\n"
+    "@@ -1,5 +1,4 @@\n-def fetch(client, key):\n+def fetch(client, key, timeout=None):\n"
+    '     """Fetch one object."""\n'
+    "-    client.reset()\n-    client.dispose()\n"
+    "-    return client.get(key)\n+    data = client.get(key)\n+    return data.decode()\n"
+)
+RESTORE_RANGE_DIFF = (
+    "diff --git a/app/storage/fetch.py b/app/storage/fetch.py\n"
+    "--- a/app/storage/fetch.py\n+++ b/app/storage/fetch.py\n"
+    "@@ -1,4 +1,6 @@\n def fetch(client, key, timeout=None):\n"
+    '     """Fetch one object."""\n'
+    "+    client.reset()\n+    client.dispose()\n"
+    "     data = client.get(key)\n     return data.decode()\n"
+)
+RESTORE_PR_DIFF_H2 = (
+    "diff --git a/app/storage/fetch.py b/app/storage/fetch.py\n"
+    "--- a/app/storage/fetch.py\n+++ b/app/storage/fetch.py\n"
+    "@@ -1,5 +1,6 @@\n-def fetch(client, key):\n+def fetch(client, key, timeout=None):\n"
+    '     """Fetch one object."""\n'
+    "     client.reset()\n     client.dispose()\n"
+    "-    return client.get(key)\n+    data = client.get(key)\n+    return data.decode()\n"
+)
+RESTORED_SRC = SRC_V2.replace(
+    '    """Fetch one object."""\n',
+    '    """Fetch one object."""\n    client.reset()\n    client.dispose()\n',
+)
+# What a merge of main brings in: a file the PR does not touch.
+MAIN_ONLY_DIFF = (
+    "diff --git a/app/common/other.py b/app/common/other.py\n"
+    "--- a/app/common/other.py\n+++ b/app/common/other.py\n"
+    "@@ -1 +1 @@\n-x = 1\n+x = 2\n"
+)
+
+
+def _round_one_on_restore_fixture(
+    gh: Any, repo: Path, pr_diff: str = RESTORE_PR_DIFF_H1
+) -> tuple[PrincipleSet, str]:
+    """Round 1 at h1 raises one finding on fetch.py that stays quoted at h2."""
+    gh.diffs[("b0", "h1")] = pr_diff
+    principles = principles_of(repo)
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles,
+        client_factory=_factory(_review_script()),
+    )
+    return principles, state_of(first).findings[0].id
+
+
+def _verify_requests(script: Script) -> list[str]:
+    return [
+        json.dumps(r)
+        for r in script.requests
+        if "<changes_this_round>" in json.dumps(r)
+    ]
+
+
+def _review_files_blocks(script: Script) -> list[str]:
+    return [
+        r["messages"][2]["content"].split("<review_files>", 1)[1]
+        for r in script.requests
+        if r.get("prompt_cache_key") == "connector-reviewer-review"
+    ]
+
+
+def test_restoring_base_lines_without_a_merge_is_rechecked(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+):
+    """The live case: round 2 restored two lines the base branch has. No merge is in
+    the range, yet the restoration was taken for one, 0 files were in range and
+    verify was skipped, so the fixed finding stayed blocking."""
+    gh = fake_github()
+    principles, fid = _round_one_on_restore_fixture(gh, repo)
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = RESTORE_RANGE_DIFF
+    gh.diffs[("b0", "h2")] = RESTORE_PR_DIFF_H2
+    gh.files[("app/storage/fetch.py", "h2")] = RESTORED_SRC
+    script = Script(
+        response([tool_call("verdicts", {"items": [{"id": fid, "status": "fixed"}]})])
+    )
+    capsys.readouterr()
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles,
+        client_factory=_factory(script),
+    )
+
+    log = capsys.readouterr().err
+    assert res.mode == "incremental"
+    assert "excluded changes that came from merging" not in log
+    assert "no base-branch merge since the last review" in log
+    assert "1 file(s) in range" in log
+    assert res.verify_skipped == [] and res.resolved_verified == [fid]
+    (verify,) = _verify_requests(script)
+    assert "+    client.dispose()" in verify
+
+
+def test_an_unreadable_merge_base_reviews_the_whole_range(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+):
+    """A failed compare (e.g. a rate limit) returns no merge base. That must not be
+    taken as proof of a merge, which could drop an author's restoration from
+    review with nothing marking the run incomplete: the whole range is kept."""
+    gh = fake_github()
+    principles, fid = _round_one_on_restore_fixture(gh, repo)
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = RESTORE_RANGE_DIFF
+    gh.diffs[("b0", "h2")] = RESTORE_PR_DIFF_H2
+    gh.files[("app/storage/fetch.py", "h2")] = RESTORED_SRC
+    gh.merge_bases[("b0", "h2")] = ""  # the compare request failed
+    script = Script(
+        response([tool_call("verdicts", {"items": [{"id": fid, "status": "fixed"}]})])
+    )
+    capsys.readouterr()
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles,
+        client_factory=_factory(script),
+    )
+
+    log = capsys.readouterr().err
+    assert "the merge base could not be read: reviewing the whole range" in log
+    assert "excluded changes that came from merging" not in log
+    assert "1 file(s) in range" in log
+    assert res.verify_skipped == [] and res.resolved_verified == [fid]
+
+
+def test_a_real_base_merge_is_still_excluded(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+):
+    """Control: a range that only merges main (a file the PR does not touch) still
+    leaves main's change out of review, and verify has nothing new to judge."""
+    gh = fake_github()
+    principles, fid = _round_one_on_restore_fixture(gh, repo)
+    _merge_main_into_round_two(gh, MAIN_ONLY_DIFF, RESTORE_PR_DIFF_H1)
+    gh.files[("app/storage/fetch.py", "h2")] = gh.files[("app/storage/fetch.py", "h1")]
+    script = Script()
+    capsys.readouterr()
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles,
+        client_factory=_factory(script),
+    )
+
+    log = capsys.readouterr().err
+    assert res.mode == "incremental"
+    assert "the merge base moved from b0 to b1" in log
+    assert "excluded changes that came from merging the base branch: 1 file(s)" in log
+    assert "0 file(s) in range" in log
+    assert res.verify_skipped and fid in res.verify_skipped
+    assert _verify_requests(script) == []
+    assert all("app/common/other.py" not in b for b in _review_files_blocks(script))
+
+
+DELETE_RANGE_DIFF = (
+    "diff --git a/app/storage/fetch.py b/app/storage/fetch.py\n"
+    "--- a/app/storage/fetch.py\n+++ b/app/storage/fetch.py\n"
+    "@@ -1,6 +1,4 @@\n def fetch(client, key, timeout=None):\n"
+    '     """Fetch one object."""\n'
+    "-    client.reset()\n-    client.dispose()\n"
+    "     data = client.get(key)\n     return data.decode()\n"
+)
+
+
+def test_a_round_that_only_deletes_lines_is_rechecked(repo: Path):
+    """A commit that only deletes (here, lines the base branch has) adds no line at
+    all, so it was dropped as a base merge too and verify never ran."""
+    gh = fake_github()
+    gh.files[("app/storage/fetch.py", "h1")] = RESTORED_SRC
+    principles, fid = _round_one_on_restore_fixture(gh, repo, RESTORE_PR_DIFF_H2)
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = DELETE_RANGE_DIFF
+    gh.diffs[("b0", "h2")] = RESTORE_PR_DIFF_H1
+    gh.files[("app/storage/fetch.py", "h2")] = SRC_V2
+    script = Script(
+        response([tool_call("verdicts", {"items": [{"id": fid, "status": "fixed"}]})])
+    )
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles,
+        client_factory=_factory(script),
+    )
+
+    assert res.mode == "incremental"
+    assert res.verify_skipped == [] and res.resolved_verified == [fid]
+    (verify,) = _verify_requests(script)
+    assert "-    client.dispose()" in verify
+    # Selection skips a change with no added line; that is not unread source.
+    assert state_of(res).unread == {} and not res.incomplete
+
+
+def test_a_merge_and_a_restoration_in_one_range_still_rechecks(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+):
+    """A merge of main and the author's restoration land in the same range: main's
+    change stays out of review, and verify still runs and sees the restoration."""
+    gh = fake_github()
+    principles, fid = _round_one_on_restore_fixture(gh, repo)
+    _merge_main_into_round_two(
+        gh, RESTORE_RANGE_DIFF + MAIN_ONLY_DIFF, RESTORE_PR_DIFF_H2
+    )
+    gh.files[("app/storage/fetch.py", "h2")] = RESTORED_SRC
+    script = Script(
+        response([tool_call("verdicts", {"items": [{"id": fid, "status": "fixed"}]})])
+    )
+    capsys.readouterr()
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles,
+        client_factory=_factory(script),
+    )
+
+    log = capsys.readouterr().err
+    assert "the merge base moved from b0 to b1" in log
+    assert "excluded changes that came from merging the base branch" in log
+    assert all("app/common/other.py" not in b for b in _review_files_blocks(script))
+    assert res.verify_skipped == [] and res.resolved_verified == [fid]
+    (verify,) = _verify_requests(script)
+    assert "+    client.dispose()" in verify
+    assert "app/common/other.py" not in verify
 
 
 # ---- which kind of run this is, in words ----------------------------------------------------------------------
@@ -8962,8 +9258,9 @@ def test_the_approach_check_runs_alongside_the_line_review(repo: Path):
     assert seen_in_time == [True]
     assert state_of(res).approach.get("verdict") == "sound"
     assert "approach" in res.timings_ms
-    # Its own ledger is carved out of the round's and booked into the PR's.
-    assert state_of(res).ledger["calls"] == 3
+    # Its own ledger is carved out of the round's and booked into the PR's
+    # (with the skeptic check of the new high finding).
+    assert state_of(res).ledger["calls"] == 4
     assert (
         gh.statuses[-1]["state"] == "failure"
     )  # the finding, not the approach, decides
@@ -10436,6 +10733,7 @@ _DIFF_RENDERERS = {
     "bundle.py": {"diff_tokens", "group", "_split"},  # token estimates, no prompt
     "holistic.py": {"build_input"},
     "review.py": {"round_diff"},
+    "skeptic.py": {"build_input"},
     "tools.py": {"read_diff"},
 }
 
@@ -10458,7 +10756,12 @@ def test_every_diff_rendered_into_a_prompt_is_a_known_path():
                     and fn.name != "render"
                     # The one call that renders a principle, not a diff: exempt by
                     # its exact site, never by a variable's name.
-                    and (src.name, fn.name) != ("principles.py", "render_for")
+                    and (src.name, fn.name)
+                    not in {
+                        ("principles.py", "render_for"),
+                        # the skeptic's cited principle (FND-5332), not a diff
+                        ("review.py", "_cited_principle"),
+                    }
                 ):
                     found.setdefault(src.name, set()).add(fn.name)
     assert found == _DIFF_RENDERERS
@@ -10532,3 +10835,989 @@ def test_the_cli_answers_an_unknown_word_and_reviews_nothing(
     assert _cli_event(monkeypatch, tmp_path, _comment("/review forse"), _CliGitHub) == 0
     assert _CliGitHub.comments == [f"connector-reviewer: {event_mod.REVIEW_USAGE}"]
     assert _CliGitHub.reactions[-1] == "confused"
+
+
+# ---- the skeptic pass on new blocking findings (FND-5332) -------------------------------------------
+
+
+def _refuted(
+    quote: str = "    data = client.get(key)",
+    path: str = "app/storage/fetch.py",
+    reason: str = "client.get raises KeyError | never returns None for a missing key.",
+) -> Any:
+    return response(
+        [
+            tool_call(
+                "skeptic_verdict",
+                {
+                    "verdict": "refuted",
+                    "reason": reason,
+                    # A wrong line: the location recorded is where the quote is found.
+                    "evidence": [{"path": path, "line": 99, "quote": quote}],
+                },
+            )
+        ]
+    )
+
+
+def _skeptic_run(
+    repo: Path, script: Script, cfg: Config | None = None
+) -> tuple[RunResult, Any]:
+    gh = fake_github()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg or cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    return res, gh
+
+
+def _sent(request: dict[str, Any]) -> str:
+    return json.dumps(request)
+
+
+def _two_comments(*comments: dict[str, Any]) -> Script:
+    return Script(
+        response(
+            [
+                tool_call("code_comment", {"comments": list(comments)}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+
+
+def test_an_upheld_finding_still_blocks(repo: Path):
+    script = _review_script()
+    res, gh = _skeptic_run(repo, script)
+
+    # One independent call, with the finding, its quoted code and its file, and
+    # only the read-only tools plus the verdict: it cannot comment or finish a review.
+    [req] = script.skeptic_requests
+    sent = _sent(req)
+    assert "decode() on a None result" in sent
+    assert "return data.decode()" in sent
+    assert "app/storage/fetch.py:4" in sent
+    assert req.get("prompt_cache_key") == "connector-reviewer-skeptic"
+    offered = cast(list[dict[str, Any]], req["tools"])
+    fns = [cast(dict[str, Any], t.get("function") or {}) for t in offered]
+    tools = {t.get("name") or fn.get("name") for t, fn in zip(offered, fns)}
+    assert tools == {
+        "find_symbol",
+        "search_code",
+        "read_file",
+        "read_diff",
+        "skeptic_verdict",
+    }
+
+    [f] = state_of(res).findings
+    assert f.severity == "high" and f.contested == ""
+    [o] = res.skeptic
+    assert (o.finding_id, o.outcome) == (f.id, "upheld")
+    assert "Changes requested" in gh.comments[0]["body"]
+    assert gh.statuses[-1]["state"] == "failure"
+    assert "blocking" in gh.statuses[-1]["description"]
+    assert "skeptic" in res.timings_ms
+
+
+def test_a_refuted_finding_drops_to_medium_and_is_contested_not_deleted(
+    repo: Path, tmp_path: Path
+):
+    script = _review_script()
+    script.skeptic = [_refuted()]
+    res, gh = _skeptic_run(repo, script)
+
+    assert len(script.skeptic_requests) == 1
+    st = state_of(res)
+    [f] = st.findings
+    assert f.status == "open" and f.severity == "medium"  # kept: a person can act on it
+    assert f.contested.startswith("client.get raises KeyError")
+    assert "|" not in f.contested  # the reason cannot break a table cell
+    assert st.open_findings(("critical", "high")) == []
+    [o] = res.skeptic
+    assert o.outcome == "refuted" and o.evidence == ["app/storage/fetch.py:3"]
+
+    body = gh.comments[0]["body"]
+    assert "Changes requested" not in body
+    assert "Not ready to merge" in body  # an open medium still is not green
+    assert f"⚖️ contested — {f.contested}" in body
+    assert "**⚖️ Contested:**" in body
+    status = gh.statuses[-1]
+    assert status["state"] == "failure" and "blocking" not in status["description"]
+    assert decode_state(body).findings[0].contested == f.contested  # it is stored
+
+    rep = report_mod.write(res, 1, str(tmp_path / "run.json"), None)
+    assert rep["skeptic"]["counts"]["refuted"] == 1
+    assert rep["skeptic"]["checks"][0]["evidence"] == ["app/storage/fetch.py:3"]
+    assert "data = client.get(key)" not in (tmp_path / "run.json").read_text()
+
+
+def _no_verdict_turns(n: int) -> list[Any]:
+    return [response(content="thinking") for _ in range(n)]
+
+
+@pytest.mark.parametrize(
+    "replies, outcome",
+    [
+        ([(400, {}, "bad request")], "error"),  # the call failed
+        (
+            [response([tool_call("skeptic_verdict", {"verdict": "maybe"})])],
+            "malformed",
+        ),
+        (  # refuted, but the quote is not in the file
+            [_refuted(quote="    if data is None:\n        return None")],
+            "malformed",
+        ),
+        (  # refuted, with no evidence at all
+            [
+                response(
+                    [
+                        tool_call(
+                            "skeptic_verdict",
+                            {"verdict": "refuted", "reason": "It is fine."},
+                        )
+                    ]
+                )
+            ],
+            "malformed",
+        ),
+        ([_refuted(path="../../etc/passwd")], "malformed"),  # not a repository file
+        ([_refuted(quote="return")], "malformed"),  # too short to prove anything
+        (_no_verdict_turns(4), "malformed"),  # max_lookups + 1 turns, no verdict
+    ],
+    ids=[
+        "llm-error",
+        "bad-verdict",
+        "quote-not-in-file",
+        "no-evidence",
+        "outside-repo",
+        "quote-too-short",
+        "no-verdict",
+    ],
+)
+def test_a_skeptic_that_cannot_refute_keeps_the_severity(
+    repo: Path, replies: list[Any], outcome: str
+):
+    script = _review_script()
+    script.skeptic = list(replies)
+    res, gh = _skeptic_run(repo, script)
+
+    [f] = state_of(res).findings
+    assert f.severity == "high" and f.contested == ""
+    [o] = res.skeptic
+    assert o.outcome == outcome
+    body = gh.comments[0]["body"]
+    assert "Changes requested" in body and "contested" not in body
+    assert not res.incomplete  # a skeptic failure never makes the review incomplete
+
+
+def test_a_skeptic_that_cannot_reserve_its_call_keeps_the_severity(repo: Path):
+    cfg = cfg_for(repo)
+    # One call's worst case is now past the skeptic's whole share: it is never sent.
+    cfg.skeptic.max_tokens = 100_000
+    script = _review_script()
+    script.skeptic = [_refuted()]
+    res, _ = _skeptic_run(repo, script, cfg)
+
+    assert script.skeptic_requests == []
+    [f] = state_of(res).findings
+    assert f.severity == "high" and f.contested == ""
+    [o] = res.skeptic
+    assert o.outcome == "budget"
+
+
+def test_the_skeptic_spends_its_own_share_and_is_booked(repo: Path):
+    res, _ = _skeptic_run(repo, _review_script())
+    st = state_of(res)
+    assert st.ledger["by_stage"]["skeptic"] > 0
+    assert st.history[-1]["calls"] == 4  # review, reflect, approach, skeptic
+
+
+def test_the_skeptic_can_be_turned_off(repo: Path):
+    cfg = cfg_for(repo)
+    cfg.skeptic.enabled = False
+    script = _review_script()
+    script.skeptic = [_refuted()]
+    res, gh = _skeptic_run(repo, script, cfg)
+
+    assert script.skeptic_requests == [] and res.skeptic == []
+    assert state_of(res).findings[0].severity == "high"
+    assert "Changes requested" in gh.comments[0]["body"]
+
+
+def test_only_new_critical_and_high_findings_are_checked(repo: Path):
+    medium = dict(
+        COMMENT,
+        existing_code="    data = client.get(key)",
+        severity="medium",
+        title="a medium finding",
+    )
+    script = _two_comments(COMMENT, medium)
+    res, _ = _skeptic_run(repo, script)
+
+    assert sorted(f.severity for f in state_of(res).findings) == ["high", "medium"]
+    [req] = script.skeptic_requests
+    assert "decode() on a None result" in _sent(req)
+    assert "a medium finding" not in _sent(req)
+    assert [o.severity for o in res.skeptic] == ["high"]
+
+
+def test_a_round_with_only_low_findings_makes_no_skeptic_call(repo: Path):
+    script = _two_comments(dict(COMMENT, severity="low"))
+    res, _ = _skeptic_run(repo, script)
+    assert state_of(res).findings and script.skeptic_requests == []
+    assert res.skeptic == []
+
+
+def test_findings_carried_over_from_an_earlier_round_are_never_re_checked(repo: Path):
+    gh = fake_github()
+    principles = principles_of(repo)
+    first = _review_script()
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles,
+        client_factory=_factory(first),
+    )
+    assert len(first.skeptic_requests) == 1
+    old_id = decode_state(gh.comments[0]["body"]).findings[0].id
+
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = gh.diffs[("b0", "h1")]
+    gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
+    gh.files[("app/storage/fetch.py", "h2")] = SRC_V2_NEXT
+    new_high = dict(
+        COMMENT,
+        existing_code="    data = client.get(key)",
+        title="a new high finding",
+    )
+    second = Script(
+        response([tool_call("verdicts", {"items": []})]),  # verify: still open
+        response(
+            [
+                # The round-1 finding raised again (a known id), and a new one.
+                tool_call("code_comment", {"comments": [COMMENT, new_high]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    second.skeptic = [_refuted(reason="refuted"), _refuted(reason="refuted")]
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles,
+        client_factory=_factory(second),
+    )
+    [req] = second.skeptic_requests
+    assert "a new high finding" in _sent(req)
+    assert old_id not in [o.finding_id for o in res.skeptic]
+    by_id = {f.id: f for f in state_of(res).findings}
+    assert by_id[old_id].severity == "high" and by_id[old_id].contested == ""
+
+
+def test_checks_past_the_per_round_cap_keep_their_severity(repo: Path):
+    cfg = cfg_for(repo)
+    cfg.skeptic.max_findings = 1
+    second = dict(
+        COMMENT, existing_code="    data = client.get(key)", title="second high"
+    )
+    script = _two_comments(COMMENT, second)
+    script.skeptic = [_refuted()]
+    res, _ = _skeptic_run(repo, script, cfg)
+
+    assert len(script.skeptic_requests) == 1
+    assert sorted(o.outcome for o in res.skeptic) == ["refuted", "skipped"]
+    ids = {o.outcome: o.finding_id for o in res.skeptic}
+    by_id = {f.id: f for f in state_of(res).findings}
+    assert by_id[ids["skipped"]].severity == "high"
+    assert by_id[ids["refuted"]].severity == "medium"
+
+
+def test_the_skeptic_may_look_up_code_before_it_answers(repo: Path):
+    script = _review_script()
+    script.skeptic = [
+        response(
+            [
+                tool_call(
+                    "read_file", {"file_path": "app/storage/fetch.py", "start_line": 1}
+                )
+            ]
+        ),
+        _refuted(),
+    ]
+    res, _ = _skeptic_run(repo, script)
+    assert len(script.skeptic_requests) == 2
+    assert "def load_all" in _sent(script.skeptic_requests[1])  # what it read
+    [o] = res.skeptic
+    assert (o.outcome, o.lookups) == ("refuted", 1)
+
+
+def _lookups(n: int) -> Any:
+    """One response that asks for `n` lookups at once."""
+    return response(
+        [tool_call("search_code", {"search_text": f"term{i}"}, i) for i in range(n)]
+    )
+
+
+def _tool_replies(request: dict[str, Any]) -> list[str]:
+    msgs = cast(list[dict[str, Any]], request["messages"])
+    return [str(m.get("content")) for m in msgs if m.get("role") == "tool"]
+
+
+def test_skeptic_lookups_are_capped_per_call_not_per_turn(repo: Path):
+    """F-468537: one response asking for four lookups under max_lookups=3 used
+    to run all four. Only three run; the fourth is answered "lookup limit
+    reached", and the next turn is the final one."""
+    cfg = cfg_for(repo)
+    cfg.skeptic.max_lookups = 3
+    script = _review_script()
+    script.skeptic = [_lookups(4)]  # then upheld
+    res, _ = _skeptic_run(repo, script, cfg)
+
+    [o] = res.skeptic
+    assert (o.outcome, o.lookups) == ("upheld", 3)
+    assert len(script.skeptic_requests) == 2
+    final = script.skeptic_requests[1]
+    replies = _tool_replies(final)
+    assert len(replies) == 4
+    assert replies[-1] == "Lookup limit reached: call skeptic_verdict."
+    assert not any("Lookup limit reached" in r for r in replies[:3])
+    msgs = cast(list[dict[str, Any]], final["messages"])
+    assert msgs[-1]["content"] == "Lookups are exhausted: call skeptic_verdict now."
+
+
+def test_skeptic_stops_after_the_forced_turn_once_lookups_are_spent(repo: Path):
+    """Two lookups per response under max_lookups=3: two run, then one (and one
+    is refused), then the final turn. A skeptic that still gives no verdict is
+    not asked again, and the finding keeps its severity."""
+    cfg = cfg_for(repo)
+    cfg.skeptic.max_lookups = 3
+    script = _review_script()
+    script.skeptic = [_lookups(2) for _ in range(5)]  # never volunteers a verdict
+    res, _ = _skeptic_run(repo, script, cfg)
+
+    [o] = res.skeptic
+    assert (o.outcome, o.lookups) == ("malformed", 3)
+    assert o.error == "no verdict returned"
+    assert len(script.skeptic_requests) == 3
+    msgs = cast(list[dict[str, Any]], script.skeptic_requests[-1]["messages"])
+    assert msgs[-1]["content"] == "Lookups are exhausted: call skeptic_verdict now."
+    assert state_of(res).findings[0].severity == "high"
+
+
+@pytest.mark.parametrize("reason", ["", "   \n "], ids=["empty", "blank"])
+def test_a_refutation_without_a_reason_keeps_the_severity(repo: Path, reason: str):
+    """F-3cdd62: the quote is valid and in the file, so only the missing reason
+    rejects the refutation."""
+    script = _review_script()
+    script.skeptic = [_refuted(reason=reason)]
+    res, gh = _skeptic_run(repo, script)
+
+    [f] = state_of(res).findings
+    assert f.severity == "high" and f.contested == ""
+    [o] = res.skeptic
+    assert (o.outcome, o.error) == ("malformed", "refuted without a reason")
+    assert "Changes requested" in gh.comments[0]["body"]
+
+
+def test_gate_and_closed_findings_are_not_skeptic_candidates():
+    from connector_reviewer import skeptic  # noqa: PLC0415 - module under test
+
+    llm = Finding("a.py", 1, "high", "bug", "t", "b", "x")
+    gate = Finding("a.py", 2, "critical", "bug", "t", "b", "y", origin="gate")
+    fixed = Finding("a.py", 3, "high", "bug", "t", "b", "z", status="fixed")
+    medium = Finding("a.py", 4, "medium", "bug", "t", "b", "w")
+    assert skeptic.candidates([llm, gate, fixed, medium]) == [llm]
+
+
+def test_old_state_without_the_contested_field_still_decodes():
+    import base64  # noqa: PLC0415
+    import zlib  # noqa: PLC0415
+
+    st = PRState(round=1, findings=[Finding("a.py", 1, "high", "bug", "t", "b", "x")])
+    payload = st.encode().split(":", 1)[1].split(" ")[0]
+    raw = json.loads(zlib.decompress(base64.b64decode(payload)))
+    for f in raw["findings"]:
+        f.pop("contested")  # as a reviewer before FND-5332 wrote it
+    packed = base64.b64encode(zlib.compress(json.dumps(raw).encode())).decode()
+    decoded = decode_state(f"<!-- {findings_mod.STATE_MARKER}:{packed} -->")
+    assert decoded.findings[0].contested == ""
+    assert decoded.findings[0].severity == "high"
+
+
+def test_shipped_config_turns_the_skeptic_on_with_bounded_calls():
+    cfg = load_config(Path(__file__).resolve().parents[2] / "connector-reviewer")
+    assert cfg.skeptic.enabled is True
+    assert 0 <= cfg.skeptic.max_lookups <= 4
+    assert cfg.skeptic.max_tokens <= 16_000
+    assert 1 <= cfg.skeptic.max_findings <= 8
+
+
+@pytest.mark.parametrize(
+    "table, error",
+    [
+        ('enabled = "false"', "skeptic.enabled must be true or false"),
+        ("enabled = 0", "skeptic.enabled must be true or false"),
+        ("max_lookups = true", "skeptic.max_lookups must be a whole number"),
+        ("max_tokens = 8000.0", "skeptic.max_tokens must be a whole number"),
+        ('max_findings = "6"', "skeptic.max_findings must be a whole number"),
+        ("max_lookups = -1", "skeptic.max_lookups must be at least 0"),
+        ("max_tokens = 10", "skeptic.max_tokens must be at least 1000"),
+        ("enable = false", "skeptic.enable is not a known key"),
+    ],
+)
+def test_the_skeptic_table_is_validated_strictly(
+    tmp_path: Path, table: str, error: str
+):
+    (tmp_path / "config.toml").write_text(
+        "[model.price]\ninput_per_mtok = 1.0\noutput_per_mtok = 4.0\n\n"
+        f"[skeptic]\n{table}\n"
+    )
+    cfg = load_config(tmp_path)
+    errs = validate(cfg)
+    assert any(error in e for e in errs), errs
+    assert cfg.skeptic.enabled is True  # a bad value keeps the default
+
+
+def test_the_skeptic_table_loads_good_values(tmp_path: Path):
+    (tmp_path / "config.toml").write_text(
+        "[model.price]\ninput_per_mtok = 1.0\noutput_per_mtok = 4.0\n\n"
+        "[skeptic]\nenabled = false\nmax_lookups = 0\nmax_tokens = 4000\nmax_findings = 2\n"
+    )
+    cfg = load_config(tmp_path)
+    assert validate(cfg) == []
+    assert (
+        cfg.skeptic.enabled,
+        cfg.skeptic.max_lookups,
+        cfg.skeptic.max_tokens,
+        cfg.skeptic.max_findings,
+    ) == (False, 0, 4000, 2)
+
+
+# ---- the SDK source at the version the app pins (FND-5331) ------------------------------------
+
+_SHA = "e633c5b1fb7d0a1b2c3d4e5f60718293a4b5c6d7"
+
+
+def _lock(source: str, version: str = "3.40.0", extra: str = "") -> str:
+    return (
+        'version = 1\nrevision = 3\nrequires-python = ">=3.11"\n\n'
+        '[[package]]\nname = "atlan-example-app"\nversion = "0.1.0"\n'
+        'source = { editable = "." }\n\n'
+        f'[[package]]\nname = "atlan-application-sdk"\nversion = "{version}"\n'
+        f"source = {source}\n" + extra
+    )
+
+
+@pytest.mark.parametrize(
+    "lock, ref, label",
+    [
+        (_lock('{ registry = "https://pypi.org/simple" }'), "v3.40.0", "v3.40.0"),
+        # The org's registry firewall that mirrors PyPI is a known registry too.
+        (
+            _lock(
+                '{ registry = "https://factory.endorlabs.com/v1/namespaces/'
+                'atlan.atlanhq/firewall/pypi/simple/" }',
+                "3.58.1",
+            ),
+            "v3.58.1",
+            "v3.58.1",
+        ),
+        # A release candidate is tagged as `v<version>` like a release.
+        (
+            _lock('{ registry = "https://pypi.org/simple" }', "0.1.1rc64"),
+            "v0.1.1rc64",
+            "v0.1.1rc64",
+        ),
+        # A git pin is the locked commit after `#`, whatever `rev=` names.
+        (
+            _lock(
+                f'{{ git = "https://github.com/atlanhq/application-sdk.git?rev={_SHA}#{_SHA}" }}'
+            ),
+            _SHA,
+            f"3.40.0 at commit {_SHA[:12]}",
+        ),
+        (
+            _lock(
+                f'{{ git = "https://github.com/atlanhq/application-sdk?branch=main#{_SHA}" }}'
+            ),
+            _SHA,
+            f"3.40.0 at commit {_SHA[:12]}",
+        ),
+    ],
+    ids=["release", "firewall-registry", "rc", "git-rev", "git-branch"],
+)
+def test_the_sdk_pin_resolves_to_a_tag_or_a_commit(lock: str, ref: str, label: str):
+    res = sdk_source_mod.resolve(lock)
+    assert res.pin is not None and res.reason == ""
+    assert (res.pin.ref, res.pin.label) == (ref, label)
+    assert sdk_source_mod.step_output(res) == f"ref={ref}\nlabel={label}\n"
+
+
+@pytest.mark.parametrize(
+    "lock, why",
+    [
+        (
+            'version = 1\n\n[[package]]\nname = "other"\nversion = "1.0.0"\n',
+            "is not in uv.lock",
+        ),
+        ("version = 1\n", "is not in uv.lock"),
+        ("[[package]\nname = ", "does not parse"),
+        (_lock('{ editable = "." }'), "editable source"),
+        (_lock('{ path = "../application-sdk" }'), "path source"),
+        # Another repository's commit is not in atlanhq/application-sdk.
+        (
+            _lock(
+                f'{{ git = "https://github.com/someone/application-sdk.git#{_SHA}" }}'
+            ),
+            "git source other than atlanhq/application-sdk",
+        ),
+        (
+            _lock(
+                f'{{ git = "https://github.com.evil.example/atlanhq/application-sdk#{_SHA}" }}'
+            ),
+            "git source other than",
+        ),
+        (
+            _lock('{ git = "https://github.com/atlanhq/application-sdk?rev=main" }'),
+            "no locked commit",
+        ),
+        (
+            _lock(
+                '{ git = "https://github.com/atlanhq/application-sdk#main;rm -rf /" }'
+            ),
+            "no locked commit",
+        ),
+        # No tag exists for a dev release or for anything that is not a version.
+        (
+            _lock('{ registry = "https://pypi.org/simple" }', "3.40.0.dev1"),
+            "not a released version",
+        ),
+        (
+            _lock('{ registry = "https://pypi.org/simple" }', "v3; echo"),
+            "not a released version",
+        ),
+        (_lock("{ }"), "empty source"),
+        # Another index could serve different contents under the same version.
+        (
+            _lock('{ registry = "https://firewall.example/pypi/simple/" }'),
+            "not PyPI or its mirror",
+        ),
+        (
+            _lock('{ registry = "http://pypi.org/simple" }'),
+            "not PyPI or its mirror",
+        ),
+        (
+            _lock('{ registry = "https://pypi.org.evil.example/simple" }'),
+            "not PyPI or its mirror",
+        ),
+        # An unparseable git URL falls back instead of aborting the review.
+        (
+            _lock(
+                '{ git = "https://[bad/atlanhq/application-sdk'
+                '#e633c5b1fb7d0a1b2c3d4e5f60718293a4b5c6d7" }'
+            ),
+            "malformed",
+        ),
+        # Two different pins (a split resolution): which one runs is unknown.
+        (
+            _lock(
+                '{ registry = "https://pypi.org/simple" }',
+                extra='\n[[package]]\nname = "atlan-application-sdk"\nversion = "3.41.0"\n'
+                'source = { registry = "https://pypi.org/simple" }\n',
+            ),
+            "more than one way",
+        ),
+    ],
+    ids=[
+        "absent",
+        "no-packages",
+        "malformed",
+        "editable",
+        "path",
+        "other-repo",
+        "lookalike-host",
+        "git-no-commit",
+        "git-bad-fragment",
+        "dev-version",
+        "junk-version",
+        "empty-source",
+        "unknown-registry",
+        "http-registry",
+        "lookalike-registry",
+        "malformed-git-url",
+        "two-pins",
+    ],
+)
+def test_an_unresolvable_sdk_pin_is_no_ref_and_says_why(lock: str, why: str):
+    res = sdk_source_mod.resolve(lock)
+    assert res.pin is None
+    assert why in res.reason
+    assert sdk_source_mod.step_output(res) == "ref=\nlabel=\n"
+
+
+def test_the_sdk_ref_cli_writes_the_step_output_and_always_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test
+
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "uv.lock").write_text(_lock('{ registry = "https://pypi.org/simple" }'))
+    assert cli.main(["sdk-ref", "--root", str(app)]) == 0
+    assert out.read_text() == "ref=v3.40.0\nlabel=v3.40.0\n"
+    assert "application-sdk pin: v3.40.0" in capsys.readouterr().out
+
+    # No lock at all: an empty ref, so the workflow skips the checkout.
+    out.write_text("")
+    assert cli.main(["sdk-ref", "--root", str(tmp_path / "nowhere")]) == 0
+    assert out.read_text() == "ref=\nlabel=\n"
+    assert "SDK source not available: the app has no uv.lock" in capsys.readouterr().out
+
+
+def _sdk_checkout(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A fake application-sdk checkout: `application_sdk/` and, beside it, files
+    the tools must never reach. In its own pytest-managed directory, apart from
+    `tmp_path`, which the `repo` fixture uses as the app's root: the app's own
+    search must not see it."""
+    base = tmp_path_factory.mktemp("sdk")
+    root = base / "sdk-src"
+    pkg = root / "application_sdk" / "outputs"
+    pkg.mkdir(parents=True)
+    (root / "application_sdk" / "__init__.py").write_text('"""SDK."""\n')
+    (pkg / "__init__.py").write_text(
+        "class ParquetOutput:\n"
+        '    """Writes a dataframe as parquet under the output prefix."""\n\n'
+        "    def write(self, df, *, chunk_size: int = 100_000) -> int:\n"
+        '        """Returns the rows written; raises OutputError on an empty frame."""\n'
+        "        if df.empty:\n"
+        "            raise OutputError('empty')\n"
+        "        return len(df)\n\n\n"
+        "def publish(out: ParquetOutput, df) -> int:\n"
+        "    return out.write(df)\n"
+    )
+    (root / "application_sdk" / ".env").write_text("PLACEHOLDER=1\n")
+    (root / "application_sdk" / "deploy.pem").write_text("placeholder\n")
+    (root / ".git").mkdir()
+    (root / ".git" / "config").write_text("[core]\n")
+    (root / "pyproject.toml").write_text("[project]\nname = 'outside'\n")
+    (base / "outside.py").write_text("OUTSIDE = 1\n")
+    return root
+
+
+def _sdk_ws(repo: Path, sdk_root: Path | None) -> Workspace:
+    return Workspace(
+        root=repo,
+        head_text={},
+        diffs={},
+        index=build_index(repo),
+        sdk=SdkSource(root=sdk_root, label="v3.40.0") if sdk_root else None,
+    )
+
+
+def test_the_tools_read_the_sdk_source_under_its_prefix(
+    repo: Path, tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+):
+    ws = _sdk_ws(repo, _sdk_checkout(tmp_path_factory))
+
+    text = read_file(ws, "sdk:application_sdk/outputs/__init__.py")
+    assert text.startswith("File: sdk:application_sdk/outputs/__init__.py")
+    assert "raise OutputError('empty')" in text
+
+    hits = search_code(ws, "raise OutputError", "sdk:application_sdk/**")
+    assert hits.splitlines() == [
+        "sdk:application_sdk/outputs/__init__.py:7: raise OutputError('empty')"
+    ]
+    # Every hit can be handed back to read_file as it is.
+    assert "OutputError" in read_file(ws, hits.split(":7:")[0])
+    # Without the prefix, search and find stay inside the app.
+    assert search_code(ws, "raise OutputError") == "No matches for 'raise OutputError'."
+
+    found = find_symbol(ws, "sdk:ParquetOutput.write")
+    assert "SDK source v3.40.0" in found
+    assert "DEFINED sdk:application_sdk/outputs/__init__.py:4-8" in found
+    assert "sdk:application_sdk/outputs/__init__.py:11  publish" in found
+    # The app has no such symbol, and the reply points at the SDK.
+    assert 'find_symbol(name="sdk:ParquetOutput")' in find_symbol(ws, "ParquetOutput")
+    # The app's own lookups are unchanged.
+    assert find_symbol(ws, "fetch").startswith("DEFINED app/storage/fetch.py")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "sdk:application_sdk/../pyproject.toml",
+        "sdk:../outside.py",
+        "sdk:pyproject.toml",  # outside application_sdk/
+        "sdk:/etc/hosts",
+        "sdk:application_sdk/.env",
+        "sdk:application_sdk/deploy.pem",
+        "sdk:.git/config",
+    ],
+)
+def test_the_sdk_tools_refuse_escapes_and_secret_paths(
+    repo: Path, tmp_path: Path, path: str, tmp_path_factory: pytest.TempPathFactory
+):
+    ws = _sdk_ws(repo, _sdk_checkout(tmp_path_factory))
+    assert read_file(ws, path).startswith("ERROR: cannot read")
+
+
+def test_the_sdk_tools_refuse_symlinks_out_of_the_package(
+    repo: Path, tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+):
+    root = _sdk_checkout(tmp_path_factory)
+    pkg = root / "application_sdk"
+    (pkg / "link.py").symlink_to(root.parent / "outside.py")
+    (pkg / "linked_dir").symlink_to(root.parent, target_is_directory=True)
+    ws = _sdk_ws(repo, root)
+
+    assert read_file(ws, "sdk:application_sdk/link.py").startswith("ERROR")
+    assert read_file(ws, "sdk:application_sdk/linked_dir/outside.py").startswith(
+        "ERROR"
+    )
+    assert search_code(ws, "OUTSIDE", "sdk:") == "No matches for 'OUTSIDE'."
+    assert ws.sdk is not None
+    files = ws.sdk.files()
+    assert files == [
+        "application_sdk/__init__.py",
+        "application_sdk/outputs/__init__.py",
+    ]
+    assert "No definition of 'OUTSIDE'" in find_symbol(ws, "sdk:OUTSIDE")
+
+
+def test_without_the_sdk_source_the_prefix_says_so_and_nothing_else_changes(
+    repo: Path,
+):
+    ws = _sdk_ws(repo, None)
+    for reply in (
+        read_file(ws, "sdk:application_sdk/outputs/__init__.py"),
+        search_code(ws, "OutputError", "sdk:application_sdk/**"),
+        find_symbol(ws, "sdk:ParquetOutput"),
+    ):
+        assert reply.startswith("ERROR: the application-sdk source is not available")
+    assert (
+        find_symbol(ws, "ParquetOutput")
+        == "No definition of 'ParquetOutput' in the index."
+    )
+
+
+def test_the_sdk_index_is_built_once_and_only_when_asked(
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+):
+    ws = _sdk_ws(repo, _sdk_checkout(tmp_path_factory))
+    built: list[str] = []
+    real = tools_mod.index_source
+
+    def counting(idx: Index, rel: str, src: str) -> None:
+        built.append(rel)
+        real(idx, rel, src)
+
+    monkeypatch.setattr(tools_mod, "index_source", counting)
+    read_file(ws, "sdk:application_sdk/outputs/__init__.py")
+    search_code(ws, "OutputError", "sdk:application_sdk/**")
+    assert built == []  # reads and searches never index the SDK
+    find_symbol(ws, "sdk:ParquetOutput")
+    find_symbol(ws, "sdk:publish")
+    assert built == [
+        "application_sdk/__init__.py",
+        "application_sdk/outputs/__init__.py",
+    ]
+
+
+def test_the_sdk_index_stops_at_its_time_limit(
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+):
+    monkeypatch.setattr(tools_mod, "SDK_INDEX_SECONDS", -1.0)
+    ws = _sdk_ws(repo, _sdk_checkout(tmp_path_factory))
+    reply = find_symbol(ws, "sdk:ParquetOutput")
+    assert "No definition of 'ParquetOutput'" in reply
+    assert "partial: the index stopped at its time limit" in reply
+
+
+def test_the_sdk_source_falls_back_with_a_reason(
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+):
+    app = tmp_path / "app"
+    app.mkdir()
+    checkout = _sdk_checkout(tmp_path_factory)
+
+    # No lock: no pin, whatever is on disk.
+    sdk, note = SdkSource.open(str(checkout), app)
+    assert sdk is None and note == "SDK source not available: the app has no uv.lock"
+
+    (app / "uv.lock").write_text(_lock('{ registry = "https://pypi.org/simple" }'))
+    # A pin, but the checkout was skipped or failed: absent, or a .git only.
+    failed = tmp_path / "failed"
+    (failed / ".git").mkdir(parents=True)
+    for missing in ("", str(tmp_path / "absent"), str(failed)):
+        sdk, note = SdkSource.open(missing, app)
+        assert sdk is None
+        assert note == (
+            "SDK source not available: no checkout of application-sdk at v3.40.0 "
+            "(the ref may not exist)"
+        )
+
+    sdk, note = SdkSource.open(str(checkout), app)
+    assert sdk is not None and note == ""
+    assert sdk.label == "v3.40.0" and sdk.root == checkout.resolve()
+
+
+def test_the_cli_passes_the_sdk_source_or_why_it_is_missing(
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path_factory: pytest.TempPathFactory,
+):
+    monkeypatch.delenv("CONNECTOR_REVIEWER_SDK_SOURCE", raising=False)
+    # A local run without the flag or the variable: as before, no note.
+    code, seen = _cli_review(monkeypatch, ["--root", str(repo)])
+    assert code == 0
+    assert seen["run"]["sdk"] is None and seen["run"]["sdk_note"] == ""
+    assert "SDK source not available: not configured" in capsys.readouterr().err
+
+    # CI: the variable is set, and the app has no lock to resolve.
+    monkeypatch.setenv("CONNECTOR_REVIEWER_SDK_SOURCE", str(tmp_path / "sdk-src"))
+    code, seen = _cli_review(monkeypatch, ["--root", str(repo)])
+    assert seen["run"]["sdk"] is None
+    assert seen["run"]["sdk_note"] == "SDK source not available: the app has no uv.lock"
+    assert "SDK source not available: the app has no uv.lock" in capsys.readouterr().err
+
+    (repo / "uv.lock").write_text(_lock('{ registry = "https://pypi.org/simple" }'))
+    checkout = _sdk_checkout(tmp_path_factory)
+    code, seen = _cli_review(
+        monkeypatch, ["--root", str(repo), "--sdk-source", str(checkout)]
+    )
+    assert seen["run"]["sdk"].label == "v3.40.0" and seen["run"]["sdk_note"] == ""
+    assert f"SDK source: application-sdk v3.40.0 at {checkout.resolve()}" in (
+        capsys.readouterr().err
+    )
+
+
+def test_a_review_without_the_sdk_source_runs_as_before_and_says_so(repo: Path):
+    note = "SDK source not available: the app has no uv.lock"
+    gh = fake_github()
+    script = _review_script()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+        sdk=None,
+        sdk_note=note,
+    )
+    assert res.action == "reviewed" and not res.incomplete and not res.failed
+    assert res.notes == [note]
+    assert f"> ℹ️ {note}" in gh.comments[0]["body"]
+    assert [f.title for f in state_of(res).findings] == ["decode() on a None result"]
+    # The prompt is the one a review without the SDK source always sent.
+    sent = script.requests[0]["messages"]
+    assert "<sdk_source" not in sent[2]["content"]
+    assert "sdk:" not in sent[0]["content"]
+
+
+def test_a_review_reads_the_sdk_source_when_the_model_asks(
+    repo: Path, tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+):
+    """A scripted review: the model reads an SDK file through the prefix, and
+    the file's text comes back to it as the tool reply."""
+    sdk = SdkSource(root=_sdk_checkout(tmp_path_factory), label="v3.40.0")
+    script = Script(
+        response(
+            [
+                tool_call(
+                    "read_file",
+                    {"file_path": "sdk:application_sdk/outputs/__init__.py"},
+                )
+            ]
+        ),
+        response(
+            [
+                tool_call("code_comment", {"comments": [COMMENT]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    gh = fake_github()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+        sdk=sdk,
+    )
+    assert res.action == "reviewed" and not res.failed and res.notes == []
+    context_msg = script.requests[0]["messages"][2]["content"]
+    assert '<sdk_source version="v3.40.0">' in context_msg
+    assert 'read_file(file_path="sdk:application_sdk/<path>.py")' in context_msg
+    tool_reply = script.requests[1]["messages"][-1]
+    assert tool_reply["role"] == "tool"
+    assert tool_reply["content"].startswith(
+        "File: sdk:application_sdk/outputs/__init__.py"
+    )
+    assert "raise OutputError('empty')" in tool_reply["content"]
+    assert [f.title for f in state_of(res).findings] == ["decode() on a None result"]
+
+
+@pytest.mark.parametrize(
+    "version",
+    [r"3.40.0\nref=main\nlabel=x", r"3.40.0\" onload=\"x", "3.40.0 <b>"],
+    ids=["newline", "quote", "markup"],
+)
+def test_a_git_pins_version_never_reaches_the_step_output_or_the_prompt(
+    version: str, tmp_path: Path
+):
+    """The ref of a git pin is the commit, checked against a pattern; its
+    version is only shown. A TOML string can hold a newline or a quote, so a
+    version outside the safe characters is left out of the label: it can add no
+    line to $GITHUB_OUTPUT and cannot close the prompt's attribute."""
+    lock = _lock(
+        f'{{ git = "https://github.com/atlanhq/application-sdk.git#{_SHA}" }}',
+        version,
+    )
+    res = sdk_source_mod.resolve(lock)
+    assert res.pin is not None and res.pin.ref == _SHA
+    assert res.pin.label == f"commit {_SHA[:12]}"
+    assert sdk_source_mod.step_output(res) == (
+        f"ref={_SHA}\nlabel=commit {_SHA[:12]}\n"
+    )
+    # A label set by hand is escaped in the prompt all the same.
+    block = SdkSource(root=tmp_path, label='x" injected="1').prompt_block()
+    assert '<sdk_source version="x&quot; injected=&quot;1">' in block
+
+
+def test_an_sdk_search_past_the_file_cap_says_it_is_partial(
+    repo: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """lens F-4b844c: a miss in a file past the cap is not a real miss. The
+    search and the lookup say the SDK source is partial instead of reporting a
+    clean miss."""
+    monkeypatch.setattr(tools_mod, "SDK_MAX_FILES", 1)
+    ws = _sdk_ws(repo, _sdk_checkout(tmp_path_factory))
+    out = search_code(ws, "no-such-text-anywhere", path_glob="sdk:application_sdk/**")
+    assert "No matches" in out
+    assert "the SDK source is partial: it lists only the first 1 files" in out
