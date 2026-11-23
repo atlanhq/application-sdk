@@ -1218,7 +1218,8 @@ def test_refused_scaffolds_ignores_the_intentional_skips():
             # A folder of real local review rules is left for a hand move
             # (FND-5317). Reported as `kept:`, so it never holds the repo.
             "kept: /w/.mothership/review-rulesets/connector-app  (it holds rules"
-            " that are not the placeholder: x.md; nothing in it was removed.)",
+            " that are not the placeholder: x.md; nothing in it was removed. Move"
+            " its rules to .github/connector-reviewer/principles/ by hand)",
             # Outside the render root, or escaping it: not a repo file.
             "skipped: /elsewhere/tests.yaml declares `x`; left untouched",
             "skipped: /w/../etc/passwd declares `x`; left untouched",
