@@ -1531,10 +1531,14 @@ def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:  # n
         )
         bundles = group(files, max_diff_tokens=bigger, max_files=12)
     bundles.sort(key=_risk)
+    # A file over the token cap is reviewed in parts (`bundle._parts`), and its
+    # parts can fall on both sides of the cap: named once, as not reviewed.
+    skipped: list[str] = []
     for b in bundles[cfg.max_bundles :]:
-        res.skipped_files.extend(
-            (p, "bundle cap (lowest-risk code, after re-packing)") for p in b.paths
-        )
+        skipped.extend(p for p in b.paths if p not in skipped)
+    res.skipped_files.extend(
+        (p, "bundle cap (lowest-risk code, after re-packing)") for p in skipped
+    )
     return bundles[: cfg.max_bundles]
 
 

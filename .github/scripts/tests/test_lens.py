@@ -7942,3 +7942,18 @@ def test_the_same_edit_under_different_context_is_reviewed_in_every_file():
         "deploy/b.yaml": "deploy/a.yaml",
         "deploy/c.yaml": "deploy/a.yaml",
     }
+
+
+def test_a_split_file_past_the_bundle_cap_is_named_once():
+    """A file reviewed in parts can have several parts past `max_bundles`: it
+    is named once among the files not reviewed, not once per part."""
+    path = "application_sdk/storage/huge.py"
+    files = parse_unified_diff(_hunks_diff(path, [60] * 150))
+    cfg = Config(price=PRICE)
+    cfg.max_bundles = 1
+    res = RunResult("reviewed")
+    bundles = plan_bundles(files, cfg, res)
+    assert [b.paths for b in bundles] == [[path]]
+    assert res.skipped_files == [
+        (path, "bundle cap (lowest-risk code, after re-packing)")
+    ]

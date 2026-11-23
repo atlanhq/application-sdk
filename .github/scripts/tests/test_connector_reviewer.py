@@ -10603,3 +10603,19 @@ def test_the_same_edit_under_different_context_is_reviewed_in_every_file():
         "contract/b.yaml": "contract/a.yaml",
         "contract/c.yaml": "contract/a.yaml",
     }
+
+
+def test_a_split_file_past_the_bundle_cap_is_named_once_and_stays_unread():
+    """A file reviewed in parts can have several parts past `max_bundles`: it
+    is named once, and since part of it was not read it is unread source, so
+    the verdict cannot go green."""
+    path = "app/storage/huge.py"
+    files = parse_unified_diff(_hunks_diff(path, [60] * 150))
+    cfg = Config(price=PRICE)
+    cfg.max_bundles = 1
+    res = RunResult("reviewed")
+    bundles = plan_bundles(files, cfg, res)
+    assert [b.paths for b in bundles] == [[path]]
+    reason = "bundle cap (lowest-risk code, after re-packing)"
+    assert res.skipped_files == [(path, reason)]
+    assert review_mod.unread_skips(res.skipped_files) == [(path, reason)]
