@@ -44,6 +44,11 @@ _COMMIT = re.compile(r"[0-9a-f]{40}")
 # The two ways a ref reaches the workflow: what `resolve` returns, and nothing
 # else is written as a step output.
 _REF = re.compile(rf"v{_RELEASE.pattern}|{_COMMIT.pattern}")
+# A git pin's version is only shown, never checked out, but it is written to
+# `$GITHUB_OUTPUT` and the prompt: a TOML string can hold a newline or a quote,
+# so anything outside these characters is left out of the label.
+_VERSION = re.compile(r"[0-9A-Za-z.+!_-]{1,64}")
+_LABEL = re.compile(r"[0-9A-Za-z.+!_ -]{1,100}")
 
 
 @dataclass(frozen=True)
@@ -52,14 +57,15 @@ class SdkPin:
     `_REF` by construction."""
 
     ref: str  # "v3.40.0" or a 40-hex commit
-    version: str  # the version uv.lock records, e.g. "3.40.0"
+    version: str  # the version uv.lock records, e.g. "3.40.0"; "" when unsafe to show
     kind: str  # "release" | "git"
 
     @property
     def label(self) -> str:
         """How the prompt and the log name it."""
         if self.kind == "git":
-            return f"{self.version} at commit {self.ref[:12]}"
+            at = f"commit {self.ref[:12]}"
+            return f"{self.version} at {at}" if self.version else at
         return self.ref
 
 
@@ -121,7 +127,8 @@ def _pin_of(entry: dict[str, object]) -> SdkPin | str:
         commit = url.fragment
         if not _COMMIT.fullmatch(commit):
             return f"{PACKAGE}'s git pin in uv.lock has no locked commit"
-        return SdkPin(ref=commit, version=version, kind="git")
+        shown = version if _VERSION.fullmatch(version) else ""
+        return SdkPin(ref=commit, version=shown, kind="git")
     kinds = ", ".join(sorted(source)) or "empty"
     return f"{PACKAGE} comes from a {kinds} source, not a release or a git commit"
 
@@ -145,6 +152,8 @@ def step_output(res: Resolution) -> str:
     ok = pin is not None and _REF.fullmatch(pin.ref) is not None
     ref = pin.ref if pin is not None and ok else ""
     label = pin.label if pin is not None and ok else ""
+    if not _LABEL.fullmatch(label):
+        label = ""
     return f"ref={ref}\nlabel={label}\n"
 
 

@@ -373,7 +373,11 @@ equivalent.
   reason: the package absent, two different pins, an editable or path source, a
   git pin of another repository, a version with no tag (a dev or post release),
   or a lock that does not parse. Both ref shapes are checked against a strict
-  pattern before they are written as a step output.
+  pattern before they are written as a step output. A git pin's version is only
+  shown, never checked out, and is left out of the label unless it is plain
+  version characters: a TOML string can hold a newline (a second line in
+  `$GITHUB_OUTPUT`) or a quote (out of the prompt's attribute). The prompt
+  escapes the label as well.
 - **Workflow.** `python -m connector_reviewer sdk-ref --root repo` writes `ref`
   and `label` to `$GITHUB_OUTPUT` and always exits 0. A third checkout, of
   `atlanhq/application-sdk` at that ref, runs only when `ref` is not empty
@@ -388,8 +392,9 @@ equivalent.
   `sdk:application_sdk/outputs/__init__.py`. Every hit and definition carries the
   prefix, so it can be handed back to `read_file`. Why a prefix: the tool
   schemas, part of the cached prompt prefix, do not change; the approach check,
-  which takes a subset of the same schemas, gets it for nothing; and the model
-  already knows the three tools. Without the prefix every tool is the app only,
+  which takes a subset of the same schemas and the same `run_tool`, needs no
+  change of its own to use the prefix later (today it is not told about it, see
+  Prompt); and the model already knows the three tools. Without the prefix every tool is the app only,
   as before. `Workspace.text` and `Workspace.files` stay the app only too: the
   context and facts code walks them, and must not count SDK callers or slow
   down.

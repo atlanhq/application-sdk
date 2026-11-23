@@ -10524,3 +10524,30 @@ def test_a_review_reads_the_sdk_source_when_the_model_asks(repo: Path, tmp_path:
     )
     assert "raise OutputError('empty')" in tool_reply["content"]
     assert [f.title for f in state_of(res).findings] == ["decode() on a None result"]
+
+
+@pytest.mark.parametrize(
+    "version",
+    [r"3.40.0\nref=main\nlabel=x", r"3.40.0\" onload=\"x", "3.40.0 <b>"],
+    ids=["newline", "quote", "markup"],
+)
+def test_a_git_pins_version_never_reaches_the_step_output_or_the_prompt(
+    version: str, tmp_path: Path
+):
+    """The ref of a git pin is the commit, checked against a pattern; its
+    version is only shown. A TOML string can hold a newline or a quote, so a
+    version outside the safe characters is left out of the label: it can add no
+    line to $GITHUB_OUTPUT and cannot close the prompt's attribute."""
+    lock = _lock(
+        f'{{ git = "https://github.com/atlanhq/application-sdk.git#{_SHA}" }}',
+        version,
+    )
+    res = sdk_source_mod.resolve(lock)
+    assert res.pin is not None and res.pin.ref == _SHA
+    assert res.pin.label == f"commit {_SHA[:12]}"
+    assert sdk_source_mod.step_output(res) == (
+        f"ref={_SHA}\nlabel=commit {_SHA[:12]}\n"
+    )
+    # A label set by hand is escaped in the prompt all the same.
+    block = SdkSource(root=tmp_path, label='x" injected="1').prompt_block()
+    assert '<sdk_source version="x&quot; injected=&quot;1">' in block

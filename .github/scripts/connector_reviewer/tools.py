@@ -22,6 +22,7 @@ only `application_sdk/` is reachable.
 from __future__ import annotations
 
 import fnmatch
+import html
 import json
 import os
 import threading
@@ -237,9 +238,10 @@ class SdkSource:
         """What the line review is told about the SDK source, in its context
         message. The system prompt does not change, so a review without the SDK
         source sends the same prompt as before."""
+        label = html.escape(self.label, quote=True)
         return (
-            f'<sdk_source version="{self.label}">\n'
-            f"The Atlan Application SDK source this app pins in uv.lock ({self.label}) is "
+            f'<sdk_source version="{label}">\n'
+            f"The Atlan Application SDK source this app pins in uv.lock ({label}) is "
             "readable, read-only, through the same tools with an `sdk:` prefix:\n"
             '- read_file(file_path="sdk:application_sdk/<path>.py")\n'
             '- search_code(search_text=..., path_glob="sdk:application_sdk/**")\n'
