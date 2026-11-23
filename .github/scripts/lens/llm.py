@@ -1,13 +1,14 @@
 """The one way lens talks to a model: Atlan Model Gateway's OpenAI-compatible
 `/v1/responses` (or `/v1/chat/completions`), with the spend cap enforced here in code.
 
-Every call is priced BEFORE it is sent (prompt estimate × input price +
+Every call is priced BEFORE it is sent (prompt upper bound × input price +
 `max_tokens` × output price) and refused if it could take the run past its
 budget; the actual cost the gateway reports (or the list-price cost) is then booked. A prompt cannot talk
 its way past this, and neither can a model that keeps calling tools.
 
 Retries are for transport weather only — 5xx, a rate-limit 429, a timeout —
-and are bounded. A budget-exceeded 429 is deterministic and is never retried:
+and are bounded. An attempt that may have been billed (a 5xx, a cut stream, a
+timeout) is booked at its worst case before a retry reserves again. A budget-exceeded 429 is deterministic and is never retried:
 the September incident that re-dispatched into a spent key, hour after hour,
 is the case this exists to make impossible.
 """
@@ -70,10 +71,28 @@ class ContentRejected(FatalRequestError):
 PROVIDER_REJECTED = "provider_rejected"
 
 
+# Secret values this process holds (the gateway key). `redact` masks each one
+# wherever it appears, whatever its shape: a key need not start with `sk-`, and a
+# gateway or proxy can echo the submitted key back in an error body.
+_SECRETS: set[str] = set()
+
+
+def register_secret(value: str) -> None:
+    """Have `redact` mask `value` from now on. Called with the gateway key.
+
+    Any non-empty value, however short: a short key is still a key, and an
+    over-eager mask in an error message costs far less than a leaked one."""
+    if value:
+        _SECRETS.add(value)
+
+
 def redact(text: str) -> str:
-    """An error body as it may be recorded: whitespace collapsed and any
-    key-shaped token masked. Never truncated: a cut-off error body is what made a
-    refused request undiagnosable (the run report is the place to read it whole)."""
+    """An error body as it may be recorded: whitespace collapsed, every registered
+    secret and any key-shaped token masked. Never truncated: a cut-off error body
+    is what made a refused request undiagnosable (the run report is the place to
+    read it whole)."""
+    for secret in sorted(_SECRETS, key=len, reverse=True):
+        text = text.replace(secret, "[key]")
     return re.sub(r"sk-[A-Za-z0-9._-]+", "sk-…", " ".join(text.split()))
 
 
@@ -107,6 +126,15 @@ def estimate_tokens(text: str) -> int:
     # ~3.5 chars/token for code-heavy English; deliberately pessimistic so the
     # pre-call estimate errs toward refusing, not overspending.
     return int(len(text) / 3.5) + 1
+
+
+def token_bound(text: str) -> int:
+    """The most tokens `text` can be: one per UTF-8 byte, since every token of a
+    byte-level tokenizer covers at least one byte. `estimate_tokens` is an
+    average, and a token-dense prompt (fragmented code, hashes, non-ASCII)
+    beats it; the reservation against the cap must not be beaten, so it counts
+    with this. Sizing (bundles, the context ceiling) keeps the estimate."""
+    return len(text.encode("utf-8")) + 1
 
 
 @dataclass
@@ -160,6 +188,15 @@ class Ledger:
     def release(self, amount: float) -> None:
         with self._lock:
             self.reserved_usd = max(self.reserved_usd - amount, 0.0)
+
+    def settle(self, stage: str, amount: float) -> None:
+        """Turn `amount` of a reservation into spend, with no usage to book: an
+        attempt that failed after the provider may have generated tokens. Only
+        the money is booked: it is not a call, and it has no token counts."""
+        with self._lock:
+            self.reserved_usd = max(self.reserved_usd - amount, 0.0)
+            self.spent_usd += amount
+            self.by_stage[stage] = self.by_stage.get(stage, 0.0) + amount
 
     def book(self, stage: str, cost: float, usage: dict[str, Any]) -> None:
         with self._lock:
@@ -425,6 +462,7 @@ class Client:
             base_url or os.environ.get("MODEL_GATEWAY_BASE_URL") or ""
         ).rstrip("/")
         self.api_key = api_key or os.environ.get("LENS_GATEWAY_KEY") or ""
+        register_secret(self.api_key)
         self.timeout_s = timeout_s
         self.max_retries = max_retries
         self.max_consecutive_failures = max_consecutive_failures
@@ -466,7 +504,7 @@ class Client:
             json.dumps(tools) if tools else ""
         )
         return (
-            estimate_tokens(prompt) * self.price.prompt_ceiling
+            token_bound(prompt) * self.price.prompt_ceiling
             + max_tokens * self.price.output_per_mtok
         ) / 1e6
 
@@ -586,10 +624,12 @@ class Client:
         try:
             status, text = self._meta("/v1/models")
         except (LLMError, TimeoutError, urllib.error.URLError, OSError) as e:
-            return f"gateway unreachable: {e}"
+            return f"gateway unreachable: {redact(str(e))}"
         self._diagnose("/v1/models", status, text)
         if status == 401:
-            return f"the gateway key was rejected (HTTP 401: {text[:160]})"
+            # Redacted: this reason is published in the pull request's summary,
+            # and a gateway or proxy can echo the submitted key in a 401 body.
+            return f"the gateway key was rejected (HTTP 401: {redact(text)[:160]})"
         if status == 200:
             try:
                 ids = {m.get("id") for m in json.loads(text).get("data", [])}
@@ -656,6 +696,9 @@ class Client:
             raise BudgetExhausted(
                 f"{stage}: worst case ${worst:.4f} exceeds the ${self.ledger.remaining:.4f} left of the ${self.ledger.cap_usd:.2f} cap"
             )
+        # What this call holds against the cap right now: a retry after an attempt
+        # that may have been billed settles the old hold and takes a new one.
+        hold = [worst]
         try:
             return self._complete(
                 stage,
@@ -666,9 +709,10 @@ class Client:
                 temperature,
                 tool_choice,
                 cache_key,
+                hold=hold,
             )
         finally:
-            self.ledger.release(worst)
+            self.ledger.release(hold[0])
 
     def _body(
         self,
@@ -900,7 +944,12 @@ class Client:
         temperature,
         tool_choice,
         cache_key,
+        *,
+        hold: list[float] | None = None,
     ) -> Completion:  # noqa: ANN001
+        # The reservation `complete` took for this call; None when called directly.
+        worst = hold[0] if hold else 0.0
+
         def build() -> dict[str, Any]:
             if self.api == "responses":
                 return self._responses_body(
@@ -935,46 +984,69 @@ class Client:
                 status, headers, text = 0, {}, f"transport: {e}"
             latency_ms = int((time.monotonic() - t0) * 1000)
             if status == 200:
-                self._record(True)
-                data = json.loads(text)
-                if self.api == "responses":
-                    _, _, usage, msg, finish = self._parse_responses(data)
-                    choice = {"message": msg, "finish_reason": finish}
+                # Parsed before anything is booked: a 200 whose body is not a
+                # completion (truncated, not JSON, the wrong shape) may still have
+                # been generated and billed, so it takes the failed-attempt path
+                # below as a cut stream does: its hold is settled, never released.
+                try:
+                    # Not narrowed by isinstance: a body that is not an object
+                    # (a list, a string, null) fails on `.get` below instead.
+                    data = json.loads(text)
+                    if self.api == "responses":
+                        _, _, usage, msg, finish = self._parse_responses(data)
+                        choice = {"message": msg, "finish_reason": finish}
+                    else:
+                        choice = (data.get("choices") or [{}])[0]
+                        msg = choice.get("message") or {}
+                        usage = data.get("usage") or {}
+                    if not all(isinstance(x, dict) for x in (msg, usage)):
+                        raise TypeError("not a completion")
+                    reported = None
+                    for k, v in headers.items():
+                        if k.lower() == PRICE_HEADER:
+                            reported = gateway_cost(v, usage)
+                    cost = self.actual_cost(usage, reported)
+                except (
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                    KeyError,
+                    IndexError,
+                ) as e:
+                    status, text = (
+                        0,
+                        f"malformed HTTP 200 response ({type(e).__name__})",
+                    )
                 else:
-                    choice = (data.get("choices") or [{}])[0]
-                    msg = choice.get("message") or {}
-                    usage = data.get("usage") or {}
-                reported = None
-                for k, v in headers.items():
-                    if k.lower() == PRICE_HEADER:
-                        reported = gateway_cost(v, usage)
-                cost = self.actual_cost(usage, reported)
-                self.ledger.book(stage, cost, usage)
-                self._note_call(
-                    stage=stage,
-                    api=self.api,
-                    status=200,
-                    attempt=attempt,
-                    latency_ms=latency_ms,
-                    input=int(usage.get("prompt_tokens") or 0),
-                    cached=int(
-                        (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
-                        or 0
-                    ),
-                    output=int(usage.get("completion_tokens") or 0),
-                    reasoning=int(usage.get("reasoning_tokens") or 0),
-                    cost=round(cost, 6),
-                    tool_calls=len(msg.get("tool_calls") or []),
-                    effort=self.reasoning_effort or "",
-                )
-                return Completion(
-                    content=msg.get("content") or "",
-                    tool_calls=msg.get("tool_calls") or [],
-                    usage=usage,
-                    cost=cost,
-                    finish_reason=choice.get("finish_reason") or "",
-                    message=msg,
-                )
+                    self._record(True)
+                    self.ledger.book(stage, cost, usage)
+                    self._note_call(
+                        stage=stage,
+                        api=self.api,
+                        status=200,
+                        attempt=attempt,
+                        latency_ms=latency_ms,
+                        input=int(usage.get("prompt_tokens") or 0),
+                        cached=int(
+                            (usage.get("prompt_tokens_details") or {}).get(
+                                "cached_tokens"
+                            )
+                            or 0
+                        ),
+                        output=int(usage.get("completion_tokens") or 0),
+                        reasoning=int(usage.get("reasoning_tokens") or 0),
+                        cost=round(cost, 6),
+                        tool_calls=len(msg.get("tool_calls") or []),
+                        effort=self.reasoning_effort or "",
+                    )
+                    return Completion(
+                        content=msg.get("content") or "",
+                        tool_calls=msg.get("tool_calls") or [],
+                        usage=usage,
+                        cost=cost,
+                        finish_reason=choice.get("finish_reason") or "",
+                        message=msg,
+                    )
             # A content refusal is bundle-local: it is a failed request, but it must not
             # open the breaker on bundles whose prompts were never refused. Each bundle
             # stops at its first refusal, so this costs at most one request per bundle.
@@ -1041,8 +1113,25 @@ class Client:
                     f"{stage}: {last} — stopping the run (a request lens got wrong; retrying cannot help)"
                 )
             retryable = status == 0 or status == 429 or status >= 500
+            # A cut stream, a timeout or a 5xx can come after the provider has
+            # generated tokens, and those are billed, but no usage comes back to
+            # book. So the attempt's worst case is booked as spent, and a retry
+            # must reserve its own: one reservation never covers two billable
+            # attempts. The ledger may overstate a failed call, never understate it.
+            billable = status == 0 or status >= 500
+            if billable and hold is not None and hold[0]:
+                self.ledger.settle(stage, hold[0])
+                hold[0] = 0.0
             if not retryable or attempt >= self.max_retries or self._breaker_open():
                 break
+            if billable and hold is not None:
+                if not self.ledger.reserve(worst):
+                    raise BudgetExhausted(
+                        f"{stage}: not retried — the failed attempt may have been billed, and "
+                        f"a retry's worst case ${worst:.4f} exceeds the ${self.ledger.remaining:.4f} left "
+                        f"of the ${self.ledger.cap_usd:.2f} cap ({last})"
+                    )
+                hold[0] = worst
             time.sleep(self._retry_after(headers, attempt))
             attempt += 1
         raise LLMError(f"{stage}: {last}")

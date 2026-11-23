@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from . import context
 from .diff import FileDiff
-from .tools import _secret_path
+from .tools import secret_diff
 
 DEFAULT_EXCLUDE = (
     "uv.lock",
@@ -67,12 +67,10 @@ def select_files(
             skipped.append((fd.path, "binary"))
         elif not fd.hunks:
             skipped.append((fd.path, "no line changed"))  # a pure rename or mode change
-        elif not fd.added_lines and (
-            _secret_path(fd.path) or bool(fd.old_path and _secret_path(fd.old_path))
-        ):
-            # A deletion-only change was never sent to the model, and one to a
-            # path that may hold secrets still is not: its removed lines are the
-            # secret. (Secret filtering of every change is separate work.)
+        elif secret_diff(fd):
+            # Before any other rule: its diff is never sent to the model. The
+            # tools refuse to read such a file, and a review must not hand over
+            # in a prompt what a tool call would be refused.
             skipped.append((fd.path, "may hold secrets: not sent to the model"))
         elif _match(fd.path, exclude):
             skipped.append((fd.path, "excluded by pattern"))

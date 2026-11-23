@@ -155,11 +155,76 @@ def _new_no(ln: Line | None) -> int | None:
     return ln.new_no if ln is not None else None
 
 
+# Git's C-style quoting of a path that holds a special character: `\"`, `\\`,
+# the control escapes, and `\ooo` octal for each byte of a non-ASCII character
+# (the default `core.quotePath`).
+_C_ESCAPES = {
+    "a": 7,
+    "b": 8,
+    "t": 9,
+    "n": 10,
+    "v": 11,
+    "f": 12,
+    "r": 13,
+    '"': 34,
+    "\\": 92,
+}
+_OCTAL = re.compile(r"[0-7]{3}")
+
+
+def _unquote(p: str) -> str:
+    """A path as Git wrote it, decoded: a quoted one (`"app/a\\"b.py"`,
+    `"caf\\303\\251.py"`) loses its quotes and escapes; any other is unchanged."""
+    if len(p) < 2 or p[0] != '"' or p[-1] != '"':
+        return p
+    s, out, i = p[1:-1], bytearray(), 0
+    while i < len(s):
+        if s[i] == "\\" and i + 1 < len(s):
+            if _OCTAL.match(s, i + 1):
+                out.append(int(s[i + 1 : i + 4], 8))
+                i += 4
+                continue
+            if s[i + 1] in _C_ESCAPES:
+                out.append(_C_ESCAPES[s[i + 1]])
+                i += 2
+                continue
+        out += s[i].encode("utf-8")
+        i += 1
+    return out.decode("utf-8", "replace")
+
+
 def _strip_prefix(p: str) -> str:
-    p = p.strip()
-    if p.startswith('"') and p.endswith('"'):
-        p = p[1:-1]
+    p = _unquote(p.strip())
     return p[2:] if p[:2] in ("a/", "b/") else p
+
+
+def _quoted_end(s: str) -> int:
+    """The index of the `"` that closes the quoted string `s` opens, or -1."""
+    i = 1
+    while i < len(s):
+        if s[i] == "\\":
+            i += 2
+            continue
+        if s[i] == '"':
+            return i
+        i += 1
+    return -1
+
+
+def _header_path(rest: str) -> str:
+    """The new path in a `diff --git <old> <new>` header (`rest` is what follows
+    `diff --git `). Either name is C-quoted when it holds a special character,
+    and an unquoted name may hold spaces."""
+    if rest.startswith('"'):
+        end = _quoted_end(rest)
+        if end > 0:
+            return _strip_prefix(rest[end + 1 :])
+    if rest.endswith('"'):
+        start = rest.rfind(' "')
+        if start >= 0:
+            return _strip_prefix(rest[start + 1 :])
+    parts = rest.split(" b/", 1)
+    return parts[1] if len(parts) == 2 else _strip_prefix(rest.rsplit(" ", 1)[-1])
 
 
 def parse_unified_diff(text: str) -> list[FileDiff]:
@@ -169,10 +234,7 @@ def parse_unified_diff(text: str) -> list[FileDiff]:
     old_no = new_no = 0
     for raw in text.splitlines():
         if raw.startswith("diff --git "):
-            parts = raw[len("diff --git ") :].split(" b/", 1)
-            path = (
-                parts[1] if len(parts) == 2 else _strip_prefix(raw.rsplit(" ", 1)[-1])
-            )
+            path = _header_path(raw[len("diff --git ") :])
             cur = FileDiff(path=path)
             files.append(cur)
             hunk = None
@@ -197,10 +259,10 @@ def parse_unified_diff(text: str) -> list[FileDiff]:
             elif raw.startswith("deleted file mode"):
                 cur.status = "deleted"
             elif raw.startswith("rename from "):
-                cur.old_path = raw[len("rename from ") :]
+                cur.old_path = _unquote(raw[len("rename from ") :])
                 cur.status = "renamed"
             elif raw.startswith("rename to "):
-                cur.path = raw[len("rename to ") :]
+                cur.path = _unquote(raw[len("rename to ") :])
             elif raw.startswith("Binary files ") or raw.startswith("GIT binary patch"):
                 cur.is_binary = True
             elif raw.startswith("+++ "):
