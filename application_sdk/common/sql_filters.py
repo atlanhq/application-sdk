@@ -96,6 +96,10 @@ def strip_sql_block_comments(fragment: str) -> str:
 #   * ``--`` — SQL line comment (eats the rest of the line)
 #   * ``/*`` / ``*/`` — block comment
 #   * ``\x00`` — null byte; some drivers truncate on it
+#   * a trailing odd run of ``\`` — escapes the template's closing quote
+#     in dialects that treat ``\`` as an escape inside literals (MySQL by
+#     default), leaving the literal unclosed (FND-5216). An even run is a
+#     literal backslash and stays allowed.
 #
 # Regex meta-characters that legitimately appear in filter values
 # (``^``, ``$``, ``.``, ``*``, ``+``, ``?``, ``|``, ``()``, ``[]``, ``\``,
@@ -178,6 +182,10 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
                 raise ValueError(
                     f"SQL-unsafe sequence {seq!r} not allowed in filter {label}"
                 )
+        trailing_backslashes = len(value) - len(value.rstrip("\\"))
+        if trailing_backslashes % 2:
+            # conformance: ignore[E012] Pydantic @field_validator requires ValueError to collect validation errors; any other type bypasses Pydantic's error collection and propagates raw, breaking model instantiation for all callers
+            raise ValueError(f"SQL-unsafe trailing backslash in filter {label}")
 
     def _check_value(label: str, value: Any, depth: int = 0) -> None:
         if depth > _MAX_FILTER_NESTING_DEPTH:
@@ -563,6 +571,8 @@ def prepare_query(
             # validators) still trip on migrated workflow specs.
             temp_table_regex = normalize_legacy_filter_value(temp_table_regex)
             validate_filter_no_sql_injection(temp_table_regex)
+            # FND-5216: the same structural check the typed contracts run.
+            validate_filter_regex_syntax(temp_table_regex)
         if temp_table_regex and temp_table_regex_sql is not None:
             temp_table_regex_sql = strip_sql_block_comments(
                 temp_table_regex_sql
@@ -651,6 +661,7 @@ async def get_database_names(
         raw_include = normalize_legacy_filter_value(raw_include)
     if isinstance(raw_include, (str, dict)):
         validate_filter_no_sql_injection(raw_include)
+        validate_filter_regex_syntax(raw_include)
     database_names = parse_filter_input(raw_include)
 
     database_names = [
@@ -717,12 +728,16 @@ def prepare_filters(
     # as a JSONDecodeError instead of the SQL-unsafe ValueError).
     # HYP-1560: normalise legacy quoted-CSV strings first so migrated
     # workflow specs surviving the v3.13 SDK bump still validate.
+    # FND-5216: each deny-list call is paired with the regex-structure check
+    # the typed contracts run, so both paths refuse the same input.
     if isinstance(include_filter_str, str):
         include_filter_str = normalize_legacy_filter_value(include_filter_str)
         validate_filter_no_sql_injection(include_filter_str)
+        validate_filter_regex_syntax(include_filter_str)
     if isinstance(exclude_filter_str, str):
         exclude_filter_str = normalize_legacy_filter_value(exclude_filter_str)
         validate_filter_no_sql_injection(exclude_filter_str)
+        validate_filter_regex_syntax(exclude_filter_str)
 
     include_filter = parse_filter_input(include_filter_str)
     exclude_filter = parse_filter_input(exclude_filter_str)
@@ -730,7 +745,9 @@ def prepare_filters(
     # Re-validate the parsed shapes — defense in depth for callers that
     # pass a dict directly without going through the string path.
     validate_filter_no_sql_injection(include_filter)
+    validate_filter_regex_syntax(include_filter)
     validate_filter_no_sql_injection(exclude_filter)
+    validate_filter_regex_syntax(exclude_filter)
 
     normalized_include_filter_list = normalize_filters(include_filter, True)
     normalized_exclude_filter_list = normalize_filters(exclude_filter, False)
