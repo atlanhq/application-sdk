@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Mapping
+from types import MappingProxyType
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
@@ -80,7 +82,7 @@ class Checker(
         self._bounded_loop_caps: dict[ast.For | ast.AsyncFor, int] = {}
         self._except_stack: list[ast.ExceptHandler] = []
         self._function_stack: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
-        self._l022_failure_helpers: frozenset[str] = frozenset()
+        self._l022_failure_helpers: Mapping[str, bool] = MappingProxyType({})
         self._l022_exit_status_functions: frozenset[
             ast.FunctionDef | ast.AsyncFunctionDef
         ] = frozenset()

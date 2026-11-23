@@ -796,9 +796,10 @@ handler does none of these:
 * calls `sys.exit`, `os._exit`, `exit` or `quit`;
 * returns a failure result — a call or dict literal carrying `success=False`,
   `status=<Enum>.FAILURE|FAILED|ERROR` or a `status_code` of 500 or more. A call to a
-  local helper counts only when its sole normal return is such a failure result.
-* returns a nonzero integer status from a function whose result is consumed by a
-  process-exit sink, such as `SystemExit(asyncio.run(main()))`.
+  module-level helper, bound nowhere else in the module, counts only when its sole
+  normal return is such a failure result; an `async` helper counts only when awaited.
+* returns a nonzero integer status from a function whose every call sends its result to
+  a process exit, such as `raise SystemExit(asyncio.run(main()))`.
 
 Returning `False`, `None` or a default value does not count as a failure result: the
 caller gets a sentinel it may ignore, so the handler has absorbed the failure.

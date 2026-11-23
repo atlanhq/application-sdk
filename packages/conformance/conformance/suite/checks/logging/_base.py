@@ -8,6 +8,7 @@ etc.) rather than multiple incompatible overrides across mixin classes.
 from __future__ import annotations
 
 import ast
+from collections.abc import Mapping
 
 from conformance.suite.checks._ast_common import _IgnoreDirective
 from conformance.suite.schema.findings import Finding
@@ -30,7 +31,7 @@ class _MixinBase:
     _bounded_loop_caps: dict[ast.For | ast.AsyncFor, int]
     _except_stack: list[ast.ExceptHandler]
     _function_stack: list[ast.FunctionDef | ast.AsyncFunctionDef]
-    _l022_failure_helpers: frozenset[str]
+    _l022_failure_helpers: Mapping[str, bool]
     _l022_exit_status_functions: frozenset[ast.FunctionDef | ast.AsyncFunctionDef]
     _in_main_block: int
     # True when the module is a standalone script/CLI (shebang / __main__

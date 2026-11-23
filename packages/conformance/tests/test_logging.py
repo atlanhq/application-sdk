@@ -1984,6 +1984,129 @@ def sync_event(event):
     assert "L022" in _ids(src)
 
 
+_L022_CLI_MAIN = """
+import asyncio, sys
+from application_sdk.observability import get_logger
+logger = get_logger(__name__)
+
+async def main():
+    try:
+        publish()
+    except Exception:
+        logger.error("registration failed", exc_info=True)
+        return 1
+"""
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        pytest.param("raise SystemExit(asyncio.run(main()))", id="raise-SystemExit"),
+        pytest.param("raise SystemExit(code=asyncio.run(main()))", id="code-kw"),
+        pytest.param("sys.exit(asyncio.run(main()))", id="sys-exit"),
+    ],
+)
+def test_l022_silent_for_every_exit_sink_shape(entry: str) -> None:
+    src = _L022_CLI_MAIN + f'if __name__ == "__main__":\n    {entry}\n'
+    assert "L022" not in _ids(src)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        # Constructing SystemExit without raising it exits nothing.
+        pytest.param("SystemExit(asyncio.run(main()))", id="unraised-SystemExit"),
+        pytest.param("err = SystemExit(asyncio.run(main()))", id="assigned-SystemExit"),
+        # One call site reaches the exit; the other discards the status.
+        pytest.param(
+            "if sys.argv[1:]:\n        raise SystemExit(asyncio.run(main()))\n"
+            "    asyncio.run(main())",
+            id="one-discarding-call-site",
+        ),
+        # The function escapes as a value, so its callers are unknown.
+        pytest.param(
+            "raise SystemExit(asyncio.run(main()))\n    register(main)",
+            id="escapes-as-value",
+        ),
+    ],
+)
+def test_l022_still_fires_when_status_does_not_always_reach_exit(entry: str) -> None:
+    src = _L022_CLI_MAIN + f'if __name__ == "__main__":\n    {entry}\n'
+    assert "L022" in _ids(src)
+
+
+def test_l022_silent_for_awaited_async_failure_helper() -> None:
+    src = """
+from application_sdk.observability import get_logger
+logger = get_logger(__name__)
+
+async def make_failure():
+    return OutcomeRecord(status=OutcomeStatus.FAILED)
+
+async def sync_event(event):
+    try:
+        await publish(event)
+    except Exception:
+        logger.error("sync failed", exc_info=True)
+        return await make_failure()
+"""
+    assert "L022" not in _ids(src)
+
+
+def test_l022_still_fires_for_unawaited_async_failure_helper() -> None:
+    # The un-awaited call returns a coroutine, not the failure result.
+    src = """
+from application_sdk.observability import get_logger
+logger = get_logger(__name__)
+
+async def make_failure():
+    return OutcomeRecord(status=OutcomeStatus.FAILED)
+
+async def sync_event(event):
+    try:
+        await publish(event)
+    except Exception:
+        logger.error("sync failed", exc_info=True)
+        return make_failure()
+"""
+    assert "L022" in _ids(src)
+
+
+@pytest.mark.parametrize(
+    "shadow",
+    [
+        # The handler's call resolves to the import, not the nested def.
+        pytest.param(
+            "from diagnostics import make_failure\n"
+            "def outer():\n"
+            "    def make_failure():\n"
+            "        return OutcomeRecord(status=OutcomeStatus.FAILED)\n"
+            "    return make_failure\n",
+            id="import-vs-nested-def",
+        ),
+        pytest.param(
+            "def make_failure():\n"
+            "    return OutcomeRecord(status=OutcomeStatus.FAILED)\n"
+            "make_failure = diagnostic_result\n",
+            id="rebound-at-module-level",
+        ),
+    ],
+)
+def test_l022_still_fires_when_helper_name_is_not_uniquely_bound(shadow: str) -> None:
+    src = (
+        "from application_sdk.observability import get_logger\n"
+        "logger = get_logger(__name__)\n"
+        f"{shadow}"
+        "def sync_event(event):\n"
+        "    try:\n"
+        "        publish(event)\n"
+        "    except Exception:\n"
+        "        logger.error('sync failed', exc_info=True)\n"
+        "        return make_failure()\n"
+    )
+    assert "L022" in _ids(src)
+
+
 def test_l022_judges_the_innermost_handler() -> None:
     # The outer handler raises; the inner one, which holds the call, does not.
     handler = (

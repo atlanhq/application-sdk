@@ -537,10 +537,12 @@ report that site the same way.
   `except` handler that has no `raise`, no process-exit call, and no return of
   a failure result (a call or dict carrying `success=False`,
   `status=<Enum>.FAILURE|FAILED|ERROR` or a 5xx `status_code`). A call to a
-  local helper counts only when its sole normal return is such a failure result.
-  A nonzero integer status counts only when the enclosing function's result
-  reaches a process-exit sink such as `SystemExit(asyncio.run(main()))`; plain
-  `return 1` remains a sentinel. Otherwise the code recovered and the customer
+  module-level helper, bound nowhere else in the module, counts only when its
+  sole normal return is such a failure result; an `async` helper counts only
+  when awaited. A nonzero integer status counts only when every call of the
+  enclosing function sends its result to a process exit, such as
+  `raise SystemExit(asyncio.run(main()))`; plain `return 1` remains a
+  sentinel. Otherwise the code recovered and the customer
   log view — which filters at ERROR — shows a failed run that did not fail.
   Change `.error(` to `.warning(` and keep
   every argument, `exc_info=True` included (L004 still applies):
