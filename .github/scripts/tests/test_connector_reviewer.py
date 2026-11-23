@@ -10223,3 +10223,29 @@ def test_the_oldest_resolved_findings_go_before_any_open_one():
     all_resolved = [f.id for f in st.findings if f.status != "open"]
     assert 0 < len(kept_resolved) < len(all_resolved)
     assert kept_resolved == all_resolved[-len(kept_resolved) :]  # the newest stay
+
+
+def test_approach_lookups_are_capped_per_call_not_per_turn(repo: Path):
+    """F-13205d: two lookups in each response used to run four lookups under
+    max_lookups=2. The cap counts calls, and once it is spent the next turn is
+    the final one."""
+    ws, _ = _ws(repo)
+    two = response(
+        [
+            tool_call("search_code", {"search_text": "fetch"}, 0),
+            tool_call("find_symbol", {"name": "fetch"}, 1),
+        ]
+    )
+    calls: list[dict[str, Any]] = []
+
+    def transport(body: dict[str, Any]) -> tuple[int, dict[str, str], str]:
+        calls.append(json.loads(json.dumps(body)))
+        return two  # never volunteers a verdict
+
+    client = Client(
+        model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=transport
+    )
+    ac = holistic.check(client, ws, parse_unified_diff(DIFF), {}, max_lookups=2)
+    assert ac.lookups == 2 and not ac.ran
+    assert len(calls) == 2
+    assert "call approach_verdict now" in calls[-1]["messages"][-1]["content"]
