@@ -700,6 +700,23 @@ def _template_fields(template: str) -> frozenset[str]:
     )
 
 
+def _is_ipv6_without_zone(text: str) -> bool:
+    """Whether ``text`` is an IPv6 address with no zone id.
+
+    A zone id (``fe80::1%eth0``) is free text, so it is refused.
+    """
+    if "%" in text:
+        return False
+    try:
+        ipaddress.IPv6Address(text)
+    except ValueError:
+        # Not an address: the caller rejects the host with a typed error.
+        # The value itself is form input, so it is not logged.
+        logger.debug("Bracketed SQL host is not a valid IPv6 address")
+        return False
+    return True
+
+
 def _url_host(value: object) -> str:
     """Return ``value`` if it is a hostname, IPv4 address or bracketed IPv6.
 
@@ -714,15 +731,8 @@ def _url_host(value: object) -> str:
     """
     host = str(value)
     if host.startswith("[") and host.endswith("]"):
-        inner = host[1:-1]
-        try:
-            ipaddress.IPv6Address(inner)
-        except ValueError:
-            pass
-        else:
-            # A zone id (``fe80::1%eth0``) is free text, so it is refused.
-            if "%" not in inner:
-                return host
+        if _is_ipv6_without_zone(host[1:-1]):
+            return host
     elif len(host) <= _URL_HOSTNAME_MAX_LEN and _URL_HOSTNAME.fullmatch(host):
         return host
     raise SqlCredentialsParseError(
