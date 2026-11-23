@@ -35,7 +35,7 @@ from . import report, trace
 from .config import load_config, validate
 from .event import USAGE_ERRORS, decide
 from .github import GitHub
-from .llm import Client
+from .llm import Client, register_secret
 from .lock import BUSY_NOTE, WORKFLOW_FILE, older_active_run
 from .principles import (
     PrinciplesError,
@@ -109,6 +109,9 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("--pr or --event-name is required")
     live = not args.dry_run
 
+    # First thing with a key in reach: an error raised before a client exists is
+    # masked too.
+    register_secret(os.environ.get("CONNECTOR_REVIEWER_GATEWAY_KEY", ""))
     root = Path(args.root).resolve()
     cfg_dir = Path(args.config_dir).resolve() if args.config_dir else SHIPPED_CONFIG_DIR
     cfg = load_config(cfg_dir)

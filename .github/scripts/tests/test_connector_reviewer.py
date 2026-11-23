@@ -33,6 +33,7 @@ from connector_reviewer import bundle as bundle_mod
 from connector_reviewer import context as reviewer_context
 from connector_reviewer import findings as findings_mod
 from connector_reviewer import llm as llm_mod
+from connector_reviewer import report as report_mod
 from connector_reviewer import review as review_mod
 from connector_reviewer.advisory import glob_match
 from connector_reviewer.agent import BundleResult
@@ -7237,8 +7238,11 @@ def _changed(path: str, n: int = 1) -> str:
     return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1,{n} @@\n{body}"
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def no_registered_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test starts with no registered secret. The set is module-global,
+    and a key one test registers (`api_key="k"`) would otherwise mask every
+    `k` in a later test's error text."""
     monkeypatch.setattr(llm_mod, "_SECRETS", set())
 
 
@@ -7254,9 +7258,12 @@ def test_redact_masks_the_configured_key_whatever_its_shape(
         api_key=OPAQUE_KEY,
     )
     assert llm_mod.redact(f"bad key {OPAQUE_KEY}") == "bad key [key]"
-    # A value too short to be a key is not registered: masking it would blank words.
-    llm_mod.register_secret("m")
-    assert llm_mod.redact("a model name") == "a model name"
+    # A short key is still a key.
+    llm_mod.register_secret("k7Q")
+    assert llm_mod.redact("echoed k7Q back") == "echoed [key] back"
+    # An empty value registers nothing.
+    llm_mod.register_secret("")
+    assert llm_mod.redact("text") == "text"
 
 
 def test_a_rejected_key_echoed_by_the_gateway_is_not_published(
@@ -7416,3 +7423,72 @@ def test_a_finding_is_never_placed_in_another_bundles_file(repo: Path):
     # Its own file still places.
     own = agent_mod.place(ws, bundle, COMMENT)
     assert own is not None and own.path == "app/storage/fetch.py" and own.line
+
+
+RENAME_FROM_ENV = """\
+diff --git a/.env b/app/settings.py
+similarity index 80%
+rename from .env
+rename to app/settings.py
+--- a/.env
++++ b/app/settings.py
+@@ -1,2 +1,2 @@
+-API_TOKEN=not-a-real-value
++API_TOKEN = None
+ DEBUG=1
+"""
+
+
+def test_a_rename_from_a_file_that_may_hold_secrets_is_never_selected():
+    """The diff of a rename away from `.env` still carries the deleted `.env`
+    lines, so the source path is checked as well as the destination."""
+    sel = select_files(parse_unified_diff(DIFF + RENAME_FROM_ENV))
+    assert [f.path for f in sel.reviewed] == ["app/storage/fetch.py"]
+    assert sel.skipped == [
+        ("app/settings.py", "may hold secrets: not sent to the model")
+    ]
+
+
+def test_read_diff_refuses_a_rename_from_a_file_that_may_hold_secrets(repo: Path):
+    files = parse_unified_diff(RENAME_FROM_ENV)
+    ws = Workspace(
+        root=repo,
+        head_text={},
+        diffs={f.path: f for f in files},
+        index=build_index(repo),
+    )
+    out = read_diff(ws, ["app/settings.py"])
+    assert "not available: may hold secrets" in out
+    assert "not-a-real-value" not in out
+
+
+def test_the_run_report_redacts_errors_whatever_recorded_them():
+    """The report is the boundary to the Actions log and the uploaded artifact:
+    an error recorded upstream without redaction is still masked there."""
+    llm_mod.register_secret(OPAQUE_KEY)
+    leak = f"gateway said: invalid key {OPAQUE_KEY}"
+    event = {
+        "n": 1,
+        "stage": "review:storage",
+        "status": 401,
+        "latency_ms": 12,
+        "attempt": 0,
+        "error": leak,
+    }
+    assert OPAQUE_KEY not in report_mod.call_line(event)
+    res = RunResult(
+        "reviewed",
+        mode="full",
+        state=PRState(),
+        calls=[event],
+        bundles=[
+            BundleResult(
+                label="storage",
+                error=leak,
+                refusal={"stage": "review:storage", "error": leak},
+            )
+        ],
+    )
+    built = report_mod.build(res)
+    assert OPAQUE_KEY not in json.dumps(built)
+    assert event["error"] == leak, "the run's own record is not rewritten"

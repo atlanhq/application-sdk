@@ -76,14 +76,14 @@ PROVIDER_REJECTED = "provider_rejected"
 # wherever it appears, whatever its shape: a key need not start with `sk-`, and a
 # gateway or proxy can echo the submitted key back in an error body.
 _SECRETS: set[str] = set()
-# A value shorter than this is not treated as a secret: masking it would blank
-# ordinary words out of every error message.
-_MIN_SECRET_CHARS = 8
 
 
 def register_secret(value: str) -> None:
-    """Have `redact` mask `value` from now on. Called with the gateway key."""
-    if len(value) >= _MIN_SECRET_CHARS:
+    """Have `redact` mask `value` from now on. Called with the gateway key.
+
+    Any non-empty value, however short: a short key is still a key, and an
+    over-eager mask in an error message costs far less than a leaked one."""
+    if value:
         _SECRETS.add(value)
 
 
