@@ -8225,6 +8225,35 @@ async def run():
     )
 
 
+@pytest.mark.parametrize(
+    "nested",
+    [
+        "def helper():\n            fault = group.exceptions[0]",
+        "async def helper():\n            fault = group.exceptions[0]",
+        "class Holder:\n            fault = group.exceptions[0]",
+    ],
+)
+def test_e016_still_fires_when_only_a_nested_scope_in_the_handler_binds_the_alias(
+    nested: str,
+) -> None:
+    # The nested scope's `fault` is its own local; `raise fault` reads the
+    # module binding, which is not a member of the caught group.
+    assert "E016" in _findings(
+        f"""\
+fault = ValueError("not from the group")
+
+
+async def run():
+    try:
+        await work()
+    except* ValueError as group:
+        {nested}
+
+        raise fault
+"""
+    )
+
+
 def test_e016_still_fires_when_a_nested_scope_rebinds_the_alias() -> None:
     assert "E016" in _findings(
         """\

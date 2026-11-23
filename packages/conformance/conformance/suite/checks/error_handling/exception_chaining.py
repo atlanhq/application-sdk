@@ -486,7 +486,10 @@ def _handler_nodes(handler: ast.ExceptHandler) -> Iterator[ast.AST]:
     """The handler's statements and their descendants, not crossing nested defs."""
     for statement in handler.body:
         yield statement
-        yield from _iter_shallow(statement)
+        if not isinstance(
+            statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            yield from _iter_shallow(statement)
 
 
 def _raised_alias(raised: ast.expr) -> tuple[str, bool] | None:
