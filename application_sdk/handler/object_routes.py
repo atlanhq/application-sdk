@@ -40,12 +40,24 @@ from typing import TYPE_CHECKING, Annotated, Any, Protocol, cast
 from uuid import uuid4
 
 import orjson
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    params,
+)
 from fastapi import Path as PathParam
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
+from starlette.middleware import Middleware
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from typing_extensions import deprecated
 
-from application_sdk import _obstore_config
+from application_sdk import _env, _obstore_config
 from application_sdk._logging import get_logger
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.handler.contracts import FileUploadResponse
@@ -145,8 +157,243 @@ class ObjectRoutesSource:
     upload_namespace: str = ""
 
 
+#: Path of the SDK's setup-form file upload route.
+UPLOAD_ROUTE = "/workflows/v1/file"
+
+#: Default cap on a request body a route reads whole (4 MiB): every route but a
+#: form route. FastAPI reads such a body into memory before it parses it, so
+#: this bounds what one request can make the process hold. The largest setup
+#: form we ship decodes to ~5 KB.
+DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
+#: Default cap on a body sent to a form route (512 MiB): a route that declares a
+#: ``File`` or ``Form`` parameter, such as :data:`UPLOAD_ROUTE` or an app's own
+#: upload route. Starlette spools a multipart file to local disk while parsing
+#: it, before the route runs, so this bounds the ephemeral storage one upload
+#: can take.
+DEFAULT_MAX_UPLOAD_BYTES = 512 * 1024 * 1024
+
+MAX_BODY_BYTES_ENV = "ATLAN_HANDLER_MAX_BODY_BYTES"
+MAX_UPLOAD_BYTES_ENV = "ATLAN_HANDLER_MAX_UPLOAD_BYTES"
+
+_TOO_LARGE_DETAIL = "Request body too large"
+_TOO_LARGE_BODY = orjson.dumps({"detail": _TOO_LARGE_DETAIL})
+
+
+def _too_large() -> HTTPException:
+    """The signal ``receive`` raises once a body passes its cap.
+
+    An ``HTTPException`` because every layer between the read and the response
+    already passes one through untouched and unlogged: the routes' error
+    boundaries re-raise it, FastAPI's form parsing re-raises it, and
+    ``ExceptionMiddleware`` renders it as the 413. It is not a ``ValueError``,
+    so :func:`~application_sdk.handler.request_contract.read_json_object` does
+    not answer 422 for it.
+    """
+    return HTTPException(status_code=413, detail=_TOO_LARGE_DETAIL)
+
+
+def _report_env(message: str) -> None:
+    logger.warning("Ignoring env var: %s", message)
+
+
+class RequestBodyLimitMiddleware:
+    """Answer 413 to a request whose body is larger than its cap.
+
+    Pure ASGI, so it counts bytes as they arrive and never buffers a body. A
+    ``Content-Length`` over the cap is refused before anything is read. A body
+    without one, or with one that understates it, is refused when the running
+    count passes the cap: ``receive`` raises a 413 ``HTTPException``, which
+    stops a multipart parser before it spools more to disk (Starlette closes the
+    spooled files when the read fails). Should an inner layer answer something
+    else, the response is still replaced by the 413, unless the app had already
+    started its response.
+
+    The cap depends on the route that reads the body. Routing runs before any
+    read and records the route in ``scope["route"]``, so the cap is chosen at
+    the first ``receive``, before a byte is counted. A form route (one that
+    declares a ``File`` or ``Form`` parameter) streams its body to disk and gets
+    ``max_upload_bytes``. Every other route, a mount included, may read its body
+    whole into memory and gets ``max_body_bytes``. The route decides, not the
+    request's ``Content-Type``: FastAPI reads a non-form body whole before it
+    looks at the content type, so a large body labelled multipart must still
+    meet the smaller cap on a JSON route. An app's own upload route gets the
+    upload cap by declaring its file parameter, with nothing to configure. A
+    route that calls ``request.form()`` by hand gets the smaller cap.
+
+    A declared ``Content-Length`` over both caps is refused before routing; one
+    over the route's cap is refused at the first ``receive``, with nothing read.
+
+    :func:`install_body_limit` puts it inside every other user middleware, so
+    the raise never crosses a ``BaseHTTPMiddleware`` (the worker's
+    ``LogMiddleware``): that would wrap it in an ``ExceptionGroup`` no handler
+    matches and log an expected rejection as a failed request.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        max_body_bytes: int,
+        max_upload_bytes: int,
+    ) -> None:
+        self.app = app
+        self.max_body_bytes = max_body_bytes
+        self.max_upload_bytes = max_upload_bytes
+
+    def _limit_for(self, scope: Scope) -> int:
+        """The cap of the route routing chose (``max_body_bytes`` when none)."""
+        if _is_form_route(scope.get("route")):
+            return self.max_upload_bytes
+        return self.max_body_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        declared = _content_length(scope)
+        largest = max(self.max_body_bytes, self.max_upload_bytes)
+        if declared is not None and declared > largest:
+            # No route takes a body this size: refuse it before routing.
+            self._log_rejection(scope, largest)
+            await _send_413(send)
+            return
+
+        limit: int | None = None
+        received = 0
+        exceeded = False
+        response_started = False
+        replaced = False
+
+        async def limited_receive() -> Message:
+            nonlocal limit, received, exceeded
+            if exceeded:
+                raise _too_large()
+            if limit is None:
+                limit = self._limit_for(scope)
+                if declared is not None and declared > limit:
+                    exceeded = True
+                    raise _too_large()
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    exceeded = True
+                    raise _too_large()
+            return message
+
+        async def guarded_send(message: Message) -> None:
+            nonlocal response_started, replaced
+            if replaced:
+                # The inner app's answer to the oversize body is discarded.
+                return
+            if message["type"] == "http.response.start":
+                if exceeded:
+                    replaced = True
+                    await _send_413(send)
+                    return
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, guarded_send)
+        except Exception:
+            # Once the cap has tripped, whatever escaped is its consequence:
+            # the 413 itself, or an inner layer's wrapping of it.
+            if not exceeded or response_started:
+                raise
+        if exceeded:
+            if not replaced and not response_started:
+                await _send_413(send)
+            self._log_rejection(scope, limit or self.max_body_bytes)
+
+    @staticmethod
+    def _log_rejection(scope: Scope, limit: int) -> None:
+        logger.warning(
+            "Request body over the %d-byte limit on %s %s; answered 413",
+            limit,
+            scope.get("method", ""),
+            scope.get("path", ""),
+        )
+
+
+def _is_form_route(route: object) -> bool:
+    """Whether *route* parses its body as a form (a ``File`` or ``Form`` parameter).
+
+    FastAPI parses such a body with ``request.form()``, which spools files to
+    disk, and reads any other body whole. ``File`` subclasses ``Form``.
+    """
+    if not isinstance(route, APIRoute) or route.body_field is None:
+        return False
+    return isinstance(route.body_field.field_info, params.Form)
+
+
+def _content_length(scope: Scope) -> int | None:
+    for name, value in scope.get("headers", ()):
+        if name == b"content-length":
+            try:
+                return int(value)
+            except ValueError:
+                return None
+    return None
+
+
+async def _send_413(send: Send) -> None:
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 413,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(_TOO_LARGE_BODY)).encode()),
+                (b"connection", b"close"),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": _TOO_LARGE_BODY})
+
+
+def install_body_limit(app: FastAPI) -> None:
+    """Cap request bodies on *app*, reading the caps from the environment.
+
+    :envvar:`ATLAN_HANDLER_MAX_UPLOAD_BYTES` caps a body sent to a form route
+    (``/workflows/v1/file``, or an app's own route with a ``File`` parameter),
+    :envvar:`ATLAN_HANDLER_MAX_BODY_BYTES` every other body. Called
+    by :func:`register_object_routes`, which the worker and the consolidated host
+    both call, so neither app can be built without the cap. Idempotent.
+
+    Appended, not added with ``add_middleware`` (which makes a middleware the
+    outermost): the cap must run inside every other user middleware, whenever
+    that was added. See :class:`RequestBodyLimitMiddleware`.
+    """
+    if getattr(app.state, "body_limit_installed", False):
+        return
+    if app.middleware_stack is not None:
+        raise RuntimeError("Cannot add middleware after an application has started")
+    limit = Middleware(
+        RequestBodyLimitMiddleware,
+        max_body_bytes=_env.env_int(
+            MAX_BODY_BYTES_ENV, DEFAULT_MAX_BODY_BYTES, minimum=1, report=_report_env
+        ),
+        max_upload_bytes=_env.env_int(
+            MAX_UPLOAD_BYTES_ENV,
+            DEFAULT_MAX_UPLOAD_BYTES,
+            minimum=1,
+            report=_report_env,
+        ),
+    )
+    app.user_middleware.append(limit)
+    app.state.body_limit_installed = True
+
+
 def register_object_routes(app: FastAPI, source: ObjectRoutesSource) -> None:
-    """Register the config and file-upload routes on *app*."""
+    """Register the config and file-upload routes on *app*.
+
+    Also installs the request-body cap for the whole app
+    (:func:`install_body_limit`): every route's body is bounded, and an upload is
+    refused with 413 before it fills the pod's disk.
+    """
+    install_body_limit(app)
 
     @app.get("/workflows/v1/config/{config_id}")
     async def get_workflow_config(
@@ -218,7 +465,7 @@ def register_object_routes(app: FastAPI, source: ObjectRoutesSource) -> None:
             )
         )
 
-    @app.post("/workflows/v1/file")
+    @app.post(UPLOAD_ROUTE)
     async def upload_file(
         file: UploadFile = File(...),
         filename: str | None = Form(None),
