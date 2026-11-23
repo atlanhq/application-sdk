@@ -19,6 +19,10 @@ from .typed import EMPTY, objects
 API = "https://api.github.com"
 STATUS_CONTEXT = "connector-reviewer"
 DEFAULT_BOT_LOGIN = "atlan-app-fleet[bot]"
+# GitHub lists at most 250 commits of a pull request: three pages of 100.
+COMMIT_MESSAGE_PAGES = 3
+# Pages of a commit's combined status read before giving up on a context.
+STATUS_PAGES = 10
 
 
 def bot_login() -> str:
@@ -161,14 +165,22 @@ class GitHub:
             page += 1
 
     def pr_commit_messages(self, number: int) -> list[str]:
-        """The message of each of the pull request's commits, at most the first
-        100 (one request): read for a "This reverts commit …" line."""
-        batch = self._call(
-            "GET", f"/repos/{self.repo}/pulls/{number}/commits?per_page=100"
-        )
-        return [
-            str((c.get("commit") or EMPTY).get("message") or "") for c in objects(batch)
-        ]
+        """The message of each of the pull request's commits, read for a "This
+        reverts commit …" line: at most `COMMIT_MESSAGE_PAGES` pages of 100.
+        GitHub lists at most 250 commits of a pull request, so compare the
+        length with the pull request's own `commits` count to tell a cut list."""
+        out: list[str] = []
+        for page in range(1, COMMIT_MESSAGE_PAGES + 1):
+            batch = objects(
+                self._call(
+                    "GET",
+                    f"/repos/{self.repo}/pulls/{number}/commits?per_page=100&page={page}",
+                )
+            )
+            out += [str((c.get("commit") or EMPTY).get("message") or "") for c in batch]
+            if len(batch) < 100:
+                break
+        return out
 
     def recent_commits(
         self, path: str, ref: str, since: str, limit: int
@@ -221,13 +233,26 @@ class GitHub:
     def status_of(self, sha: str, context: str) -> dict[str, Any] | None:
         """The latest commit status `context` has on `sha` (`state`,
         `target_url`, `description`, …), or None when it has none. Read from
-        the combined status, which holds the newest status per context."""
-        data = self._call(
-            "GET", f"/repos/{self.repo}/commits/{sha}/status?per_page=100"
-        )
-        for s in objects((data or EMPTY).get("statuses")):
-            if s.get("context") == context:
-                return s
+        the combined status, which holds the newest status per context and is
+        paginated: pages of 100 until the context is found, a page comes back
+        short, `total_count` is reached, or `STATUS_PAGES` pages were read."""
+        seen = 0
+        for page in range(1, STATUS_PAGES + 1):
+            data = (
+                self._call(
+                    "GET",
+                    f"/repos/{self.repo}/commits/{sha}/status?per_page=100&page={page}",
+                )
+                or EMPTY
+            )
+            batch = objects(data.get("statuses"))
+            for s in batch:
+                if s.get("context") == context:
+                    return s
+            seen += len(batch)
+            total = data.get("total_count")
+            if len(batch) < 100 or (isinstance(total, int) and seen >= total):
+                return None
         return None
 
     def issue_comments(self, number: int) -> list[dict[str, Any]]:

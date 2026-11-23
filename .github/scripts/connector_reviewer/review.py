@@ -56,11 +56,11 @@ from .findings import (
     PRState,
     merge_new,
 )
-from .github import GitHub, GitHubError, bot_login
+from .github import COMMIT_MESSAGE_PAGES, GitHub, GitHubError, bot_login
 from .index import Index, Symbol, build_index, index_source
 from .llm import BudgetExhausted, Client, Ledger, LLMError
 from .principles import PrincipleSet
-from .select import DEFAULT_EXCLUDE, excluded, select_files
+from .select import DEFAULT_EXCLUDE, Selection, excluded, select_files
 from .tools import Workspace, parse_args, secret_diff
 from .triage import Triage, triage
 from .typed import EMPTY, objects
@@ -275,12 +275,47 @@ def renamed_away(files: list[FileDiff]) -> list[FileDiff]:
 # The reasons `select.select_files` and `plan_bundles` give for a file the review
 # meant to read and did not. Anything else skipped (binary, deletion only,
 # excluded by pattern, may hold secrets) is left out on purpose.
-UNREAD_REASONS = ("over ", "bundle cap")
+# A test file deleted outright that weakens an expectation, in a round with no
+# line review to hand the facts to: nothing in the change can be commented on.
+WEAKENED_UNREVIEWED = "deleted test: weakens expectations, no line to review"
+UNREAD_REASONS = ("over ", "bundle cap", WEAKENED_UNREVIEWED)
 
 
 def unread_skips(skipped: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    """The skipped files that are unread source: too large, or past the bundle cap."""
+    """The skipped files that are unread source: too large, past the bundle cap,
+    or a deleted test that weakens expectations with no line review to see it."""
     return [(p, why) for p, why in skipped if why.startswith(UNREAD_REASONS)]
+
+
+# Why selection skips a file that still has lines a review can comment on.
+_NOTHING_ADDED = ("no added lines", "deletion only")
+
+
+def _review_weakened_tests(
+    sel: Selection, files: list[FileDiff], weakened: set[str]
+) -> None:
+    """Move a test file that weakens an expectation from skipped to reviewed
+    when it has a line to comment on (a context line around a removed
+    assertion). Selection skips a change with no added line, and that is
+    exactly a removed assertion or test; the line review must see it and its
+    facts. A test deleted outright has no such line and stays skipped."""
+    if not weakened:
+        return
+    by_path = {fd.path: fd for fd in files}
+    keep: list[tuple[str, str]] = []
+    for path, why in sel.skipped:
+        fd = by_path.get(path)
+        if (
+            path in weakened
+            and why in _NOTHING_ADDED
+            and fd is not None
+            and fd.status != "deleted"
+            and fd.commentable_lines
+        ):
+            sel.reviewed.append(fd)
+        else:
+            keep.append((path, why))
+    sel.skipped[:] = keep
 
 
 def _no_verdict(
@@ -305,7 +340,8 @@ def compute_facts(
 ) -> code_facts.Facts:
     """The regression and history facts for the files under review, in review
     order. No model call; the history half makes at most
-    1 + `history_max_files` + `history_max_commits` GitHub requests.
+    3 + `history_max_files` + `history_max_commits` GitHub requests (the
+    commit messages take up to three pages).
 
     `tests_changed` are the test files this round changed, taken before file
     selection: a deleted test file and a test change that only removes lines
@@ -338,7 +374,18 @@ def compute_facts(
             pr_messages=messages,
             cfg=cfg.facts,
         )
-        fx.history.requests += 1
+        # The commit list is read in pages of 100, at most COMMIT_MESSAGE_PAGES.
+        fx.history.requests += min(COMMIT_MESSAGE_PAGES, len(messages) // 100 + 1)
+        total = pr.get("commits")
+        if isinstance(total, int) and 0 < len(messages) < total:
+            # GitHub lists at most 250 commits: a revert in a later one is not seen.
+            fx.history.limits.append(
+                f"revert check read the first {len(messages)} of {total} commit messages"
+            )
+            fx.history.notes.append(
+                f"commit messages: {len(messages)} of {total} read (GitHub's limit); "
+                "a revert marker in a later commit is not seen"
+            )
         fx.history_read = True
     return fx
 
@@ -392,7 +439,11 @@ def run(
     verify_budget: bool = False,
     post: bool = True,
     run_url: str = "",
+    on_pending: Callable[[str], None] | None = None,
 ) -> RunResult:
+    """One review round. `on_pending(head)` is called right after the
+    `pending` status is set on `head`, so the caller can record which head
+    `finalize` must check if this run never posts a verdict."""
     t_start = time.monotonic()
     pr = gh.pr(number)
     head = pr["head"]["sha"]
@@ -578,6 +629,8 @@ def run(
         gh.set_status(
             head, "pending", f"reviewing · round {round_no} · {mode_label}", run_url
         )
+        if on_pending is not None:
+            on_pending(head)
     trace.line(
         f"decision: REVIEW round {round_no} — {mode_label}; range={range_base[:9]}..{head[:9]}, "
         f"{len(all_files)} file(s) in range ({len(full_files)} in the whole PR), budget left ${ledger.remaining:.4f}"
@@ -606,6 +659,14 @@ def run(
 
     # ---- scope -----------------------------------------------------------
     sel = select_files(all_files, exclude=tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude))
+    # The weakened-expectation facts are read from the round's test files before
+    # selection, which skips a deleted test and a change that only removes lines.
+    tests_changed = changed_tests(all_files, cfg)
+    weakened = (
+        code_facts.weakened_expectations(tests_changed) if cfg.facts.regression else []
+    )
+    weakened_paths = {e.path for e in weakened}
+    _review_weakened_tests(sel, all_files, weakened_paths)
     res.skipped_files = sel.skipped
 
     # Mechanical change is proven and set aside before any model call (triage.py):
@@ -619,6 +680,13 @@ def run(
     )
 
     bundles = plan_bundles(res.triage.reviewed, cfg, res)
+    if not bundles and weakened_paths:
+        # No line review to carry the facts: a test deleted outright has no line
+        # to comment on. It must not pass unseen, so it counts as unread.
+        res.skipped_files[:] = [
+            (p, WEAKENED_UNREVIEWED if p in weakened_paths else why)
+            for p, why in res.skipped_files
+        ]
     # Source that was meant to be read and was not can never give a green verdict.
     state.unread = dict(unread_skips(res.skipped_files))
     if state.unread:
@@ -724,7 +792,7 @@ def run(
     # Computed in code and handed to every bundle's prompt (facts.py). The
     # history half reads the base branch's recent commits through the REST API,
     # within hard caps; a failure there means fewer facts, never an incomplete review.
-    if bundles:
+    if bundles or weakened:
         t_facts = time.monotonic()
         with trace.group("3c · facts: regression and history (computed in code)"):
             fx = compute_facts(
@@ -735,7 +803,7 @@ def run(
                 ws,
                 [fd for b in bundles for fd in b.files],
                 cfg,
-                tests_changed=changed_tests(all_files, cfg),
+                tests_changed=tests_changed,
             )
             res.timings_ms["facts"] = int((time.monotonic() - t_facts) * 1000)
             trace.line(f"regression: {fx.regression_line()}")
@@ -2539,9 +2607,9 @@ def _details(f: Finding, blob_base: str, chars: int | None = None) -> str:
 
 
 UNREAD_HINT = (
-    "Part of the change is too large to read (listed below), so a retry would not read it "
-    "either: split it into smaller pull requests, or, once a person has reviewed those files, "
-    "comment `/review waive <reason>`."
+    "Part of the change could not be read (listed below: too large, or a deleted test with no "
+    "line to review), so a retry would not read it either: split it into smaller pull requests, "
+    "or, once a person has reviewed those files, comment `/review waive <reason>`."
 )
 
 

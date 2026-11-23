@@ -40,7 +40,13 @@ from typing import Any
 from . import report, trace
 from .config import load_config, validate
 from .event import FORK_REFUSAL, addressed, decide, is_fork
-from .finalize import FAILED_NOTE, PROGRESS_NOTE, finalize, pr_number
+from .finalize import (
+    FAILED_NOTE,
+    PROGRESS_NOTE,
+    finalize,
+    pr_number,
+    progress_with_head,
+)
 from .github import GitHub, GitHubError
 from .llm import Client, register_secret
 from .lock import BUSY_NOTE, WORKFLOW_FILE, older_active_run
@@ -278,6 +284,11 @@ def main(argv: list[str] | None = None) -> int:
     # failure note if connector-reviewer itself crashes, so it never lingers as a stale "running".
     progress_id = _progress(gh, args.pr, run_url) if live else 0
 
+    def record_head(sha: str) -> None:
+        # The head this run set `pending` on, on its progress note: if the PR is
+        # pushed to while the run is going, finalize still finds that head.
+        _best_effort(gh.edit_comment, progress_id, progress_with_head(run_url, sha))
+
     try:
         res = run(
             gh=gh,
@@ -290,19 +301,22 @@ def main(argv: list[str] | None = None) -> int:
             verify_budget=args.verify_budget,
             post=live,
             run_url=run_url,
+            on_pending=record_head,
         )
     except Exception:
+        # The pending status this run set must not outlive it. The workflow's
+        # `finalize` step does the same for a run that is killed outright.
+        # Finalize first: it reads the head this run recorded on the progress
+        # note, which the failure note below replaces.
+        try:
+            finalize(gh, args.pr, run_url)
+        except Exception as e:  # noqa: BLE001 - must never mask the real failure
+            print(f"connector-reviewer: finalize failed: {e}", file=sys.stderr)
         _best_effort(
             gh.edit_comment,
             progress_id,
             FAILED_NOTE.format(url=run_url or "the Actions log"),
         )
-        # The pending status this run set must not outlive it. The workflow's
-        # `finalize` step does the same for a run that is killed outright.
-        try:
-            finalize(gh, args.pr, run_url)
-        except Exception as e:  # noqa: BLE001 - must never mask the real failure
-            print(f"connector-reviewer: finalize failed: {e}", file=sys.stderr)
         react("confused")
         raise
     _best_effort(gh.delete_comment, progress_id)
@@ -364,7 +378,7 @@ def _finalize(args: argparse.Namespace) -> int:
     print(
         f"connector-reviewer: finalize #{number} — "
         + (
-            f"status on {done.head[:9]} set to error"
+            f"status on {', '.join(h[:9] for h in done.errored)} set to error"
             if done.status_set
             else "no pending status of this run"
         )

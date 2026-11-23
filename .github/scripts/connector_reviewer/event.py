@@ -60,6 +60,7 @@ has read the pull request.
 
 from __future__ import annotations
 
+import http.client
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -182,7 +183,12 @@ def _may_ask(
         return False, ROLE_REFUSAL, True
     try:
         return bool(can_push(login)), ROLE_REFUSAL, True
-    except GitHubError:
+    except (GitHubError, OSError, ValueError, http.client.HTTPException):
+        # Fail closed on any failed lookup: an HTTP error (GitHubError), a
+        # network error that urlopen raises as such (DNS, a reset, a timeout:
+        # URLError and TimeoutError are OSError), a body that is not JSON
+        # (ValueError) or a reply cut short (http.client.IncompleteRead). Not
+        # authorised, with a reply that says why, never a crash.
         return False, ROLE_UNKNOWN, True
 
 

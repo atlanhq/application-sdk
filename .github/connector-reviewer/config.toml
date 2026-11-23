@@ -133,9 +133,10 @@ bootstrap_managed = [
 # History: lines the PR restores that a recent base-branch commit removed, lines it removes
 # that one added, a revert, and a function changed churn_changes times in history_days days
 # (this PR included). Read through the GitHub REST API, at most
-# 1 + history_max_files + history_max_commits requests, four at a time. No request starts
-# after history_seconds (one in flight may take up to the client's 60 s timeout). A failed
-# read means fewer facts, never an incomplete review.
+# 3 + history_max_files + history_max_commits requests, four at a time. Reading history
+# returns after history_seconds at the latest: no request starts after it, and one still in
+# flight is abandoned. A failed read means fewer facts, never an incomplete review. Each
+# value must have its TOML type (true/false, a whole number): a quoted value is refused.
 regression = true
 history = true
 history_days = 30

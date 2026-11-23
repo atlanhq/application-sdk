@@ -57,6 +57,8 @@ class Config:
     facts: FactsConfig = field(default_factory=FactsConfig)
     limits: AgentLimits = field(default_factory=AgentLimits)
     raw_hash: str = ""
+    # Values config.toml gives with the wrong type; `validate` refuses them.
+    load_errors: list[str] = field(default_factory=list)
 
 
 def load_config(config_dir: Path) -> Config:
@@ -112,8 +114,22 @@ def load_config(config_dir: Path) -> Config:
     for k, v in fx.items():
         if k not in FactsConfig.__dataclass_fields__:
             continue
-        default = getattr(facts, k)
-        setattr(facts, k, bool(v) if isinstance(default, bool) else int(v))
+        # Each value must have its field's TOML type, never a coercion of it:
+        # `bool("false")` is True, so a quoted boolean would turn a half on.
+        # A wrong type keeps the default here and `validate` refuses the run.
+        if isinstance(getattr(facts, k), bool):
+            if isinstance(v, bool):
+                setattr(facts, k, v)
+            else:
+                cfg.load_errors.append(
+                    f"facts.{k} must be true or false (a TOML boolean), not {type(v).__name__} {v!r}."
+                )
+        elif isinstance(v, int) and not isinstance(v, bool):
+            setattr(facts, k, v)
+        else:
+            cfg.load_errors.append(
+                f"facts.{k} must be a whole number (a TOML integer), not {type(v).__name__} {v!r}."
+            )
     cfg.facts = facts
     a = data.get("agent", {})
     cfg.limits = AgentLimits(
@@ -124,8 +140,9 @@ def load_config(config_dir: Path) -> Config:
 
 
 def validate(cfg: Config) -> list[str]:
-    """Refuse to run on a config that cannot enforce its own cap."""
-    errs: list[str] = []
+    """Refuse to run on a config that cannot enforce its own cap, or that gives
+    a value with the wrong type."""
+    errs: list[str] = list(cfg.load_errors)
     prices = (
         cfg.price.input_per_mtok,
         cfg.price.output_per_mtok,

@@ -9,9 +9,14 @@ review step, and the review's own crash handler calls `finalize` too.
 
 What it decides on is only what GitHub shows, so it is safe after any outcome:
 
-- The head's latest `connector-reviewer` status is `pending` AND links to this
-  run: this run started a review and never posted a verdict. It becomes `error`
-  ("review incomplete"), which is never green.
+- Which heads to look at: the pull request's current head, and the head this
+  run set `pending` on. A push during the run moves the current head, so the
+  review records the head it marked in a hidden marker on its own progress
+  note (`progress_with_head`) the moment it sets `pending`; finalize reads it
+  back from that note, which only the reviewer's App can write.
+- A head whose latest `connector-reviewer` status is `pending` AND links to
+  this run: this run started a review and never posted a verdict. It becomes
+  `error` ("review incomplete"), which is never green.
 - Anything else (a verdict, a skip, an exempt or waived head, a comment that was
   not `/review`, a run that found another review busy, or a pending status a
   newer run set) is left alone.
@@ -23,6 +28,7 @@ It makes no model call and reads no config.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -43,12 +49,22 @@ INCOMPLETE = (
     "timed out); comment `/review` to retry"
 )
 _PROGRESS_START = PROGRESS_NOTE.split("{url}", 1)[0]
+# The head a review set `pending` on, recorded on its progress note.
+HEAD_MARKER = "<!-- connector-reviewer-head: {sha} -->"
+_HEAD = re.compile(r"<!-- connector-reviewer-head: ([0-9A-Za-z]{1,64}) -->")
+
+
+def progress_with_head(run_url: str, sha: str) -> str:
+    """The progress note, with the head this run set `pending` on recorded in
+    it for `finalize`."""
+    return PROGRESS_NOTE.format(url=run_url) + "\n" + HEAD_MARKER.format(sha=sha)
 
 
 @dataclass
 class Finalized:
-    head: str = ""
-    status_set: bool = False  # the pending status was turned into `error`
+    head: str = ""  # the pull request's current head
+    status_set: bool = False  # a pending status was turned into `error`
+    errored: list[str] = field(default_factory=list)  # heads set to `error`
     notes_fixed: list[int] = field(default_factory=list)  # progress notes rewritten
 
 
@@ -73,18 +89,21 @@ def finalize(gh: GitHub, number: int, run_url: str) -> Finalized:
         return out
     pr = gh.pr(number) or EMPTY
     out.head = str((pr.get("head") or EMPTY).get("sha") or "")
-    if out.head:
-        st = gh.status_of(out.head, STATUS_CONTEXT) or EMPTY
+    notes = [
+        c
+        for c in gh.issue_comments(number)
+        if (c.get("user") or EMPTY).get("login") == bot_login()
+        and str(c.get("body") or "").startswith(_PROGRESS_START)
+        and run_url in str(c.get("body") or "")
+    ]
+    recorded = [m for c in notes for m in _HEAD.findall(str(c.get("body") or ""))]
+    for sha in dict.fromkeys(h for h in [out.head, *recorded] if h):
+        st = gh.status_of(sha, STATUS_CONTEXT) or EMPTY
         if st.get("state") == "pending" and st.get("target_url") == run_url:
-            gh.set_status(out.head, "error", INCOMPLETE, run_url)
-            out.status_set = True
-    for c in gh.issue_comments(number):
-        body = str(c.get("body") or "")
-        if (
-            (c.get("user") or EMPTY).get("login") == bot_login()
-            and body.startswith(_PROGRESS_START)
-            and run_url in body
-        ):
-            gh.edit_comment(int(c["id"]), FAILED_NOTE.format(url=run_url))
-            out.notes_fixed.append(int(c["id"]))
+            gh.set_status(sha, "error", INCOMPLETE, run_url)
+            out.errored.append(sha)
+    out.status_set = bool(out.errored)
+    for c in notes:
+        gh.edit_comment(int(c["id"]), FAILED_NOTE.format(url=run_url))
+        out.notes_fixed.append(int(c["id"]))
     return out
