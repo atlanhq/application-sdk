@@ -816,19 +816,20 @@ def _published_input_contract(ep: EntryPointMetadata) -> type[PydanticBaseModel]
     credential fields by their ``CredentialRef``/``AgentCredentialSpec`` ``$ref``.
 
     Prefer that generated contract by convention; fall back to the entry point's
-    runtime ``input_type`` when no generated contract is importable (so apps that
-    don't use the contract-toolkit keep working unchanged).
+    runtime ``input_type`` when no generated contract module exists (so apps that
+    don't use the contract-toolkit keep working unchanged). A generated module
+    that exists but fails to import raises rather than falling back.
     """
-    import importlib  # noqa: PLC0415 — cold path: only on /input-contract
-
     ep_module = ep.name.replace("-", "_")
     for module_path in (
         f"app.generated.{ep_module}._input",
         "app.generated._input",
     ):
-        try:
-            module = importlib.import_module(module_path)
-        except ImportError:  # conformance: ignore[E008,E014] optional generated module; continue to next candidate
+        # Absent module → next candidate. A generated module that exists but
+        # fails to import raises: serving the thin contract instead would hide
+        # its CredentialRef fields from Heracles.
+        module = _import_optional_app_module(module_path)
+        if module is None:
             continue
         contract = getattr(module, "AppInputContract", None)
         if contract is not None and hasattr(contract, "model_json_schema"):
@@ -869,11 +870,9 @@ def _marketplace_entrypoint_contract(
     path.
 
     Returns ``None`` when the entry point has no generated contract dir or no
-    importable ``AppInputContract`` — callers fall back to their existing
-    behavior.
+    ``AppInputContract`` module — callers fall back to their existing
+    behavior. A contract module that exists but fails to import raises.
     """
-    import importlib  # noqa: PLC0415 — cold path: only on /input-contract
-
     from application_sdk.app.entrypoint import (  # noqa: PLC0415 — circular at module import time
         entrypoint_module_segment,
     )
@@ -897,9 +896,11 @@ def _marketplace_entrypoint_contract(
         f"app.generated.{ep_module}._input",
         f"app.{ep_module}._input",
     ):
-        try:
-            module = importlib.import_module(module_path)
-        except ImportError:  # conformance: ignore[E008,E014] optional generated module; continue to next candidate
+        # Absent module → next candidate. A generated module that exists but
+        # fails to import raises: serving the thin contract instead would hide
+        # its CredentialRef fields from Heracles.
+        module = _import_optional_app_module(module_path)
+        if module is None:
             continue
         contract = getattr(module, "AppInputContract", None)
         if contract is not None and hasattr(contract, "model_json_schema"):
