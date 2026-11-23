@@ -33,3 +33,8 @@ class FullFeaturedMustacheSubstitutions(SQLMustacheSubstitutions):
     legacy_timeout: int = Field(default=60, alias="{{legacy_timeout}}")
     old_batch_mode: bool = Field(default=False, alias="{{old_batch_mode}}")
     schemas: dict[str, Any] | None = Field(default=None, alias="{{schemas}}")
+    enable_dsn_mapping: Literal["true", "false"] = Field(
+        default="false",
+        alias="{{enable-dsn-mapping}}",
+    )
+    dsn_mapping: dict[str, str] | None = Field(default=None, alias="{{dsn-mapping}}")

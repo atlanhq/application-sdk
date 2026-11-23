@@ -1,0 +1,207 @@
+// Tests for `ConditionalInput.stringMap`.
+//
+// Background: an object-valued ConditionalInput (`outputValueType = "object"`)
+// renders `Annotated[dict[str, Any], MaxItems(1000)]`, which the SDK's
+// payload-safety check (AAF-CTR-002) rejects when the generated `_input.py` is
+// imported. Power BI's ODBC DSN map is such a field: a `div` base whose
+// condition swaps in the `dsnTreeMap` widget, storing `{dsn: connectionQN}`.
+// `stringMap = true` types it as `dict[str, str]` and gives it a lenient
+// coercion validator. These tests cover the App.pkl (Widgets.pkl) and
+// NativeApp.pkl (Config.pkl) paths, the refusal, and that the default output
+// and the wire format do not change.
+
+amends "pkl:test"
+
+import "../src/App.pkl" as App
+import "../src/Config.pkl"
+import "../src/Connectors.pkl"
+import "../src/NativeApp.pkl"
+
+local function appWith(useStringMap: Boolean, valueType: String) = (App) {
+  name = "string-map-test"
+  displayName = "String Map Test"
+  icon = "https://example.com/icon.svg"
+  connector = Connectors.API
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["enable-dsn-mapping"] = new App.Radio {
+            title = "Enable DSN mapping"
+            possibleValues { ["true"] = "True"; ["false"] = "False" }
+            default = "false"
+          }
+          ["dsn-mapping"] = new App.ConditionalInput {
+            title = ""
+            baseWidgetType = "div"
+            outputValueType = valueType
+            default = "{}"
+            conditions {
+              new App.Condition {
+                property = "enable-dsn-mapping"
+                value = "true"
+                overrideUi = new Mapping { ["widget"] = "dsnTreeMap" }
+              }
+            }
+          } {
+            stringMap = useStringMap
+          }
+          // Control: an object conditional without stringMap keeps the old type.
+          ["other-object"] = new App.ConditionalInput {
+            title = "Other object"
+            baseWidgetType = "div"
+            outputValueType = "object"
+            default = "{}"
+          }
+        }
+      }
+    }
+  }
+}
+
+local function nativeWith(useStringMap: Boolean, valueType: String) = (NativeApp) {
+  name = "native-string-map-test"
+  displayName = "Native String Map Test"
+  icon = "https://example.com/icon.svg"
+  connector = Connectors.API
+  workflowTypeOverride = "NativeStringMapTestWorkflow"
+  hasCredentialConfig = false
+  hasPublishStep = false
+  uiConfig = new Config.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["enable-dsn-mapping"] = new Config.Radio {
+            title = "Enable DSN mapping"
+            possibleValues { ["true"] = "True"; ["false"] = "False" }
+            default = "false"
+          }
+          ["dsn-mapping"] = new Config.ConditionalInput {
+            title = ""
+            baseWidgetType = "div"
+            outputValueType = valueType
+            default = "{}"
+            conditions {
+              new Config.Condition {
+                property = "enable-dsn-mapping"
+                value = "true"
+                overrideUi = new Mapping { ["widget"] = "dsnTreeMap" }
+              }
+            }
+          } {
+            stringMap = useStringMap
+          }
+          ["other-object"] = new Config.ConditionalInput {
+            title = "Other object"
+            baseWidgetType = "div"
+            outputValueType = "object"
+            default = "{}"
+          }
+        }
+      }
+    }
+  }
+}
+
+local appOn = appWith(true, "object")
+local appOff = appWith(false, "object")
+local nativeOn = nativeWith(true, "object")
+local nativeOff = nativeWith(false, "object")
+
+local appInputPath = "app/generated/_input.py"
+local nativeInputPath = "_input.py"
+local appConfigPath = "app/generated/string-map-test.json"
+
+local appOnPy: String = appOn.output.files[appInputPath].text
+local appOffPy: String = appOff.output.files[appInputPath].text
+local nativeOnPy: String = nativeOn.output.files[nativeInputPath].text
+local nativeOffPy: String = nativeOff.output.files[nativeInputPath].text
+
+local function forceAll(m: Module): Map<String, String> =
+  m.output.files.toMap().mapValues((_, f) -> f.text)
+
+local function assertsStringMap(py: String): Boolean =
+  py.contains("dsn_mapping: Annotated[dict[str, str], MaxItems(1000)]")
+    && !py.contains("dsn_mapping: Annotated[dict[str, Any]")
+    && py.contains("other_object: Annotated[dict[str, Any], MaxItems(1000)]")
+    && py.contains("@field_validator(\"dsn_mapping\", mode=\"before\")")
+    && py.contains("def _coerce_string_maps(cls, value: Any) -> Any:")
+    && py.contains("        if value is None:\n            return {}\n")
+    && py.contains("String-map input was not a JSON object; using an empty map.")
+    // The shared validator still covers the control field, and only it.
+    && py.contains("@field_validator(\"other_object\", mode=\"before\")")
+    && py.contains("def _coerce_json_object_strings(cls, value: Any) -> Any:")
+    && py.contains("import orjson")
+    && py.contains("logger = get_logger(__name__)")
+
+local function assertsDefault(py: String): Boolean =
+  py.contains("dsn_mapping: Annotated[dict[str, Any], MaxItems(1000)]")
+    && !py.contains("_coerce_string_maps")
+    && py.contains("@field_validator(\"dsn_mapping\", \"other_object\", mode=\"before\")")
+
+facts {
+  ["App.pkl: stringMap types the field dict[str, str] with its own lenient validator"] {
+    assertsStringMap(appOnPy)
+  }
+
+  ["NativeApp.pkl: stringMap types the field dict[str, str] with its own lenient validator"] {
+    assertsStringMap(nativeOnPy)
+  }
+
+  ["default stringMap = false keeps dict[str, Any] and the shared validator"] {
+    assertsDefault(appOffPy)
+    assertsDefault(nativeOffPy)
+  }
+
+  // stringMap changes only the Python input model, never what the UI or AE see.
+  ["stringMap does not change the workflow config JSON"] {
+    appOn.output.files[appConfigPath].text == appOff.output.files[appConfigPath].text
+  }
+
+  ["stringMap on a string-valued conditional is refused (App.pkl)"] {
+    module.catch(() -> forceAll(appWith(true, "string")))
+      .contains("ConditionalInput 'dsn-mapping' (outputValueType = \"string\") sets stringMap")
+  }
+
+  ["stringMap on a string-valued conditional is refused (NativeApp.pkl)"] {
+    module.catch(() -> forceAll(nativeWith(true, "string")))
+      .contains("ConditionalInput 'dsn-mapping' (outputValueType = \"string\") sets stringMap")
+  }
+
+  // The refusal must not depend on the field being rendered into _input.py.
+  ["stringMap refusal also covers a field excluded from the input (NativeApp.pkl)"] {
+    module.catch(() -> forceAll((nativeWith(true, "string")) {
+      uiConfig { tasks { ["Configuration"] { inputs { ["dsn-mapping"] { includeInInput = false } } } } }
+    })).contains("ConditionalInput 'dsn-mapping' (outputValueType = \"string\") sets stringMap")
+  }
+
+  // treeSelection would win and render TreeSelection, dropping dict[str, str] silently.
+  ["stringMap together with treeSelection is refused (App.pkl)"] {
+    module.catch(() -> forceAll((appWith(true, "object")) {
+      uiConfig { tasks { ["Configuration"] { inputs { ["dsn-mapping"] {
+        baseWidgetType = "apitree"
+        treeSelection = true
+      } } } } }
+    })).contains("ConditionalInput 'dsn-mapping' sets both stringMap and treeSelection")
+  }
+
+  // Control for the refusals: the same contracts with stringMap off generate.
+  ["string-valued conditional without stringMap still generates"] {
+    forceAll(appWith(false, "string")).containsKey(appInputPath)
+    forceAll(nativeWith(false, "string")).containsKey(nativeInputPath)
+  }
+
+  // scripts/test-sdk-import.py validates the App.pkl output at runtime (the
+  // `full` example); identical validator text extends that to NativeApp.pkl.
+  ["App.pkl and NativeApp.pkl emit the same _coerce_string_maps validator"] {
+    validatorBlock(appOnPy) == validatorBlock(nativeOnPy)
+    validatorBlock(appOnPy).contains("return {}")
+  }
+}
+
+local function validatorBlock(py: String): String =
+  let (start = py.indexOf("    @field_validator(\"dsn_mapping\", mode=\"before\")"))
+  let (rest = py.drop(start))
+  rest.take(rest.indexOf("using an empty map.\")\n        return {}\n") + 40)
