@@ -9113,6 +9113,23 @@ def test_finalize_reads_the_pull_request_from_the_event():
     assert finalize_mod.pr_number("push", {}) == 0
 
 
+@pytest.mark.parametrize(
+    "inputs, expected",
+    [
+        ({"pr": "1023", "force": True}, 1023),
+        ({"pr": " #42 "}, 42),
+        ({"pr": "abc"}, 0),
+        ({}, 0),
+    ],
+)
+def test_finalize_reads_the_pull_request_from_a_manual_dispatch(
+    inputs: dict[str, Any], expected: int
+):
+    """A cancelled manual dispatch left its status pending in the first live
+    test: finalize found no pull request in a `workflow_dispatch` event."""
+    assert finalize_mod.pr_number("workflow_dispatch", {"inputs": inputs}) == expected
+
+
 def test_the_finalize_command_needs_no_config_and_exits_zero(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
