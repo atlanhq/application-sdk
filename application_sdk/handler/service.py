@@ -35,7 +35,7 @@ import json
 import os
 import tempfile
 import warnings
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
@@ -287,9 +287,15 @@ async def _get_workflow_result(
     client: Client,
     *,
     workflow_id: str,
+    run_id: str,
     output_type: type | None,
 ) -> dict[str, Any]:
     """Fetch and normalise a completed workflow result.
+
+    *run_id* pins the read to the run whose ownership the caller checked. A
+    handle resolved by ID alone follows whichever run holds the ID now, which
+    after a failed run can be a different app's workflow started under the
+    same ID (FND-5215).
 
     Attempts typed deserialization first (so the OutputContract dataclass is
     reconstructed properly). Falls back to untyped if that fails, logging a
@@ -303,7 +309,7 @@ async def _get_workflow_result(
     """
     try:
         result = await client.get_workflow_handle(
-            workflow_id, result_type=output_type
+            workflow_id, run_id=run_id, result_type=output_type
         ).result()
     except Exception:
         logger.warning(
@@ -312,7 +318,7 @@ async def _get_workflow_result(
             output_type,
             exc_info=True,
         )
-        result = await client.get_workflow_handle(workflow_id).result()
+        result = await client.get_workflow_handle(workflow_id, run_id=run_id).result()
 
     if isinstance(result, PydanticBaseModel):
         return result.model_dump()
@@ -335,11 +341,18 @@ def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
     app's workflow, or an external one); the caller falls back to untyped
     deserialisation via ``_get_workflow_result``'s own fallback path.
     """
-    if _workflow_config.app_class is None:
-        return None
-    app_cls_name = _workflow_config.app_name
-    if not app_cls_name:
-        return None
+    workflow_types = _registered_workflow_types(_workflow_config)
+    ep = workflow_types.get(workflow_type_name)
+    return ep.output_type if ep else None
+
+
+def _registered_workflow_types(
+    workflow_config: WorkflowClientConfig,
+) -> Mapping[str, EntryPointMetadata]:
+    """Every Temporal workflow type the configured app registers, or an empty
+    mapping when no app is configured or it is not in the registry."""
+    if workflow_config.app_class is None or not workflow_config.app_name:
+        return {}
 
     from application_sdk.app.registry import (  # noqa: PLC0415
         AppNotRegisteredError,
@@ -347,15 +360,15 @@ def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
     )
 
     try:
-        app_meta = AppRegistry.get_instance().get(app_cls_name)
+        app_meta = AppRegistry.get_instance().get(workflow_config.app_name)
     except AppNotRegisteredError:
         logger.warning(
-            "App %r not found in registry; returning None", app_cls_name, exc_info=True
+            "App %r not found in registry; no workflow types resolved",
+            workflow_config.app_name,
+            exc_info=True,
         )
-        return None
-
-    ep = app_meta.workflow_types.get(workflow_type_name)
-    return ep.output_type if ep else None
+        return {}
+    return app_meta.workflow_types
 
 
 # ---------------------------------------------------------------------------
@@ -420,17 +433,29 @@ async def _describe_owned_workflow(
     """Describe *handle*, refusing a workflow that does not belong to this app.
 
     The Temporal namespace is shared across apps, so a bare workflow ID can
-    name another app's run. ``/start`` dispatches every workflow onto
-    ``workflow_config.task_queue`` (``continue_as_new`` keeps it, and worker
-    pools route activities, not workflows), so a run on any other queue is
-    not this app's. It is answered with the same 404 as a missing workflow,
-    so the route does not confirm that the ID exists elsewhere.
+    name another app's run. A run is this app's only when both hold:
+
+    - it is on ``workflow_config.task_queue``, where ``/start`` dispatches
+      every workflow (``continue_as_new`` keeps the queue, and worker pools
+      route activities, not workflows);
+    - its type is one this app registers. Workflow types carry the app name,
+      so this separates two apps that were configured onto the same queue.
+
+    Any other run gets the same 404 as a missing workflow, so the route does
+    not confirm that the ID exists elsewhere. Callers act on ``desc.run_id``
+    (or a handle already pinned to a run) so that the run checked here is
+    the run acted on.
     """
     desc = await handle.describe()
-    if not workflow_config.task_queue or desc.task_queue != workflow_config.task_queue:
+    if (
+        not workflow_config.task_queue
+        or desc.task_queue != workflow_config.task_queue
+        or desc.workflow_type not in _registered_workflow_types(workflow_config)
+    ):
         logger.warning(
-            "Refusing workflow %s: task queue %s is not this app's queue %s",
+            "Refusing workflow %s: type %s on task queue %s is not this app's (queue %s)",
             workflow_id,
+            desc.workflow_type,
             desc.task_queue,
             workflow_config.task_queue,
         )
@@ -1367,7 +1392,10 @@ def _register_workflow_routes(
                             desc.workflow_type,
                         )
                     result_data = await _get_workflow_result(
-                        client, workflow_id=workflow_id, output_type=output_type
+                        client,
+                        workflow_id=workflow_id,
+                        run_id=desc.run_id,
+                        output_type=output_type,
                     )
                     return JSONResponse(
                         content=_wrap_response(
@@ -1439,7 +1467,10 @@ def _register_workflow_routes(
                             desc.workflow_type,
                         )
                     result_data = await _get_workflow_result(
-                        client, workflow_id=workflow_id, output_type=output_type
+                        client,
+                        workflow_id=workflow_id,
+                        run_id=desc.run_id,
+                        output_type=output_type,
                     )
                     return JSONResponse(
                         content=_wrap_response(
