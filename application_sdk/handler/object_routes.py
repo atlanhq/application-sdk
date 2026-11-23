@@ -97,6 +97,17 @@ def valid_upload_prefix(prefix: str) -> bool:
     )
 
 
+#: First segments a worker refuses in an upload prefix: the object-store trees
+#: the SDK itself writes, in the bucket every app on the tenant shares. Apps'
+#: configs and state live under ``persistent-artifacts/apps/<app>/``, run
+#: outputs under ``artifacts/apps/<app>/``, and connector caches under
+#: ``connection-cache/``, each listed and read back by its owner. The host needs
+#: no such list: it puts every upload under the app's own namespace.
+_RESERVED_UPLOAD_ROOTS = frozenset(
+    {"persistent-artifacts", "artifacts", "connection-cache"}
+)
+
+
 # Strips any character that is not a simple alphanumeric from file extensions
 # before they become part of an object-store key.
 SAFE_EXT_RE = re.compile(r"[^a-zA-Z0-9]")
@@ -147,7 +158,16 @@ class ObjectRoutesSource:
             consolidated host sets the app's own
             ``persistent-artifacts/apps/<app>/uploads``: one identity writes to
             the shared bucket for every hosted app, so a request routed to one
-            app must not be able to write under another's prefix.
+            app must not be able to write under another's prefix. When unset
+            (the worker), the prefix is kept as given but may not start with
+            one of :data:`_RESERVED_UPLOAD_ROOTS`. Either way an unsafe prefix
+            (see :func:`valid_upload_prefix`) answers 400.
+        stored_key: ``key`` → the key ``upload_file`` actually writes. The
+            worker's store normalises keys (``storage.ops.normalize_key``
+            strips the local staging root, so ``local/tmp/artifacts/x`` is
+            stored at ``artifacts/x``). An upload whose key the store would
+            rewrite answers 400, so the key the route checks and returns is
+            the key stored. Defaults to the key unchanged.
     """
 
     configured: Callable[[], bool]
@@ -155,6 +175,7 @@ class ObjectRoutesSource:
     save_config: Callable[[str, dict[str, Any], str], Awaitable[bool]]
     upload_file: Callable[[str, str], Awaitable[None]]
     upload_namespace: str = ""
+    stored_key: Callable[[str], str] = lambda key: key
 
 
 #: Path of the SDK's setup-form file upload route.
@@ -487,20 +508,34 @@ def register_object_routes(app: FastAPI, source: ObjectRoutesSource) -> None:
 
         file_id = str(uuid4())
         effective_prefix = prefix or "workflow_file_upload"
+        if not valid_upload_prefix(effective_prefix):
+            raise HTTPException(
+                status_code=400,
+                detail="prefix must be relative path segments of letters, "
+                "digits, '_', '-' or '.', with no '.' or '..' segment",
+            )
         if source.upload_namespace:
             # The consolidated host: one AWS identity and one bucket serve every
-            # hosted app, so a request routed to one app must not choose a key
-            # outside that app's namespace. A worker serves only its own app and
-            # keeps accepting the prefix as given, as it always has.
-            if not valid_upload_prefix(effective_prefix):
-                raise HTTPException(
-                    status_code=400,
-                    detail="prefix must be relative path segments of letters, "
-                    "digits, '_', '-' or '.', with no '.' or '..' segment",
-                )
+            # hosted app, so every upload goes under the app's own namespace.
             effective_prefix = f"{source.upload_namespace}/{effective_prefix}"
+        elif effective_prefix.split("/", 1)[0] in _RESERVED_UPLOAD_ROOTS:
+            # A worker keeps the prefix as given, so its keys stay where its
+            # readers expect them (``workflow_file_upload/...``), but the bucket
+            # is shared by every app on the tenant: a prefix must not plant an
+            # object in a tree the SDK writes and other apps or runs list.
+            raise HTTPException(
+                status_code=400,
+                detail="prefix must not start with a reserved object-store root",
+            )
         stored_name = f"{file_id}.{extension}" if extension else file_id
         key = f"{effective_prefix}/{stored_name}"
+        if source.stored_key(key) != key:
+            # The store would write somewhere else (a staging-path alias such
+            # as ``local/tmp/artifacts/...``), past the checks above.
+            raise HTTPException(
+                status_code=400,
+                detail="prefix must not be a local staging path",
+            )
 
         # Stream the upload: drain the spooled temp file to a named temp file,
         # then stream-upload to the object store (avoids materialising in memory).
