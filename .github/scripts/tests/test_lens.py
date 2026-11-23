@@ -7455,3 +7455,45 @@ def test_no_retry_when_the_cap_cannot_cover_a_second_billable_attempt():
         c.complete("review:x", msgs, max_tokens=10)
     assert len(sent.requests) == 1
     assert led.spent_usd == pytest.approx(worst) and led.reserved_usd == 0
+
+
+def _hunks_diff(path: str, sizes: list[int]) -> str:
+    """One file, one added hunk per size, each hunk `size` lines long."""
+    out = [f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"]
+    start = 1
+    for n in sizes:
+        out.append(f"@@ -{start},0 +{start},{n} @@\n")
+        out.extend(f"+    value_{start + i} = compute({start + i})\n" for i in range(n))
+        start += n + 10
+    return "".join(out)
+
+
+def test_a_file_over_the_bundle_token_cap_is_split_at_hunk_boundaries():
+    """F-71bfe6: one file's diff alone over `max_diff_tokens` used to become a
+    bundle over the cap. It is split into parts of whole hunks that fit."""
+    files = parse_unified_diff(
+        _hunks_diff("application_sdk/storage/big.py", [40, 40, 40, 40])
+        + _hunks_diff("application_sdk/storage/small.py", [3])
+    )
+    cap = 1000
+    assert bundle_mod.estimate_tokens(files[0].render()) > cap
+    bundles = group(files, max_diff_tokens=cap)
+    assert all(b.diff_tokens() <= cap for b in bundles)
+    parts = [f for b in bundles for f in b.files if f.path.endswith("big.py")]
+    assert len(parts) > 1
+    # Every hunk is reviewed once, in order, and no hunk is cut.
+    assert [h.new_start for p in parts for h in p.hunks] == [
+        h.new_start for h in files[0].hunks
+    ]
+    assert sum(p.additions for p in parts) == files[0].additions
+
+
+def test_a_single_hunk_over_the_cap_goes_alone_and_is_never_cut():
+    files = parse_unified_diff(
+        _hunks_diff("application_sdk/storage/big.py", [200])
+        + _hunks_diff("application_sdk/storage/small.py", [3])
+    )
+    bundles = group(files, max_diff_tokens=1000)
+    [alone] = [b for b in bundles if "application_sdk/storage/big.py" in b.paths]
+    assert alone.paths == ["application_sdk/storage/big.py"]
+    assert alone.files[0].additions == 200

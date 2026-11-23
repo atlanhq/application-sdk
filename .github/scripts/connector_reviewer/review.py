@@ -328,6 +328,26 @@ def _no_verdict(
         gh.set_status(head, "error", why, run_url)
 
 
+def _whole_files(files: list[FileDiff]) -> list[FileDiff]:
+    """One diff per path, in first-seen order. A file over the bundle token cap
+    is reviewed in parts (`bundle._parts`); the facts are about the file, so
+    its parts are joined back into one diff before they are computed."""
+    joined: dict[str, FileDiff] = {}
+    for fd in files:
+        have = joined.get(fd.path)
+        if have is None:
+            joined[fd.path] = fd
+        else:
+            joined[fd.path] = FileDiff(
+                path=fd.path,
+                old_path=fd.old_path,
+                status=fd.status,
+                is_binary=fd.is_binary,
+                hunks=[*have.hunks, *fd.hunks],
+            )
+    return list(joined.values())
+
+
 def compute_facts(
     gh: GitHub,
     number: int,
@@ -789,7 +809,7 @@ def run(
                 pr,
                 base,
                 ws,
-                [fd for b in bundles for fd in b.files],
+                _whole_files([fd for b in bundles for fd in b.files]),
                 cfg,
                 tests_changed=tests_changed,
             )
