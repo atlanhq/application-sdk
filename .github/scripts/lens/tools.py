@@ -63,7 +63,16 @@ SECRET_GLOBS = (
 SAFE_ENV = (".env.example", ".env.sample", ".env.template")
 
 
-def _secret_path(p: str) -> bool:
+def secret_diff(fd: FileDiff) -> bool:
+    """True when either side of this change may hold secrets. A rename from
+    `.env` to an ordinary name still carries the deleted `.env` lines in its
+    diff, so the source path counts as much as the destination."""
+    return secret_path(fd.path) or (
+        fd.old_path is not None and secret_path(fd.old_path)
+    )
+
+
+def secret_path(p: str) -> bool:
     name = p.rsplit("/", 1)[-1]
     if name in SAFE_ENV:
         return False
@@ -86,7 +95,7 @@ class Workspace:
             not rel
             or rel.startswith("/")
             or ".." in Path(rel).parts
-            or _secret_path(rel)
+            or secret_path(rel)
         ):
             return None
         return rel
@@ -209,9 +218,14 @@ def find_symbol(ws: Workspace, name: str) -> str:
 
 
 def read_diff(ws: Workspace, path_array: list[str]) -> str:
-    out = []
+    out: list[str] = []
     for p in path_array[:5]:
         fd = ws.diffs.get(p)
+        # `ws.diffs` holds every changed file, including ones selection
+        # skipped, so the guard is applied here too, to both sides of a rename.
+        if secret_path(p) or (fd is not None and secret_diff(fd)):
+            out.append(f'<file path="{p}">\nnot available: may hold secrets\n</file>')
+            continue
         out.append(
             f'<file path="{p}">\n{fd.render(max_lines=200) if fd else "not changed in this PR"}\n</file>'
         )
@@ -319,23 +333,21 @@ TOOL_SCHEMAS = [
 
 def parse_args(raw: str) -> dict[str, Any]:
     """Tool arguments as a dict. A malformed payload is salvaged by taking the
-    first balanced JSON object in it;
+    first JSON object in it (read by the JSON decoder, so a brace inside a
+    string is text, not structure);
     anything else is an empty dict and the tool reports the error."""
     try:
         v = json.loads(raw or "{}")
         return v if isinstance(v, dict) else {}
     except json.JSONDecodeError:
         start = (raw or "").find("{")
-        depth = 0
-        for i in range(max(start, 0), len(raw or "")):
-            depth += {"{": 1, "}": -1}.get(raw[i], 0)
-            if depth == 0 and start >= 0:
-                try:
-                    v = json.loads(raw[start : i + 1])
-                    return v if isinstance(v, dict) else {}
-                except json.JSONDecodeError:
-                    return {}
-        return {}
+        if start < 0:
+            return {}
+        try:
+            v, _ = json.JSONDecoder().raw_decode(raw, start)
+        except json.JSONDecodeError:
+            return {}
+        return v if isinstance(v, dict) else {}
 
 
 def run_tool(ws: Workspace, name: str, args: dict[str, Any]) -> str:

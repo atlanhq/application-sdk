@@ -44,7 +44,17 @@ from .diff import (
     parse_unified_diff,
     snippet_in_text,
 )
-from .findings import BLOCKING, BODY_KEEP, SEVERITIES, Finding, PRState, merge_new
+from .findings import (
+    BLOCKING,
+    BODY_KEEP,
+    EVIDENCE_KEEP_RESOLVED,
+    SEVERITIES,
+    STATE_MARKER,
+    Finding,
+    PRState,
+    merge_new,
+    quote_stored,
+)
 from .github import GitHub, bot_login
 from .index import Index, Symbol, build_index, index_source
 from .llm import BudgetExhausted, Client, Ledger, LLMError
@@ -495,6 +505,8 @@ def run(
     # ---- free resolution: the quoted code is gone ------------------------
     touched = {fd.path for fd in all_files}
     for f in state.open_findings():
+        if not quote_stored(f):
+            continue  # no quote to match (the state outgrew a comment): verify judges it
         text = head_text.get(f.path)
         if text is None and f.path not in touched:
             continue  # file untouched since: finding still stands
@@ -1156,7 +1168,7 @@ def recheck_evidence(
     code_now = (
         "\n".join(f"{i:>5} {lines[i - 1]}" for i in range(lo, min(hi, len(lines)) + 1))
         if at
-        else "(the quoted code is not in this file any more)"
+        else _quote_gone(f)
     )
     fd = ws.diffs.get(f.path)
     base_path = fd.old_path if fd and fd.status == "renamed" and fd.old_path else f.path
@@ -1185,8 +1197,12 @@ def recheck_evidence(
             # The quote is gone from the head, so its enclosing symbol is unknown:
             # its absence from the merge base says nothing about that symbol.
             facts.append(
-                f"the quoted code is no longer in {f.path} at the PR head: "
-                "merge-base presence of its symbol unknown"
+                (
+                    f"the quoted code is no longer in {f.path} at the PR head"
+                    if quote_stored(f)
+                    else QUOTE_NOT_STORED
+                )
+                + ": merge-base presence of its symbol unknown"
             )
         elif snippet_in_text(base, f.evidence):
             facts.append(f"present on merge base: the quoted code is in {base_path}")
@@ -1591,10 +1607,14 @@ def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:  # n
         )
         bundles = group(files, max_diff_tokens=bigger, max_files=12)
     bundles.sort(key=_risk)
+    # A file over the token cap is reviewed in parts (`bundle._parts`), and its
+    # parts can fall on both sides of the cap: named once, as not reviewed.
+    skipped: list[str] = []
     for b in bundles[cfg.max_bundles :]:
-        res.skipped_files.extend(
-            (p, "bundle cap (lowest-risk code, after re-packing)") for p in b.paths
-        )
+        skipped.extend(p for p in b.paths if p not in skipped)
+    res.skipped_files.extend(
+        (p, "bundle cap (lowest-risk code, after re-packing)") for p in skipped
+    )
     return bundles[: cfg.max_bundles]
 
 
@@ -1705,6 +1725,20 @@ def round_diff(files: list[FileDiff], open_: list[Finding]) -> str:
     return "\n".join(out)
 
 
+QUOTE_NOT_STORED = (
+    "this finding's quoted code was not stored (the review state outgrew one "
+    "comment), so where it sits now is unknown"
+)
+
+
+def _quote_gone(f: Finding) -> str:
+    """What `<code_now>` says when the quote is not found: gone from the file,
+    or never stored, which says nothing about the code."""
+    if quote_stored(f):
+        return "(the quoted code is not in this file any more)"
+    return f"({QUOTE_NOT_STORED}: judge it from its title and body)"
+
+
 def _current_line(ws: Workspace, f: Finding, text: str) -> int:
     """Where the finding's quoted code is NOW. Stored line numbers are from an
     earlier head and drift as commits land; the quote is what identifies the site,
@@ -1745,6 +1779,8 @@ def at_base_branch(
         # Module level: no symbol to look up, so the quote locates the site.
         at = locate_in_text(text, f.evidence)
         if not at:
+            if not quote_stored(f):
+                return f"({QUOTE_NOT_STORED})"
             return f"absent on base: the quoted code is not in {rel}"
         return f"{rel}: module level\n{_numbered(text, at - 15, at + 15)}"
     dotted = head_sym.qualname.split(":", 1)[1]
@@ -1915,7 +1951,7 @@ def _verify_batch(
                 f"{i:>5} {lines[i - 1]}" for i in range(lo, min(hi, len(lines)) + 1)
             )
             if at
-            else "(the quoted code is not in this file any more)"
+            else _quote_gone(f)
         )
         items.append(
             f'<finding id="{f.id}" path="{f.path}"{mark}>\n{f.title}. {f.body}\n'
@@ -2345,12 +2381,152 @@ def render_summary(res: RunResult) -> str:
     for detail_chars in (None, 600, 200):
         block = _details_block(opened, res.blob_base, detail_chars)
         head = "\n".join(lines[:details_at] + block + lines[details_at:]) + "\n"
+        head = _no_state_marker(head)
         for keep in (BODY_KEEP, 200, 0):
             body = head + st.encode(body_keep=keep)
             if len(body) <= COMMENT_LIMIT:
                 return body
-    lean = "\n".join(_without_resolved(lines)) + "\n"
-    return lean + st.encode(body_keep=0)
+    lean = _no_state_marker("\n".join(_without_resolved(lines)) + "\n")
+    body = lean + st.encode(body_keep=0)
+    if len(body) <= COMMENT_LIMIT:
+        return body
+    # The marker, the title and the verdict.
+    top = "\n".join(lines[: lines.index(verdict) + 1]) + "\n"
+    return _fit_state(lean, _no_state_marker(top), st)
+
+
+STATE_TOO_LARGE = (
+    "\n> ⚠️ This pull request's review state is too large for one comment: the "
+    "tables are not shown, and stored quoted code is shortened. Every open "
+    "finding and its id are still tracked.\n"
+)
+
+
+def _quotes_not_stored(n: int) -> str:
+    return (
+        "\n> ⚠️ This pull request's review state is too large for one comment: the "
+        f"tables are not shown, resolved findings are not stored, and {n} open "
+        "finding(s) are stored without their quoted code. Every open finding and its "
+        "id are still tracked; one without its quote stays open until a re-check "
+        "judges it.\n"
+    )
+
+
+def _open_not_stored(n: int) -> str:
+    return (
+        "\n> ⚠️ This pull request's review state is too large for one comment even "
+        f"without quoted code: {n} open finding(s), lowest severity first, could not "
+        "be stored. If their code is still there, a later round can raise them again.\n"
+    )
+
+
+STATE_NOT_STORED = (
+    "\n> ⚠️ This pull request's review state is too large for one comment and "
+    "could not be stored: the next round reviews this pull request afresh.\n"
+)
+
+
+def _fewest(most: int, fits: Callable[[int], bool]) -> int | None:
+    """The fewest of `most` things to leave out for `fits`, or None when even all
+    of them is not enough. A bisection: the size only shrinks as more are left out.
+    The value returned is always one `fits` was checked true for."""
+    if most <= 0 or not fits(most):
+        return None
+    lo, hi = 1, most
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if fits(mid):
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+
+
+def _fit_state(lean: str, top: str, st: PRState) -> str:
+    """The summary when even the lean view and the stored bodies at 0 are over
+    the limit: GitHub would refuse the edit, and the next run would read the
+    previous state. Cut in this order until it fits: open findings' quoted code
+    to its leading lines (whole lines, so free resolution still matches), the
+    view to its first lines, the quoted code to its first line, then the oldest
+    resolved findings.
+
+    Past that, only open findings are left, and their first lines can still be
+    too long (a quote is one minified line). Then the largest quotes are left out,
+    the fewest that fit: each such finding keeps its id, title and place, stays
+    open, and is never resolved for a quote that is not there (`quote_stored`).
+    With every quote out, a finding is a title (≤120 characters), a path and a few
+    numbers, so only hundreds of open findings could still be over; then the
+    fewest open findings are left out, lowest severity and newest first. Should
+    the state be too large with none of them (only its bounded round history,
+    ledger and notes are left), the summary goes without a state block: GitHub
+    accepts it, and the next round starts afresh instead of reading a stale one.
+    Every value returned here is within the limit."""
+    for text, keep in (
+        (lean, EVIDENCE_KEEP_RESOLVED),
+        (top + STATE_TOO_LARGE, EVIDENCE_KEEP_RESOLVED),
+        (top + STATE_TOO_LARGE, 0),
+    ):
+        body = text + st.encode(body_keep=0, evidence_keep=keep)
+        if len(body) <= COMMENT_LIMIT:
+            return body
+
+    def fits(body: str) -> bool:
+        return len(body) <= COMMENT_LIMIT
+
+    def dropping(n: int) -> str:
+        return (
+            top
+            + STATE_TOO_LARGE
+            + st.encode(body_keep=0, evidence_keep=0, drop_resolved=n)
+        )
+
+    resolved = sum(1 for f in st.findings if f.status != "open")
+    n = _fewest(resolved, lambda k: fits(dropping(k)))
+    if n is not None:
+        return dropping(n)
+
+    def unquoting(n: int) -> str:
+        return (
+            top
+            + _quotes_not_stored(n)
+            + st.encode(
+                body_keep=0, evidence_keep=0, drop_resolved=resolved, drop_quotes=n
+            )
+        )
+
+    quoted = sum(1 for f in st.findings if f.status == "open" and quote_stored(f))
+    n = _fewest(quoted, lambda k: fits(unquoting(k)))
+    if n is not None:
+        return unquoting(n)
+
+    def leaving(n: int) -> str:
+        return (
+            top
+            + _open_not_stored(n)
+            + st.encode(
+                body_keep=0,
+                evidence_keep=0,
+                drop_resolved=resolved,
+                drop_quotes=quoted,
+                drop_open=n,
+            )
+        )
+
+    n = _fewest(len(st.open_findings()), lambda k: fits(leaving(k)))
+    if n is not None:
+        return leaving(n)
+    return top[: COMMENT_LIMIT - len(STATE_NOT_STORED)] + STATE_NOT_STORED
+
+
+def _no_state_marker(text: str) -> str:
+    """The summary with the state marker's name made inert.
+
+    Finding titles and bodies come from the model, which reads the pull
+    request. Text that spelled out a state block would otherwise sit in the
+    same comment as the real one. The real block is appended after this and
+    is the last in the comment, which is the one `PRState.decode` reads; this
+    keeps the visible text from containing a second well-formed block at all."""
+    return text.replace(STATE_MARKER + ":", STATE_MARKER + "​:")
 
 
 def _details_block(

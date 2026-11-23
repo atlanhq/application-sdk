@@ -48,6 +48,9 @@ class Symbol:
     # "Type.name" per `.name()` call whose receiver's class is known at the
     # call site ("self.name" for self, cls and super()); see `_typed_calls`.
     typed_calls: list[str] = field(default_factory=list)
+    # Each call as written: "name" for `name()`, "a.b.name" for `a.b.name()`,
+    # "?.name" when the receiver is not a dotted name; see `_call_ref`.
+    call_refs: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -55,12 +58,13 @@ class ScopedCallers:
     """The callers of one symbol that its scope lets reach it by name, ranked
     as `callers_of` ranks them.
 
-    `local_to` is the outermost function the symbol is defined inside, when
+    `local_to` is the nearest function the symbol is defined inside, when
     it is nested: nothing outside that function can name it. `owner` is a
-    method's class. `unrelated` counts same-name calls from files that
-    neither define nor import a module-level symbol; `untyped` counts
-    `.name()` calls whose receiver the index cannot tie to the method's
-    class, so they may or may not be it."""
+    method's class. `unrelated` counts same-name calls that cannot be a
+    module-level symbol: from files that neither define nor import it, or on
+    a receiver that is not its module; `untyped` counts `.name()` calls whose
+    receiver the index cannot tie to the method's class (or a subclass that
+    inherits it), so they may or may not be it."""
 
     callers: list[Symbol]
     local_to: Symbol | None = None
@@ -105,13 +109,16 @@ class Index:
     def scoped_callers(self, sym: Symbol) -> ScopedCallers:
         """The callers of `sym` its scope allows, not every call of its bare name.
 
-        A nested function or class is reachable by name only inside its
-        outermost enclosing function. A module-level function or class is
-        reachable from its own file and from files that import it (under any
-        alias), its package, or its module. A method is reachable from any
-        instance, even of a local class, so a call counts only when its
-        receiver is tied to the class (see `_typed_calls`); every other
-        `.name()` call is counted as untyped, not listed."""
+        A nested function or class is reachable by name only inside the
+        function it is defined in (its nearest enclosing function). A
+        module-level function or class is reachable from its own file and from
+        files that import it (under any alias), its package, or its module: by
+        its bare name where that name is bound, or on a receiver that is its
+        module (`mod.name()`), never on any other receiver. A method is
+        reachable from any instance, even of a local class, so a call counts
+        only when its receiver is tied to the class or to a subclass that
+        inherits the method (see `_typed_calls`); every other `.name()` call
+        is counted as untyped, not listed."""
         named = [
             self.symbols[q]
             for q in self.callers.get(sym.name, [])
@@ -120,7 +127,7 @@ class Index:
         chain = self._parents(sym)
         if sym.kind == "method" and chain and chain[-1]:
             return self._method_callers(sym, chain[-1], named)
-        local_to = next((s for s in chain if s and s.kind != "class"), None)
+        local_to = next((s for s in reversed(chain) if s and s.kind != "class"), None)
         if local_to is not None:
             inside = [
                 c
@@ -131,7 +138,7 @@ class Index:
             return ScopedCallers(
                 _ranked(inside), local_to, unrelated=len(named) - len(inside)
             )
-        found = [c for c in named if c.path == sym.path or self._reaches(c.path, sym)]
+        found = [c for c in named if self._binds(c, sym)]
         unrelated = len(named) - len(found)
         found += [
             self.symbols[q]
@@ -149,6 +156,65 @@ class Index:
             self.symbols.get(f"{mod}:{'.'.join(parts[:i])}")
             for i in range(1, len(parts))
         ]
+
+    def _binds(self, c: Symbol, sym: Symbol) -> bool:
+        """True when one of `c`'s calls named like module-level `sym` can be
+        it: a bare `name()` where the file defines the name or imports it, or
+        `recv.name()` where `recv` is the module (or a package above it). A
+        call on any other receiver (`client.fetch()` in a file that imports
+        the module for something else) is a different function."""
+        refs = [r for r in c.call_refs if r.rpartition(".")[2] == sym.name]
+        if not refs:  # an index saved before call_refs existed: by file, as then
+            return c.path == sym.path or self._reaches(c.path, sym)
+        for ref in refs:
+            recv, _, _ = ref.rpartition(".")
+            if not recv:
+                if c.path == sym.path or self._imports_name(c.path, sym):
+                    return True
+            elif self._is_module(c.path, recv, sym):
+                return True
+        return False
+
+    def _imports_name(self, path: str, sym: Symbol) -> bool:
+        """True when `path` binds module-level `sym`'s bare name by an import
+        (`from m import name`, `from m import *`, or a package re-export)."""
+        for i in self.imports.get(path, []):
+            pkg, _, last = i.rpartition(".")
+            if last not in (sym.name, "*") or not pkg:
+                continue
+            if any(
+                m == pkg or m.startswith(pkg + ".") for m in _import_names(sym.path)
+            ):
+                return True
+        return False
+
+    def _is_module(self, path: str, recv: str, sym: Symbol) -> bool:
+        """True when the dotted receiver `recv` in `path` names `sym`'s module,
+        or a package above it, through an import of that file."""
+        head, _, rest = recv.partition(".")
+        tail = f".{rest}" if rest else ""
+        imports = self.imports.get(path, [])
+        full = {
+            *(
+                [self.aliases[path][head] + tail]
+                if head in self.aliases.get(path, {})
+                else []
+            ),
+            # `from pkg import mod` binds `mod`.
+            *(i + tail for i in imports if i.rpartition(".")[2] == head),
+            # `import pkg.mod` binds `pkg`, called as `pkg.mod.name()`.
+            *(
+                [recv]
+                if any(
+                    i == recv or i.startswith(recv + ".") or recv.startswith(i + ".")
+                    for i in imports
+                    if i.split(".")[0] == head
+                )
+                else []
+            ),
+        }
+        modules = _import_names(sym.path)
+        return any(f == m or m.startswith(f + ".") for f in full for m in modules)
 
     def _reaches(self, path: str, sym: Symbol) -> bool:
         """True when a file's imports can bring module-level `sym` into it."""
@@ -174,12 +240,21 @@ class Index:
     def _method_callers(
         self, sym: Symbol, owner: Symbol, named: list[Symbol]
     ) -> ScopedCallers:
-        local_class = any(s and s.kind != "class" for s in self._parents(owner))
+        # The owner and every subclass that inherits the method (one that
+        # overrides it dispatches to its own, and so do its subclasses).
+        classes = [owner, *self._inheritors(owner, sym.name)]
+        names = {k.name for k in classes}
+        quals = {k.qualname for k in classes}
 
         def class_names(path: str) -> set[str]:
-            if local_class:  # importable from nowhere: only its own file names it
-                return {owner.name} if path == sym.path else set()
-            return self._local_names(path, owner)
+            out: set[str] = set()
+            for k in classes:
+                if any(s and s.kind != "class" for s in self._parents(k)):
+                    # A local class is importable from nowhere: only its own file names it.
+                    out |= {k.name} if path == k.path else set()
+                else:
+                    out |= self._local_names(path, k)
+            return out
 
         def in_class(c: Symbol) -> bool:
             if (c.qualname + ".").startswith(owner.qualname + "."):
@@ -187,8 +262,12 @@ class Index:
             k = next(
                 (s for s in reversed(self._parents(c)) if s and s.kind == "class"), None
             )
-            bases = k.signature.partition("(")[2] if k else ""
-            return owner.name in re.findall(r"\w+", bases)
+            if k is None:
+                return False
+            bases = set(re.findall(r"\w+", k.signature.partition("(")[2]))
+            # The class itself by its qualified name: two functions can each
+            # define a `Local`, and the other one's `self.run()` is not a caller.
+            return k.qualname in quals or bool(bases & names)
 
         found = [
             c
@@ -199,6 +278,27 @@ class Index:
         return ScopedCallers(
             _ranked(found), owner=owner, untyped=len(named) - len(found)
         )
+
+    def _inheritors(self, owner: Symbol, method: str) -> list[Symbol]:
+        """Classes that inherit `owner`'s `method`: subclasses at any depth,
+        by bare base name as `in_class` matches them, short of one that
+        defines `method` itself (it and its own subclasses call that one)."""
+        out: list[Symbol] = []
+        seen = {owner.qualname}
+        todo = [owner.name]
+        while todo:
+            base = todo.pop()
+            for s in self.symbols.values():
+                if s.kind != "class" or s.qualname in seen:
+                    continue
+                if base not in re.findall(r"\w+", s.signature.partition("(")[2]):
+                    continue
+                seen.add(s.qualname)
+                if f"{s.qualname}.{method}" in self.symbols:
+                    continue  # overrides it
+                out.append(s)
+                todo.append(s.name)
+        return out
 
     def definitions(self, name: str, limit: int = 5) -> list[Symbol]:
         return [self.symbols[q] for q in self.by_name.get(name, [])[:limit]]
@@ -281,6 +381,27 @@ def _file_imports(rel: str, tree: ast.AST) -> tuple[list[str], dict[str, str]]:
             if a.asname and a.asname != a.name:
                 aliases[a.asname] = full
     return out, aliases
+
+
+def _dotted(node: ast.AST) -> str | None:
+    """`a.b.c` for a chain of names and attributes; None for anything else."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        inner = _dotted(node.value)
+        return f"{inner}.{node.attr}" if inner else None
+    return None
+
+
+def _call_ref(node: ast.AST) -> str | None:
+    """A call as written, receiver kept: "name", "a.b.name", or "?.name" when
+    the receiver is not a dotted name (`f().name()`, `x[0].name()`)."""
+    f = node.func if isinstance(node, ast.Call) else None
+    if isinstance(f, ast.Name):
+        return f.id
+    if isinstance(f, ast.Attribute):
+        return f"{_dotted(f.value) or '?'}.{f.attr}"
+    return None
 
 
 def _call_name(node: ast.AST) -> str | None:
@@ -429,6 +550,7 @@ def index_source(idx: Index, rel: str, source: str) -> None:
                         doc=doc,
                         calls=[n for n in map(_call_name, own) if n],
                         typed_calls=_typed_calls(child, nodes),
+                        call_refs=[r for r in map(_call_ref, own) if r],
                     )
                 )
                 visit(child, [*scope, child.name], isinstance(child, ast.ClassDef))
@@ -472,10 +594,18 @@ def _test_map(
             tree = ast.parse(text)
         except (SyntaxError, ValueError):
             continue
+        # A relative import (`from ..fetch import fetch`) is resolved against
+        # the test's own package, as `_file_imports` resolves it.
+        package = _module_name(p).split(".")
+        if not p.endswith("__init__.py"):
+            package = package[:-1]
         for node in ast.walk(tree):
             names: list[str] = []
-            if isinstance(node, ast.ImportFrom) and node.module:
-                names = [node.module, *(f"{node.module}.{a.name}" for a in node.names)]
+            if isinstance(node, ast.ImportFrom):
+                base = package[: len(package) - node.level + 1] if node.level else []
+                mod = ".".join([*base, *([node.module] if node.module else [])])
+                if mod:
+                    names = [mod, *(f"{mod}.{a.name}" for a in node.names)]
             elif isinstance(node, ast.Import):
                 names = [a.name for a in node.names]
             for n in names:

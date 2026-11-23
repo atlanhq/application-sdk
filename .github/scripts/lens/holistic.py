@@ -196,7 +196,7 @@ def check(
     client: Client,
     ws: Workspace,
     files: list[FileDiff],
-    pr_meta: dict,
+    pr_meta: dict[str, Any],
     *,
     max_input_tokens: int = 8000,
     max_lookups: int = 4,
@@ -212,7 +212,9 @@ def check(
     ]
     try:
         for turn in range(max_lookups + 1):
-            last = turn == max_lookups
+            # The final turn: the turns are used up, or the lookups are (one
+            # response can ask for several, so turns alone do not bound them).
+            last = turn == max_lookups or out.lookups >= max_lookups
             if last:
                 messages.append(
                     {
@@ -239,7 +241,7 @@ def check(
                     _parse_verdict(out, args, max_concerns)
                     out.ran = True
                     return out
-                if name in _LOOKUPS and not last:
+                if name in _LOOKUPS and not last and out.lookups < max_lookups:
                     out.lookups += 1
                     reply = run_tool(ws, name, args)
                     trace.line(
@@ -261,6 +263,8 @@ def check(
                         "content": "Call a lookup tool or approach_verdict.",
                     }
                 )
+            if last:
+                break
     except (BudgetExhausted, LLMError) as e:
         out.error = str(e)
     return out
