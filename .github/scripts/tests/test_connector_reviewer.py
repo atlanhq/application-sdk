@@ -290,15 +290,28 @@ def response(
     return 200, {"x-gateway-model-price": price}, json.dumps(body)
 
 
-def _is_approach(body: dict[str, Any]) -> bool:
+def _offers(body: dict[str, Any], tool: str) -> bool:
     # Chat tools nest the name under "function"; Responses tools are flat.
     tools: list[dict[str, Any]] = body.get("tools") or []
 
-    def name(tool: dict[str, Any]) -> Any:
-        fn: dict[str, Any] = tool.get("function") or {}
-        return tool.get("name") or fn.get("name")
+    def name(t: dict[str, Any]) -> Any:
+        fn: dict[str, Any] = t.get("function") or {}
+        return t.get("name") or fn.get("name")
 
-    return any(name(t) == "approach_verdict" for t in tools)
+    return any(name(t) == tool for t in tools)
+
+
+def _is_approach(body: dict[str, Any]) -> bool:
+    return _offers(body, "approach_verdict")
+
+
+def _is_skeptic(body: dict[str, Any]) -> bool:
+    return _offers(body, "skeptic_verdict")
+
+
+UPHELD = response(
+    [tool_call("skeptic_verdict", {"verdict": "upheld", "reason": "The code does it."})]
+)
 
 
 class Script:
@@ -306,15 +319,22 @@ class Script:
 
     The approach check runs concurrently with bundle reviews, so its call is
     routed to its own reply (`approach`) instead of the ordered queue — the
-    queue then scripts the bundle loop deterministically."""
+    queue then scripts the bundle loop deterministically. The skeptic pass
+    (one check per new blocking finding, in parallel) is routed the same way:
+    `skeptic` replies in order, then each further skeptic call is upheld. A
+    reply may be a callable taking the request body."""
 
-    def __init__(self, *responses: Any, approach: Any = None):
+    def __init__(
+        self, *responses: Any, approach: Any = None, skeptic: list[Any] | None = None
+    ):
         self.responses: list[Any] = list(responses)
         self.requests: list[dict[str, Any]] = []
         self.approach_requests: list[dict[str, Any]] = []
+        self.skeptic_requests: list[dict[str, Any]] = []
         self.approach: Any = approach or response(
             [tool_call("approach_verdict", {"verdict": "sound"})]
         )
+        self.skeptic: list[Any] = list(skeptic or [])
 
     def __call__(self, body: dict[str, Any]) -> Any:
         snap = json.loads(
@@ -323,6 +343,10 @@ class Script:
         if _is_approach(body):
             self.approach_requests.append(snap)
             return self.approach
+        if _is_skeptic(body):
+            self.skeptic_requests.append(snap)
+            r = self.skeptic.pop(0) if self.skeptic else UPHELD
+            return r(body) if callable(r) else r
         self.requests.append(snap)
         if not self.responses:
             return response([tool_call("task_done", {"state": "DONE"})])
@@ -1585,9 +1609,10 @@ def test_first_round_puts_every_finding_in_the_summary_and_opens_no_thread(repo:
     link = "https://github.com/o/r/blob/h1/app/storage/fetch.py#L4"
     assert f"[`app/storage/fetch.py:4`]({link})" in body
     st = decode_state(body)
-    # review + reflect + approach, each booked at the cost LiteLLM reported.
-    assert st and st.round == 1 and st.ledger["calls"] == 3
-    assert st.ledger["spent_usd"] == pytest.approx(0.006)
+    # review + reflect + approach + the skeptic check of the one new high finding,
+    # each booked at the cost LiteLLM reported.
+    assert st and st.round == 1 and st.ledger["calls"] == 4
+    assert st.ledger["spent_usd"] == pytest.approx(0.008)
     assert st.findings[0].suggestion  # kept: the next round's summary still shows it
 
 
@@ -3846,11 +3871,13 @@ def test_every_request_is_recorded_with_counts_only_and_reported(
         client_factory=factory,
     )
     # The approach check runs alongside the line review on a client of its own;
-    # its requests are listed after the line review's.
+    # its requests are listed after the line review's, and the skeptic check of
+    # the new high finding (its own client too) last.
     assert [c["stage"].split(":")[0] for c in res.calls] == [
         "review",
         "reflect",
         "approach",
+        "skeptic",
     ]
     for c in res.calls:
         assert {
@@ -3866,7 +3893,7 @@ def test_every_request_is_recorded_with_counts_only_and_reported(
         assert not any(
             isinstance(v, str) and len(v) > 200 for v in c.values()
         )  # no prompt or code text
-    assert len(logged) == 3 and all(
+    assert len(logged) == 4 and all(
         line.startswith("connector-reviewer: call") for line in logged
     )
     assert set(res.timings_ms) >= {
@@ -3879,9 +3906,14 @@ def test_every_request_is_recorded_with_counts_only_and_reported(
     }
 
     rep = report.write(res, 1, str(tmp_path / "run.json"), str(tmp_path / "summary.md"))
-    assert rep["totals"]["requests"] == 3 and rep["totals"][
+    assert rep["totals"]["requests"] == 4 and rep["totals"][
         "cost_usd"
-    ] == pytest.approx(0.006)
+    ] == pytest.approx(0.008)
+    assert rep["skeptic"]["counts"]["upheld"] == 1
+    assert (
+        "**Skeptic (new blocking findings):** upheld 1"
+        in (tmp_path / "summary.md").read_text()
+    )
     assert (
         rep["bundles"][0]["stop"] == "done"
         and rep["new_findings"][0]["severity"] == "high"
@@ -9197,8 +9229,9 @@ def test_the_approach_check_runs_alongside_the_line_review(repo: Path):
     assert seen_in_time == [True]
     assert state_of(res).approach.get("verdict") == "sound"
     assert "approach" in res.timings_ms
-    # Its own ledger is carved out of the round's and booked into the PR's.
-    assert state_of(res).ledger["calls"] == 3
+    # Its own ledger is carved out of the round's and booked into the PR's
+    # (with the skeptic check of the new high finding).
+    assert state_of(res).ledger["calls"] == 4
     assert (
         gh.statuses[-1]["state"] == "failure"
     )  # the finding, not the approach, decides
@@ -10352,6 +10385,472 @@ def test_a_facts_value_of_the_wrong_type_is_refused(tmp_path: Path):
     assert cfg.facts.history is False and cfg.facts.history_days == 14
     assert cfg.load_errors == []
     assert not any(e.startswith("facts.") for e in validate(cfg))
+
+
+# ---- the skeptic pass on new blocking findings (FND-5332) -------------------------------------------
+
+
+def _refuted(
+    quote: str = "    data = client.get(key)",
+    path: str = "app/storage/fetch.py",
+    reason: str = "client.get raises KeyError | never returns None for a missing key.",
+) -> Any:
+    return response(
+        [
+            tool_call(
+                "skeptic_verdict",
+                {
+                    "verdict": "refuted",
+                    "reason": reason,
+                    # A wrong line: the location recorded is where the quote is found.
+                    "evidence": [{"path": path, "line": 99, "quote": quote}],
+                },
+            )
+        ]
+    )
+
+
+def _skeptic_run(
+    repo: Path, script: Script, cfg: Config | None = None
+) -> tuple[RunResult, Any]:
+    gh = fake_github()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg or cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    return res, gh
+
+
+def _sent(request: dict[str, Any]) -> str:
+    return json.dumps(request)
+
+
+def _two_comments(*comments: dict[str, Any]) -> Script:
+    return Script(
+        response(
+            [
+                tool_call("code_comment", {"comments": list(comments)}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+
+
+def test_an_upheld_finding_still_blocks(repo: Path):
+    script = _review_script()
+    res, gh = _skeptic_run(repo, script)
+
+    # One independent call, with the finding, its quoted code and its file, and
+    # only the read-only tools plus the verdict: it cannot comment or finish a review.
+    [req] = script.skeptic_requests
+    sent = _sent(req)
+    assert "decode() on a None result" in sent
+    assert "return data.decode()" in sent
+    assert "app/storage/fetch.py:4" in sent
+    assert req.get("prompt_cache_key") == "connector-reviewer-skeptic"
+    offered = cast(list[dict[str, Any]], req["tools"])
+    fns = [cast(dict[str, Any], t.get("function") or {}) for t in offered]
+    tools = {t.get("name") or fn.get("name") for t, fn in zip(offered, fns)}
+    assert tools == {
+        "find_symbol",
+        "search_code",
+        "read_file",
+        "read_diff",
+        "skeptic_verdict",
+    }
+
+    [f] = state_of(res).findings
+    assert f.severity == "high" and f.contested == ""
+    [o] = res.skeptic
+    assert (o.finding_id, o.outcome) == (f.id, "upheld")
+    assert "Changes requested" in gh.comments[0]["body"]
+    assert gh.statuses[-1]["state"] == "failure"
+    assert "blocking" in gh.statuses[-1]["description"]
+    assert "skeptic" in res.timings_ms
+
+
+def test_a_refuted_finding_drops_to_medium_and_is_contested_not_deleted(
+    repo: Path, tmp_path: Path
+):
+    script = _review_script()
+    script.skeptic = [_refuted()]
+    res, gh = _skeptic_run(repo, script)
+
+    assert len(script.skeptic_requests) == 1
+    st = state_of(res)
+    [f] = st.findings
+    assert f.status == "open" and f.severity == "medium"  # kept: a person can act on it
+    assert f.contested.startswith("client.get raises KeyError")
+    assert "|" not in f.contested  # the reason cannot break a table cell
+    assert st.open_findings(("critical", "high")) == []
+    [o] = res.skeptic
+    assert o.outcome == "refuted" and o.evidence == ["app/storage/fetch.py:3"]
+
+    body = gh.comments[0]["body"]
+    assert "Changes requested" not in body
+    assert "Not ready to merge" in body  # an open medium still is not green
+    assert f"⚖️ contested — {f.contested}" in body
+    assert "**⚖️ Contested:**" in body
+    status = gh.statuses[-1]
+    assert status["state"] == "failure" and "blocking" not in status["description"]
+    assert decode_state(body).findings[0].contested == f.contested  # it is stored
+
+    rep = report_mod.write(res, 1, str(tmp_path / "run.json"), None)
+    assert rep["skeptic"]["counts"]["refuted"] == 1
+    assert rep["skeptic"]["checks"][0]["evidence"] == ["app/storage/fetch.py:3"]
+    assert "data = client.get(key)" not in (tmp_path / "run.json").read_text()
+
+
+def _no_verdict_turns(n: int) -> list[Any]:
+    return [response(content="thinking") for _ in range(n)]
+
+
+@pytest.mark.parametrize(
+    "replies, outcome",
+    [
+        ([(400, {}, "bad request")], "error"),  # the call failed
+        (
+            [response([tool_call("skeptic_verdict", {"verdict": "maybe"})])],
+            "malformed",
+        ),
+        (  # refuted, but the quote is not in the file
+            [_refuted(quote="    if data is None:\n        return None")],
+            "malformed",
+        ),
+        (  # refuted, with no evidence at all
+            [
+                response(
+                    [
+                        tool_call(
+                            "skeptic_verdict",
+                            {"verdict": "refuted", "reason": "It is fine."},
+                        )
+                    ]
+                )
+            ],
+            "malformed",
+        ),
+        ([_refuted(path="../../etc/passwd")], "malformed"),  # not a repository file
+        ([_refuted(quote="return")], "malformed"),  # too short to prove anything
+        (_no_verdict_turns(4), "malformed"),  # max_lookups + 1 turns, no verdict
+    ],
+    ids=[
+        "llm-error",
+        "bad-verdict",
+        "quote-not-in-file",
+        "no-evidence",
+        "outside-repo",
+        "quote-too-short",
+        "no-verdict",
+    ],
+)
+def test_a_skeptic_that_cannot_refute_keeps_the_severity(
+    repo: Path, replies: list[Any], outcome: str
+):
+    script = _review_script()
+    script.skeptic = list(replies)
+    res, gh = _skeptic_run(repo, script)
+
+    [f] = state_of(res).findings
+    assert f.severity == "high" and f.contested == ""
+    [o] = res.skeptic
+    assert o.outcome == outcome
+    body = gh.comments[0]["body"]
+    assert "Changes requested" in body and "contested" not in body
+    assert not res.incomplete  # a skeptic failure never makes the review incomplete
+
+
+def test_a_skeptic_that_cannot_reserve_its_call_keeps_the_severity(repo: Path):
+    cfg = cfg_for(repo)
+    # One call's worst case is now past the skeptic's whole share: it is never sent.
+    cfg.skeptic.max_tokens = 100_000
+    script = _review_script()
+    script.skeptic = [_refuted()]
+    res, _ = _skeptic_run(repo, script, cfg)
+
+    assert script.skeptic_requests == []
+    [f] = state_of(res).findings
+    assert f.severity == "high" and f.contested == ""
+    [o] = res.skeptic
+    assert o.outcome == "budget"
+
+
+def test_the_skeptic_spends_its_own_share_and_is_booked(repo: Path):
+    res, _ = _skeptic_run(repo, _review_script())
+    st = state_of(res)
+    assert st.ledger["by_stage"]["skeptic"] > 0
+    assert st.history[-1]["calls"] == 4  # review, reflect, approach, skeptic
+
+
+def test_the_skeptic_can_be_turned_off(repo: Path):
+    cfg = cfg_for(repo)
+    cfg.skeptic.enabled = False
+    script = _review_script()
+    script.skeptic = [_refuted()]
+    res, gh = _skeptic_run(repo, script, cfg)
+
+    assert script.skeptic_requests == [] and res.skeptic == []
+    assert state_of(res).findings[0].severity == "high"
+    assert "Changes requested" in gh.comments[0]["body"]
+
+
+def test_only_new_critical_and_high_findings_are_checked(repo: Path):
+    medium = dict(
+        COMMENT,
+        existing_code="    data = client.get(key)",
+        severity="medium",
+        title="a medium finding",
+    )
+    script = _two_comments(COMMENT, medium)
+    res, _ = _skeptic_run(repo, script)
+
+    assert sorted(f.severity for f in state_of(res).findings) == ["high", "medium"]
+    [req] = script.skeptic_requests
+    assert "decode() on a None result" in _sent(req)
+    assert "a medium finding" not in _sent(req)
+    assert [o.severity for o in res.skeptic] == ["high"]
+
+
+def test_a_round_with_only_low_findings_makes_no_skeptic_call(repo: Path):
+    script = _two_comments(dict(COMMENT, severity="low"))
+    res, _ = _skeptic_run(repo, script)
+    assert state_of(res).findings and script.skeptic_requests == []
+    assert res.skeptic == []
+
+
+def test_findings_carried_over_from_an_earlier_round_are_never_re_checked(repo: Path):
+    gh = fake_github()
+    principles = principles_of(repo)
+    first = _review_script()
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles,
+        client_factory=_factory(first),
+    )
+    assert len(first.skeptic_requests) == 1
+    old_id = decode_state(gh.comments[0]["body"]).findings[0].id
+
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = gh.diffs[("b0", "h1")]
+    gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
+    gh.files[("app/storage/fetch.py", "h2")] = SRC_V2_NEXT
+    new_high = dict(
+        COMMENT,
+        existing_code="    data = client.get(key)",
+        title="a new high finding",
+    )
+    second = Script(
+        response([tool_call("verdicts", {"items": []})]),  # verify: still open
+        response(
+            [
+                # The round-1 finding raised again (a known id), and a new one.
+                tool_call("code_comment", {"comments": [COMMENT, new_high]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    second.skeptic = [_refuted(reason="refuted"), _refuted(reason="refuted")]
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles,
+        client_factory=_factory(second),
+    )
+    [req] = second.skeptic_requests
+    assert "a new high finding" in _sent(req)
+    assert old_id not in [o.finding_id for o in res.skeptic]
+    by_id = {f.id: f for f in state_of(res).findings}
+    assert by_id[old_id].severity == "high" and by_id[old_id].contested == ""
+
+
+def test_checks_past_the_per_round_cap_keep_their_severity(repo: Path):
+    cfg = cfg_for(repo)
+    cfg.skeptic.max_findings = 1
+    second = dict(
+        COMMENT, existing_code="    data = client.get(key)", title="second high"
+    )
+    script = _two_comments(COMMENT, second)
+    script.skeptic = [_refuted()]
+    res, _ = _skeptic_run(repo, script, cfg)
+
+    assert len(script.skeptic_requests) == 1
+    assert sorted(o.outcome for o in res.skeptic) == ["refuted", "skipped"]
+    ids = {o.outcome: o.finding_id for o in res.skeptic}
+    by_id = {f.id: f for f in state_of(res).findings}
+    assert by_id[ids["skipped"]].severity == "high"
+    assert by_id[ids["refuted"]].severity == "medium"
+
+
+def test_the_skeptic_may_look_up_code_before_it_answers(repo: Path):
+    script = _review_script()
+    script.skeptic = [
+        response(
+            [
+                tool_call(
+                    "read_file", {"file_path": "app/storage/fetch.py", "start_line": 1}
+                )
+            ]
+        ),
+        _refuted(),
+    ]
+    res, _ = _skeptic_run(repo, script)
+    assert len(script.skeptic_requests) == 2
+    assert "def load_all" in _sent(script.skeptic_requests[1])  # what it read
+    [o] = res.skeptic
+    assert (o.outcome, o.lookups) == ("refuted", 1)
+
+
+def _lookups(n: int) -> Any:
+    """One response that asks for `n` lookups at once."""
+    return response(
+        [tool_call("search_code", {"search_text": f"term{i}"}, i) for i in range(n)]
+    )
+
+
+def _tool_replies(request: dict[str, Any]) -> list[str]:
+    msgs = cast(list[dict[str, Any]], request["messages"])
+    return [str(m.get("content")) for m in msgs if m.get("role") == "tool"]
+
+
+def test_skeptic_lookups_are_capped_per_call_not_per_turn(repo: Path):
+    """F-468537: one response asking for four lookups under max_lookups=3 used
+    to run all four. Only three run; the fourth is answered "lookup limit
+    reached", and the next turn is the final one."""
+    cfg = cfg_for(repo)
+    cfg.skeptic.max_lookups = 3
+    script = _review_script()
+    script.skeptic = [_lookups(4)]  # then upheld
+    res, _ = _skeptic_run(repo, script, cfg)
+
+    [o] = res.skeptic
+    assert (o.outcome, o.lookups) == ("upheld", 3)
+    assert len(script.skeptic_requests) == 2
+    final = script.skeptic_requests[1]
+    replies = _tool_replies(final)
+    assert len(replies) == 4
+    assert replies[-1] == "Lookup limit reached: call skeptic_verdict."
+    assert not any("Lookup limit reached" in r for r in replies[:3])
+    msgs = cast(list[dict[str, Any]], final["messages"])
+    assert msgs[-1]["content"] == "Lookups are exhausted: call skeptic_verdict now."
+
+
+def test_skeptic_stops_after_the_forced_turn_once_lookups_are_spent(repo: Path):
+    """Two lookups per response under max_lookups=3: two run, then one (and one
+    is refused), then the final turn. A skeptic that still gives no verdict is
+    not asked again, and the finding keeps its severity."""
+    cfg = cfg_for(repo)
+    cfg.skeptic.max_lookups = 3
+    script = _review_script()
+    script.skeptic = [_lookups(2) for _ in range(5)]  # never volunteers a verdict
+    res, _ = _skeptic_run(repo, script, cfg)
+
+    [o] = res.skeptic
+    assert (o.outcome, o.lookups) == ("malformed", 3)
+    assert o.error == "no verdict returned"
+    assert len(script.skeptic_requests) == 3
+    msgs = cast(list[dict[str, Any]], script.skeptic_requests[-1]["messages"])
+    assert msgs[-1]["content"] == "Lookups are exhausted: call skeptic_verdict now."
+    assert state_of(res).findings[0].severity == "high"
+
+
+@pytest.mark.parametrize("reason", ["", "   \n "], ids=["empty", "blank"])
+def test_a_refutation_without_a_reason_keeps_the_severity(repo: Path, reason: str):
+    """F-3cdd62: the quote is valid and in the file, so only the missing reason
+    rejects the refutation."""
+    script = _review_script()
+    script.skeptic = [_refuted(reason=reason)]
+    res, gh = _skeptic_run(repo, script)
+
+    [f] = state_of(res).findings
+    assert f.severity == "high" and f.contested == ""
+    [o] = res.skeptic
+    assert (o.outcome, o.error) == ("malformed", "refuted without a reason")
+    assert "Changes requested" in gh.comments[0]["body"]
+
+
+def test_gate_and_closed_findings_are_not_skeptic_candidates():
+    from connector_reviewer import skeptic  # noqa: PLC0415 - module under test
+
+    llm = Finding("a.py", 1, "high", "bug", "t", "b", "x")
+    gate = Finding("a.py", 2, "critical", "bug", "t", "b", "y", origin="gate")
+    fixed = Finding("a.py", 3, "high", "bug", "t", "b", "z", status="fixed")
+    medium = Finding("a.py", 4, "medium", "bug", "t", "b", "w")
+    assert skeptic.candidates([llm, gate, fixed, medium]) == [llm]
+
+
+def test_old_state_without_the_contested_field_still_decodes():
+    import base64  # noqa: PLC0415
+    import zlib  # noqa: PLC0415
+
+    st = PRState(round=1, findings=[Finding("a.py", 1, "high", "bug", "t", "b", "x")])
+    payload = st.encode().split(":", 1)[1].split(" ")[0]
+    raw = json.loads(zlib.decompress(base64.b64decode(payload)))
+    for f in raw["findings"]:
+        f.pop("contested")  # as a reviewer before FND-5332 wrote it
+    packed = base64.b64encode(zlib.compress(json.dumps(raw).encode())).decode()
+    decoded = decode_state(f"<!-- {findings_mod.STATE_MARKER}:{packed} -->")
+    assert decoded.findings[0].contested == ""
+    assert decoded.findings[0].severity == "high"
+
+
+def test_shipped_config_turns_the_skeptic_on_with_bounded_calls():
+    cfg = load_config(Path(__file__).resolve().parents[2] / "connector-reviewer")
+    assert cfg.skeptic.enabled is True
+    assert 0 <= cfg.skeptic.max_lookups <= 4
+    assert cfg.skeptic.max_tokens <= 16_000
+    assert 1 <= cfg.skeptic.max_findings <= 8
+
+
+@pytest.mark.parametrize(
+    "table, error",
+    [
+        ('enabled = "false"', "skeptic.enabled must be true or false"),
+        ("enabled = 0", "skeptic.enabled must be true or false"),
+        ("max_lookups = true", "skeptic.max_lookups must be a whole number"),
+        ("max_tokens = 8000.0", "skeptic.max_tokens must be a whole number"),
+        ('max_findings = "6"', "skeptic.max_findings must be a whole number"),
+        ("max_lookups = -1", "skeptic.max_lookups must be at least 0"),
+        ("max_tokens = 10", "skeptic.max_tokens must be at least 1000"),
+        ("enable = false", "skeptic.enable is not a known key"),
+    ],
+)
+def test_the_skeptic_table_is_validated_strictly(
+    tmp_path: Path, table: str, error: str
+):
+    (tmp_path / "config.toml").write_text(
+        "[model.price]\ninput_per_mtok = 1.0\noutput_per_mtok = 4.0\n\n"
+        f"[skeptic]\n{table}\n"
+    )
+    cfg = load_config(tmp_path)
+    errs = validate(cfg)
+    assert any(error in e for e in errs), errs
+    assert cfg.skeptic.enabled is True  # a bad value keeps the default
+
+
+def test_the_skeptic_table_loads_good_values(tmp_path: Path):
+    (tmp_path / "config.toml").write_text(
+        "[model.price]\ninput_per_mtok = 1.0\noutput_per_mtok = 4.0\n\n"
+        "[skeptic]\nenabled = false\nmax_lookups = 0\nmax_tokens = 4000\nmax_findings = 2\n"
+    )
+    cfg = load_config(tmp_path)
+    assert validate(cfg) == []
+    assert (
+        cfg.skeptic.enabled,
+        cfg.skeptic.max_lookups,
+        cfg.skeptic.max_tokens,
+        cfg.skeptic.max_findings,
+    ) == (False, 0, 4000, 2)
 
 
 # ---- the SDK source at the version the app pins (FND-5331) ------------------------------------
