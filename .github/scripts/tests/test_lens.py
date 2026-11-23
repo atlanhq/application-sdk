@@ -3109,6 +3109,29 @@ MERGED_DIFF = (
 )
 
 
+def test_after_a_merge_an_authors_pure_deletion_keeps_its_hunk():
+    """lens F-bee981: after a base merge the range is filtered to the PR's own
+    change. A hunk with only removed lines must survive when the PR's own diff
+    removes them too (the author's deletion), and still drop when only the merge
+    removed them."""
+    pr = parse_unified_diff(
+        "diff --git a/m.py b/m.py\n--- a/m.py\n+++ b/m.py\n"
+        "@@ -1,4 +1,3 @@\n keep_a\n-    guard()\n keep_b\n keep_c\n"
+    )
+    merged_range = parse_unified_diff(
+        "diff --git a/m.py b/m.py\n--- a/m.py\n+++ b/m.py\n"
+        "@@ -1,4 +1,3 @@\n keep_a\n-    guard()\n keep_b\n keep_c\n"
+        "@@ -20,3 +19,2 @@\n other\n-    base_only_removed()\n tail\n"
+    )
+    kept, dropped, _ = review_mod.only_pr_changes(merged_range, pr)
+    assert dropped == []
+    [fd] = kept
+    removed = [ln.text for h in fd.hunks for ln in h.lines if ln.kind == "-"]
+    assert removed == ["    guard()"], (
+        "the author's deletion stays; the merge's does not"
+    )
+
+
 def _merge_main_into_round_two(
     gh: FakeGitHub, range_diff: str = MERGED_DIFF, pr_diff: str = PR_DIFF
 ) -> None:

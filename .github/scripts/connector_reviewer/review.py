@@ -25,6 +25,7 @@ import json
 import re
 import time
 import urllib.parse
+from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -190,6 +191,12 @@ def only_pr_changes(
             dropped.append(fd.path)
             continue
         own_added = own.added_lines
+        # A removed line is the author's when the PR's own diff removes the same
+        # text from this file: old-side numbers differ between the two diffs, so
+        # text is the stable key. A deletion only the merge brought in is not.
+        own_removed = Counter(
+            ln.text for h in own.hunks for ln in h.lines if ln.kind == "-"
+        )
         hunks: list[Hunk] = []
         for h in fd.hunks:
             lines: list[Line] = []
@@ -203,6 +210,9 @@ def only_pr_changes(
                 else:
                     lines.append(ln)
                     mine = mine or ln.kind == "+"
+                    if ln.kind == "-" and own_removed[ln.text] > 0:
+                        own_removed[ln.text] -= 1
+                        mine = True  # an author's deletion, even with nothing added
             if mine:
                 hunks.append(
                     Hunk(
