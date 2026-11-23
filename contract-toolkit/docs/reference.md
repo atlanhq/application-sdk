@@ -2475,7 +2475,7 @@ the frontend renderer shape.
 
 ## Connectors.pkl — Connector Registry
 
-162 connector constants. Each has `value` (string identifier) and `category`.
+163 connector constants. Each has `value` (string identifier) and `category`.
 
 The registry is a hand copy of pyatlan's `AtlanConnectorType`. In CI,
 `scripts/test-sdk-import.py` compares it with the pyatlan the SDK locks: every
