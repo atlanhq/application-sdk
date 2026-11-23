@@ -634,7 +634,7 @@ async def count_assets_by_guid(
         )
         request.dsl.size = 0  # cheap response: only .count matters
         total = int((await client.asset.search(request)).count)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 — _unreadable reports the failure as a typed Settled result
         return _unreadable(label, started, error)
     name, attempts, elapsed = _one_shot(label, started)
     return Settled(label=name, attempts=attempts, elapsed=elapsed, value=total)
