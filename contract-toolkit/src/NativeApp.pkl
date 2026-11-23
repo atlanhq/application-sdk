@@ -3414,7 +3414,14 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     "        try:\n" +
     "            parsed = orjson.loads(stripped)\n" +
     "        except orjson.JSONDecodeError:\n" +
-    "            parsed = None\n" +
+    // Log the error, never the value: it may hold connection names.
+    // DEBUG because saved configs really do hold non-JSON values like
+    // "false"; exc_info keeps the trace without the raw string.
+    "            logger.debug(\n" +
+    "                \"String-map input was not valid JSON; using an empty map.\",\n" +
+    "                exc_info=True,\n" +
+    "            )\n" +
+    "            return {}\n" +
     "        if isinstance(parsed, dict):\n" +
     "            return parsed\n" +
     "        logger.debug(\"String-map input was not a JSON object; using an empty map.\")\n" +
