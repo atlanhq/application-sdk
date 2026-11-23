@@ -108,9 +108,9 @@ async def read_json_object(request: Request) -> dict[str, Any]:
         body = await request.json()
     except ValueError as exc:
         # ValueError, not Exception: json.JSONDecodeError is a ValueError, while
-        # the body-size cap signals with a bare Exception subclass from inside
-        # the ASGI receive. Catching broadly swallowed that signal and answered
-        # 422 for an oversize body that must be a 413.
+        # the body-size cap (object_routes.RequestBodyLimitMiddleware) signals
+        # with RequestBodyTooLargeError, which is not a ValueError, from inside
+        # the ASGI receive. It must propagate: the middleware answers 413.
         raise RequestContractError(message="Request body is not valid JSON.") from exc
     if not isinstance(body, dict):
         raise RequestContractError(
