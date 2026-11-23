@@ -18,7 +18,8 @@ here is a proof, not a heuristic guess:
 - **Mechanical rename**: every changed line differs from its old version
   only by token swaps of names drawn from one small set that recurs across
   files (`get_x → fetch_x` in 35 files). Reviewed as one line, not 35 files.
-  A keyword or a literal (`False → True`) is never a rename.
+  A keyword or a literal (`False → True`, `"safe" → "unsafe"`) is never a
+  rename.
 - **Duplicate hunk**: the identical hunk (header, context and changed lines)
   in several files is reviewed once, in the first file; the rest are listed
   as "same change".
@@ -38,7 +39,11 @@ from dataclasses import dataclass, field
 
 from .diff import FileDiff, Hunk
 
-_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\d+|\S")
+# A quoted string is one token: a word inside it is a value (`"safe"` ->
+# `"unsafe"`), and a swap of a whole literal is never a rename.
+_TOKEN = re.compile(
+    r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'|[A-Za-z_][A-Za-z0-9_]*|\d+|\S'
+)
 _IMPORT = re.compile(r"^\s*(import\s+\S|from\s+\S+\s+import\s)")
 _IMPORT_OPEN = re.compile(r"from\s+\S+\s+import\s*\(\s*(#.*)?")
 # Files whose leading indentation is syntax.

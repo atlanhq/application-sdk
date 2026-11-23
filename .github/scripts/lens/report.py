@@ -53,7 +53,7 @@ def build(res: RunResult) -> dict[str, Any]:
         "mode": res.mode,
         "mode_label": res.mode_label,
         "head": res.head,
-        "incomplete": res.incomplete,
+        "incomplete": [redact(r) for r in res.incomplete],
         "notes": res.notes,
         "timings_ms": res.timings_ms,
         "ledger": led,

@@ -8229,3 +8229,253 @@ def test_a_split_file_past_the_bundle_cap_is_named_once():
     assert res.skipped_files == [
         (path, "bundle cap (lowest-risk code, after re-packing)")
     ]
+
+
+# ---- FND-5323 round 2: lens's review of the fixes ----------------------------
+
+
+def _wide_state(open_n: int, resolved_n: int, quote: int = 1500) -> PRState:
+    """Open findings whose quote is ONE long line of noise: the first-line rule
+    keeps it whole at evidence_keep=0, so only leaving quotes out can fit it."""
+    import random  # noqa: PLC0415
+
+    rnd = random.Random(11)
+    fs: list[Finding] = []
+    for i in range(open_n + resolved_n):
+        f = Finding(
+            f"application_sdk/w{i % 7}/f{i}.py",
+            i + 1,
+            "medium",
+            "bug",
+            _noise(rnd, 100),
+            _noise(rnd, 600),
+            f"    blob_{i} = '{_noise(rnd, quote + i)}'",
+        )
+        if i >= open_n:
+            f.status, f.fixed_round, f.fixed_by = "fixed", 2, "verified"
+        fs.append(f)
+    return PRState(round=3, findings=fs, ledger={"spent_usd": 0.5, "cap_usd": 1.0})
+
+
+@pytest.mark.parametrize("resolved_n", [0, 40])
+def test_open_findings_whose_first_lines_alone_are_too_big_fit_without_quotes(
+    resolved_n: int,
+):
+    """F-3f3e23 / F-ad2f66: with only open findings left, a long first line was
+    kept even at evidence_keep=0, and the over-limit body was returned unchecked.
+    The largest quotes are left out, the fewest that fit; every id stays."""
+    st = _wide_state(80, resolved_n)
+    floor = st.encode(body_keep=0, evidence_keep=0, drop_resolved=resolved_n)
+    assert len(floor) > review_mod.COMMENT_LIMIT  # the real case
+    body = render_summary(RunResult("reviewed", mode="full", state=st))
+    assert len(body) <= review_mod.COMMENT_LIMIT
+    assert "stored without their quoted code" in body
+    back = PRState.decode(body)
+    assert back is not None
+    opened = [f for f in st.findings if f.status == "open"]
+    assert [f.id for f in back.findings] == [f.id for f in opened]
+    assert back.ledger == st.ledger and back.round == 3
+    kept = {f.id: f.evidence for f in back.findings}
+    dropped = [f for f in opened if not kept[f.id]]
+    assert 0 < len(dropped) < len(opened)
+    # The largest quotes go first; the rest are whole, so they still match.
+    assert min(len(f.evidence) for f in dropped) >= max(
+        len(f.evidence) for f in opened if kept[f.id]
+    )
+    assert all(kept[f.id] == f.evidence for f in opened if kept[f.id])
+
+
+def test_too_many_open_findings_even_without_quotes_leave_the_lowest_first():
+    """The last stage before no state at all: the fewest open findings are left
+    out, lowest severity and newest first, and the summary says how many."""
+    import random  # noqa: PLC0415
+
+    rnd = random.Random(5)
+    fs = [
+        Finding(
+            f"application_sdk/{_noise(rnd, 60)}.py",
+            i + 1,
+            "critical" if i < 40 else "low",
+            "bug",
+            _noise(rnd, 120),
+            "",
+            f"    x_{i} = {_noise(rnd, 400)}",
+        )
+        for i in range(900)
+    ]
+    st = PRState(round=2, findings=fs, ledger={"spent_usd": 0.1, "cap_usd": 1.0})
+    assert (
+        len(st.encode(body_keep=0, evidence_keep=0, drop_quotes=len(fs)))
+        > review_mod.COMMENT_LIMIT
+    )
+    body = render_summary(RunResult("reviewed", mode="full", state=st))
+    assert len(body) <= review_mod.COMMENT_LIMIT
+    assert "could not be stored" in body
+    back = PRState.decode(body)
+    assert back is not None and back.ledger == st.ledger
+    ids = {f.id for f in back.findings}
+    assert 0 < len(ids) < len(fs)
+    assert {f.id for f in fs if f.severity == "critical"} <= ids
+
+
+def test_a_state_too_large_with_no_finding_still_gives_a_comment_github_accepts():
+    """Every path returns a body within the limit: past every cut, the summary
+    goes without a state block (the next round starts afresh) rather than being
+    refused and leaving the previous state in place."""
+    import random  # noqa: PLC0415
+
+    rnd = random.Random(3)
+    st = PRState(round=2, pending_files=[_noise(rnd, 200) for _ in range(500)])
+    body = render_summary(RunResult("reviewed", mode="full", state=st))
+    assert len(body) <= review_mod.COMMENT_LIMIT
+    assert PRState.decode(body) is None
+    assert review_mod.STATE_NOT_STORED in body
+
+
+def test_an_open_finding_stored_without_its_quote_is_not_resolved_for_free(
+    repo: Path,
+):
+    """An empty quote proves nothing about the code: a round that touches its
+    file leaves it open for verify, instead of resolving it as code-gone."""
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    run(
+        gh=cast(GitHub, gh),
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    body = gh.comments[0]["body"]
+    st = PRState.decode(body)
+    assert st is not None and st.findings[0].evidence
+    st.findings[0].evidence = ""
+    gh.comments[0]["body"] = (
+        body.rsplit(f"<!-- {findings_mod.STATE_MARKER}:", 1)[0] + st.encode()
+    )
+    fixed = SRC_V2.replace(
+        "    return data.decode()",
+        "    return data.decode() if data is not None else None",
+    )
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = (
+        "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
+        "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+        "@@ -4 +4 @@\n-    return data.decode()\n+    return data.decode() if data is not None else None\n"
+    )
+    gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = fixed
+    res = run(
+        gh=cast(GitHub, gh),
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(Script()),
+    )
+    assert res.resolved_free == []
+    assert res.state is not None
+    assert res.state.findings[0].status == "open"
+
+
+def test_verify_is_told_a_missing_quote_was_not_stored_not_that_the_code_is_gone():
+    f = Finding("a.py", 1, "low", "bug", "t", "b", "")
+    assert "not stored" in review_mod._quote_gone(f)
+    f.evidence = "x = 1"
+    assert review_mod._quote_gone(f) == "(the quoted code is not in this file any more)"
+
+
+def test_a_malformed_200_settles_its_hold_and_is_retried():
+    """F-74df6d: a 200 whose body was not JSON raised before anything was booked,
+    and `complete` released the hold: a billed response went missing from the
+    ledger. It is settled at its worst case, counted failed, and retried."""
+    led = Ledger(cap_usd=1)
+    sent = Script(
+        (200, {"Retry-After": "0"}, '{"choices": [{"message": '),
+        response(),
+    )
+    c = Client(model="m", price=PRICE, ledger=led, transport=sent, max_retries=2)
+    msgs = [{"role": "user", "content": "hi"}]
+    worst = c.worst_case_cost(msgs, None, 10)
+    c.complete("review:x", msgs, max_tokens=10)
+    assert len(sent.requests) == 2
+    assert led.spent_usd == pytest.approx(worst + 0.002)
+    assert led.calls == 1 and led.reserved_usd == 0 and led.failed_requests == 1
+
+
+@pytest.mark.parametrize("text", ["not json", "[]", '{"choices": "x"}'])
+def test_a_malformed_200_with_no_retry_left_is_settled_not_released(text: str):
+    led = Ledger(cap_usd=1)
+    sent = Script((200, {}, text))
+    c = Client(model="m", price=PRICE, ledger=led, transport=sent, max_retries=0)
+    msgs = [{"role": "user", "content": "hi"}]
+    worst = c.worst_case_cost(msgs, None, 10)
+    with pytest.raises(LLMError, match="malformed HTTP 200 response"):
+        c.complete("review:x", msgs, max_tokens=10)
+    assert led.spent_usd == pytest.approx(worst) and led.reserved_usd == 0
+    assert led.calls == 0 and led.failed_requests == 1
+
+
+def test_the_run_report_redacts_the_incomplete_reasons():
+    """F-32079e: a bundle's error is copied into `RunResult.incomplete`, and the
+    report carried that list unredacted."""
+    from lens import report as report_mod  # noqa: PLC0415
+
+    llm_mod.register_secret(OPAQUE_KEY)
+    leak = f"gateway said: invalid key {OPAQUE_KEY}"
+    res = RunResult(
+        "reviewed",
+        mode="full",
+        state=PRState(),
+        bundles=[BundleResult(label="storage", error=leak)],
+        incomplete=[f"storage: failed — {leak}"],
+    )
+    built = report_mod.build(res)
+    assert OPAQUE_KEY not in json.dumps(built)
+    assert OPAQUE_KEY not in report_mod.markdown(built, 1)
+    assert res.incomplete == [f"storage: failed — {leak}"]
+
+
+def test_a_same_named_local_class_elsewhere_is_not_a_callers_class():
+    """F-e31e5a: two functions each define a `Local` with `run`; the second's
+    `self.run()` was counted as a caller of the first's, by the bare name."""
+    idx = _index_of(
+        {
+            "pkg/locals.py": (
+                "def first():\n"
+                "    class Local:\n"
+                "        def run(self):\n            return 1\n"
+                "        def go(self):\n            return self.run()\n"
+                "    return Local\n\n"
+                "def second():\n"
+                "    class Local:\n"
+                "        def run(self):\n            return 2\n"
+                "        def go(self):\n            return self.run()\n"
+                "    return Local\n"
+            )
+        }
+    )
+    assert _callers(idx, "pkg.locals:first.Local.run") == ["pkg.locals:first.Local.go"]
+    assert _callers(idx, "pkg.locals:second.Local.run") == [
+        "pkg.locals:second.Local.go"
+    ]
+
+
+def test_a_repeated_string_literal_edit_is_not_a_mechanical_rename():
+    """F-1bf426: words inside quotes were tokens like names, so `"safe"` ->
+    `"unsafe"` in three files passed as a rename and went unreviewed."""
+    diff = "".join(
+        _hunk(
+            f"application_sdk/m{i}.py",
+            f"def c_{i}():",
+            '    mode = "safe"',
+            '    mode = "unsafe"',
+        )
+        for i in range(3)
+    )
+    t = _triaged(diff)
+    assert sorted(f.path for f in t.reviewed) == [
+        f"application_sdk/m{i}.py" for i in range(3)
+    ]
+    assert t.renames == [] and t.hunks_dropped == 0
