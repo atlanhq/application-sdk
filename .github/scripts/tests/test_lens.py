@@ -244,6 +244,8 @@ class FakeGitHub:
         self.status = "ahead"
         self.visibility: dict[str, str | None] = {}  # owner/name -> API visibility
         self.visibility_lookups: list[str] = []
+        # (base, ref) -> merge base; the base's own sha unless a test scripts a merge.
+        self.merge_bases: dict[tuple[str, str], str] = {}
 
     def pr(self, n):
         return {
@@ -260,7 +262,7 @@ class FakeGitHub:
         return self.status
 
     def merge_base(self, a, b):
-        return self.base
+        return self.merge_bases.get((a, b), self.base)
 
     def file_at(self, path, ref):
         return self.files.get((path, ref))
@@ -3101,6 +3103,17 @@ MERGED_DIFF = (
 )
 
 
+def _merge_main_into_round_two(
+    gh: FakeGitHub, range_diff: str = MERGED_DIFF, pr_diff: str = PR_DIFF
+) -> None:
+    """Round two's head merges main: main moved on to b1 and the PR's merge base
+    moved with it (the last reviewed head forked from b0)."""
+    gh.head, gh.base = "h2", "b1"
+    gh.merge_bases[("b1", "h1")] = "b0"
+    gh.diffs[("h1", "h2")] = range_diff
+    gh.diffs[("b1", "h2")] = pr_diff
+
+
 def test_only_the_prs_own_change_is_kept_after_a_base_merge():
     kept, dropped, demoted = review_mod.only_pr_changes(
         parse_unified_diff(MERGED_DIFF), parse_unified_diff(PR_DIFF)
@@ -3128,9 +3141,7 @@ def test_a_re_review_after_merging_main_reviews_only_the_authors_change(repo: Pa
         rules=rules,
         client_factory=_factory(Script()),
     )
-    gh.head = "h2"
-    gh.diffs[("h1", "h2")] = MERGED_DIFF
-    gh.diffs[("b0", "h2")] = PR_DIFF
+    _merge_main_into_round_two(gh)
     gh.files[("application_sdk/storage/fetch.py", "h2")] = (
         gh.files[("application_sdk/storage/fetch.py", "h1")].replace(
             '    """Fetch one object."""\n',
@@ -3153,6 +3164,192 @@ def test_a_re_review_after_merging_main_reviews_only_the_authors_change(repo: Pa
         files_block = r["messages"][2]["content"].split("<review_files>", 1)[1]
         assert "application_sdk/common/other.py" not in files_block
         assert "+    MAIN_ONLY" not in files_block
+
+
+# ---- a restoration of base lines is the author's change, not a base merge (FND-5314) ----------
+
+# The base branch disposes the client before the fetch; the PR at h1 dropped those
+# two lines, and h2 puts them back, so the file matches the base branch there again.
+RESTORE_PR_DIFF_H1 = (
+    "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
+    "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+    "@@ -1,5 +1,4 @@\n-def fetch(client, key):\n+def fetch(client, key, timeout=None):\n"
+    '     """Fetch one object."""\n'
+    "-    client.reset()\n-    client.dispose()\n"
+    "-    return client.get(key)\n+    data = client.get(key)\n+    return data.decode()\n"
+)
+RESTORE_RANGE_DIFF = (
+    "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
+    "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+    "@@ -1,4 +1,6 @@\n def fetch(client, key, timeout=None):\n"
+    '     """Fetch one object."""\n'
+    "+    client.reset()\n+    client.dispose()\n"
+    "     data = client.get(key)\n     return data.decode()\n"
+)
+RESTORE_PR_DIFF_H2 = (
+    "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
+    "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+    "@@ -1,5 +1,6 @@\n-def fetch(client, key):\n+def fetch(client, key, timeout=None):\n"
+    '     """Fetch one object."""\n'
+    "     client.reset()\n     client.dispose()\n"
+    "-    return client.get(key)\n+    data = client.get(key)\n+    return data.decode()\n"
+)
+RESTORED_SRC = SRC_V2.replace(
+    '    """Fetch one object."""\n',
+    '    """Fetch one object."""\n    client.reset()\n    client.dispose()\n',
+)
+# What a merge of main brings in: a file the PR does not touch.
+MAIN_ONLY_DIFF = (
+    "diff --git a/application_sdk/common/other.py b/application_sdk/common/other.py\n"
+    "--- a/application_sdk/common/other.py\n+++ b/application_sdk/common/other.py\n"
+    "@@ -1 +1 @@\n-x = 1\n+x = 2\n"
+)
+
+
+def _any_github() -> Any:
+    """A `FakeGitHub` typed `Any`: `run` takes a `GitHub`, which the fake stands
+    in for without being one."""
+    return FakeGitHub()
+
+
+def _round_one_on_restore_fixture(gh: Any, repo: Path) -> tuple[RuleSet, str]:
+    """Round 1 at h1 raises one finding on fetch.py that stays quoted at h2."""
+    gh.diffs[("b0", "h1")] = RESTORE_PR_DIFF_H1
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    assert first.state is not None
+    return rules, first.state.findings[0].id
+
+
+def _verify_requests(script: Script) -> list[str]:
+    return [
+        json.dumps(r)
+        for r in script.requests
+        if "<changes_this_round>" in json.dumps(r)
+    ]
+
+
+def _review_files_blocks(script: Script) -> list[str]:
+    return [
+        r["messages"][2]["content"].split("<review_files>", 1)[1]
+        for r in script.requests
+        if r.get("prompt_cache_key") == "lens-review"
+    ]
+
+
+def test_restoring_base_lines_without_a_merge_is_rechecked(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+):
+    """The live case: round 2 restored two lines the base branch has. No merge is in
+    the range, yet the restoration was taken for one, 0 files were in range and
+    verify was skipped, so the fixed finding stayed blocking."""
+    gh = _any_github()
+    rules, fid = _round_one_on_restore_fixture(gh, repo)
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = RESTORE_RANGE_DIFF
+    gh.diffs[("b0", "h2")] = RESTORE_PR_DIFF_H2
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = RESTORED_SRC
+    script = Script(
+        response([tool_call("verdicts", {"items": [{"id": fid, "status": "fixed"}]})])
+    )
+    capsys.readouterr()
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+    )
+
+    log = capsys.readouterr().err
+    assert res.mode == "incremental"
+    assert "excluded changes that came from merging" not in log
+    assert "no base-branch merge since the last review" in log
+    assert "1 file(s) in range" in log
+    assert res.verify_skipped == [] and res.resolved_verified == [fid]
+    (verify,) = _verify_requests(script)
+    assert "+    client.dispose()" in verify
+
+
+def test_a_real_base_merge_is_still_excluded(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+):
+    """Control: a range that only merges main (a file the PR does not touch) still
+    leaves main's change out of review, and verify has nothing new to judge."""
+    gh = _any_github()
+    rules, fid = _round_one_on_restore_fixture(gh, repo)
+    _merge_main_into_round_two(gh, MAIN_ONLY_DIFF, RESTORE_PR_DIFF_H1)
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = gh.files[
+        ("application_sdk/storage/fetch.py", "h1")
+    ]
+    script = Script()
+    capsys.readouterr()
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+    )
+
+    log = capsys.readouterr().err
+    assert res.mode == "incremental"
+    assert "the merge base moved from b0 to b1" in log
+    assert "excluded changes that came from merging the base branch: 1 file(s)" in log
+    assert "0 file(s) in range" in log
+    assert res.verify_skipped and fid in res.verify_skipped
+    assert _verify_requests(script) == []
+    assert all(
+        "application_sdk/common/other.py" not in b for b in _review_files_blocks(script)
+    )
+
+
+def test_a_merge_and_a_restoration_in_one_range_still_rechecks(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+):
+    """A merge of main and the author's restoration land in the same range: main's
+    change stays out of review, and verify still runs and sees the restoration."""
+    gh = _any_github()
+    rules, fid = _round_one_on_restore_fixture(gh, repo)
+    _merge_main_into_round_two(
+        gh, RESTORE_RANGE_DIFF + MAIN_ONLY_DIFF, RESTORE_PR_DIFF_H2
+    )
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = RESTORED_SRC
+    script = Script(
+        response([tool_call("verdicts", {"items": [{"id": fid, "status": "fixed"}]})])
+    )
+    capsys.readouterr()
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+    )
+
+    log = capsys.readouterr().err
+    assert "the merge base moved from b0 to b1" in log
+    assert "excluded changes that came from merging the base branch" in log
+    assert all(
+        "application_sdk/common/other.py" not in b for b in _review_files_blocks(script)
+    )
+    assert res.verify_skipped == [] and res.resolved_verified == [fid]
+    (verify,) = _verify_requests(script)
+    assert "+    client.dispose()" in verify
+    assert "application_sdk/common/other.py" not in verify
 
 
 # ---- which kind of run this is, in words ----------------------------------------------------------------------
