@@ -18,7 +18,10 @@ from sqlalchemy.engine import make_url
 
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.clients.sql_errors import SqlCredentialsParseError
+from application_sdk.clients.sql_errors import (
+    MissingSqlParamError,
+    SqlCredentialsParseError,
+)
 
 _DEFAULTS = {"sslmode": "require"}
 
@@ -182,12 +185,30 @@ def test_non_numeric_or_out_of_range_port_is_rejected(port: object) -> None:
     assert excinfo.value.field == "port"
 
 
-def test_zero_port_is_rejected() -> None:
-    """``0`` is falsy, so it falls through to ``extra``; set it there too."""
+@pytest.mark.parametrize(
+    "credentials",
+    [{"port": 0}, {"port": None, "extra": {"port": 0}}],
+    ids=["credentials", "extra"],
+)
+def test_zero_port_is_rejected_not_reported_missing(
+    credentials: dict[str, Any],
+) -> None:
+    """``0`` is a value, so it is range-checked rather than read as absent."""
     client = _pg_client()
-    client.credentials = _credentials(port=0, extra={"port": 0})
+    client.credentials = _credentials(**credentials)
 
-    with pytest.raises(SqlCredentialsParseError):
+    with pytest.raises(SqlCredentialsParseError) as excinfo:
+        client.get_sqlalchemy_connection_string()
+
+    assert excinfo.value.field == "port"
+
+
+@pytest.mark.parametrize("port", [None, ""])
+def test_absent_port_is_still_reported_missing(port: object) -> None:
+    client = _pg_client()
+    client.credentials = _credentials(port=port)
+
+    with pytest.raises(MissingSqlParamError):
         client.get_sqlalchemy_connection_string()
 
 

@@ -757,6 +757,18 @@ def _url_port(value: object) -> str:
     return str(port)
 
 
+def _absent(value: object) -> bool:
+    """Whether a required connection value counts as not supplied.
+
+    ``None`` and other falsy values (``""``) do, as before; a numeric ``0``
+    does not, so ``port: 0`` reaches ``_url_port`` and is rejected as out of
+    range instead of being reported missing.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        return False
+    return not value
+
+
 def _url_component(param: str, value: object, template_fields: frozenset[str]) -> str:
     """Make one ``DatabaseConfig.required`` value safe to put in the URL.
 
@@ -1154,8 +1166,10 @@ class BaseSQLClient(ClientInterface):
             if param == "password":
                 param_values[param] = auth_token
             else:
-                value = self.credentials.get(param) or extra.get(param)
-                if value is None:
+                value = self.credentials.get(param)
+                if _absent(value):
+                    value = extra.get(param)
+                if _absent(value):
                     raise MissingSqlParamError(field=param)
                 param_values[param] = _url_component(param, value, template_fields)
 
