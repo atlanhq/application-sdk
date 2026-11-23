@@ -70,10 +70,11 @@ class TestHostLibraryModules:
 
 
 class TestOsPath:
-    """os.path is allowed in workflow code on every Python version.
+    """One os.path rule on every Python version: string-only members allowed.
 
-    temporalio restricts it below 3.14 only, so an app passing on a 3.14
-    laptop would fail its workflow tasks on the 3.13 production image.
+    temporalio refuses all of os.path below 3.14 and allows all of it from
+    3.14, so an app passing on a 3.14 laptop would fail its workflow tasks on
+    the 3.13 production image.
     """
 
     @staticmethod
@@ -113,6 +114,15 @@ class TestOsPath:
             tmp_path, monkeypatch, 'return os.path.join("a", "b")'
         )
         assert result == "a/b" or result == "a\\b", result
+
+    def test_os_path_filesystem_probe_is_refused(self, tmp_path, monkeypatch) -> None:
+        """Only string-only os.path members are allowed: exists() reads the disk."""
+        from temporalio.worker.workflow_sandbox import RestrictedWorkflowAccessError
+
+        result = self._call_in_sandbox(
+            tmp_path, monkeypatch, 'return os.path.exists("/")'
+        )
+        assert isinstance(result, RestrictedWorkflowAccessError), result
 
     def test_rest_of_os_is_still_refused(self, tmp_path, monkeypatch) -> None:
         from temporalio.worker.workflow_sandbox import RestrictedWorkflowAccessError

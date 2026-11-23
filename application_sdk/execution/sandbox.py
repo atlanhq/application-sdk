@@ -152,42 +152,8 @@ class SandboxConfig:
         Returns:
             SandboxRestrictions with framework + user-specified passthrough modules.
         """
-        from temporalio.worker.workflow_sandbox import (  # noqa: PLC0415 — cold path: sandbox restrictions only at worker startup
-            SandboxRestrictions,
+        from application_sdk.execution._temporal.sandbox_restrictions import (  # noqa: PLC0415 — cold path: sandbox restrictions only at worker startup; keeps temporalio behind the adapter
+            build_restrictions,
         )
 
-        all_modules = _FRAMEWORK_MODULES | self.passthrough_modules
-        restrictions = SandboxRestrictions.default.with_passthrough_modules(
-            *all_modules
-        )
-        return _allow_os_path(restrictions)
-
-
-def _allow_os_path(restrictions: SandboxRestrictions) -> SandboxRestrictions:
-    """Allow ``os.path`` in workflow code on every Python version.
-
-    temporalio restricts ``os.path`` on Python < 3.14 and allows it on 3.14+
-    (CPython needs it there to render tracebacks). Left alone, workflow code
-    that builds a path with ``os.path.join`` passes on a 3.14 laptop and fails
-    its workflow task on the 3.13 production image. This applies the 3.14
-    rule everywhere, so one app behaves the same on both.
-    """
-    import dataclasses  # noqa: PLC0415 — cold path: worker startup only
-
-    from temporalio.worker.workflow_sandbox import (  # noqa: PLC0415 — cold path: sandbox restrictions only at worker startup
-        SandboxMatcher,
-    )
-
-    members = restrictions.invalid_module_members
-    os_matcher = members.children.get("os")
-    if os_matcher is None:
-        return restrictions
-    os_matcher = dataclasses.replace(
-        os_matcher,
-        children={**os_matcher.children, "path": SandboxMatcher.none},
-        exclude=frozenset(os_matcher.exclude) | {"path"},
-    )
-    members = dataclasses.replace(
-        members, children={**members.children, "os": os_matcher}
-    )
-    return dataclasses.replace(restrictions, invalid_module_members=members)
+        return build_restrictions(_FRAMEWORK_MODULES | self.passthrough_modules)
