@@ -445,6 +445,7 @@ def _is_throttled(node: ast.Call, loop: ast.For | ast.AsyncFor | ast.While) -> b
 # ── L022 handled-failure recognition ─────────────────────────────────────────
 
 _NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+_L022Function = ast.FunctionDef | ast.AsyncFunctionDef
 # ``sys.exit(...)`` / ``os._exit(...)`` and the builtins end the process: the
 # failure is not handled, whatever the handler logged first.
 _EXIT_CALLS = frozenset({("sys", "exit"), ("os", "_exit")})
@@ -483,14 +484,53 @@ def _is_exit_call(node: ast.AST) -> bool:
     )
 
 
-def _is_false(node: ast.expr | None) -> bool:
-    return isinstance(node, ast.Constant) and node.value is False
+def _is_process_exit_call(node: ast.AST) -> bool:
+    return _is_exit_call(node) or (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "SystemExit"
+    )
+
+
+def _exit_call_argument(call: ast.Call) -> ast.expr | None:
+    if call.args:
+        return call.args[0]
+    return next(
+        (
+            keyword.value
+            for keyword in call.keywords
+            if keyword.arg in {"code", "status"}
+        ),
+        None,
+    )
+
+
+def _unique_functions(module: ast.Module) -> dict[str, _L022Function]:
+    """Map unambiguous local function names to their definitions."""
+    definitions: dict[str, list[_L022Function]] = {}
+    for node in ast.walk(module):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            definitions.setdefault(node.name, []).append(node)
+    return {name: values[0] for name, values in definitions.items() if len(values) == 1}
+
+
+def _function_returns(function: _L022Function) -> list[ast.Return]:
+    """Return statements in *function*, excluding nested scopes."""
+    returns: list[ast.Return] = []
+    stack: list[ast.AST] = list(function.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.Return):
+            returns.append(node)
+        elif not isinstance(node, _NESTED_SCOPES):
+            stack.extend(ast.iter_child_nodes(node))
+    return returns
 
 
 def _is_failure_keyword(name: str | None, value: ast.expr | None) -> bool:
     """``success=False``, ``status=X.FAILURE`` or ``status_code=<5xx>``."""
     if name == "success":
-        return _is_false(value)
+        return isinstance(value, ast.Constant) and value.value is False
     if name == "status":
         return isinstance(value, ast.Attribute) and value.attr in _FAILURE_STATUS_NAMES
     if name == "status_code":
@@ -502,17 +542,20 @@ def _is_failure_keyword(name: str | None, value: ast.expr | None) -> bool:
     return False
 
 
-def _is_failure_result(value: ast.expr | None) -> bool:
-    """True if *value* is a result object that reports the failure to the caller.
+def _is_failure_result(
+    value: ast.expr | None, helper_names: frozenset[str] | set[str] = frozenset()
+) -> bool:
+    """True if *value* reports a failure to the caller.
 
-    An allowlist of local shapes: a call or dict literal carrying
-    ``success=False``, ``status=<Enum>.FAILURE|FAILED|ERROR`` or a 5xx
-    ``status_code``. A bare ``False``, ``None`` or default value is not one:
-    the caller gets a sentinel it may ignore, so the handler has absorbed the
-    failure.
+    Direct call/dict markers retain the original allowlist. A call to a unique
+    local helper is included only when its sole normal return is itself a
+    recognised failure result; names, annotations, and arbitrary call results
+    are not evidence of failure.
     """
     if isinstance(value, ast.Call):
-        return any(_is_failure_keyword(kw.arg, kw.value) for kw in value.keywords)
+        if any(_is_failure_keyword(kw.arg, kw.value) for kw in value.keywords):
+            return True
+        return isinstance(value.func, ast.Name) and value.func.id in helper_names
     if isinstance(value, ast.Dict):
         return any(
             isinstance(key, ast.Constant)
@@ -523,16 +566,109 @@ def _is_failure_result(value: ast.expr | None) -> bool:
     return False
 
 
-def handler_propagates_failure(handler: ast.ExceptHandler) -> bool:
+def _local_failure_result_helpers(module: ast.Module) -> frozenset[str]:
+    """Summarise local helpers with one terminal, typed failure-result return.
+
+    Requiring a single return as the function's final top-level statement makes
+    the summary conservative: a helper with a success/default return path is not
+    treated as a failure merely because one branch can return a failure.
+    """
+    functions = _unique_functions(module)
+    helpers: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for name, function in functions.items():
+            if name in helpers:
+                continue
+            returns = _function_returns(function)
+            if (
+                len(returns) == 1
+                and function.body
+                and function.body[-1] is returns[0]
+                and _is_failure_result(returns[0].value, helpers)
+            ):
+                helpers.add(name)
+                changed = True
+    return frozenset(helpers)
+
+
+def _exit_status_function(
+    expression: ast.expr, functions: dict[str, _L022Function]
+) -> _L022Function | None:
+    """Find a local function whose result is the value sent to an exit call.
+
+    ``asyncio.run(main())`` is the one transparent wrapper needed for async CLI
+    entrypoints. Other nested calls are deliberately not assumed to preserve
+    their argument as an exit status.
+    """
+    if not isinstance(expression, ast.Call):
+        return None
+    if isinstance(expression.func, ast.Name):
+        return functions.get(expression.func.id)
+    if (
+        isinstance(expression.func, ast.Attribute)
+        and isinstance(expression.func.value, ast.Name)
+        and expression.func.value.id == "asyncio"
+        and expression.func.attr == "run"
+        and len(expression.args) == 1
+        and not expression.keywords
+    ):
+        return _exit_status_function(expression.args[0], functions)
+    return None
+
+
+def _process_exit_status_functions(module: ast.Module) -> frozenset[_L022Function]:
+    """Find local functions whose return value reaches a process-exit sink."""
+    functions = _unique_functions(module)
+    exit_functions: set[_L022Function] = set()
+    for node in ast.walk(module):
+        if isinstance(node, ast.Call) and _is_process_exit_call(node):
+            argument = _exit_call_argument(node)
+            if argument is not None:
+                function = _exit_status_function(argument, functions)
+                if function is not None:
+                    exit_functions.add(function)
+    return frozenset(exit_functions)
+
+
+def _collect_l022_module_context(
+    module: ast.Module,
+) -> tuple[frozenset[str], frozenset[_L022Function]]:
+    """Precompute the only interprocedural facts L022 accepts."""
+    return (
+        _local_failure_result_helpers(module),
+        _process_exit_status_functions(module),
+    )
+
+
+def _is_nonzero_exit_status(value: ast.expr | None) -> bool:
+    return (
+        isinstance(value, ast.Constant)
+        and type(value.value) is int
+        and value.value != 0
+    )
+
+
+def handler_propagates_failure(
+    handler: ast.ExceptHandler,
+    *,
+    failure_helpers: frozenset[str] = frozenset(),
+    is_exit_status_function: bool = False,
+) -> bool:
     """True if *handler* raises, exits, or returns a failure result.
 
-    Any ``raise`` in the handler counts, conditional or not: the check reports
-    only handlers that cannot propagate the failure at all.
+    Any ``raise`` in the handler counts, conditional or not. A nonzero integer
+    return counts only when the enclosing function's result is statically sent
+    to a process-exit sink; ordinary integer sentinels remain handled failures.
     """
     for node in _handler_statements(handler):
         if isinstance(node, ast.Raise) or _is_exit_call(node):
             return True
-        if isinstance(node, ast.Return) and _is_failure_result(node.value):
+        if isinstance(node, ast.Return) and (
+            _is_failure_result(node.value, failure_helpers)
+            or (is_exit_status_function and _is_nonzero_exit_status(node.value))
+        ):
             return True
     return False
 
@@ -643,7 +779,14 @@ class LevelMixin(_MixinBase):
             return
         if get_logger_method(node, self._logging_module_names) != "error":
             return
-        if handler_propagates_failure(self._except_stack[-1]):
+        function = self._function_stack[-1] if self._function_stack else None
+        if handler_propagates_failure(
+            self._except_stack[-1],
+            failure_helpers=self._l022_failure_helpers,
+            is_exit_status_function=(
+                function is not None and function in self._l022_exit_status_functions
+            ),
+        ):
             return
         self._add(
             "L022",

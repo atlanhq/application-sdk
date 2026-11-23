@@ -1897,6 +1897,71 @@ def test_l022_silent_outside_an_except_block() -> None:
     assert "L022" not in _ids(src)
 
 
+def test_l022_silent_for_nonzero_cli_status_consumed_by_system_exit() -> None:
+    src = (
+        "import asyncio\n"
+        "from application_sdk.observability import get_logger\n"
+        "logger = get_logger(__name__)\n"
+        "async def main():\n"
+        "    try:\n"
+        "        publish()\n"
+        "    except Exception:\n"
+        "        logger.error('registration failed', exc_info=True)\n"
+        "        return 1\n"
+        'if __name__ == "__main__":\n'
+        "    raise SystemExit(asyncio.run(main()))\n"
+    )
+    assert "L022" not in _ids(src)
+
+
+def test_l022_still_fires_for_unconsumed_nonzero_integer_return() -> None:
+    handler = (
+        "    except Exception:\n"
+        "        logger.error('operation failed', exc_info=True)\n"
+        "        return 1\n"
+    )
+    assert _l022(handler) == ["L022"]
+
+
+def test_l022_silent_when_local_helper_returns_typed_failure() -> None:
+    src = """
+from application_sdk.observability import get_logger
+logger = get_logger(__name__)
+
+class OutcomeStatus:
+    FAILED = "FAILED"
+
+def make_failure(event):
+    return OutcomeRecord(status=OutcomeStatus.FAILED)
+
+def sync_event(event):
+    try:
+        process(event)
+    except Exception as exc:
+        logger.error("event sync failed: %s", exc, exc_info=True)
+        return make_failure(event)
+"""
+    assert "L022" not in _ids(src)
+
+
+def test_l022_still_fires_for_helper_returning_diagnostic_flag() -> None:
+    src = """
+from application_sdk.observability import get_logger
+logger = get_logger(__name__)
+
+def make_diagnostic_result():
+    return ScopeResult(chunks=[], discovery_failed=True)
+
+def list_scope():
+    try:
+        discover()
+    except Exception as exc:
+        logger.error("scope discovery failed: %s", exc, exc_info=True)
+        return make_diagnostic_result()
+"""
+    assert "L022" in _ids(src)
+
+
 def test_l022_judges_the_innermost_handler() -> None:
     # The outer handler raises; the inner one, which holds the call, does not.
     handler = (

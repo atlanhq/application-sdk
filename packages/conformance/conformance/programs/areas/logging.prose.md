@@ -534,11 +534,15 @@ report that site the same way.
   `atlan-metabase-app app/handler.py` uses the module-level logger directly.
 
 - **L022 HandledFailureLoggedAtError** — a `logger.error()` sits in an
-  `except` handler that has no `raise`, no `sys.exit`/`os._exit`, and no
-  `return` of a failure result (a call or dict carrying `success=False`,
-  `status=<Enum>.FAILURE|FAILED|ERROR` or a 5xx `status_code`), so the code
-  recovered and the customer log view — which filters at ERROR — shows a
-  failed run that did not fail.  Change `.error(` to `.warning(` and keep
+  `except` handler that has no `raise`, no process-exit call, and no return of
+  a failure result (a call or dict carrying `success=False`,
+  `status=<Enum>.FAILURE|FAILED|ERROR` or a 5xx `status_code`). A call to a
+  local helper counts only when its sole normal return is such a failure result.
+  A nonzero integer status counts only when the enclosing function's result
+  reaches a process-exit sink such as `SystemExit(asyncio.run(main()))`; plain
+  `return 1` remains a sentinel. Otherwise the code recovered and the customer
+  log view — which filters at ERROR — shows a failed run that did not fail.
+  Change `.error(` to `.warning(` and keep
   every argument, `exc_info=True` included (L004 still applies):
   `logger.error("close failed", exc_info=True)` →
   `logger.warning("close failed", exc_info=True)`.  Mirror

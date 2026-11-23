@@ -29,6 +29,9 @@ class _MixinBase:
     _loop_stack: list[ast.For | ast.AsyncFor | ast.While]
     _bounded_loop_caps: dict[ast.For | ast.AsyncFor, int]
     _except_stack: list[ast.ExceptHandler]
+    _function_stack: list[ast.FunctionDef | ast.AsyncFunctionDef]
+    _l022_failure_helpers: frozenset[str]
+    _l022_exit_status_functions: frozenset[ast.FunctionDef | ast.AsyncFunctionDef]
     _in_main_block: int
     # True when the module is a standalone script/CLI (shebang / __main__
     # guard) — stdout is its interface, so L005 is exempt.
