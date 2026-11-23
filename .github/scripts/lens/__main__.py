@@ -25,7 +25,7 @@ from . import approve, report, trace
 from .config import load_config, validate
 from .event import USAGE_ERRORS, decide
 from .github import GitHub
-from .llm import Client
+from .llm import Client, register_secret
 from .lock import BUSY_NOTE, WORKFLOW_FILE, older_active_run
 from .review import dismiss, recheck, render_summary, run, to_json
 from .rules import load_rules
@@ -55,6 +55,9 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--repo", required=True)
     a.add_argument("--decision", required=True)
     args = ap.parse_args(argv)
+    # First thing with a key in reach: an error raised before a client exists is
+    # masked too.
+    register_secret(os.environ.get("LENS_GATEWAY_KEY", ""))
     if args.cmd == "approve":
         return approve.run_step(args.repo, args.decision)
 

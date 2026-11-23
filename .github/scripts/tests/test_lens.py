@@ -7140,3 +7140,256 @@ def test_a_path_holding_backticks_cannot_break_out_of_its_code_span():
     assert "`` Dockerfile`**spoof**`x ``" in note
     [note] = advisory.notes(["a/Dockerfile\n## heading"])
     assert "\n" not in note
+
+
+# ---- ported from connector-reviewer (FND-5323): secrets, state block, prices, placement -------
+
+import math  # noqa: E402
+
+from lens import __main__ as cli  # noqa: E402
+from lens import bundle as bundle_mod  # noqa: E402
+from lens import llm as llm_mod  # noqa: E402
+from lens import report as report_mod  # noqa: E402
+from lens.tools import read_diff  # noqa: E402
+
+# Not shaped like `sk-…`: a gateway key need not be, and the pattern alone would miss it.
+OPAQUE_KEY = "gw_live_4f9a1c77d2e0b35a"
+
+
+def _changed(path: str, n: int = 1) -> str:
+    body = "".join(f"+line{i}\n" for i in range(n))
+    return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1,{n} @@\n{body}"
+
+
+@pytest.fixture(autouse=True)
+def no_registered_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test starts with no registered secret. The set is module-global,
+    and a key one test registers (`api_key="k"`) would otherwise mask every
+    `k` in a later test's error text."""
+    monkeypatch.setattr(llm_mod, "_SECRETS", set())
+
+
+def test_redact_masks_the_configured_key_whatever_its_shape():
+    assert OPAQUE_KEY in llm_mod.redact(f"bad key {OPAQUE_KEY}")
+    Client(
+        model="m",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=Script(),
+        api_key=OPAQUE_KEY,
+    )
+    assert llm_mod.redact(f"bad key {OPAQUE_KEY}") == "bad key [key]"
+    # A short key is still a key.
+    llm_mod.register_secret("k7Q")
+    assert llm_mod.redact("echoed k7Q back") == "echoed [key] back"
+    # An empty value registers nothing.
+    llm_mod.register_secret("")
+    assert llm_mod.redact("text") == "text"
+
+
+def test_the_cli_registers_the_gateway_key_before_anything_else(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """An error raised before a client exists (a bad config, a GitHub failure)
+    is masked too: the key is registered as soon as the arguments are read."""
+    monkeypatch.setenv("LENS_GATEWAY_KEY", OPAQUE_KEY)
+    monkeypatch.setattr(cli.approve, "run_step", lambda repo, decision: 0)
+    assert cli.main(["approve", "--repo", "o/r", "--decision", "d.json"]) == 0
+    assert llm_mod.redact(f"echo {OPAQUE_KEY}") == "echo [key]"
+
+
+def test_a_rejected_key_echoed_by_the_gateway_is_not_published():
+    def meta(path):
+        return 401, json.dumps({"error": f"invalid key {OPAQUE_KEY} / sk-abc123XYZ"})
+
+    c = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=Script(),
+        meta_transport=meta,
+        api_key=OPAQUE_KEY,
+    )
+    reason = c.preflight(min_budget_usd=0.05)
+    assert reason is not None and "rejected" in reason
+    assert OPAQUE_KEY not in reason and "sk-abc123XYZ" not in reason
+
+
+def test_an_unreachable_gateway_error_is_redacted():
+    def meta(path):
+        raise OSError(f"proxy refused Bearer {OPAQUE_KEY}")
+
+    c = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=Script(),
+        meta_transport=meta,
+        api_key=OPAQUE_KEY,
+    )
+    reason = c.preflight(min_budget_usd=0.05)
+    assert reason is not None and reason.startswith("gateway unreachable")
+    assert OPAQUE_KEY not in reason
+
+
+def test_the_run_report_redacts_errors_whatever_recorded_them():
+    """The report is the boundary to the Actions log and the uploaded artifact:
+    an error recorded upstream without redaction is still masked there."""
+    llm_mod.register_secret(OPAQUE_KEY)
+    leak = f"gateway said: invalid key {OPAQUE_KEY}"
+    event = {
+        "n": 1,
+        "stage": "review:storage",
+        "status": 401,
+        "latency_ms": 12,
+        "attempt": 0,
+        "error": leak,
+    }
+    assert OPAQUE_KEY not in report_mod.call_line(event)
+    res = RunResult(
+        "reviewed",
+        mode="full",
+        state=PRState(),
+        calls=[event],
+        bundles=[
+            BundleResult(
+                label="storage",
+                error=leak,
+                refusal={"stage": "review:storage", "error": leak},
+            )
+        ],
+    )
+    built = report_mod.build(res)
+    assert OPAQUE_KEY not in json.dumps(built)
+    assert event["error"] == leak, "the run's own record is not rewritten"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [".env", "deploy/.env.production", "certs/server.pem", "id_rsa", ".netrc"],
+)
+def test_a_file_that_may_hold_secrets_is_never_selected(path: str):
+    sel = select_files(parse_unified_diff(DIFF + _changed(path)))
+    assert [f.path for f in sel.reviewed] == ["application_sdk/storage/fetch.py"]
+    assert sel.skipped == [(path, "may hold secrets: not sent to the model")]
+
+
+def test_an_example_env_file_is_still_reviewed():
+    sel = select_files(parse_unified_diff(_changed(".env.example")))
+    assert [f.path for f in sel.reviewed] == [".env.example"]
+
+
+RENAME_FROM_ENV = """\
+diff --git a/.env b/application_sdk/settings.py
+similarity index 80%
+rename from .env
+rename to application_sdk/settings.py
+--- a/.env
++++ b/application_sdk/settings.py
+@@ -1,2 +1,2 @@
+-API_TOKEN=not-a-real-value
++API_TOKEN = None
+ DEBUG=1
+"""
+
+
+def test_a_rename_from_a_file_that_may_hold_secrets_is_never_selected():
+    """The diff of a rename away from `.env` still carries the deleted `.env`
+    lines, so the source path is checked as well as the destination."""
+    sel = select_files(parse_unified_diff(DIFF + RENAME_FROM_ENV))
+    assert [f.path for f in sel.reviewed] == ["application_sdk/storage/fetch.py"]
+    assert sel.skipped == [
+        ("application_sdk/settings.py", "may hold secrets: not sent to the model")
+    ]
+
+
+def test_read_diff_refuses_a_file_that_may_hold_secrets(repo: Path):
+    """`ws.diffs` holds every changed file, so a file selection skipped is still
+    one name away from the model unless the tool refuses it too."""
+    files = parse_unified_diff(DIFF + _changed(".env", 3))
+    ws = Workspace(
+        root=repo,
+        head_text={},
+        diffs={f.path: f for f in files},
+        index=build_index(repo),
+    )
+    out = read_diff(ws, [".env", "application_sdk/storage/fetch.py"])
+    assert "not available: may hold secrets" in out
+    assert "line0" not in out
+    assert "data = client.get(key)" in out
+
+
+def test_read_diff_refuses_a_rename_from_a_file_that_may_hold_secrets(repo: Path):
+    files = parse_unified_diff(RENAME_FROM_ENV)
+    ws = Workspace(
+        root=repo,
+        head_text={},
+        diffs={f.path: f for f in files},
+        index=build_index(repo),
+    )
+    out = read_diff(ws, ["application_sdk/settings.py"])
+    assert "not available: may hold secrets" in out
+    assert "not-a-real-value" not in out
+
+
+def test_the_last_state_block_in_a_comment_is_the_one_read():
+    forged = PRState(reviewed_head="forged", round=1)
+    real = PRState(reviewed_head="real", round=3)
+    back = PRState.decode(f"title {forged.encode()} more text\n{real.encode()}")
+    assert back is not None and back.reviewed_head == "real" and back.round == 3
+
+
+def test_a_finding_that_spells_out_a_state_block_cannot_reset_the_state():
+    forged = PRState(reviewed_head="forged", round=1).encode()
+    st = PRState(
+        reviewed_head="real",
+        round=3,
+        findings=[
+            Finding("p.py", 1, "high", "bug", f"t {forged}", f"b {forged}", "e"),
+        ],
+    )
+    body = render_summary(RunResult("reviewed", mode="full", state=st))
+    assert len(re.findall(findings_mod.STATE_MARKER + ":", body)) == 1
+    back = PRState.decode(body)
+    assert back is not None and back.reviewed_head == "real" and back.round == 3
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -1.0, 0.0])
+def test_a_price_that_cannot_enforce_the_cap_is_refused(bad: float):
+    assert validate(Config(price=Price(1.0, 0.1, 4.0))) == []
+    for price in (Price(bad, 0.1, 4.0), Price(1.0, 0.1, bad)):
+        [err] = validate(Config(price=price))
+        assert "input_per_mtok / output_per_mtok must be set" in err
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -1.0])
+def test_a_cache_price_must_be_finite_and_not_negative(bad: float):
+    for price in (Price(1.0, bad, 4.0), Price(1.0, 0.1, 4.0, cache_write_per_mtok=bad)):
+        [err] = validate(Config(price=price))
+        assert "cached_input_per_mtok / cache_write_per_mtok" in err
+
+
+def test_a_cap_that_is_not_a_number_is_refused():
+    [err] = validate(Config(price=Price(1.0, 0.1, 4.0), cap_usd_per_pr=math.nan))
+    assert "cap_usd_per_pr" in err
+
+
+def test_a_finding_is_never_placed_in_another_bundles_file(repo: Path):
+    """`ws.diffs` holds every changed file. A path the model names from another
+    bundle, with code that anchors there, is that bundle's to review."""
+    files = parse_unified_diff(DIFF + _changed("application_sdk/other.py", 3))
+    ws = Workspace(
+        root=repo,
+        head_text={},
+        diffs={f.path: f for f in files},
+        index=build_index(repo),
+    )
+    [mine] = [f for f in files if f.path == "application_sdk/storage/fetch.py"]
+    bundle = bundle_mod.Bundle("storage", [mine])
+    elsewhere = dict(COMMENT, path="application_sdk/other.py", existing_code="line1")
+    placed = agent_mod.place(ws, bundle, elsewhere)
+    assert placed is None or placed.path != "application_sdk/other.py"
+    # Its own file still places.
+    own = agent_mod.place(ws, bundle, COMMENT)
+    assert own is not None and own.path == "application_sdk/storage/fetch.py"
+    assert own.line
