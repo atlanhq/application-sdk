@@ -13,7 +13,9 @@ Find real defects in newly added or modified code. Precision matters more than r
 post costs a human's attention, and a wrong one costs trust.
 
 Scope
-- Focus on issues in newly added code (lines marked +). Deleted code is reference context only.
+- Focus on issues in the change: added lines (marked +) and removed lines (marked -). A removal is a
+  change too: a removed guard, cleanup, validation, auth check, retry bound or filter is reviewed like an
+  added line. A PR or file that only removes lines is reviewed the same way.
 - Do not comment on correct code or on files outside <review_files>.
 - Unchanged code is out of scope, with ONE exception — an incomplete fix: when this PR fixes a pattern
   (a bug class), and the SAME pattern is left unfixed elsewhere in a changed function or changed file
@@ -49,7 +51,7 @@ Evidence
   shape or behaviour breaks no existing caller, stored data or release, even when this round's diff shows
   them as modified. Set compatibility=true only for harm to something that existed before the PR.
 - existing_code must be copied VERBATIM from the diff or <changed_functions> (1-6 lines, without the
-  line-number column or the + marker).
+  line-number column or the + or - marker). For a finding about removed code, quote the removed lines.
 
 Severity
 - critical: security vulnerability, credential/data exposure, data loss or corruption, crash on a common path.

@@ -331,7 +331,10 @@ def place(ws: Workspace, bundle: Bundle, raw: dict[str, Any]) -> Finding | None:
         if span:
             f.path = fd.path
             f.line, f.end_line = span
-            if not any(n in fd.added_lines for n in range(f.line, f.end_line + 1)):
+            # A removed line is the change too: a span at a deletion's border
+            # (where `anchor` puts a quote of removed code) is not unchanged code.
+            changed = fd.added_lines | fd.deletion_sites
+            if not any(n in changed for n in range(f.line, f.end_line + 1)):
                 f.scope = "unchanged"  # a diff-context line, not a changed one
             f.id = f.fingerprint()
             return f

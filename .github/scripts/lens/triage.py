@@ -13,8 +13,9 @@ here is a proof, not a heuristic guess:
   whitespace is normalised. In Python leading indentation is syntax, so it
   is kept: a re-indented statement is a real change.
 - **Import-only** hunk (Python): every changed line is an import statement
-  and nothing else. Unused or missing imports are ruff/pyright territory,
-  not judgment.
+  and nothing else, and one is added. Unused or missing imports are
+  ruff/pyright territory, not judgment. A pure deletion is never mechanical
+  here: removing only imports can drop a re-export or a side-effect import.
 - **Mechanical rename**: every changed line differs from its old version
   only by token swaps of names drawn from one small set that recurs across
   files (`get_x → fetch_x` in 35 files). Reviewed as one line, not 35 files.
@@ -152,9 +153,13 @@ def _import_line(line: str) -> bool:
 
 
 def hunk_imports_only(h: Hunk) -> bool:
+    """Every changed line is an import statement and nothing else, and at least
+    one is added. A hunk that only removes imports is not proven mechanical: it
+    can drop a re-export (a deleted `__init__.py`) or an import kept for its
+    side effect."""
     rem, add = _sides(h)
     changed = [x for x in rem + add if x.strip()]
-    return bool(changed) and all(_import_line(x) for x in changed)
+    return any(x.strip() for x in add) and all(_import_line(x) for x in changed)
 
 
 def _renameable(token: str) -> bool:
