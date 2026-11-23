@@ -441,6 +441,10 @@ hidden const PREFECT: Type = new {
   value = "prefect"
   category = "elt"
 }
+hidden const DAGSTER: Type = new {
+  value = "dagster"
+  category = "elt"
+}
 hidden const AZURE_DATA_FACTORY: Type = new {
   value = "azure-data-factory"
   category = "elt"
