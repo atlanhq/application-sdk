@@ -47,6 +47,7 @@ from application_sdk.app._ep_registration import (
     _register_tasks,
     _scan_entrypoints,
 )
+from application_sdk.app._run_scratch import run_scratch_dir as _run_scratch_dir
 from application_sdk.app.base_errors import (
     AbstractRunNotImplementedError,
     ObjectStoreNotConfiguredError,
@@ -1376,6 +1377,39 @@ class App(ABC):
     def run_id(self) -> str:
         """Get the current run ID."""
         return self.context.run_id
+
+    @property
+    def run_scratch_dir(self) -> str:
+        """The run's local scratch directory, removed when the run ends.
+
+        ``{TEMPORARY_PATH}/artifacts/apps/{app}/workflows/{workflow_id}/{run_id}``,
+        e.g. ``./local/tmp/artifacts/apps/my-app/workflows/wf-123/run-456``.
+        Use it instead of ``tempfile.gettempdir()`` for files a run writes
+        locally:
+
+        * It is the same string in ``run()`` and in every ``@task`` of the
+          same run, so a path the workflow builds and passes to a task is the
+          one the task writes to.
+        * ``cleanup_files`` removes it at the end of the run (the default
+          ``on_complete``), so nothing is left on the worker's disk.
+        * It is safe in workflow code: it is computed from the run's
+          identity with string-only ``os.path`` calls, never from
+          ``tempfile``, the filesystem or the clock, which the workflow
+          sandbox refuses.
+        * It sits under ``TEMPORARY_PATH``, so a file under it maps to an
+          object-store key the way every ``./local/tmp/...`` path does.
+
+        The directory is not created; ``os.makedirs(..., exist_ok=True)`` it
+        in a task before writing. Do not create it in ``run()``: workflow
+        code must not touch the filesystem.
+
+        Raises:
+            AppContextError: If accessed outside ``run()`` or a ``@task``.
+            RunTempDirEscapeError: If the run's workflow ID would place the
+                directory outside ``TEMPORARY_PATH`` (e.g. ``..`` segments).
+        """
+        context = self.context
+        return _run_scratch_dir(context.app_name, context.workflow_id, context.run_id)
 
     @property
     def correlation_id(self) -> str:
