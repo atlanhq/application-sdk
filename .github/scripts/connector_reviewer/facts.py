@@ -180,12 +180,14 @@ def regression_symbols(ws: Workspace, files: list[FileDiff]) -> list[SymbolFact]
 def _scoped(fd: FileDiff) -> list[tuple[Line, str, str]]:
     """Each line of a file's hunks with the test function it sits in on the
     old side and on the new side ("" when not known). A hunk starts in the
-    function its header names (git shows the enclosing scope there) and moves
+    function or class its header names (the enclosing scope) and moves
     into each test def it passes: a removed def moves only the old side, an
     added one only the new side."""
     out: list[tuple[Line, str, str]] = []
     for h in fd.hunks:
-        m = _TEST_DEF.match(h.header.strip())
+        # The header names the enclosing test, or for a method deep in a test
+        # class, the class: either keeps an unrelated test from matching.
+        m = _TEST_DEF.match(h.header.strip()) or _DEF.match(h.header.strip())
         old = new = m.group(1) if m else ""
         for ln in h.lines:
             m = _TEST_DEF.match(ln.text)
@@ -476,6 +478,8 @@ def history(
     pr_title: str,
     pr_messages: list[str],
     cfg: FactsConfig,
+    read_messages: Callable[[], list[str]] | None = None,
+    pr_commits: int = 0,
 ) -> History:
     """History facts for `files` (in review order) against the base branch's
     recent commits. Every cap is hard: `history_max_files` files,
@@ -483,9 +487,42 @@ def history(
     all, read four at a time. So is the wall time: no new read starts once
     `history_seconds` have passed, and the call returns then even with a read
     still in flight; that read is abandoned (`_bounded`) and its answer, if one
-    comes, is never used."""
+    comes, is never used.
+
+    `read_messages` reads the pull request's commit messages (for a revert
+    marker) inside the same cap, added to `pr_messages`. `pr_commits` is the
+    pull request's own commit count: when fewer messages came back, the
+    history line says the list was cut."""
     out = History()
     deadline = _clock() + max(cfg.history_seconds, 1)
+    pr_messages = list(pr_messages)
+    if read_messages is not None:
+        reader = read_messages
+        msgs = _bounded(lambda _: reader(), [None], deadline, workers=1)
+        got_messages = msgs.results.get(0)
+        if got_messages is not None:
+            pr_messages += got_messages
+            # Pages of 100, at most three (GitHub lists at most 250 commits).
+            out.requests += min(3, len(got_messages) // 100 + 1)
+            if 0 < len(got_messages) < pr_commits:
+                out.limits.append(
+                    f"revert check read the first {len(got_messages)} of {pr_commits} "
+                    "commit messages"
+                )
+                out.notes.append(
+                    f"commit messages: {len(got_messages)} of {pr_commits} read "
+                    "(GitHub's limit); a revert marker in a later commit is not seen"
+                )
+        else:
+            out.requests += msgs.started
+        for e in msgs.errors:
+            out.notes.append(
+                f"commit messages not read: {type(e).__name__}: {str(e)[:120]}"
+            )
+        if msgs.abandoned:
+            out.notes.append(
+                f"commit messages not read within the {cfg.history_seconds}s cap"
+            )
     since = (_now() - timedelta(days=cfg.history_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     # A file that already existed has history to read; an added one rarely
     # does (only when it puts back a file a recent commit deleted), so it goes last.

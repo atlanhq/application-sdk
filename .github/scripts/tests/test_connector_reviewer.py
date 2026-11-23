@@ -9909,6 +9909,86 @@ def test_a_history_read_that_never_ends_cannot_hold_the_review(
     )
 
 
+def test_the_commit_message_read_is_inside_the_history_cap(frozen_now: None):
+    """The commit messages are read within `history_seconds` like every other
+    history read: a reply that never ends is abandoned at the cap."""
+    import threading  # noqa: PLC0415 - only this test needs it
+
+    release = threading.Event()
+
+    def stuck() -> list[str]:
+        release.wait(30)
+        return ["Revert x\n\nThis reverts commit c0aaaaaaa."]
+
+    try:
+        t0 = time.monotonic()
+        out = facts_mod.history(
+            _History({}, {}),
+            base="b0",
+            files=parse_unified_diff(DIFF),
+            changed_names={},
+            pr_title="",
+            pr_messages=[],
+            cfg=facts_mod.FactsConfig(history_seconds=1),
+            read_messages=stuck,
+        )
+        took = time.monotonic() - t0
+    finally:
+        release.set()
+    assert took < 3
+    assert out.facts == []  # the late revert marker is never used
+    assert any("commit messages not read within the 1s cap" in n for n in out.notes)
+
+
+def test_a_commit_message_read_that_fails_on_the_network_is_a_note(
+    repo: Path, frozen_now: None
+):
+    """urlopen raises DNS, reset and timeout failures as OSError, not
+    GitHubError: the review goes on with fewer facts and says why."""
+
+    class Offline(FakeGitHub):
+        def pr_commit_messages(self, n: int) -> list[str]:
+            raise URLError("[Errno 8] nodename nor servname provided")
+
+    gh = Offline()
+    res = run(
+        gh=cast(Any, gh),
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(_review_script()),
+    )
+    assert res.action == "reviewed"
+    assert "**History** — nothing fired" in gh.comments[0]["body"]
+
+
+def test_a_test_class_in_the_hunk_header_scopes_a_removed_assertion():
+    """A method deep in a test class: the hunk header is the class line. An
+    identical line added in another class's method does not hide the removal."""
+
+    def method_hunk(path: str, cls: str, line: str) -> str:
+        return (
+            f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
+            f"@@ -40,2 +40,2 @@ class {cls}:\n{line}\n         pass\n"
+        )
+
+    removed = method_hunk(
+        "tests/unit/test_a.py", "TestA", "-        assert len(files) == 1"
+    )
+    added = method_hunk(
+        "tests/unit/test_b.py", "TestB", "+        assert len(files) == 1"
+    )
+    assert _expectations(removed + added) == [
+        ("assertion removed", "assert len(files) == 1")
+    ]
+    # The same class on both sides (a line moved within it) is not a removal.
+    moved = method_hunk(
+        "tests/unit/test_a.py", "TestA", "+        assert len(files) == 1"
+    )
+    assert _expectations(removed + moved) == []
+
+
 def test_a_cut_commit_list_is_said_in_the_history_facts(repo: Path, frozen_now: None):
     """GitHub lists at most 250 commits of a pull request. When the pull
     request has more, the history line says the revert check did not see them."""

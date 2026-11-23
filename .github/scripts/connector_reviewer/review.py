@@ -56,7 +56,7 @@ from .findings import (
     PRState,
     merge_new,
 )
-from .github import COMMIT_MESSAGE_PAGES, GitHub, GitHubError, bot_login
+from .github import GitHub, GitHubError, bot_login
 from .index import Index, Symbol, build_index, index_source
 from .llm import BudgetExhausted, Client, Ledger, LLMError
 from .principles import PrincipleSet
@@ -360,32 +360,20 @@ def compute_facts(
             for fd in files
             if fd.path.endswith(".py")
         }
-        try:
-            messages = gh.pr_commit_messages(number)
-        except GitHubError as e:
-            trace.line(f"history: commit messages not read ({trace.short(e, 120)})")
-            messages = []
+        total = pr.get("commits")
+        # The commit messages are read inside history's wall-time cap, and a
+        # failed read (HTTP, network or a bad body) is a note, never a crash.
         fx.history = code_facts.history(
             gh,
             base=base,
             files=files,
             changed_names=names,
             pr_title=str(pr.get("title") or ""),
-            pr_messages=messages,
+            pr_messages=[],
             cfg=cfg.facts,
+            read_messages=lambda: gh.pr_commit_messages(number),
+            pr_commits=total if isinstance(total, int) else 0,
         )
-        # The commit list is read in pages of 100, at most COMMIT_MESSAGE_PAGES.
-        fx.history.requests += min(COMMIT_MESSAGE_PAGES, len(messages) // 100 + 1)
-        total = pr.get("commits")
-        if isinstance(total, int) and 0 < len(messages) < total:
-            # GitHub lists at most 250 commits: a revert in a later one is not seen.
-            fx.history.limits.append(
-                f"revert check read the first {len(messages)} of {total} commit messages"
-            )
-            fx.history.notes.append(
-                f"commit messages: {len(messages)} of {total} read (GitHub's limit); "
-                "a revert marker in a later commit is not seen"
-            )
         fx.history_read = True
     return fx
 
