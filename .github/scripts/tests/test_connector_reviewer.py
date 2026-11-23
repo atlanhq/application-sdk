@@ -4339,9 +4339,11 @@ MAIN_ONLY_DIFF = (
 )
 
 
-def _round_one_on_restore_fixture(gh: Any, repo: Path) -> tuple[PrincipleSet, str]:
+def _round_one_on_restore_fixture(
+    gh: Any, repo: Path, pr_diff: str = RESTORE_PR_DIFF_H1
+) -> tuple[PrincipleSet, str]:
     """Round 1 at h1 raises one finding on fetch.py that stays quoted at h2."""
-    gh.diffs[("b0", "h1")] = RESTORE_PR_DIFF_H1
+    gh.diffs[("b0", "h1")] = pr_diff
     principles = principles_of(repo)
     first = run(
         gh=gh,
@@ -4435,6 +4437,47 @@ def test_a_real_base_merge_is_still_excluded(
     assert res.verify_skipped and fid in res.verify_skipped
     assert _verify_requests(script) == []
     assert all("app/common/other.py" not in b for b in _review_files_blocks(script))
+
+
+DELETE_RANGE_DIFF = (
+    "diff --git a/app/storage/fetch.py b/app/storage/fetch.py\n"
+    "--- a/app/storage/fetch.py\n+++ b/app/storage/fetch.py\n"
+    "@@ -1,6 +1,4 @@\n def fetch(client, key, timeout=None):\n"
+    '     """Fetch one object."""\n'
+    "-    client.reset()\n-    client.dispose()\n"
+    "     data = client.get(key)\n     return data.decode()\n"
+)
+
+
+def test_a_round_that_only_deletes_lines_is_rechecked(repo: Path):
+    """A commit that only deletes (here, lines the base branch has) adds no line at
+    all, so it was dropped as a base merge too and verify never ran."""
+    gh = fake_github()
+    gh.files[("app/storage/fetch.py", "h1")] = RESTORED_SRC
+    principles, fid = _round_one_on_restore_fixture(gh, repo, RESTORE_PR_DIFF_H2)
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = DELETE_RANGE_DIFF
+    gh.diffs[("b0", "h2")] = RESTORE_PR_DIFF_H1
+    gh.files[("app/storage/fetch.py", "h2")] = SRC_V2
+    script = Script(
+        response([tool_call("verdicts", {"items": [{"id": fid, "status": "fixed"}]})])
+    )
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles,
+        client_factory=_factory(script),
+    )
+
+    assert res.mode == "incremental"
+    assert res.verify_skipped == [] and res.resolved_verified == [fid]
+    (verify,) = _verify_requests(script)
+    assert "-    client.dispose()" in verify
+    # Selection skips a change with no added line; that is not unread source.
+    assert state_of(res).unread == {} and not res.incomplete
 
 
 def test_a_merge_and_a_restoration_in_one_range_still_rechecks(

@@ -3212,9 +3212,11 @@ def _any_github() -> Any:
     return FakeGitHub()
 
 
-def _round_one_on_restore_fixture(gh: Any, repo: Path) -> tuple[RuleSet, str]:
+def _round_one_on_restore_fixture(
+    gh: Any, repo: Path, pr_diff: str = RESTORE_PR_DIFF_H1
+) -> tuple[RuleSet, str]:
     """Round 1 at h1 raises one finding on fetch.py that stays quoted at h2."""
-    gh.diffs[("b0", "h1")] = RESTORE_PR_DIFF_H1
+    gh.diffs[("b0", "h1")] = pr_diff
     rules = load_rules(repo / ".github" / "lens")
     first = run(
         gh=gh,
@@ -3313,6 +3315,45 @@ def test_a_real_base_merge_is_still_excluded(
     assert all(
         "application_sdk/common/other.py" not in b for b in _review_files_blocks(script)
     )
+
+
+DELETE_RANGE_DIFF = (
+    "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
+    "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+    "@@ -1,6 +1,4 @@\n def fetch(client, key, timeout=None):\n"
+    '     """Fetch one object."""\n'
+    "-    client.reset()\n-    client.dispose()\n"
+    "     data = client.get(key)\n     return data.decode()\n"
+)
+
+
+def test_a_round_that_only_deletes_lines_is_rechecked(repo: Path):
+    """A commit that only deletes (here, lines the base branch has) adds no line at
+    all, so it was dropped as a base merge too and verify never ran."""
+    gh = _any_github()
+    gh.files[("application_sdk/storage/fetch.py", "h1")] = RESTORED_SRC
+    rules, fid = _round_one_on_restore_fixture(gh, repo, RESTORE_PR_DIFF_H2)
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = DELETE_RANGE_DIFF
+    gh.diffs[("b0", "h2")] = RESTORE_PR_DIFF_H1
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = SRC_V2
+    script = Script(
+        response([tool_call("verdicts", {"items": [{"id": fid, "status": "fixed"}]})])
+    )
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+    )
+
+    assert res.mode == "incremental"
+    assert res.verify_skipped == [] and res.resolved_verified == [fid]
+    (verify,) = _verify_requests(script)
+    assert "-    client.dispose()" in verify
 
 
 def test_a_merge_and_a_restoration_in_one_range_still_rechecks(
