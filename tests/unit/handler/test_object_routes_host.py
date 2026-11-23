@@ -22,6 +22,7 @@ from typing import Any
 import obstore
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 from obstore.store import LocalStore, MemoryStore
 
 from application_sdk import _obstore_config
@@ -217,9 +218,8 @@ def test_a_prefix_naming_another_app_stays_in_this_apps_namespace(
     assert key.startswith("persistent-artifacts/apps/mysql/uploads/")
 
 
-def test_the_worker_keeps_accepting_any_prefix() -> None:
-    """Only the shared host validates the prefix; a worker (no upload namespace)
-    stores it as given, exactly as before."""
+def _worker() -> tuple[TestClient, list[str]]:
+    """The routes as the worker registers them: no upload namespace."""
     from fastapi import FastAPI
 
     from application_sdk.handler.object_routes import (
@@ -245,13 +245,71 @@ def test_the_worker_keeps_accepting_any_prefix() -> None:
             upload_file=_upload,
         ),
     )
-    response = TestClient(app).post(
+    return TestClient(app), uploaded
+
+
+def _worker_upload(client: TestClient, prefix: str | None) -> Response:
+    data = {} if prefix is None else {"prefix": prefix}
+    return client.post(
         "/workflows/v1/file",
         files={"file": ("rows.csv", b"a,b\n", "text/csv")},
-        data={"prefix": "my uploads/./2026 run"},
+        data=data,
     )
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [None, "workflow_file_upload", "sample_data/2026-run", "my.app/v1.2"],
+)
+def test_the_worker_keeps_a_safe_prefix_as_given(prefix: str | None) -> None:
+    """The worker does not namespace: its keys stay where its readers look."""
+    client, uploaded = _worker()
+    response = _worker_upload(client, prefix)
     assert response.status_code == 200
-    assert uploaded[0].startswith("my uploads/./2026 run/")
+    expected = prefix or "workflow_file_upload"
+    (key,) = uploaded
+    assert key.startswith(f"{expected}/")
+    assert response.json()["data"]["key"] == key
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "../x",
+        "../../persistent-artifacts/apps/redshift",
+        "a/../b",
+        "/abs",
+        "a//b",
+        "trailing/",
+        ".",
+        "a/./b",
+        "my uploads",
+        "x" * 300,
+        "abc\n",
+    ],
+)
+def test_the_worker_refuses_an_unsafe_prefix(prefix: str) -> None:
+    client, uploaded = _worker()
+    response = _worker_upload(client, prefix)
+    assert response.status_code == 400
+    assert uploaded == []
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "persistent-artifacts/apps/redshift/credentials",
+        "persistent-artifacts",
+        "artifacts/apps/redshift/workflows/run-1",
+        "connection-cache",
+    ],
+)
+def test_the_worker_refuses_a_prefix_in_a_reserved_tree(prefix: str) -> None:
+    """Another app's tree in the shared bucket is not the worker's to write."""
+    client, uploaded = _worker()
+    response = _worker_upload(client, prefix)
+    assert response.status_code == 400
+    assert uploaded == []
 
 
 # --- the store from the host's env ------------------------------------------

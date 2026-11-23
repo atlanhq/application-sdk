@@ -361,7 +361,12 @@ Same manifest, with the inputs in the request body instead of the query string. 
 
 Upload a file to be used as workflow input (e.g. CSV for file-based connectors).
 
-**Request body:** `multipart/form-data` with a `file` field.
+**Request body:** `multipart/form-data` with a `file` field, and optional `filename`, `prefix` and `contentType` fields. `prefix` (default `workflow_file_upload`) is the object-store prefix the file is stored under, as `{prefix}/{uuid}.{ext}`. It must be relative `/`-separated segments of letters, digits, `_`, `-` and `.`, with no `.` or `..` segment, at most 256 characters. On the worker it is kept as given but may not start with an SDK-owned root (`persistent-artifacts`, `artifacts`, `connection-cache`); on the consolidated API host it is placed under `persistent-artifacts/apps/{app}/uploads/`.
+
+**Error responses:**
+
+- `400` — `prefix` is unsafe, or (on the worker) starts with an SDK-owned root.
+- `503 {"detail": "Storage not configured"}`
 
 **Response:** `FileUploadResponse` serialized with camelCase aliases:
 ```json
