@@ -35,7 +35,7 @@ import json
 import os
 import tempfile
 import warnings
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
@@ -48,7 +48,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ValidationError
-from temporalio.client import WorkflowFailureError
+from temporalio.client import (
+    WorkflowExecutionDescription,
+    WorkflowFailureError,
+    WorkflowHandle,
+)
 
 from application_sdk import _deprecation
 from application_sdk._runtime.offload import (  # noqa: F401 — re-exported (served here before object_routes)
@@ -283,9 +287,15 @@ async def _get_workflow_result(
     client: Client,
     *,
     workflow_id: str,
+    run_id: str,
     output_type: type | None,
 ) -> dict[str, Any]:
     """Fetch and normalise a completed workflow result.
+
+    *run_id* pins the read to the run whose ownership the caller checked. A
+    handle resolved by ID alone follows whichever run holds the ID now, which
+    after a failed run can be a different app's workflow started under the
+    same ID (FND-5215).
 
     Attempts typed deserialization first (so the OutputContract dataclass is
     reconstructed properly). Falls back to untyped if that fails, logging a
@@ -299,7 +309,7 @@ async def _get_workflow_result(
     """
     try:
         result = await client.get_workflow_handle(
-            workflow_id, result_type=output_type
+            workflow_id, run_id=run_id, result_type=output_type
         ).result()
     except Exception:
         logger.warning(
@@ -308,7 +318,7 @@ async def _get_workflow_result(
             output_type,
             exc_info=True,
         )
-        result = await client.get_workflow_handle(workflow_id).result()
+        result = await client.get_workflow_handle(workflow_id, run_id=run_id).result()
 
     if isinstance(result, PydanticBaseModel):
         return result.model_dump()
@@ -331,11 +341,18 @@ def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
     app's workflow, or an external one); the caller falls back to untyped
     deserialisation via ``_get_workflow_result``'s own fallback path.
     """
-    if _workflow_config.app_class is None:
-        return None
-    app_cls_name = _workflow_config.app_name
-    if not app_cls_name:
-        return None
+    workflow_types = _registered_workflow_types(_workflow_config)
+    ep = workflow_types.get(workflow_type_name)
+    return ep.output_type if ep else None
+
+
+def _registered_workflow_types(
+    workflow_config: WorkflowClientConfig,
+) -> Mapping[str, EntryPointMetadata]:
+    """Every Temporal workflow type the configured app registers, or an empty
+    mapping when no app is configured or it is not in the registry."""
+    if workflow_config.app_class is None or not workflow_config.app_name:
+        return {}
 
     from application_sdk.app.registry import (  # noqa: PLC0415
         AppNotRegisteredError,
@@ -343,15 +360,15 @@ def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
     )
 
     try:
-        app_meta = AppRegistry.get_instance().get(app_cls_name)
+        app_meta = AppRegistry.get_instance().get(workflow_config.app_name)
     except AppNotRegisteredError:
         logger.warning(
-            "App %r not found in registry; returning None", app_cls_name, exc_info=True
+            "App %r not found in registry; no workflow types resolved",
+            workflow_config.app_name,
+            exc_info=True,
         )
-        return None
-
-    ep = app_meta.workflow_types.get(workflow_type_name)
-    return ep.output_type if ep else None
+        return {}
+    return app_meta.workflow_types
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +418,50 @@ _workflow_config: WorkflowClientConfig = WorkflowClientConfig()
 _handler_auth_manager: Any | None = None
 _secret_store: SecretStore | None = None
 _storage: ObjectStore | None = None
+
+
+def _workflow_not_found(workflow_id: str) -> HTTPException:
+    """The 404 every workflow-lifecycle route answers for an ID it will not act on."""
+    return HTTPException(status_code=404, detail=f"Workflow not found: {workflow_id}")
+
+
+async def _describe_owned_workflow(
+    handle: WorkflowHandle[Any, Any],
+    workflow_config: WorkflowClientConfig,
+    workflow_id: str,
+) -> WorkflowExecutionDescription:
+    """Describe *handle*, refusing a workflow that does not belong to this app.
+
+    The Temporal namespace is shared across apps, so a bare workflow ID can
+    name another app's run. A run is this app's only when both hold:
+
+    - it is on ``workflow_config.task_queue``, where ``/start`` dispatches
+      every workflow (``continue_as_new`` keeps the queue, and worker pools
+      route activities, not workflows);
+    - its type is one this app registers. Workflow types carry the app name,
+      so this separates two apps that were configured onto the same queue.
+
+    Any other run gets the same 404 as a missing workflow, so the route does
+    not confirm that the ID exists elsewhere. Callers act on ``desc.run_id``
+    (or a handle already pinned to a run) so that the run checked here is
+    the run acted on.
+    """
+    desc = await handle.describe()
+    if (
+        not workflow_config.task_queue
+        or desc.task_queue != workflow_config.task_queue
+        or desc.workflow_type not in _registered_workflow_types(workflow_config)
+    ):
+        logger.warning(
+            "Refusing workflow %s: type %s on task queue %s is not this app's (queue %s)",
+            workflow_id,
+            desc.workflow_type,
+            desc.task_queue,
+            workflow_config.task_queue,
+        )
+        raise _workflow_not_found(workflow_id)
+    return desc
+
 
 # Directory where generated contract JSON files are stored
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
@@ -1277,7 +1338,7 @@ def _register_workflow_routes(
 
     @app.post("/workflows/v1/stop/{workflow_id}/{run_id:path}")
     async def stop_workflow(workflow_id: str, run_id: str) -> JSONResponse:
-        if not _workflow_config.is_configured():
+        if not workflow_config.is_configured():
             raise HTTPException(
                 status_code=503, detail="Workflow execution not configured."
             )
@@ -1285,18 +1346,19 @@ def _register_workflow_routes(
         client = await _get_temporal_client()
         try:
             handle = client.get_workflow_handle(workflow_id, run_id=run_id)
+            await _describe_owned_workflow(handle, workflow_config, workflow_id)
             await handle.terminate(reason="Stopped via handler API")
             return JSONResponse(
                 content={"success": True, "message": "Workflow terminated successfully"}
             )
+        except HTTPException:
+            raise
         except Exception as e:
             if (
                 isinstance(e, temporalio.service.RPCError)
                 and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
             ):
-                raise HTTPException(
-                    status_code=404, detail=f"Workflow not found: {workflow_id}"
-                ) from None
+                raise _workflow_not_found(workflow_id) from None
             logger.error(
                 "Failed to stop workflow %s run %s: %s",
                 workflow_id,
@@ -1310,7 +1372,7 @@ def _register_workflow_routes(
 
     @app.get("/workflows/v1/result/{workflow_id}")
     async def get_result(workflow_id: str, wait: bool = False) -> JSONResponse:
-        if not _workflow_config.is_configured():
+        if not workflow_config.is_configured():
             raise HTTPException(
                 status_code=503, detail="Workflow execution not configured."
             )
@@ -1318,10 +1380,10 @@ def _register_workflow_routes(
         client = await _get_temporal_client()
         try:
             handle = client.get_workflow_handle(workflow_id)
+            desc = await _describe_owned_workflow(handle, workflow_config, workflow_id)
 
             if wait:
                 try:
-                    desc = await handle.describe()
                     output_type = _resolve_output_type_for_workflow(desc.workflow_type)
                     if output_type is None:
                         logger.warning(
@@ -1330,7 +1392,10 @@ def _register_workflow_routes(
                             desc.workflow_type,
                         )
                     result_data = await _get_workflow_result(
-                        client, workflow_id=workflow_id, output_type=output_type
+                        client,
+                        workflow_id=workflow_id,
+                        run_id=desc.run_id,
+                        output_type=output_type,
                     )
                     return JSONResponse(
                         content=_wrap_response(
@@ -1379,7 +1444,6 @@ def _register_workflow_routes(
                         )
                     )
 
-            desc = await handle.describe()
             status = desc.status.name if desc.status else "UNKNOWN"
 
             if status == "RUNNING":
@@ -1403,7 +1467,10 @@ def _register_workflow_routes(
                             desc.workflow_type,
                         )
                     result_data = await _get_workflow_result(
-                        client, workflow_id=workflow_id, output_type=output_type
+                        client,
+                        workflow_id=workflow_id,
+                        run_id=desc.run_id,
+                        output_type=output_type,
                     )
                     return JSONResponse(
                         content=_wrap_response(
@@ -1475,14 +1542,14 @@ def _register_workflow_routes(
                     )
                 )
 
+        except HTTPException:
+            raise
         except Exception as e:
             if (
                 isinstance(e, temporalio.service.RPCError)
                 and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
             ):
-                raise HTTPException(
-                    status_code=404, detail=f"Workflow not found: {workflow_id}"
-                ) from None
+                raise _workflow_not_found(workflow_id) from None
             # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
                 "Failed to get workflow result for %s: %s",
@@ -1496,7 +1563,7 @@ def _register_workflow_routes(
 
     @app.get("/workflows/v1/status/{workflow_id}/{run_id:path}")
     async def get_workflow_status(workflow_id: str, run_id: str) -> JSONResponse:
-        if not _workflow_config.is_configured():
+        if not workflow_config.is_configured():
             raise HTTPException(
                 status_code=503, detail="Workflow execution not configured."
             )
@@ -1504,7 +1571,7 @@ def _register_workflow_routes(
         client = await _get_temporal_client()
         try:
             handle = client.get_workflow_handle(workflow_id, run_id=run_id)
-            desc = await handle.describe()
+            desc = await _describe_owned_workflow(handle, workflow_config, workflow_id)
             status = desc.status.name if desc.status else "UNKNOWN"
 
             execution_duration_seconds = 0
@@ -1528,14 +1595,14 @@ def _register_workflow_routes(
                     message=f"Workflow status: {status}",
                 )
             )
+        except HTTPException:
+            raise
         except Exception as e:
             if (
                 isinstance(e, temporalio.service.RPCError)
                 and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
             ):
-                raise HTTPException(
-                    status_code=404, detail=f"Workflow not found: {workflow_id}"
-                ) from None
+                raise _workflow_not_found(workflow_id) from None
             # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
                 "Failed to get workflow status for %s run %s: %s",
