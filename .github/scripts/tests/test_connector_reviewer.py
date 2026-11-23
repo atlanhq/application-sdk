@@ -10051,3 +10051,65 @@ def test_a_facts_value_of_the_wrong_type_is_refused(tmp_path: Path):
     assert cfg.facts.history is False and cfg.facts.history_days == 14
     assert cfg.load_errors == []
     assert not any(e.startswith("facts.") for e in validate(cfg))
+
+
+# ---- FND-5323: defects lens found in code this fork inherited (fixed in lens, ported here) ----
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["x1;" * 3000, "é€" * 2000, "deadbeef" * 1000],
+    ids=["fragmented", "non-ascii", "hex"],
+)
+def test_the_reservation_covers_a_prompt_as_dense_as_one_token_per_byte(content: str):
+    """F-19fdc0: the chars/3.5 estimate is an average, not a bound. The
+    reservation must cover a prompt the tokenizer splits into one token per
+    byte, or the booked cost can pass what was reserved."""
+    msgs: list[dict[str, Any]] = [{"role": "user", "content": content}]
+    c = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=Script())
+    sent = len(json.dumps(llm_mod.prompt_view(msgs)).encode())
+    densest = (sent * PRICE.prompt_ceiling + 100 * PRICE.output_per_mtok) / 1e6
+    assert c.worst_case_cost(msgs, None, 100) >= densest
+    # Sizing still uses the estimate: only the reservation is the bound.
+    assert llm_mod.estimate_tokens(content) < len(content.encode())
+
+
+def test_an_attempt_that_may_have_been_billed_is_booked_before_the_retry():
+    """F-edf298: a 5xx or a cut stream can come after the provider generated
+    tokens. Each such attempt is booked at its worst case, and the retry takes a
+    reservation of its own."""
+    led = Ledger(cap_usd=1)
+    sent = Script(
+        (502, {"Retry-After": "0"}, "bad gateway"),
+        (0, {"Retry-After": "0"}, "transport: the stream ended"),
+        response(),
+    )
+    c = Client(model="m", price=PRICE, ledger=led, transport=sent, max_retries=2)
+    msgs: list[dict[str, Any]] = [{"role": "user", "content": "hi"}]
+    worst = c.worst_case_cost(msgs, None, 10)
+    c.complete("review:x", msgs, max_tokens=10)
+    assert len(sent.requests) == 3
+    assert led.spent_usd == pytest.approx(2 * worst + 0.002)
+    assert led.by_stage["review:x"] == pytest.approx(2 * worst + 0.002)
+    assert led.calls == 1 and led.reserved_usd == 0
+
+
+def test_a_rate_limit_is_not_booked_as_spend():
+    led = Ledger(cap_usd=1)
+    sent = Script((429, {"Retry-After": "0"}, "rate limited"), response())
+    c = Client(model="m", price=PRICE, ledger=led, transport=sent)
+    c.complete("review:x", [{"role": "user", "content": "hi"}], max_tokens=10)
+    assert led.spent_usd == pytest.approx(0.002) and led.reserved_usd == 0
+
+
+def test_no_retry_when_the_cap_cannot_cover_a_second_billable_attempt():
+    msgs: list[dict[str, Any]] = [{"role": "user", "content": "hi"}]
+    probe = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=Script())
+    worst = probe.worst_case_cost(msgs, None, 10)
+    led = Ledger(cap_usd=worst * 1.5)
+    sent = Script((503, {"Retry-After": "0"}, "down"), response())
+    c = Client(model="m", price=PRICE, ledger=led, transport=sent, max_retries=2)
+    with pytest.raises(BudgetExhausted, match="may have been billed"):
+        c.complete("review:x", msgs, max_tokens=10)
+    assert len(sent.requests) == 1
+    assert led.spent_usd == pytest.approx(worst) and led.reserved_usd == 0

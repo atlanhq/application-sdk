@@ -1,13 +1,14 @@
 """The one way lens talks to a model: Atlan Model Gateway's OpenAI-compatible
 `/v1/responses` (or `/v1/chat/completions`), with the spend cap enforced here in code.
 
-Every call is priced BEFORE it is sent (prompt estimate × input price +
+Every call is priced BEFORE it is sent (prompt upper bound × input price +
 `max_tokens` × output price) and refused if it could take the run past its
 budget; the actual cost the gateway reports (or the list-price cost) is then booked. A prompt cannot talk
 its way past this, and neither can a model that keeps calling tools.
 
 Retries are for transport weather only — 5xx, a rate-limit 429, a timeout —
-and are bounded. A budget-exceeded 429 is deterministic and is never retried:
+and are bounded. An attempt that may have been billed (a 5xx, a cut stream, a
+timeout) is booked at its worst case before a retry reserves again. A budget-exceeded 429 is deterministic and is never retried:
 the September incident that re-dispatched into a spent key, hour after hour,
 is the case this exists to make impossible.
 """
@@ -127,6 +128,15 @@ def estimate_tokens(text: str) -> int:
     return int(len(text) / 3.5) + 1
 
 
+def token_bound(text: str) -> int:
+    """The most tokens `text` can be: one per UTF-8 byte, since every token of a
+    byte-level tokenizer covers at least one byte. `estimate_tokens` is an
+    average, and a token-dense prompt (fragmented code, hashes, non-ASCII)
+    beats it; the reservation against the cap must not be beaten, so it counts
+    with this. Sizing (bundles, the context ceiling) keeps the estimate."""
+    return len(text.encode("utf-8")) + 1
+
+
 @dataclass
 class Price:
     input_per_mtok: float
@@ -178,6 +188,15 @@ class Ledger:
     def release(self, amount: float) -> None:
         with self._lock:
             self.reserved_usd = max(self.reserved_usd - amount, 0.0)
+
+    def settle(self, stage: str, amount: float) -> None:
+        """Turn `amount` of a reservation into spend, with no usage to book: an
+        attempt that failed after the provider may have generated tokens. Only
+        the money is booked: it is not a call, and it has no token counts."""
+        with self._lock:
+            self.reserved_usd = max(self.reserved_usd - amount, 0.0)
+            self.spent_usd += amount
+            self.by_stage[stage] = self.by_stage.get(stage, 0.0) + amount
 
     def book(self, stage: str, cost: float, usage: dict[str, Any]) -> None:
         with self._lock:
@@ -485,7 +504,7 @@ class Client:
             json.dumps(tools) if tools else ""
         )
         return (
-            estimate_tokens(prompt) * self.price.prompt_ceiling
+            token_bound(prompt) * self.price.prompt_ceiling
             + max_tokens * self.price.output_per_mtok
         ) / 1e6
 
@@ -677,6 +696,9 @@ class Client:
             raise BudgetExhausted(
                 f"{stage}: worst case ${worst:.4f} exceeds the ${self.ledger.remaining:.4f} left of the ${self.ledger.cap_usd:.2f} cap"
             )
+        # What this call holds against the cap right now: a retry after an attempt
+        # that may have been billed settles the old hold and takes a new one.
+        hold = [worst]
         try:
             return self._complete(
                 stage,
@@ -687,9 +709,10 @@ class Client:
                 temperature,
                 tool_choice,
                 cache_key,
+                hold=hold,
             )
         finally:
-            self.ledger.release(worst)
+            self.ledger.release(hold[0])
 
     def _body(
         self,
@@ -921,7 +944,12 @@ class Client:
         temperature,
         tool_choice,
         cache_key,
+        *,
+        hold: list[float] | None = None,
     ) -> Completion:  # noqa: ANN001
+        # The reservation `complete` took for this call; None when called directly.
+        worst = hold[0] if hold else 0.0
+
         def build() -> dict[str, Any]:
             if self.api == "responses":
                 return self._responses_body(
@@ -1062,8 +1090,25 @@ class Client:
                     f"{stage}: {last} — stopping the run (a request lens got wrong; retrying cannot help)"
                 )
             retryable = status == 0 or status == 429 or status >= 500
+            # A cut stream, a timeout or a 5xx can come after the provider has
+            # generated tokens, and those are billed, but no usage comes back to
+            # book. So the attempt's worst case is booked as spent, and a retry
+            # must reserve its own: one reservation never covers two billable
+            # attempts. The ledger may overstate a failed call, never understate it.
+            billable = status == 0 or status >= 500
+            if billable and hold is not None and hold[0]:
+                self.ledger.settle(stage, hold[0])
+                hold[0] = 0.0
             if not retryable or attempt >= self.max_retries or self._breaker_open():
                 break
+            if billable and hold is not None:
+                if not self.ledger.reserve(worst):
+                    raise BudgetExhausted(
+                        f"{stage}: not retried — the failed attempt may have been billed, and "
+                        f"a retry's worst case ${worst:.4f} exceeds the ${self.ledger.remaining:.4f} left "
+                        f"of the ${self.ledger.cap_usd:.2f} cap ({last})"
+                    )
+                hold[0] = worst
             time.sleep(self._retry_after(headers, attempt))
             attempt += 1
         raise LLMError(f"{stage}: {last}")
