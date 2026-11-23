@@ -130,6 +130,10 @@ local function assertsStringMap(py: String): Boolean =
     && py.contains("def _coerce_string_maps(cls, value: Any) -> Any:")
     && py.contains("        if value is None:\n            return {}\n")
     && py.contains("String-map input was not a JSON object; using an empty map.")
+    // A JSON error is logged with its trace, not swallowed by an assignment
+    // (conformance E009), and the raw value is never logged.
+    && py.contains("        except orjson.JSONDecodeError:\n            logger.debug(\n                \"String-map input was not valid JSON; using an empty map.\",\n                exc_info=True,\n            )\n            return {}\n")
+    && !py.contains("parsed = None")
     // The shared validator still covers the control field, and only it.
     && py.contains("@field_validator(\"other_object\", mode=\"before\")")
     && py.contains("def _coerce_json_object_strings(cls, value: Any) -> Any:")
