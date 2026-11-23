@@ -10489,6 +10489,9 @@ def test_an_unknown_word_after_review_gets_a_usage_reply_and_no_review(body):
         ("/REVIEW FORCE\n", True, False),
         ("/review force verify-budget", True, True),
         ("/review verify-budget", False, True),
+        # A note on the lines below the command is for people, not an option.
+        ("/review\nplease look at the retry change", False, False),
+        ("/review force\nthe base moved, so review it all again", True, False),
     ],
 )
 def test_review_and_its_options_still_start_a_review(body, force, verify_budget):

@@ -288,7 +288,11 @@ def decide(
                 pr_author=pr_author,
                 reply=not reason,
             )
-        options = [w.lower() for w in words[1:3]]
+        # Options come from the command's own line only: a note on the lines
+        # below a bare `/review` ("/review\nplease look at the retry") is a
+        # message to the reviewers, not an option, and still reviews.
+        first_line = str(comment.get("body") or "").strip().splitlines()[0].split()
+        options = [w.lower() for w in first_line[1:3]]
         if options and options[0] not in REVIEW_OPTIONS:
             # Not a word this command knows: tell the commenter, review nothing.
             return Decision(
