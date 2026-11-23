@@ -292,8 +292,8 @@ def decide(
         # below a bare `/review` ("/review\nplease look at the retry") is a
         # message to the reviewers, not an option, and still reviews.
         first_line = str(comment.get("body") or "").strip().splitlines()[0].split()
-        options = [w.lower() for w in first_line[1:3]]
-        if options and options[0] not in REVIEW_OPTIONS:
+        options = [w.lower() for w in first_line[1:]]
+        if any(w not in REVIEW_OPTIONS for w in options):
             # Not a word this command knows: tell the commenter, review nothing.
             return Decision(
                 False,

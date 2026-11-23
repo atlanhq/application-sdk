@@ -7480,10 +7480,6 @@ def test_every_diff_rendered_into_a_prompt_is_a_known_path():
                     and isinstance(node.func, ast.Attribute)
                     and node.func.attr == "render"
                     and fn.name != "render"
-                    and not (
-                        isinstance(node.func.value, ast.Name)
-                        and node.func.value.id == "p"  # a principle, not a diff
-                    )
                 ):
                     found.setdefault(src.name, set()).add(fn.name)
     assert found == _DIFF_RENDERERS

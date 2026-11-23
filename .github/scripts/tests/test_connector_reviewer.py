@@ -2238,7 +2238,9 @@ def test_a_push_never_triggers_a_review(name, action):
 
 def test_maintainer_comment_triggers_and_force_is_parsed():
     assert decide("issue_comment", _comment("/review"), REPO).run
-    d = decide("issue_comment", _comment("/review force please"), REPO)
+    # A note goes on the next line: every word on the command's line is an
+    # option, so a typo of one is never read as prose (lens F-b64eec).
+    d = decide("issue_comment", _comment("/review force\nplease"), REPO)
     assert d.run and d.force
 
 
@@ -6325,7 +6327,7 @@ def test_shipped_config_keeps_the_verify_default_and_names_the_opt_in():
         ("/review", False, False),
         ("/review verify-budget", False, True),
         ("/review force verify-budget", True, True),
-        ("/review force please", True, False),
+        ("/review force\nplease", True, False),
     ],
 )
 def test_verify_budget_is_parsed_from_the_comment(body, force, verify_budget):
@@ -10454,10 +10456,9 @@ def test_every_diff_rendered_into_a_prompt_is_a_known_path():
                     and isinstance(node.func, ast.Attribute)
                     and node.func.attr == "render"
                     and fn.name != "render"
-                    and not (
-                        isinstance(node.func.value, ast.Name)
-                        and node.func.value.id == "p"  # a principle, not a diff
-                    )
+                    # The one call that renders a principle, not a diff: exempt by
+                    # its exact site, never by a variable's name.
+                    and (src.name, fn.name) != ("principles.py", "render_for")
                 ):
                     found.setdefault(src.name, set()).add(fn.name)
     assert found == _DIFF_RENDERERS
@@ -10468,7 +10469,15 @@ def test_every_diff_rendered_into_a_prompt_is_a_known_path():
 
 @pytest.mark.parametrize(
     "body",
-    ["/review frobnicate", "/review forse", "/review Forcee now", "/review please"],
+    [
+        "/review frobnicate",
+        "/review forse",
+        "/review Forcee now",
+        "/review please",
+        # A typo after a valid option is still a typo (lens F-b64eec).
+        "/review force forse",
+        "/review verify-budget please",
+    ],
 )
 def test_an_unknown_word_after_review_gets_a_usage_reply_and_no_review(body):
     d = decide("issue_comment", _comment(body), REPO)
