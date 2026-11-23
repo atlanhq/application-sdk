@@ -15,7 +15,10 @@ from typing import Any, TypeAlias
 import orjson
 
 from application_sdk._logging import get_logger
-from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
+from application_sdk.common.sql_filters_errors import (
+    InvalidSqlFilterError,
+    InvalidSqlFilterValueError,
+)
 from application_sdk.errors import AppError
 
 logger = get_logger(__name__)
@@ -522,6 +525,21 @@ def transform_posix_regex(regex_pattern: str) -> str:
     return "|".join(transformed_patterns)
 
 
+def _reject_unsafe_raw_filter(value: object) -> None:
+    """Run the deny-list and the regex-structure check for a raw-dict caller.
+
+    The typed contracts run both validators inside Pydantic; the raw helpers
+    below run the same pair here. A rejection is re-raised as
+    :class:`InvalidSqlFilterValueError` so it carries the ``USER`` audience
+    instead of reaching the activity as an unclassified ``ValueError``.
+    """
+    try:
+        validate_filter_no_sql_injection(value)
+        validate_filter_regex_syntax(value)
+    except ValueError as e:
+        raise InvalidSqlFilterValueError(message=str(e), cause=e) from e
+
+
 def prepare_query(
     query: str | None,
     workflow_args: dict[str, Any],
@@ -564,24 +582,25 @@ def prepare_query(
             or metadata.get("exclude-table-regex")
             or metadata.get("exclude_table_regex")
         )
-        if isinstance(temp_table_regex, str):
+        # Only a value that will be rendered is validated: with no fragment
+        # to render into, the value never reaches the SQL, and a caller that
+        # checks it elsewhere (with its own error) keeps that verdict.
+        if temp_table_regex and temp_table_regex_sql:
+            if not isinstance(temp_table_regex, str):
+                # A non-string would skip the string checks below and still
+                # be stringified into the quoted literal by ``.format``.
+                raise InvalidSqlFilterValueError(
+                    message="temp-table regex must be a string, got "
+                    f"{type(temp_table_regex).__name__}"
+                )
             # Translate legacy quoted-CSV shape to a v3 alternation regex
             # before applying the deny-list. Without this, raw-dict
             # callers (which bypass the typed ``ExtractionInput``
             # validators) still trip on migrated workflow specs.
             temp_table_regex = normalize_legacy_filter_value(temp_table_regex)
-            validate_filter_no_sql_injection(temp_table_regex)
-            # FND-5216: the same structural check the typed contracts run.
-            validate_filter_regex_syntax(temp_table_regex)
-        elif temp_table_regex:
-            # A truthy non-string would skip the checks above and still be
-            # stringified into the quoted literal by ``.format`` below.
-            # conformance: ignore[E012] Mirrors the typed contract's Pydantic type error; ValueError matches every other rejection on this path
-            raise ValueError(
-                "temp-table regex must be a string, got "
-                f"{type(temp_table_regex).__name__}"
-            )
-        if temp_table_regex and temp_table_regex_sql is not None:
+            # FND-5216: the deny-list plus the structural check the typed
+            # contracts run.
+            _reject_unsafe_raw_filter(temp_table_regex)
             temp_table_regex_sql = strip_sql_block_comments(
                 temp_table_regex_sql
             ).format(exclude_table_regex=temp_table_regex)
@@ -634,6 +653,10 @@ def prepare_query(
                 exclude_empty_tables=exclude_empty_tables,
                 exclude_views=exclude_views,
             )
+    except InvalidSqlFilterValueError:
+        # The customer's filter was refused: surface it with its USER
+        # audience rather than collapse it into the ``None`` return below.
+        raise
     except AppError as e:
         error_message = str(e).split(": ", 1)[-1] if ": " in str(e) else str(e)
         logger.warning(
@@ -668,8 +691,7 @@ async def get_database_names(
     if isinstance(raw_include, str):
         raw_include = normalize_legacy_filter_value(raw_include)
     if isinstance(raw_include, (str, dict)):
-        validate_filter_no_sql_injection(raw_include)
-        validate_filter_regex_syntax(raw_include)
+        _reject_unsafe_raw_filter(raw_include)
     database_names = parse_filter_input(raw_include)
 
     database_names = [
@@ -740,22 +762,18 @@ def prepare_filters(
     # the typed contracts run, so both paths refuse the same input.
     if isinstance(include_filter_str, str):
         include_filter_str = normalize_legacy_filter_value(include_filter_str)
-        validate_filter_no_sql_injection(include_filter_str)
-        validate_filter_regex_syntax(include_filter_str)
+        _reject_unsafe_raw_filter(include_filter_str)
     if isinstance(exclude_filter_str, str):
         exclude_filter_str = normalize_legacy_filter_value(exclude_filter_str)
-        validate_filter_no_sql_injection(exclude_filter_str)
-        validate_filter_regex_syntax(exclude_filter_str)
+        _reject_unsafe_raw_filter(exclude_filter_str)
 
     include_filter = parse_filter_input(include_filter_str)
     exclude_filter = parse_filter_input(exclude_filter_str)
 
     # Re-validate the parsed shapes — defense in depth for callers that
     # pass a dict directly without going through the string path.
-    validate_filter_no_sql_injection(include_filter)
-    validate_filter_regex_syntax(include_filter)
-    validate_filter_no_sql_injection(exclude_filter)
-    validate_filter_regex_syntax(exclude_filter)
+    _reject_unsafe_raw_filter(include_filter)
+    _reject_unsafe_raw_filter(exclude_filter)
 
     normalized_include_filter_list = normalize_filters(include_filter, True)
     normalized_exclude_filter_list = normalize_filters(exclude_filter, False)

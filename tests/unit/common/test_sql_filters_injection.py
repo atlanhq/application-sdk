@@ -27,6 +27,8 @@ from application_sdk.common.sql_filters import (
     strip_sql_block_comments,
     validate_filter_no_sql_injection,
 )
+from application_sdk.common.sql_filters_errors import InvalidSqlFilterValueError
+from application_sdk.errors import Audience, FailureCategory
 
 # ---------------------------------------------------------------------------
 # validate_filter_no_sql_injection — the deny-list itself
@@ -517,3 +519,87 @@ class TestTempTableRegexNonString:
         )
         assert result is not None
         assert "REGEXP" not in result
+
+
+# ---------------------------------------------------------------------------
+# Failure audience on the raw path (FND-5216). A refused filter is the
+# customer's own configuration, so it must reach the activity typed as a
+# USER-audience input error -- not as an unclassified ValueError, and not as
+# ``prepare_query``'s ``None`` return, which callers turn into an internal
+# "query prep failed" error. It stays a ValueError for existing guards.
+# ---------------------------------------------------------------------------
+
+
+class TestRawPathRejectionIsUserAudience:
+    @staticmethod
+    def _assert_user_input_error(exc: BaseException) -> None:
+        assert isinstance(exc, InvalidSqlFilterValueError)
+        assert isinstance(exc, ValueError)
+        assert exc.audience is Audience.USER
+        assert exc.category is FailureCategory.INVALID_INPUT
+        assert exc.code == "INVALID_INPUT_SQL_FILTER_VALUE"
+
+    @pytest.mark.parametrize("value", ["x' OR '1'='1", "^tmp_\\", "^(tmp_", ["^tmp_"]])
+    def test_prepare_query_temp_table_regex(self, value: object) -> None:
+        with pytest.raises(InvalidSqlFilterValueError) as exc_info:
+            prepare_query(
+                "SELECT 1 WHERE 1=1 {temp_table_regex_sql}",
+                {"metadata": {"temp-table-regex": value}},
+                temp_table_regex_sql=_TEMP_TABLE_FRAGMENT,
+            )
+        self._assert_user_input_error(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "include", ["name'; DROP TABLE x", '{"^db$": ["^public\\\\"]}', '{"^[a-z": []}']
+    )
+    def test_prepare_query_include_filter(self, include: str) -> None:
+        with pytest.raises(InvalidSqlFilterValueError) as exc_info:
+            prepare_query("SELECT 1", {"metadata": {"include-filter": include}})
+        self._assert_user_input_error(exc_info.value)
+
+    def test_prepare_filters(self) -> None:
+        with pytest.raises(InvalidSqlFilterValueError) as exc_info:
+            prepare_filters("", '{"^[z-a]$": ["^public$"]}')
+        self._assert_user_input_error(exc_info.value)
+
+    async def test_get_database_names(self) -> None:
+        sql_client = MagicMock()
+        sql_client.get_results = AsyncMock()
+        with pytest.raises(InvalidSqlFilterValueError) as exc_info:
+            await get_database_names(
+                sql_client,
+                {"metadata": {"include-filter": {"db'; DROP--": ["public"]}}},
+                "SELECT name FROM information_schema.databases",
+            )
+        self._assert_user_input_error(exc_info.value)
+        sql_client.get_results.assert_not_called()
+
+    def test_message_does_not_echo_value(self) -> None:
+        with pytest.raises(InvalidSqlFilterValueError) as exc_info:
+            prepare_filters("secret_marker'", "")
+        assert "secret_marker" not in str(exc_info.value)
+
+
+class TestTempTableRegexNotRenderedIsNotJudged:
+    """A caller that renders no temp-table fragment never puts the value in
+    SQL, so ``prepare_query`` leaves it alone and the caller's own check --
+    with its own error class and audience -- stays the one that fires."""
+
+    @pytest.mark.parametrize("value", ["tmp_[a-z", "^tmp_\\", "x'y", ["^tmp_"]])
+    @pytest.mark.parametrize("fragment", ["", None])
+    def test_value_is_not_validated_without_a_fragment(
+        self, value: object, fragment: str | None
+    ) -> None:
+        result = prepare_query(
+            "SELECT 1 WHERE 1=1 {temp_table_regex_sql}",
+            {"metadata": {"temp-table-regex": value}},
+            temp_table_regex_sql=fragment,
+        )
+        assert result == "SELECT 1 WHERE 1=1 "
+
+    def test_default_fragment_is_not_validated(self) -> None:
+        result = prepare_query(
+            "SELECT 1 WHERE 1=1 {temp_table_regex_sql}",
+            {"metadata": {"temp-table-regex": "tmp_[a-z"}},
+        )
+        assert result == "SELECT 1 WHERE 1=1 "
