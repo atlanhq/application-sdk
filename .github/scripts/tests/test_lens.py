@@ -3282,6 +3282,40 @@ def test_restoring_base_lines_without_a_merge_is_rechecked(
     assert "+    client.dispose()" in verify
 
 
+def test_an_unreadable_merge_base_reviews_the_whole_range(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+):
+    """A failed compare (e.g. a rate limit) returns no merge base. That must not be
+    taken as proof of a merge, which could drop an author's restoration from
+    review with nothing marking the run incomplete: the whole range is kept."""
+    gh = _any_github()
+    rules, fid = _round_one_on_restore_fixture(gh, repo)
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = RESTORE_RANGE_DIFF
+    gh.diffs[("b0", "h2")] = RESTORE_PR_DIFF_H2
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = RESTORED_SRC
+    gh.merge_bases[("b0", "h2")] = ""  # the compare request failed
+    script = Script(
+        response([tool_call("verdicts", {"items": [{"id": fid, "status": "fixed"}]})])
+    )
+    capsys.readouterr()
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+    )
+
+    log = capsys.readouterr().err
+    assert "the merge base could not be read: reviewing the whole range" in log
+    assert "excluded changes that came from merging" not in log
+    assert "1 file(s) in range" in log
+    assert res.verify_skipped == [] and res.resolved_verified == [fid]
+
+
 def test_a_real_base_merge_is_still_excluded(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ):

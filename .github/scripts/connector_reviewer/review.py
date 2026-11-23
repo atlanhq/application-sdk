@@ -229,13 +229,21 @@ def base_merged_in(gh: GitHub, base: str, reviewed_head: str, head: str) -> str:
     The range carries base-branch changes only when a merge brought them in,
     which moves the merge base with the base branch. Without one, every change
     in the range is the author's, including a line restored to what the base
-    branch has and a commit that only deletes. A merge base that cannot be read
-    counts as moved, so the base branch's code never reaches the line review as
-    the author's."""
+    branch has and a commit that only deletes.
+
+    A merge base that cannot be read (a rate limit, a missing SHA) is not proof
+    of a merge: taking it as one could drop an author's restoration from review
+    with nothing marking the run incomplete. The whole range is reviewed
+    instead; at worst a merged-in base change is reviewed too, which costs a
+    little and hides nothing."""
     before = gh.merge_base(base, reviewed_head)
     after = gh.merge_base(base, head)
     if not before or not after:
-        return "the merge base could not be read"
+        trace.line(
+            "the merge base could not be read: reviewing the whole range "
+            "since the last review, as if no base merge happened"
+        )
+        return ""
     if before != after:
         return f"the merge base moved from {before[:7]} to {after[:7]}"
     return ""
