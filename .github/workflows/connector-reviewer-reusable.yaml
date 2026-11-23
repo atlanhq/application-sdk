@@ -112,6 +112,10 @@ jobs:
           permission-actions: read # the lock: is an older review of this PR still running?
 
       - name: Review
+        id: review
+        # Below the job's 45 minutes, so the finalize step below still runs when
+        # a review runs out of time.
+        timeout-minutes: 40
         working-directory: sdk/.github/scripts
         env:
           GITHUB_TOKEN: ${{ steps.app.outputs.token }}
@@ -136,6 +140,26 @@ jobs:
           --repo "$REPO"
           --root "$ROOT"
           --config-dir "$CONFIG_DIR"
+          --event-name "$EVENT_NAME"
+          --event-path "$EVENT_PATH"
+
+      # A review that crashed, timed out or was cancelled must not leave its
+      # `connector-reviewer` status pending (or an old green standing). finalize
+      # turns this run's own pending status into `error` and leaves every other
+      # status alone, so it is a no-op after a normal review. No model call, no
+      # gateway key. Skipped only when there is no App token to act with.
+      - name: Finalize the status
+        if: always() && steps.app.outcome == 'success'
+        working-directory: sdk/.github/scripts
+        env:
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          CONNECTOR_REVIEWER_BOT_LOGIN: atlan-app-fleet[bot]
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+        run: >-
+          python -m connector_reviewer finalize
+          --repo "$REPO"
           --event-name "$EVENT_NAME"
           --event-path "$EVENT_PATH"
 

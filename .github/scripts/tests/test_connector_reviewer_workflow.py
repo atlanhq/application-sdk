@@ -163,6 +163,34 @@ def test_the_review_reads_the_fleet_principles_from_this_repository(
     assert "python -m connector_reviewer review" in review["run"]
 
 
+def test_a_review_that_dies_is_finalized_with_the_same_token(
+    job: dict[str, Any],
+) -> None:
+    """A crashed, timed-out or cancelled review must not leave its status
+    pending: finalize runs after it whatever happened, as the same App, and
+    needs no model key."""
+    steps = _steps(job)
+    names = [s.get("name") for s in steps]
+    review = steps[names.index("Review")]
+    final = steps[names.index("Finalize the status")]
+    assert names.index("Finalize the status") == names.index("Review") + 1
+    assert final["if"] == "always() && steps.app.outcome == 'success'"
+    assert "python -m connector_reviewer finalize" in final["run"]
+    assert final["working-directory"] == review["working-directory"]
+    assert final["env"]["GITHUB_TOKEN"] == review["env"]["GITHUB_TOKEN"]
+    assert (
+        final["env"]["CONNECTOR_REVIEWER_BOT_LOGIN"]
+        == review["env"]["CONNECTOR_REVIEWER_BOT_LOGIN"]
+    )
+    assert "CONNECTOR_REVIEWER_GATEWAY_KEY" not in final["env"]
+
+
+def test_the_review_step_times_out_before_the_job(job: dict[str, Any]) -> None:
+    """Otherwise the job's own timeout kills the finalize step with it."""
+    [review] = [s for s in _steps(job) if s.get("name") == "Review"]
+    assert 0 < review["timeout-minutes"] < JOB_TIMEOUT_MINUTES
+
+
 def test_the_run_report_is_uploaded_even_when_the_review_fails(
     job: dict[str, Any],
 ) -> None:
