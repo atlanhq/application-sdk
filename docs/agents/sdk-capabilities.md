@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.58.0
-source-sha:    eddb71aedf168cf1cd7842286211a9685f0c3ba8
-source-date:   2026-11-20T20:27:37+05:30
+sdk-version:   3.58.1
+source-sha:    1c0ed7783dfb14b69eafc0e4db87bbb5e2be88e3
+source-date:   2026-11-23T13:34:47+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 461 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 468 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 87 |
 
 ## Subpackage Details
@@ -4329,6 +4329,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** What the gate observed, and the one verdict it reduces to.
 - **Defined in:** `application_sdk/testing/harness/preconditions.py`
 
+#### `GlossaryTermSpec`
+
+- **Import:** `from application_sdk.testing.harness.atlas import GlossaryTermSpec`
+- **Signature:** `class GlossaryTermSpec(*, name: str, description: str = '', verified: bool = False) -> None`
+- **Summary:** One glossary term a suite seeds with :func:`create_glossary_term`.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
 #### `GoldenCorpus`
 
 - **Import:** `from application_sdk.testing.integration import GoldenCorpus`
@@ -4900,6 +4907,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** What one seeding pass created, for the report and the teardown registry.
 - **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
 
+#### `SeededGlossary`
+
+- **Import:** `from application_sdk.testing.harness.atlas import SeededGlossary`
+- **Signature:** `class SeededGlossary(*, name: str, guid: str, term_guids: Mapping[str, str]) -> None`
+- **Summary:** A glossary a suite seeded, and the terms in it.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
 #### `SeededWorkflow`
 
 - **Import:** `from application_sdk.testing.harness.starters import SeededWorkflow`
@@ -4969,6 +4983,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class SeedVerifier`
 - **Summary:** Reads back how many assets a seed actually landed under its connection.
 - **Defined in:** `application_sdk/testing/harness/seed/__init__.py`
+
+#### `SeedWriteUnconfirmedError`
+
+- **Import:** `from application_sdk.testing.harness.atlas import SeedWriteUnconfirmedError`
+- **Signature:** `class SeedWriteUnconfirmedError(*, ...)`
+- **Summary:** Atlas accepted a seed write but did not report a GUID for what it created.
+- **Defined in:** `application_sdk/testing/harness/atlas/_errors.py`
 
 #### `ServedForm`
 
@@ -5616,6 +5637,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Count active assets of each named type under a connection.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
+#### `count_assets_by_guid`
+
+- **Import:** `from application_sdk.testing.harness.atlas import count_assets_by_guid`
+- **Signature:** `count_assets_by_guid(client: AsyncAtlanClient, guids: Sequence[str]) -> Reading[int]`
+- **Summary:** Count how many of *guids* the search index returns as active assets.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
 #### `count_lineage`
 
 - **Import:** `from application_sdk.testing.harness.atlas import count_lineage`
@@ -5642,6 +5670,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.harness.atlas import create_connection`
 - **Signature:** `create_connection(client: AsyncAtlanClient, *, ...)`
 - **Summary:** Create a Connection at an exact qualified name, and return that name.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `create_glossary`
+
+- **Import:** `from application_sdk.testing.harness.atlas import create_glossary`
+- **Signature:** `create_glossary(client: AsyncAtlanClient, *, name: str) -> str`
+- **Summary:** Create an empty glossary and return the GUID Atlas assigned to it.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `create_glossary_term`
+
+- **Import:** `from application_sdk.testing.harness.atlas import create_glossary_term`
+- **Signature:** `create_glossary_term(client: AsyncAtlanClient, *, glossary_guid: str, term: GlossaryTermSpec) -> str`
+- **Summary:** Create one term in the glossary *glossary_guid* and return its GUID.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
 #### `credentials_strategy`
@@ -6389,6 +6431,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `publish_seed_version(spec: AEWorkflowSpec, *, client: AEClient, minter: Minter | None = None)`
 - **Summary:** Return a slug with a published version, creating and seeding one if needed.
 - **Defined in:** `application_sdk/testing/harness/starters/_ae.py`
+
+#### `purge_assets`
+
+- **Import:** `from application_sdk.testing.harness.teardown import purge_assets`
+- **Signature:** `purge_assets(client: AsyncAtlanClient, guids: Sequence[str])`
+- **Summary:** Purge seeded assets that live outside any connection, one GUID at a time.
+- **Defined in:** `application_sdk/testing/harness/teardown/_purge.py`
 
 #### `purge_connection`
 
