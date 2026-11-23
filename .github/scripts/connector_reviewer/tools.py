@@ -63,6 +63,15 @@ SECRET_GLOBS = (
 SAFE_ENV = (".env.example", ".env.sample", ".env.template")
 
 
+def secret_diff(fd: FileDiff) -> bool:
+    """True when either side of this change may hold secrets. A rename from
+    `.env` to an ordinary name still carries the deleted `.env` lines in its
+    diff, so the source path counts as much as the destination."""
+    return secret_path(fd.path) or (
+        fd.old_path is not None and secret_path(fd.old_path)
+    )
+
+
 def secret_path(p: str) -> bool:
     name = p.rsplit("/", 1)[-1]
     if name in SAFE_ENV:
@@ -211,12 +220,12 @@ def find_symbol(ws: Workspace, name: str) -> str:
 def read_diff(ws: Workspace, path_array: list[str]) -> str:
     out: list[str] = []
     for p in path_array[:5]:
-        if secret_path(p):
-            # `ws.diffs` holds every changed file, including ones selection
-            # skipped, so the guard is applied here too.
+        fd = ws.diffs.get(p)
+        # `ws.diffs` holds every changed file, including ones selection
+        # skipped, so the guard is applied here too, to both sides of a rename.
+        if secret_path(p) or (fd is not None and secret_diff(fd)):
             out.append(f'<file path="{p}">\nnot available: may hold secrets\n</file>')
             continue
-        fd = ws.diffs.get(p)
         out.append(
             f'<file path="{p}">\n{fd.render(max_lines=200) if fd else "not changed in this PR"}\n</file>'
         )

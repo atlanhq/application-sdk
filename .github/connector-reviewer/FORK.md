@@ -301,9 +301,11 @@ re-syncing either copy from the other.
 
 | Where | What changed |
 |---|---|
-| `llm.py` | `redact` also masks the gateway key itself (`register_secret`), whatever its shape, not only `sk-…` tokens. The preflight's 401 and "unreachable" reasons are redacted, because they are published in the summary. |
-| `select.py` | A path that may hold secrets (`tools.secret_path`) is skipped before any other rule, so its diff never enters a bundle. |
-| `tools.py` | `_secret_path` is public as `secret_path`. `read_diff` refuses such a path. |
+| `llm.py` | `redact` also masks the gateway key itself (`register_secret`, any non-empty value), whatever its shape, not only `sk-…` tokens. The preflight's 401 and "unreachable" reasons are redacted, because they are published in the summary. |
+| `__main__.py` | Registers the key from the environment first thing, so an error raised before a client exists is masked too. |
+| `report.py` | Redacts every error again on the way to the Actions log and the uploaded report. |
+| `select.py` | A change that may hold secrets (`tools.secret_diff`: either side of a rename) is skipped before any other rule, so its diff never enters a bundle. |
+| `tools.py` | `_secret_path` is public as `secret_path`; `secret_diff` checks both sides of a rename. `read_diff` refuses such a change. |
 | `findings.py`, `review.py` | `PRState.decode` reads the last state block in the comment, and the summary text can no longer contain a state marker. |
 | `config.py` | `validate` refuses a price or cap that is NaN or infinite, and a negative cache price. |
 | `agent.py` | `place` only accepts a path from the bundle it was given. |
