@@ -1390,8 +1390,11 @@ def active_waiver(st: PRState, head: str) -> dict[str, Any] | None:
     return w if head and w.get("head") == head else None
 
 
-def _waiver_lines(st: PRState) -> list[str]:
-    """What the summary says while a waive is on record."""
+def _waiver_lines(st: PRState, active: bool) -> list[str]:
+    """What the summary says while a waive is on record. While it covers the
+    head the status is for (`active`, the same test `verdict_status` makes), the
+    status is green, and the headline says so: the verdict it set aside follows
+    as detail, never as a second headline."""
     w = st.waiver or {}
     if not w.get("head"):
         return []
@@ -1401,9 +1404,10 @@ def _waiver_lines(st: PRState) -> list[str]:
         if left
         else "There were no open findings."
     )
+    icon = "✅" if active else "🟣"
     return [
-        f"🟣 **Waived** by @{w.get('by', '?')} at `{str(w['head'])[:7]}` — "
-        f"{w.get('reason', '')}",
+        f"{icon} **Waived by @{w.get('by', '?')}:** {w.get('reason', '')} "
+        f"(at `{str(w['head'])[:7]}`)",
         "",
         f"The reviewer's verdict was set aside for that commit. {unresolved} "
         "A later commit is not covered: it has no status until it is reviewed "
@@ -2738,10 +2742,13 @@ def render_summary(res: RunResult) -> str:
         verdict = "✅ **Ready to merge** — every finding is resolved"
     # Not reviewed at all: the exemption is the verdict.
     verdict = _exempt_line(st) or verdict
+    waived = bool(active_waiver(st, res.head or st.reviewed_head))
+    if waived:
+        verdict = set_aside(verdict)
     lines = [
         SUMMARY_MARKER,
         f"### connector-reviewer summary · updated after round {st.round} ({res.mode_label or res.mode})",
-        *_waiver_lines(st),
+        *_waiver_lines(st, waived),
         verdict,
         *_spiral_lines(res),
         "",
@@ -2841,6 +2848,16 @@ def render_summary(res: RunResult) -> str:
                 return body
     lean = _no_state_marker("\n".join(_without_resolved(lines)) + "\n")
     return lean + st.encode(body_keep=0)
+
+
+_HEADLINE = re.compile(r"^\S+ \*\*(.+?)\*\*")
+
+
+def set_aside(verdict: str) -> str:
+    """A verdict a waive set aside: its icon and bold headline made plain, and
+    the whole of it quoted, so it reads as detail under the waive's headline."""
+    plain_text = _HEADLINE.sub(r"\1", verdict, count=1)
+    return "\n".join(f"> {line}" if line else ">" for line in plain_text.splitlines())
 
 
 def _facts_lines(st: PRState, res: RunResult) -> list[str]:

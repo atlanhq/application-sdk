@@ -5233,13 +5233,40 @@ def test_a_waive_turns_the_head_green_and_says_who_and_why(repo: Path):
     }
     assert st.history[-1]["mode"] == "waive" and st.history[-1]["head"] == "h1"
     assert "waive · by @author" in body.split("🕘 Round history")[1]
-    assert "🟣 **Waived** by @author at `h1` — hotfix first, fix tracked" in body
+    assert "✅ **Waived by @author:** hotfix first, fix tracked (at `h1`)" in body
     assert "1 open finding(s) were **not resolved**" in body
     # The finding is still open and still shown: a waive resolves nothing.
     assert [x.status for x in st.findings] == ["open"] and f.id in body
-    assert "❌ **Changes requested**" in body
+    # The verdict it set aside is detail under the waive, not a second headline.
+    assert "> Changes requested — 1 blocking" in body
+    assert "❌ **Changes requested**" not in body
     assert "waive after round 1 · by @author" in gh.posted[-1]
     assert "waived by @author" in gh.posted[-1]
+
+
+def test_the_summary_of_a_waived_incomplete_review_leads_with_the_waive(repo: Path):
+    """The status turns green with the waive, so the summary must not open with
+    "Review incomplete": the waive is the headline, the incomplete details stay
+    below it, and the two can never disagree (one test decides both)."""
+    gh, _ = _reviewed(repo)
+    st = decode_state(gh.comments[0]["body"])
+    st.unread = {"app/huge.py": "over 1500 changed lines"}
+    gh.comments[0]["body"] = SUMMARY_MARKER + st.encode()
+    review_mod.waive(gh, 1, "huge file read by hand", actor="lead")
+    body = gh.comments[0]["body"]
+    assert gh.statuses[-1]["state"] == "success"
+    head = body.split("**Open findings:**")[0]
+    lead = head.index("✅ **Waived by @lead:** huge file read by hand (at `h1`)")
+    assert "⚠️ **Review incomplete**" not in body
+    detail = head.index("> Review incomplete — part of this change was not reviewed")
+    assert lead < detail
+    assert "> - 1 file(s) not read: `app/huge.py` (over 1500 changed lines)" in head
+    # Without a waive on the head, the incomplete verdict is the headline again.
+    res = RunResult("reviewed", state=st, head="h2")
+    st.waiver = {"by": "lead", "reason": "r", "head": "h1"}
+    later = render_summary(res)
+    assert "⚠️ **Review incomplete**" in later and "✅ **Waived" not in later
+    assert "🟣 **Waived by @lead:** r (at `h1`)" in later
 
 
 def test_a_waive_before_any_review_creates_the_summary(repo: Path):
@@ -10434,3 +10461,62 @@ def test_every_diff_rendered_into_a_prompt_is_a_known_path():
                 ):
                     found.setdefault(src.name, set()).add(fn.name)
     assert found == _DIFF_RENDERERS
+
+
+# ---- unknown /review words start nothing (FND-5314) ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["/review frobnicate", "/review forse", "/review Forcee now", "/review please"],
+)
+def test_an_unknown_word_after_review_gets_a_usage_reply_and_no_review(body):
+    d = decide("issue_comment", _comment(body), REPO)
+    assert not d.run and not d.force and d.reply
+    assert d.reason == event_mod.REVIEW_USAGE
+    assert event_mod.REVIEW_USAGE in event_mod.USAGE_ERRORS
+    assert (d.pr, d.comment_id) == (7, 555)
+
+
+@pytest.mark.parametrize(
+    ("body", "force", "verify_budget"),
+    [
+        ("/review", False, False),
+        ("/review   ", False, False),
+        ("/review\n\n", False, False),
+        ("  /review \r\n", False, False),
+        ("/review force", True, False),
+        ("/REVIEW FORCE\n", True, False),
+        ("/review force verify-budget", True, True),
+        ("/review verify-budget", False, True),
+    ],
+)
+def test_review_and_its_options_still_start_a_review(body, force, verify_budget):
+    d = decide("issue_comment", _comment(body), REPO)
+    assert d.run and not d.reply
+    assert (d.force, d.verify_budget) == (force, verify_budget)
+    assert not (d.dismiss or d.recheck or d.waive)
+
+
+def test_the_subcommands_are_unchanged_by_the_usage_reply():
+    assert decide(
+        "issue_comment", _comment("/review dismiss F-1a2b3c fine"), REPO
+    ).dismiss
+    assert decide("issue_comment", _comment("/review recheck F-1a2b3c"), REPO).recheck
+    assert decide("issue_comment", _comment("/review waive urgent"), REPO).waive
+    for bad, usage in (
+        ("/review dismiss", event_mod.DISMISS_USAGE),
+        ("/review recheck", event_mod.RECHECK_USAGE),
+        ("/review waive", event_mod.WAIVE_USAGE),
+    ):
+        d = decide("issue_comment", _comment(bad), REPO)
+        assert not d.run and d.reason == usage
+
+
+def test_the_cli_answers_an_unknown_word_and_reviews_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    # `_cli_event` fails the test if a review starts.
+    assert _cli_event(monkeypatch, tmp_path, _comment("/review forse"), _CliGitHub) == 0
+    assert _CliGitHub.comments == [f"connector-reviewer: {event_mod.REVIEW_USAGE}"]
+    assert _CliGitHub.reactions[-1] == "confused"
