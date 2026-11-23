@@ -97,6 +97,22 @@ PKL: Dep = {
     "depName": "pkl",
     "packageName": "apple/pkl",
 }
+# An image in the local dev stack's compose file (FND-5353).
+LOCAL_DEV_IMAGE: Dep = {
+    "manager": "docker-compose",
+    "datasource": "docker",
+    "depName": "postgres",
+    "packageName": "postgres",
+    "packageFile": "local/temporal-auth/docker-compose.yml",
+}
+# The same image anywhere outside local/: a connector repo's compose file, or
+# the production Dockerfile. Neither may pick up the local lane.
+ROOT_COMPOSE_IMAGE: Dep = {**LOCAL_DEV_IMAGE, "packageFile": "docker-compose.yml"}
+DOCKERFILE_IMAGE: Dep = {
+    **LOCAL_DEV_IMAGE,
+    "manager": "dockerfile",
+    "packageFile": "Dockerfile",
+}
 PRE_COMMIT_HOOK: Dep = {
     "manager": "pre-commit",
     "datasource": "github-tags",
@@ -235,6 +251,57 @@ class TestActionMajorsAreReviewed:
         config = resolve(THIRD_PARTY_ACTION, update_type)
         assert config.get("automerge") is True
         assert config.get("platformAutomerge") is True
+
+
+class TestLocalDevImages:
+    """The local dev images lane (FND-5353): non-major bumps of the images in
+    local/ compose files auto-merge, majors wait for a human, tag bumps are
+    held 7 days, and digests are not held (no per-digest timestamp)."""
+
+    @pytest.mark.parametrize("update_type", ["minor", "patch", "digest"])
+    def test_non_majors_auto_merge(self, update_type: str) -> None:
+        config = resolve(LOCAL_DEV_IMAGE, update_type)
+        assert config.get("enabled", True) is True
+        assert config.get("automerge") is True
+        assert config.get("platformAutomerge") is True
+        assert config.get("automergeType") == "pr"
+        assert config.get("groupName") == "local dev images"
+
+    def test_major_is_reviewed(self) -> None:
+        config = resolve(LOCAL_DEV_IMAGE, "major")
+        assert config.get("enabled", True) is True
+        assert config.get("automerge") is False
+        assert config.get("platformAutomerge") is False
+        # separateMajorMinor gives it renovate/major-local-dev-images.
+        assert config.get("groupName") == "local dev images"
+
+    @pytest.mark.parametrize("update_type", ["major", "minor", "patch"])
+    def test_tag_bumps_wait_seven_days(self, update_type: str) -> None:
+        assert (
+            resolve(LOCAL_DEV_IMAGE, update_type).get("minimumReleaseAge")
+            == ACTIONS_WINDOW
+        )
+
+    @pytest.mark.parametrize("update_type", ["digest", "pinDigest"])
+    def test_digests_are_not_held(self, update_type: str) -> None:
+        """No per-digest releaseTimestamp: under timestamp-required a hold
+        could keep the update back for good instead of delaying it."""
+        assert resolve(LOCAL_DEV_IMAGE, update_type).get("minimumReleaseAge") is None
+
+    @pytest.mark.parametrize(
+        "dep",
+        [ROOT_COMPOSE_IMAGE, DOCKERFILE_IMAGE],
+        ids=["root-compose", "dockerfile"],
+    )
+    @pytest.mark.parametrize("update_type", ["major", "minor", "patch", "digest"])
+    def test_lane_stays_out_of_other_docker_files(
+        self, dep: Dep, update_type: str
+    ) -> None:
+        """Connector repos and the production Dockerfile must not auto-merge."""
+        config = resolve(dep, update_type)
+        assert config.get("automerge") is None
+        assert config.get("groupName") is None
+        assert config.get("minimumReleaseAge") is None
 
 
 class TestThreeDayException:

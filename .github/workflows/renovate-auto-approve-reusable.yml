@@ -54,6 +54,9 @@
 #      edit, or a swapped action, routes to a human (FND-1996). The filename
 #      allowlist alone cannot see what a workflow change does, and this is the
 #      gate rather than the missing `workflows: write` permission doing the work
+#      ...and, on a Renovate grouped-major branch (renovate/major-*), no changed
+#      file is approvable only through the caller's extra_dep_file_pattern: a
+#      repo-declared path's major goes to a human Code Owner (FND-5353)
 #   5. All ruleset-required checks are green (gh pr checks --required exits 0)
 #   6. Renovate's own renovate/artifacts status is green — this is what stops a
 #      failed post-upgrade task from auto-merging
@@ -139,7 +142,10 @@ on:
           e.g. 'packages/conformance/.../templates/.+\.ya?ml'. This is how a repo
           declares its OWN dep-managed source paths without hard-coding any
           app-specific path into this shared workflow. A pattern that does not
-          compile fails the step rather than widening the allowlist.
+          compile fails the step rather than widening the allowlist. On a
+          Renovate grouped-major branch (renovate/major-*), files admitted only
+          by this pattern withhold the approval, so give any Renovate lane that
+          writes these paths a groupName that spans majors.
         required: false
         default: ""
         type: string

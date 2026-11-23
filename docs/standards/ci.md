@@ -1485,6 +1485,7 @@ lanes are a deliberate exception to the baseline, recorded here (FND-4651).
 |---|---|---|
 | Third-party GitHub Actions, and the toolchains `actions/setup-*` and `astral-sh/setup-uv` install | 7 days | `renovate-config/default.json`, github-actions release-age rule |
 | The uv cache-key literal in `setup-deps` | 7 days | `renovate.json`, astral-sh/uv release-age rule |
+| Local dev images in `local/` compose files (major, minor, patch; digests are not held) | 7 days | `renovate.json`, local dev images release-age rule |
 | Third-party PyPI (major, minor, patch) | 3 days | `renovate-config/default.json`, PyPI release-age rule |
 | Lock refresh (`lockFileMaintenance`), fleet | 3 days | `renovate-config/self-hosted.js`, `--window P3D` |
 | Lock refresh, application-sdk itself | 3 days | `.github/workflows/renovate-lock-cooldown.yaml`, `--window P3D` |
