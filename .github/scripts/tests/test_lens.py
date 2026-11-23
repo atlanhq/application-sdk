@@ -7545,6 +7545,29 @@ def test_quoted_removed_code_beats_the_same_text_left_as_context_elsewhere():
     assert anchor(fd, "await self.engine.dispose()") == (3, 3)
 
 
+def test_a_replaced_line_is_not_a_deletion_and_its_neighbours_stay_unchanged(
+    repo: Path,
+):
+    """Only a pure deletion widens what counts as changed: in an ordinary edit
+    the added lines mark the change, and the context line before it is still
+    unchanged code (capped at low), as it was before FND-5314."""
+    ws, bundle = _ws(repo)
+    [fd] = bundle.files
+    assert fd.deletion_sites == set()
+    assert fd.changed_lines == fd.added_lines
+    # The old side of a replacement is placed on the line that replaced it.
+    assert anchor(fd, "    return client.get(key)") == (3, 3)
+    old_side = agent_mod.place(
+        ws, bundle, {**COMMENT, "existing_code": "    return client.get(key)"}
+    )
+    assert old_side is not None and (old_side.line, old_side.scope) == (3, "changed")
+    docstring = agent_mod.place(
+        ws, bundle, {**COMMENT, "existing_code": '    """Fetch one object."""'}
+    )
+    assert docstring is not None
+    assert (docstring.line, docstring.scope) == (2, "unchanged")
+
+
 @pytest.mark.parametrize(
     ("evidence", "line"),
     [
