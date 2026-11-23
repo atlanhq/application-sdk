@@ -10494,3 +10494,112 @@ def test_a_relative_import_in_a_test_maps_it_to_its_source():
         "app/tests/test_pkg.py",
         "app/tests/unit/test_deep.py",
     ]
+
+
+def _hunk(path: str, context: str, old: str, new: str) -> str:
+    """One file whose only hunk replaces `old` with `new` under `context`."""
+    return (
+        f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
+        f"@@ -1,2 +1,2 @@\n {context}\n-{old}\n+{new}\n"
+    )
+
+
+def _triaged(diff: str) -> Any:
+    return triage(parse_unified_diff(diff), {}, {})
+
+
+@pytest.mark.parametrize(
+    "path, old, new",
+    [
+        ("app/m{}.py", "    enabled = False", "    enabled = True"),
+        ("contract/m{}.yaml", "  enabled: false", "  enabled: true"),
+        ("app/m{}.py", "    ok = a and b", "    ok = a or b"),
+    ],
+)
+def test_a_repeated_keyword_or_literal_flip_is_not_a_mechanical_rename(
+    path: str, old: str, new: str
+):
+    """F-a48b0a: `False -> True` in three files passed as a rename (any two
+    word-like tokens did) and all three hunks were dropped unreviewed."""
+    diff = "".join(_hunk(path.format(i), f"component_{i}:", old, new) for i in range(3))
+    t = _triaged(diff)
+    assert sorted(f.path for f in t.reviewed) == [path.format(i) for i in range(3)]
+    assert t.renames == [] and t.hunks_dropped == 0
+
+
+def test_a_real_rename_across_files_is_still_mechanical():
+    diff = "".join(
+        _hunk(
+            f"app/m{i}.py",
+            f"def caller_{i}():",
+            "    return get_x(1)",
+            "    return fetch_x(1)",
+        )
+        for i in range(3)
+    )
+    t = _triaged(diff)
+    assert t.reviewed == [] and t.renames == [("get_x", "fetch_x")]
+
+
+DEDENT = (
+    "diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n"
+    "@@ -1,2 +1,2 @@\n if retry:\n-    send()\n+send()\n"
+)
+
+
+def test_a_python_dedent_is_not_whitespace_only():
+    """F-76a9cf: `send()` moved out of `if retry:` normalises to the same text,
+    but in Python the indentation is the control flow."""
+    t = _triaged(DEDENT.format(p="app/send.py"))
+    assert [f.path for f in t.reviewed] == ["app/send.py"]
+    # Where indentation is not syntax, re-indenting is still whitespace.
+    t = _triaged(DEDENT.format(p="docs/send.md"))
+    assert t.reviewed == [] and "docs/send.md" in t.mechanical["whitespace-only"]
+
+
+@pytest.mark.parametrize(
+    "old, new, imports_only",
+    [
+        ("import os", "import os; dangerous()", False),
+        ("import os", "import os as _os\nrun()", False),
+        ("import os", "import sys  # noqa: F401", True),
+        ("from a import (", "from b import (", True),
+        ("from a import x", "from a import x, y; x.boot()", False),
+    ],
+)
+def test_import_only_means_nothing_but_import_statements(
+    old: str, new: str, imports_only: bool
+):
+    """F-dced3f: `_IMPORT` matched a prefix, so `import os; dangerous()` was an
+    import-only hunk and was dropped."""
+    added = "".join(f"+{line}\n" for line in new.splitlines())
+    n = len(new.splitlines())
+    diff = (
+        "diff --git a/app/x.py b/app/x.py\n"
+        "--- a/app/x.py\n+++ b/app/x.py\n"
+        f"@@ -1,1 +1,{n} @@\n-{old}\n{added}"
+    )
+    t = _triaged(diff)
+    assert (t.reviewed == []) is imports_only
+
+
+def test_the_same_edit_under_different_context_is_reviewed_in_every_file():
+    """F-284d76: `timeout: 30 -> 60` for three different components was one
+    duplicate signature; the second and third were never reviewed."""
+    diff = "".join(
+        _hunk(f"contract/{c}.yaml", f"{c}:", "  timeout: 30", "  timeout: 60")
+        for c in ("db", "cache", "queue")
+    )
+    t = _triaged(diff)
+    assert len(t.reviewed) == 3 and t.duplicate_of == {}
+    # A hunk identical down to its context is still the same change.
+    same = "".join(
+        _hunk(f"contract/{c}.yaml", "db:", "  timeout: 30", "  timeout: 60")
+        for c in ("a", "b", "c")
+    )
+    t = _triaged(same)
+    assert [f.path for f in t.reviewed] == ["contract/a.yaml"]
+    assert t.duplicate_of == {
+        "contract/b.yaml": "contract/a.yaml",
+        "contract/c.yaml": "contract/a.yaml",
+    }
