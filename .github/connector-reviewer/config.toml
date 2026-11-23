@@ -154,6 +154,11 @@ max_nits = 5              # low-severity (nit) findings kept per bundle
 plan = 1
 plan_min_lines = 60
 plan_max_tokens = 8000
+# Wall-clock limit per bundle, plan turn included: past it the next turn is the final one
+# (code_comment/task_done only), so one slow bundle cannot hold the whole review. The
+# final turn and the fact-check still run after it, about one call each. 0 turns it off.
+# Bundles still run `[scope] concurrency` at a time; the approach check runs beside them.
+bundle_time_limit_s = 120
 # Second pass ("what did you miss?") on large bundles. Off until the replay bench shows it
 # finds real defects the first pass misses at an acceptable cost.
 second_pass = 0

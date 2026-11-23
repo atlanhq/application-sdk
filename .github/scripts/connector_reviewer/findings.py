@@ -54,6 +54,8 @@ class Finding:
     scope: str = "changed"  # changed | unchanged (an incomplete-fix suggestion on unchanged code)
     scenario: str = ""
     suggestion: str = ""
+    # The principle this finding rests on (FP01, RP02, …), checked in code
+    # against the principles that apply to its file; "" for a concrete bug.
     rule_id: str = ""
     origin: str = "llm"  # llm | gate
     # The reviewer's claim that the harm lands on something that existed before
@@ -105,6 +107,11 @@ class PRState:
     pending_files: list[str] = field(
         default_factory=list
     )  # left unreviewed by a failure
+    # Changed files the reviewer meant to read and could not: too large, or past
+    # the bundle cap (path -> why). Recomputed every round, since each such file
+    # rides along with the next review; while any is listed the verdict is
+    # "incomplete", never green. A retry cannot help, so they are not pending.
+    unread: dict[str, str] = field(default_factory=dict)
     # `/review waive`: who set the verdict aside, why, and for which head sha
     # ({"by", "reason", "head"}). Empty when nothing is waived. A real review
     # clears it.

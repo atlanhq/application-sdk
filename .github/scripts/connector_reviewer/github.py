@@ -14,9 +14,10 @@ import urllib.parse
 import urllib.request
 from typing import Any, cast
 
-from .typed import EMPTY
+from .typed import EMPTY, objects
 
 API = "https://api.github.com"
+STATUS_CONTEXT = "connector-reviewer"
 DEFAULT_BOT_LOGIN = "atlan-app-fleet[bot]"
 
 
@@ -187,6 +188,18 @@ class GitHub:
         got = cast("dict[str, object]", data).get("visibility")
         return str(got) if got else None
 
+    def status_of(self, sha: str, context: str) -> dict[str, Any] | None:
+        """The latest commit status `context` has on `sha` (`state`,
+        `target_url`, `description`, …), or None when it has none. Read from
+        the combined status, which holds the newest status per context."""
+        data = self._call(
+            "GET", f"/repos/{self.repo}/commits/{sha}/status?per_page=100"
+        )
+        for s in objects((data or EMPTY).get("statuses")):
+            if s.get("context") == context:
+                return s
+        return None
+
     def issue_comments(self, number: int) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         page = 1
@@ -224,7 +237,7 @@ class GitHub:
         This is the green/red signal (and what branch protection can require)."""
         body = {
             "state": state,
-            "context": "connector-reviewer",
+            "context": STATUS_CONTEXT,
             "description": description[:140],
         }
         if target_url:

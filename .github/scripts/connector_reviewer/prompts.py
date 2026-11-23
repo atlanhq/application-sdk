@@ -46,7 +46,9 @@ Principles
   repository's own. Its `for` attribute names the files it applies to.
 - Judge the change by them: put each principle's Ask questions to the code it applies to, leave what its
   "Don't flag" line names to CI, and grade with its Severity line.
-- When a finding rests on a principle, name that principle's id in the comment's content.
+- Every finding either rests on a principle or is a concrete bug. When it rests on a principle, set the
+  comment's `principle` to that id (one listed for its file). A finding of category bug or security may
+  omit it. Any other finding with no applicable principle is dropped in code, so do not report it.
 
 Scope
 - Focus on issues in newly added code (lines marked +). Deleted code is reference context only.

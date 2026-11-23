@@ -119,8 +119,9 @@ Call sites that changed with it:
 - `agent.build_rules_message` is `agent.build_principles_message`.
 - `agent.build_context` has no `rules` parameter (lens passes one and never reads it).
 - `REVIEW_SYSTEM` has a "Principles" section: what `<principles>` is, how to use the
-  fields, and that a finding resting on a principle names its id. Citing one is not
-  required and nothing in code checks it.
+  fields, and that every finding rests on a principle (its id in the comment's
+  `principle` field) or is a concrete bug. Since FND-5313 this is checked in code:
+  see "Verdict rules" below.
 - `config.raw_hash` is the hash of `config.toml` alone (lens adds `rules.toml`).
 - `glob_match` lives in `advisory.py`, its only user here (lens has it in `rules.py`).
 - The trace line per bundle lists the principle ids, where lens counts rule cards.
@@ -214,7 +215,10 @@ that every conformance rule id it cites exists and runs on app repos.
 The change that adds the connector-reviewer workflow must bring the workflow guards
 back for its own file: the trigger list, never checking out the PR head, the
 `run-name` and no `concurrency:` block (`lock.run_name`), `timeout-minutes` equal to
-`lock.JOB_TIMEOUT`, the token permissions, and the run-report upload.
+`lock.JOB_TIMEOUT`, the token permissions, and the run-report upload. It must also
+run `python -m connector_reviewer finalize` in an `if: always()` step after the
+review step, and give the review step its own `timeout-minutes` below the job's, so
+that a timed-out review still reaches that step (see "Verdict rules" below).
 
 ## Behaviour that differs from lens
 
@@ -263,6 +267,39 @@ function of facts GitHub reports, names four classes that are not reviewed:
 - `run` fetches each diff once (`diff()` memoises `gh.diff`), since the exempt check
   and the review both need the pull request's whole diff.
 
+### Verdict rules (FND-5313)
+
+The status is the verdict, and it is never green unless every part of the change
+was read and every finding is closed.
+
+| Situation | Status | Summary |
+|---|---|---|
+| Nothing open | success | Ready to merge |
+| Exempt, or waived | success | Exempt: <class>, or waived by @login: reason |
+| An open critical or high finding | failure | Changes requested |
+| Only medium or low open, a nit included | failure | Not ready to merge |
+| Incomplete: a bundle failed, a file is left pending, source was not read, the round cap or the budget stopped a new head, or the run itself ended without a verdict | error | Review incomplete |
+
+| | lens | connector-reviewer |
+|---|---|---|
+| A nit | Keeps the status red | The same, now by decision: the design's verdict table puts "only medium or low open" at failure, "not ready". |
+| A changed file skipped for size (`over 1500 changed lines`) or past the bundle cap | Listed under "not reviewed"; the status can still go green | Unread source (`review.unread_skips`, by the reasons `UNREAD_REASONS`). `PRState.unread` (path -> why) holds them; while it is not empty the status is `error`. Each unread file rides along, whole, with every later review, so a later round re-decides and an incremental round never reviews only the slice the new commits touched. A retry cannot help, so they are not `pending_files`, and the summary says to split the change or waive, not to retry. Excluded, binary, deletion-only and secret-bearing files are skipped on purpose and are not unread. |
+| What the status reads | `res.incomplete` of the run | `review.incomplete_reasons`: the run's reasons plus the state's (`pending_files`, `unread`). A dismissal or a re-check builds a fresh result, so in lens dismissing the last finding could turn an incomplete review green; here it stays `error`. The run report and the CLI's reaction read the same list. |
+| The round cap or a spent budget stops `/review` on a new head | No status on that head | `error` on that head (`_no_verdict`), "not reviewed — round cap …" or "review incomplete — PR budget … spent; `/review waive` …". A head already reviewed keeps its verdict. |
+| A crash, a cancel or a timeout | The `pending` status stays | `finalize.py`, new: `python -m connector_reviewer finalize` reads the head's latest `connector-reviewer` status (`GitHub.status_of`, read-only) and turns it into `error` only when it is `pending` and links to this run (`GITHUB_RUN_ID`), and rewrites a progress note this run left behind into the failure note. Everything else is left alone, so it is safe after any outcome. The review's own crash handler calls it too. Known limit: a push during the run moves the head, and the old head keeps its `pending`; a merge checks the new head, which has no green. |
+| A finding that names no principle | Kept | `agent.cite`, after placement and before the fact-check: `Finding.rule_id` (from the comment's new optional `principle` field, or an applicable id written in its title or content) stands only when it names a principle that applies to the bundle's files. A finding left without one is dropped unless its category is `bug` or `security` (`CONCRETE_CATEGORIES`). `BundleResult.uncited` and the run report count them. The tool schema has no per-bundle enum, so the cached prefix stays the same for every bundle. |
+| A finding in a test file | Capped at low unless `security` | Also not capped when it rests on a principle (`rule_id`): that principle's Severity line grades it (FP15 says high for a deleted test that covered changed code). |
+| The approach check | First, before the line review; the bundles see `<pr_understanding>` | Alongside the line review, in a thread of its own (at most `concurrency` + 1 calls in flight), on a ledger of its own carved out of the round's (`APPROACH_SHARE`, 15%), so it can never spend a bundle's share. On the round it runs the bundles do not see its reading of the PR; later rounds do, from the state. Its requests are listed after the line review's in the run report. Still advisory: it never changes the status. |
+| A slow bundle | Bounded by turns, context and its budget share | Also by wall time: `[agent] bundle_time_limit_s` (default 120; 0 turns it off), measured from the bundle's start, plan turn included. Past it the next turn is the final one. `BundleResult.forced` names why the final turn was forced and `seconds` how long the bundle took; both are in the run report. Bundles still run four at a time. |
+
+Tests adapted for this: `test_the_review_prompt_tells_the_model_how_to_use_and_name_principles`
+(citing is now required), `test_loop_places_comments_from_quoted_code_and_reflector_can_only_remove`
+(its fact-checked finding now names a principle, or it would be dropped before the
+fact-check), `test_approach_check_runs_once_per_pr_and_is_advisory` (round 1's line
+review no longer sees `<pr_understanding>`; round 2's does) and
+`test_every_request_is_recorded_with_counts_only_and_reported` (the approach request
+comes last).
+
 ## Module by module
 
 Where a lens fix lands in this copy. "Names" means only the renames in the table
@@ -271,26 +308,27 @@ above; "typing" means only the annotations described under Typing.
 | Module | Against lens at the fork point |
 |---|---|
 | `baseline.py`, `diff.py`, `index.py` | Identical, byte for byte. A lens patch applies as it is. |
-| `lock.py`, `report.py` | Names. |
-| `findings.py` | Names; `PRState.waiver`; `decode` reads the last state marker. |
+| `lock.py` | Names. |
+| `report.py` | Names; bundle time, forced final turn and dropped uncited findings; the incomplete list from `incomplete_reasons`. |
+| `findings.py` | Names; `PRState.waiver`, `exempt`, `unread`; `decode` reads the last state marker. |
 | `triage.py` | Typing (one annotation). |
-| `tools.py` | Typing (one annotation), and two description strings (`compatibility`, `search_code`). |
+| `tools.py` | Typing (one annotation), two description strings (`compatibility`, `search_code`), and the comment's optional `principle` field. |
 | `trace.py` | Names, typing. |
 | `select.py` | `DEFAULT_EXCLUDE` only. |
 | `config.py` | Docstring, `raw_hash`, typing. |
 | `bundle.py` | `_module_key` and the module docstring. |
 | `llm.py` | Names (the gateway key variable, the User-Agent, log text), typing. |
-| `github.py` | Names, typing, four methods removed with the approval step; `can_push` and `safe_body` added. |
+| `github.py` | Names, typing, four methods removed with the approval step; `can_push`, `safe_body` and `status_of` added. |
 | `event.py` | Rewritten around who may ask (FND-5310); the command grammar is lens's plus `waive`. |
 | `holistic.py` | The prompt's opening and one concern; no `<public_api>` block; typing. |
 | `context.py` | No `_public` / `public_api`; `build` returns a string. |
 | `advisory.py` | Rewritten as the empty extension point; holds `glob_match`. |
-| `agent.py` | Names; principles where lens has rules; no released-surface block; typing. |
+| `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313). |
 | `prompts.py` | The review prompt's opening, "Repository layout" and "Principles" sections; the removals; typing. |
-| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing. |
-| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`. |
+| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313). |
+| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it. |
 | `__init__.py` | Docstring. |
-| `principles.py`, `typed.py`, `exempt.py` | New here. |
+| `principles.py`, `typed.py`, `exempt.py`, `finalize.py` | New here. |
 | `approve.py`, `surface.py`, `rules.py` | Not here. |
 
 ## Fixed here, still open in lens
@@ -316,11 +354,6 @@ nothing for a value that is not a list.
 
 ## Not changed, and worth knowing before the next change
 
-These are lens's behaviour, carried over as it is. Later changes to this fork are
-expected to revisit them:
-
-- `agent.calibrate` still caps a finding in a test file at low unless its category
-  is `security`. The review scope here includes test integrity, so a principle whose
-  `Severity` says "high" for a test change is capped by this rule.
-- The verdict rule is lens's: any open finding, a nit included, keeps the status red.
-- Nothing requires a finding to name a principle, and `Finding.rule_id` is unused.
+Nothing listed at the moment. The three items that were here (the test-file
+severity cap, the verdict rule for a nit, and the unused `Finding.rule_id`) are
+decided under "Verdict rules (FND-5313)".

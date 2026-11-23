@@ -26,7 +26,7 @@ import re
 import time
 import urllib.parse
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -63,6 +63,9 @@ from .triage import Triage, triage
 from .typed import EMPTY, objects
 
 SUMMARY_MARKER = "<!-- connector-reviewer-summary -->"
+# The share of a round's budget held for the approach check, which runs on a
+# ledger of its own alongside the line review.
+APPROACH_SHARE = 0.15
 COMMENT_LIMIT = 64_000  # GitHub's cap is 65,536 characters; keep a margin
 MAX_HISTORY = 20  # rounds kept in the state and shown in the summary
 
@@ -266,6 +269,36 @@ def renamed_away(files: list[FileDiff]) -> list[FileDiff]:
     ]
 
 
+# The reasons `select.select_files` and `plan_bundles` give for a file the review
+# meant to read and did not. Anything else skipped (binary, deletion only,
+# excluded by pattern, may hold secrets) is left out on purpose.
+UNREAD_REASONS = ("over ", "bundle cap")
+
+
+def unread_skips(skipped: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """The skipped files that are unread source: too large, or past the bundle cap."""
+    return [(p, why) for p, why in skipped if why.startswith(UNREAD_REASONS)]
+
+
+def _no_verdict(
+    gh: GitHub, head: str, state: PRState, post: bool, run_url: str, why: str
+) -> None:
+    """An `error` status on a head this request did not review (round cap, spent
+    budget), so no head is ever left without a verdict or with a stale one.
+    A head that was already reviewed keeps the verdict it has."""
+    if post and head and head != state.reviewed_head:
+        gh.set_status(head, "error", why, run_url)
+
+
+def _approach(
+    client: Client, ws: Workspace, files: list[FileDiff], pr_meta: dict[str, Any]
+) -> tuple[holistic.ApproachCheck, int]:
+    """The approach check, run in its own thread; returns it and its wall time (ms)."""
+    t0 = time.monotonic()
+    ac = holistic.check(client, ws, files, pr_meta)
+    return ac, int((time.monotonic() - t0) * 1000)
+
+
 def find_state(gh: GitHub, number: int) -> tuple[PRState | None, str]:
     for c in gh.issue_comments(number):
         body = c.get("body") or ""
@@ -361,6 +394,14 @@ def run(
         )
     if state.round >= cfg.max_rounds and not force:
         trace.line(f"decision: SKIP — round cap {cfg.max_rounds} reached")
+        _no_verdict(
+            gh,
+            head,
+            state,
+            post,
+            run_url,
+            f"not reviewed — round cap ({cfg.max_rounds}) reached; `/review force` reviews it",
+        )
         return RunResult(
             "skipped",
             f"round cap ({cfg.max_rounds}) reached; comment `/review force` to review anyway",
@@ -377,6 +418,15 @@ def run(
     )
     if ledger.remaining <= 0.01:
         trace.line(f"decision: SKIP — PR budget ${cfg.cap_usd_per_pr:.2f} spent")
+        _no_verdict(
+            gh,
+            head,
+            state,
+            post,
+            run_url,
+            f"review incomplete — PR budget of ${cfg.cap_usd_per_pr:.2f} spent; "
+            "`/review waive <reason>` is the way past it",
+        )
         return RunResult(
             "skipped",
             f"PR budget of ${cfg.cap_usd_per_pr:.2f} spent",
@@ -404,9 +454,12 @@ def run(
         model_changed=bool(state.model) and state.model != cfg.model,
         ancestry=ancestry,
     )
+    # Files left unread last round (too large, or past the bundle cap) ride along
+    # with every review, whole, so each round decides afresh whether they can be read.
+    carried = set(state.pending_files) | set(state.unread)
     if retry_only:
         full_files = parse_unified_diff(diff(base, head))
-        all_files = [fd for fd in full_files if fd.path in set(state.pending_files)]
+        all_files = [fd for fd in full_files if fd.path in carried]
         range_base = base
     else:
         range_base = state.reviewed_head if incremental else base
@@ -426,12 +479,13 @@ def run(
                     f"excluded changes that came from merging the base branch: "
                     f"{len(merged_paths)} file(s), {merged_lines} line(s)"
                 )
-        # Files a previous run failed to review ride along with the new commits.
+        # Files a previous run failed to review ride along with the new commits, and
+        # so do files it could not read; an unread file comes whole, never as the
+        # slice of it the new commits touched.
+        all_files = [fd for fd in all_files if fd.path not in state.unread]
         have = {fd.path for fd in all_files}
         all_files += [
-            fd
-            for fd in full_files
-            if fd.path in set(state.pending_files) and fd.path not in have
+            fd for fd in full_files if fd.path in carried and fd.path not in have
         ]
 
     round_no = state.round + 1
@@ -496,6 +550,13 @@ def run(
     )
 
     bundles = plan_bundles(res.triage.reviewed, cfg, res)
+    # Source that was meant to be read and was not can never give a green verdict.
+    state.unread = dict(unread_skips(res.skipped_files))
+    if state.unread:
+        trace.line(
+            f"unread: {len(state.unread)} file(s) the review could not read — the verdict "
+            "is incomplete until they are read or waived"
+        )
     with trace.group("2 · scope: files, triage, bundles"):
         for fd in sel.reviewed:
             trace.line(
@@ -533,7 +594,13 @@ def run(
         index=idx,
     )
     round_cap = ledger.remaining * (cfg.first_round_share if round_no == 1 else 1.0)
-    round_ledger = Ledger(cap_usd=round_cap)
+    # The approach check runs alongside the line review, on a ledger of its own
+    # carved out of the round's: whatever it spends, it can never take a
+    # bundle's share and leave that bundle unfinished.
+    run_approach = bool(cfg.approach and (not state.approach or force) and sel.reviewed)
+    approach_cap = round_cap * APPROACH_SHARE if run_approach else 0.0
+    round_ledger = Ledger(cap_usd=round_cap - approach_cap)
+    approach_ledger = Ledger(cap_usd=approach_cap)
     client: Client = client_factory(round_ledger)
     pr_meta = {"title": pr.get("title"), "body": pr.get("body")}
 
@@ -654,35 +721,37 @@ def run(
 
     res.timings_ms["index"] = int((time.monotonic() - t_phase) * 1000)
     t_phase = time.monotonic()
-    # ---- approach check: once per PR, FIRST --------------------------------
-    # It runs before the line review so every bundle reviews against the PR's
-    # intent. It is stored in state and reused on every later invocation — a
-    # re-review never pays to re-understand the PR (only `/review force` redoes it).
+    # ---- approach check: once per PR, ALONGSIDE the line review --------------
+    # It runs in its own thread next to the bundles (at most concurrency + 1 calls
+    # in flight), so it no longer adds its time to the review's. The price: on the
+    # round it runs, the bundles do not see its reading of the PR's intent. It is
+    # stored in state and reused on every later invocation, where the bundles do
+    # see it — a re-review never pays to re-understand the PR (only `/review
+    # force` redoes it). Advisory only: it never changes the status.
     pr_meta["mechanical"] = res.triage.summary_lines() + [
         f"rename: {a} -> {b}" for a, b in res.triage.renames
     ]
-    if cfg.approach and (not state.approach or force) and sel.reviewed:
-        with trace.group("5 · approach check (once per PR)"):
-            ac = holistic.check(
-                client, ws, full_files if incremental else sel.reviewed, pr_meta
-            )
-            if ac.ran:
-                state.approach = holistic.to_state(ac, head)
-                trace.line(f"problem: {trace.short(ac.problem, 240)}")
-                trace.line(f"approach: {trace.short(ac.approach, 240)}")
-                trace.line(
-                    f"verdict: {ac.verdict} ({len(ac.concerns)} concern(s), {ac.lookups} lookup(s))"
-                )
-                for c in ac.concerns:
-                    trace.line(f"concern: {trace.short(c.get('title'), 120)}")
-            else:
-                trace.line(f"did not complete: {ac.error or 'no verdict returned'}")
+    pr_meta["understanding"] = holistic.understanding_from_state(state.approach or {})
+    approach_client: Client | None = None
+    approach_pool = ThreadPoolExecutor(max_workers=1) if run_approach else None
+    approach_job: Future[tuple[holistic.ApproachCheck, int]] | None = None
+    if approach_pool is not None:
+        side: Client = client_factory(approach_ledger)
+        approach_client = side
+        trace.line(
+            "approach check: running alongside the line review "
+            f"(its own budget ${approach_cap:.4f})"
+        )
+        approach_job = approach_pool.submit(
+            _approach,
+            side,
+            ws,
+            full_files if incremental else sel.reviewed,
+            dict(pr_meta),
+        )
     elif state.approach:
         trace.line("approach check: reused from an earlier round (not re-run)")
-    pr_meta["understanding"] = holistic.understanding_from_state(state.approach or {})
 
-    res.timings_ms["approach"] = int((time.monotonic() - t_phase) * 1000)
-    t_phase = time.monotonic()
     # ---- review ----------------------------------------------------------
     confirmed = [f for f in state.findings if f.status == "open"]
 
@@ -712,11 +781,34 @@ def run(
         )
         with ThreadPoolExecutor(max_workers=max(1, cfg.concurrency)) as pool:
             res.bundles = list(pool.map(one, bundles))
+    res.timings_ms["review"] = int((time.monotonic() - t_phase) * 1000)
+    if approach_job is not None and approach_pool is not None:
+        with trace.group("5 · approach check (once per PR, alongside the line review)"):
+            ac, ms = approach_job.result()
+            approach_pool.shutdown()
+            res.timings_ms["approach"] = ms
+            if ac.ran:
+                state.approach = holistic.to_state(ac, head)
+                trace.line(f"problem: {trace.short(ac.problem, 240)}")
+                trace.line(f"approach: {trace.short(ac.approach, 240)}")
+                trace.line(
+                    f"verdict: {ac.verdict} ({len(ac.concerns)} concern(s), {ac.lookups} lookup(s))"
+                )
+                for c in ac.concerns:
+                    trace.line(f"concern: {trace.short(c.get('title'), 120)}")
+            else:
+                trace.line(f"did not complete: {ac.error or 'no verdict returned'}")
     if getattr(client, "fell_back", ""):
         res.notes.append(client.fell_back)
+    elif approach_client is not None and getattr(approach_client, "fell_back", ""):
+        res.notes.append(approach_client.fell_back)
 
-    res.timings_ms["review"] = int((time.monotonic() - t_phase) * 1000)
-    res.calls = list(getattr(client, "calls", []))
+    def all_calls() -> list[dict[str, Any]]:
+        own = list(getattr(client, "calls", []))
+        side = list(getattr(approach_client, "calls", [])) if approach_client else []
+        return own + side
+
+    res.calls = all_calls()
     fresh: list[Finding] = []
     for br in res.bundles:
         # A finding that is not on a diff line (unchanged code) is still a finding: it is
@@ -745,7 +837,7 @@ def run(
             added=added,
             max_tokens=res.verify_max_tokens or cfg.limits.verify_max_tokens,
         )
-        res.calls = list(getattr(client, "calls", []))  # the check's call too
+        res.calls = all_calls()  # the check's call too
     res.new_findings = merge_new(state, fresh, round_no=round_no)
     res.unplaced = [f for f in res.new_findings if not f.line]
     res.spiral = spiral_paths(state, res.new_findings, round_no)
@@ -774,6 +866,7 @@ def run(
 
     # ---- state -----------------------------------------------------------
     _book(ledger, round_ledger)
+    _book(ledger, approach_ledger)
     failed_paths: list[str] = []
     bundle_paths = {b.label: b.paths for b in bundles}
     for b in res.bundles:
@@ -815,9 +908,9 @@ def run(
             "new": len(res.new_findings),
             "resolved": len(res.resolved_free) + len(res.resolved_verified),
             "blocking": len(state.open_findings(BLOCKING)),
-            "incomplete": bool(res.failed or res.incomplete),
-            "usd": round(round_ledger.spent_usd, 4),
-            "calls": round_ledger.calls,
+            "incomplete": bool(res.failed or res.incomplete or state.unread),
+            "usd": round(round_ledger.spent_usd + approach_ledger.spent_usd, 4),
+            "calls": round_ledger.calls + approach_ledger.calls,
             "run": run_url,
         }
     )
@@ -2343,10 +2436,46 @@ def _details(f: Finding, blob_base: str, chars: int | None = None) -> str:
     return "\n".join(out)
 
 
+UNREAD_HINT = (
+    "Part of the change is too large to read (listed below), so a retry would not read it "
+    "either: split it into smaller pull requests, or, once a person has reviewed those files, "
+    "comment `/review waive <reason>`."
+)
+
+
+def incomplete_reasons(res: RunResult) -> list[str]:
+    """Why the review of this head is incomplete, from the run and from the state.
+
+    The state's part (files left unreviewed by a failure, files too large to
+    read) survives a dismissal or a re-check, which build a fresh result: an
+    incomplete review stays incomplete until a review covers those files."""
+    st = res.state or PRState()
+    out = list(res.incomplete)
+    if st.pending_files and not res.incomplete:
+        out.append(
+            f"{len(st.pending_files)} file(s) could not be reviewed in the last run: "
+            "comment `/review` to retry them"
+        )
+    if st.unread:
+        listed = ", ".join(f"`{p}` ({why})" for p, why in list(st.unread.items())[:5])
+        more = f" (+{len(st.unread) - 5} more)" if len(st.unread) > 5 else ""
+        out.append(f"{len(st.unread)} file(s) not read: {listed}{more}")
+    return out
+
+
 def _retry_hint(res: RunResult) -> str:
     """What an author can do about an incomplete review. A refusal by the model
     provider is deterministic: `/review` on the same content is refused again and
-    spends a round, so it is never offered as the fix for one."""
+    spends a round, so it is never offered as the fix for one. Nor is a file too
+    large to read: a retry reads the same file."""
+    st = res.state or PRState()
+    if st.unread and not res.incomplete and not st.pending_files:
+        return UNREAD_HINT
+    hint = _failure_hint(res)
+    return f"{hint} {UNREAD_HINT}" if st.unread else hint
+
+
+def _failure_hint(res: RunResult) -> str:
     refused = res.refused
     if not refused:
         return "Comment `/review` to retry the part that failed."
@@ -2368,12 +2497,13 @@ def render_summary(res: RunResult) -> str:
     counts = " · ".join(
         f"{_SEV_ICON[s]} {len(by_level[s])} {_SEV_LABEL[s]}" for s in SEVERITIES
     )
-    if res.incomplete:
+    incomplete = incomplete_reasons(res)
+    if incomplete:
         verdict = (
             "⚠️ **Review incomplete** — part of this change was not reviewed; this is not an all-clear. "
             + _retry_hint(res)
             + "\n\n"
-            + "\n".join(f"- {r}" for r in res.incomplete)
+            + "\n".join(f"- {r}" for r in incomplete)
         )
     elif blocking:
         verdict = f"❌ **Changes requested** — {len(blocking)} blocking (critical/high) finding(s) open"
@@ -2708,10 +2838,13 @@ def verdict_status(res: RunResult) -> tuple[str, str]:
 
     Green means ready to merge: every finding, nits included, is fixed or was
     dismissed with a reason. Any open finding keeps it red; the description says
-    whether it is blocking or only medium/low. The approach check is advisory and
-    never turns it red. An incomplete review is `error`, never green: part of
-    the change was not looked at. A head that was waived (`waive`) is green
-    whatever the reviewer found, and says who waived it."""
+    whether it is blocking ("changes requested") or only medium/low ("not
+    ready"). The approach check is advisory and never turns it red. An
+    incomplete review is `error`, never green: part of the change was not looked
+    at — a failed bundle, a file left pending, or source too large to read, and
+    the state's part of that holds through a dismissal too. A head that was
+    waived (`waive`) or is exempt is green whatever the reviewer found, and says
+    why."""
     st = res.state or PRState()
     led = st.ledger or {}
     cost = f"${float(led.get('spent_usd', 0)):.2f}"
@@ -2725,8 +2858,9 @@ def verdict_status(res: RunResult) -> tuple[str, str]:
     exempted = active_exemption(st, res.head or st.reviewed_head)
     if exempted:
         return "success", f"exempt: {exempted['class']}"
-    if res.incomplete:
-        return "error", f"review incomplete — {res.incomplete[0][:90]}"
+    incomplete = incomplete_reasons(res)
+    if incomplete:
+        return "error", f"review incomplete — {incomplete[0][:90]}"
     blocking = st.open_findings(BLOCKING)
     if blocking:
         ids = ", ".join(f.id for f in blocking[:4]) + ("…" if len(blocking) > 4 else "")

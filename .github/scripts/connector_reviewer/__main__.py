@@ -2,6 +2,11 @@
 
     python -m connector_reviewer review --repo atlanhq/atlan-example-app --pr 1234 --root <app checkout> [--force] [--verify-budget] [--dry-run]
     python -m connector_reviewer review --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
+    python -m connector_reviewer finalize --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
+
+`finalize` runs after the review step whatever its outcome (`if: always()`): a
+run that crashed, was cancelled or timed out leaves its `pending` status as
+`error` instead (connector_reviewer/finalize.py).
 
 Sub-commands of the `/review` comment (`/review force`, `/review verify-budget`,
 `/review dismiss`, `/review recheck`) are parsed and documented in connector_reviewer/event.py.
@@ -35,7 +40,8 @@ from typing import Any
 from . import report, trace
 from .config import load_config, validate
 from .event import FORK_REFUSAL, addressed, decide, is_fork
-from .github import GitHub
+from .finalize import FAILED_NOTE, PROGRESS_NOTE, finalize, pr_number
+from .github import GitHub, GitHubError
 from .llm import Client, register_secret
 from .lock import BUSY_NOTE, WORKFLOW_FILE, older_active_run
 from .principles import (
@@ -44,7 +50,15 @@ from .principles import (
     load_principles,
     resolve_fleet_dir,
 )
-from .review import dismiss, recheck, render_summary, run, to_json, waive
+from .review import (
+    dismiss,
+    incomplete_reasons,
+    recheck,
+    render_summary,
+    run,
+    to_json,
+    waive,
+)
 
 # The config that ships with this package: `.github/connector-reviewer/` of the
 # application-sdk checkout the package is run from, not of the repo under review.
@@ -82,7 +96,18 @@ def main(argv: list[str] | None = None) -> int:
         help="give the verify call its opt-in output budget (agent.verify_max_tokens_opt_in)",
     )
     r.add_argument("--dry-run", action="store_true")
+    f = sub.add_parser(
+        "finalize",
+        help="after the review step, whatever its outcome: turn this run's leftover "
+        "pending status into error",
+    )
+    f.add_argument("--repo", required=True)
+    f.add_argument("--pr", type=int)
+    f.add_argument("--event-name")
+    f.add_argument("--event-path")
     args = ap.parse_args(argv)
+    if args.cmd == "finalize":
+        return _finalize(args)
 
     event: dict[str, Any] = {}
     if args.event_name:
@@ -272,6 +297,12 @@ def main(argv: list[str] | None = None) -> int:
             progress_id,
             FAILED_NOTE.format(url=run_url or "the Actions log"),
         )
+        # The pending status this run set must not outlive it. The workflow's
+        # `finalize` step does the same for a run that is killed outright.
+        try:
+            finalize(gh, args.pr, run_url)
+        except Exception as e:  # noqa: BLE001 - must never mask the real failure
+            print(f"connector-reviewer: finalize failed: {e}", file=sys.stderr)
         react("confused")
         raise
     _best_effort(gh.delete_comment, progress_id)
@@ -302,11 +333,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     for n in res.notes:
         print(f"connector-reviewer: note: {n}", file=sys.stderr)
-    for r in res.incomplete:
+    for r in incomplete_reasons(res):
         print(f"connector-reviewer: incomplete: {r}", file=sys.stderr)
     react(
         "confused"
-        if res.failed or res.incomplete
+        if res.failed or incomplete_reasons(res)
         else ("+1" if res.action == "skipped" else "rocket")
     )
     # A model/transport failure turns the job red. A deliberate budget stop does
@@ -314,15 +345,36 @@ def main(argv: list[str] | None = None) -> int:
     return 1 if res.failed else 0
 
 
-PROGRESS_NOTE = (
-    "⏳ **connector-reviewer is reviewing this PR** — [watch the run live]({url}).\n\n"
-    "<sub>This note is removed when the verdict is posted. If it is still here after the run "
-    "ends, the run was cancelled or timed out: see the log, then comment `/review` again.</sub>"
-)
-FAILED_NOTE = (
-    "❌ **connector-reviewer failed before it could post a verdict** — see {url}. "
-    "Comment `/review` to retry."
-)
+def _finalize(args: argparse.Namespace) -> int:
+    """`finalize`: no config, no principles, no model; GitHub only. Exit 0 when it
+    ran, whether or not it had anything to fix; 1 when GitHub could not be read."""
+    number = args.pr or 0
+    if not number and args.event_name and args.event_path:
+        event = json.loads(Path(args.event_path).read_text())
+        number = pr_number(args.event_name, event)
+    run_url = _run_url()
+    if not number or not run_url:
+        print("connector-reviewer: finalize — no pull request or no run to attribute")
+        return 0
+    try:
+        done = finalize(GitHub(args.repo), number, run_url)
+    except GitHubError as e:
+        print(f"connector-reviewer: finalize failed: {e}", file=sys.stderr)
+        return 1
+    print(
+        f"connector-reviewer: finalize #{number} — "
+        + (
+            f"status on {done.head[:9]} set to error"
+            if done.status_set
+            else "no pending status of this run"
+        )
+        + (
+            f"; {len(done.notes_fixed)} progress note(s) rewritten"
+            if done.notes_fixed
+            else ""
+        )
+    )
+    return 0
 
 
 def _run_url() -> str:

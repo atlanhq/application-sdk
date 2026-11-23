@@ -33,6 +33,7 @@ from connector_reviewer import bundle as bundle_mod
 from connector_reviewer import context as reviewer_context
 from connector_reviewer import event as event_mod
 from connector_reviewer import exempt as exempt_mod
+from connector_reviewer import finalize as finalize_mod
 from connector_reviewer import findings as findings_mod
 from connector_reviewer import llm as llm_mod
 from connector_reviewer import report as report_mod
@@ -79,6 +80,7 @@ from connector_reviewer.review import (
 )
 from connector_reviewer.select import select_files
 from connector_reviewer.tools import (
+    COMMENT_ITEM,
     Workspace,
     find_symbol,
     read_diff,
@@ -1141,9 +1143,13 @@ def test_the_review_prompt_tells_the_model_how_to_use_and_name_principles(repo: 
     assert "<principles> lists the review principles that apply to these files" in flat
     assert "FP ids (FP01, FP02, …) are fleet principles" in flat
     assert "RP ids (RP01, …) are this repository's own" in flat
-    assert "name that principle's id in the comment's content" in flat
-    # Naming one is offered, not required: a finding without a principle still stands.
-    assert "must cite" not in flat and "every finding" not in flat.lower()
+    # Citing is required, and the prompt says what happens otherwise (FND-5313).
+    assert "Every finding either rests on a principle or is a concrete bug" in flat
+    assert "set the comment's `principle` to that id" in flat
+    assert "dropped in code" in flat
+    item = cast(dict[str, Any], COMMENT_ITEM)
+    assert "principle" in item["properties"]
+    assert "principle" not in item["required"]  # a concrete bug may omit it
     ws, bundle = _ws(repo)
     msg = agent_mod.build_principles_message(bundle, principles_of(repo))
     assert msg.startswith("<principles>\n") and msg.endswith("\n</principles>")
@@ -1361,6 +1367,7 @@ def test_loop_places_comments_from_quoted_code_and_reflector_can_only_remove(
         severity="low",
         title="rename data",
         content="data is a vague name",
+        principle="FP01",  # cited, so it reaches the fact-check (see `cite`)
     )
     script = Script(
         response([tool_call("find_symbol", {"name": "fetch"})]),
@@ -1987,9 +1994,10 @@ def test_approach_check_runs_once_per_pr_and_is_advisory(repo: Path):
     body = gh.comments[0]["body"]
     assert "Approach check" in body and "Fixes the symptom" in body
     assert "The reviewer reads this PR as" in body and "callers want text" in body
-    # It ran FIRST: the line reviewer was told the PR's intent.
+    # It ran ALONGSIDE the line review (FND-5313): on its first round the line
+    # reviewer is not told the PR's intent, since the check had not answered yet.
     change_msg = first.requests[0]["messages"][2]["content"]
-    assert "<pr_understanding>" in change_msg and "Decode inside fetch()" in change_msg
+    assert "<pr_understanding>" not in change_msg
     # Advisory: never a fingerprinted finding, so it can never block or drive a resolve loop.
     assert all("symptom" not in f.title for f in state_of(res).findings)
 
@@ -3715,10 +3723,12 @@ def test_every_request_is_recorded_with_counts_only_and_reported(
         principles=principles_of(repo),
         client_factory=factory,
     )
+    # The approach check runs alongside the line review on a client of its own;
+    # its requests are listed after the line review's.
     assert [c["stage"].split(":")[0] for c in res.calls] == [
-        "approach",
         "review",
         "reflect",
+        "approach",
     ]
     for c in res.calls:
         assert {
@@ -8398,3 +8408,548 @@ def test_the_run_report_redacts_errors_whatever_recorded_them():
     built = report_mod.build(res)
     assert OPAQUE_KEY not in json.dumps(built)
     assert event["error"] == leak, "the run's own record is not rewritten"
+
+
+# ---- verdict rules that differ from lens (FND-5313) -----------------------------------------------
+
+
+def _open(severity: str, i: int = 0) -> Finding:
+    return Finding(
+        path="app/storage/fetch.py",
+        line=4,
+        severity=severity,
+        category="bug",
+        title=f"finding {i}",
+        body="b",
+        evidence=f"    x{i} = 1",
+    )
+
+
+@pytest.mark.parametrize(
+    "state, incomplete, expected, words",
+    [
+        (PRState(reviewed_head="h1"), [], "success", "ready to merge"),
+        (
+            PRState(reviewed_head="h1", findings=[_open("high")]),
+            [],
+            "failure",
+            "blocking",
+        ),
+        (
+            PRState(reviewed_head="h1", findings=[_open("medium")]),
+            [],
+            "failure",
+            "not ready",
+        ),
+        # A nit still keeps the status red: green means every finding is closed.
+        (
+            PRState(reviewed_head="h1", findings=[_open("low")]),
+            [],
+            "failure",
+            "not ready",
+        ),
+        (
+            PRState(reviewed_head="h1"),
+            ["storage: fatal — x"],
+            "error",
+            "review incomplete",
+        ),
+        (
+            PRState(
+                reviewed_head="h1", unread={"app/big.py": "over 1500 changed lines"}
+            ),
+            [],
+            "error",
+            "1 file(s) not read",
+        ),
+        (
+            PRState(reviewed_head="h1", pending_files=["app/storage/fetch.py"]),
+            [],
+            "error",
+            "could not be reviewed in the last run",
+        ),
+        (
+            PRState(
+                reviewed_head="h1",
+                findings=[_open("high")],
+                waiver={"by": "lead", "reason": "known", "head": "h1"},
+            ),
+            ["storage: fatal — x"],
+            "success",
+            "waived by @lead",
+        ),
+        (
+            PRState(exempt={"class": "version bump", "why": "w", "head": "h1"}),
+            [],
+            "success",
+            "exempt: version bump",
+        ),
+    ],
+)
+def test_the_status_table_holds_for_every_verdict(
+    state: PRState, incomplete: list[str], expected: str, words: str
+):
+    """success: ready, exempt, waived. failure: changes requested, not ready.
+    error: incomplete. Nothing else is green."""
+    res = RunResult("reviewed", state=state, head="h1", incomplete=incomplete)
+    got, description = verdict_status(res)
+    assert got == expected and words in description
+
+
+BIG = "".join(f"+    x{i} = {i}\n" for i in range(1600))
+BIG_DIFF = (
+    "diff --git a/app/storage/big.py b/app/storage/big.py\n"
+    "new file mode 100644\n--- /dev/null\n+++ b/app/storage/big.py\n"
+    f"@@ -0,0 +1,1600 @@\n{BIG}"
+)
+SMALL_BIG_DIFF = (
+    "diff --git a/app/storage/big.py b/app/storage/big.py\n"
+    "new file mode 100644\n--- /dev/null\n+++ b/app/storage/big.py\n"
+    "@@ -0,0 +1,2 @@\n+def big():\n+    return 1\n"
+)
+
+
+def test_source_too_large_to_read_is_incomplete_until_it_is_read(repo: Path):
+    """A file skipped for size can never give a green verdict: not this round, not
+    after the last finding is dismissed, not on a later round that does not touch
+    it. Only reading it (or a waive) clears it."""
+    gh = fake_github(diffs={("b0", "h1"): DIFF + BIG_DIFF})
+    gh.files[("app/storage/big.py", "h1")] = "".join(
+        f"    x{i} = {i}\n" for i in range(1600)
+    )
+    principles = principles_of(repo)
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles,
+        client_factory=_factory(_review_script()),
+    )
+    st = state_of(res)
+    assert st.unread == {"app/storage/big.py": "over 1500 changed lines"}
+    assert gh.statuses[-1]["state"] == "error"
+    body = gh.comments[0]["body"]
+    assert "Review incomplete" in body and review_mod.UNREAD_HINT in body
+    assert "Comment `/review` to retry" not in body  # a retry reads the same file
+    assert st.pending_files == []  # nothing a retry could fix
+
+    # Dismissing the only finding does not make it green.
+    fid = st.findings[0].id
+    review_mod.dismiss(gh, 1, [fid], "accepted", actor="lead", pr_author="author")
+    assert gh.statuses[-1]["state"] == "error"
+    assert "not read" in gh.statuses[-1]["description"]
+
+    # A later round that does not touch the file still cannot read it.
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = DIFF
+    gh.diffs[("b0", "h2")] = DIFF + BIG_DIFF
+    gh.files[("app/storage/fetch.py", "h2")] = SRC_V2_NEXT
+    gh.files[("app/storage/big.py", "h2")] = gh.files[("app/storage/big.py", "h1")]
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles,
+        client_factory=_factory(Script()),
+    )
+    assert res.mode == "incremental"
+    assert "app/storage/big.py" in state_of(res).unread
+    assert gh.statuses[-1]["state"] == "error"
+
+    # Once the file can be read, it is: whole, not only the new commits' slice.
+    gh.head = "h3"
+    gh.diffs[("h2", "h3")] = SMALL_BIG_DIFF
+    gh.diffs[("b0", "h3")] = DIFF + SMALL_BIG_DIFF
+    gh.files[("app/storage/fetch.py", "h3")] = SRC_V2_NEXT
+    gh.files[("app/storage/big.py", "h3")] = "def big():\n    return 1\n"
+    script = Script()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles,
+        client_factory=_factory(script),
+    )
+    assert state_of(res).unread == {}
+    assert any(
+        '<file path="app/storage/big.py">' in r["messages"][2]["content"]
+        for r in script.requests
+    )
+    assert gh.statuses[-1]["state"] == "success"
+
+
+def test_files_past_the_bundle_cap_are_unread():
+    def fd(path: str) -> str:
+        # ~5,000 tokens each: two files are too many for one 9,000-token bundle.
+        body = "".join(f'+x{i} = "{"v" * 40}"\n' for i in range(400))
+        return (
+            f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
+            f"@@ -0,0 +1,400 @@\n{body}"
+        )
+
+    files = parse_unified_diff(fd("app/a/one.py") + fd("docs/two.py"))
+    cfg = Config(price=PRICE)
+    cfg.max_bundles = 1
+    cfg.limits.context_limit_tokens = 2000  # each file alone fills a re-packed bundle
+    res = RunResult("reviewed")
+    bundles = plan_bundles(files, cfg, res)
+    assert [b.paths for b in bundles] == [["app/a/one.py"]]
+    assert review_mod.unread_skips(res.skipped_files) == [
+        ("docs/two.py", "bundle cap (lowest-risk code, after re-packing)")
+    ]
+    # What is skipped on purpose is not unread source.
+    assert (
+        review_mod.unread_skips(
+            [
+                ("uv.lock", "excluded by pattern"),
+                ("a.png", "binary"),
+                (".env", "may hold secrets: not sent to the model"),
+                ("app/x.py", "deletion only"),
+            ]
+        )
+        == []
+    )
+
+
+def test_a_head_the_round_cap_or_the_budget_stops_is_never_left_without_a_verdict(
+    repo: Path,
+):
+    gh = fake_github()
+    st = PRState(reviewed_head="old", model="gpt-6-luna", config_hash="test", round=5)
+    gh.comments.append(
+        {
+            "id": 1,
+            "body": SUMMARY_MARKER + st.encode(),
+            "user": {"login": "atlan-app-fleet[bot]"},
+        }
+    )
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=PrincipleSet(),
+        client_factory=_factory(Script()),
+        run_url="https://github.test/run/1",
+    )
+    assert res.action == "skipped"
+    assert gh.statuses[-1]["sha"] == "h1" and gh.statuses[-1]["state"] == "error"
+    assert "round cap" in gh.statuses[-1]["description"]
+
+    st.round, st.ledger = 1, {"cap_usd": 1.0, "spent_usd": 1.0}
+    gh.comments[0]["body"] = SUMMARY_MARKER + st.encode()
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=PrincipleSet(),
+        client_factory=_factory(Script()),
+    )
+    assert gh.statuses[-1]["state"] == "error"
+    assert "budget" in gh.statuses[-1]["description"]
+    assert "waive" in gh.statuses[-1]["description"]
+
+
+# ---- every finding cites a principle or is a concrete bug ----------------------------------------
+
+
+def _finding(
+    category: str, *, rule_id: str = "", body: str = "b", path: str = "app/x.py"
+):
+    return Finding(
+        path=path,
+        line=1,
+        severity="medium",
+        category=category,
+        title="t",
+        body=body,
+        evidence="x = 1",
+        rule_id=rule_id,
+    )
+
+
+def test_a_finding_without_an_applicable_principle_is_dropped_unless_it_is_a_bug():
+    applicable = {"FP01", "FP02"}
+    kept, dropped = agent_mod.cite(
+        [
+            _finding("bug"),
+            _finding("security"),
+            _finding("maintainability"),
+            _finding("performance", rule_id="FP01"),
+            _finding("test", rule_id="RP01"),  # names a principle that does not apply
+            _finding("other", body="Shortfall published as complete (FP02)."),
+        ],
+        applicable,
+    )
+    assert [(f.category, f.rule_id) for f in kept] == [
+        ("bug", ""),
+        ("security", ""),
+        ("performance", "FP01"),
+        ("other", "FP02"),  # an applicable id written in the content counts
+    ]
+    assert [f.category for f in dropped] == ["maintainability", "test"]
+
+
+def test_the_line_review_drops_uncited_findings_before_the_fact_check(repo: Path):
+    ws, bundle = _ws(repo)
+    style = dict(
+        COMMENT,
+        existing_code="    data = client.get(key)",
+        category="maintainability",
+        severity="medium",
+        title="vague name",
+        content="data is a vague name",
+    )
+    cited = dict(COMMENT, category="performance", principle="fp01")
+    script = Script(
+        response(
+            [
+                tool_call("code_comment", {"comments": [style, cited]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    res = agent_mod.review_bundle(
+        client, ws, bundle, principles_of(repo), {}, [], agent_mod.AgentLimits()
+    )
+    assert [f.title for f in res.uncited] == ["vague name"]
+    assert [(f.title, f.rule_id) for f in res.findings] == [
+        ("decode() on a None result", "FP01")
+    ]
+    reflect = script.requests[-1]["messages"][1]["content"]
+    assert "vague name" not in reflect  # it cost no fact-check tokens
+
+
+def test_a_principled_finding_in_a_test_file_keeps_its_severity():
+    """The test-file cap gives way to a principle's own Severity line: FP15 says
+    high for a deleted test that covered changed code."""
+    lim = agent_mod.AgentLimits()
+    graded = _finding("test", rule_id="FP15", path="tests/unit/test_x.py")
+    graded.severity = "high"
+    hygiene = _finding("test", path="tests/unit/test_y.py")
+    hygiene.severity = "high"
+    leak = _finding("security", path="tests/unit/test_z.py")
+    leak.severity = "critical"
+    kept, notes = agent_mod.calibrate([graded, hygiene, leak], lim)
+    assert [f.severity for f in kept] == ["high", "low", "critical"]
+    assert notes == [f"{hygiene.id}: high → low (test-only)"]
+
+
+# ---- the approach check runs alongside the line review --------------------------------------------
+
+
+def test_the_approach_check_runs_alongside_the_line_review(repo: Path):
+    """The approach reply is held until a line-review request has arrived: if the
+    check still ran first, the review would never start and this would time out."""
+    import threading  # noqa: PLC0415
+
+    review_started = threading.Event()
+    seen_in_time: list[bool] = []
+
+    class Alongside(Script):
+        def __call__(self, body: dict[str, Any]) -> Any:
+            if _is_approach(body):
+                seen_in_time.append(review_started.wait(timeout=10))
+            elif body.get("prompt_cache_key") == "connector-reviewer-review":
+                review_started.set()
+            return super().__call__(body)
+
+    gh = fake_github()
+    script = Alongside(*_review_script().responses)
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    assert seen_in_time == [True]
+    assert state_of(res).approach.get("verdict") == "sound"
+    assert "approach" in res.timings_ms
+    # Its own ledger is carved out of the round's and booked into the PR's.
+    assert state_of(res).ledger["calls"] == 3
+    assert (
+        gh.statuses[-1]["state"] == "failure"
+    )  # the finding, not the approach, decides
+
+
+# ---- the per-bundle time limit ---------------------------------------------------------------------
+
+
+def test_a_bundle_past_its_time_limit_gives_its_final_answer(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    now = [0.0]
+    monkeypatch.setattr(agent_mod, "_clock", lambda: now[0])
+
+    def slow(body: dict[str, Any]) -> Any:
+        now[0] += 90.0  # each turn takes 90 s of wall time
+        return response([tool_call("find_symbol", {"name": "fetch"})])
+
+    ws, bundle = _ws(repo)
+    script = Script(slow, slow, slow)
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    lim = agent_mod.AgentLimits(bundle_time_limit_s=120)
+    res = agent_mod.review_bundle(client, ws, bundle, PrincipleSet(), {}, [], lim)
+    assert res.forced == "time limit" and res.stop == "final_round"
+    assert res.turns == 3  # 90 s, 180 s (past the limit), then the forced final turn
+    final = script.requests[-1]
+    assert final["tool_choice"] == "required"
+    assert "FINAL turn" in final["messages"][-1]["content"]
+    assert res.seconds == 270.0
+
+    # 0 turns it off: the turn budget is then the only bound.
+    now[0] = 0.0
+    script = Script(slow, response([tool_call("task_done", {"state": "DONE"})]))
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    off = agent_mod.AgentLimits(bundle_time_limit_s=0)
+    res = agent_mod.review_bundle(client, ws, bundle, PrincipleSet(), {}, [], off)
+    assert res.forced == "" and res.stop == "done"
+
+
+def test_the_shipped_time_limit_keeps_four_bundles_in_parallel():
+    cfg = load_config(Path(__file__).resolve().parents[2] / "connector-reviewer")
+    assert cfg.concurrency == 4
+    assert 0 < cfg.limits.bundle_time_limit_s <= 180
+
+
+# ---- finalize: a crashed, cancelled or timed-out run never leaves a stale or green status ----------
+
+RUN_URL = "https://github.com/o/r/actions/runs/105"
+
+
+class _FinalizeGitHub:
+    def __init__(self, status: dict[str, Any] | None, comments: list[dict[str, Any]]):
+        self.status = status
+        self.comments = comments
+        self.set: list[tuple[str, str, str, str]] = []
+        self.edited: dict[int, str] = {}
+
+    def pr(self, number: int) -> dict[str, Any]:
+        return {"head": {"sha": "h1"}}
+
+    def status_of(self, sha: str, context: str) -> dict[str, Any] | None:
+        assert context == "connector-reviewer"
+        return self.status
+
+    def set_status(self, sha: str, state: str, description: str, target_url: str = ""):
+        self.set.append((sha, state, description, target_url))
+
+    def issue_comments(self, number: int) -> list[dict[str, Any]]:
+        return self.comments
+
+    def edit_comment(self, comment_id: int, body: str) -> None:
+        self.edited[comment_id] = body
+
+
+def _progress_comment(url: str, cid: int = 7, login: str = "atlan-app-fleet[bot]"):
+    return {
+        "id": cid,
+        "body": finalize_mod.PROGRESS_NOTE.format(url=url),
+        "user": {"login": login},
+    }
+
+
+def test_finalize_turns_this_runs_pending_status_into_error():
+    gh = _FinalizeGitHub(
+        {"state": "pending", "target_url": RUN_URL}, [_progress_comment(RUN_URL)]
+    )
+    done = finalize_mod.finalize(cast(Any, gh), 1, RUN_URL)
+    assert done.status_set and done.notes_fixed == [7]
+    [(sha, state, description, url)] = gh.set
+    assert (sha, state, url) == ("h1", "error", RUN_URL)
+    assert description.startswith("review incomplete")
+    assert gh.edited[7].startswith("❌ **connector-reviewer failed")
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        None,  # never started (not addressed, busy, fork, …)
+        {"state": "success", "target_url": "https://github.test/c/1"},  # a verdict
+        {"state": "failure", "target_url": "https://github.test/c/1"},
+        {"state": "error", "target_url": RUN_URL},
+        # A newer run's review in progress is not this run's to end.
+        {"state": "pending", "target_url": "https://github.com/o/r/actions/runs/106"},
+    ],
+)
+def test_finalize_leaves_a_finished_or_foreign_status_alone(
+    status: dict[str, Any] | None,
+):
+    others = [
+        _progress_comment("https://github.com/o/r/actions/runs/106", cid=8),
+        _progress_comment(RUN_URL, cid=9, login="someone"),
+    ]
+    gh = _FinalizeGitHub(status, others)
+    done = finalize_mod.finalize(cast(Any, gh), 1, RUN_URL)
+    assert not done.status_set and gh.set == [] and gh.edited == {}
+
+
+def test_finalize_without_a_run_to_attribute_changes_nothing():
+    gh = _FinalizeGitHub({"state": "pending", "target_url": ""}, [])
+    assert not finalize_mod.finalize(cast(Any, gh), 1, "").status_set
+    assert gh.set == []
+
+
+def test_finalize_reads_the_pull_request_from_the_event():
+    comment = {"issue": {"number": 7, "pull_request": {}}}
+    assert finalize_mod.pr_number("issue_comment", comment) == 7
+    assert finalize_mod.pr_number("issue_comment", {"issue": {"number": 7}}) == 0
+    assert finalize_mod.pr_number("pull_request", {"pull_request": {"number": 3}}) == 3
+    assert finalize_mod.pr_number("push", {}) == 0
+
+
+def test_the_finalize_command_needs_no_config_and_exits_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test, patched below
+
+    gh = _FinalizeGitHub({"state": "pending", "target_url": RUN_URL}, [])
+    monkeypatch.setattr(cli, "GitHub", lambda repo: gh)
+    monkeypatch.setenv("GITHUB_RUN_ID", "105")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.delenv("CONNECTOR_REVIEWER_PRINCIPLES_DIR", raising=False)
+    path = tmp_path / "event.json"
+    path.write_text(json.dumps({"issue": {"number": 7, "pull_request": {}}}))
+    argv = ["finalize", "--repo", "o/r", "--event-name", "issue_comment"]
+    assert cli.main([*argv, "--event-path", str(path)]) == 0
+    assert [s[1] for s in gh.set] == ["error"]
+
+
+def test_a_crash_sets_error_on_the_head_it_left_pending(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """The review's own crash handler finalizes too, before re-raising."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test, patched below
+
+    class Pending(_CliGitHub):
+        def status_of(self, sha: str, context: str) -> dict[str, Any]:
+            return {"state": "pending", "target_url": RUN_URL}
+
+        def issue_comments(self, number: int) -> list[dict[str, Any]]:
+            return []
+
+    _CliGitHub.reactions, _CliGitHub.comments, _CliGitHub.live = [], [], {}
+    _CliGitHub.statuses = []
+    monkeypatch.setattr(cli, "GitHub", Pending)
+
+    def boom(**kw: Any) -> RunResult:
+        raise RuntimeError("connector-reviewer bug")
+
+    monkeypatch.setattr(cli, "run", boom)
+    monkeypatch.setenv("GITHUB_RUN_ID", "105")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    root = str(Path(__file__).resolve().parents[3])
+    args = ["review", "--repo", "o/r", "--root", root, "--event-name", "issue_comment"]
+    with pytest.raises(RuntimeError):
+        cli.main([*args, "--event-path", _event_file(tmp_path)])
+    assert [s[1] for s in _CliGitHub.statuses] == ["error"]

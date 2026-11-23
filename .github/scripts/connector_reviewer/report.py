@@ -17,7 +17,12 @@ from pathlib import Path
 from typing import Any
 
 from .llm import redact
-from .review import RunResult, verify_cut_off_report, verify_skipped_report
+from .review import (
+    RunResult,
+    incomplete_reasons,
+    verify_cut_off_report,
+    verify_skipped_report,
+)
 
 
 def call_line(event: dict[str, Any]) -> str:
@@ -53,7 +58,7 @@ def build(res: RunResult) -> dict[str, Any]:
         "mode": res.mode,
         "mode_label": res.mode_label,
         "head": res.head,
-        "incomplete": res.incomplete,
+        "incomplete": incomplete_reasons(res),
         "notes": res.notes,
         "timings_ms": res.timings_ms,
         "ledger": led,
@@ -79,6 +84,9 @@ def build(res: RunResult) -> dict[str, Any]:
                 "turns": b.turns,
                 "turn_budget": b.turn_budget,
                 "planned": b.planned,
+                "seconds": b.seconds,
+                "forced": b.forced,
+                "uncited_dropped": len(b.uncited),
                 "tools": b.tool_calls,
                 "stop": b.stop,
                 # whole: the run report is where an error is read in full
@@ -190,14 +198,17 @@ def markdown(report: dict[str, Any], pr: int) -> str:
     if report["bundles"]:
         lines += [
             "### Bundles",
-            "| bundle | turns | plan | tools | stop | findings | fact-check removed |",
-            "|---|---|---|---|---|---|---|",
+            "| bundle | turns | plan | tools | stop | time | findings | fact-check removed | no principle, dropped |",
+            "|---|---|---|---|---|---|---|---|---|",
         ]
         for b in report["bundles"]:
             tools = ", ".join(f"{k}×{v}" for k, v in b["tools"].items()) or "-"
+            forced = f" (final turn forced: {b['forced']})" if b.get("forced") else ""
             lines.append(
                 f"| {b['label']} | {b['turns']}/{b['turn_budget']} | {'yes' if b['planned'] else '-'} | {tools} "
-                f"| {b['stop']}{(' — ' + b['error'][:80]) if b['error'] else ''} | {b['findings']} | {b['fact_check_removed']} |"
+                f"| {b['stop']}{forced}{(' — ' + b['error'][:80]) if b['error'] else ''} "
+                f"| {b.get('seconds', 0):.1f}s | {b['findings']} | {b['fact_check_removed']} "
+                f"| {b.get('uncited_dropped', 0)} |"
             )
         lines.append("")
     lines.extend(_refusal_lines(report["bundles"]))
