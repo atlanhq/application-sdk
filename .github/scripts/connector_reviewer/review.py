@@ -1010,7 +1010,8 @@ def run(
             )
         for f in res.new_findings:
             trace.line(
-                f"NEW {f.id} {f.severity:<8} {f.path}:{f.line} {trace.short(f.title, 100)}"
+                f"NEW {f.id} {f.severity:<8} {f.rule_id or '-':<5} {f.path}:{f.line} "
+                f"{trace.short(f.title, 100)}"
             )
         if round_no > 1:
             trace.line(
@@ -2546,6 +2547,13 @@ _FENCE = {
 }
 
 
+def _principle(f: Finding) -> str:
+    """The principle a finding rests on, as shown in the summary: its id (FPnn
+    from the fleet set, RPnn from the repository's own), or a note that it is a
+    concrete bug, which needs no principle (`agent.cite`)."""
+    return f"`{f.rule_id}`" if f.rule_id else "— (concrete bug)"
+
+
 def _where(f: Finding, blob_base: str) -> str:
     """The finding's location, linked to the file at the reviewed commit."""
     line = f.line or f.head_line
@@ -2574,8 +2582,8 @@ def _details(f: Finding, blob_base: str, chars: int | None = None) -> str:
         )
 
     out = [
-        f"<details><summary>{_SEV_ICON[f.severity]} {f.id} · {f.severity} · {f.category} — "
-        f"{f.title}</summary>\n",
+        f"<details><summary>{_SEV_ICON[f.severity]} {f.id} · {f.severity} · {f.category} · "
+        f"{_principle(f)} — {f.title}</summary>\n",
         f"**Where:** {_where(f, blob_base)}\n",
         cap(f.body.strip()),
     ]
@@ -2706,9 +2714,11 @@ def render_summary(res: RunResult) -> str:
         lines.append(
             f"#### {_SEV_ICON[sev]} {_SEV_LABEL[sev].capitalize()} ({len(items)}){blocks}"
         )
-        lines.append("| id | where | finding |\n|---|---|---|")
+        lines.append("| id | where | principle | finding |\n|---|---|---|---|")
         for f in items:
-            lines.append(f"| {f.id} | {_where(f, res.blob_base)} | {f.title} |")
+            lines.append(
+                f"| {f.id} | {_where(f, res.blob_base)} | {_principle(f)} | {f.title} |"
+            )
         lines.append("")
     opened = st.open_findings()
     details_at = len(lines)  # the details block is sized last (see the size backstop)
