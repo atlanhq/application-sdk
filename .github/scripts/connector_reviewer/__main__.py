@@ -3,6 +3,7 @@
     python -m connector_reviewer review --repo atlanhq/atlan-example-app --pr 1234 --root <app checkout> [--force] [--verify-budget] [--dry-run]
     python -m connector_reviewer review --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
     python -m connector_reviewer finalize --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
+    python -m connector_reviewer sdk-ref --root <app checkout>
 
 `finalize` runs after the review step whatever its outcome (`if: always()`): a
 run that crashed, was cancelled or timed out leaves its `pending` status as
@@ -10,6 +11,14 @@ run that crashed, was cancelled or timed out leaves its `pending` status as
 
 Sub-commands of the `/review` comment (`/review force`, `/review verify-budget`,
 `/review dismiss`, `/review recheck`) are parsed and documented in connector_reviewer/event.py.
+
+`sdk-ref` reads the app's `uv.lock` and writes the application-sdk ref it pins
+(`ref=` and `label=`) to `$GITHUB_OUTPUT`, empty when there is none
+(connector_reviewer/sdk_source.py); the workflow checks the SDK source out at
+that ref and passes it to `review --sdk-source` (or `CONNECTOR_REVIEWER_SDK_SOURCE`).
+The review's tools then read it under `sdk:`. When it was asked for and is not
+there, the review runs without it and its summary says so; without the flag or
+the variable (a local run) nothing changes.
 
 Run from `.github/scripts` of an application-sdk checkout (where this package
 lives), against a checkout of the BASE branch of the connector app under review
@@ -65,6 +74,8 @@ from .review import (
     to_json,
     waive,
 )
+from .sdk_source import resolve_root, step_output
+from .tools import SdkSource
 
 # The config that ships with this package: `.github/connector-reviewer/` of the
 # application-sdk checkout the package is run from, not of the repo under review.
@@ -102,6 +113,12 @@ def main(argv: list[str] | None = None) -> int:
         help="give the verify call its opt-in output budget (agent.verify_max_tokens_opt_in)",
     )
     r.add_argument("--dry-run", action="store_true")
+    r.add_argument(
+        "--sdk-source",
+        default=None,
+        help="checkout of application-sdk at the version the app pins, read under "
+        "`sdk:` (default: $CONNECTOR_REVIEWER_SDK_SOURCE; unset: no SDK source)",
+    )
     f = sub.add_parser(
         "finalize",
         help="after the review step, whatever its outcome: turn this run's leftover "
@@ -111,9 +128,16 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument("--pr", type=int)
     f.add_argument("--event-name")
     f.add_argument("--event-path")
+    s = sub.add_parser(
+        "sdk-ref",
+        help="write the application-sdk ref the app's uv.lock pins to $GITHUB_OUTPUT",
+    )
+    s.add_argument("--root", required=True, help="checkout of the app (trusted base)")
     args = ap.parse_args(argv)
     if args.cmd == "finalize":
         return _finalize(args)
+    if args.cmd == "sdk-ref":
+        return _sdk_ref(args)
 
     event: dict[str, Any] = {}
     if args.event_name:
@@ -279,6 +303,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"connector-reviewer: {res.action} {res.reason}".strip())
         react("rocket" if res.action == "dismissed" else "confused")
         return 0
+    # The pinned SDK source (FND-5331). Asked for (the flag or the variable,
+    # even empty) but not usable: the review runs as without it, and says so.
+    sdk: SdkSource | None = None
+    sdk_note = ""
+    sdk_dir = (
+        args.sdk_source
+        if args.sdk_source is not None
+        else os.environ.get("CONNECTOR_REVIEWER_SDK_SOURCE")
+    )
+    if sdk_dir is not None:
+        sdk, sdk_note = SdkSource.open(sdk_dir, root)
+    trace.line(
+        f"SDK source: application-sdk {sdk.label} at {sdk.root}"
+        if sdk
+        else (sdk_note or "SDK source not available: not configured")
+    )
+
     # A "running" note while the review is in progress, with a link to the live log. It is
     # removed once the verdict is posted (the verdict links the run too), and turned into a
     # failure note if connector-reviewer itself crashes, so it never lingers as a stale "running".
@@ -302,6 +343,8 @@ def main(argv: list[str] | None = None) -> int:
             post=live,
             run_url=run_url,
             on_pending=record_head,
+            sdk=sdk,
+            sdk_note=sdk_note,
         )
     except Exception:
         # The pending status this run set must not outlive it. The workflow's
@@ -388,6 +431,31 @@ def _finalize(args: argparse.Namespace) -> int:
             else ""
         )
     )
+    return 0
+
+
+def _sdk_ref(args: argparse.Namespace) -> int:
+    """`sdk-ref`: always exit 0. No ref is an empty output, and the review then
+    runs without the SDK source; it is never a reason to fail the job."""
+    res = resolve_root(Path(args.root))
+    out = step_output(res)
+    print(
+        f"connector-reviewer: application-sdk pin: {res.pin.label}"
+        if res.pin
+        else f"connector-reviewer: SDK source not available: {res.reason}"
+    )
+    path = os.environ.get("GITHUB_OUTPUT")
+    if path:
+        try:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(out)
+        except OSError as e:
+            print(
+                f"connector-reviewer: could not write the step output: {e}",
+                file=sys.stderr,
+            )
+    else:
+        print(out, end="")
     return 0
 
 

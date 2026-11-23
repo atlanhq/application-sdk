@@ -152,6 +152,20 @@ reflect = true   # filter-only fact check of each bundle's comments
 verify = true    # one call per round checking still-open findings in touched files
 approach = true  # understand the problem + judge the approach: once per PR, first, advisory only
 
+[skeptic]
+# Before a NEW critical or high finding is published, one independent model call tries to refute it
+# against the code with the read-only tools (connector_reviewer/skeptic.py), and defaults to upheld.
+# A refutation must quote a line that is checked in code to be in the file it names; then the finding
+# drops to medium and is shown as contested, with the reason. It is never deleted. A failed call, a
+# spent budget share or a malformed answer keeps the severity. Runs after the line review, up to
+# `[scope] concurrency` checks at a time, on its own 10% share of the round's budget
+# (review.SKEPTIC_SHARE). Findings carried over from earlier rounds are never re-checked.
+# Each value must have its TOML type (true/false, a whole number), and an unknown key is refused.
+enabled = true
+max_lookups = 3      # read-only lookups per check; then the verdict is forced (at most 4 calls)
+max_tokens = 8000    # per call; reasoning tokens count against it
+max_findings = 6     # checks per round; a further new blocking finding keeps its severity
+
 [agent]
 # Turn budget per bundle scales with its size: base + 1 per extra file + 1 per 150 changed
 # lines, capped. It is a safety net, not a target: the model is never told it and stops

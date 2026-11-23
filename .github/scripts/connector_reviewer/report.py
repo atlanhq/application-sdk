@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from . import skeptic
 from .llm import redact
 from .review import (
     RunResult,
@@ -117,6 +118,14 @@ def build(res: RunResult) -> dict[str, Any]:
             for f in res.new_findings
         ],
         "resolved": {"free": res.resolved_free, "verified": res.resolved_verified},
+        # The skeptic pass (skeptic.py): counts by outcome, and one entry per check
+        # (locations only, never the quoted code).
+        "skeptic": {
+            "counts": skeptic.counts(res.skeptic),
+            "checks": [
+                {**o.to_report(), "error": redact(o.error)} for o in res.skeptic
+            ],
+        },
         "verify_cut_off": verify_cut_off_report(res),
         "verify_skipped": verify_skipped_report(res),
         "approach": (st.approach if st else {}) or {},
@@ -213,6 +222,19 @@ def markdown(report: dict[str, Any], pr: int) -> str:
             )
         lines.append("")
     lines.extend(_refusal_lines(report["bundles"]))
+    sk: dict[str, Any] = report.get("skeptic") or {}
+    if sk.get("checks"):
+        lines.append(
+            "**Skeptic (new blocking findings):** "
+            + ", ".join(f"{k} {v}" for k, v in sk["counts"].items() if v)
+            + " — "
+            + ", ".join(
+                f"{c['id']} {c['outcome']}"
+                + (" → medium" if c["outcome"] == "refuted" else "")
+                for c in sk["checks"]
+            )
+        )
+        lines.append("")
     tri = report["triage"]
     if tri["mechanical"] or tri["duplicates"]:
         lines.append(
