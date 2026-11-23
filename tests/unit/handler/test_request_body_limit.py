@@ -13,12 +13,14 @@ from __future__ import annotations
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import obstore
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from obstore.store import MemoryStore
+from starlette import formparsers
 
 from application_sdk.handler import object_routes
 from application_sdk.handler.asgi import build_asgi_app
@@ -64,13 +66,10 @@ def host(memory: MemoryStore) -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
-def _chunks(total: int, size: int = 512) -> Iterator[bytes]:
-    """A body sent chunked: no Content-Length for the fast path to read."""
-    sent = 0
-    while sent < total:
-        n = min(size, total - sent)
-        sent += n
-        yield b"a" * n
+def _chunks(body: bytes, size: int = 512) -> Iterator[bytes]:
+    """*body* sent chunked: no Content-Length for the fast path to read."""
+    for start in range(0, len(body), size):
+        yield body[start : start + size]
 
 
 def _oversize_json() -> bytes:
@@ -121,7 +120,7 @@ def test_an_oversize_auth_body_without_a_length_gets_413(
     client: TestClient = request.getfixturevalue(client_name)
     response = client.post(
         "/workflows/v1/auth",
-        content=_chunks(_BODY_CAP * 2),
+        content=_chunks(_oversize_json()),
         headers={"content-type": "application/json"},
     )
     assert response.status_code == 413
@@ -139,7 +138,7 @@ def test_an_oversize_config_post_gets_413_and_stores_nothing(
 ) -> None:
     response = host.post(
         "/workflows/v1/config/abc?type=credentials",
-        content=_chunks(_BODY_CAP * 2),
+        content=_chunks(_oversize_json()),
         headers={"content-type": "application/json"},
     )
     assert response.status_code == 413
@@ -161,7 +160,7 @@ def test_an_oversize_upload_gets_413_and_leaves_no_temp_file(
     body, content_type = _multipart(_UPLOAD_CAP * 2)
     response = client.post(
         "/workflows/v1/file",
-        content=body if declare_length else _chunks(len(body)),
+        content=body if declare_length else _chunks(body),
         headers={"content-type": content_type},
     )
     assert response.status_code == 413
@@ -174,7 +173,7 @@ def test_an_oversize_upload_stores_nothing(
     body, content_type = _multipart(_UPLOAD_CAP * 2)
     response = host.post(
         "/workflows/v1/file",
-        content=_chunks(len(body)),
+        content=_chunks(body),
         headers={"content-type": content_type},
     )
     assert response.status_code == 413
@@ -193,6 +192,107 @@ def test_an_upload_gets_its_own_larger_cap(
     assert list(_small_caps.iterdir()) == []
 
 
+async def _post_in_messages(
+    app: FastAPI, path: str, body: bytes, content_type: str, size: int = 512
+) -> int:
+    """POST *body* straight to the ASGI app, *size* bytes per ``receive``.
+
+    TestClient hands the app a body in one message, so the cap would trip
+    before the multipart parser opened a part. This streams it like a socket.
+    """
+    pieces = [body[i : i + size] for i in range(0, len(body), size)]
+    statuses: list[int] = []
+
+    async def receive() -> dict[str, Any]:
+        if pieces:
+            return {
+                "type": "http.request",
+                "body": pieces.pop(0),
+                "more_body": bool(pieces),
+            }
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, Any]) -> None:
+        if message["type"] == "http.response.start":
+            statuses.append(message["status"])
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "root_path": "",
+        "query_string": b"",
+        "headers": [(b"content-type", content_type.encode())],
+        "client": ("testclient", 50000),
+        "server": ("testserver", 80),
+    }
+    await app(scope, receive, send)
+    return statuses[0]
+
+
+@pytest.mark.parametrize("client_name", ["worker", "host"])
+async def test_an_oversize_upload_closes_its_disk_spool(
+    client_name: str,
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cap trips after Starlette has rolled the part over to a real file;
+    that file is closed (its disk space released) by the time the 413 is out."""
+    spools: list[tempfile.SpooledTemporaryFile[bytes]] = []
+
+    class _Recorded(tempfile.SpooledTemporaryFile):  # type: ignore[type-arg]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            spools.append(self)
+
+    monkeypatch.setattr(formparsers, "SpooledTemporaryFile", _Recorded)
+    monkeypatch.setattr(formparsers.MultiPartParser, "spool_max_size", 1024)
+    client: TestClient = request.getfixturevalue(client_name)
+    assert isinstance(client.app, FastAPI)
+    body, content_type = _multipart(_UPLOAD_CAP * 2)
+
+    status = await _post_in_messages(
+        client.app, "/workflows/v1/file", body, content_type
+    )
+
+    assert status == 413
+    assert spools, "the upload never reached the multipart parser"
+    assert all(spool._rolled for spool in spools)  # type: ignore[attr-defined]
+    assert all(spool.closed for spool in spools)
+
+
+# --- logging -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("client_name", ["worker", "host"])
+@pytest.mark.parametrize("declare_length", [True, False])
+def test_a_rejection_is_one_warning_and_no_error(
+    client_name: str,
+    declare_length: bool,
+    request: pytest.FixtureRequest,
+    loguru_capture: list[dict[str, Any]],
+) -> None:
+    """A 413 is an expected answer, not a failed request: neither the worker's
+    request log nor a route's error boundary may log it at ERROR."""
+    client: TestClient = request.getfixturevalue(client_name)
+    body = _oversize_json()
+    response = client.post(
+        "/workflows/v1/auth",
+        content=body if declare_length else _chunks(body),
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 413
+    errors = [r["message"] for r in loguru_capture if r["level"].no >= 40]
+    assert errors == []
+    rejections = [r for r in loguru_capture if "answered 413" in r["message"]]
+    assert len(rejections) == 1
+    assert rejections[0]["level"].name == "WARNING"
+
+
 # --- configuration -----------------------------------------------------------
 
 
@@ -204,13 +304,17 @@ def _installed(app: FastAPI) -> list[dict[str, int]]:
     ]
 
 
-def test_both_apps_install_the_cap_once(worker: TestClient, host: TestClient) -> None:
+def test_both_apps_install_the_cap_once_innermost(
+    worker: TestClient, host: TestClient
+) -> None:
     for client in (worker, host):
         app = client.app
         assert isinstance(app, FastAPI)
         assert _installed(app) == [
             {"max_body_bytes": _BODY_CAP, "max_upload_bytes": _UPLOAD_CAP}
         ]
+        # Last in user_middleware is innermost: inside LogMiddleware.
+        assert app.user_middleware[-1].cls is RequestBodyLimitMiddleware
 
 
 @pytest.mark.parametrize("raw", ["not-a-number", "0", "-5"])

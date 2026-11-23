@@ -1647,6 +1647,9 @@ def _register_workflow_routes(
 
         try:
             body = await request.json()
+        except HTTPException:
+            # The body-size cap's 413: already the answer, nothing to log.
+            raise
         except Exception:
             # Log details server-side; the HTTPException intentionally hides the
             # parse internals from the client (avoid leaking file/line/offset).

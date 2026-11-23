@@ -36,20 +36,20 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Protocol, cast
+from typing import TYPE_CHECKING, Annotated, Any, Protocol, cast
 from uuid import uuid4
 
 import orjson
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi import Path as PathParam
 from fastapi.responses import JSONResponse
+from starlette.middleware import Middleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from typing_extensions import deprecated
 
 from application_sdk import _env, _obstore_config
 from application_sdk._logging import get_logger
 from application_sdk._runtime.offload import run_in_thread
-from application_sdk.errors.leaves import InvalidInputError
 from application_sdk.handler.contracts import FileUploadResponse
 from application_sdk.handler.routes import _wrap_response
 from application_sdk.handler.service_errors import (
@@ -162,22 +162,21 @@ DEFAULT_MAX_UPLOAD_BYTES = 512 * 1024 * 1024
 MAX_BODY_BYTES_ENV = "ATLAN_HANDLER_MAX_BODY_BYTES"
 MAX_UPLOAD_BYTES_ENV = "ATLAN_HANDLER_MAX_UPLOAD_BYTES"
 
-_TOO_LARGE_BODY = b'{"detail":"Request body too large"}'
+_TOO_LARGE_DETAIL = "Request body too large"
+_TOO_LARGE_BODY = orjson.dumps({"detail": _TOO_LARGE_DETAIL})
 
 
-@dataclass(kw_only=True)
-class RequestBodyTooLargeError(InvalidInputError):
-    """Raised from inside the ASGI ``receive`` once a body passes its cap.
+def _too_large() -> HTTPException:
+    """The signal ``receive`` raises once a body passes its cap.
 
-    Not a ``ValueError`` on purpose, so
-    :func:`~application_sdk.handler.request_contract.read_json_object` does not
-    turn it into a 422. :class:`RequestBodyLimitMiddleware` answers 413 whatever
-    a layer in between does with it.
+    An ``HTTPException`` because every layer between the read and the response
+    already passes one through untouched and unlogged: the routes' error
+    boundaries re-raise it, FastAPI's form parsing re-raises it, and
+    ``ExceptionMiddleware`` renders it as the 413. It is not a ``ValueError``,
+    so :func:`~application_sdk.handler.request_contract.read_json_object` does
+    not answer 422 for it.
     """
-
-    code: ClassVar[str] = "INVALID_INPUT_REQUEST_BODY_TOO_LARGE"
-    message: str = "Request body too large"
-    limit_bytes: int | None = None
+    return HTTPException(status_code=413, detail=_TOO_LARGE_DETAIL)
 
 
 def _report_env(message: str) -> None:
@@ -190,11 +189,16 @@ class RequestBodyLimitMiddleware:
     Pure ASGI, so it counts bytes as they arrive and never buffers a body. A
     ``Content-Length`` over the cap is refused before anything is read. A body
     without one, or with one that understates it, is refused when the running
-    count passes the cap: ``receive`` raises :class:`RequestBodyTooLargeError`,
-    which stops a multipart parser before it spools more to disk. The response is
-    then a 413 whatever an inner layer made of the error (FastAPI's form parser
-    turns it into a 400, a route's error boundary into a 500), unless the app had
-    already started its response.
+    count passes the cap: ``receive`` raises a 413 ``HTTPException``, which
+    stops a multipart parser before it spools more to disk (Starlette closes the
+    spooled files when the read fails). Should an inner layer answer something
+    else, the response is still replaced by the 413, unless the app had already
+    started its response.
+
+    :func:`install_body_limit` puts it inside every other user middleware, so
+    the raise never crosses a ``BaseHTTPMiddleware`` (the worker's
+    ``LogMiddleware``): that would wrap it in an ``ExceptionGroup`` no handler
+    matches and log an expected rejection as a failed request.
     """
 
     def __init__(
@@ -240,13 +244,13 @@ class RequestBodyLimitMiddleware:
         async def limited_receive() -> Message:
             nonlocal received, exceeded
             if exceeded:
-                raise RequestBodyTooLargeError(limit_bytes=limit)
+                raise _too_large()
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
                 if received > limit:
                     exceeded = True
-                    raise RequestBodyTooLargeError(limit_bytes=limit)
+                    raise _too_large()
             return message
 
         async def guarded_send(message: Message) -> None:
@@ -265,9 +269,8 @@ class RequestBodyLimitMiddleware:
         try:
             await self.app(scope, limited_receive, guarded_send)
         except Exception:
-            # Once the cap has tripped, whatever escaped is its consequence --
-            # the error itself, or a layer's wrapping of it (a
-            # BaseHTTPMiddleware re-raises it inside an ExceptionGroup).
+            # Once the cap has tripped, whatever escaped is its consequence:
+            # the 413 itself, or an inner layer's wrapping of it.
             if not exceeded or response_started:
                 raise
         if exceeded:
@@ -317,10 +320,16 @@ def install_body_limit(app: FastAPI) -> None:
     :envvar:`ATLAN_HANDLER_MAX_UPLOAD_BYTES` caps ``/workflows/v1/file``. Called
     by :func:`register_object_routes`, which the worker and the consolidated host
     both call, so neither app can be built without the cap. Idempotent.
+
+    Appended, not added with ``add_middleware`` (which makes a middleware the
+    outermost): the cap must run inside every other user middleware, whenever
+    that was added. See :class:`RequestBodyLimitMiddleware`.
     """
     if getattr(app.state, "body_limit_installed", False):
         return
-    app.add_middleware(
+    if app.middleware_stack is not None:
+        raise RuntimeError("Cannot add middleware after an application has started")
+    limit = Middleware(
         RequestBodyLimitMiddleware,
         max_body_bytes=_env.env_int(
             MAX_BODY_BYTES_ENV, DEFAULT_MAX_BODY_BYTES, minimum=1, report=_report_env
@@ -332,6 +341,7 @@ def install_body_limit(app: FastAPI) -> None:
             report=_report_env,
         ),
     )
+    app.user_middleware.append(limit)
     app.state.body_limit_installed = True
 
 
