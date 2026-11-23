@@ -11,6 +11,7 @@ stubbed ``subprocess.run``).
 
 from __future__ import annotations
 
+import ast
 import subprocess
 import sys
 import tomllib
@@ -117,6 +118,34 @@ def _drive(
         return fake, exc
 
 
+CONFORMANCE_TESTS = Path(__file__).resolve().parents[3] / "packages/conformance/tests"
+
+
+@pytest.mark.parametrize("node", gate.DESELECT)
+def test_deselected_tests_exist_in_the_slice(node: str) -> None:
+    file, _, func = node.partition("::")
+    assert file in gate.SLICE
+    assert f"def {func}(" in (CONFORMANCE_TESTS / file).read_text()
+
+
+@pytest.mark.parametrize("name", gate.SLICE)
+def test_slice_tests_needing_the_checkout_are_deselected(name: str) -> None:
+    """A slice test calling ``sdk_root()`` fails outside the checkout under CI."""
+    tree = ast.parse((CONFORMANCE_TESTS / name).read_text())
+    needs_checkout = {
+        f"{name}::{fn.name}"
+        for fn in ast.walk(tree)
+        if isinstance(fn, ast.FunctionDef)
+        and any(
+            isinstance(c, ast.Call) and getattr(c.func, "id", None) == "sdk_root"
+            for c in ast.walk(fn)
+        )
+    }
+    assert needs_checkout <= set(gate.DESELECT), (
+        f"{sorted(needs_checkout - set(gate.DESELECT))} need the monorepo; add to DESELECT"
+    )
+
+
 def test_main_passes_when_every_step_passes(
     monkeypatch: pytest.MonkeyPatch, wheel_dir: Path
 ) -> None:
@@ -129,6 +158,8 @@ def test_main_passes_when_every_step_passes(
     assert smoke[smoke.index("--outside") + 1] == str(gate.REPO_ROOT)
     _, pytest_argv, pytest_cwd = fake.calls[6]
     assert [f"tests/{name}" for name in gate.SLICE] == pytest_argv[-len(gate.SLICE) :]
+    for node in gate.DESELECT:
+        assert pytest_argv[pytest_argv.index(f"tests/{node}") - 1] == "--deselect"
     assert not pytest_cwd.is_relative_to(gate.REPO_ROOT)
 
 
