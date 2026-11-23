@@ -11,16 +11,18 @@ nothing in the store.
 from __future__ import annotations
 
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import obstore
 import pytest
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI, File, UploadFile
 from fastapi.testclient import TestClient
 from obstore.store import MemoryStore
 from starlette import formparsers
+from starlette.applications import Starlette
+from starlette.routing import Mount
 
 from application_sdk.handler import object_routes
 from application_sdk.handler.asgi import build_asgi_app
@@ -51,6 +53,26 @@ def _small_caps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 @pytest.fixture
 def memory() -> MemoryStore:
     return MemoryStore()
+
+
+_app_router = APIRouter(prefix="/v1/memory")
+
+
+@_app_router.post("/bulk")
+async def _bulk(file: Annotated[UploadFile, File(...)]) -> dict[str, int]:
+    return {"size": len(await file.read())}
+
+
+@_app_router.post("/search")
+async def _search(body: dict[str, Any]) -> dict[str, int]:
+    return {"keys": len(body)}
+
+
+class _RoutedHandler(_TestHandler):
+    """An app with its own upload route and its own JSON route."""
+
+    def routers(self) -> Sequence[APIRouter]:
+        return [_app_router]
 
 
 @pytest.fixture
@@ -333,11 +355,93 @@ def test_a_bad_cap_falls_back_to_the_default(
     ]
 
 
-def test_the_upload_cap_applies_under_a_mount() -> None:
+def test_the_upload_cap_applies_under_a_mount(memory: MemoryStore) -> None:
     """The host mounts each app under a prefix; the route is matched without it."""
-    middleware = RequestBodyLimitMiddleware(
-        FastAPI(), max_body_bytes=1, max_upload_bytes=2
+    store = HostObjectStore(memory, kind="memory")
+    app = build_asgi_app(_TestHandler(), app_name="mysql", object_store=store)
+    client = TestClient(Starlette(routes=[Mount("/apps/mysql", app=app)]))
+    response = client.post(
+        "/apps/mysql/workflows/v1/file",
+        files={"file": ("a.csv", b"a" * (_BODY_CAP * 4))},
     )
-    scope = {"path": "/apps/mysql/workflows/v1/file", "root_path": "/apps/mysql"}
-    assert middleware._limit_for(scope) == 2
-    assert middleware._limit_for({"path": "/workflows/v1/auth"}) == 1
+    assert response.status_code == 200
+    response = client.post(
+        "/apps/mysql/workflows/v1/auth",
+        content=_oversize_json(),
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 413
+
+
+# --- an app's own routes -------------------------------------------------------
+
+
+@pytest.fixture(params=["worker", "host"])
+def routed(request: pytest.FixtureRequest, memory: MemoryStore) -> TestClient:
+    if request.param == "worker":
+        app = create_app_handler_service(_RoutedHandler(), app_name="test-app")
+    else:
+        store = HostObjectStore(memory, kind="memory")
+        app = build_asgi_app(_RoutedHandler(), app_name="mysql", object_store=store)
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_an_apps_own_file_route_gets_the_upload_cap(routed: TestClient) -> None:
+    """Declaring a File parameter is all an app does: no path to configure."""
+    payload = b"a" * (_BODY_CAP * 4)
+    response = routed.post("/v1/memory/bulk", files={"file": ("m.jsonl", payload)})
+    assert response.status_code == 200
+    assert response.json() == {"size": len(payload)}
+
+
+def test_an_apps_own_file_route_still_has_a_cap(routed: TestClient) -> None:
+    body, content_type = _multipart(_UPLOAD_CAP * 2)
+    response = routed.post(
+        "/v1/memory/bulk",
+        content=_chunks(body),
+        headers={"content-type": content_type},
+    )
+    assert response.status_code == 413
+
+
+def test_an_apps_own_json_route_gets_the_body_cap(routed: TestClient) -> None:
+    response = routed.post(
+        "/v1/memory/search",
+        content=_chunks(_oversize_json()),
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 413
+
+
+@pytest.mark.parametrize("path", ["/workflows/v1/auth", "/v1/memory/search"])
+def test_a_multipart_label_does_not_buy_a_json_route_the_upload_cap(
+    routed: TestClient, path: str
+) -> None:
+    """FastAPI reads a non-form body whole whatever its Content-Type, so the
+    route, not the label, picks the cap."""
+    body, content_type = _multipart(_BODY_CAP * 2)
+    response = routed.post(
+        path, content=_chunks(body), headers={"content-type": content_type}
+    )
+    assert response.status_code == 413
+
+
+def test_a_length_over_every_cap_is_refused_before_routing(
+    worker: TestClient,
+) -> None:
+    """No route takes it, so even an unknown path answers 413, not 404."""
+    body, content_type = _multipart(_UPLOAD_CAP * 2)
+    response = worker.post(
+        "/no/such/route", content=body, headers={"content-type": content_type}
+    )
+    assert response.status_code == 413
+
+
+def test_an_unrouted_path_reads_no_body(worker: TestClient) -> None:
+    """Nothing reads the body of a 404, so it needs no cap."""
+    response = worker.post(
+        "/no/such/route",
+        content=_chunks(_oversize_json()),
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 404
