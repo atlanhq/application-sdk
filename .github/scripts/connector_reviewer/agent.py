@@ -282,7 +282,9 @@ def place(ws: Workspace, bundle: Bundle, raw: dict[str, Any]) -> Finding | None:
     )
     if not f.body or not evidence.strip():
         return None
-    candidates = [ws.diffs[path]] if path in ws.diffs else []
+    # Only this bundle's files: `ws.diffs` holds every changed file, and a
+    # path from another bundle is that bundle's to review.
+    candidates = [ws.diffs[path]] if path in bundle.paths and path in ws.diffs else []
     # Re-file to another bundle file on a unique hit (the model named the wrong file).
     candidates += [fd for fd in bundle.files if fd.path != path]
     for fd in candidates:

@@ -12,6 +12,7 @@ silently mixing verdicts from two different reviewers.
 from __future__ import annotations
 
 import hashlib
+import math
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -91,11 +92,22 @@ def load_config(config_dir: Path) -> Config:
 def validate(cfg: Config) -> list[str]:
     """Refuse to run on a config that cannot enforce its own cap."""
     errs: list[str] = []
-    if cfg.price.input_per_mtok <= 0 or cfg.price.output_per_mtok <= 0:
+    prices = (
+        cfg.price.input_per_mtok,
+        cfg.price.output_per_mtok,
+    )
+    # `nan <= 0` is false, so a NaN price would pass a plain comparison and
+    # then pass every budget check too.
+    if any(not math.isfinite(p) or p <= 0 for p in prices):
         errs.append(
             "model.price.input_per_mtok / output_per_mtok must be set: the $ cap is enforced from them."
         )
-    if not 0 < cfg.cap_usd_per_pr <= 5:
+    cache_prices = (cfg.price.cached_input_per_mtok, cfg.price.cache_write_per_mtok)
+    if any(p is not None and (not math.isfinite(p) or p < 0) for p in cache_prices):
+        errs.append(
+            "model.price.cached_input_per_mtok / cache_write_per_mtok must be finite and not negative."
+        )
+    if not (math.isfinite(cfg.cap_usd_per_pr) and 0 < cfg.cap_usd_per_pr <= 5):
         errs.append("budget.cap_usd_per_pr must be in (0, 5].")
     if not 0 < cfg.first_round_share <= 1:
         errs.append("budget.first_round_share must be in (0, 1].")

@@ -350,6 +350,13 @@ def load_principles(fleet: Path | None, root: Path) -> PrincipleSet:
             f"the fleet principles directory holds no principle file "
             f"(named like `fp01-<slug>.md`): {fleet}"
         )
+    if not out.fleet:
+        # Every fleet file was malformed. Reviewing with none would look like
+        # a normal review while judging by nothing, so it is refused.
+        raise PrinciplesError(
+            f"none of the {named} fleet principle file(s) in {fleet} could be "
+            f"read: {'; '.join(out.notes)}"
+        )
     repo = root / REPO_DIR
     if repo.is_symlink():
         out.notes.append(

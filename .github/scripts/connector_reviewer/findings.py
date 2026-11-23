@@ -133,11 +133,14 @@ class PRState:
 
     @classmethod
     def decode(cls, comment_body: str) -> "PRState | None":
-        m = _STATE_RE.search(comment_body or "")
-        if not m:
+        # The reviewer appends the state block after everything else, so the
+        # last match is the real one. Text earlier in the comment comes from
+        # the model and the pull request, and must never be read as state.
+        found = _STATE_RE.findall(comment_body or "")
+        if not found:
             return None
         try:
-            raw = json.loads(zlib.decompress(base64.b64decode(m.group(1))))
+            raw = json.loads(zlib.decompress(base64.b64decode(found[-1])))
         except (ValueError, zlib.error):
             return None
         # A field a newer connector-reviewer added (or a revert dropped) must not make every

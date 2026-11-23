@@ -24,5 +24,9 @@ EMPTY: Mapping[str, Any] = MappingProxyType({})
 
 def objects(value: Any) -> list[dict[str, Any]]:
     """The JSON objects in `value`, a list from untrusted JSON (or None).
-    An entry that is not an object is dropped."""
-    return [cast("dict[str, Any]", x) for x in value or [] if isinstance(x, dict)]
+    An entry that is not an object is dropped, and so is a `value` that is not
+    a list at all: a model can answer `true` where a list was asked for."""
+    if not isinstance(value, list):
+        return []
+    items = cast("list[Any]", value)
+    return [cast("dict[str, Any]", x) for x in items if isinstance(x, dict)]

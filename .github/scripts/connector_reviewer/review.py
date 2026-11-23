@@ -44,7 +44,15 @@ from .diff import (
     parse_unified_diff,
     snippet_in_text,
 )
-from .findings import BLOCKING, BODY_KEEP, SEVERITIES, Finding, PRState, merge_new
+from .findings import (
+    BLOCKING,
+    BODY_KEEP,
+    SEVERITIES,
+    STATE_MARKER,
+    Finding,
+    PRState,
+    merge_new,
+)
 from .github import GitHub, bot_login
 from .index import Index, Symbol, build_index, index_source
 from .llm import BudgetExhausted, Client, Ledger, LLMError
@@ -2255,12 +2263,24 @@ def render_summary(res: RunResult) -> str:
     for detail_chars in (None, 600, 200):
         block = _details_block(opened, res.blob_base, detail_chars)
         head = "\n".join(lines[:details_at] + block + lines[details_at:]) + "\n"
+        head = _no_state_marker(head)
         for keep in (BODY_KEEP, 200, 0):
             body = head + st.encode(body_keep=keep)
             if len(body) <= COMMENT_LIMIT:
                 return body
-    lean = "\n".join(_without_resolved(lines)) + "\n"
+    lean = _no_state_marker("\n".join(_without_resolved(lines)) + "\n")
     return lean + st.encode(body_keep=0)
+
+
+def _no_state_marker(text: str) -> str:
+    """The summary with the state marker's name made inert.
+
+    Finding titles and bodies come from the model, which reads the pull
+    request. Text that spelled out a state block would otherwise sit in the
+    same comment as the real one. The real block is appended after this and
+    is the last in the comment, which is the one `PRState.decode` reads; this
+    keeps the visible text from containing a second well-formed block at all."""
+    return text.replace(STATE_MARKER + ":", STATE_MARKER + "\u200b:")
 
 
 def _details_block(
