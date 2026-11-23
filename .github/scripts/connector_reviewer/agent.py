@@ -264,6 +264,9 @@ def build_context(
         parts.append(
             f"<symbols_added_by_this_pr>\n{pr_meta['symbols_added']}\n</symbols_added_by_this_pr>"
         )
+    # The pinned SDK source, when the workflow checked it out (FND-5331).
+    if ws.sdk is not None:
+        parts.append(ws.sdk.prompt_block())
     # Callers (followed through thin wrappers), ranked tests, each changed
     # function in full, and repo code the change or the PR names.
     ctx_block = context.build(
