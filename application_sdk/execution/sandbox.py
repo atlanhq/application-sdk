@@ -101,6 +101,14 @@ def host_library_modules(sandboxed_packages: Iterable[str]) -> frozenset[str]:
     module and, with them, every library they import, so passing those
     libraries through leaves exactly the app's own package to the sandbox.
 
+    A library first imported lazily, from inside workflow code, is not in this
+    snapshot. That is no change from passing the app module through: while a
+    workflow runs, the sandbox replaces ``__import__`` for host and sandboxed
+    code alike, so the lazy import was re-imported in the sandbox before too
+    (an unlisted ``msgspec`` fails with ``KeyError: 'msgspec._utils'`` either
+    way). Import it at module level, or list it in the App's
+    ``passthrough_modules``.
+
     Args:
         sandboxed_packages: Top-level package names to leave out, so that the
             sandbox re-imports and checks them: the registered apps' packages.
