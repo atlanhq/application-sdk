@@ -162,6 +162,12 @@ class ObjectRoutesSource:
             (the worker), the prefix is kept as given but may not start with
             one of :data:`_RESERVED_UPLOAD_ROOTS`. Either way an unsafe prefix
             (see :func:`valid_upload_prefix`) answers 400.
+        stored_key: ``key`` → the key ``upload_file`` actually writes. The
+            worker's store normalises keys (``storage.ops.normalize_key``
+            strips the local staging root, so ``local/tmp/artifacts/x`` is
+            stored at ``artifacts/x``). An upload whose key the store would
+            rewrite answers 400, so the key the route checks and returns is
+            the key stored. Defaults to the key unchanged.
     """
 
     configured: Callable[[], bool]
@@ -169,6 +175,7 @@ class ObjectRoutesSource:
     save_config: Callable[[str, dict[str, Any], str], Awaitable[bool]]
     upload_file: Callable[[str, str], Awaitable[None]]
     upload_namespace: str = ""
+    stored_key: Callable[[str], str] = lambda key: key
 
 
 #: Path of the SDK's setup-form file upload route.
@@ -522,6 +529,13 @@ def register_object_routes(app: FastAPI, source: ObjectRoutesSource) -> None:
             )
         stored_name = f"{file_id}.{extension}" if extension else file_id
         key = f"{effective_prefix}/{stored_name}"
+        if source.stored_key(key) != key:
+            # The store would write somewhere else (a staging-path alias such
+            # as ``local/tmp/artifacts/...``), past the checks above.
+            raise HTTPException(
+                status_code=400,
+                detail="prefix must not be a local staging path",
+            )
 
         # Stream the upload: drain the spooled temp file to a named temp file,
         # then stream-upload to the object store (avoids materialising in memory).

@@ -15,7 +15,7 @@ import asyncio
 import base64
 import os
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -218,7 +218,9 @@ def test_a_prefix_naming_another_app_stays_in_this_apps_namespace(
     assert key.startswith("persistent-artifacts/apps/mysql/uploads/")
 
 
-def _worker() -> tuple[TestClient, list[str]]:
+def _worker(
+    stored_key: Callable[[str], str] = lambda key: key,
+) -> tuple[TestClient, list[str]]:
     """The routes as the worker registers them: no upload namespace."""
     from fastapi import FastAPI
 
@@ -243,6 +245,7 @@ def _worker() -> tuple[TestClient, list[str]]:
             load_config=_no_config,
             save_config=_no_config,
             upload_file=_upload,
+            stored_key=stored_key,
         ),
     )
     return TestClient(app), uploaded
@@ -310,6 +313,22 @@ def test_the_worker_refuses_a_prefix_in_a_reserved_tree(prefix: str) -> None:
     response = _worker_upload(client, prefix)
     assert response.status_code == 400
     assert uploaded == []
+
+
+def test_an_upload_the_store_would_rewrite_is_refused() -> None:
+    """The check runs on the key the store writes: a store that maps
+    ``staging/...`` onto ``...`` (as the worker's ``normalize_key`` strips its
+    staging root) must not carry ``staging/artifacts/...`` into ``artifacts/``."""
+
+    def _strip_staging(key: str) -> str:
+        return key.removeprefix("staging/")
+
+    client, uploaded = _worker(stored_key=_strip_staging)
+    assert _worker_upload(client, "staging/artifacts/apps/other").status_code == 400
+    assert uploaded == []
+    # A key the store keeps unchanged is still accepted.
+    assert _worker_upload(client, "workflow_file_upload").status_code == 200
+    assert len(uploaded) == 1
 
 
 # --- the store from the host's env ------------------------------------------

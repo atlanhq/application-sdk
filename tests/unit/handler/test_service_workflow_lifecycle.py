@@ -975,6 +975,39 @@ class TestUploadFileEndpoint:
         called_key = mock_upload.await_args.args[0]
         assert called_key.startswith("custom/path/")
 
+    @pytest.mark.parametrize("tail", ["artifacts/apps/other-app", "x"])
+    def test_upload_refuses_a_staging_path_prefix(
+        self, tail: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A prefix under the local staging root is a valid-looking relative
+        prefix whose first segment is not reserved, but the store's
+        ``normalize_key`` strips the staging root, so it would land elsewhere
+        (``artifacts/apps/other-app/...``, another app's run outputs)."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from application_sdk.handler.object_routes import valid_upload_prefix
+
+        # The production default; the unit tier points it at an absolute temp
+        # dir. normalize_key reads it per call.
+        monkeypatch.setattr("application_sdk.constants.TEMPORARY_PATH", "./local/tmp/")
+        prefix = f"local/tmp/{tail}"
+        # The guard under test is the stored-key check, not the syntax check.
+        assert valid_upload_prefix(prefix), prefix
+
+        app = create_app_handler_service(
+            _TestHandler(), app_name="upload-alias", storage=MagicMock()
+        )
+        with patch(
+            "application_sdk.storage.ops.upload_file", new=AsyncMock(return_value=None)
+        ) as mock_upload:
+            response = TestClient(app).post(
+                "/workflows/v1/file",
+                files={"file": ("rows.csv", b"a,b\n", "text/csv")},
+                data={"prefix": prefix},
+            )
+        assert response.status_code == 400
+        mock_upload.assert_not_awaited()
+
     def test_upload_strips_unsafe_extension_chars(self) -> None:
         """Extensions with non-alphanumerics must be sanitised — no path traversal."""
         from unittest.mock import AsyncMock, MagicMock

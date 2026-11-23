@@ -1559,6 +1559,13 @@ def _register_workflow_routes(
 
         await _upload_file(key, local_path, _storage)
 
+    def _stored_upload_key(key: str) -> str:
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related
+            normalize_key,
+        )
+
+        return normalize_key(key)
+
     # Every operation reads this module's _storage per request.
     register_object_routes(
         app,
@@ -1571,6 +1578,7 @@ def _register_workflow_routes(
                 _config_save_to_objectstore(config_id, body, config_type=config_type)
             ),
             upload_file=_upload_to_storage,
+            stored_key=_stored_upload_key,
         ),
     )
 
