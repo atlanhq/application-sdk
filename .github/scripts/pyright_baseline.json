@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 454,
-    "warning": 5577
+    "warning": 5572
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -154,9 +154,6 @@
       "error:reportOptionalSubscript": 1,
       "warning:reportUnknownMemberType": 3
     },
-    ".github/scripts/lens/config.py": {
-      "warning:reportUnknownMemberType": 3
-    },
     ".github/scripts/lens/event.py": {
       "warning:reportUnknownMemberType": 22
     },
@@ -170,7 +167,7 @@
       "warning:reportUnknownMemberType": 32
     },
     ".github/scripts/lens/review.py": {
-      "warning:reportUnknownMemberType": 28
+      "warning:reportUnknownMemberType": 27
     },
     ".github/scripts/lens/rules.py": {
       "warning:reportUnknownMemberType": 1
@@ -555,7 +552,7 @@
       "error:reportAttributeAccessIssue": 1,
       "error:reportOptionalMemberAccess": 72,
       "error:reportOptionalSubscript": 8,
-      "warning:reportUnknownMemberType": 89
+      "warning:reportUnknownMemberType": 88
     },
     ".github/scripts/tests/test_lint_guards.py": {
       "warning:reportUnknownMemberType": 2

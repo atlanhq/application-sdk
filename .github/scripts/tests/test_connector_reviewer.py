@@ -49,6 +49,7 @@ from connector_reviewer.agent import BundleResult
 from connector_reviewer.bundle import group
 from connector_reviewer.config import TRUSTED_APPS, Config, load_config, validate
 from connector_reviewer.diff import (
+    FileDiff,
     anchor,
     parse_unified_diff,
     snippet_in_text,
@@ -90,6 +91,7 @@ from connector_reviewer.tools import (
     SdkSource,
     Workspace,
     find_symbol,
+    parse_args,
     read_diff,
     read_file,
     search_code,
@@ -7572,14 +7574,19 @@ def _scoped_evidence(path: str, quote: str) -> Any:
 
 def test_recheck_evidence_lists_no_outside_callers_for_a_nested_symbol():
     """FND-4341: a closure's bare name colliding with a call elsewhere is not a
-    caller; the evidence names the enclosing function's real callers instead."""
+    caller; the evidence names the enclosing function's real callers instead.
+    F-8ed060: `hook` is bound in `resolve`, the nearest enclosing function, not
+    in `handler_compute_manifest`; the facts walk up one function at a time."""
     ev = _scoped_evidence("app/handler/routes.py", 'return config.get("name")')
     facts = [x for x in ev.facts if "caller" in x]
     assert facts == [
         "local symbol: handler_compute_manifest.resolve.hook is defined inside "
+        "handler_compute_manifest.resolve, so no code outside it can call it by "
+        "name (callers inside handler_compute_manifest.resolve: none; 1 same-name "
+        "call elsewhere unrelated: no import reaches it)",
+        "local symbol: handler_compute_manifest.resolve is defined inside "
         "handler_compute_manifest, so no code outside it can call it by name "
-        "(callers inside handler_compute_manifest: none; 1 same-name call "
-        "elsewhere unrelated: no import reaches it)",
+        "(callers inside handler_compute_manifest: none)",
         "callers of handler_compute_manifest at the PR head (3 in its file or "
         "importing it; 1 same-name call elsewhere unrelated: no import reaches "
         "it): app/aliased.py:3 build, app/handler/routes.py:9 serve, "
@@ -10730,7 +10737,12 @@ def test_the_round_diff_and_the_approach_input_never_render_a_secret(repo: Path)
 # `select_files`); a new one fails here until it is checked and listed.
 _DIFF_RENDERERS = {
     "agent.py": {"initial_sources", "build_context", "_reflect"},
-    "bundle.py": {"diff_tokens", "group", "_split"},  # token estimates, no prompt
+    "bundle.py": {
+        "diff_tokens",
+        "group",
+        "_split",
+        "_parts",
+    },  # token estimates, no prompt
     "holistic.py": {"build_input"},
     "review.py": {"round_diff"},
     "skeptic.py": {"build_input"},
@@ -10835,6 +10847,818 @@ def test_the_cli_answers_an_unknown_word_and_reviews_nothing(
     assert _cli_event(monkeypatch, tmp_path, _comment("/review forse"), _CliGitHub) == 0
     assert _CliGitHub.comments == [f"connector-reviewer: {event_mod.REVIEW_USAGE}"]
     assert _CliGitHub.reactions[-1] == "confused"
+
+
+# ---- FND-5323: defects lens found in code this fork inherited (fixed in lens, ported here) ----
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["x1;" * 3000, "é€" * 2000, "deadbeef" * 1000],
+    ids=["fragmented", "non-ascii", "hex"],
+)
+def test_the_reservation_covers_a_prompt_as_dense_as_one_token_per_byte(content: str):
+    """F-19fdc0: the chars/3.5 estimate is an average, not a bound. The
+    reservation must cover a prompt the tokenizer splits into one token per
+    byte, or the booked cost can pass what was reserved."""
+    msgs: list[dict[str, Any]] = [{"role": "user", "content": content}]
+    c = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=Script())
+    sent = len(json.dumps(llm_mod.prompt_view(msgs)).encode())
+    densest = (sent * PRICE.prompt_ceiling + 100 * PRICE.output_per_mtok) / 1e6
+    assert c.worst_case_cost(msgs, None, 100) >= densest
+    # Sizing still uses the estimate: only the reservation is the bound.
+    assert llm_mod.estimate_tokens(content) < len(content.encode())
+
+
+def test_an_attempt_that_may_have_been_billed_is_booked_before_the_retry():
+    """F-edf298: a 5xx or a cut stream can come after the provider generated
+    tokens. Each such attempt is booked at its worst case, and the retry takes a
+    reservation of its own."""
+    led = Ledger(cap_usd=1)
+    sent = Script(
+        (502, {"Retry-After": "0"}, "bad gateway"),
+        (0, {"Retry-After": "0"}, "transport: the stream ended"),
+        response(),
+    )
+    c = Client(model="m", price=PRICE, ledger=led, transport=sent, max_retries=2)
+    msgs: list[dict[str, Any]] = [{"role": "user", "content": "hi"}]
+    worst = c.worst_case_cost(msgs, None, 10)
+    c.complete("review:x", msgs, max_tokens=10)
+    assert len(sent.requests) == 3
+    assert led.spent_usd == pytest.approx(2 * worst + 0.002)
+    assert led.by_stage["review:x"] == pytest.approx(2 * worst + 0.002)
+    assert led.calls == 1 and led.reserved_usd == 0
+
+
+def test_a_rate_limit_is_not_booked_as_spend():
+    led = Ledger(cap_usd=1)
+    sent = Script((429, {"Retry-After": "0"}, "rate limited"), response())
+    c = Client(model="m", price=PRICE, ledger=led, transport=sent)
+    c.complete("review:x", [{"role": "user", "content": "hi"}], max_tokens=10)
+    assert led.spent_usd == pytest.approx(0.002) and led.reserved_usd == 0
+
+
+def test_no_retry_when_the_cap_cannot_cover_a_second_billable_attempt():
+    msgs: list[dict[str, Any]] = [{"role": "user", "content": "hi"}]
+    probe = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=Script())
+    worst = probe.worst_case_cost(msgs, None, 10)
+    led = Ledger(cap_usd=worst * 1.5)
+    sent = Script((503, {"Retry-After": "0"}, "down"), response())
+    c = Client(model="m", price=PRICE, ledger=led, transport=sent, max_retries=2)
+    with pytest.raises(BudgetExhausted, match="may have been billed"):
+        c.complete("review:x", msgs, max_tokens=10)
+    assert len(sent.requests) == 1
+    assert led.spent_usd == pytest.approx(worst) and led.reserved_usd == 0
+
+
+def _hunks_diff(path: str, sizes: list[int]) -> str:
+    """One file, one added hunk per size, each hunk `size` lines long."""
+    out = [f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"]
+    start = 1
+    for n in sizes:
+        out.append(f"@@ -{start},0 +{start},{n} @@\n")
+        out.extend(f"+    value_{start + i} = compute({start + i})\n" for i in range(n))
+        start += n + 10
+    return "".join(out)
+
+
+def test_a_file_over_the_bundle_token_cap_is_split_at_hunk_boundaries():
+    """F-71bfe6: one file's diff alone over `max_diff_tokens` used to become a
+    bundle over the cap. It is split into parts of whole hunks that fit."""
+    files = parse_unified_diff(
+        _hunks_diff("app/storage/big.py", [40, 40, 40, 40])
+        + _hunks_diff("app/storage/small.py", [3])
+    )
+    cap = 1000
+    assert bundle_mod.estimate_tokens(files[0].render()) > cap
+    bundles = group(files, max_diff_tokens=cap)
+    assert all(b.diff_tokens() <= cap for b in bundles)
+    parts = [f for b in bundles for f in b.files if f.path.endswith("big.py")]
+    assert len(parts) > 1
+    # Every hunk is reviewed once, in order, and no hunk is cut.
+    assert [h.new_start for p in parts for h in p.hunks] == [
+        h.new_start for h in files[0].hunks
+    ]
+    assert sum(p.additions for p in parts) == files[0].additions
+    # The facts are about files: the parts are joined back into one diff.
+    [whole] = [
+        f
+        for f in review_mod._whole_files([f for b in bundles for f in b.files])
+        if f.path.endswith("big.py")
+    ]
+    assert [h.new_start for h in whole.hunks] == [h.new_start for h in files[0].hunks]
+
+
+def test_a_single_hunk_over_the_cap_goes_alone_and_is_never_cut():
+    files = parse_unified_diff(
+        _hunks_diff("app/storage/big.py", [200])
+        + _hunks_diff("app/storage/small.py", [3])
+    )
+    bundles = group(files, max_diff_tokens=1000)
+    [alone] = [b for b in bundles if "app/storage/big.py" in b.paths]
+    assert alone.paths == ["app/storage/big.py"]
+    assert alone.files[0].additions == 200
+
+
+def _big_state(open_n: int, resolved_n: int) -> PRState:
+    """Random letters: they compress worst, a harder case than real code."""
+    import random  # noqa: PLC0415
+    import string  # noqa: PLC0415
+
+    rnd = random.Random(7)
+
+    def noise(n: int) -> str:
+        return "".join(rnd.choices(string.ascii_letters + string.digits, k=n))
+
+    fs: list[Finding] = []
+    for i in range(open_n + resolved_n):
+        f = Finding(
+            f"app/m{i % 9}/f{i}.py",
+            i + 1,
+            "medium",
+            "bug",
+            noise(100),
+            noise(600),
+            "\n".join(f"    v{i}_{k} = {noise(70)}" for k in range(12)),
+        )
+        if i >= open_n:
+            f.status, f.fixed_round, f.fixed_by = "fixed", 2, "verified"
+        fs.append(f)
+    return PRState(round=4, findings=fs, ledger={"spent_usd": 0.7, "cap_usd": 1.0})
+
+
+def test_a_state_too_big_at_body_keep_zero_still_fits_and_keeps_every_open_finding():
+    """F-b8783f: bodies were the only thing shortened, so enough long quoted code
+    made even the leanest summary pass GitHub's limit; the edit would be refused
+    and the next run would read the previous state."""
+    st = _big_state(150, 0)
+    st.waiver = {"by": "lead", "reason": "known", "head": "h1"}
+    assert len(st.encode(body_keep=0)) > review_mod.COMMENT_LIMIT  # the real case
+    body = render_summary(RunResult("reviewed", mode="full", state=st))
+    assert len(body) <= review_mod.COMMENT_LIMIT
+    back = decode_state(body)
+    assert [f.id for f in back.findings] == [f.id for f in st.findings]
+    assert back.ledger == st.ledger and back.round == 4 and back.waiver == st.waiver
+    for kept, orig in zip(back.findings, st.findings):
+        # Whole leading lines only: free resolution still matches the code.
+        assert kept.evidence and orig.evidence.startswith(kept.evidence)
+        assert orig.evidence.splitlines()[: len(kept.evidence.splitlines())] == (
+            kept.evidence.splitlines()
+        )
+        assert snippet_in_text(orig.evidence, kept.evidence)
+
+
+def test_the_oldest_resolved_findings_go_before_any_open_one():
+    st = _big_state(120, 400)
+    body = render_summary(RunResult("reviewed", mode="full", state=st))
+    assert len(body) <= review_mod.COMMENT_LIMIT
+    back = decode_state(body)
+    open_ids = [f.id for f in st.findings if f.status == "open"]
+    assert [f.id for f in back.findings if f.status == "open"] == open_ids
+    kept_resolved = [f.id for f in back.findings if f.status != "open"]
+    all_resolved = [f.id for f in st.findings if f.status != "open"]
+    assert 0 < len(kept_resolved) < len(all_resolved)
+    assert kept_resolved == all_resolved[-len(kept_resolved) :]  # the newest stay
+
+
+def test_approach_lookups_are_capped_per_call_not_per_turn(repo: Path):
+    """F-13205d: two lookups in each response used to run four lookups under
+    max_lookups=2. The cap counts calls, and once it is spent the next turn is
+    the final one."""
+    ws, _ = _ws(repo)
+    two = response(
+        [
+            tool_call("search_code", {"search_text": "fetch"}, 0),
+            tool_call("find_symbol", {"name": "fetch"}, 1),
+        ]
+    )
+    calls: list[dict[str, Any]] = []
+
+    def transport(body: dict[str, Any]) -> tuple[int, dict[str, str], str]:
+        calls.append(json.loads(json.dumps(body)))
+        return two  # never volunteers a verdict
+
+    client = Client(
+        model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=transport
+    )
+    ac = holistic.check(client, ws, parse_unified_diff(DIFF), {}, max_lookups=2)
+    assert ac.lookups == 2 and not ac.ran
+    assert len(calls) == 2
+    assert "call approach_verdict now" in calls[-1]["messages"][-1]["content"]
+
+
+def _long_function_ws(
+    repo: Path, changed: list[int]
+) -> tuple[Workspace, list[FileDiff]]:
+    """A 800-line function whose lines `changed` (file line numbers) were edited."""
+    path = "app/storage/long.py"
+    body = [f"    x{n} = {n}" for n in range(2, 801)]
+    for n in changed:
+        body[n - 2] = f"    x{n} = -{n}"
+    head = {path: "def long_one():\n" + "\n".join(body) + "\n"}
+    diff = f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n" + "".join(
+        f"@@ -{n},1 +{n},1 @@\n-    x{n} = {n}\n+    x{n} = -{n}\n" for n in changed
+    )
+    files = parse_unified_diff(diff)
+    ws = Workspace(
+        root=repo,
+        head_text=head,
+        diffs={f.path: f for f in files},
+        index=build_index(repo, overrides=head),
+    )
+    return ws, files
+
+
+def test_a_long_function_shows_a_window_around_every_change(repo: Path):
+    """F-4a882d: one window from the first change to the last (lines 60-740 for
+    changes at 100 and 700) was cut by the line budget before the later change."""
+    ws, files = _long_function_ws(repo, [100, 700])
+    out = reviewer_context.changed_functions(ws, files)
+    assert "  100 +     x100 = -100" in out
+    assert "  700 +     x700 = -700" in out
+    assert out.count("<function ") == 2
+    assert 'lines="60-140"' in out and 'lines="660-740"' in out
+
+
+def test_nearby_changes_in_a_long_function_share_one_window(repo: Path):
+    ws, files = _long_function_ws(repo, [100, 150])
+    out = reviewer_context.changed_functions(ws, files)
+    assert out.count("<function ") == 1 and 'lines="60-190"' in out
+
+
+def test_a_named_file_under_a_dot_directory_keeps_its_leading_dot(repo: Path):
+    """F-d02f0e: `lstrip("./")` turned `.github/scripts/helper.py` into
+    `github/scripts/helper.py`, which matches no indexed path."""
+    head = {
+        ".github/scripts/helper.py": "class RetryHelper:\n    def run(self):\n        return 1\n"
+    }
+    ws = Workspace(
+        root=repo, head_text=head, diffs={}, index=build_index(repo, overrides=head)
+    )
+    files = parse_unified_diff(DIFF)
+    out = reviewer_context.referenced_patterns(
+        ws, files, "This copies what .github/scripts/helper.py already does."
+    )
+    assert 'path=".github/scripts/helper.py"' in out
+    out = reviewer_context.referenced_patterns(
+        ws, files, "This copies what ./.github/scripts/helper.py already does."
+    )
+    assert 'path=".github/scripts/helper.py"' in out
+
+
+QUOTED_PATHS_DIFF = r"""diff --git "a/app/a\"b.py" "b/app/a\"b.py"
+--- "a/app/a\"b.py"
++++ "b/app/a\"b.py"
+@@ -1 +1 @@
+-x = 1
++x = 2
+diff --git "a/app/caf\303\251.py" "b/app/caf\303\251.py"
+deleted file mode 100644
+--- "a/app/caf\303\251.py"
++++ /dev/null
+@@ -1 +0,0 @@
+-y = 1
+diff --git a/app/old name.py "b/app/new\tname.py"
+similarity index 100%
+rename from app/old name.py
+rename to "app/new\tname.py"
+diff --git "a/docs/r\303\251sum\303\251.png" "b/docs/r\303\251sum\303\251.png"
+Binary files "a/docs/r\303\251sum\303\251.png" and "b/docs/r\303\251sum\303\251.png" differ
+"""
+
+
+def test_quoted_git_paths_are_decoded():
+    """F-8f1fc1: Git C-quotes a path holding a quote, a control character or a
+    non-ASCII byte. Only the outer quotes were stripped, so `a\\"b.py` kept its
+    backslash and `\\303\\251` stayed octal: the workspace looked up a file that
+    does not exist and an inline comment named an invalid path."""
+    files = parse_unified_diff(QUOTED_PATHS_DIFF)
+    assert [(f.path, f.status) for f in files] == [
+        ('app/a"b.py', "modified"),
+        ("app/café.py", "deleted"),
+        ("app/new\tname.py", "renamed"),
+        ("docs/résumé.png", "modified"),
+    ]
+    assert files[2].old_path == "app/old name.py"
+    assert files[3].is_binary
+    # A path with a space but nothing to quote is read as before.
+    [plain] = parse_unified_diff(
+        "diff --git a/docs/my file.md b/docs/my file.md\n"
+        "--- a/docs/my file.md\n+++ b/docs/my file.md\n@@ -1 +1 @@\n-a\n+b\n"
+    )
+    assert plain.path == "docs/my file.md"
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ('args: {"search_text": "foo } bar"}', {"search_text": "foo } bar"}),
+        (
+            'x {"search_text": "a { b", "path_glob": "*.py"} y',
+            {"search_text": "a { b", "path_glob": "*.py"},
+        ),
+        ('{"name": "say \\"}\\" here"} trailing', {"name": 'say "}" here'}),
+        ('{"name": "fetch"', {}),  # cut short: nothing to salvage
+        ("no object at all", {}),
+        ('["a list"] {"name": "x"}', {"name": "x"}),
+    ],
+)
+def test_salvaging_tool_arguments_reads_braces_inside_strings_as_text(
+    raw: str, expected: dict[str, Any]
+):
+    """F-bdcf59: the salvage counted every brace, so `}` inside a string closed
+    the object early, the slice failed to parse, and the arguments were lost."""
+    assert parse_args(raw) == expected
+
+
+def _index_of(files: dict[str, str]) -> Index:
+    return build_index(Path("/nonexistent"), overrides=files)
+
+
+def test_a_nested_symbol_is_local_to_its_nearest_enclosing_function():
+    """F-8ed060: `helper` is bound in `middle`; a `helper()` call in `outer`
+    cannot reach it (it raises NameError there), so it is not a caller."""
+    idx = _index_of(
+        {
+            "app/nest.py": (
+                "def outer():\n"
+                "    def middle():\n"
+                "        def helper():\n"
+                "            return 1\n"
+                "        return helper()\n"
+                "    return helper()\n"
+            )
+        }
+    )
+    got = idx.scoped_callers(idx.symbols["app.nest:outer.middle.helper"])
+    assert got.local_to is not None
+    assert got.local_to.qualname == "app.nest:outer.middle"
+    assert [c.qualname for c in got.callers] == ["app.nest:outer.middle"]
+    assert got.unrelated == 1
+
+
+SCOPED_MODULE_FUNCTION = {
+    "app/store.py": "def fetch(key):\n    return key\n",
+    "app/client_use.py": (
+        "from app import store\n\n"
+        "def unrelated(client):\n    return client.fetch('k')\n\n"
+        "def related():\n    return store.fetch('k')\n"
+    ),
+    "app/dotted.py": "import app.store\n\ndef go():\n    return app.store.fetch('k')\n",
+    "app/aliased.py": "import app.store as st\n\ndef go():\n    return st.fetch('k')\n",
+    "app/bare.py": "from app.store import fetch\n\ndef go():\n    return fetch('k')\n",
+    # The module is imported, but the bare name `fetch` is not bound here.
+    "app/modonly.py": "import app.store\n\ndef go():\n    return fetch('k')\n",
+}
+
+
+def test_a_module_function_caller_must_bind_the_name_or_call_it_on_its_module():
+    """F-510a00: a file that imports the module for something else and calls
+    `client.fetch()` on an unrelated object is not a caller of `store.fetch`."""
+    idx = _index_of(SCOPED_MODULE_FUNCTION)
+    got = idx.scoped_callers(idx.symbols["app.store:fetch"])
+    assert sorted(c.qualname for c in got.callers) == [
+        "app.aliased:go",
+        "app.bare:go",
+        "app.client_use:related",
+        "app.dotted:go",
+    ]
+    assert got.unrelated == 2  # client.fetch() and the unbound bare fetch()
+
+
+def test_an_index_saved_before_call_refs_resolves_callers_by_file_as_before():
+    idx = _index_of(SCOPED_MODULE_FUNCTION)
+    for s in idx.symbols.values():
+        s.call_refs = []
+    got = idx.scoped_callers(idx.symbols["app.store:fetch"])
+    assert "app.client_use:unrelated" in [c.qualname for c in got.callers]
+
+
+INHERITED_METHOD = {
+    "app/base.py": (
+        "class Base:\n    def run(self):\n        return 1\n\n"
+        "class Child(Base):\n    pass\n\n"
+        "class GrandChild(Child):\n    def other(self):\n        return self.run()\n\n"
+        "class Override(Base):\n    def run(self):\n        return 2\n"
+    ),
+    "app/use_child.py": (
+        "from app.base import Child\n\ndef use(x: Child):\n    return x.run()\n"
+    ),
+    "app/use_grandchild.py": (
+        "from app.base import GrandChild\n\ndef use():\n    return GrandChild().run()\n"
+    ),
+    "app/use_override.py": (
+        "from app.base import Override\n\ndef use(x: Override):\n    return x.run()\n"
+    ),
+}
+
+
+def test_a_call_on_a_subclass_that_inherits_the_method_is_a_caller():
+    """F-2d76d2: `x: Child` then `x.run()` dispatches to `Base.run` when Child
+    does not override it; it used to be counted as untyped."""
+    idx = _index_of(INHERITED_METHOD)
+    got = idx.scoped_callers(idx.symbols["app.base:Base.run"])
+    assert sorted(c.qualname for c in got.callers) == [
+        "app.base:GrandChild.other",
+        "app.use_child:use",
+        "app.use_grandchild:use",
+    ]
+    # A subclass that overrides run() dispatches to its own.
+    assert got.untyped == 1
+
+
+def test_a_relative_import_in_a_test_maps_it_to_its_source():
+    """F-92d36b: `from ..fetch import fetch` in app/tests/ names `app.fetch`;
+    the module part alone (`fetch`) matched nothing."""
+    idx = _index_of(
+        {
+            "app/fetch.py": "def fetch():\n    return 1\n",
+            "app/tests/test_fetch.py": "from ..fetch import fetch\n",
+            "app/tests/test_pkg.py": "from .. import fetch\n",
+            "app/tests/unit/test_deep.py": "from ...fetch import fetch\n",
+        }
+    )
+    assert sorted(idx.tests_for["app/fetch.py"]) == [
+        "app/tests/test_fetch.py",
+        "app/tests/test_pkg.py",
+        "app/tests/unit/test_deep.py",
+    ]
+
+
+def _hunk(path: str, context: str, old: str, new: str) -> str:
+    """One file whose only hunk replaces `old` with `new` under `context`."""
+    return (
+        f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
+        f"@@ -1,2 +1,2 @@\n {context}\n-{old}\n+{new}\n"
+    )
+
+
+def _triaged(diff: str) -> Any:
+    return triage(parse_unified_diff(diff), {}, {})
+
+
+@pytest.mark.parametrize(
+    "path, old, new",
+    [
+        ("app/m{}.py", "    enabled = False", "    enabled = True"),
+        ("contract/m{}.yaml", "  enabled: false", "  enabled: true"),
+        ("app/m{}.py", "    ok = a and b", "    ok = a or b"),
+    ],
+)
+def test_a_repeated_keyword_or_literal_flip_is_not_a_mechanical_rename(
+    path: str, old: str, new: str
+):
+    """F-a48b0a: `False -> True` in three files passed as a rename (any two
+    word-like tokens did) and all three hunks were dropped unreviewed."""
+    diff = "".join(_hunk(path.format(i), f"component_{i}:", old, new) for i in range(3))
+    t = _triaged(diff)
+    assert sorted(f.path for f in t.reviewed) == [path.format(i) for i in range(3)]
+    assert t.renames == [] and t.hunks_dropped == 0
+
+
+def test_a_real_rename_across_files_is_still_mechanical():
+    diff = "".join(
+        _hunk(
+            f"app/m{i}.py",
+            f"def caller_{i}():",
+            "    return get_x(1)",
+            "    return fetch_x(1)",
+        )
+        for i in range(3)
+    )
+    t = _triaged(diff)
+    assert t.reviewed == [] and t.renames == [("get_x", "fetch_x")]
+
+
+DEDENT = (
+    "diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n"
+    "@@ -1,2 +1,2 @@\n if retry:\n-    send()\n+send()\n"
+)
+
+
+def test_a_python_dedent_is_not_whitespace_only():
+    """F-76a9cf: `send()` moved out of `if retry:` normalises to the same text,
+    but in Python the indentation is the control flow."""
+    t = _triaged(DEDENT.format(p="app/send.py"))
+    assert [f.path for f in t.reviewed] == ["app/send.py"]
+    # Where indentation is not syntax, re-indenting is still whitespace.
+    t = _triaged(DEDENT.format(p="docs/send.md"))
+    assert t.reviewed == [] and "docs/send.md" in t.mechanical["whitespace-only"]
+
+
+@pytest.mark.parametrize(
+    "old, new, imports_only",
+    [
+        ("import os", "import os; dangerous()", False),
+        ("import os", "import os as _os\nrun()", False),
+        ("import os", "import sys  # noqa: F401", True),
+        ("from a import (", "from b import (", True),
+        ("from a import x", "from a import x, y; x.boot()", False),
+    ],
+)
+def test_import_only_means_nothing_but_import_statements(
+    old: str, new: str, imports_only: bool
+):
+    """F-dced3f: `_IMPORT` matched a prefix, so `import os; dangerous()` was an
+    import-only hunk and was dropped."""
+    added = "".join(f"+{line}\n" for line in new.splitlines())
+    n = len(new.splitlines())
+    diff = (
+        "diff --git a/app/x.py b/app/x.py\n"
+        "--- a/app/x.py\n+++ b/app/x.py\n"
+        f"@@ -1,1 +1,{n} @@\n-{old}\n{added}"
+    )
+    t = _triaged(diff)
+    assert (t.reviewed == []) is imports_only
+
+
+def test_the_same_edit_under_different_context_is_reviewed_in_every_file():
+    """F-284d76: `timeout: 30 -> 60` for three different components was one
+    duplicate signature; the second and third were never reviewed."""
+    diff = "".join(
+        _hunk(f"contract/{c}.yaml", f"{c}:", "  timeout: 30", "  timeout: 60")
+        for c in ("db", "cache", "queue")
+    )
+    t = _triaged(diff)
+    assert len(t.reviewed) == 3 and t.duplicate_of == {}
+    # A hunk identical down to its context is still the same change.
+    same = "".join(
+        _hunk(f"contract/{c}.yaml", "db:", "  timeout: 30", "  timeout: 60")
+        for c in ("a", "b", "c")
+    )
+    t = _triaged(same)
+    assert [f.path for f in t.reviewed] == ["contract/a.yaml"]
+    assert t.duplicate_of == {
+        "contract/b.yaml": "contract/a.yaml",
+        "contract/c.yaml": "contract/a.yaml",
+    }
+
+
+def test_a_split_file_past_the_bundle_cap_is_named_once_and_stays_unread():
+    """A file reviewed in parts can have several parts past `max_bundles`: it
+    is named once, and since part of it was not read it is unread source, so
+    the verdict cannot go green."""
+    path = "app/storage/huge.py"
+    files = parse_unified_diff(_hunks_diff(path, [60] * 150))
+    cfg = Config(price=PRICE)
+    cfg.max_bundles = 1
+    res = RunResult("reviewed")
+    bundles = plan_bundles(files, cfg, res)
+    assert [b.paths for b in bundles] == [[path]]
+    reason = "bundle cap (lowest-risk code, after re-packing)"
+    assert res.skipped_files == [(path, reason)]
+    assert review_mod.unread_skips(res.skipped_files) == [(path, reason)]
+
+
+# ---- FND-5323 round 2: lens's review of the fixes, ported ---------------------
+
+
+def _noise(rnd: Any, n: int) -> str:
+    """Random letters: they compress worst, a harder case than real code."""
+    import string  # noqa: PLC0415
+
+    return "".join(rnd.choices(string.ascii_letters + string.digits, k=n))
+
+
+def _wide_state(open_n: int, resolved_n: int, quote: int = 1500) -> PRState:
+    """Open findings whose quote is ONE long line of noise: the first-line rule
+    keeps it whole at evidence_keep=0, so only leaving quotes out can fit it."""
+    import random  # noqa: PLC0415
+
+    rnd = random.Random(11)
+    fs: list[Finding] = []
+    for i in range(open_n + resolved_n):
+        f = Finding(
+            f"app/w{i % 7}/f{i}.py",
+            i + 1,
+            "medium",
+            "bug",
+            _noise(rnd, 100),
+            _noise(rnd, 600),
+            f"    blob_{i} = '{_noise(rnd, quote + i)}'",
+        )
+        if i >= open_n:
+            f.status, f.fixed_round, f.fixed_by = "fixed", 2, "verified"
+        fs.append(f)
+    return PRState(round=3, findings=fs, ledger={"spent_usd": 0.5, "cap_usd": 1.0})
+
+
+@pytest.mark.parametrize("resolved_n", [0, 40])
+def test_open_findings_whose_first_lines_alone_are_too_big_fit_without_quotes(
+    resolved_n: int,
+):
+    """F-3f3e23 / F-ad2f66: with only open findings left, a long first line was
+    kept even at evidence_keep=0, and the over-limit body was returned unchecked.
+    The largest quotes are left out, the fewest that fit; every id stays."""
+    st = _wide_state(80, resolved_n)
+    floor = st.encode(body_keep=0, evidence_keep=0, drop_resolved=resolved_n)
+    assert len(floor) > review_mod.COMMENT_LIMIT  # the real case
+    body = render_summary(RunResult("reviewed", mode="full", state=st))
+    assert len(body) <= review_mod.COMMENT_LIMIT
+    assert "stored without their quoted code" in body
+    back = PRState.decode(body)
+    assert back is not None
+    opened = [f for f in st.findings if f.status == "open"]
+    assert [f.id for f in back.findings] == [f.id for f in opened]
+    assert back.ledger == st.ledger and back.round == 3
+    kept = {f.id: f.evidence for f in back.findings}
+    dropped = [f for f in opened if not kept[f.id]]
+    assert 0 < len(dropped) < len(opened)
+    # The largest quotes go first; the rest are whole, so they still match.
+    assert min(len(f.evidence) for f in dropped) >= max(
+        len(f.evidence) for f in opened if kept[f.id]
+    )
+    assert all(kept[f.id] == f.evidence for f in opened if kept[f.id])
+
+
+def test_too_many_open_findings_even_without_quotes_leave_the_lowest_first():
+    """The last stage before no state at all: the fewest open findings are left
+    out, lowest severity and newest first, and the summary says how many."""
+    import random  # noqa: PLC0415
+
+    rnd = random.Random(5)
+    fs = [
+        Finding(
+            f"app/{_noise(rnd, 60)}.py",
+            i + 1,
+            "critical" if i < 40 else "low",
+            "bug",
+            _noise(rnd, 120),
+            "",
+            f"    x_{i} = {_noise(rnd, 400)}",
+        )
+        for i in range(900)
+    ]
+    st = PRState(round=2, findings=fs, ledger={"spent_usd": 0.1, "cap_usd": 1.0})
+    assert (
+        len(st.encode(body_keep=0, evidence_keep=0, drop_quotes=len(fs)))
+        > review_mod.COMMENT_LIMIT
+    )
+    body = render_summary(RunResult("reviewed", mode="full", state=st))
+    assert len(body) <= review_mod.COMMENT_LIMIT
+    assert "could not be stored" in body
+    back = PRState.decode(body)
+    assert back is not None and back.ledger == st.ledger
+    ids = {f.id for f in back.findings}
+    assert 0 < len(ids) < len(fs)
+    assert {f.id for f in fs if f.severity == "critical"} <= ids
+
+
+def test_a_state_too_large_with_no_finding_still_gives_a_comment_github_accepts():
+    """Every path returns a body within the limit: past every cut, the summary
+    goes without a state block (the next round starts afresh) rather than being
+    refused and leaving the previous state in place."""
+    import random  # noqa: PLC0415
+
+    rnd = random.Random(3)
+    st = PRState(round=2, pending_files=[_noise(rnd, 200) for _ in range(500)])
+    body = render_summary(RunResult("reviewed", mode="full", state=st))
+    assert len(body) <= review_mod.COMMENT_LIMIT
+    assert PRState.decode(body) is None
+    assert review_mod.STATE_NOT_STORED in body
+
+
+def test_an_open_finding_stored_without_its_quote_is_not_resolved_for_free(
+    repo: Path,
+):
+    """An empty quote proves nothing about the code: a round that touches its
+    file leaves it open for verify, instead of resolving it as code-gone."""
+    gh = fake_github()
+    principles = principles_of(repo)
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles,
+        client_factory=_factory(_review_script()),
+    )
+    body = gh.comments[0]["body"]
+    st = PRState.decode(body)
+    assert st is not None and st.findings[0].evidence
+    st.findings[0].evidence = ""
+    gh.comments[0]["body"] = (
+        body.rsplit(f"<!-- {findings_mod.STATE_MARKER}:", 1)[0] + st.encode()
+    )
+    fixed = SRC_V2.replace(
+        "    return data.decode()",
+        "    return data.decode() if data is not None else None",
+    )
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = (
+        "diff --git a/app/storage/fetch.py b/app/storage/fetch.py\n"
+        "--- a/app/storage/fetch.py\n+++ b/app/storage/fetch.py\n"
+        "@@ -4 +4 @@\n-    return data.decode()\n+    return data.decode() if data is not None else None\n"
+    )
+    gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
+    gh.files[("app/storage/fetch.py", "h2")] = fixed
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles,
+        client_factory=_factory(Script()),
+    )
+    assert res.resolved_free == []
+    assert state_of(res).findings[0].status == "open"
+
+
+def test_verify_is_told_a_missing_quote_was_not_stored_not_that_the_code_is_gone():
+    f = Finding("a.py", 1, "low", "bug", "t", "b", "")
+    assert "not stored" in review_mod._quote_gone(f)
+    f.evidence = "x = 1"
+    assert review_mod._quote_gone(f) == "(the quoted code is not in this file any more)"
+
+
+def test_a_malformed_200_settles_its_hold_and_is_retried():
+    """F-855736: a 200 whose body was not JSON raised before anything was booked,
+    and `complete` released the hold: a billed response went missing from the
+    ledger. It is settled at its worst case, counted failed, and retried."""
+    led = Ledger(cap_usd=1)
+    sent = Script(
+        (200, {"Retry-After": "0"}, '{"choices": [{"message": '),
+        response(),
+    )
+    c = Client(model="m", price=PRICE, ledger=led, transport=sent, max_retries=2)
+    msgs = [{"role": "user", "content": "hi"}]
+    worst = c.worst_case_cost(msgs, None, 10)
+    c.complete("review:x", msgs, max_tokens=10)
+    assert len(sent.requests) == 2
+    assert led.spent_usd == pytest.approx(worst + 0.002)
+    assert led.calls == 1 and led.reserved_usd == 0 and led.failed_requests == 1
+
+
+@pytest.mark.parametrize("text", ["not json", "[]", '{"choices": "x"}'])
+def test_a_malformed_200_with_no_retry_left_is_settled_not_released(text: str):
+    led = Ledger(cap_usd=1)
+    sent = Script((200, {}, text))
+    c = Client(model="m", price=PRICE, ledger=led, transport=sent, max_retries=0)
+    msgs = [{"role": "user", "content": "hi"}]
+    worst = c.worst_case_cost(msgs, None, 10)
+    with pytest.raises(LLMError, match="malformed HTTP 200 response"):
+        c.complete("review:x", msgs, max_tokens=10)
+    assert led.spent_usd == pytest.approx(worst) and led.reserved_usd == 0
+    assert led.calls == 0 and led.failed_requests == 1
+
+
+def test_the_run_report_redacts_the_incomplete_reasons():
+    """F-32079e: a bundle's error is copied into `RunResult.incomplete`, and the
+    report carried that list unredacted."""
+    llm_mod.register_secret(OPAQUE_KEY)
+    leak = f"gateway said: invalid key {OPAQUE_KEY}"
+    res = RunResult(
+        "reviewed",
+        mode="full",
+        state=PRState(),
+        bundles=[BundleResult(label="storage", error=leak)],
+        incomplete=[f"storage: failed — {leak}"],
+    )
+    built = report_mod.build(res)
+    assert OPAQUE_KEY not in json.dumps(built)
+    assert OPAQUE_KEY not in report_mod.markdown(built, 1)
+    assert res.incomplete == [f"storage: failed — {leak}"]
+
+
+def test_a_same_named_local_class_elsewhere_is_not_a_callers_class():
+    """F-e31e5a: two functions each define a `Local` with `run`; the second's
+    `self.run()` was counted as a caller of the first's, by the bare name."""
+    idx = _index_of(
+        {
+            "app/locals.py": (
+                "def first():\n"
+                "    class Local:\n"
+                "        def run(self):\n            return 1\n"
+                "        def go(self):\n            return self.run()\n"
+                "    return Local\n\n"
+                "def second():\n"
+                "    class Local:\n"
+                "        def run(self):\n            return 2\n"
+                "        def go(self):\n            return self.run()\n"
+                "    return Local\n"
+            )
+        }
+    )
+    for owner in ("first", "second"):
+        got = idx.scoped_callers(idx.symbols[f"app.locals:{owner}.Local.run"])
+        assert [c.qualname for c in got.callers] == [f"app.locals:{owner}.Local.go"]
+
+
+def test_a_repeated_string_literal_edit_is_not_a_mechanical_rename():
+    """F-1bf426: words inside quotes were tokens like names, so `"safe"` ->
+    `"unsafe"` in three files passed as a rename and went unreviewed."""
+    diff = "".join(
+        _hunk(
+            f"app/m{i}.py",
+            f"def c_{i}():",
+            '    mode = "safe"',
+            '    mode = "unsafe"',
+        )
+        for i in range(3)
+    )
+    t = _triaged(diff)
+    assert sorted(f.path for f in t.reviewed) == [f"app/m{i}.py" for i in range(3)]
+    assert t.renames == [] and t.hunks_dropped == 0
 
 
 # ---- the skeptic pass on new blocking findings (FND-5332) -------------------------------------------
