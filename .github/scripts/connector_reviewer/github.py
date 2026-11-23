@@ -160,6 +160,36 @@ class GitHub:
                 return out
             page += 1
 
+    def pr_commit_messages(self, number: int) -> list[str]:
+        """The message of each of the pull request's commits, at most the first
+        100 (one request): read for a "This reverts commit …" line."""
+        batch = self._call(
+            "GET", f"/repos/{self.repo}/pulls/{number}/commits?per_page=100"
+        )
+        return [
+            str((c.get("commit") or EMPTY).get("message") or "") for c in objects(batch)
+        ]
+
+    def recent_commits(
+        self, path: str, ref: str, since: str, limit: int
+    ) -> list[dict[str, Any]]:
+        """The newest commits reachable from `ref` that touched `path` since
+        `since` (ISO 8601), at most `limit` (one request)."""
+        q = urllib.parse.urlencode(
+            {"sha": ref, "path": path, "since": since, "per_page": max(1, limit)}
+        )
+        return objects(self._call("GET", f"/repos/{self.repo}/commits?{q}"))
+
+    def commit_patches(self, sha: str) -> dict[str, str]:
+        """Each file a commit changed, with its patch text (path -> patch). A
+        file GitHub gives no patch for (binary, too large) is left out."""
+        data = self._call("GET", f"/repos/{self.repo}/commits/{sha}")
+        return {
+            str(f.get("filename")): str(f.get("patch"))
+            for f in objects((data or EMPTY).get("files"))
+            if f.get("filename") and isinstance(f.get("patch"), str)
+        }
+
     def can_push(self, login: str) -> bool:
         """Whether `login` holds Write, Maintain or Admin on this repository,
         read live from the collaborator-permission API.

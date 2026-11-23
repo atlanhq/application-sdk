@@ -300,6 +300,44 @@ review no longer sees `<pr_understanding>`; round 2's does) and
 `test_every_request_is_recorded_with_counts_only_and_reported` (the approach request
 comes last).
 
+### Regression and history facts (FND-5312)
+
+lens hands the line review the callers, tests and changed functions it finds in
+`context.build`. This fork adds two sets of facts, computed in code in `facts.py`
+and placed in every bundle's prompt after `<context>`. They add no model stage.
+
+| Facts | What is computed | Where it comes from |
+|---|---|---|
+| Regression (`<regression_facts>`) | For each changed function of a non-test Python file in the bundle: its callers outside the tests (by name, from the index) and the test files that name it, by tier (`unit`, `integration`, `e2e`, `other`, from the path). For the whole pull request: every existing test expectation weakened or removed: an assertion gone, an expectation changed (same left-hand side, new right-hand side), a new skip or xfail, a deleted test whose assertions went with it. A moved, reformatted or renamed test, an added test, and an assertion in source code do not count. | The index and the diff. No request. |
+| History (`<history_facts>`) | Lines the pull request restores that a recent base-branch commit removed; lines it removes that one added (at least `history_min_lines` non-trivial lines each, and not lines that commit merely moved); a revert ("This reverts commit …" in a commit message of the pull request, or a title `Revert "…"`); a function changed `churn_changes` times in `history_days` days. The count includes this pull request: the default 3 fires when two recent commits touched a function the pull request changes. A function is "touched" when a hunk's header or a def or class line inside it names it, so the count is a floor. | `GitHub.recent_commits` (commits on the base sha that touched the path, since `history_days`), `GitHub.commit_patches` (each commit's patches, read once per sha) and `GitHub.pr_commit_messages`: new, read-only. At most 1 + `history_max_files` + `history_max_commits` requests, four at a time, stopped after `history_seconds`. A failed read means fewer facts and a trace note, never an incomplete review. |
+
+- The history block is there only when a fact fired for the bundle's files (or the
+  pull request is a revert), and only then are the earlier commits shown: short sha,
+  date, title and the lines. A commit title is untrusted text, so `<` and `>` are
+  made inert, and code lines cannot close the block.
+- `REVIEW_SYSTEM` has a "Facts" section: what the blocks are, that a fact is not a
+  finding, and the severity guidance (medium at most; high only for a concrete
+  broken caller, a deleted or skipped test covering changed code, or a recent fix
+  undone without a reason). `task_done` takes two optional answers, `regression` and
+  `history`, kept on `BundleResult.answers`.
+- The summary has a **Regression** line and a **History** line under the approach
+  check: the facts' counts (`Facts.regression_line`, `history_line`), then what the
+  line review answered (at most two bundles). `PRState.facts` keeps the lines, so a
+  summary re-rendered by a dismissal keeps them. The run report carries them, with
+  the history request count, and `timings_ms["facts"]`.
+- `[facts]` in config.toml turns each half off and sets the caps (`facts.FactsConfig`).
+- Cost, measured offline: the regression facts take about 1.3 s on application-sdk
+  itself (about 3,000 files, 650 test files), most of it listing the files, which
+  the tools then reuse. A connector app is a fraction of that. The history half is
+  network time, bounded as above; it has not been measured against GitHub here.
+- Not done: the gate-file check of FND-5312 (compare a changed bootstrap-managed
+  gate file with what bootstrap would render). It needs the conformance package's
+  renderer, which this stdlib-only engine does not have.
+
+Tests: `FakeGitHub` has empty history reads by default
+(`pr_commit_messages`, `recent_commits`, `commit_patches`), so every other test runs
+as before.
+
 ## Module by module
 
 Where a lens fix lands in this copy. "Names" means only the renames in the table
@@ -310,25 +348,25 @@ above; "typing" means only the annotations described under Typing.
 | `baseline.py`, `diff.py`, `index.py` | Identical, byte for byte. A lens patch applies as it is. |
 | `lock.py` | Names. |
 | `report.py` | Names; bundle time, forced final turn and dropped uncited findings; the incomplete list from `incomplete_reasons`. |
-| `findings.py` | Names; `PRState.waiver`, `exempt`, `unread`; `decode` reads the last state marker. |
+| `findings.py` | Names; `PRState.waiver`, `exempt`, `unread`, `facts`; `decode` reads the last state marker. |
 | `triage.py` | Typing (one annotation). |
-| `tools.py` | Typing (one annotation), two description strings (`compatibility`, `search_code`), and the comment's optional `principle` field. |
+| `tools.py` | Typing (one annotation), two description strings (`compatibility`, `search_code`), the comment's optional `principle` field, and `task_done`'s optional `regression` and `history`. |
 | `trace.py` | Names, typing. |
 | `select.py` | `DEFAULT_EXCLUDE` only. |
-| `config.py` | Docstring, `raw_hash`, typing. |
+| `config.py` | Docstring, `raw_hash`, typing; the `[access]`, `[exempt]` and `[facts]` tables. |
 | `bundle.py` | `_module_key` and the module docstring. |
 | `llm.py` | Names (the gateway key variable, the User-Agent, log text), typing. |
-| `github.py` | Names, typing, four methods removed with the approval step; `can_push`, `safe_body` and `status_of` added. |
+| `github.py` | Names, typing, four methods removed with the approval step; `can_push`, `safe_body`, `status_of`, `pr_commit_messages`, `recent_commits` and `commit_patches` added. |
 | `event.py` | Rewritten around who may ask (FND-5310); the command grammar is lens's plus `waive`. |
 | `holistic.py` | The prompt's opening and one concern; no `<public_api>` block; typing. |
 | `context.py` | No `_public` / `public_api`; `build` returns a string. |
 | `advisory.py` | Rewritten as the empty extension point; holds `glob_match`. |
-| `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313). |
-| `prompts.py` | The review prompt's opening, "Repository layout" and "Principles" sections; the removals; typing. |
-| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313). |
+| `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313); the facts blocks and the `task_done` answers (FND-5312). |
+| `prompts.py` | The review prompt's opening, "Repository layout", "Principles" and "Facts" sections; the removals; typing. |
+| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312). |
 | `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it. |
 | `__init__.py` | Docstring. |
-| `principles.py`, `typed.py`, `exempt.py`, `finalize.py` | New here. |
+| `principles.py`, `typed.py`, `exempt.py`, `finalize.py`, `facts.py` | New here. |
 | `approve.py`, `surface.py`, `rules.py` | Not here. |
 
 ## Fixed here, still open in lens

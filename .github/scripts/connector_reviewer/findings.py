@@ -121,6 +121,9 @@ class PRState:
     # clears it.
     exempt: dict[str, Any] = field(default_factory=dict)
     history: list[dict[str, Any]] = field(default_factory=list)
+    # The regression and history lines of the last review ({"regression",
+    # "history", "head"}), so a summary re-rendered by a dismissal keeps them.
+    facts: dict[str, Any] = field(default_factory=dict)
 
     def open_findings(self, severities: tuple[str, ...] = SEVERITIES) -> list[Finding]:
         return [

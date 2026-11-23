@@ -32,6 +32,8 @@ from pathlib import Path
 from typing import Any, cast
 
 from . import advisory, baseline, exempt, holistic, prompts, trace
+from . import context as code_context
+from . import facts as code_facts
 from .agent import AgentLimits, BundleResult, review_bundle, suspect_paths
 from .baseline import PRAdditions
 from .bundle import Bundle, group
@@ -44,6 +46,7 @@ from .diff import (
     parse_unified_diff,
     snippet_in_text,
 )
+from .event import plain
 from .findings import (
     BLOCKING,
     BODY_KEEP,
@@ -288,6 +291,48 @@ def _no_verdict(
     A head that was already reviewed keeps the verdict it has."""
     if post and head and head != state.reviewed_head:
         gh.set_status(head, "error", why, run_url)
+
+
+def compute_facts(
+    gh: GitHub,
+    number: int,
+    pr: dict[str, Any],
+    base: str,
+    ws: Workspace,
+    files: list[FileDiff],
+    cfg: Config,
+) -> code_facts.Facts:
+    """The regression and history facts for the files under review, in review
+    order. No model call; the history half makes at most
+    1 + `history_max_files` + `history_max_commits` GitHub requests."""
+    fx = code_facts.Facts()
+    if cfg.facts.regression:
+        fx.symbols = code_facts.regression_symbols(ws, files)
+        fx.expectations = code_facts.weakened_expectations(files)
+        fx.regression_read = True
+    if cfg.facts.history and files:
+        names = {
+            fd.path: {s.name for s in code_context.changed_symbols(ws, fd)}
+            for fd in files
+            if fd.path.endswith(".py")
+        }
+        try:
+            messages = gh.pr_commit_messages(number)
+        except GitHubError as e:
+            trace.line(f"history: commit messages not read ({trace.short(e, 120)})")
+            messages = []
+        fx.history = code_facts.history(
+            gh,
+            base=base,
+            files=files,
+            changed_names=names,
+            pr_title=str(pr.get("title") or ""),
+            pr_messages=messages,
+            cfg=cfg.facts,
+        )
+        fx.history.requests += 1
+        fx.history_read = True
+    return fx
 
 
 def _approach(
@@ -650,6 +695,32 @@ def run(
         )
     pr_meta["paths_added"] = added.render_paths()
     pr_meta["symbols_added"] = added.render_symbols()
+
+    # ---- regression and history facts (0 model calls) ----------------------
+    # Computed in code and handed to every bundle's prompt (facts.py). The
+    # history half reads the base branch's recent commits through the REST API,
+    # within hard caps; a failure there means fewer facts, never an incomplete review.
+    if bundles:
+        t_facts = time.monotonic()
+        with trace.group("3c · facts: regression and history (computed in code)"):
+            fx = compute_facts(
+                gh, number, pr, base, ws, [fd for b in bundles for fd in b.files], cfg
+            )
+            res.timings_ms["facts"] = int((time.monotonic() - t_facts) * 1000)
+            trace.line(f"regression: {fx.regression_line()}")
+            trace.line(
+                f"history: {fx.history_line()}; {fx.history.requests} request(s), "
+                f"{res.timings_ms['facts']} ms"
+            )
+            for n in fx.history.notes:
+                trace.line(f"history: {n}")
+        pr_meta["facts"] = fx
+        state.facts = {
+            "regression": fx.regression_line(),
+            "history": fx.history_line(),
+            "head": head,
+            "history_requests": fx.history.requests,
+        }
 
     # ---- verify still-open findings (1 call) -------------------------------
     # Every open finding, not only those whose own file changed: a fix often lands
@@ -2537,6 +2608,7 @@ def render_summary(res: RunResult) -> str:
         lines.append("")
     elif ap.get("verdict") == "sound":
         lines.append("**Approach check** — sound.\n")
+    lines.extend(_facts_lines(st, res))
     for note in st.advisories:
         lines.append(f"**Advisory** (does not block) — {note}\n")
     for sev in SEVERITIES:
@@ -2616,6 +2688,23 @@ def render_summary(res: RunResult) -> str:
                 return body
     lean = _no_state_marker("\n".join(_without_resolved(lines)) + "\n")
     return lean + st.encode(body_keep=0)
+
+
+def _facts_lines(st: PRState, res: RunResult) -> list[str]:
+    """The regression and history lines: the facts computed in code, then what
+    the line review answered about them this round (one answer per bundle that
+    gave one, at most two)."""
+    fx = st.facts or {}
+    if not fx.get("regression") and not fx.get("history"):
+        return []
+    out: list[str] = []
+    for key, label in (("regression", "Regression"), ("history", "History")):
+        line = f"**{label}** — {fx.get(key) or 'not computed'}."
+        answers = [b.answers[key] for b in res.bundles if b.answers.get(key)][:2]
+        for a in answers:
+            line += f" *Line review:* {plain(a)}"
+        out.append(line + "\n")
+    return out
 
 
 def _no_state_marker(text: str) -> str:

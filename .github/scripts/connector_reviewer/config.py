@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .agent import AgentLimits
 from .exempt import ExemptConfig
+from .facts import FactsConfig
 from .llm import Price
 
 TRUSTED_APPS = (
@@ -52,6 +53,8 @@ class Config:
     trusted_apps: list[str] = field(default_factory=lambda: list(TRUSTED_APPS))
     # Which pull requests are not reviewed at all (exempt.classify).
     exempt: ExemptConfig = field(default_factory=ExemptConfig)
+    # Regression and history facts for the line review (facts.py).
+    facts: FactsConfig = field(default_factory=FactsConfig)
     limits: AgentLimits = field(default_factory=AgentLimits)
     raw_hash: str = ""
 
@@ -104,6 +107,14 @@ def load_config(config_dir: Path) -> Config:
             if k in ExemptConfig.__dataclass_fields__
         }
     )
+    fx = data.get("facts", {})
+    facts = FactsConfig()
+    for k, v in fx.items():
+        if k not in FactsConfig.__dataclass_fields__:
+            continue
+        default = getattr(facts, k)
+        setattr(facts, k, bool(v) if isinstance(default, bool) else int(v))
+    cfg.facts = facts
     a = data.get("agent", {})
     cfg.limits = AgentLimits(
         **{k: int(v) for k, v in a.items() if k in AgentLimits.__dataclass_fields__}

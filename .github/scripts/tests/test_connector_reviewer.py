@@ -33,6 +33,7 @@ from connector_reviewer import bundle as bundle_mod
 from connector_reviewer import context as reviewer_context
 from connector_reviewer import event as event_mod
 from connector_reviewer import exempt as exempt_mod
+from connector_reviewer import facts as facts_mod
 from connector_reviewer import finalize as finalize_mod
 from connector_reviewer import findings as findings_mod
 from connector_reviewer import llm as llm_mod
@@ -370,6 +371,11 @@ class FakeGitHub:
         self.author = "author"  # who opened the pull request
         self.head_ref = "fix/decode"
         self.commit_authors: list[str] = ["author"]
+        # History facts: none unless a test scripts them.
+        self.commit_messages: list[str] = []
+        self.history: dict[str, list[dict[str, Any]]] = {}  # path -> commits
+        self.patches: dict[str, dict[str, str]] = {}  # sha -> path -> patch
+        self.history_reads: list[str] = []
 
     def pr(self, n):
         return {
@@ -383,6 +389,17 @@ class FakeGitHub:
 
     def pr_commit_authors(self, n):
         return list(self.commit_authors)
+
+    def pr_commit_messages(self, n):
+        return list(self.commit_messages)
+
+    def recent_commits(self, path, ref, since, limit):
+        self.history_reads.append(path)
+        return list(self.history.get(path, []))[:limit]
+
+    def commit_patches(self, sha):
+        self.history_reads.append(sha)
+        return dict(self.patches.get(sha, {}))
 
     def diff(self, a, b):
         return self.diffs[(a, b)]
@@ -8976,3 +8993,453 @@ def test_a_crash_sets_error_on_the_head_it_left_pending(
     with pytest.raises(RuntimeError):
         cli.main([*args, "--event-path", _event_file(tmp_path)])
     assert [s[1] for s in _CliGitHub.statuses] == ["error"]
+
+
+# ---- regression and history facts, computed in code (FND-5312) ------------------------------------
+
+
+def _udiff(
+    path: str, lines: list[str], *, old: int = 1, new: int = 1, status: str = ""
+) -> str:
+    """A one-hunk diff of `path`; each line keeps its own +, - or space marker."""
+    olen = sum(1 for x in lines if x[:1] in "- ")
+    nlen = sum(1 for x in lines if x[:1] in "+ ")
+    head = f"diff --git a/{path} b/{path}\n"
+    if status == "deleted":
+        head += "deleted file mode 100644\n"
+    head += f"--- a/{path}\n+++ b/{path}\n@@ -{old},{olen} +{new},{nlen} @@\n"
+    return head + "\n".join(lines) + "\n"
+
+
+def _expectations(text: str) -> list[tuple[str, str]]:
+    return [
+        (e.kind, e.text)
+        for e in facts_mod.weakened_expectations(parse_unified_diff(text))
+    ]
+
+
+def test_regression_facts_name_callers_and_the_tests_by_tier(repo: Path):
+    (repo / "tests" / "integration").mkdir(parents=True)
+    (repo / "tests" / "integration" / "test_fetch_it.py").write_text(
+        "from app.storage.fetch import fetch\n\ndef test_it():\n    assert fetch(None, 'k')\n"
+    )
+    ws, bundle = _ws(repo)
+    [fact] = facts_mod.regression_symbols(ws, bundle.files)
+    assert (fact.path, fact.name, fact.callers) == ("app/storage/fetch.py", "fetch", 1)
+    assert fact.tests == {
+        "unit": ["tests/unit/test_fetch.py"],
+        "integration": ["tests/integration/test_fetch_it.py"],
+    }
+    fx = facts_mod.Facts(symbols=[fact], regression_read=True)
+    block = fx.regression_block(bundle.paths)
+    assert block.startswith("<regression_facts>") and "`fetch` — 1 caller(s)" in block
+    assert "unit 1 (tests/unit/test_fetch.py)" in block and "e2e 0" in block
+    assert fx.regression_block(["app/other.py"]) == ""  # another bundle's files
+    assert fx.regression_line().startswith(
+        "1 changed function(s), 1 caller(s) outside tests"
+    )
+    assert facts_mod.tier("tests/e2e/test_x.py") == "e2e"
+    assert facts_mod.tier("tests/test_x.py") == "other"
+
+
+def test_a_weakened_or_removed_expectation_is_a_fact():
+    text = _udiff(
+        "tests/unit/test_fetch.py",
+        [
+            " def test_fetch():",
+            "-    assert len(rows) == 3",
+            "+    assert len(rows) == 2",
+            "-    assert rows[0].name == 'a'",
+            "+@pytest.mark.skip(reason='flaky')",
+            " def test_more():",
+            "     pass",
+        ],
+    ) + _udiff(
+        "tests/unit/test_gone.py",
+        ["-def test_gone():", "-    assert parse('x') is None"],
+        status="deleted",
+    )
+    assert _expectations(text) == [
+        ("expectation changed", "assert len(rows) == 3 → assert len(rows) == 2"),
+        ("assertion removed", "assert rows[0].name == 'a'"),
+        ("skip added", "@pytest.mark.skip(reason='flaky')"),
+        ("assertion removed", "assert parse('x') is None"),
+        ("test removed", "test_gone"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Added tests only.
+        _udiff("tests/unit/test_new.py", ["+def test_new():", "+    assert f() == 1"]),
+        # A test renamed, its body unchanged.
+        _udiff(
+            "tests/unit/test_a.py",
+            ["-def test_old():", "+def test_new_name():", "     assert f() == 1"],
+        ),
+        # An assertion moved to another test file.
+        _udiff("tests/unit/test_a.py", ["-    assert g() == 2"])
+        + _udiff("tests/unit/test_b.py", ["+    assert g() == 2"]),
+        # A whole test file renamed: no hunk at all.
+        "diff --git a/tests/unit/test_a.py b/tests/unit/test_z.py\n"
+        "similarity index 100%\nrename from tests/unit/test_a.py\nrename to tests/unit/test_z.py\n",
+        # An assertion removed from source code, not a test.
+        _udiff("app/x.py", ["-    assert value is not None"]),
+    ],
+)
+def test_a_test_change_that_keeps_its_expectations_is_not_a_fact(text: str):
+    assert _expectations(text) == []
+
+
+def test_reformatted_whitespace_is_not_a_removed_assertion():
+    text = _udiff(
+        "tests/unit/test_a.py", ["-    assert f(x) ==  1", "+    assert f(x) == 1"]
+    )
+    assert _expectations(text) == []
+
+
+class _History:
+    """A fake of the history reads: commits per path and patches per commit."""
+
+    def __init__(
+        self,
+        commits: dict[str, list[dict[str, Any]]],
+        patches: dict[str, dict[str, str]],
+    ):
+        self.commits, self.patches = commits, patches
+        self.reads: list[str] = []
+
+    def recent_commits(self, path: str, ref: str, since: str, limit: int):
+        self.reads.append(f"list {path} {ref} {since[:10]} {limit}")
+        return self.commits.get(path, [])[:limit]
+
+    def commit_patches(self, sha: str):
+        self.reads.append(f"patch {sha}")
+        return self.patches.get(sha, {})
+
+
+def _commit(sha: str, title: str, date: str = "2026-11-20T10:00:00Z") -> dict[str, Any]:
+    return {
+        "sha": sha,
+        "commit": {"message": f"{title}\n\nbody", "committer": {"date": date}},
+    }
+
+
+def _patch(lines: list[str]) -> str:
+    return "@@ -1,9 +1,9 @@ def fetch(client, key):\n" + "\n".join(lines)
+
+
+GUARD = ["    if data is None:", "        raise KeyError(key)"]
+
+
+def _history(
+    pr_lines: list[str],
+    earlier: list[str],
+    *,
+    title: str = "Raise on a missing key",
+    pr_title: str = "Decode fetched bytes",
+    messages: list[str] | None = None,
+    cfg: Any = None,
+    names: dict[str, set[str]] | None = None,
+    commits: int = 1,
+):
+    gh = _History(
+        {
+            "app/storage/fetch.py": [
+                _commit(f"c{i}aaaaaaa", title) for i in range(commits)
+            ]
+        },
+        {
+            f"c{i}aaaaaaa": {"app/storage/fetch.py": _patch(earlier)}
+            for i in range(commits)
+        },
+    )
+    files = parse_unified_diff(_udiff("app/storage/fetch.py", pr_lines))
+    out = facts_mod.history(
+        gh,
+        base="b0",
+        files=files,
+        changed_names=names or {},
+        pr_title=pr_title,
+        pr_messages=messages or [],
+        cfg=cfg or facts_mod.FactsConfig(),
+    )
+    return out, gh
+
+
+@pytest.fixture
+def frozen_now(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        facts_mod, "_now", lambda: datetime(2026, 11, 23, tzinfo=timezone.utc)
+    )
+
+
+def test_lines_a_recent_commit_removed_and_the_pr_restores_are_a_fact(frozen_now: None):
+    out, gh = _history(
+        [" def fetch(client, key):", *("-" + x for x in GUARD), "     return data"],
+        [" def fetch(client, key):", *("+" + x for x in GUARD)],
+    )
+    [fact] = out.facts
+    assert fact.kind == "removed" and fact.commit is not None
+    assert fact.commit.sha == "c0aaaaaaa" and fact.commit.date == "2026-11-20"
+    assert sorted(fact.lines) == sorted(" ".join(x.split()) for x in GUARD)
+    assert gh.reads[0] == "list app/storage/fetch.py b0 2026-10-24 5"  # 30 days back
+    assert out.requests == 2 and out.files == 1 and out.commits == 1
+
+    out, _ = _history(
+        [" def fetch(client, key):", *("+" + x for x in GUARD)],
+        [" def fetch(client, key):", *("-" + x for x in GUARD)],
+        title="Drop the <script> guard",
+    )
+    [fact] = out.facts
+    assert fact.kind == "restored"
+    block = facts_mod.Facts(history=out, history_read=True).history_block(
+        ["app/storage/fetch.py"]
+    )
+    assert block.startswith("<history_facts>")
+    assert "restores 2+ line(s) that commit c0aaaaaaa (2026-11-20)" in block
+    assert "‹script›" in block and "<script>" not in block  # the title is inert data
+    assert "raise KeyError(key)" in block
+
+
+@pytest.mark.parametrize(
+    "pr_lines, earlier",
+    [
+        # New lines with no history behind them.
+        ([*("+" + x for x in GUARD)], ["+    value = compute()", "+    return value"]),
+        # Only one line restored: below history_min_lines.
+        (["+" + GUARD[1]], ["-" + GUARD[1]]),
+        # Only trivial lines.
+        (
+            ["+    return", "+    )", "+    else:"],
+            ["-    return", "-    )", "-    else:"],
+        ),
+        # The earlier commit moved the lines (removed and added them): nothing undone.
+        (
+            [*("+" + x for x in GUARD)],
+            [*("-" + x for x in GUARD), *("+" + x for x in GUARD)],
+        ),
+    ],
+)
+def test_history_that_is_not_going_back_and_forth_is_not_a_fact(
+    frozen_now: None, pr_lines: list[str], earlier: list[str]
+):
+    out, _ = _history(pr_lines, earlier)
+    assert out.facts == []
+    fx = facts_mod.Facts(history=out, history_read=True)
+    assert fx.history_block(["app/storage/fetch.py"]) == ""  # absent from the prompt
+    assert fx.history_line() == "nothing fired (1 file(s), 1 commit(s) read)"
+
+
+def test_a_function_changed_three_times_in_30_days_is_a_fact(frozen_now: None):
+    """Two recent commits touched `fetch`; this pull request is the third change."""
+    changed = [" def fetch(client, key):", "+    data = client.get(key)"]
+    earlier = ["     data = client.get(key)", "+    log(key)"]
+    out, _ = _history(
+        changed, earlier, names={"app/storage/fetch.py": {"fetch"}}, commits=2
+    )
+    [fact] = out.facts
+    assert fact.kind == "churn"
+    assert (
+        "`fetch` changed 3 times in 30 days, this pull request included" in fact.detail
+    )
+    out, _ = _history(
+        changed, earlier, names={"app/storage/fetch.py": {"fetch"}}, commits=1
+    )
+    assert out.facts == []  # two changes is not three
+
+
+def test_a_revert_is_a_fact_only_when_it_says_so(frozen_now: None):
+    lines = ["+    x = 1"]
+    out, _ = _history(
+        lines, [], messages=["Revert x\n\nThis reverts commit c0aaaaaaa."]
+    )
+    [fact] = out.facts
+    assert (
+        fact.kind == "revert" and fact.commit is not None
+    )  # a commit read in the window
+    assert "reverts c0aaaaaaa" in fact.detail
+    out, _ = _history(lines, [], pr_title='Revert "Raise on a missing key"')
+    assert [f.kind for f in out.facts] == ["revert"]
+    out, _ = _history(lines, [], messages=["Revert-proof naming of things"])
+    assert out.facts == []
+
+
+def test_history_reads_stay_within_their_caps(
+    frozen_now: None, monkeypatch: pytest.MonkeyPatch
+):
+    paths = [f"app/m{i}.py" for i in range(12)]
+    gh = _History(
+        {p: [_commit(f"{p}-{j}", "t") for j in range(9)] for p in paths},
+        {},
+    )
+    files = parse_unified_diff("".join(_udiff(p, ["+    y = 2"]) for p in paths))
+    cfg = facts_mod.FactsConfig(
+        history_max_files=3, history_commits_per_file=2, history_max_commits=4
+    )
+    out = facts_mod.history(
+        gh,
+        base="b0",
+        files=files,
+        changed_names={},
+        pr_title="",
+        pr_messages=[],
+        cfg=cfg,
+    )
+    lists = [r for r in gh.reads if r.startswith("list")]
+    patches = [r for r in gh.reads if r.startswith("patch")]
+    assert len(lists) == 3 and len(patches) == 4 and out.requests == 7
+
+    # The wall-clock cap stops further reads.
+    ticks = iter([0.0, 0.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0])
+    monkeypatch.setattr(facts_mod, "_clock", lambda: next(ticks, 999.0))
+    gh.reads.clear()
+    out = facts_mod.history(
+        gh,
+        base="b0",
+        files=files,
+        changed_names={},
+        pr_title="",
+        pr_messages=[],
+        cfg=cfg,
+    )
+    assert not [r for r in gh.reads if r.startswith("patch")]
+    assert any("cap" in n for n in out.notes)
+
+
+def test_a_history_read_that_fails_gives_no_facts_and_never_raises(frozen_now: None):
+    class Down:
+        def recent_commits(
+            self, path: str, ref: str, since: str, limit: int
+        ) -> list[dict[str, Any]]:
+            raise GitHubError("GET /commits: HTTP 502")
+
+        def commit_patches(self, sha: str) -> dict[str, str]:  # pragma: no cover
+            return {}
+
+    out = facts_mod.history(
+        Down(),
+        base="b0",
+        files=parse_unified_diff(DIFF),
+        changed_names={},
+        pr_title="",
+        pr_messages=[],
+        cfg=facts_mod.FactsConfig(),
+    )
+    assert out.facts == [] and out.notes and "502" in out.notes[0]
+
+
+def test_the_review_hands_the_facts_to_the_line_review_and_shows_them(
+    repo: Path, frozen_now: None
+):
+    gh = fake_github()
+    gh.history["app/storage/fetch.py"] = [
+        _commit("c0aaaaaaa", "Raise on a missing key")
+    ]
+    gh.patches["c0aaaaaaa"] = {
+        "app/storage/fetch.py": _patch(
+            [
+                " def fetch(client, key):",
+                "+    data = client.get(key)",
+                "+    return data.decode()",
+            ]
+        )
+    }
+    answered = response(
+        [
+            tool_call("code_comment", {"comments": [COMMENT]}),
+            tool_call(
+                "task_done",
+                {
+                    "state": "DONE",
+                    "regression": "Callers of fetch now get text; the unit test still passes.",
+                    "history": "It restores what c0aaaaa added; the PR does not say why.",
+                },
+                1,
+            ),
+        ]
+    )
+    script = Script(answered, response([tool_call("approve_all_comments", {})]))
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    msg = script.requests[0]["messages"][2]["content"]
+    assert "<regression_facts>" in msg and "`fetch` — 1 caller(s)" in msg
+    # DIFF re-adds lines the earlier commit added: they are not restored, so no
+    # history fact fires and the history block is absent.
+    assert "<history_facts>" not in msg
+    assert "facts" in res.timings_ms
+    body = gh.comments[0]["body"]
+    assert "**Regression** — 1 changed function(s)" in body
+    assert "*Line review:* Callers of fetch now get text" in body
+    assert "**History** — nothing fired (1 file(s), 1 commit(s) read)." in body
+    st = state_of(res)
+    assert st.facts["head"] == "h1" and st.facts["history"].startswith("nothing fired")
+    assert gh.history_reads == ["app/storage/fetch.py", "c0aaaaaaa"]
+
+    # A dismissal re-renders the summary from the state: the lines stay.
+    review_mod.dismiss(
+        gh, 1, [st.findings[0].id], "ok", actor="lead", pr_author="author"
+    )
+    assert "**Regression** — 1 changed function(s)" in gh.comments[0]["body"]
+
+
+def test_a_history_fact_that_fires_reaches_the_prompt(repo: Path, frozen_now: None):
+    gh = fake_github()
+    gh.history["app/storage/fetch.py"] = [_commit("c0aaaaaaa", "Return raw bytes")]
+    gh.patches["c0aaaaaaa"] = {
+        "app/storage/fetch.py": _patch(
+            [
+                "-    data = client.get(key)",
+                "-    return data.decode()",
+                "+    return client.get(key)",
+            ]
+        )
+    }
+    script = _review_script()
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    msg = script.requests[0]["messages"][2]["content"]
+    assert (
+        "<history_facts>" in msg and "restores 2+ line(s) that commit c0aaaaaaa" in msg
+    )
+    assert (
+        "**History** — 1 × lines restored that a recent commit removed"
+        in gh.comments[0]["body"]
+    )
+
+
+def test_facts_can_be_turned_off_and_cost_no_request(repo: Path):
+    gh = fake_github()
+    cfg = cfg_for(repo)
+    cfg.facts = facts_mod.FactsConfig(regression=False, history=False)
+    script = _review_script()
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg,
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    assert gh.history_reads == []
+    assert "<regression_facts>" not in script.requests[0]["messages"][2]["content"]
+
+
+def test_the_shipped_facts_config_loads():
+    cfg = load_config(Path(__file__).resolve().parents[2] / "connector-reviewer")
+    assert cfg.facts == facts_mod.FactsConfig()
+    assert cfg.facts.history_days == 30 and cfg.facts.churn_changes == 3
+    assert 1 + cfg.facts.history_max_files + cfg.facts.history_max_commits <= 40

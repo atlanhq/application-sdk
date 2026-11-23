@@ -126,6 +126,25 @@ bootstrap_managed = [
 # Docs only (no list): every changed file ends in .md or is under docs/, and none is under
 # .github/connector-reviewer/ or .claude/, or named CLAUDE.md or AGENTS.md at any depth.
 
+[facts]
+# Computed in code and handed to the line review's prompt (connector_reviewer/facts.py); no
+# model stage. Regression: each changed function's callers outside the tests, the tests that
+# name it by tier, and every existing test expectation the PR weakened or removed (no request).
+# History: lines the PR restores that a recent base-branch commit removed, lines it removes
+# that one added, a revert, and a function changed churn_changes times in history_days days
+# (this PR included). Read through the GitHub REST API, at most
+# 1 + history_max_files + history_max_commits requests, four at a time, cut off after
+# history_seconds. A failed read means fewer facts, never an incomplete review.
+regression = true
+history = true
+history_days = 30
+history_max_files = 8
+history_commits_per_file = 5
+history_max_commits = 20
+history_min_lines = 2
+churn_changes = 3
+history_seconds = 20
+
 [stages]
 reflect = true   # filter-only fact check of each bundle's comments
 verify = true    # one call per round checking still-open findings in touched files

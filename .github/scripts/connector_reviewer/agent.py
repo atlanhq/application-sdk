@@ -32,6 +32,7 @@ from . import context, prompts, trace
 from .baseline import PRAdditions
 from .bundle import Bundle
 from .diff import anchor, locate_in_text
+from .facts import Facts
 from .findings import BLOCKING, Finding
 from .llm import (
     BudgetExhausted,
@@ -58,6 +59,7 @@ _clock: Callable[[], float] = time.monotonic
 # A finding that names no principle must be one of these to stand: a concrete
 # defect in what the code does, or a security defect.
 CONCRETE_CATEGORIES = ("bug", "security")
+ANSWER_KEEP = 400  # characters of a regression or history answer kept for the summary
 _PRINCIPLE_ID = re.compile(r"\b[FR]P\d{2}\b")
 
 
@@ -120,6 +122,8 @@ class BundleResult:
     # Findings dropped because they named no principle that applies to their
     # file and were not a concrete bug (see `cite`).
     uncited: list[Finding] = field(default_factory=list)
+    # The model's answers to the regression and history questions, from task_done.
+    answers: dict[str, str] = field(default_factory=dict)
 
 
 # ---- prompt manifest -----------------------------------------------------------
@@ -267,6 +271,16 @@ def build_context(
     )
     if ctx_block:
         parts.append(ctx_block)
+    # Regression and history facts, computed in code (facts.py). A history block
+    # is there only when a history fact fired for these files.
+    facts = pr_meta.get("facts")
+    if isinstance(facts, Facts):
+        for block in (
+            facts.regression_block(bundle.paths),
+            facts.history_block(bundle.paths),
+        ):
+            if block:
+                parts.append(block)
 
     if confirmed:
         lines = [f"- [{f.id}] {f.path}: {f.title}" for f in confirmed[:30]]
@@ -662,6 +676,10 @@ def _loop(
             elif name == "task_done":
                 done = True
                 reply = "OK"
+                for key in ("regression", "history"):
+                    answer = " ".join(str(args.get(key) or "").split())
+                    if answer:
+                        res.answers[key] = answer[:ANSWER_KEEP]
             elif final:
                 reply = "Unavailable on the final turn: call code_comment or task_done."
             else:

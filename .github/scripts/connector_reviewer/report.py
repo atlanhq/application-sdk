@@ -120,6 +120,7 @@ def build(res: RunResult) -> dict[str, Any]:
         "verify_cut_off": verify_cut_off_report(res),
         "verify_skipped": verify_skipped_report(res),
         "approach": (st.approach if st else {}) or {},
+        "facts": (st.facts if st else {}) or {},
         "calls": calls,
     }
 

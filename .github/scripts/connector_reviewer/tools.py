@@ -329,7 +329,17 @@ TOOL_SCHEMAS = [
     _fn(
         "task_done",
         "Call when every file in <review_files> has had its pass.",
-        {"state": {"type": "string", "enum": ["DONE", "FAILED"]}},
+        {
+            "state": {"type": "string", "enum": ["DONE", "FAILED"]},
+            "regression": {
+                "type": "string",
+                "description": "One or two sentences: can this change break behaviour that works today, and would a test in the right tier catch it? Rest it on <regression_facts>.",
+            },
+            "history": {
+                "type": "string",
+                "description": "Only when <history_facts> is present, one or two sentences: is this going back and forth, and does the PR say why?",
+            },
+        },
         ["state"],
     ),
 ]
