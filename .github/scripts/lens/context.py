@@ -68,9 +68,12 @@ def _lines(ws: Workspace, path: str) -> list[str]:
 
 
 def changed_symbols(ws: Workspace, fd: FileDiff) -> list[Symbol]:
-    """Innermost symbols enclosing an added line, in file order, once each."""
+    """Innermost symbols enclosing a changed line, in file order, once each.
+
+    A deletion counts at the line it is attributed to (`FileDiff.changed_lines`),
+    so a function that only lost lines is a changed function too."""
     seen: dict[str, Symbol] = {}
-    for line in sorted(fd.added_lines):
+    for line in sorted(fd.changed_lines):
         s = ws.index.enclosing(fd.path, line)
         if s and s.qualname not in seen:
             seen[s.qualname] = s
@@ -100,7 +103,7 @@ def changed_functions(ws: Workspace, files: list[FileDiff]) -> str:
             if s.kind == "class" and hi - lo > FN_MAX_LINES:
                 continue  # a change directly in a big class body: the diff hunk is the context
             if hi - lo + 1 > FN_MAX_LINES:
-                ch = [n for n in added if lo <= n <= hi] or [lo]
+                ch = [n for n in fd.changed_lines if lo <= n <= hi] or [lo]
                 lo, hi = max(lo, min(ch) - 40), min(hi, max(ch) + 40)
             take = min(hi - lo + 1, budget)
             if take <= 0:

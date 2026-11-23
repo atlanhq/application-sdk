@@ -60,6 +60,41 @@ class FileDiff:
             if ln.kind != "-" and ln.new_no
         }
 
+    def _removed_runs(self) -> list[tuple[int | None, int | None]]:
+        """Each run of consecutive removed lines, as the RIGHT-side lines just
+        before and just after it in its hunk (None where there is none)."""
+        runs: list[tuple[int | None, int | None]] = []
+        for h in self.hunks:
+            i = 0
+            while i < len(h.lines):
+                if h.lines[i].kind != "-":
+                    i += 1
+                    continue
+                j = i
+                while j < len(h.lines) and h.lines[j].kind == "-":
+                    j += 1
+                before = h.lines[i - 1].new_no if i > 0 else None
+                after = h.lines[j].new_no if j < len(h.lines) else None
+                runs.append((before, after))
+                i = j
+        return runs
+
+    @property
+    def deletion_sites(self) -> set[int]:
+        """The RIGHT-side lines that border a deletion: the line just before and
+        just after each run of removed lines. A finding there is about the
+        change, not about unchanged code."""
+        return {n for run in self._removed_runs() for n in run if n}
+
+    @property
+    def changed_lines(self) -> set[int]:
+        """Added lines, and for each deletion the one RIGHT-side line it is
+        attributed to: the line before it (inside the same function as the
+        removed code), else the line after it."""
+        return self.added_lines | {
+            n for before, after in self._removed_runs() if (n := before or after)
+        }
+
     @property
     def additions(self) -> int:
         return sum(1 for h in self.hunks for ln in h.lines if ln.kind == "+")
@@ -167,6 +202,11 @@ def _norm(s: str) -> str:
     return " ".join(s.split())
 
 
+# How `FileDiff.render` shows a removed line: an empty five-wide number column,
+# a space, then the marker. Matched exactly, so a unary minus is never eaten.
+_REMOVED_RENDER = "      -"
+
+
 def snippet_lines(snippet: str) -> list[str]:
     """A quoted snippet as comparable lines: whitespace-normalised, a leading
     diff marker or rendered line number stripped, blanks dropped."""
@@ -176,6 +216,8 @@ def snippet_lines(snippet: str) -> list[str]:
         m = re.match(r"^\s*\d+\s[+\- ]", s)  # "  123 +code" as rendered to the model
         if m:
             s = s[m.end() :]
+        elif s.startswith(_REMOVED_RENDER):  # "      -code": a removed line, no number
+            s = s[len(_REMOVED_RENDER) :]
         elif s[:1] in "+-":
             s = s[1:]
         s = _norm(s)
@@ -193,19 +235,59 @@ def _find_run(seq: list[tuple[int, str]], needle: list[str]) -> list[tuple[int, 
     return hits
 
 
+def _removed_hits(fd: FileDiff, needle: list[str]) -> list[int]:
+    """Where `needle` matches the LEFT side of a hunk (context + removed lines)
+    in a run that holds at least one removed line: the RIGHT-side line the
+    first removed line's deletion is attributed to (the line before it in the
+    hunk, else the line after it), or 0 when the hunk has no RIGHT-side line
+    (a whole-file deletion)."""
+    out: list[int] = []
+    for h in fd.hunks:
+        seq = [
+            (i, _norm(ln.text))
+            for i, ln in enumerate(h.lines)
+            if ln.kind != "+" and _norm(ln.text)
+        ]
+        for lo, hi in _find_run(seq, needle):
+            gone = [i for i in range(lo, hi + 1) if h.lines[i].kind == "-"]
+            if not gone:
+                continue  # context only: the RIGHT-side match covers it
+            r = gone[0]
+            while r > 0 and h.lines[r - 1].kind == "-":
+                r -= 1
+            before = next(
+                (ln.new_no for ln in reversed(h.lines[:r]) if ln.new_no), None
+            )
+            after = next((ln.new_no for ln in h.lines[r:] if ln.new_no), None)
+            out.append(before or after or 0)
+    return out
+
+
+def in_removed_lines(fd: FileDiff, snippet: str) -> bool:
+    """Whether `snippet` quotes code this diff removes (a run of the LEFT side
+    holding at least one removed line)."""
+    needle = snippet_lines(snippet)
+    return bool(needle) and bool(_removed_hits(fd, needle))
+
+
 def anchor(fd: FileDiff, snippet: str) -> tuple[int, int] | None:
     """The RIGHT-side (start, end) the quoted code occupies inside the diff, or None.
 
     The model never supplies a line number — it quotes the code it means and
     the position is computed here (drift is fixed in code, not by asking
     harder). Matching is a consecutive, whitespace-
-    normalised run over each hunk's RIGHT side (context + added lines). When
-    the snippet appears more than once, the occurrence that touches an added
-    line wins, then the first."""
+    normalised run over each hunk's RIGHT side (context + added lines), and
+    over its LEFT side (context + removed lines): removed code is the change
+    too, and a quote of it is placed on the RIGHT-side line its deletion is
+    attributed to (`FileDiff.changed_lines`). When the snippet appears more
+    than once, an occurrence that touches the change wins (a RIGHT-side run
+    over an added line or a deletion's border, then removed code), then the
+    first. None when nothing matches or the quote is of a file deleted whole,
+    which has no RIGHT side to place it on."""
     needle = snippet_lines(snippet)
     if not needle:
         return None
-    added = fd.added_lines
+    changed = fd.added_lines | fd.deletion_sites
     hits: list[tuple[int, int]] = []
     for h in fd.hunks:
         seq = [
@@ -215,10 +297,10 @@ def anchor(fd: FileDiff, snippet: str) -> tuple[int, int] | None:
         ]
         seq = [(n, t) for n, t in seq if t]
         hits.extend(_find_run(seq, needle))
-    if not hits:
-        return None
-    touching = [h for h in hits if any(n in added for n in range(h[0], h[1] + 1))]
-    return (touching or hits)[0]
+    touching = [h for h in hits if any(n in changed for n in range(h[0], h[1] + 1))]
+    removed = [(n, n) for n in _removed_hits(fd, needle) if n]
+    ranked = touching + removed + hits
+    return ranked[0] if ranked else None
 
 
 def locate_in_text(text: str, snippet: str) -> int:

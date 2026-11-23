@@ -40,6 +40,8 @@ from .diff import (
     FileDiff,
     Hunk,
     Line,
+    anchor,
+    in_removed_lines,
     locate_in_text,
     parse_unified_diff,
     snippet_in_text,
@@ -494,11 +496,18 @@ def run(
 
     # ---- free resolution: the quoted code is gone ------------------------
     touched = {fd.path for fd in all_files}
+    pr_diffs = {fd.path: fd for fd in full_files}
     for f in state.open_findings():
         text = head_text.get(f.path)
         if text is None and f.path not in touched:
             continue  # file untouched since: finding still stands
         if not text or not snippet_in_text(text, f.evidence):
+            pr_fd = pr_diffs.get(f.path)
+            if pr_fd is not None and in_removed_lines(pr_fd, f.evidence):
+                # A finding about code the PR removes quotes what is absent at
+                # the head by design: absence is not a fix while the PR still
+                # removes it. Verify judges it.
+                continue
             f.status, f.fixed_round, f.fixed_by = "fixed", round_no, "code-gone"
             res.resolved_free.append(f.id)
 
@@ -1712,6 +1721,22 @@ def _current_line(ws: Workspace, f: Finding, text: str) -> int:
     return locate_in_text(text, f.evidence)  # 0 = the quote is gone; never guess a line
 
 
+REMOVED_NOTE = (
+    "(the quoted code is code this PR removes, and the finding is about that "
+    "removal: its absence is not a fix"
+)
+
+
+def _removed_site(ws: Workspace, f: Finding) -> int | None:
+    """For a finding that quotes code the PR still removes: the PR-head line its
+    deletion sits at (0 when the file is deleted whole). None otherwise."""
+    fd = ws.diffs.get(f.path)
+    if fd is None or not in_removed_lines(fd, f.evidence):
+        return None
+    span = anchor(fd, f.evidence)
+    return span[0] if span else 0
+
+
 BASE_EXCERPT_LINES = 120  # a longer base symbol is shown as a window, like <code_now>
 
 
@@ -1904,6 +1929,10 @@ def _verify_batch(
         text = ws.text(f.path) or ""
         lines = text.splitlines()
         at = _current_line(ws, f, text)
+        # Code the PR removes is absent at the head by design: show where it
+        # was removed, and say so, so absence is not read as a fix.
+        removed_at = None if at else _removed_site(ws, f)
+        at = at or removed_at or 0
         sym = ws.index.enclosing(f.path, at) if at else None
         lo, hi = (
             (sym.start, sym.end)
@@ -1917,6 +1946,12 @@ def _verify_batch(
             if at
             else "(the quoted code is not in this file any more)"
         )
+        if removed_at is not None:
+            code = (
+                f"{REMOVED_NOTE}; the site it was removed from, as it is now:)\n{code}"
+                if at
+                else f"{REMOVED_NOTE}; the PR deletes the whole file)"
+            )
         items.append(
             f'<finding id="{f.id}" path="{f.path}"{mark}>\n{f.title}. {f.body}\n'
             f"<quoted_when_raised>\n{f.evidence}\n</quoted_when_raised>\n"
