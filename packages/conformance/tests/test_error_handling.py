@@ -8107,6 +8107,143 @@ def run():
     )
 
 
+# ── E016: re-raising a group member through a local alias ─────────────────────
+
+_GROUP_LEAF_WALK = """\
+async def run():
+    try:
+        await work()
+    {clause}
+        fault: BaseException = group
+        while isinstance(fault, BaseExceptionGroup):
+            fault = fault.exceptions[0]
+        raise fault
+"""
+
+_GROUP_SEQUENCE_ALIAS = """\
+async def run():
+    try:
+        await work()
+    {clause}
+        leaves = group.exceptions
+        if all(isinstance(leaf, ValueError) for leaf in leaves):
+            raise leaves[0]
+        raise
+"""
+
+
+@pytest.mark.parametrize(
+    "clause",
+    ["except* (OSError, ValueError) as group:", "except BaseExceptionGroup as group:"],
+)
+@pytest.mark.parametrize("template", [_GROUP_LEAF_WALK, _GROUP_SEQUENCE_ALIAS])
+def test_e016_no_finding_when_a_group_member_is_reraised_through_an_alias(
+    template: str, clause: str
+) -> None:
+    # A leaf reached by walking the caught group keeps its own __cause__;
+    # `from group` would overwrite it with the wrapper.
+    assert "E016" not in _findings(template.format(clause=clause))
+
+
+@pytest.mark.parametrize(
+    "clause",
+    [
+        "except AggregateError as group:",
+        "except (BaseExceptionGroup, AggregateError) as group:",
+    ],
+)
+@pytest.mark.parametrize("template", [_GROUP_LEAF_WALK, _GROUP_SEQUENCE_ALIAS])
+def test_e016_still_fires_for_an_alias_into_a_non_group(
+    template: str, clause: str
+) -> None:
+    assert "E016" in _findings(template.format(clause=clause))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # A new exception bound to a name is still a replacing raise.
+        "fault = SourceUnavailableError(str(group))\n        raise fault",
+        # One branch binds a new exception; the alias is no longer group-only.
+        "fault = group.exceptions[0]\n"
+        "        if retry:\n"
+        "            fault = ValueError('gave up')\n"
+        "        raise fault",
+        # A wrapper call may build anything.
+        "fault = group.exceptions[0]\n        fault = wrap(fault)\n        raise fault",
+        # A member of some other group is not a member of the caught one.
+        "fault = other.exceptions[0]\n        raise fault",
+        # Unpacking, loop targets and walrus are not proven bindings.
+        "fault, rest = group.exceptions[0], None\n        raise fault",
+        "for fault in group.exceptions:\n            pass\n        raise fault",
+        "if (fault := group.exceptions[0]):\n            raise fault\n        raise",
+        # The sequence alias rebound to something else.
+        "leaves = group.exceptions\n        leaves = [ValueError('x')]\n        raise leaves[0]",
+        "leaves = list(group.exceptions)\n        raise leaves[0]",
+        # The handler name rebound before the alias reads it.
+        "group = ValueError('x')\n        fault = group\n        raise fault",
+    ],
+)
+def test_e016_still_fires_when_the_alias_is_not_group_only(body: str) -> None:
+    assert "E016" in _findings(
+        f"""\
+async def run(retry, other):
+    try:
+        await work()
+    except* ValueError as group:
+        {body}
+"""
+    )
+
+
+def test_e016_still_fires_when_the_alias_is_a_parameter() -> None:
+    assert "E016" in _findings(
+        """\
+async def run(fault):
+    try:
+        await work()
+    except* ValueError as group:
+        if fault is None:
+            fault = group.exceptions[0]
+        raise fault
+"""
+    )
+
+
+def test_e016_still_fires_when_the_alias_is_bound_outside_the_handler() -> None:
+    assert "E016" in _findings(
+        """\
+async def run():
+    fault = ValueError("not from the group")
+    try:
+        await work()
+    except* ValueError as group:
+        if group.exceptions:
+            fault = group.exceptions[0]
+        raise fault
+"""
+    )
+
+
+def test_e016_still_fires_when_a_nested_scope_rebinds_the_alias() -> None:
+    assert "E016" in _findings(
+        """\
+async def run():
+    try:
+        await work()
+    except* ValueError as group:
+        fault = group.exceptions[0]
+
+        def replace():
+            nonlocal fault
+            fault = ValueError("replaced")
+
+        replace()
+        raise fault
+"""
+    )
+
+
 # ── E007: a typed result from a proven helper under a narrow catch ─────────────
 
 _NARROW_TYPED_RESULT = """\

@@ -944,6 +944,14 @@ RULES: tuple[RuleDefinition, ...] = (
             "member keeps its own ``__cause__``, which ``from group`` would overwrite.\n"
             "Only a proven group counts: an app class that merely exposes an\n"
             "``exceptions`` sequence (``except AggregateError as group``) still fires.\n"
+            "The same member reached through a local is accepted when every binding\n"
+            "of that local is a plain assignment inside the handler: ``raise fault``\n"
+            "where ``fault`` is only ever ``group`` or ``<group or fault>.exceptions[i]``\n"
+            "(the walk down nested groups to a leaf), and ``raise leaves[i]`` where\n"
+            "``leaves`` is only ever ``group.exceptions``.  The walk's seed binds the\n"
+            "group itself; re-raising that object is the caught exception, not a\n"
+            "replacement.  Any other binding of the local (a new exception in one\n"
+            "branch, a wrapper call, a parameter, a loop target) still fires.\n"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
