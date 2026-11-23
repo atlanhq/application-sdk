@@ -17,12 +17,14 @@ name: Connector reviewer (reusable)
 # Security shape (review this before changing it):
 #   * `issue_comment` runs the caller from ITS default branch, with secrets,
 #     and this file from the ref the caller pins. That is safe only because no
-#     step checks out, installs or runs pull-request code. There are two
+#     step checks out, installs or runs pull-request code. There are three
 #     checkouts: the caller's default branch (trusted, and only read as data
-#     and parsed, never imported or run) and this repository's reviewer code
-#     at this workflow's own commit. The reviewer reads the pull request's
-#     diff and head-side file text through the REST API as data. Do not add a
-#     step that checks out the pull request head.
+#     and parsed, never imported or run), this repository's reviewer code at
+#     this workflow's own commit, and, when the caller's uv.lock pins one, this
+#     repository's `application_sdk/` at that release tag or commit (read as
+#     data by the reviewer's tools, never imported or run). The reviewer reads
+#     the pull request's diff and head-side file text through the REST API as
+#     data. Do not add a step that checks out the pull request head.
 #   * Who may ask is decided in the reviewer (connector_reviewer/event.py,
 #     tested), not in shell here, per docs/standards/ci.md.
 #   * The reviewer acts on GitHub as the fleet App, with a token minted per run
@@ -93,6 +95,34 @@ jobs:
         with:
           python-version: "3.14"
 
+      # Which application-sdk the app pins: its release tag, or the locked
+      # commit of a git pin, read from the trusted base's uv.lock
+      # (connector_reviewer/sdk_source.py, tested). Writes `ref` (empty when
+      # there is none) and `label` as step outputs. Always exits 0.
+      - name: Resolve the application-sdk version the app pins
+        id: sdk-ref
+        continue-on-error: true
+        working-directory: sdk/.github/scripts
+        run: python -m connector_reviewer sdk-ref --root "$GITHUB_WORKSPACE/repo"
+
+      # That version's SDK source, so the reviewer can check how an SDK API the
+      # diff calls behaves (FND-5331). `application_sdk/` only, in a directory
+      # of its own. A ref that does not exist fails only this step: the review
+      # then runs without the SDK source and its summary says so.
+      - name: Check out the SDK source at the pinned version (read as data)
+        # sdk-checkout-ref-exempt: the app's own pinned SDK version, read as data by the reviewer's tools and never imported or run; the ref is validated (vX.Y.Z tag or 40-hex commit) in connector_reviewer/sdk_source.py
+        if: steps.sdk-ref.outputs.ref != ''
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ steps.sdk-ref.outputs.ref }}
+          sparse-checkout: |
+            /application_sdk/
+          sparse-checkout-cone-mode: false
+          path: sdk-src
+          persist-credentials: false
+
       # The reviewer speaks to GitHub as the fleet App. Naming any permission-*
       # scopes the minted token to those alone, and `repositories` to the
       # calling repo alone, so a review never holds the App's full grant, and
@@ -133,6 +163,10 @@ jobs:
           CONFIG_DIR: ${{ github.workspace }}/sdk/.github/connector-reviewer
           # The fleet principles. The app's own are read from $ROOT.
           CONNECTOR_REVIEWER_PRINCIPLES_DIR: ${{ github.workspace }}/sdk/.github/connector-reviewer/principles
+          # The SDK source at the pinned version. Always set: when the checkout
+          # above was skipped or failed the directory is absent, and the
+          # reviewer says "SDK source not available" (connector_reviewer/tools.py).
+          CONNECTOR_REVIEWER_SDK_SOURCE: ${{ github.workspace }}/sdk-src
           EVENT_NAME: ${{ github.event_name }}
           EVENT_PATH: ${{ github.event_path }}
           # Run report (every model request, bundle, timing; no prompts, code or

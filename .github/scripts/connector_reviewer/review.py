@@ -61,7 +61,7 @@ from .index import Index, Symbol, build_index, index_source
 from .llm import BudgetExhausted, Client, Ledger, LLMError
 from .principles import PrincipleSet
 from .select import DEFAULT_EXCLUDE, Selection, excluded, select_files
-from .tools import Workspace, parse_args, secret_diff
+from .tools import SdkSource, Workspace, parse_args, secret_diff
 from .triage import Triage, triage
 from .typed import EMPTY, objects
 
@@ -474,10 +474,14 @@ def run(
     post: bool = True,
     run_url: str = "",
     on_pending: Callable[[str], None] | None = None,
+    sdk: SdkSource | None = None,
+    sdk_note: str = "",
 ) -> RunResult:
     """One review round. `on_pending(head)` is called right after the
     `pending` status is set on `head`, so the caller can record which head
-    `finalize` must check if this run never posts a verdict."""
+    `finalize` must check if this run never posts a verdict. `sdk` is the
+    pinned SDK source the tools can read; `sdk_note` says why it is missing
+    when one was asked for (FND-5331)."""
     t_start = time.monotonic()
     pr = gh.pr(number)
     head = pr["head"]["sha"]
@@ -676,6 +680,8 @@ def run(
     state.exempt = {}
     # A principle file that was skipped is said in the summary, never silently.
     res.notes.extend(principles.notes)
+    if sdk_note:
+        res.notes.append(sdk_note)
     if post:
         # Pending while it runs: the checks box links straight to the live log.
         gh.set_status(
@@ -781,6 +787,7 @@ def run(
         head_text=head_text,
         diffs={fd.path: fd for fd in full_files},
         index=idx,
+        sdk=sdk,
     )
     round_cap = ledger.remaining * (cfg.first_round_share if round_no == 1 else 1.0)
     # The approach check runs alongside the line review, on a ledger of its own

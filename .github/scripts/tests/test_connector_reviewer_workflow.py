@@ -7,7 +7,9 @@ few structural facts about the file, not on anyone remembering them:
 * it is only ever called (`workflow_call`), never triggered by a pull request
   event in this repository;
 * it never checks out pull-request code: one checkout of the caller's default
-  branch, one of this repository at the workflow's own commit;
+  branch, one of this repository at the workflow's own commit, and one of this
+  repository's `application_sdk/` at the ref the caller's uv.lock pins
+  (FND-5331), skipped when none resolves and never fatal;
 * it has no `concurrency:` block, because the reviewer has its own lock and a
   block would queue or cancel reviews;
 * its job timeout equals the lock's idea of how long a review can run;
@@ -80,19 +82,67 @@ def test_it_is_only_ever_called(workflow: dict[Any, Any]) -> None:
     assert list(triggers) == ["workflow_call"]
 
 
+def _checkout(job: dict[str, Any], path: str) -> dict[str, Any]:
+    [step] = [
+        c for c in _uses(job, "actions/checkout") if c["with"].get("path") == path
+    ]
+    return step
+
+
 def test_it_never_checks_out_pull_request_code(job: dict[str, Any]) -> None:
-    """Two checkouts: the caller's default branch (no `ref`, which for a
-    comment event is the default branch), and this repository at the workflow's
-    own commit. Neither may name a pull request ref."""
+    """Three checkouts: the caller's default branch (no `ref`, which for a
+    comment event is the default branch), this repository at the workflow's own
+    commit, and this repository's SDK source at the version the app pins. None
+    may name a pull request ref, and each has a directory of its own."""
     checkouts = _uses(job, "actions/checkout")
-    assert len(checkouts) == 2
-    app, sdk = (c["with"] for c in checkouts)
-    assert "ref" not in app and "repository" not in app
+    assert len(checkouts) == 3
+    app = _checkout(job, "repo")["with"]
+    sdk = _checkout(job, "sdk")["with"]
+    src = _checkout(job, "sdk-src")["with"]
+    # Exactly one checkout of the app, with no ref.
+    assert [c for c in checkouts if "repository" not in c["with"]] == [
+        _checkout(job, "repo")
+    ]
+    assert "ref" not in app
     assert sdk["repository"] == "atlanhq/application-sdk"
     assert sdk["ref"] == "${{ job.workflow_sha }}"
-    for with_ in (app, sdk):
+    assert src["repository"] == "atlanhq/application-sdk"
+    for with_ in (app, sdk, src):
         assert with_["persist-credentials"] is False
-    assert app["path"] != sdk["path"], "the app and the reviewer must not share a dir"
+        assert "token" not in with_
+    assert len({app["path"], sdk["path"], src["path"]}) == 3
+
+
+def test_the_sdk_source_is_checked_out_at_the_resolved_pin(
+    job: dict[str, Any],
+) -> None:
+    """The SDK source checkout takes its ref from the resolve step, written by
+    tested Python (`connector_reviewer sdk-ref`), not from workflow shell. It
+    runs only when a ref resolved, reads `application_sdk/` alone, and a ref
+    that does not exist cannot fail the job: the review runs without it."""
+    steps = _steps(job)
+    [resolve] = [s for s in steps if s.get("id") == "sdk-ref"]
+    assert "python -m connector_reviewer sdk-ref" in resolve["run"]
+    assert '--root "$GITHUB_WORKSPACE/repo"' in resolve["run"]
+    assert resolve["working-directory"] == "sdk/.github/scripts"
+    assert resolve.get("continue-on-error") is True
+    # Straight-line: no shell branching in the step (docs/standards/ci.md).
+    assert not re.search(r"\b(if|case|for|while)\b", resolve["run"])
+    src = _checkout(job, "sdk-src")
+    assert src["if"] == "steps.sdk-ref.outputs.ref != ''"
+    assert src["with"]["ref"] == "${{ steps.sdk-ref.outputs.ref }}"
+    assert src["with"]["sparse-checkout"].split() == ["/application_sdk/"]
+    assert src["with"]["sparse-checkout-cone-mode"] is False
+    assert src.get("continue-on-error") is True
+    assert steps.index(resolve) < steps.index(src)
+    # The setup-python step comes first: the resolve step runs Python.
+    setup = _uses(job, "actions/setup-python")[0]
+    assert steps.index(setup) < steps.index(resolve)
+    [review] = [s for s in steps if s.get("name") == "Review"]
+    assert steps.index(src) < steps.index(review)
+    assert review["env"]["CONNECTOR_REVIEWER_SDK_SOURCE"] == (
+        "${{ github.workspace }}/sdk-src"
+    )
 
 
 def test_no_step_mentions_a_pull_request_head(text: str) -> None:

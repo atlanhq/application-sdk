@@ -357,6 +357,73 @@ Tests: `FakeGitHub` has empty history reads by default
 (`pr_commit_messages`, `recent_commits`, `commit_patches`), so every other test runs
 as before.
 
+### The SDK source at the version the app pins (FND-5331)
+
+lens reviews application-sdk itself, so the code it reads is the SDK. This fork
+reviews a connector app, and many connector bugs are a misuse of the SDK
+(outputs, publish nodes, typed errors, storage). It can read the application-sdk
+source at the exact version the app pins, read-only, beside the app. lens has no
+equivalent.
+
+- **Which version.** `sdk_source.py` reads the app's `uv.lock` from the trusted
+  base checkout (never the pull request's) with `tomllib`. A registry pin of
+  `X.Y.Z` or `X.Y.ZrcN` is the release tag `vX.Y.Z` (the scheme of every
+  application-sdk release tag). A git pin of `github.com/atlanhq/application-sdk`
+  is the locked commit uv writes after `#`. Anything else is no ref, with a
+  reason: the package absent, two different pins, an editable or path source, a
+  git pin of another repository, a version with no tag (a dev or post release),
+  or a lock that does not parse. Both ref shapes are checked against a strict
+  pattern before they are written as a step output. A git pin's version is only
+  shown, never checked out, and is left out of the label unless it is plain
+  version characters: a TOML string can hold a newline (a second line in
+  `$GITHUB_OUTPUT`) or a quote (out of the prompt's attribute). The prompt
+  escapes the label as well.
+- **Workflow.** `python -m connector_reviewer sdk-ref --root repo` writes `ref`
+  and `label` to `$GITHUB_OUTPUT` and always exits 0. A third checkout, of
+  `atlanhq/application-sdk` at that ref, runs only when `ref` is not empty
+  (`if:` on the step output). It is sparse (`/application_sdk/`), into `sdk-src/`,
+  with `persist-credentials: false` and the job's read-only token. Both steps
+  have `continue-on-error: true`: a ref that does not exist fails only the
+  checkout. The Review step always gets `CONNECTOR_REVIEWER_SDK_SOURCE`
+  (`--sdk-source`), the checkout's path, whether or not it exists.
+- **Tools.** One prefix on the existing tools, not new tools: a `file_path` of
+  `read_file`, a `path_glob` of `search_code`, or a `name` of `find_symbol` that
+  starts `sdk:` goes to the SDK source (`tools.SdkSource`), e.g.
+  `sdk:application_sdk/outputs/__init__.py`. Every hit and definition carries the
+  prefix, so it can be handed back to `read_file`. Why a prefix: the tool
+  schemas, part of the cached prompt prefix, do not change; the approach check,
+  which takes a subset of the same schemas and the same `run_tool`, needs no
+  change of its own to use the prefix later (today it is not told about it, see
+  Prompt); and the model already knows the three tools. Without the prefix every tool is the app only,
+  as before. `Workspace.text` and `Workspace.files` stay the app only too: the
+  context and facts code walks them, and must not count SDK callers or slow
+  down.
+- **Safety.** The same path guard as the app (`_safe_rel`: no absolute path, no
+  `..`, no secret-bearing path), then an allowlist: only `application_sdk/` is
+  reachable, so a stray file beside it is not. A symlink is refused, and a file
+  must resolve inside `application_sdk/`, so a symlinked directory cannot lead
+  out. The walk does not follow links. Files over 1 MB are not read.
+- **Cost.** Nothing is walked or indexed until the model asks. The file list is
+  built on the first `sdk:` search or `find_symbol`; the index (`index_source`
+  over the SDK's Python files, about 1 s for 460 files at v3.58) on the first
+  `find_symbol("sdk:…")`, once, under a lock, since bundles share one Workspace.
+  It stops at 20 s and says the index is partial. A search over the SDK took
+  about 0.06 s. Its tests are not checked out, so `find_symbol` lists no tests
+  for an SDK symbol.
+- **Prompt.** `REVIEW_SYSTEM` is unchanged. When the source is there, the line
+  review's context message has an `<sdk_source version="…">` block (from
+  `SdkSource.prompt_block`, rendered in `agent.build_context`): the version, the
+  three calls, and when to use them (to check how an SDK API the diff calls
+  behaves before claiming the app misuses it; the SDK is reference, never under
+  review). The approach check, verify and re-check are not told.
+- **Fallback.** Without the source, the prompt and the tools are as before, and a
+  `sdk:` call answers that the source is not available. When it was asked for
+  (the variable or the flag, as in CI) and is not usable, `review.run` adds a
+  note, "SDK source not available: <reason>", to the summary, and the job log says
+  the same. A local run without either changes nothing and adds no note.
+- **Open.** A live review on a connector pull request that reads SDK source, and
+  its cost and time against today's reviews (the ticket's last two items).
+
 ## Module by module
 
 Where a lens fix lands in this copy. "Names" means only the renames in the table
@@ -369,7 +436,7 @@ above; "typing" means only the annotations described under Typing.
 | `report.py` | Names; bundle time, forced final turn and dropped uncited findings; the incomplete list from `incomplete_reasons`. |
 | `findings.py` | Names; `PRState.waiver`, `exempt`, `unread`, `facts`; `decode` reads the last state marker. |
 | `triage.py` | Typing (one annotation). |
-| `tools.py` | Typing (one annotation), two description strings (`compatibility`, `search_code`), the comment's optional `principle` field, and `task_done`'s optional `regression` and `history`. |
+| `tools.py` | Typing (one annotation), two description strings (`compatibility`, `search_code`), the comment's optional `principle` field, and `task_done`'s optional `regression` and `history`; `SdkSource`, `Workspace.sdk` and the `sdk:` prefix in `read_file`, `search_code` and `find_symbol`, with the path checks factored into `_safe_rel` and `_read_inside` (FND-5331). |
 | `trace.py` | Names, typing. |
 | `select.py` | `DEFAULT_EXCLUDE`, the secret skip, and `excluded` (the pattern match, public for `review.changed_tests`). |
 | `config.py` | Docstring, `raw_hash`, typing; the `[access]`, `[exempt]` and `[facts]` tables. |
@@ -380,12 +447,12 @@ above; "typing" means only the annotations described under Typing.
 | `holistic.py` | The prompt's opening and one concern; no `<public_api>` block; typing. |
 | `context.py` | No `_public` / `public_api`; `build` returns a string. |
 | `advisory.py` | Rewritten as the empty extension point; holds `glob_match`. |
-| `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313); the facts blocks and the `task_done` answers (FND-5312). |
+| `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313); the facts blocks and the `task_done` answers (FND-5312); the `<sdk_source>` block (FND-5331). |
 | `prompts.py` | The review prompt's opening, "Repository layout", "Principles" and "Facts" sections; the removals; typing. |
-| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312). |
-| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it. |
+| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312); `run`'s `sdk` and `sdk_note` (FND-5331). |
+| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it; the `sdk-ref` sub-command and `--sdk-source` (FND-5331). |
 | `__init__.py` | Docstring. |
-| `principles.py`, `typed.py`, `exempt.py`, `finalize.py`, `facts.py` | New here. |
+| `principles.py`, `typed.py`, `exempt.py`, `finalize.py`, `facts.py`, `sdk_source.py` | New here. |
 | `approve.py`, `surface.py`, `rules.py` | Not here. |
 
 ## Fixed here, still open in lens
