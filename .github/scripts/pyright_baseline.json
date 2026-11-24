@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 454,
-    "warning": 5572
+    "warning": 5568
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -155,7 +155,7 @@
       "warning:reportUnknownMemberType": 3
     },
     ".github/scripts/lens/event.py": {
-      "warning:reportUnknownMemberType": 22
+      "warning:reportUnknownMemberType": 18
     },
     ".github/scripts/lens/github.py": {
       "warning:reportUnknownMemberType": 12
