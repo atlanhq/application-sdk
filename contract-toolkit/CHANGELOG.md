@@ -6,6 +6,13 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.39.1] - 2026-11-23
+
+### Bug fixes
+
+- add DAGSTER connector type, bump pyatlan to 11.8 [FND-5350] (#5050) ([148fe08](https://github.com/atlanhq/application-sdk/commit/148fe08))
+- log the JSON error in the generated stringMap validator [FND-5342] (#5039) ([39b912b](https://github.com/atlanhq/application-sdk/commit/39b912b))
+
 ## [0.39.0] - 2026-11-22
 
 ### Features
