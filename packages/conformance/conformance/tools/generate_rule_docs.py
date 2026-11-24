@@ -153,7 +153,8 @@ _SERIES_META: list[SeriesMeta] = [
             "conformance/suite/rules/transform_templates.py, "
             "conformance/suite/rules/portability.py, "
             "conformance/suite/rules/atomic_publish.py, "
-            "conformance/suite/rules/retry_ladder.py"
+            "conformance/suite/rules/retry_ladder.py, "
+            "conformance/suite/rules/run_scratch.py"
         ),
         output_filename="prescriptions.md",
         checker=(

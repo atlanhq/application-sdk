@@ -1,9 +1,14 @@
-"""``App.run_scratch_dir`` in sandboxed workflow code, a task, and cleanup (FND-5364).
+"""``App.run_scratch_dir`` in workflow code, a task, and cleanup (FND-5364).
 
 The worker is built by ``create_worker`` with no extra passthrough modules
-(the shared ``run_worker`` fixture passes all of ``tests``), so the app module
-is re-imported in the workflow sandbox the way a consumer app's is in
-production and ``run()`` reads the property as checked workflow code.
+(the shared ``run_worker`` fixture passes all of ``tests``). Until #5056
+(FND-5218) lands, ``create_worker`` still passes every registered app module
+through the sandbox, so on its own this checks the shared path and the
+cleanup, not the sandbox. With #5056 the app module is re-imported in the
+sandbox, as a consumer app's is in production, and ``run()`` reads the
+property as checked workflow code: verified on main + #5056 on Python 3.13,
+where the same app with ``tempfile.gettempdir()`` in ``run()`` fails its
+workflow task.
 
 Requires a running Temporal dev server (see conftest.py).
 """

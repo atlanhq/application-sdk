@@ -1,7 +1,7 @@
 """App for the run-scratch-dir integration test (``test_run_scratch_dir.py``).
 
-In its own module, not the test module, so the test can start its worker
-without passing ``tests`` through the workflow sandbox: Temporal then
+In its own module, not the test module, so that once #5056 (FND-5218) stops
+``create_worker`` passing app modules through the workflow sandbox, Temporal
 re-imports this module inside the sandbox for every run, the way it re-imports
 a consumer app's module in production, and ``run()`` reads
 ``self.run_scratch_dir`` as sandboxed workflow code.
