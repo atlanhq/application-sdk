@@ -58,6 +58,10 @@ description: >
   every credential lookup fails) is fixed in contract/app.pkl by removing the
   explicit false or setting secretstore = true and regenerating, verified by the
   pkl-eval gate.
+  K031 (ATLAN_TASK_QUEUE is pinned in the deploy env, so the on-demand worker polls
+  the base queue and retries hang) is fixed by deleting the line from the contract
+  (or from atlan.yaml when the app has no contract) and regenerating, but only when the
+  pin equals the derived queue; a legacy queue name is left for a human.
   K009, K011, K012, and K015 are
   BLOCK-tier (they fail the gate in default mode); the rest of the K-series is WARN.
 ---
@@ -79,10 +83,10 @@ K009 (unresolved scaffold placeholder), K011 (missing `app_id`), K012
 finding is present — those are FAILING results
 that fail the gate and must be remediated in default mode.  In **strict** mode
 the fingerprint-set also includes the unsuppressed WARNING results
-(K004/K005/K007/K008/K010/K014/K016/K017/K018/K019/K020/K021/K029/K030), which is where the rest
+(K004/K005/K007/K008/K010/K014/K016/K017/K018/K019/K020/K021/K029/K030/K031), which is where the rest
 of K-series remediation runs.
 
-The active scope decides which rules can appear: K001–K021, K027, K029 and K030 are all `scope=APP`,
+The active scope decides which rules can appear: K001–K021, K027, K029, K030 and K031 are all `scope=APP`,
 so they surface only on consumer app repos.  The runner auto-detects scope, so
 the SDK repo sees 0 findings.
 
@@ -1128,15 +1132,45 @@ to `false` rendered it for every contract with a `deploy` block.
 
 If `pkl` is unavailable, route to residue with a regenerate-locally note.
 
+**K031 PinnedWorkerTaskQueue** — the contract's deploy env sets
+`["ATLAN_TASK_QUEUE"]`, or `atlan.yaml` carries `ATLAN_TASK_QUEUE` under
+`deploy.env` or `pools.<name>.env`. That overrides the SDK's per-deployment queue
+`atlan-{app}-{deployment}`, so the on-demand (`-od`) worker polls the base queue
+and retries the activity rerouter moves to the `-od` queue are never picked up;
+the run hangs until its timeout. `classification = "judgment"`.
+
+The finding anchors on the `["ATLAN_TASK_QUEUE"] =` line in `contract/**/*.pkl`
+when there is one, and otherwise on the key in `atlan.yaml`. An app with only
+`atlan.yaml` (no `contract/`) is still checked.
+
+*Procedure:*
+
+1. Delete the `["ATLAN_TASK_QUEUE"] = ...` line from the `env` block in
+   `contract/app.pkl` **only when the pinned value equals
+   `atlan-<contract name>-<deployment>`** (or its `{deployment_name}`-token
+   form), i.e. the queue the SDK derives anyway. Otherwise it is a legacy queue
+   name that the manifest (`taskQueuePrefix`, node `taskQueue`) and the KEDA
+   trigger still use: do NOT edit, and leave the finding for a human (queue
+   migration, or suppress with a reason).
+2. Regenerate with the repo's generate task (`uv run poe generate`, or
+   `pkl eval -m . contract/app.pkl`) and stage the result; confirm `atlan.yaml`
+   no longer carries `ATLAN_TASK_QUEUE`. **Never hand-edit a generated
+   `atlan.yaml`.** **requires `pkl`** for a contract app. An app with no
+   `contract/` deletes the line from `atlan.yaml` directly.
+3. Suppression is almost never correct — the pinned queue breaks on-demand
+   retries. If one is justified, `// conformance: ignore[K031] <reason>` on the
+   contract line (or `# conformance: ignore[K031] <reason>` on the `atlan.yaml`
+   line) and route to residue.
+
 ---
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline suppression comment — `// conformance: ignore[Kxxx]
 <8–40 word justification>` for the `.pkl`-source / `PklProject`-anchored rules
-(K001–K005, K007, K008, K010, K029 and K030 contract; `//` comments) or `# conformance: ignore[Kxxx]
+(K001–K005, K007, K008, K010, K029, K030 and K031 contract; `//` comments) or `# conformance: ignore[Kxxx]
 <8–40 word justification>` for the artifact/Python-anchored rules (K006, K016 and
 K017 Python, K018, K021, K027,
-K009 text artifact, K014, K029 and K030 `atlan.yaml`; `#` comments) — on the violating line or
+K009 text artifact, K014, K029, K030 and K031 `atlan.yaml`; `#` comments) — on the violating line or
 the comment-only
 line directly above it when a legitimate exception exists (e.g. a K001 finding on
 a contract intentionally kept at the legacy module during a phased migration with
