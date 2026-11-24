@@ -51,8 +51,7 @@ def _config_warnings(caught: list[warnings.WarningMessage]) -> list[str]:
         str(w.message)
         for w in caught
         if issubclass(w.category, DeprecationWarning)
-        and f"EntryPointDeclarationError in v{APP_CONFIG_ERROR_VERSION}"
-        in str(w.message)
+        and f"will be an error in v{APP_CONFIG_ERROR_VERSION}" in str(w.message)
     ]
 
 

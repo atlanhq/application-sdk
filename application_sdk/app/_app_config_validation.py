@@ -189,8 +189,8 @@ def warn_config_problem(cls: type, attr: str, value: object, problem: str) -> No
     """Emit one class-definition complaint as a warning and a log line."""
     message = (
         f"{cls.__module__}.{cls.__qualname__}: {attr} = {value!r} {problem}. "
-        f"This is a warning today and will raise EntryPointDeclarationError "
-        f"in v{APP_CONFIG_ERROR_VERSION}."
+        f"Declare a valid value instead; this warning will be an error in "
+        f"v{APP_CONFIG_ERROR_VERSION} (EntryPointDeclarationError)."
     )
     warnings.warn(message, DeprecationWarning, stacklevel=_STACKLEVEL)
     logger.warning("%s", message)
