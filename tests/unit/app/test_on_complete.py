@@ -156,6 +156,35 @@ class TestOnComplete:
 
         m.assert_not_called()
 
+    @pytest.mark.parametrize(
+        ("env_value", "pinned_cleanup"), [("false", True), ("true", False)]
+    )
+    async def test_a_run_s_pinned_cleanup_beats_the_environment(
+        self, monkeypatch: pytest.MonkeyPatch, env_value: str, pinned_cleanup: bool
+    ) -> None:
+        """Inside a run, the value pinned at the run's first workflow task
+        decides; the pod's environment does not, so a replay on a pod with the
+        other value schedules the same cleanup activities."""
+        from application_sdk.execution._temporal.run_flags import _RUN_FLAGS, RunFlags
+
+        monkeypatch.setenv("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", env_value)
+
+        class _App(App):
+            async def run(self, input: _OCInput) -> _OCOutput:
+                return _OCOutput()
+
+        app = _App()
+        token = _RUN_FLAGS.set(RunFlags(events=True, cleanup=pinned_cleanup))
+        try:
+            with mock.patch.object(
+                app, "cleanup_files", new_callable=mock.AsyncMock
+            ) as m:
+                await app.on_complete()
+        finally:
+            _RUN_FLAGS.reset(token)
+
+        assert m.called is pinned_cleanup
+
     async def test_cleanup_failure_does_not_propagate(self) -> None:
         class _App(App):
             async def run(self, input: _OCInput) -> _OCOutput:

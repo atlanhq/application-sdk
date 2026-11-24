@@ -45,6 +45,7 @@ from application_sdk.contracts.events import (
     EventTypes,
     WorkflowStates,
 )
+from application_sdk.execution._temporal.run_flags import current_run_flags
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -878,6 +879,15 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         Returns:
             Any: The result of the workflow execution.
         """
+        # Off for this run when the run was pinned with events off. The pinned
+        # value, not the pod's setting, so a run replays the same whichever
+        # worker picks it up; see ``run_flags``. No pinned value means a worker
+        # that registered this interceptor without RunFlagsInterceptor, which
+        # is the pre-pinning "registered means on".
+        flags = current_run_flags()
+        if flags is not None and not flags.events:
+            return await super().execute_workflow(input)
+
         # Record start time (use workflow.time() for deterministic time in workflows)
         start_time = workflow.time()
 
@@ -942,7 +952,18 @@ class EventInterceptor(Interceptor):
 
     This interceptor provides event tracking capabilities for both
     workflow and activity executions.
+
+    The worker registers it whatever ``APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR``
+    says, because the workflow side decides per run: each run publishes its
+    workflow events when it was pinned with events on (see ``run_flags``), so a
+    worker with events off still replays a run that started with them on.
+    ``activity_events`` is the worker's own value and gates the activity
+    start/end events, which are not workflow commands.
     """
+
+    def __init__(self, *, activity_events: bool = True) -> None:
+        super().__init__()
+        self._activity_events = activity_events
 
     def intercept_activity(
         self, next: ActivityInboundInterceptor
@@ -955,7 +976,10 @@ class EventInterceptor(Interceptor):
         Returns:
             ActivityInboundInterceptor: The activity interceptor.
         """
-        return EventActivityInboundInterceptor(super().intercept_activity(next))
+        inner = super().intercept_activity(next)
+        if not self._activity_events:
+            return inner
+        return EventActivityInboundInterceptor(inner)
 
     def workflow_interceptor_class(
         self, input: WorkflowInterceptorClassInput

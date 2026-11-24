@@ -265,6 +265,8 @@ class MyConnector(App):
         await super().on_complete()  # preserves built-in file/storage cleanup
 ```
 
+Whether the built-in cleanup runs is `APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR`, read once when the worker starts and pinned on each run at its first workflow task. A run keeps the value it started with wherever it continues or replays, so changing the variable on a rollout affects new runs only. The event interceptor's `APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR` is pinned the same way. Outside a workflow (a direct `on_complete()` call in a unit test), the variable is read at the call.
+
 ### Run Scratch Directory (`self.run_scratch_dir`)
 
 `self.run_scratch_dir` is the run's local scratch directory, e.g.

@@ -30,7 +30,7 @@ This page covers **runtime** variables only. Variables starting `E2E_` configure
 | `ATLAN_TENANT_ID` | `default` | Tenant identifier for multi-tenant deployments. |
 | `ATLAN_DOMAIN_NAME` | `atlan.com` | Tenant domain name. |
 | `ATLAN_TEMPORARY_PATH` | `./local/tmp/` | Path for intermediate files during processing. |
-| `APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR` | `true` | End-of-run cleanup. When `false`, the default `on_complete()` skips `cleanup_files()` and `cleanup_storage()`, and a worker that releases a closed run's app state keeps the local files that run's tasks tracked. The run's app-state slot is still released and its cached clients closed. |
+| `APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR` | `true` | End-of-run cleanup. Read once at worker start and pinned on each run, which keeps the value it started with on any pod. When `false`, the default `on_complete()` skips `cleanup_files()` and `cleanup_storage()`, and a worker that releases a closed run's app state keeps the local files that run's tasks tracked. The run's app-state slot is still released and its cached clients closed. |
 | `ATLAN_CLEANUP_BASE_PATHS` | _(empty)_ | Comma-separated object-store prefixes cleaned up by `cleanup_files()`. Defaults to the workflow-scoped run path when unset. |
 | `ATLAN_CONTRACT_GENERATED_DIR` | `app/generated` | Directory for generated contract JSON (configmaps, manifest). In Docker (`WORKDIR=/app`) this resolves to `/app/app/generated`. |
 | `ATLAN_FRONTEND_ASSETS_PATH` | `app/generated/frontend/static` | Path to static frontend assets served by the handler. |

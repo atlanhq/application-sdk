@@ -3052,7 +3052,11 @@ class App(ABC):
 
         The default implementation deletes local files produced during the run
         when cleanup is enabled (``APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR``
-        not set to a falsy value).
+        not set to a falsy value). Inside a workflow the worker reads that
+        variable once at start and pins its value on each run at the run's
+        first workflow task, so a run replays with the cleanup it started
+        with whatever the replaying pod's value is. Called outside a
+        workflow, it reads the variable.
 
         Override this method to add custom post-run logic.  Call
         ``await super().on_complete()`` to preserve the default file cleanup::
@@ -3061,8 +3065,14 @@ class App(ABC):
                 await self.send_notification()
                 await super().on_complete()
         """
-        cleanup_enabled = env_bool("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", True)
-        if cleanup_enabled:
+        # Passed through so the sandbox sees the module the worker's
+        # RunFlagsInterceptor set the run's flags in, not a fresh copy.
+        with workflow.unsafe.imports_passed_through():
+            from application_sdk.execution._temporal.run_flags import (  # noqa: PLC0415 — circular: execution imports app.base
+                cleanup_enabled,
+            )
+
+        if cleanup_enabled():
 
             async def _local_cleanup() -> None:
                 try:

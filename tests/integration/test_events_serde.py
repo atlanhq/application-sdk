@@ -26,8 +26,9 @@ Setup notes
   ``monkeypatch.setenv`` to override it before ``create_worker`` is called.
 - ``_publish_event_via_binding`` is patched to a no-op that captures events,
   avoiding the need for a real Dapr binding.
-- ``publish_event`` activity is only registered on the worker when the
-  event interceptor is enabled (see ``execution/_temporal/worker.py``).
+- ``publish_event`` and the workflow side of the event interceptor are always
+  registered; whether a run publishes is pinned on the run from the worker's
+  setting at the run's first workflow task (see ``execution/_temporal/run_flags.py``).
 """
 
 from __future__ import annotations

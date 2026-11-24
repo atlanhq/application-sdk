@@ -88,8 +88,9 @@ both ``asyncio_default_fixture_loop_scope`` and
 ``[tool.pytest.ini_options]``, or mark per-test
 ``@pytest.mark.asyncio(loop_scope="session")``. See conformance rule T019.
 
-``APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR`` is read at run time, not at
-import, so the kit can own it. It defaults to ``true`` in the SDK, and with it
+``APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR`` is read when the worker starts,
+not at import, so the kit can own it: the ``worker`` fixture applies it before
+``create_worker``. It defaults to ``true`` in the SDK, and with it
 on ``App.on_complete()`` deletes the run's local files and every tracked
 ``TRANSIENT`` object-store ref after each run. The kit leaves it on by default
 (``KitOptions.preserve_artifacts=False``), so a suite asserts on the storage a
