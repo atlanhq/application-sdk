@@ -262,7 +262,9 @@ the app without touching a decorator. Two caveats worth stating:
 - The ceiling bounds one *dispatch*, which is what the retry policy spends.
   Worker-eviction re-dispatches (pod SIGTERM: KEDA scale-down, spot reclaim,
   rolling deploy) each get a fresh window by design, and are bounded separately
-  by `ATLAN_WORKER_EVICTION_MAX_RETRIES`.
+  by `ATLAN_WORKER_EVICTION_MAX_RETRIES`. When that cap stops a re-dispatch, the
+  run records it in history, and a replay follows the record rather than the
+  replaying pod's cap, so pods with different caps replay the same run alike.
 
 ### The run-length SLA alert
 

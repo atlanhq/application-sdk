@@ -107,7 +107,13 @@ class InterceptorSettings:
     """
 
     enable_event_interceptor: bool = True
-    """Enable lifecycle event publishing interceptor."""
+    """Enable lifecycle event publishing interceptor.
+
+    Read once at worker start. The workflow side of the interceptor is always
+    registered; this value is pinned on each run the worker starts, so a run
+    publishes (or not) according to the worker that started it, wherever it
+    continues or replays.
+    """
 
     enable_output_interceptor: bool = True
     """Enable structured output collection interceptor (metrics/artifacts)."""
@@ -133,9 +139,11 @@ class InterceptorSettings:
     .. deprecated::
         ``CleanupInterceptor`` is no longer registered by default. Post-run
         cleanup is now handled by ``App.on_complete()`` / ``App.cleanup_files()``.
-        This setting and the ``APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR`` env
-        var are still read by ``App.on_complete()`` to decide whether to run
-        cleanup, but the interceptor itself is no longer added to the worker.
+        This setting (``APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR``) still
+        decides whether ``App.on_complete()`` runs cleanup: the worker reads it
+        once at start and pins it on each run it starts, and ``on_complete``
+        reads the run's pinned value. The interceptor itself is no longer added
+        to the worker.
     """
 
 
