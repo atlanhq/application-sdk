@@ -2276,7 +2276,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "polls the wrong queue and retries hang"
         ),
         full_description=(
-            "The contract's deploy env (``contract/**/*.pkl``) or the ``deploy.env`` "
+            "A deploy or pool ``env`` block of the contract (``contract/**/*.pkl``) or the ``deploy.env`` "
             "or ``pools.<name>.env`` of ``atlan.yaml`` sets ``ATLAN_TASK_QUEUE``. "
             "That overrides the SDK's per-deployment queue "
             "``atlan-{app}-{deployment}``, so the on-demand (``-od``) worker polls "
@@ -2284,7 +2284,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "``-od`` queue are never picked up. The run hangs until its timeout.\n"
             "\n"
             'The finding anchors on the ``["ATLAN_TASK_QUEUE"] =`` line in the '
-            "contract when there is one, and otherwise on the key in "
+            "contract when there is one (the same key in ``overrides`` is not an env var), and otherwise on the key in "
             "``atlan.yaml``. An app with no ``contract/`` is still checked.\n"
             "\n"
             "**Fix:** if the pinned value is the queue the SDK derives anyway "

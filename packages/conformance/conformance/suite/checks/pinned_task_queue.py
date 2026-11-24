@@ -9,8 +9,10 @@ polls the base queue, and the retry the activity rerouter moves to the ``-od``
 queue is never picked up.
 
 Reported once per app, where the fix belongs, like K029/K030: on the
-``["ATLAN_TASK_QUEUE"] =`` line in ``contract/**/*.pkl``, else on the key under
-``deploy.env`` / ``pools.<name>.env`` in ``atlan.yaml``. An app with only
+``["ATLAN_TASK_QUEUE"] =`` line in a deploy or pool ``env`` block of
+``contract/**/*.pkl`` (the same key in ``overrides`` or elsewhere is not an env
+var), else on the key under ``deploy.env`` / ``pools.<name>.env`` in
+``atlan.yaml``. An app with only
 ``atlan.yaml`` (no ``contract/``) is still checked.
 """
 
@@ -29,8 +31,10 @@ from conformance.suite.checks._ast_common import (
 )
 from conformance.suite.checks.dapr_objectstore import (
     _YAML_KV_RE,
-    contract_false_findings,
+    _make_pkl_finding_suppressed,
+    _parse_pkl_directives,
     contract_files,
+    pkl_code_lines,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -43,6 +47,9 @@ __all__ = ["SERIES", "discover", "main", "scan_all"]
 # text under the masked match must be the ATLAN_TASK_QUEUE key.
 _PKL_MASKED_RE = re.compile(r"\[\s*\]\s*=")
 _PKL_RAW_RE = re.compile(r'\[\s*"ATLAN_TASK_QUEUE"\s*\]\s*=')
+# Text before a ``{`` that names the block: ``env`` or ``name = new X<..>``.
+# Anything else (``["k"] = new Pool``, a bare ``new Mapping``) is anonymous.
+_BLOCK_NAME_RE = re.compile(r"^\s*(\w+)\s*$|(\w+)\s*=\s*new\s+[\w.]+(?:<[^{}]*>)?\s*$")
 
 _CAUSE = (
     "pins ATLAN_TASK_QUEUE in the deploy env, which overrides the SDK's "
@@ -108,18 +115,60 @@ def _pinned_lines(text: str) -> list[int]:
     return hits
 
 
+def _pinned_contract_lines(text: str) -> list[int]:
+    """1-based lines of ``["ATLAN_TASK_QUEUE"] =`` directly inside a deploy ``env`` block."""
+    stack: list[str | None] = []
+    raw_lines = text.splitlines()
+    hits: list[int] = []
+    for lineno, code in enumerate(pkl_code_lines(text), start=1):
+        seg = 0  # start of the text since the last brace on this line
+        for i, ch in enumerate(code):
+            if ch == "{":
+                m = _BLOCK_NAME_RE.search(code[seg:i])
+                stack.append(m and (m.group(1) or m.group(2)))
+                seg = i + 1
+            elif ch == "}":
+                if stack:
+                    stack.pop()
+                seg = i + 1
+            elif ch == "[" and stack and stack[-1] == "env" and "deploy" in stack:
+                m = _PKL_MASKED_RE.match(code, i)
+                if m and _PKL_RAW_RE.fullmatch(raw_lines[lineno - 1][i : m.end()]):
+                    hits.append(lineno)
+    return hits
+
+
+def _contract_findings(root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    for path in contract_files(root):
+        text = safe_read_text(path)
+        if text is None:
+            continue
+        directives = _parse_pkl_directives(text)
+        for lineno in _pinned_contract_lines(text):
+            suppressed, justification = _make_pkl_finding_suppressed(
+                rule_id=_RULE_ID, line=lineno, directives=directives
+            )
+            findings.append(
+                Finding(
+                    rule_id=_RULE_ID,
+                    file=path.relative_to(root).as_posix(),
+                    line=lineno,
+                    column=1,
+                    message=_CONTRACT_MSG,
+                    suppressed=suppressed,
+                    suppression_justification=justification,
+                )
+            )
+    return findings
+
+
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     """Emit K031 at the contract source if it pins the queue, else at atlan.yaml."""
     if not paths:
         return []
     has_contract = bool(contract_files(root))
-    findings = contract_false_findings(
-        root,
-        rule_id=_RULE_ID,
-        pattern=_PKL_MASKED_RE,
-        raw_pattern=_PKL_RAW_RE,
-        message=_CONTRACT_MSG,
-    )
+    findings = _contract_findings(root)
     if findings:
         return findings
     atlan = root / "atlan.yaml"

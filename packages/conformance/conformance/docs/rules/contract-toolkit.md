@@ -1612,15 +1612,15 @@ instead of retrying in minutes.
   toolkit) and run the repo's own generate task. O005 shares the same helper,
   application_sdk.common.task_queue, for task queues an app builds by hand.
 
-The contract's deploy env (`contract/**/*.pkl`) or the `deploy.env` or
-`pools.<name>.env` of `atlan.yaml` sets `ATLAN_TASK_QUEUE`. That overrides the SDK's
+A deploy or pool `env` block of the contract (`contract/**/*.pkl`) or the `deploy.env`
+or `pools.<name>.env` of `atlan.yaml` sets `ATLAN_TASK_QUEUE`. That overrides the SDK's
 per-deployment queue `atlan-{app}-{deployment}`, so the on-demand (`-od`) worker polls
 the base queue and the retries the activity rerouter moves to the `-od` queue are never
 picked up. The run hangs until its timeout.
 
 The finding anchors on the `["ATLAN_TASK_QUEUE"] =` line in the contract when there is
-one, and otherwise on the key in `atlan.yaml`. An app with no `contract/` is still
-checked.
+one (the same key in `overrides` is not an env var), and otherwise on the key in
+`atlan.yaml`. An app with no `contract/` is still checked.
 
 **Fix:** if the pinned value is the queue the SDK derives anyway (`atlan-<app
 name>-<deployment>`), delete the line, then regenerate with the repo's generate task and

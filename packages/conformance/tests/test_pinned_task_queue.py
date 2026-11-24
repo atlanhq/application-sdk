@@ -159,3 +159,61 @@ def test_contract_suppression(tmp_path: Path) -> None:
 def test_message_warns_about_legacy_queue_pins(tmp_path: Path) -> None:
     findings = _active(_scan(tmp_path, atlan=_ATLAN_DEPLOY_PIN))
     assert "legacy" in findings[0].message
+
+
+_PIN_LINE = '["ATLAN_TASK_QUEUE"] = "atlan-example-production"'
+
+
+def _pkl(body: str) -> dict[str, str]:
+    return {"app.pkl": 'amends "@app-contract-toolkit/App.pkl"\n\n' + body}
+
+
+def test_contract_deploy_overrides_is_not_a_pin(tmp_path: Path) -> None:
+    body = f"deploy = new DeployConfig {{\n  overrides {{\n    {_PIN_LINE}\n  }}\n}}\n"
+    assert _scan(tmp_path, contracts=_pkl(body)) == []
+
+
+def test_contract_pool_overrides_is_not_a_pin(tmp_path: Path) -> None:
+    body = (
+        'deploy {\n  pools {\n    ["default"] = new Pool {\n'
+        f"      overrides {{\n        {_PIN_LINE}\n      }}\n    }}\n  }}\n}}\n"
+    )
+    assert _scan(tmp_path, contracts=_pkl(body)) == []
+
+
+def test_contract_key_outside_deploy_is_not_a_pin(tmp_path: Path) -> None:
+    for block in ("extraEnv", "metadata", "env"):
+        body = f"{block} {{\n  {_PIN_LINE}\n}}\n"
+        assert _scan(tmp_path, contracts=_pkl(body)) == []
+
+
+def test_contract_pool_env_with_siblings_is_a_pin(tmp_path: Path) -> None:
+    body = (
+        "deploy = new DeployConfig {\n"  # 3
+        "  pools {\n"  # 4
+        '    ["default"] = new Pool {\n'  # 5
+        '      keda { temporal { queue = "q" } }\n'  # 6
+        '      resources = new ResourceConfig { requests { cpu = "1" } }\n'  # 7
+        "      env {\n"  # 8
+        f"        {_PIN_LINE}\n"  # 9
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "  overrides {\n"
+        '    ["envFrom"] = new Mapping { ["a"] = "b" }\n'
+        "  }\n"
+        "}\n"
+    )
+    findings = _active(_scan(tmp_path, contracts=_pkl(body)))
+    assert [(f.file, f.line) for f in findings] == [("contract/app.pkl", 9)]
+
+
+def test_contract_deploy_env_block_is_a_pin(tmp_path: Path) -> None:
+    body = f"deploy = new DeployConfig {{\n  env {{\n    {_PIN_LINE}\n  }}\n}}\n"
+    assert len(_active(_scan(tmp_path, contracts=_pkl(body)))) == 1
+
+
+def test_contract_overrides_only_and_clean_yaml_is_empty(tmp_path: Path) -> None:
+    body = f"deploy {{\n  overrides {{\n    {_PIN_LINE}\n  }}\n}}\n"
+    atlan = "name: x\ndeploy:\n  env:\n    OTHER: x\n"
+    assert _scan(tmp_path, contracts=_pkl(body), atlan=atlan) == []
