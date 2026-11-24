@@ -28,8 +28,10 @@ Two sources, one format:
   `--principles-dir` or the `CONNECTOR_REVIEWER_PRINCIPLES_DIR` environment
   variable (in CI, that directory of the application-sdk checkout);
 - **repo principles** (`RP01`…) are one repository's own. They are read from
-  `<root>/.github/connector-reviewer/principles/` on the base branch of the
-  repo under review, when that directory exists.
+  `.github/connector-reviewer/principles/` on the default branch of the repo
+  under review, when that directory exists: in CI a checkout of its own
+  (`--principles-root`), not the pull request's base checkout, so a pull
+  request or the branch it targets cannot rewrite them.
 
 The two paths end the same way on purpose. They are different directories of
 different repositories, and when they are the same directory (the reviewer is
@@ -331,7 +333,7 @@ def resolve_fleet_dir(arg: str | None) -> Path | None:
 
 def load_principles(fleet: Path | None, root: Path) -> PrincipleSet:
     """The fleet principles in `fleet`, and the repo principles of the
-    base-branch checkout at `root` when it has any.
+    default-branch checkout at `root` when it has any.
 
     Raises PrinciplesError when the fleet directory is not given, does not
     exist, or holds no principle file: the reviewer must not run without the

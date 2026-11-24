@@ -31,7 +31,7 @@ from typing import Any, cast
 from . import context, prompts, trace
 from .baseline import PRAdditions
 from .bundle import Bundle
-from .diff import anchor, in_removed_lines, locate_in_text
+from .diff import anchor, in_removed_lines, locate_in_text, snippet_lines
 from .facts import Facts
 from .findings import (
     BLOCKING,
@@ -44,6 +44,7 @@ from .findings import (
 from .llm import (
     BudgetExhausted,
     Client,
+    Completion,
     ContentRejected,
     FatalRequestError,
     LLMError,
@@ -70,7 +71,8 @@ ANSWER_KEEP = 400  # characters of a regression or history answer kept for the s
 _PRINCIPLE_ID = re.compile(r"\b[FR]P\d{2}\b")
 # A causal chain (`trace_chain`): at most this many steps are read, each step's
 # quote is checked up to STEP_QUOTE_KEEP characters, and must carry at least
-# STEP_QUOTE_MIN non-space characters, as a skeptic's quote must.
+# STEP_QUOTE_MIN non-space characters, as a skeptic's quote must, unless it is
+# one whole line that pins one place (`_short_line_at`).
 MAX_CHAIN_STEPS = 6
 STEP_QUOTE_KEEP = 400
 STEP_QUOTE_MIN = 12
@@ -102,6 +104,13 @@ class AgentLimits:
     # Wall-clock seconds a bundle may spend before its final turn is forced
     # (plan turn included). It cuts the long tail; 0 turns it off.
     bundle_time_limit_s: int = 120
+    # The output budget of the one retry an app-code bundle gets when its loop
+    # ends on a turn with no tool call and nothing reported: such a final turn
+    # had spent all of `review_max_tokens` on reasoning (`_retry_final`). Never
+    # below `review_max_tokens`. Raise it only once the gateway route is known
+    # to accept the value: a 400 is fatal and opens the run-wide breaker, so
+    # every later bundle (all test bundles) would fail with it.
+    final_retry_max_tokens: int = 24_000
 
     def turn_budget(self, n_files: int, changed_lines: int) -> int:
         extra = self.turns_per_extra_file * max(n_files - 1, 0) + changed_lines // max(
@@ -140,6 +149,25 @@ class BundleResult:
     untraced: list[tuple[Finding, str]] = field(default_factory=list)
     # The model's answers to the regression and history questions, from task_done.
     answers: dict[str, str] = field(default_factory=dict)
+    # An app-code bundle whose loop ended with no answer got one more final
+    # turn (`_retry_final`).
+    retried: bool = False
+    # The bundle ended with no answer at all (`no_answer`): it never called
+    # code_comment (not even with no comments) and never called task_done.
+    # Its 0 findings mean it was not read to a conclusion, not that it is
+    # clean; review.run makes the review incomplete and retries its files.
+    unanswered: bool = False
+
+
+def no_answer(res: BundleResult) -> bool:
+    """Whether a bundle's loop ended without an answer: on empty turns or a
+    forced final turn (the retry's included), with no code_comment call at
+    any turn (one with no comments is an answer: "nothing found") and no
+    task_done. A failed bundle (budget, error, refusal) is not this: its
+    stop already makes the review incomplete."""
+    return res.stop in ("empty_turns", "final_round") and not res.tool_calls.get(
+        "code_comment"
+    )
 
 
 # ---- prompt manifest -----------------------------------------------------------
@@ -389,6 +417,37 @@ def locate_step(ws: Workspace, path: str, code: str) -> str:
     return ""
 
 
+def _whole_line_hits(text: str | None, line: str) -> list[int]:
+    """The lines of `text` that are exactly `line`, whitespace-normalised."""
+    return [
+        i
+        for i, t in enumerate((text or "").splitlines(), 1)
+        if " ".join(t.split()) == line
+    ]
+
+
+def _short_line_at(ws: Workspace, path: str, line: str) -> str:
+    """Where a one-line quote under `STEP_QUOTE_MIN` characters is, or "" when
+    it does not pin one place. A finding whose whole mechanism is one changed
+    line (a log call un-commented) can only quote that line, so a short line
+    stands when it matches a whole line exactly and that line is one the PR
+    adds or removes, or is the only such line in the file. A bare `return`
+    that occurs all over an unchanged file proves nothing and still fails.
+    `line` is whitespace-normalised (`snippet_lines`)."""
+    if path.startswith(SDK_PREFIX):
+        text = ws.sdk.text(path[len(SDK_PREFIX) :]) if ws.sdk else None
+        hits = _whole_line_hits(text, line)
+        return f"{path}:{hits[0]}" if len(hits) == 1 else ""
+    hits = _whole_line_hits(ws.text(path), line)
+    fd = ws.diffs.get(path)
+    changed = [n for n in hits if fd is not None and n in fd.added_lines]
+    if changed:
+        return f"{path}:{changed[0]}"
+    if fd is not None and in_removed_lines(fd, line):
+        return f"{path} (removed)"
+    return f"{path}:{hits[0]}" if len(hits) == 1 else ""
+
+
 def trace_chain(ws: Workspace, raw: Any) -> tuple[dict[str, Any], str]:
     """A comment's `causal_chain` checked against the code: (chain, "") when
     every step quotes code that is where it says, or ({}, why not).
@@ -396,7 +455,8 @@ def trace_chain(ws: Workspace, raw: Any) -> tuple[dict[str, Any], str]:
     The chain is what a finding claims happens: the trigger, each step of the
     code path as code the model read, and the wrong outcome. A step's code
     must be at least `STEP_QUOTE_MIN` non-space characters (a bare `return`
-    is in every file) and must be found in the file it names
+    is in every file), or one whole line that pins one place
+    (`_short_line_at`), and must be found in the file it names
     (`locate_step`). A mechanism that is not traced through code the model
     can quote is a story, not a finding (FND-5316)."""
     chain: Mapping[str, Any] = (
@@ -417,11 +477,22 @@ def trace_chain(ws: Workspace, raw: Any) -> tuple[dict[str, Any], str]:
         path = str(step.get("path") or "").strip()[:200]
         code = str(step.get("code") or "")[:STEP_QUOTE_KEEP]
         effect = " ".join(str(step.get("effect") or "").split())
-        if len("".join(code.split())) < STEP_QUOTE_MIN:
+        lines = snippet_lines(code)
+        # A short quote proves something only as one whole line that pins one
+        # place (`_short_line_at`); a short run of lines does not.
+        short = len("".join(code.split())) < STEP_QUOTE_MIN
+        if not lines or (short and len(lines) > 1):
             return {}, f"step {n} quotes too little code to check"
         at = locate_step(ws, path, code) if path else ""
         if not at:
             return {}, f"step {n} quotes code that is not in {path or 'any file'}"
+        if short:
+            at = _short_line_at(ws, path, lines[0])
+            if not at:
+                return {}, (
+                    f"step {n} quotes one short line that occurs more than once in "
+                    f"{path} and on no line this PR changes"
+                )
         if not effect:
             return {}, f"step {n} does not say what its code does"
         steps.append({"at": at, "code": code, "effect": effect})
@@ -578,7 +649,9 @@ def bound_by_outcome(
     - Its only harm is a missing or weak test (`harm` test_gap, or no harm
       given and category test): at most medium, unless the principle it cites
       says otherwise by its High case (`principle_case`).
-    - A traced crash, data loss or silent wrong output (OUTCOME_FLOOR) whose
+    - A traced crash, data loss, silent wrong output or rejection by a
+      consumer of the output (OUTCOME_FLOOR: the chain carried to what the
+      publish step or the runtime does with it) whose
       trigger occurs on a normal path (`normal_path`): at least high. This
       wins over a principle's Medium case: the chain is traced through code
       the model quoted, the case is the model's reading of a sentence.
@@ -673,7 +746,11 @@ def review_bundle(
     reflect: bool = True,
     budget_usd: float | None = None,
     added: PRAdditions | None = None,
+    retry_empty: bool = False,
 ) -> BundleResult:
+    """Review one bundle. `retry_empty` (review.run sets it for a bundle that
+    holds the code the app ships) gives a loop that ended without an answer
+    (`no_answer`) one more final turn (`_retry_final`)."""
     res = BundleResult(label=bundle.label)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": prompts.REVIEW_SYSTEM},
@@ -709,6 +786,8 @@ def review_bundle(
             budget_usd,
             deadline,
         )
+        if retry_empty and no_answer(res):
+            _retry_final(client, ws, bundle, messages, raw_comments, res, limits)
         if (
             limits.second_pass
             and res.stop == "done"
@@ -745,6 +824,7 @@ def review_bundle(
     except LLMError as e:
         res.stop, res.error = "llm_error", str(e)
 
+    res.unanswered = no_answer(res)
     raw = raw_comments[: limits.max_comments]
     pairs = [(place(ws, bundle, c), c) for c in raw]
     # Ids first: two findings on one quote shared an id, and the second was
@@ -920,55 +1000,125 @@ def _loop(
             continue
         empty = 0
         messages.append(assistant_turn(comp))  # carries reasoning items across turns
-        done = False
-        for tc in comp.tool_calls:
-            fn = tc.get("function") or EMPTY
-            name = fn.get("name") or ""
-            args = parse_args(fn.get("arguments") or "")
-            res.tool_calls[name] = res.tool_calls.get(name, 0) + 1
-            if name == "code_comment":
-                items = args.get("comments") or []
-                raw_comments.extend(c for c in items if isinstance(c, dict))
-                reply = "Successfully commented."
-            elif name == "task_done":
-                done = True
-                reply = "OK"
-                for key in ("regression", "history"):
-                    answer = " ".join(str(args.get(key) or "").split())
-                    if answer:
-                        res.answers[key] = answer[:ANSWER_KEEP]
-            elif final:
-                reply = "Unavailable on the final turn: call code_comment or task_done."
-            else:
-                reply = run_tool(ws, name, args)
-            trace.line(
-                f"[{bundle.label}]   → {name}({trace.args_summary(name, args)})"
-                + (
-                    f" ← {len(reply)} chars"
-                    if name not in ("code_comment", "task_done")
-                    else ""
-                )
-            )
-            messages.append(
-                {"role": "tool", "tool_call_id": tc.get("id") or name, "content": reply}
-            )
-            if name not in ("code_comment", "task_done"):
-                res.sources.append(
-                    {
-                        "after_turn": res.turns,
-                        "kind": "tool",
-                        "tool": name,
-                        "args": trace.args_summary(name, args),
-                        "chars": len(reply),
-                        "files": prompt_locations(reply),
-                    }
-                )
+        done = _answer(ws, bundle, comp, messages, raw_comments, res, final)
         if done:
             res.stop = "done"
             return
         if final:
             res.stop = "final_round"
             return
+
+
+def _answer(
+    ws: Workspace,
+    bundle: Bundle,
+    comp: Completion,
+    messages: list[dict[str, Any]],
+    raw_comments: list[dict[str, Any]],
+    res: BundleResult,
+    final: bool,
+) -> bool:
+    """Run one turn's tool calls and append their replies; on the final turn
+    only code_comment and task_done do anything. Returns whether task_done
+    was called."""
+    done = False
+    for tc in comp.tool_calls:
+        fn = tc.get("function") or EMPTY
+        name = fn.get("name") or ""
+        args = parse_args(fn.get("arguments") or "")
+        res.tool_calls[name] = res.tool_calls.get(name, 0) + 1
+        if name == "code_comment":
+            items = args.get("comments") or []
+            raw_comments.extend(c for c in items if isinstance(c, dict))
+            reply = "Successfully commented."
+        elif name == "task_done":
+            done = True
+            reply = "OK"
+            for key in ("regression", "history"):
+                answer = " ".join(str(args.get(key) or "").split())
+                if answer:
+                    res.answers[key] = answer[:ANSWER_KEEP]
+        elif final:
+            reply = "Unavailable on the final turn: call code_comment or task_done."
+        else:
+            reply = run_tool(ws, name, args)
+        trace.line(
+            f"[{bundle.label}]   → {name}({trace.args_summary(name, args)})"
+            + (
+                f" ← {len(reply)} chars"
+                if name not in ("code_comment", "task_done")
+                else ""
+            )
+        )
+        messages.append(
+            {"role": "tool", "tool_call_id": tc.get("id") or name, "content": reply}
+        )
+        if name not in ("code_comment", "task_done"):
+            res.sources.append(
+                {
+                    "after_turn": res.turns,
+                    "kind": "tool",
+                    "tool": name,
+                    "args": trace.args_summary(name, args),
+                    "chars": len(reply),
+                    "files": prompt_locations(reply),
+                }
+            )
+    return done
+
+
+def _retry_final(
+    client: Client,
+    ws: Workspace,
+    bundle: Bundle,
+    messages: list[dict[str, Any]],
+    raw_comments: list[dict[str, Any]],
+    res: BundleResult,
+    limits: AgentLimits,
+) -> None:
+    """One more final turn for a code bundle whose loop ended without an
+    answer (`no_answer`: empty turns, or a forced final turn with no
+    code_comment or task_done). The cause seen in replays is a forced final
+    turn whose whole output budget went to reasoning; two plain turns with no
+    tool call end the same way. This turn gets a message that asks for the
+    answer, not more
+    analysis, and `final_retry_max_tokens` (at least `review_max_tokens`).
+    Not bounded by the bundle's
+    budget share or its time limit: an app-code bundle with no answer is
+    worth more than its share, and it runs before any test bundle starts
+    (review.run). Leaves `stop` as it is when the retry is empty too, or
+    cannot be made (a refused reservation or a failed call): the bundle then
+    ends as it would have without the retry."""
+    res.retried = True
+    trace.line(
+        f"[{bundle.label}] code bundle ended without an answer: "
+        "one retry of the final turn"
+    )
+    messages.append({"role": "user", "content": prompts.RETRY_FINAL})
+    try:
+        comp = client.complete(
+            f"review:{bundle.label}",
+            messages,
+            max_tokens=max(limits.final_retry_max_tokens, limits.review_max_tokens),
+            tools=TOOL_SCHEMAS,
+            tool_choice="required",
+            cache_key="connector-reviewer-review",
+        )
+    except (BudgetExhausted, LLMError) as e:
+        trace.line(f"[{bundle.label}]   retry not made: {trace.short(str(e), 140)}")
+        return
+    res.turns += 1
+    u = comp.usage or {}
+    trace.line(
+        f"[{bundle.label}] retry turn: {len(comp.tool_calls)} tool call(s), "
+        f"reasoning={u.get('reasoning_tokens', 0)} out={u.get('completion_tokens', 0)} ${comp.cost:.5f}"
+    )
+    if not comp.tool_calls:
+        trace.line(f"[{bundle.label}]   no tool call on the retry either")
+        return
+    messages.append(assistant_turn(comp))
+    done = _answer(ws, bundle, comp, messages, raw_comments, res, final=True)
+    res.stop = "done" if done else "final_round"
 
 
 def _reflect(

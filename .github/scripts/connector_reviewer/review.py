@@ -244,6 +244,48 @@ def only_pr_changes(
     return kept, dropped, demoted
 
 
+_SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def base_ref_output(gh: GitHub, number: int) -> tuple[str, str]:
+    """The `$GITHUB_OUTPUT` lines of `base-ref`, and a log line.
+
+    `base=` is the pull request's base commit (`base.sha`, the same `base`
+    `run` diffs against), which the workflow checks the app out at, so the
+    unchanged files, the index and the facts are the code this pull request
+    is judged against, not the default branch as it is today (a pull request
+    against another branch, or a replay of an old one). Written only when it
+    is 40 hex; empty otherwise, and the checkout then falls back to its
+    default ref, which `base_checkout_note` reports. Never raises."""
+    if number <= 0:
+        return "base=\n", "no pull request to read the base commit from"
+    try:
+        pr = gh.pr(number) or EMPTY
+        sha = str((pr.get("base") or EMPTY).get("sha") or "")
+    except Exception as e:  # noqa: BLE001 - a failed read is a reason, never a crash
+        return "base=\n", f"the pull request could not be read ({type(e).__name__})"
+    if not _SHA.fullmatch(sha):
+        return "base=\n", "the pull request names no base commit"
+    return f"base={sha}\n", f"base commit {sha[:9]}"
+
+
+def base_checkout_note(root: Path, base: str) -> str:
+    """The incomplete reason when the app checkout at `root` is a git checkout
+    whose commit is not the pull request's base `base`: `base-ref` failed and
+    the checkout fell back to its default ref, or the base moved between that
+    step and this review. "" when it is at `base`, or `root` is no checkout of
+    its own (a local run)."""
+    at = sdk_source.checkout_commit(root)
+    if not at or at == base:
+        return ""
+    return (
+        f"The app checkout is at {at[:9]}, not at this pull request's base "
+        f"{base[:9]}: unchanged files, the index and the facts were read from "
+        "other code, so this head is not taken as reviewed; comment `/review` "
+        "to run it again"
+    )
+
+
 def base_merged_in(gh: GitHub, base: str, reviewed_head: str, head: str) -> str:
     """Why `reviewed_head..head` is taken to carry base-branch changes, or ""
     when it carries none.
@@ -517,7 +559,7 @@ def sdk_pins_block(
     """The `<other_sdk_packages>` block for the line review (FND-5316): the
     Atlan SDK packages the head under review pins that `sdk:` cannot read;
     "" when it pins none. Everything is read at that head, never from the
-    checkout, which is the default branch: the lock is `lock` (read at the
+    checkout, which is the pull request's base: the lock is `lock` (read at the
     head; when it could not be read, nothing comes from a lock), and each
     `pyproject.toml` path the workspace knows (at most
     `sdk_source.MAX_PYPROJECTS`) is read with `at_head`, or taken from the
@@ -762,8 +804,16 @@ def run(
     state.exempt = {}
     # A principle file that was skipped is said in the summary, never silently.
     res.notes.extend(principles.notes)
+    # The app checkout is the code this pull request is judged against: its
+    # base commit, not the default branch (FND-5316). When it is not, the
+    # review is incomplete and the head stays unreviewed, so the next
+    # `/review` redoes it, never a green verdict read against other code.
+    off_base = base_checkout_note(root, base)
+    if off_base:
+        trace.line(off_base)
+        res.incomplete.append(off_base)
     # The head's own lock (FND-5316): the SDK source and the other-SDK block
-    # are bound to the head this round reviews, never to the default branch.
+    # are bound to the head this round reviews, never to the base checkout.
     lock = sdk_source.head_lock_at(gh, head)
     if sdk_dir is not None:
         sdk, sdk_note = SdkSource.open(
@@ -1111,8 +1161,12 @@ def run(
     left = round_ledger.remaining
     weights = {b.label: max(b.changed_lines, 20) for b in bundles}
     total_w = sum(weights.values()) or 1
+    # The code the app ships first, tests and everything else after (FND-5316):
+    # a code bundle that ends on an empty turn gets its retry (agent._retry_final)
+    # before any test bundle spends a cent, and test bundles share what is left.
+    code, rest = split_code_bundles(bundles)
 
-    def one(b: Bundle) -> BundleResult:
+    def one(b: Bundle, budget: float, is_code: bool) -> BundleResult:
         return review_bundle(
             client,
             ws,
@@ -1122,16 +1176,29 @@ def run(
             confirmed,
             cfg.limits,
             reflect=cfg.reflect,
-            budget_usd=left * weights[b.label] / total_w,
+            budget_usd=budget,
             added=added,
+            retry_empty=is_code,
         )
 
     with trace.group(f"6 · line review: {len(bundles)} bundle(s)"):
         trace.line(
-            f"up to {cfg.concurrency} bundles in parallel; lines are prefixed [bundle]"
+            f"up to {cfg.concurrency} bundles in parallel; lines are prefixed [bundle]; "
+            f"{len(code)} app-code bundle(s) first, then {len(rest)} other(s)"
         )
         with ThreadPoolExecutor(max_workers=max(1, cfg.concurrency)) as pool:
-            res.bundles = list(pool.map(one, bundles))
+
+            def first(b: Bundle) -> BundleResult:
+                return one(b, left * weights[b.label] / total_w, True)
+
+            res.bundles = list(pool.map(first, code))
+            after = round_ledger.remaining
+            rest_w = sum(weights[b.label] for b in rest) or 1
+
+            def then(b: Bundle) -> BundleResult:
+                return one(b, after * weights[b.label] / rest_w, False)
+
+            res.bundles += list(pool.map(then, rest))
     res.timings_ms["review"] = int((time.monotonic() - t_phase) * 1000)
     if approach_job is not None and approach_pool is not None:
         with trace.group("5 · approach check (once per PR, alongside the line review)"):
@@ -1273,6 +1340,13 @@ def run(
         elif b.stop in ("llm_error", "fatal", "budget"):
             res.incomplete.append(f"{b.label}: {b.stop} — {b.error[:200]}")
             failed_paths.extend(bundle_paths.get(b.label, []))
+        elif b.unanswered:
+            # No answer at all (FND-5316): its 0 findings are not a clean read,
+            # so the review is incomplete and the next `/review` retries it.
+            note = no_review_note(b, bundles)
+            trace.line(note)
+            res.incomplete.append(note)
+            failed_paths.extend(bundle_paths.get(b.label, []))
     res.retried = list(state.pending_files) if retry_only else []
     # Spend is always booked. But a round in which part of the review did not
     # happen must never be recorded as a review of this head: that would make
@@ -1282,6 +1356,8 @@ def run(
     # remembered as pending, and the next `/review` retries exactly those.
     if res.bundles and len(failed_paths) == sum(len(b.paths) for b in bundles):
         pass  # nothing was reviewed: leave the head unreviewed so the next run redoes it all
+    elif off_base:
+        pass  # reviewed against the wrong code: not a review of this head either
     else:
         state.reviewed_head, state.reviewed_base = head, base
         state.model, state.config_hash = cfg.model, cfg.raw_hash
@@ -2234,6 +2310,40 @@ def _risk(b: Bundle) -> tuple[int, int]:
 # The tier tests rank in: below it is the code the app ships (app, contract,
 # build files, CI); from it on, tests and everything else.
 _TESTS_RANK = RISKY_PREFIXES.index(("tests/",))
+
+
+def split_code_bundles(bundles: list[Bundle]) -> tuple[list[Bundle], list[Bundle]]:
+    """(the bundles that hold code the app ships, the rest), each in its
+    given order. A bundle ranks as its riskiest file, so app code packed with
+    its tests is code. `review.run` reviews the first group to the end, a
+    retry of an empty final turn included, before the second starts."""
+    code = [b for b in bundles if _risk(b)[0] < _TESTS_RANK]
+    return code, [b for b in bundles if _risk(b)[0] >= _TESTS_RANK]
+
+
+NO_REVIEW_FILES_SHOWN = 5  # files named in a no-review note
+
+
+def no_review_note(result: BundleResult, bundles: list[Bundle]) -> str:
+    """The incomplete reason for a bundle that ended with no answer at all
+    (`BundleResult.unanswered`): its 0 findings mean it was not read to a
+    conclusion, not that it is clean, and its files are retried."""
+    paths = next((b.paths for b in bundles if b.label == result.label), [])
+    shown = ", ".join(f"`{p}`" for p in paths[:NO_REVIEW_FILES_SHOWN])
+    if len(paths) > NO_REVIEW_FILES_SHOWN:
+        shown += f" and {len(paths) - NO_REVIEW_FILES_SHOWN} more"
+    kind = "App-code bundle" if result.retried else "Bundle"
+    how = (
+        "its final turn and the retry both gave no answer"
+        if result.retried
+        else "its last turn gave no answer"
+    )
+    return (
+        f"{kind} `{result.label}` got no real review: {how}, so its 0 findings do "
+        f"not mean it is clean ({shown}); `/review` retries it"
+    )
+
+
 # Every skip reason past the cap starts with this (`UNREAD_REASONS`): a state
 # written by an earlier version says "bundle cap (lowest-risk code, …)".
 BUNDLE_CAP = "bundle cap"

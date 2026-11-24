@@ -6,11 +6,12 @@ few structural facts about the file, not on anyone remembering them:
 
 * it is only ever called (`workflow_call`), never triggered by a pull request
   event in this repository;
-* it never checks out pull-request code: one checkout of the caller's default
-  branch, one of this repository at the workflow's own commit, and one of this
-  repository's `application_sdk/` at the ref the pull request head's uv.lock
-  pins (FND-5331, FND-5316: read through the API as data, never checked out),
-  skipped when none resolves and never fatal;
+* it never checks out pull-request code: one checkout of the caller's
+  principles at its default branch, one of the caller at the pull request's
+  base commit (FND-5316), one of this repository at the workflow's own commit,
+  and one of this repository's `application_sdk/` at the ref the pull request
+  head's uv.lock pins (FND-5331, FND-5316: read through the API as data, never
+  checked out), skipped when none resolves and never fatal;
 * it has no `concurrency:` block, because the reviewer has its own lock and a
   block would queue or cancel reviews;
 * its job timeout equals the lock's idea of how long a review can run;
@@ -91,27 +92,87 @@ def _checkout(job: dict[str, Any], path: str) -> dict[str, Any]:
 
 
 def test_it_never_checks_out_pull_request_code(job: dict[str, Any]) -> None:
-    """Three checkouts: the caller's default branch (no `ref`, which for a
-    comment event is the default branch), this repository at the workflow's own
-    commit, and this repository's SDK source at the version the app pins. None
-    may name a pull request ref, and each has a directory of its own."""
+    """Four checkouts: the caller's principles from its default branch, the
+    caller at the pull request's base commit, this repository at the
+    workflow's own commit, and this repository's SDK source at the version the
+    app pins. None may name a pull request ref, and each has a directory of
+    its own."""
     checkouts = _uses(job, "actions/checkout")
-    assert len(checkouts) == 3
+    assert len(checkouts) == 4
+    principles = _checkout(job, "app-principles")["with"]
     app = _checkout(job, "repo")["with"]
     sdk = _checkout(job, "sdk")["with"]
     src = _checkout(job, "sdk-src")["with"]
-    # Exactly one checkout of the app, with no ref.
+    # Exactly two checkouts of the app, each at a ref it names.
     assert [c for c in checkouts if "repository" not in c["with"]] == [
-        _checkout(job, "repo")
+        _checkout(job, "app-principles"),
+        _checkout(job, "repo"),
     ]
-    assert "ref" not in app
+    assert principles["ref"] == "${{ github.event.repository.default_branch }}"
+    assert app["ref"] == "${{ steps.base-ref.outputs.base }}"
     assert sdk["repository"] == "atlanhq/application-sdk"
     assert sdk["ref"] == "${{ job.workflow_sha }}"
     assert src["repository"] == "atlanhq/application-sdk"
-    for with_ in (app, sdk, src):
+    for with_ in (principles, app, sdk, src):
         assert with_["persist-credentials"] is False
         assert "token" not in with_
-    assert len({app["path"], sdk["path"], src["path"]}) == 3
+    assert len({w["path"] for w in (principles, app, sdk, src)}) == 4
+
+
+def test_the_code_context_is_the_pull_requests_base_commit(
+    job: dict[str, Any],
+) -> None:
+    """FND-5316: the app was checked out at its default branch, so a pull
+    request against another branch, or a replay of an old one, was reviewed
+    against today's default branch: unchanged files, callers and facts came
+    from code the pull request never saw. The checkout now takes the base
+    commit the resolve step reads through the API, in tested Python, after the
+    App token is minted (the event of a comment does not carry the base)."""
+    steps = _steps(job)
+    [resolve] = [s for s in steps if s.get("id") == "base-ref"]
+    [mint] = _uses(job, "actions/create-github-app-token")
+    app = _checkout(job, "repo")
+    assert steps.index(mint) < steps.index(resolve) < steps.index(app)
+    assert "python -m connector_reviewer base-ref" in resolve["run"]
+    assert resolve["working-directory"] == "sdk/.github/scripts"
+    assert resolve.get("continue-on-error") is True
+    assert not re.search(r"\b(if|case|for|while)\b", resolve["run"])
+    for arg in (
+        '--repo "$REPO"',
+        '--event-name "$EVENT_NAME"',
+        '--event-path "$EVENT_PATH"',
+    ):
+        assert arg in resolve["run"]
+    assert resolve["env"] == {
+        "GITHUB_TOKEN": "${{ steps.app.outputs.token }}",
+        "REPO": "${{ github.repository }}",
+        "EVENT_NAME": "${{ github.event_name }}",
+        "EVENT_PATH": "${{ github.event_path }}",
+    }
+    # The setup-python step and the reviewer code come first: it runs Python.
+    setup = _uses(job, "actions/setup-python")[0]
+    assert steps.index(setup) < steps.index(resolve)
+    assert steps.index(_checkout(job, "sdk")) < steps.index(resolve)
+    [review] = [s for s in steps if s.get("name") == "Review"]
+    assert steps.index(app) < steps.index(review)
+
+
+def test_the_apps_principles_come_from_its_default_branch_alone(
+    job: dict[str, Any],
+) -> None:
+    """The principles a pull request is judged by are read from the default
+    branch, as documented, never from the base checkout: neither the pull
+    request nor the branch it targets can rewrite them. The checkout holds
+    nothing else."""
+    principles = _checkout(job, "app-principles")["with"]
+    assert principles["sparse-checkout"].split() == [
+        ".github/connector-reviewer/principles"
+    ]
+    assert principles["sparse-checkout-cone-mode"] is False
+    [review] = [s for s in _steps(job) if s.get("name") == "Review"]
+    assert review["env"]["CONNECTOR_REVIEWER_PRINCIPLES_ROOT"] == (
+        "${{ github.workspace }}/app-principles"
+    )
 
 
 def test_the_sdk_source_is_checked_out_at_the_resolved_pin(

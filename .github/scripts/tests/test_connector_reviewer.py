@@ -313,24 +313,27 @@ def _is_skeptic(body: dict[str, Any]) -> bool:
     return _offers(body, "skeptic_verdict")
 
 
-def upheld(steps: int = 6) -> Any:
+def upheld(steps: int = 6, trigger_normal: Any = True) -> Any:
     """A skeptic verdict that confirms steps 1..`steps` of the chain (FND-5316:
-    an upheld verdict counts only when it confirms every step)."""
-    return response(
-        [
-            tool_call(
-                "skeptic_verdict",
-                {
-                    "verdict": "upheld",
-                    "reason": "The code does it.",
-                    "steps": [
-                        {"step": n, "holds": True, "why": "the quoted line does it"}
-                        for n in range(1, steps + 1)
-                    ],
-                },
-            )
-        ]
-    )
+    an upheld verdict counts only when it confirms every step) and finds the
+    trigger a normal input (an edge case does not block). `trigger_normal`
+    None leaves the field out."""
+    verdict: dict[str, Any] = {
+        "verdict": "upheld",
+        "reason": "The code does it.",
+        "steps": [
+            {"step": n, "holds": True, "why": "the quoted line does it"}
+            for n in range(1, steps + 1)
+        ],
+    }
+    if trigger_normal is not None:
+        verdict["trigger_normal"] = trigger_normal
+        verdict["trigger_why"] = (
+            "the default config produces this input"
+            if trigger_normal
+            else "only an unusual source shape produces this input"
+        )
+    return response([tool_call("skeptic_verdict", verdict)])
 
 
 UPHELD = upheld()
@@ -1538,8 +1541,45 @@ def test_the_prompt_and_schema_carry_the_harm_fields():
     assert chain["properties"]["harm"]["enum"] == list(findings_mod.HARMS)
     assert "harm" in chain["required"] and "normal_path" in chain["required"]
     flat = " ".join(prompts_mod.REVIEW_SYSTEM.split())
-    assert "a traced crash, data loss or silent wrong output on a normal path" in flat
+    assert (
+        "a traced crash, rejection by a consumer, data loss or silent wrong output on a normal path"
+        in flat
+    )
     assert "graded to that case in code, up or down" in flat
+
+
+def test_a_traced_rejection_by_the_consumer_on_a_normal_path_is_at_least_high(
+    repo: Path,
+):
+    """A chain that stopped at "the payload holds X" left a real defect at
+    medium: the principle's High case was what the consumer does with X
+    (publish rejects the record). The chain now carries on to that outcome,
+    and a consumer's rejection is a floor harm like a crash: on a normal path
+    it is at least high, and faces the skeptic."""
+    medium = dict(COMMENT, severity="medium", title="The consumer refuses the record")
+    f, gh, script = _graded_run(repo, _harm(medium, "rejection", True))
+    assert f.severity == "high"
+    assert "Changes requested" in gh.comments[0]["body"]
+    assert len(script.skeptic_requests) == 1
+    # Off the normal path the grade stands.
+    f, _, _ = _graded_run(repo, _harm(medium, "rejection", False))
+    assert f.severity == "medium"
+
+
+def test_the_chain_is_carried_to_what_the_consumer_does():
+    """The review prompt and the schema ask for the observable outcome, and
+    say that a consumer outside the repository is the outcome, not a step."""
+    flat = " ".join(prompts_mod.REVIEW_SYSTEM.split())
+    assert "Carry the chain to its observable outcome before you grade it" in flat
+    assert "goes in `outcome`, not in a step" in flat
+    assert "Judge the case at the chain's observable outcome" in flat
+    item = cast(dict[str, Any], COMMENT_ITEM)
+    chain = item["properties"]["causal_chain"]["properties"]
+    assert (
+        "what the consumer of the last step's output" in chain["outcome"]["description"]
+    )
+    assert "rejection" in chain["harm"]["enum"]
+    assert "rejection" in findings_mod.OUTCOME_FLOOR
 
 
 def test_glob_semantics():
@@ -9970,6 +10010,188 @@ def test_the_shipped_time_limit_keeps_four_bundles_in_parallel():
     assert 0 < cfg.limits.bundle_time_limit_s <= 180
 
 
+# ---- app code before tests, and a retry for an empty final turn (FND-5316) ----------------------
+
+
+def _one_turn_limits() -> Any:
+    """One tool turn, then the forced final turn; no plan turn."""
+    return agent_mod.AgentLimits(
+        max_tool_turns=1, turns_per_extra_file=0, lines_per_extra_turn=10**6, plan=0
+    )
+
+
+def test_a_code_bundle_whose_final_turn_comes_back_empty_gets_one_retry(repo: Path):
+    """App-code bundles ended on a forced final turn whose whole output budget
+    went to reasoning: no tool call, 0 findings, and the review read as clean.
+    Such a bundle now gets one more final turn, with a message that asks for
+    the answer and `final_retry_max_tokens`, and what it reports is kept."""
+    ws, bundle = _ws(repo)
+    script = Script(
+        response([tool_call("find_symbol", {"name": "fetch"})]),
+        response(content="still reasoning"),  # the forced final turn: no tool call
+        response(
+            [
+                tool_call("code_comment", {"comments": [COMMENT]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    lim = _one_turn_limits()
+    lim.final_retry_max_tokens = 30_000  # a raised budget is what the retry sends
+    res = agent_mod.review_bundle(
+        client, ws, bundle, PrincipleSet(), {}, [], lim, retry_empty=True
+    )
+    assert res.forced == "turn budget"
+    assert res.retried and not res.unanswered and res.stop == "done"
+    assert [f.title for f in res.findings] == [COMMENT["title"]]
+    retry = script.requests[2]
+    assert retry["tool_choice"] == "required"
+    assert retry["max_tokens"] == 30_000
+    assert retry["messages"][-1]["content"] == prompts_mod.RETRY_FINAL
+
+
+def test_the_retry_never_sends_less_than_a_review_turn_and_ships_a_proven_budget():
+    """A 400 opens the client's run-wide breaker, so a retry budget the
+    gateway rejects would fail every test bundle after it: the shipped value
+    is the one the review turns already send, and the retry never sends less
+    than a review turn."""
+    cfg = load_config(Path(__file__).resolve().parents[2] / "connector-reviewer")
+    assert cfg.limits.final_retry_max_tokens == cfg.limits.review_max_tokens
+    assert agent_mod.AgentLimits().final_retry_max_tokens >= (
+        agent_mod.AgentLimits().review_max_tokens
+    )
+
+
+def test_an_empty_retry_or_a_test_bundle_ends_unanswered(repo: Path):
+    """A retry that comes back empty too leaves the bundle unanswered; a bundle
+    that is not app code (retry_empty off) gets no retry at all."""
+    ws, bundle = _ws(repo)
+    for retry_empty, calls in ((True, 3), (False, 2)):
+        script = Script(
+            response([tool_call("find_symbol", {"name": "fetch"})]),
+            response(content="still reasoning"),
+            response(content="still reasoning"),
+        )
+        client = Client(
+            model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script
+        )
+        res = agent_mod.review_bundle(
+            client,
+            ws,
+            bundle,
+            PrincipleSet(),
+            {},
+            [],
+            _one_turn_limits(),
+            retry_empty=retry_empty,
+        )
+        assert (res.retried, res.unanswered) == (retry_empty, True)
+        assert res.stop == "empty_turns" and res.findings == []
+        assert len(script.requests) == calls
+
+
+@pytest.mark.parametrize(
+    "final, retry, unanswered",
+    [
+        # The forced final turn asks for a lookup it cannot have; the retry
+        # asks for another: no answer either time.
+        (
+            response([tool_call("find_symbol", {"name": "fetch"})]),
+            response([tool_call("read_file", {"file_path": "app/storage/fetch.py"})]),
+            True,
+        ),
+        # "Nothing found" is an answer: code_comment with no comments.
+        (
+            response([tool_call("code_comment", {"comments": []})]),
+            None,
+            False,
+        ),
+    ],
+    ids=["lookups-only", "nothing-found"],
+)
+def test_an_answer_is_a_code_comment_or_task_done_on_any_turn(
+    repo: Path, final: Any, retry: Any, unanswered: bool
+):
+    """A forced final turn (or a retry) that only asks for a lookup ended as
+    `final_round` and was not marked unanswered, so the review read it as
+    clean. A bundle has answered only when it called code_comment (with or
+    without comments) or task_done."""
+    ws, bundle = _ws(repo)
+    replies = [response([tool_call("find_symbol", {"name": "fetch"})]), final]
+    script = Script(*replies, *([retry] if retry else []))
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    res = agent_mod.review_bundle(
+        client, ws, bundle, PrincipleSet(), {}, [], _one_turn_limits(), retry_empty=True
+    )
+    assert res.stop == "final_round"
+    assert (res.retried, res.unanswered) == (unanswered, unanswered)
+    assert len(script.requests) == (3 if retry else 2)
+
+
+_TEST_FILE = "tests/unit/other/test_wide.py"
+
+
+def _bundle_kind(body: dict[str, Any]) -> str:
+    """Which bundle a line-review request is for, from its <review_files>."""
+    block = (
+        "<review_files>\n<file "  # the block itself, not the system prompt's mention
+    )
+    for m in cast(list[dict[str, Any]], body.get("messages") or []):
+        content = m.get("content")
+        if isinstance(content, str) and block in content:
+            files = content.split(block, 1)[1]
+            return "test" if files.startswith(f'path="{_TEST_FILE}"') else "code"
+    return ""
+
+
+def test_app_code_bundles_finish_before_any_test_bundle_starts(repo: Path):
+    """Test bundles ran beside the app-code bundles, so tests spent the round
+    while the code bundle's final turn came back empty. App-code bundles now
+    run to the end, their retry included, before any test bundle starts, and
+    a code bundle that still got no answer is named in the summary."""
+    order: list[str] = []
+
+    class ByBundle(Script):
+        def __call__(self, body: dict[str, Any]) -> Any:
+            kind = _bundle_kind(body)
+            if not kind:
+                return super().__call__(body)
+            order.append(kind)
+            if kind == "test":
+                if body.get("tool_choice") == "none":
+                    return response(content="1. nothing to check")  # the plan turn
+                return response([tool_call("task_done", {"state": "DONE"})])
+            time.sleep(0.2)  # a slow code bundle: on main the tests ran meanwhile
+            return response(content="still reasoning")
+
+    gh = fake_github()
+    # Over one bundle's token limit, so it is a bundle of its own.
+    gh.diffs[("b0", "h1")] = DIFF + _sized_file(_TEST_FILE, 1000)
+    script = ByBundle()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    assert [b.label for b in res.bundles][0] != "change"
+    assert "code" in order and "test" in order
+    assert max(i for i, k in enumerate(order) if k == "code") < order.index("test")
+    code = res.bundles[0]
+    assert code.retried and code.unanswered
+    assert order.count("code") == 3  # two empty turns, then the retry
+    body = gh.comments[0]["body"]
+    assert "got no real review" in body and "`app/storage/fetch.py`" in body
+    # Its 0 findings are not a clean read: the review is incomplete, never
+    # green, and the next `/review` retries its files.
+    assert gh.statuses[-1]["state"] == "error"
+    assert state_of(res).pending_files == ["app/storage/fetch.py"]
+
+
 # ---- finalize: a crashed, cancelled or timed-out run never leaves a stale or green status ----------
 
 RUN_URL = "https://github.com/o/r/actions/runs/105"
@@ -12993,34 +13215,55 @@ def _no_verdict_turns(n: int) -> list[Any]:
     return [response(content="thinking") for _ in range(n)]
 
 
-@pytest.mark.parametrize(
-    "replies, outcome",
-    [
-        ([(400, {}, "bad request")], "error"),  # the call failed
-        (
-            [response([tool_call("skeptic_verdict", {"verdict": "maybe"})])],
-            "malformed",
-        ),
-        (_no_verdict_turns(4), "malformed"),  # max_lookups + 1 turns, no verdict
-    ],
-    ids=["llm-error", "bad-verdict", "no-verdict"],
-)
-def test_a_skeptic_that_makes_no_check_keeps_the_severity(
-    repo: Path, replies: list[Any], outcome: str
-):
-    """A failed call or an answer that is no verdict at all is no check: a
-    provider error must not unblock a real defect."""
+def test_a_skeptic_whose_call_fails_keeps_the_severity(repo: Path):
+    """A failed call is no check: a provider error must not unblock a real
+    defect."""
     script = _review_script()
-    script.skeptic = list(replies)
+    script.skeptic = [(400, {}, "bad request")]
     res, gh = _skeptic_run(repo, script)
 
     [f] = state_of(res).findings
     assert f.severity == "high" and f.contested == ""
     [o] = res.skeptic
-    assert o.outcome == outcome
+    assert o.outcome == "error"
     body = gh.comments[0]["body"]
     assert "Changes requested" in body and "contested" not in body
     assert not res.incomplete  # a skeptic failure never makes the review incomplete
+
+
+@pytest.mark.parametrize(
+    "replies, error",
+    [
+        (
+            [response([tool_call("skeptic_verdict", {"verdict": "maybe"})])],
+            "verdict 'maybe'",
+        ),
+        (_no_verdict_turns(4), "no verdict returned"),  # max_lookups + 1 turns
+    ],
+    ids=["bad-verdict", "no-verdict"],
+)
+def test_a_skeptic_that_answers_with_no_verdict_contests_the_finding(
+    repo: Path, tmp_path: Path, replies: list[Any], error: str
+):
+    """A skeptic that ran and returned no verdict kept a finding high and
+    blocking. Anything short of a confirmed chain is contested, and a check
+    that ran and confirmed nothing is short of it. Only a failed call or a
+    spent budget, where no check was made, keeps the severity."""
+    script = _review_script()
+    script.skeptic = list(replies)
+    res, gh = _skeptic_run(repo, script)
+
+    [f] = state_of(res).findings
+    assert f.severity == "medium"
+    assert f.contested == "the skeptic gave no verdict, so the chain is not confirmed"
+    [o] = res.skeptic
+    assert (o.outcome, o.error) == ("malformed", error)
+    body = gh.comments[0]["body"]
+    assert "Changes requested" not in body
+    assert f"⚖️ contested — {f.contested}" in body
+    assert not res.incomplete
+    rep = report_mod.write(res, 1, str(tmp_path / "run.json"), None)
+    assert rep["skeptic"]["counts"]["malformed"] == 1
 
 
 @pytest.mark.parametrize(
@@ -13262,7 +13505,7 @@ def test_skeptic_lookups_are_capped_per_call_not_per_turn(repo: Path):
 def test_skeptic_stops_after_the_forced_turn_once_lookups_are_spent(repo: Path):
     """Two lookups per response under max_lookups=3: two run, then one (and one
     is refused), then the final turn. A skeptic that still gives no verdict is
-    not asked again, and the finding keeps its severity."""
+    not asked again, and the finding is contested: no verdict confirms nothing."""
     cfg = cfg_for(repo)
     cfg.skeptic.max_lookups = 3
     script = _review_script()
@@ -13275,7 +13518,7 @@ def test_skeptic_stops_after_the_forced_turn_once_lookups_are_spent(repo: Path):
     assert len(script.skeptic_requests) == 3
     msgs = cast(list[dict[str, Any]], script.skeptic_requests[-1]["messages"])
     assert msgs[-1]["content"] == "Lookups are exhausted: call skeptic_verdict now."
-    assert state_of(res).findings[0].severity == "high"
+    assert state_of(res).findings[0].severity == "medium"
 
 
 def _skeptic_says(verdict: str, steps: list[tuple[int, bool]], reason: str = "") -> Any:
@@ -13347,6 +13590,66 @@ def test_upheld_needs_every_step_of_the_chain_confirmed(
     assert "Changes requested" not in gh.comments[0]["body"]
 
 
+@pytest.mark.parametrize(
+    "reply, why, error",
+    [
+        (
+            upheld(trigger_normal=False),
+            "the trigger is not a normal input: only an unusual source shape produces this input",
+            "upheld, but the trigger is not a normal input",
+        ),
+        (
+            upheld(trigger_normal=None),
+            "the trigger was not confirmed as a normal input",
+            "upheld without judging the trigger",
+        ),
+    ],
+    ids=["edge-case-trigger", "trigger-not-judged"],
+)
+def test_a_chain_that_holds_on_an_edge_case_trigger_does_not_block(
+    repo: Path, reply: Any, why: str, error: str
+):
+    """Every step of a chain can hold while its trigger is an input no real
+    run produces. Such a finding came out high, was upheld step by step and
+    blocked a clean pull request. The skeptic now also judges whether the
+    trigger is a normal input; upheld needs that too, so an edge case drops
+    to medium, contested."""
+    script = _review_script()
+    script.skeptic = [reply]
+    res, gh = _skeptic_run(repo, script)
+
+    [req] = script.skeptic_requests
+    sent = _sent(req)
+    # It sees the reviewer's own claims, to check them.
+    assert (
+        "<harm>not given</harm>" in sent and "<normal_path>false</normal_path>" in sent
+    )
+    [f] = state_of(res).findings
+    assert (f.severity, f.contested) == ("medium", why)
+    [o] = res.skeptic
+    assert (o.outcome, o.error) == ("contested", error)
+    assert "Changes requested" not in gh.comments[0]["body"]
+
+
+def test_the_skeptic_takes_a_consumers_behaviour_from_the_cited_principle():
+    """A finding whose last hop is what a consumer outside the repository does
+    (publish rejects the record) must not be contested only because that
+    consumer's code cannot be read: the principle that states it is the
+    authority for that hop. And it must say whether the trigger is normal."""
+    from connector_reviewer import skeptic  # noqa: PLC0415 - module under test
+
+    flat = " ".join(skeptic.SYSTEM.split())
+    assert "the principle is the authority for that last hop" in flat
+    assert (
+        "do not contest the finding only because the consumer's own code cannot be read here"
+        in flat
+    )
+    assert "such a finding does not block" in flat
+    params: dict[str, Any] = skeptic.VERDICT_TOOL["function"]["parameters"]
+    assert "trigger_normal" in params["required"]
+    assert params["properties"]["trigger_normal"]["type"] == "boolean"
+
+
 # ---- the causal chain a finding must carry (FND-5316) ------------------------------------------------
 
 
@@ -13393,7 +13696,15 @@ def _step(code: str, path: str = "app/storage/fetch.py") -> dict[str, str]:
             ),
             "step 2 quotes code that is not in app/storage/retry.py",
         ),
-        (_with_steps(_step("    return")), "step 1 quotes too little code to check"),
+        (
+            _with_steps(_step("    return\n    )")),
+            "step 1 quotes too little code to check",
+        ),
+        (
+            # One short line that matches nothing is still not traced.
+            _with_steps(_step("    pass")),
+            "step 1 quotes code that is not in app/storage/fetch.py",
+        ),
         (_with_steps(), "the causal chain has no step through the code"),
         (_with_steps(_step("    data = client.get(key)"), trigger=" "), "no trigger"),
         (_with_steps(_step("    data = client.get(key)"), outcome=""), "no outcome"),
@@ -13402,6 +13713,7 @@ def _step(code: str, path: str = "app/storage/fetch.py") -> dict[str, str]:
         "no-chain",
         "untraced-step",
         "tiny-quote",
+        "tiny-line-not-there",
         "no-steps",
         "no-trigger",
         "no-outcome",
@@ -13422,6 +13734,69 @@ def test_a_finding_whose_mechanism_is_not_traced_through_code_is_dropped(
     rep = report_mod.write(res, 1, str(tmp_path / "run.json"), None)
     assert why in rep["bundles"][0]["untraced_dropped"][0]
     assert gh.statuses[-1]["state"] == "success"
+
+
+_SHORT_SRC = (
+    "def emit(rows):\n"
+    "    for r in rows:\n"
+    "        log(r)\n"
+    "    x = 1\n"
+    "    return\n"
+    "    return\n"
+)
+# The PR un-comments one short line: `log(r)` is the whole change.
+_SHORT_DIFF = (
+    "diff --git a/app/emit.py b/app/emit.py\n--- a/app/emit.py\n+++ b/app/emit.py\n"
+    "@@ -1,5 +1,6 @@\n"
+    " def emit(rows):\n"
+    "     for r in rows:\n"
+    "+        log(r)\n"
+    "     x = 1\n"
+    "     return\n"
+    "     return\n"
+)
+
+
+@pytest.mark.parametrize(
+    "code, at, why",
+    [
+        ("        log(r)", "app/emit.py:3", ""),  # the changed line itself
+        ("    x = 1", "app/emit.py:4", ""),  # unchanged, but the only such line
+        (
+            "    return",
+            "",
+            "step 1 quotes one short line that occurs more than once in app/emit.py "
+            "and on no line this PR changes",
+        ),
+        ("    pass", "", "step 1 quotes code that is not in app/emit.py"),
+        ("    x = 1\n    return", "", "step 1 quotes too little code to check"),
+    ],
+    ids=["changed-line", "unique-line", "repeated-line", "no-match", "short-run"],
+)
+def test_a_one_line_quote_that_matches_the_code_exactly_is_traced(
+    tmp_path: Path, code: str, at: str, why: str
+):
+    """A valid finding whose whole mechanism is one changed line was dropped as
+    "quotes too little code to check": a short line could never meet the
+    12-character floor. One whole line that matches the code exactly now
+    stands when it pins one place (a line the PR changes, or the only such
+    line in the file). A quote that matches nothing, a short line repeated
+    across unchanged code, and a short run of lines still fail."""
+    head = {"app/emit.py": _SHORT_SRC}
+    ws = Workspace(
+        root=tmp_path,
+        head_text=head,
+        diffs={f.path: f for f in parse_unified_diff(_SHORT_DIFF)},
+        index=build_index(tmp_path, overrides=head),
+    )
+    raw = {
+        "trigger": "A run with many rows",
+        "steps": [{"path": "app/emit.py", "code": code, "effect": "it logs a row"}],
+        "outcome": "One log line per row",
+    }
+    chain, reason = agent_mod.trace_chain(ws, raw)
+    assert reason == why
+    assert (chain["steps"][0]["at"] if chain else "") == at
 
 
 def test_a_traced_chain_is_kept_and_shown_where_each_step_was_found(repo: Path):
@@ -14146,6 +14521,119 @@ def test_the_sdk_ref_cli_reads_the_pull_request_heads_lock(
     out.write_text("")
     assert cli.main([*argv, "--event-path", str(event)]) == 0
     assert out.read_text() == "ref=\nlabel=\n" and fake.reads == []
+
+
+_SHA_BASE = "b" * 40
+
+
+def test_the_base_ref_cli_writes_the_pull_requests_base_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """FND-5316: the app was checked out at its default branch, whatever the
+    pull request's base. `base-ref` reads the base commit through the API (the
+    event of a comment does not carry it) and writes it for the checkout, only
+    as 40 hex; anything else is an empty output, and the checkout falls back."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test
+
+    gh = fake_github(base=_SHA_BASE)
+    monkeypatch.setattr(cli, "GitHub", lambda repo: gh)
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"issue": {"number": 7, "pull_request": {}}}))
+    argv = ["base-ref", "--repo", "o/r", "--event-name", "issue_comment"]
+    assert cli.main([*argv, "--event-path", str(event)]) == 0
+    assert out.read_text() == f"base={_SHA_BASE}\n"
+
+    # Not a commit (a value that could break the output file), no pull request
+    # in the event, or a failed read: an empty base, and still exit 0.
+    for base in ("main\nref=evil", ""):
+        gh.base = base
+        out.write_text("")
+        assert cli.main([*argv, "--event-path", str(event)]) == 0
+        assert out.read_text() == "base=\n"
+    assert "names no base commit" in capsys.readouterr().out
+    gh.base = _SHA_BASE
+    event.write_text(json.dumps({"issue": {"number": 7}}))
+    out.write_text("")
+    assert cli.main([*argv, "--event-path", str(event)]) == 0
+    assert out.read_text() == "base=\n"
+
+    class Down:
+        def pr(self, n: int) -> Any:
+            raise OSError("network")
+
+    monkeypatch.setattr(cli, "GitHub", lambda repo: Down())
+    assert cli.main(["base-ref", "--repo", "o/r", "--pr", "7"]) == 0
+    assert "could not be read (OSError)" in capsys.readouterr().out
+
+
+def test_the_review_says_when_the_app_checkout_is_not_at_the_base(repo: Path):
+    """The review checks that the checkout it indexes is the pull request's
+    base: a failed resolve falls back to the default ref, and the base can move
+    between the resolve step and the review. Off the base, the review is
+    incomplete and the head is not taken as reviewed, so no verdict read
+    against other code can be green and the next `/review` redoes it. At the
+    base, or with no git checkout (a local run), nothing changes."""
+    _git(repo, "init", "-q")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base")
+    at = _git(repo, "rev-parse", "HEAD")
+
+    def review(base: str) -> tuple[RunResult, Any]:
+        gh = fake_github(base=base, diffs={(base, "h1"): DIFF})
+        res = run(
+            gh=gh,
+            number=1,
+            root=repo,
+            cfg=cfg_for(repo),
+            principles=principles_of(repo),
+            # No finding: off the base this would otherwise be green.
+            client_factory=_factory(Script()),
+        )
+        return res, gh
+
+    res, gh = review(_SHA_BASE)
+    assert (
+        f"The app checkout is at {at[:9]}, not at this pull request's base "
+        f"{_SHA_BASE[:9]}" in gh.comments[0]["body"]
+    )
+    assert gh.statuses[-1]["state"] == "error"
+    assert state_of(res).reviewed_head == ""
+    res, gh = review(at)
+    assert "not at this pull request's base" not in gh.comments[0]["body"]
+    assert gh.statuses[-1]["state"] == "success"
+    assert state_of(res).reviewed_head == "h1"
+
+
+def test_the_apps_principles_are_read_from_their_own_root(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+):
+    """FND-5316: the code context is now the pull request's base, which the
+    author chooses; the app's own principles still come from its default
+    branch, a checkout of their own (`--principles-root`, or the variable),
+    so the base cannot rewrite the principles the pull request is judged by.
+    Without either, they are read from --root, as before."""
+    monkeypatch.setenv("CONNECTOR_REVIEWER_PRINCIPLES_DIR", str(repo / FLEET_DIR))
+    _repo_principle(repo, "rp01-count-assertions.md", RP01)  # in the base checkout
+    default = tmp_path_factory.mktemp("default-branch")
+    (default / ".github" / "connector-reviewer" / "principles").mkdir(parents=True)
+    (
+        default / ".github" / "connector-reviewer" / "principles" / "rp02-other.md"
+    ).write_text(RP01.replace("RP01", "RP02"))
+    code, seen = _cli_review(
+        monkeypatch, ["--root", str(repo), "--principles-root", str(default)]
+    )
+    assert code == 0
+    assert [p.id for p in seen["run"]["principles"].repo] == ["RP02"]
+    monkeypatch.setenv("CONNECTOR_REVIEWER_PRINCIPLES_ROOT", str(default))
+    code, seen = _cli_review(monkeypatch, ["--root", str(repo)])
+    assert [p.id for p in seen["run"]["principles"].repo] == ["RP02"]
+    monkeypatch.delenv("CONNECTOR_REVIEWER_PRINCIPLES_ROOT")
+    code, seen = _cli_review(monkeypatch, ["--root", str(repo)])
+    assert [p.id for p in seen["run"]["principles"].repo] == ["RP01"]
 
 
 def test_the_head_lock_is_read_raw_so_a_large_lock_still_resolves():

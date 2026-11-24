@@ -575,12 +575,12 @@ COMMENT_ITEM = {
                 },
                 "outcome": {
                     "type": "string",
-                    "description": "The wrong result the run, the customer or Atlan ends up with.",
+                    "description": "The observable outcome: what the consumer of the last step's output (the publish step, the runtime, Atlan, a downstream app) does with it, and the wrong result the run, the customer or Atlan ends up with. Carry it past 'the payload holds X' to what is done with X. A consumer whose code is not in this repository goes here, not in a step; the principle that states its behaviour is the authority for that hop.",
                 },
                 "harm": {
                     "type": "string",
                     "enum": list(HARMS),
-                    "description": "What kind of harm the outcome is. test_gap when the only harm is a missing or weak test; silent_wrong_output when the run succeeds with a wrong or partial result.",
+                    "description": "What kind of harm the outcome is, judged at the observable outcome. test_gap when the only harm is a missing or weak test; silent_wrong_output when the run succeeds with a wrong or partial result; rejection when a consumer (the publish step, the runtime, Atlan) refuses the output.",
                 },
                 "normal_path": {
                     "type": "boolean",
