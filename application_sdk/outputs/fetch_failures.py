@@ -65,7 +65,6 @@ denominator. See ``docs/concepts/apps.md``.
 from __future__ import annotations
 
 import contextvars
-import re
 import tempfile
 import threading
 import uuid
@@ -78,7 +77,11 @@ import orjson
 
 from application_sdk._logging import get_logger
 from application_sdk.outputs.models import Metric
-from application_sdk.outputs.skipped import MAX_SKIPPED_RECORDS, RunLogLayout
+from application_sdk.outputs.skipped import (
+    MAX_SKIPPED_RECORDS,
+    RunLogLayout,
+    activity_part_stem,
+)
 
 _logger = get_logger(__name__)
 
@@ -97,8 +100,6 @@ FETCH_FAILURES_LAYOUT: Final = RunLogLayout(
     artifact=FETCH_FAILURES_ARTIFACT,
     display_name="Fetch failures",
 )
-
-_UNSAFE_KEY_CHARS = re.compile(r"[^A-Za-z0-9._-]")
 
 
 class FetchFailureReason(StrEnum):
@@ -290,7 +291,7 @@ def _part_location() -> tuple[Path, str]:
         )
 
         info = activity.info()
-        name = _UNSAFE_KEY_CHARS.sub("_", info.activity_id)
+        name = activity_part_stem(info.activity_id)
         return (
             Path(run_temp_dir())
             / "fetch-failures"

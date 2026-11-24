@@ -3439,8 +3439,9 @@ async def _merge_fetch_failures(app_instance: "App") -> None:
     """Schedule ``merge_fetch_failures`` when the run recorded any (FND-5294).
 
     Workflow code, the sibling of :func:`_merge_skipped_records`. A run with
-    no fetch failures schedules nothing, so its history — and the replay of
-    any run started before this path existed — is unchanged. Fails open: a
+    no fetch failures schedules nothing, and ``workflow.patched`` keeps any
+    run started before this path existed replaying unchanged, even one whose
+    app emitted a ``fetch-failures`` metric of its own. Fails open: a
     merge failure is logged and every failure not already counted as
     unpersisted is recorded as ``fetch-failures-unpersisted``.
     """
@@ -3453,6 +3454,11 @@ async def _merge_fetch_failures(app_instance: "App") -> None:
     outputs = get_outputs()
     failures = int(outputs.numeric_metric(FETCH_FAILURES_METRIC))
     if failures <= 0:
+        return
+    # An app on an older SDK may have emitted its own ``fetch-failures``
+    # metric. Replaying that history must not gain the new activity, so the
+    # command is versioned rather than relying on the name being unused.
+    if not workflow.patched("fetch-failures-merge"):
         return
     unpersisted = int(outputs.numeric_metric(FETCH_FAILURES_UNPERSISTED_METRIC))
     try:

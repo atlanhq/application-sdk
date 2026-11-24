@@ -30,7 +30,7 @@ from application_sdk.outputs.fetch_failures import (
     persist_activity_fetch_failures,
     reason_metric_name,
 )
-from application_sdk.outputs.skipped import merge_run_log
+from application_sdk.outputs.skipped import activity_part_stem, merge_run_log
 
 _RUN_PREFIX = "artifacts/apps/a/workflows/wf/run"
 
@@ -328,3 +328,14 @@ class TestMerge:
         result = await merge_run_log(_RUN_PREFIX, str(tmp_path), FETCH_FAILURES_LAYOUT)
         assert result.key is None
         assert collector.to_dict() == {}
+
+
+class TestPartNames:
+    def test_safe_ids_are_unchanged(self):
+        assert activity_part_stem("12") == "12"
+
+    def test_ids_differing_only_in_unsafe_chars_get_distinct_parts(self):
+        a, b = activity_part_stem("fetch/a"), activity_part_stem("fetch?a")
+        assert a != b
+        assert a.startswith("fetch_a-") and b.startswith("fetch_a-")
+        assert activity_part_stem("fetch/a") == a  # stable across retries

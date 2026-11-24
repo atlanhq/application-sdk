@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
 import re
 import tempfile
 import uuid
@@ -420,6 +421,20 @@ current_skipped_records: contextvars.ContextVar[SkippedRecordSink | None] = (
 )
 
 
+def activity_part_stem(activity_id: str) -> str:
+    """An object-name-safe stem for one activity's part, unique per activity ID.
+
+    Unsafe characters become ``_``. When that changed the ID, a short hash of
+    the original is appended, so two IDs that differ only in unsafe characters
+    (``fetch/a`` and ``fetch?a``) never share a part and overwrite each other.
+    """
+    stem = _UNSAFE_KEY_CHARS.sub("_", activity_id)
+    if stem == activity_id:
+        return stem
+    digest = hashlib.sha256(activity_id.encode()).hexdigest()[:12]
+    return f"{stem}-{digest}"
+
+
 def new_activity_sink() -> SkippedRecordSink | None:
     """A sink for the current activity, or ``None`` when its path is unavailable.
 
@@ -448,7 +463,7 @@ def _new_sink() -> SkippedRecordSink:
         )
 
         info = activity.info()
-        name = _UNSAFE_KEY_CHARS.sub("_", info.activity_id)
+        name = activity_part_stem(info.activity_id)
         # The local file is per attempt: run_temp_dir() and the activity ID
         # are both stable across retries, and a failed attempt's file stays
         # behind. The part keeps the activity's name, so a retry's upload

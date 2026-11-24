@@ -29,6 +29,15 @@ def collector():
     current_outputs.reset(token)
 
 
+@pytest.fixture(autouse=True)
+def patched():
+    """Run as new workflow code: the fetch-failures-merge patch is applied."""
+    with mock.patch(
+        "application_sdk.app.base.workflow.patched", return_value=True
+    ) as p:
+        yield p
+
+
 @pytest.fixture
 def app():
     instance = mock.MagicMock()
@@ -51,6 +60,21 @@ async def test_failures_schedule_the_merge_with_counts(collector, app):
     app.merge_fetch_failures.assert_awaited_once_with(
         MergeFetchFailuresInput(failure_count=7, unpersisted_count=2)
     )
+
+
+async def test_replay_of_pre_patch_history_schedules_nothing(collector, app, patched):
+    # An app on an older SDK emitted its own ``fetch-failures`` metric; replaying
+    # that history must not gain the merge activity.
+    patched.return_value = False
+    collector.add_metric(Metric(name=FETCH_FAILURES_METRIC, value=3))
+    await base._merge_fetch_failures(app)
+    patched.assert_called_once_with("fetch-failures-merge")
+    app.merge_fetch_failures.assert_not_awaited()
+
+
+async def test_no_failures_does_not_record_the_patch_marker(collector, app, patched):
+    await base._merge_fetch_failures(app)
+    patched.assert_not_called()
 
 
 async def test_merge_failure_fails_open_and_counts_the_rest(collector, app):
