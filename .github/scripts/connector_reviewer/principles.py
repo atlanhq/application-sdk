@@ -51,7 +51,8 @@ path glob:
   repository root (`advisory.glob_match`): `**` crosses directories and `**/`
   may match none, `*` and `?` stay within one segment, and every other
   character is literal. A glob is relative: no leading `/`, no `.` or `..`
-  segment, no backslash, no empty segment, at most 200 characters.
+  segment, no backslash, no empty segment, at most 200 characters. It cannot
+  hold a comma, which separates entries.
 
 A principle covers a file when one of its areas is the file's area or one of
 its globs matches the file's path; a principle without `applies-to` covers

@@ -136,8 +136,8 @@ root. A quoted area name, such as `"app"`, still means the area.
   `"app/**/test_*.py"` matches `app/test_a.py` and `app/x/y/test_a.py`.
 - `*` and `?` match within one folder name or file name only: `"app/*.py"` matches
   `app/main.py`, not `app/extract/main.py`.
-- Every other character is literal. There are no `[...]` classes and no `{a,b}`
-  lists.
+- Every other character except `,` is literal. There are no `[...]` classes and no
+  `{a,b}` lists. Commas separate entries, so a glob cannot contain one.
 - A glob is relative to the repository root. It has no leading `/`, no `.` or `..`
   segment, no backslash and no empty segment (`//` or a trailing `/`), and is at most
   200 characters.

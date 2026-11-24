@@ -1711,6 +1711,29 @@ def test_glob_semantics():
     # Anchored at the root even without a slash: `*` never crosses one.
     assert not glob_match("a/b.py", "*.py")
     assert glob_match("b.py", "*.py")
+    # `**/` matches whole directories or none, and leaves only on a `/`.
+    assert glob_match("x.py", "**/**/x.py")
+    assert glob_match("a/b/x.py", "**/**/x.py")
+    assert not glob_match("ax.py", "**/x.py")
+    assert not glob_match("a", "a/**")
+    assert glob_match("a/b/c.py", "a/**.py")
+    assert not glob_match("a/b/c.pyc", "a/**.py")
+    assert glob_match("", "**")
+    assert not glob_match("", "?")
+
+
+def test_a_glob_built_to_backtrack_is_matched_in_linear_time():
+    """A principle's glob comes from the app repo. As a regex, `a*a*…a*z`
+    against a long run of `a` explores every split before failing, and one
+    file in a PR would stall the review."""
+    glob = "app/" + "a*" * 90 + "z"
+    started = time.monotonic()
+    assert not glob_match("app/" + "a" * 180 + "x", glob)
+    assert glob_match("app/" + "a" * 180 + "z", glob)
+    crossing = "app/" + "a*" * 90 + "**z"
+    assert glob_match("app/" + "a" * 180 + "/z", crossing)
+    assert not glob_match("app/" + "a" * 180 + "/y", crossing)
+    assert time.monotonic() - started < 2
 
 
 # ---- ledger & client ----------------------------------------------------------------------
