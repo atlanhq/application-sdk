@@ -1177,7 +1177,9 @@ when there is one, and otherwise on the key in `atlan.yaml`. An app with only
 **K032 TaskPoolNotDeployed** — a `@task(pool="x")` names a pool that is not a
 dedicated worker pool: not a `deploy.pools` key after the first, not a
 `deploy.workerPools[].name` in `atlan.yaml`, and with no non-empty
-`ATLAN_POOL_<POOL>_QUEUE`. The first `pools` key is the main worker, which polls
+`ATLAN_POOL_<POOL>_QUEUE` in the main worker's env (the first pool's `env` in the
+contract, or `deploy.env` in `atlan.yaml`; an override anywhere else never reaches
+the workflow). The first `pools` key is the main worker, which polls
 the base queue, so naming it is a finding too. The task's activities go to
 `atlan-<app>-<deployment>-x`, which nothing polls, and hang until their timeout.
 `classification = "judgment"`.

@@ -269,7 +269,8 @@ The contract-toolkit makes the **first** `pools` key the app's main worker. That
 base queue `atlan-<app>-<deployment>`, not `atlan-<app>-<deployment>-<key>`. Only keys after the
 first render a dedicated worker pool. So K032 also fails a `pool=` that names the first key, and
 K033 never flags it. A `deploy.workerPools[].name` in a hand-written `atlan.yaml`, or a pool with
-a non-empty `ATLAN_POOL_<POOL>_QUEUE` override, also counts as routable.
+a non-empty `ATLAN_POOL_<POOL>_QUEUE` override in the main worker's env (where the workflow, and
+so `resolve_pool_queue`, runs), also counts as routable.
 
 This replaces the earlier proposal (PR #1991) of a generated `worker_profiles.py` artifact.
 The conformance-rule approach achieves the same build-time safety without adding a generated file

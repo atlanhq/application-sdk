@@ -291,7 +291,8 @@ class TaskMetadata:
     declared in the app's pkl contract ``pools { ["name"] = new Pool { … } }``
     after the first one: the first key is the main worker, which polls the
     base queue. A pool routed by a non-empty ``ATLAN_POOL_<POOL>_QUEUE``
-    override to a queue the app deploys a worker for needs no key. Nothing
+    override in the main worker's env to a queue the app deploys a worker
+    for needs no key. Nothing
     checks this at runtime; conformance rule K032 (TaskPoolNotDeployed)
     checks it at build time.
     """
@@ -594,7 +595,7 @@ def task(
             ``ATLAN_POOL_<POOL>_QUEUE``. Must match a key in the app's pkl
             contract ``pools { … }`` other than the first (the main worker,
             which polls the base queue), unless a non-empty
-            ``ATLAN_POOL_<POOL>_QUEUE`` override routes it to a queue the app
+            ``ATLAN_POOL_<POOL>_QUEUE`` in the main worker's env routes it to a queue the app
             deploys a worker for; conformance rule K032 checks this at build
             time, not this decorator. Must be a non-empty lowercase kebab-case
             string (e.g. ``"heavy"``, ``"cold-tier"``). The env-var key is

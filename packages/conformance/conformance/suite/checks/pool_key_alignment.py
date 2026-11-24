@@ -14,7 +14,9 @@ the activity sits unscheduled until its timeout.
   dedicated when it is a ``pools`` key after the first (in the contract or, with
   no contract pools, the ``pools:`` mirror in ``atlan.yaml``), a
   ``deploy.workerPools[].name`` in ``atlan.yaml``, or has a non-empty
-  ``ATLAN_POOL_<POOL>_QUEUE`` in the contract or ``atlan.yaml``.
+  ``ATLAN_POOL_<POOL>_QUEUE`` in the main worker's env (the first pool's
+  ``env`` in the contract, or ``deploy.env`` in ``atlan.yaml``) — the env
+  ``resolve_pool_queue`` reads, since the workflow runs on the main worker.
 * **K033** (WARN) — a dedicated ``pools`` key no ``@task(pool=)`` routes to.
   Its worker deployment, and its on-demand mirror, scale for a queue nothing is
   sent to. Skipped when any ``pool=`` value is not a string the check can
@@ -54,7 +56,7 @@ from conformance.suite.checks._ast_common import (
 )
 from conformance.suite.checks._ast_common import discover as discover_python
 from conformance.suite.checks._ast_common._directives_pkl import _PklIgnoreDirective
-from conformance.suite.checks._ast_common._pkl import pkl_code_lines, pkl_mapping_keys
+from conformance.suite.checks._ast_common._pkl import PklEntry, pkl_entries
 from conformance.suite.schema.findings import Finding
 
 SERIES = "K"
@@ -329,17 +331,32 @@ def _pool_of_override(var_suffix: str) -> str:
     return var_suffix.lower().replace("_", "-")
 
 
-def _pkl_overrides(text: str) -> set[str]:
-    """Pools a contract gives a non-empty ``["ATLAN_POOL_<POOL>_QUEUE"] =`` value.
+def _is_main_worker_env(entry: PklEntry, main: str) -> bool:
+    """Whether *entry* sits directly in the ``env`` of the main (first) pool.
 
-    ``resolve_pool_queue`` ignores an empty value and falls back to the derived
-    queue, so an empty override does not make a pool routable.
+    ``resolve_pool_queue`` reads the process env of the worker that runs the
+    workflow, which is the main worker; a dedicated pool's env, ``overrides``
+    and ``envOverrides`` do not reach it.
+    """
+    path = entry.path
+    return (
+        len(path) >= 4
+        and path[-3:] == ("pools", f"[{main}]", "env")
+        and "deploy" in path[:-3]
+    )
+
+
+def _pkl_overrides(contract: list[tuple[str, PklEntry]], main: str) -> set[str]:
+    """Pools the main worker's contract env gives a non-empty override.
+
+    *contract* is ``(raw source line, entry)`` per mapping entry. An empty value
+    does not count: ``resolve_pool_queue`` ignores it and falls back to the
+    derived queue.
     """
     pools: set[str] = set()
-    for raw, code in zip(text.splitlines(), pkl_code_lines(text)):
-        m = _PKL_OVERRIDE_RE.search(raw)
-        # The masked code keeps a real entry's ``[``; a comment's is blanked.
-        if m is None or code[m.start() : m.start() + 1] != "[":
+    for raw, entry in contract:
+        m = _PKL_OVERRIDE_RE.match(raw, entry.column)
+        if m is None or not _is_main_worker_env(entry, main):
             continue
         if _PKL_EMPTY_VALUE_RE.match(m.group(2)) is None:
             pools.add(_pool_of_override(m.group(1)))
@@ -347,31 +364,54 @@ def _pkl_overrides(text: str) -> set[str]:
 
 
 def _yaml_overrides(text: str) -> set[str]:
-    """Pools ``atlan.yaml`` gives a non-empty ``ATLAN_POOL_<POOL>_QUEUE`` value."""
+    """Pools ``deploy.env`` of ``atlan.yaml`` gives a non-empty override.
+
+    ``deploy.env`` is the main worker's env, the one ``resolve_pool_queue``
+    reads; a pool's ``env`` or an override elsewhere does not reach it.
+    """
     pools: set[str] = set()
+    path: list[tuple[int, str]] = []  # (indent, key) of the open mappings
     for raw in text.splitlines():
-        m = YAML_KV_RE.match(raw)
-        key = _OVERRIDE_KEY_RE.match(m.group("key")) if m is not None else None
-        if m is None or key is None:
+        if not raw.strip() or raw.lstrip().startswith("#"):
             continue
-        if _yaml_value(m.group("value")) not in ("", "null", "~"):
-            pools.add(_pool_of_override(key.group(1)))
+        m = YAML_KV_RE.match(raw)
+        if m is None:
+            continue
+        indent = len(m.group("indent"))
+        while path and path[-1][0] >= indent:
+            path.pop()
+        key = _OVERRIDE_KEY_RE.match(m.group("key"))
+        value = _yaml_value(m.group("value"))
+        if key is not None and [k for _, k in path] == ["deploy", "env"]:
+            if value not in ("", "null", "~"):
+                pools.add(_pool_of_override(key.group(1)))
+        if not strip_yaml_comment(m.group("value")).strip():
+            path.append((indent, m.group("key")))
     return pools
 
 
-def _read_pools(root: Path) -> _Pools:
-    pools = _Pools()
-    contract_keys: list[_Declared] = []
+def _read_contract(
+    root: Path,
+) -> tuple[list[_Declared], list[tuple[str, PklEntry]]]:
+    """The contract's ``deploy.pools`` keys, and every entry with its raw line."""
+    keys: list[_Declared] = []
+    entries: list[tuple[str, PklEntry]] = []
     for path in contract_files(root):
         text = safe_read_text(path)
         if text is None:
             continue
         rel = path.relative_to(root).as_posix()
-        contract_keys.extend(
-            _Declared(key, rel, line)
-            for key, line in pkl_mapping_keys(text, "pools", within="deploy")
-        )
-        pools.routable_extra |= _pkl_overrides(text)
+        raw_lines = text.splitlines()
+        for entry in pkl_entries(text):
+            entries.append((raw_lines[entry.line - 1], entry))
+            if entry.path[-1:] == ("pools",) and "deploy" in entry.path[:-1]:
+                keys.append(_Declared(entry.key, rel, entry.line))
+    return keys, entries
+
+
+def _read_pools(root: Path) -> _Pools:
+    pools = _Pools()
+    contract_keys, contract = _read_contract(root)
     atlan = root / "atlan.yaml"
     atlan_text = safe_read_text(atlan) if atlan.is_file() else None
     declared = contract_keys
@@ -385,6 +425,7 @@ def _read_pools(root: Path) -> _Pools:
         )
     if declared:
         pools.main = declared[0].key
+        pools.routable_extra |= _pkl_overrides(contract, pools.main)
         seen = {pools.main}
         for d in declared[1:]:
             if d.key not in seen:
