@@ -2673,7 +2673,9 @@ def skeptic_base(ws: Workspace, f: Finding) -> str:
     copy that cannot be read, may hold secrets or has no stored quote is
     unknown: none of them can be "the same on the base". A line the PR adds
     inside a function the base has gets that function as it is on the base:
-    whether the old function already failed the same way is the question."""
+    whether the old function already failed the same way is the question. A
+    drop then needs the skeptic to quote the base line(s) where the failure
+    already happens, found in this copy (`skeptic.judge_base`)."""
     text = ws.text(f.path) or ""
     at = _current_line(ws, f, text)
     if not at or _new_copy_of_removed(ws, f, at):

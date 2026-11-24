@@ -31,7 +31,10 @@ trigger, the code path, the outcome; agent.trace_chain) against the code.
   answers whether the failure is introduced or made worse by this pull
   request, or already happens at the base (`on_base`). A judged verdict
   (upheld, contested or refuted) with `same_on_base` drops the finding: the
-  caller removes it and says so in the summary. With no base code (code the
+  caller removes it and says so in the summary. The answer must quote the
+  base line(s) where the failure already happens (`base_evidence`); code
+  checks the quote is in the base copy and is not the finding's own added
+  line, and without that the answer counts as `introduced`. With no base code (code the
   PR removes, a new file or symbol, or a base copy that cannot be read) the
   answer is not read, and nothing is dropped on an unknown.
 - **A retry turn's finding** (`Finding.retry`, FND-5316): a code bundle's
@@ -51,13 +54,14 @@ own carved out of the round's (review.SKEPTIC_SHARE).
 
 from __future__ import annotations
 
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
 from . import trace
-from .diff import locate_in_text
+from .diff import locate_in_text, snippet_lines
 from .findings import BLOCKING, Finding
 from .llm import BudgetExhausted, Client, LLMError, assistant_turn
 from .prompts import CONNECTOR_PROFILE
@@ -147,7 +151,9 @@ code as it is on the base branch, before this pull request. On the input the tri
 code reach the same outcome? introduced: the base does not fail this way. worse: the base fails, but this
 pull request makes it more likely or more harmful. same_on_base: the base reaches the same outcome, or a
 worse one, on that input, and this pull request does not make it worse. unknown: you cannot tell, or no
-<code_at_base> is given. Say why in base_why.
+<code_at_base> is given. Say why in base_why. For same_on_base, quote verbatim in base_evidence the line(s)
+of <code_at_base> where the same failure already happens; same_on_base without a quote found there counts
+as introduced.
 
 - upheld: every step holds in the code and the trigger is a normal input. List every step in `steps`
   with holds=true and what in the code shows it, and set trigger_normal=true. An upheld verdict that
@@ -229,6 +235,10 @@ VERDICT_TOOL: dict[str, Any] = {
                 "base_why": {
                     "type": "string",
                     "description": "What in <code_at_base> shows it, in one sentence.",
+                },
+                "base_evidence": {
+                    "type": "string",
+                    "description": "Required for same_on_base: the line(s) of <code_at_base>, quoted verbatim without line numbers, where the same failure already happens. same_on_base without it, or with a quote not in <code_at_base>, counts as introduced.",
                 },
             },
             "required": ["verdict", "reason", "trigger_normal", "on_base"],
@@ -356,12 +366,63 @@ def build_input(ws: Workspace, f: Finding, principle: str, base: str = "") -> st
     return "\n".join(parts)
 
 
-def judge_base(out: Outcome, args: dict[str, Any], base: str) -> None:
+_LINE_NO = re.compile(r"^ *\d+ ", re.M)
+
+
+def base_source(base: str) -> str:
+    """The code of a `<code_at_base>` excerpt (`review.skeptic_base`): its
+    header line ("path: symbol") and its line numbers removed."""
+    body = base.split("\n", 1)[1] if "\n" in base else ""
+    return _LINE_NO.sub("", body)
+
+
+def _added_lines_quoted(ws: Workspace, f: Finding) -> set[str]:
+    """The lines of `f`'s quote that the PR adds, whitespace-normalised."""
+    fd = ws.diffs.get(f.path)
+    text = ws.text(f.path) or ""
+    if fd is None or not text:
+        return set()
+    lines = text.splitlines()
+    added = {
+        " ".join(lines[n - 1].split()) for n in fd.added_lines if 0 < n <= len(lines)
+    }
+    return {s for s in snippet_lines(f.evidence) if s in added}
+
+
+def base_evidence_problem(ws: Workspace, f: Finding, quote: str, base: str) -> str:
+    """Why `quote` does not prove the failure is already on the base, or ""
+    when it does. It must carry `QUOTE_MIN`+ non-space characters, must not
+    be one of the lines the PR adds that the finding quotes, and must be in
+    the base copy the skeptic was shown (`diff.locate_in_text`, the matching
+    the causal-chain trace uses)."""
+    if len("".join(quote.split())) < QUOTE_MIN:
+        return "no base line quoted as evidence"
+    own = _added_lines_quoted(ws, f)
+    if any(s in own for s in snippet_lines(quote)):
+        return "the evidence quotes the finding's own added line"
+    if not locate_in_text(base_source(base), quote):
+        return "the evidence is not in the base copy"
+    return ""
+
+
+def judge_base(
+    out: Outcome, args: dict[str, Any], base: str, ws: Workspace, f: Finding
+) -> None:
     """Mark `out` dropped when the skeptic, shown the base code (`base`),
-    judged the finding and answered that the failure already happens there.
+    judged the finding, answered that the failure already happens there, and
+    quoted the base line(s) where it does (`base_evidence`), checked in code.
     Nothing is dropped without base code, on any other answer (a missing or
-    unknown one included), or on a check with no verdict."""
+    unknown one included), or on a check with no verdict. A `same_on_base`
+    answer whose evidence is missing or not in the base copy is taken as
+    `introduced`: a failure on a line the PR adds is never dropped on the
+    model's word alone."""
     if not base or out.outcome not in JUDGED or args.get("on_base") != SAME_ON_BASE:
+        return
+    quote = str(args.get("base_evidence") or "")[:QUOTE_MAX]
+    problem = base_evidence_problem(ws, f, quote, base)
+    if problem:
+        note = f"same_on_base taken as introduced: {problem}"
+        out.error = f"{out.error}; {note}" if out.error else note
         return
     why = clean(str(args.get("base_why") or ""), STEP_WHY_KEEP)
     out.dropped = clean(BASE_DROP + (f": {why}" if why else ""))
@@ -512,7 +573,7 @@ def check(
                 args = parse_args(fn.get("arguments") or "")
                 if name == "skeptic_verdict":
                     _parse_verdict(ws, out, args, len(chain_steps(f)))
-                    judge_base(out, args, base)
+                    judge_base(out, args, base, ws, f)
                     out.seconds = round(time.monotonic() - t0, 1)
                     return out
                 if name in _LOOKUPS and not last and out.lookups < cfg.max_lookups:

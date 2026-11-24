@@ -13916,9 +13916,15 @@ def test_the_skeptic_takes_a_consumers_behaviour_from_the_cited_principle():
 # ---- the skeptic compares against the base branch (FND-5316) -----------------------------------------
 
 
-def _base_verdict(on_base: str | None, verdict: str = "upheld") -> Any:
+BASE_LINE = "    return client.get(key)"  # SRC_V1's fetch: in the base copy
+
+
+def _base_verdict(
+    on_base: str | None, verdict: str = "upheld", evidence: str | None = BASE_LINE
+) -> Any:
     """A skeptic verdict confirming every step, with `on_base` (left out when
-    None) as its answer to "does the base already fail this way?"."""
+    None) as its answer to "does the base already fail this way?", and
+    `evidence` (left out when None) as the base line it quotes."""
     args: dict[str, Any] = {
         "verdict": verdict,
         "reason": "The code does it.",
@@ -13932,6 +13938,8 @@ def _base_verdict(on_base: str | None, verdict: str = "upheld") -> Any:
     }
     if on_base is not None:
         args["on_base"] = on_base
+    if evidence is not None:
+        args["base_evidence"] = evidence
     return response([tool_call("skeptic_verdict", args)])
 
 
@@ -13966,6 +13974,7 @@ def test_a_failure_that_already_happens_at_the_base_is_dropped(
     assert o.outcome == "upheld" and o.dropped.startswith(
         "the failure already happens at the base branch"
     )
+    assert o.error == ""  # its base evidence was found in the base copy
     body = gh.comments[0]["body"]
     assert "The skeptic dropped" in body and "decode() on a None result" in body
     assert "returns client.get(key) for the same key" in body
@@ -13973,6 +13982,54 @@ def test_a_failure_that_already_happens_at_the_base_is_dropped(
     assert "blocking" not in gh.statuses[-1]["description"]
     rep = report_mod.write(res, 1, str(tmp_path / "run.json"), None)
     assert rep["skeptic"]["checks"][0]["dropped"] == o.dropped
+
+
+@pytest.mark.parametrize(
+    "evidence, problem",
+    [
+        (None, "no base line quoted as evidence"),
+        ("return", "no base line quoted as evidence"),  # too short to prove anything
+        (
+            "    return client.get(key, default=None)",
+            "the evidence is not in the base copy",
+        ),
+        # The finding quotes a line the PR adds; the base copy of `fetch` does
+        # not fail that way, and quoting the new line itself proves nothing.
+        (
+            "    return data.decode()",
+            "the evidence quotes the finding's own added line",
+        ),
+    ],
+    ids=["missing", "too-short", "not-in-base", "own-added-line"],
+)
+def test_same_on_base_without_base_evidence_is_taken_as_introduced(
+    repo: Path, evidence: str | None, problem: str
+):
+    """A finding on a line the PR adds is compared with its function's base
+    copy, so a "same on the base" answer could drop a new bug on the model's
+    word alone. A drop now needs the base line(s) where the failure already
+    happens, quoted and found in that copy; anything less counts as
+    introduced and the finding stays."""
+    script = _review_script()
+    script.skeptic = [_base_verdict("same_on_base", evidence=evidence)]
+    res, gh = _skeptic_run(repo, script)
+
+    assert _code_at_base(script.skeptic_requests[0])  # the base copy was shown
+    [f] = state_of(res).findings
+    assert f.severity == "high" and f.contested == ""
+    [o] = res.skeptic
+    assert o.outcome == "upheld" and o.dropped == ""
+    assert o.error == f"same_on_base taken as introduced: {problem}"
+    assert "The skeptic dropped" not in gh.comments[0]["body"]
+    assert "Changes requested" in gh.comments[0]["body"]
+
+
+def test_base_evidence_is_matched_without_line_numbers_or_indentation():
+    from connector_reviewer import skeptic  # noqa: PLC0415 - module under test
+
+    base = "app/x.py: f\n    1 def f(a):\n   10     return a.b\n"
+    assert skeptic.base_source(base) == "def f(a):\n    return a.b\n"
+    assert skeptic.locate_in_text(skeptic.base_source(base), "return  a.b") == 2
 
 
 @pytest.mark.parametrize("on_base", ["introduced", "worse", "unknown", "maybe", None])
