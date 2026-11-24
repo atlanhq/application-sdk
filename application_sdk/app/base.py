@@ -81,6 +81,10 @@ from application_sdk.contracts.cleanup import (
     StorageCleanupInput,
     StorageCleanupOutput,
 )
+from application_sdk.contracts.fetch_failures import (
+    MergeFetchFailuresInput,
+    MergeFetchFailuresOutput,
+)
 from application_sdk.contracts.skipped_records import (
     MergeSkippedRecordsInput,
     MergeSkippedRecordsOutput,
@@ -2801,6 +2805,47 @@ class App(ABC):
             key=merged.key, kept=merged.kept, truncated=truncated
         )
 
+    # A bounded merge of at most MAX_SKIPPED_RECORDS lines, as above.
+    @task(timeout_seconds=300, retry_max_attempts=3, heartbeat_timeout_seconds=60)
+    async def merge_fetch_failures(
+        self, input: MergeFetchFailuresInput
+    ) -> MergeFetchFailuresOutput:
+        """Framework task: merge the run's fetch-failure parts into one artifact.
+
+        Scheduled by the workflow after ``run()`` returns, and only when the
+        run's ``fetch-failures`` metric is above zero. Concatenates the
+        per-activity parts under ``{run prefix}/fetch-failures/parts/`` into
+        ``{run prefix}/fetch-failures.ndjson`` (capped at
+        ``MAX_SKIPPED_RECORDS`` lines), adds it as the run artifact
+        ``fetch-failures``, and records ``fetch-failures-truncated`` for every
+        failure that was counted but neither kept nor lost to a storage
+        failure. See ``application_sdk.outputs.fetch_failures``.
+        """
+        from application_sdk.execution import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            build_output_path,
+        )
+        from application_sdk.execution._temporal.activity_utils import (  # noqa: PLC0415 — circular: as above
+            run_temp_dir,
+        )
+        from application_sdk.outputs import Metric, get_outputs  # noqa: PLC0415
+        from application_sdk.outputs.fetch_failures import (  # noqa: PLC0415
+            FETCH_FAILURES_LAYOUT,
+            FETCH_FAILURES_TRUNCATED_METRIC,
+        )
+        from application_sdk.outputs.skipped import merge_run_log  # noqa: PLC0415
+
+        merged = await merge_run_log(
+            build_output_path(), run_temp_dir(), FETCH_FAILURES_LAYOUT
+        )
+        truncated = max(0, input.failure_count - input.unpersisted_count - merged.kept)
+        if truncated:
+            get_outputs().add_metric(
+                Metric(name=FETCH_FAILURES_TRUNCATED_METRIC, value=truncated)
+            )
+        return MergeFetchFailuresOutput(
+            key=merged.key, kept=merged.kept, truncated=truncated
+        )
+
     async def on_complete(self) -> None:
         """Lifecycle hook called after ``run()`` finishes (success or failure).
 
@@ -3136,6 +3181,47 @@ async def _merge_skipped_records(app_instance: "App") -> None:
         if lost > 0:
             outputs.add_metric(
                 Metric(name=SKIPPED_RECORDS_UNPERSISTED_METRIC, value=lost)
+            )
+
+
+async def _merge_fetch_failures(app_instance: "App") -> None:
+    """Schedule ``merge_fetch_failures`` when the run recorded any (FND-5294).
+
+    Workflow code, the sibling of :func:`_merge_skipped_records`. A run with
+    no fetch failures schedules nothing, so its history — and the replay of
+    any run started before this path existed — is unchanged. Fails open: a
+    merge failure is logged and every failure not already counted as
+    unpersisted is recorded as ``fetch-failures-unpersisted``.
+    """
+    from application_sdk.outputs import Metric, get_outputs  # noqa: PLC0415
+    from application_sdk.outputs.fetch_failures import (  # noqa: PLC0415
+        FETCH_FAILURES_METRIC,
+        FETCH_FAILURES_UNPERSISTED_METRIC,
+    )
+
+    outputs = get_outputs()
+    failures = int(outputs.numeric_metric(FETCH_FAILURES_METRIC))
+    if failures <= 0:
+        return
+    unpersisted = int(outputs.numeric_metric(FETCH_FAILURES_UNPERSISTED_METRIC))
+    try:
+        await app_instance.merge_fetch_failures(
+            MergeFetchFailuresInput(
+                failure_count=failures, unpersisted_count=unpersisted
+            )
+        )
+    except Exception:  # noqa: BLE001 — fail-open by design (FND-5294): logged via _safe_log with exc_info=True and counted in fetch-failures-unpersisted
+        _safe_log(
+            "error",
+            "Failed to merge fetch-failure parts; the run has no "
+            "fetch-failures artifact (parts remain under the run prefix)",
+            failure_count=failures,
+            exc_info=True,
+        )
+        lost = failures - unpersisted
+        if lost > 0:
+            outputs.add_metric(
+                Metric(name=FETCH_FAILURES_UNPERSISTED_METRIC, value=lost)
             )
 
 
@@ -4027,6 +4113,7 @@ def generate_workflow_class(
             entry_method = getattr(app_instance, entry_method_name)
             result = await entry_method(input_data)
             await _merge_skipped_records(app_instance)
+            await _merge_fetch_failures(app_instance)
             return cast("Output", result)
 
         # conformance: ignore[E004] top-level entrypoint handler; logged via _safe_log with exc_info=True and re-raised as typed ApplicationError

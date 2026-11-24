@@ -55,6 +55,12 @@ from application_sdk.contracts.base import Output, OutputStatus
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs import current_outputs
 from application_sdk.outputs.collector import OutputCollector
+from application_sdk.outputs.fetch_failures import (
+    FETCH_FAILURES_METRIC,
+    FetchFailureSink,
+    current_fetch_failures,
+    persist_activity_fetch_failures,
+)
 from application_sdk.outputs.skipped import (
     SKIPPED_RECORDS_METRIC,
     current_skipped_records,
@@ -162,6 +168,8 @@ class OutputActivityInboundInterceptor(ActivityInboundInterceptor):
         # Installed up front, like the collector, so skips recorded from child
         # tasks of the activity body land in the same sink.
         current_skipped_records.set(new_activity_sink())
+        fetch_failures = FetchFailureSink()
+        current_fetch_failures.set(fetch_failures)
         # The task wrapper fills in the App's name; this scope keeps it until
         # the skipped-records part is persisted, under the same run prefix
         # merge_skipped_records lists, and clears it after.
@@ -173,11 +181,14 @@ class OutputActivityInboundInterceptor(ActivityInboundInterceptor):
             if sink is not None:
                 # Fails open: a storage failure is logged and counted.
                 await persist_activity_skips(sink)
+            # Fails open too; also turns the sink's counts into metrics.
+            await persist_activity_fetch_failures(fetch_failures)
         finally:
             # Always reset so a failed/cancelled activity doesn't leak its
             # collector into the next task that runs on this thread.
             current_outputs.set(None)
             current_skipped_records.set(None)
+            current_fetch_failures.set(None)
             _running_app_name.reset(app_name_token)
 
         try:
@@ -324,15 +335,19 @@ class OutputWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
 
 def _mark_partial_success(result: Any, collector: OutputCollector) -> Any:
-    """Mark a ``SUCCESS`` run that skipped records as ``PARTIAL_SUCCESS``.
+    """Mark a ``SUCCESS`` run that skipped records or failed fetches as ``PARTIAL_SUCCESS``.
 
-    Derived from the summed ``skipped-records`` metric, so nothing new travels
-    on activity results. ``FAILURE`` and ``PARTIAL_SUCCESS`` set by the app
-    are never changed; a run that skipped nothing is untouched.
+    Derived from the summed ``skipped-records`` and ``fetch-failures``
+    metrics, so nothing new travels on activity results. ``FAILURE`` and
+    ``PARTIAL_SUCCESS`` set by the app are never changed; a run that recorded
+    neither is untouched.
     """
     if not isinstance(result, Output) or result.status != OutputStatus.SUCCESS:
         return result
-    if collector.numeric_metric(SKIPPED_RECORDS_METRIC) <= 0:
+    if (
+        collector.numeric_metric(SKIPPED_RECORDS_METRIC) <= 0
+        and collector.numeric_metric(FETCH_FAILURES_METRIC) <= 0
+    ):
         return result
     return result.model_copy(update={"status": OutputStatus.PARTIAL_SUCCESS})
 

@@ -105,6 +105,33 @@ Rejected: a **sync `skip_record`** (needs thread-safety work for mappers run thr
 the mapper and records the skip** (hides what the loop catches; the explicit `try/except` is four
 lines).
 
+## Fetch failures: `record_fetch_failure` (FND-5294)
+
+A failed per-item fetch is a different gap from a skip: the app never received a record, so there
+is nothing to keep but the id, and the cause is the source, not the data's shape. Filing it under a
+`SkipReason` would mislabel fleet-wide aggregates. It gets a sibling helper,
+`record_fetch_failure(reason, *, entity_type, record_id, endpoint=None, http_status=None,
+detail=None)` (`application_sdk.outputs.fetch_failures`), with its own closed
+`FetchFailureReason` (`source_unavailable`, `not_found`, `forbidden`, `rate_limited`), its own
+metrics (`fetch-failures`, `fetch-failures-<reason>`, `-truncated`, `-unpersisted`), its own
+artifact (`fetch-failures`) and its own framework task (`merge_fetch_failures`). The part layout,
+the merge, the cap, fail-open storage and the derived `PARTIAL_SUCCESS` are shared with skipped
+records (`RunLogLayout` / `merge_run_log`).
+
+Two choices differ from `skip_record`, both because a line carries ids only:
+
+* **Sync, not async.** Parallel fetches run as `gather` tasks and as sync functions through
+  `run_in_thread`; a sync function cannot await. The activity's lines are bounded by
+  `MAX_SKIPPED_RECORDS` and hold no source data, so they stay in memory under a `threading.Lock`
+  and are written once when the activity returns — no event-loop write per call is needed.
+* **Metrics at activity end.** `OutputCollector` is not thread-safe, so a worker thread never
+  touches it. The sink counts; the output interceptor turns the counts into metrics on the event
+  loop when the activity returns. An activity that raises records nothing, and its retry records
+  its own.
+
+The failure threshold stays with the app: an all-items failure is an outage and must raise, but
+only the app knows how many items it expected.
+
 ## Relationship to `AssetValidationReport`
 
 They answer different questions about different records. `AssetValidationReport` (ADR-0020) is the

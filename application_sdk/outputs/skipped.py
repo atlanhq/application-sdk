@@ -608,14 +608,56 @@ def _append_capped(part: Path, merged: Path, room: int) -> int:
 
 @dataclass(frozen=True)
 class MergeResult:
-    """What :func:`merge_run_skips` produced."""
+    """What :func:`merge_run_skips` (or the fetch-failure merge) produced."""
 
     key: str | None
     kept: int
 
 
+@dataclass(frozen=True)
+class RunLogLayout:
+    """Where one per-run NDJSON log lives and how it is surfaced.
+
+    Shared by the skipped-records log and the fetch-failures log
+    (:mod:`application_sdk.outputs.fetch_failures`): both upload one part per
+    activity under ``{run prefix}/{parts_dir}/`` and merge them into
+    ``{run prefix}/{file_name}`` at run end.
+
+    Attributes:
+        parts_dir: Parts directory under the run prefix.
+        file_name: Merged file name under the run prefix.
+        artifact: Run-artifact name the merged file is registered under.
+        display_name: The artifact's UI label.
+    """
+
+    parts_dir: str
+    file_name: str
+    artifact: str
+    display_name: str
+
+
+SKIPPED_RECORDS_LAYOUT: Final = RunLogLayout(
+    parts_dir=SKIPPED_RECORDS_PARTS_DIR,
+    file_name=SKIPPED_RECORDS_FILE,
+    artifact=SKIPPED_RECORDS_ARTIFACT,
+    display_name="Skipped records",
+)
+
+
 async def merge_run_skips(run_prefix: str, scratch_dir: str) -> MergeResult:
-    """Concatenate the run's parts into one capped file and register the artifact.
+    """Concatenate the run's skipped-record parts into one capped file and register the artifact.
+
+    Parts are merged in key order. At most :data:`MAX_SKIPPED_RECORDS` lines
+    are kept. Returns ``key=None`` when there were no parts to merge, in which
+    case no artifact is added.
+    """
+    return await merge_run_log(run_prefix, scratch_dir, SKIPPED_RECORDS_LAYOUT)
+
+
+async def merge_run_log(
+    run_prefix: str, scratch_dir: str, layout: RunLogLayout
+) -> MergeResult:
+    """Concatenate one run log's parts into one capped file and register the artifact.
 
     Parts are merged in key order. At most :data:`MAX_SKIPPED_RECORDS` lines
     are kept. Returns ``key=None`` when there were no parts to merge, in which
@@ -632,12 +674,12 @@ async def merge_run_skips(run_prefix: str, scratch_dir: str) -> MergeResult:
         upload_file,
     )
 
-    parts = sorted(await list_data_keys(f"{run_prefix}/{SKIPPED_RECORDS_PARTS_DIR}/"))
+    parts = sorted(await list_data_keys(f"{run_prefix}/{layout.parts_dir}/"))
     if not parts:
         return MergeResult(key=None, kept=0)
 
-    work = Path(scratch_dir) / "skipped-records-merge"
-    merged = work / SKIPPED_RECORDS_FILE
+    work = Path(scratch_dir) / f"{layout.artifact}-merge"
+    merged = work / layout.file_name
     await run_in_thread(work.mkdir, parents=True, exist_ok=True)
     await run_in_thread(merged.write_bytes, b"")  # truncate a retried attempt's file
 
@@ -650,11 +692,9 @@ async def merge_run_skips(run_prefix: str, scratch_dir: str) -> MergeResult:
         await download_file(part_key, local_part)
         kept += await run_in_thread(_append_capped, local_part, merged, room)
 
-    key = f"{run_prefix}/{SKIPPED_RECORDS_FILE}"
+    key = f"{run_prefix}/{layout.file_name}"
     await upload_file(key, merged)
     get_outputs().add_artifact(
-        Artifact(
-            name=SKIPPED_RECORDS_ARTIFACT, path=key, display_name="Skipped records"
-        )
+        Artifact(name=layout.artifact, path=key, display_name=layout.display_name)
     )
     return MergeResult(key=key, kept=kept)

@@ -31,6 +31,10 @@ import contextvars
 
 from application_sdk import _deprecation
 from application_sdk.outputs.collector import OutputCollector
+from application_sdk.outputs.fetch_failures import (
+    FetchFailureReason,
+    record_fetch_failure,
+)
 from application_sdk.outputs.models import Artifact, Metric
 from application_sdk.outputs.skipped import (
     MAX_SKIPPED_RECORDS,
@@ -99,4 +103,6 @@ __all__ = [
     "MissingRequiredField",
     "MalformedRecord",
     "UnsupportedType",
+    "FetchFailureReason",
+    "record_fetch_failure",
 ]
