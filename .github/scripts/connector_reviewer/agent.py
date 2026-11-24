@@ -578,7 +578,9 @@ def bound_by_outcome(
     - Its only harm is a missing or weak test (`harm` test_gap, or no harm
       given and category test): at most medium, unless the principle it cites
       says otherwise by its High case (`principle_case`).
-    - A traced crash, data loss or silent wrong output (OUTCOME_FLOOR) whose
+    - A traced crash, data loss, silent wrong output or rejection by a
+      consumer of the output (OUTCOME_FLOOR: the chain carried to what the
+      publish step or the runtime does with it) whose
       trigger occurs on a normal path (`normal_path`): at least high. This
       wins over a principle's Medium case: the chain is traced through code
       the model quoted, the case is the model's reading of a sentence.

@@ -39,10 +39,14 @@ CATEGORIES = (
 # Severity reads two groups in code (agent.bound_by_outcome): a traced
 # OUTCOME_FLOOR harm on a normal path is at least high, and a TEST_GAP finding
 # is at most medium unless its principle's High case says otherwise.
+# `rejection` is a consumer of the output (the publish step, the runtime,
+# Atlan) refusing it: the chain's observable outcome, carried past "the
+# payload holds X" to what is done with X.
 HARMS = (
     "crash",
     "data_loss",
     "silent_wrong_output",
+    "rejection",
     "security",
     "hang",
     "leak",
@@ -52,7 +56,7 @@ HARMS = (
     "test_gap",
     "other",
 )
-OUTCOME_FLOOR = ("crash", "data_loss", "silent_wrong_output")
+OUTCOME_FLOOR = ("crash", "data_loss", "silent_wrong_output", "rejection")
 TEST_GAP = "test_gap"
 STATE_MARKER = "connector-reviewer-state"
 BODY_KEEP = 600  # characters of an open finding's body kept in the state

@@ -313,24 +313,23 @@ def _is_skeptic(body: dict[str, Any]) -> bool:
     return _offers(body, "skeptic_verdict")
 
 
-def upheld(steps: int = 6) -> Any:
+def upheld(steps: int = 6, trigger_normal: Any = True) -> Any:
     """A skeptic verdict that confirms steps 1..`steps` of the chain (FND-5316:
-    an upheld verdict counts only when it confirms every step)."""
-    return response(
-        [
-            tool_call(
-                "skeptic_verdict",
-                {
-                    "verdict": "upheld",
-                    "reason": "The code does it.",
-                    "steps": [
-                        {"step": n, "holds": True, "why": "the quoted line does it"}
-                        for n in range(1, steps + 1)
-                    ],
-                },
-            )
-        ]
-    )
+    an upheld verdict counts only when it confirms every step) and finds the
+    trigger a normal input (an edge case does not block). `trigger_normal`
+    None leaves the field out."""
+    verdict: dict[str, Any] = {
+        "verdict": "upheld",
+        "reason": "The code does it.",
+        "steps": [
+            {"step": n, "holds": True, "why": "the quoted line does it"}
+            for n in range(1, steps + 1)
+        ],
+    }
+    if trigger_normal is not None:
+        verdict["trigger_normal"] = trigger_normal
+        verdict["trigger_why"] = "only an unusual source shape produces this input"
+    return response([tool_call("skeptic_verdict", verdict)])
 
 
 UPHELD = upheld()
@@ -1538,8 +1537,45 @@ def test_the_prompt_and_schema_carry_the_harm_fields():
     assert chain["properties"]["harm"]["enum"] == list(findings_mod.HARMS)
     assert "harm" in chain["required"] and "normal_path" in chain["required"]
     flat = " ".join(prompts_mod.REVIEW_SYSTEM.split())
-    assert "a traced crash, data loss or silent wrong output on a normal path" in flat
+    assert (
+        "a traced crash, rejection by a consumer, data loss or silent wrong output on a normal path"
+        in flat
+    )
     assert "graded to that case in code, up or down" in flat
+
+
+def test_a_traced_rejection_by_the_consumer_on_a_normal_path_is_at_least_high(
+    repo: Path,
+):
+    """A chain that stopped at "the payload holds X" left a real defect at
+    medium: the principle's High case was what the consumer does with X
+    (publish rejects the record). The chain now carries on to that outcome,
+    and a consumer's rejection is a floor harm like a crash: on a normal path
+    it is at least high, and faces the skeptic."""
+    medium = dict(COMMENT, severity="medium", title="The consumer refuses the record")
+    f, gh, script = _graded_run(repo, _harm(medium, "rejection", True))
+    assert f.severity == "high"
+    assert "Changes requested" in gh.comments[0]["body"]
+    assert len(script.skeptic_requests) == 1
+    # Off the normal path the grade stands.
+    f, _, _ = _graded_run(repo, _harm(medium, "rejection", False))
+    assert f.severity == "medium"
+
+
+def test_the_chain_is_carried_to_what_the_consumer_does():
+    """The review prompt and the schema ask for the observable outcome, and
+    say that a consumer outside the repository is the outcome, not a step."""
+    flat = " ".join(prompts_mod.REVIEW_SYSTEM.split())
+    assert "Carry the chain to its observable outcome before you grade it" in flat
+    assert "goes in `outcome`, not in a step" in flat
+    assert "Judge the case at the chain's observable outcome" in flat
+    item = cast(dict[str, Any], COMMENT_ITEM)
+    chain = item["properties"]["causal_chain"]["properties"]
+    assert (
+        "what the consumer of the last step's output" in chain["outcome"]["description"]
+    )
+    assert "rejection" in chain["harm"]["enum"]
+    assert "rejection" in findings_mod.OUTCOME_FLOOR
 
 
 def test_glob_semantics():
@@ -13345,6 +13381,66 @@ def test_upheld_needs_every_step_of_the_chain_confirmed(
     [o] = res.skeptic
     assert o.outcome == "contested"
     assert "Changes requested" not in gh.comments[0]["body"]
+
+
+@pytest.mark.parametrize(
+    "reply, why, error",
+    [
+        (
+            upheld(trigger_normal=False),
+            "the trigger is not a normal input: only an unusual source shape produces this input",
+            "upheld, but the trigger is not a normal input",
+        ),
+        (
+            upheld(trigger_normal=None),
+            "the trigger was not confirmed as a normal input",
+            "upheld without judging the trigger",
+        ),
+    ],
+    ids=["edge-case-trigger", "trigger-not-judged"],
+)
+def test_a_chain_that_holds_on_an_edge_case_trigger_does_not_block(
+    repo: Path, reply: Any, why: str, error: str
+):
+    """Every step of a chain can hold while its trigger is an input no real
+    run produces. Such a finding came out high, was upheld step by step and
+    blocked a clean pull request. The skeptic now also judges whether the
+    trigger is a normal input; upheld needs that too, so an edge case drops
+    to medium, contested."""
+    script = _review_script()
+    script.skeptic = [reply]
+    res, gh = _skeptic_run(repo, script)
+
+    [req] = script.skeptic_requests
+    sent = _sent(req)
+    # It sees the reviewer's own claims, to check them.
+    assert (
+        "<harm>not given</harm>" in sent and "<normal_path>false</normal_path>" in sent
+    )
+    [f] = state_of(res).findings
+    assert (f.severity, f.contested) == ("medium", why)
+    [o] = res.skeptic
+    assert (o.outcome, o.error) == ("contested", error)
+    assert "Changes requested" not in gh.comments[0]["body"]
+
+
+def test_the_skeptic_takes_a_consumers_behaviour_from_the_cited_principle():
+    """A finding whose last hop is what a consumer outside the repository does
+    (publish rejects the record) must not be contested only because that
+    consumer's code cannot be read: the principle that states it is the
+    authority for that hop. And it must say whether the trigger is normal."""
+    from connector_reviewer import skeptic  # noqa: PLC0415 - module under test
+
+    flat = " ".join(skeptic.SYSTEM.split())
+    assert "the principle is the authority for that last hop" in flat
+    assert (
+        "do not contest the finding only because the consumer's own code cannot be read here"
+        in flat
+    )
+    assert "such a finding does not block" in flat
+    params: dict[str, Any] = skeptic.VERDICT_TOOL["function"]["parameters"]
+    assert "trigger_normal" in params["required"]
+    assert params["properties"]["trigger_normal"]["type"] == "boolean"
 
 
 # ---- the causal chain a finding must carry (FND-5316) ------------------------------------------------
