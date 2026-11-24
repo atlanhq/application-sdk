@@ -30,10 +30,10 @@ class TestTrackFileRefs:
 
     def test_adds_ref_to_app_state(self) -> None:
         ref = FileReference(local_path="/tmp/out.parquet", storage_path="artifacts/x")
-        _track_file_refs("wf-add", ref)
+        _track_file_refs(("wf-add", "run-1"), ref)
 
         with _app_state_lock:
-            tracked = _app_state.get("wf-add", {}).get(TRACKED_FILE_REFS_KEY)
+            tracked = _app_state.get(("wf-add", "run-1"), {}).get(TRACKED_FILE_REFS_KEY)
 
         assert tracked is not None
         assert ref in tracked
@@ -41,40 +41,48 @@ class TestTrackFileRefs:
     def test_accumulates_refs_across_calls(self) -> None:
         ref1 = FileReference(local_path="/tmp/a.parquet", storage_path="artifacts/a")
         ref2 = FileReference(local_path="/tmp/b.parquet", storage_path="artifacts/b")
-        _track_file_refs("wf-accum", ref1)
-        _track_file_refs("wf-accum", ref2)
+        _track_file_refs(("wf-accum", "run-1"), ref1)
+        _track_file_refs(("wf-accum", "run-1"), ref2)
 
         with _app_state_lock:
-            tracked = _app_state.get("wf-accum", {}).get(TRACKED_FILE_REFS_KEY)
+            tracked = _app_state.get(("wf-accum", "run-1"), {}).get(
+                TRACKED_FILE_REFS_KEY
+            )
 
         assert ref1 in tracked
         assert ref2 in tracked
 
     def test_deduplicates_identical_refs(self) -> None:
         ref = FileReference(local_path="/tmp/c.parquet", storage_path="artifacts/c")
-        _track_file_refs("wf-dedup", ref)
-        _track_file_refs("wf-dedup", ref)
+        _track_file_refs(("wf-dedup", "run-1"), ref)
+        _track_file_refs(("wf-dedup", "run-1"), ref)
 
         with _app_state_lock:
-            tracked = _app_state.get("wf-dedup", {}).get(TRACKED_FILE_REFS_KEY)
+            tracked = _app_state.get(("wf-dedup", "run-1"), {}).get(
+                TRACKED_FILE_REFS_KEY
+            )
 
         assert len(tracked) == 1
 
     def test_noop_when_no_refs(self) -> None:
-        _track_file_refs("wf-noop")
+        _track_file_refs(("wf-noop", "run-1"))
 
         with _app_state_lock:
-            assert "wf-noop" not in _app_state
+            assert ("wf-noop", "run-1") not in _app_state
 
     def test_isolates_by_workflow_id(self) -> None:
         ref1 = FileReference(local_path="/tmp/x.parquet", storage_path="x")
         ref2 = FileReference(local_path="/tmp/y.parquet", storage_path="y")
-        _track_file_refs("wf-iso-a", ref1)
-        _track_file_refs("wf-iso-b", ref2)
+        _track_file_refs(("wf-iso-a", "run-1"), ref1)
+        _track_file_refs(("wf-iso-b", "run-1"), ref2)
 
         with _app_state_lock:
-            tracked_a = _app_state.get("wf-iso-a", {}).get(TRACKED_FILE_REFS_KEY, set())
-            tracked_b = _app_state.get("wf-iso-b", {}).get(TRACKED_FILE_REFS_KEY, set())
+            tracked_a = _app_state.get(("wf-iso-a", "run-1"), {}).get(
+                TRACKED_FILE_REFS_KEY, set()
+            )
+            tracked_b = _app_state.get(("wf-iso-b", "run-1"), {}).get(
+                TRACKED_FILE_REFS_KEY, set()
+            )
 
         assert ref1 in tracked_a and ref2 not in tracked_a
         assert ref2 in tracked_b and ref1 not in tracked_b
@@ -86,10 +94,12 @@ class TestTrackFileRefs:
             )
             for i in range(3)
         ]
-        _track_file_refs("wf-multi", *refs)
+        _track_file_refs(("wf-multi", "run-1"), *refs)
 
         with _app_state_lock:
-            tracked = _app_state.get("wf-multi", {}).get(TRACKED_FILE_REFS_KEY)
+            tracked = _app_state.get(("wf-multi", "run-1"), {}).get(
+                TRACKED_FILE_REFS_KEY
+            )
 
         for ref in refs:
             assert ref in tracked
@@ -119,8 +129,8 @@ class TestActivityTrackingWiring:
 
         tracked_calls: list[tuple] = []
 
-        def capture_track(wf_id: str, *refs: FileReference) -> None:
-            tracked_calls.append((wf_id, refs))
+        def capture_track(run: tuple[str, str], *refs: FileReference) -> None:
+            tracked_calls.append((run, refs))
 
         with mock.patch.object(act_mod, "_track_file_refs", side_effect=capture_track):
             with mock.patch(
@@ -130,11 +140,11 @@ class TestActivityTrackingWiring:
                 # Directly exercise the tracking branch
                 all_refs = [in_ref] + [out_ref]
                 if all_refs:
-                    act_mod._track_file_refs("wf-wiring", *all_refs)
+                    act_mod._track_file_refs(("wf-wiring", "run-1"), *all_refs)
 
         assert len(tracked_calls) == 1
-        wf_id, refs = tracked_calls[0]
-        assert wf_id == "wf-wiring"
+        run, refs = tracked_calls[0]
+        assert run == ("wf-wiring", "run-1")
         assert in_ref in refs
         assert out_ref in refs
 

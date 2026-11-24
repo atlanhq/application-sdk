@@ -11,7 +11,7 @@ import threading
 import types
 import warnings
 from abc import ABC
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -719,10 +719,19 @@ class RetryableError(AppError):
 # =============================================================================
 
 
-# Class-level app state storage shared by all App subclasses.
-# Keyed by workflow_id to isolate state between different app executions.
-_app_state: dict[str, dict[str, Any]] = {}
+#: In-memory app state shared by all App subclasses, one slot per run:
+#: ``(workflow_id, run_id) -> {key: value}``. Process-local: each worker holds
+#: the slots of the runs whose tasks it executed, so a run's state on one
+#: worker is invisible to another. A slot is released, and every value in it
+#: closed, by the worker's run-state sweeper once Temporal reports the run
+#: closed (``execution._temporal.credential_sweep``), and the rest at worker
+#: shutdown — on every worker, not only the one that ran the workflow.
+_app_state: dict[tuple[str, str], dict[str, Any]] = {}
 _app_state_lock = threading.Lock()
+
+#: Bound on closing one app-state value when its run's slot is released, so a
+#: client whose close hangs cannot stall the sweeper.
+_STATE_VALUE_CLOSE_TIMEOUT_SECONDS = 10.0
 
 
 def _get_execution_id_from_task() -> str:
@@ -828,6 +837,165 @@ async def _remove_run_credential_dirs(run: tuple[str, str]) -> dict[str, bool]:
     return results
 
 
+def _runs_with_app_state() -> list[tuple[str, str]]:
+    """The runs that still hold an app-state slot on this worker."""
+    with _app_state_lock:
+        return list(_app_state)
+
+
+async def _close_state_value(value: object) -> None:
+    """Close one app-state value: ``aclose()`` if it has one, else ``close()``.
+
+    A value with neither is left alone. A synchronous ``close()`` runs off the
+    event loop, since a client's close may block on a socket. Each close is
+    bounded by ``_STATE_VALUE_CLOSE_TIMEOUT_SECONDS``.
+    """
+    if isinstance(value, type):
+        return  # a class object's close is an unbound method, not this value's
+    closer = getattr(value, "aclose", None)
+    if not callable(closer):
+        closer = getattr(value, "close", None)
+    if not callable(closer):
+        return
+
+    async def _close() -> None:
+        if inspect.iscoroutinefunction(closer):
+            result: object = await closer()
+        else:
+            result = await run_in_thread(closer)
+        if inspect.isawaitable(result):
+            await result
+
+    await asyncio.wait_for(_close(), timeout=_STATE_VALUE_CLOSE_TIMEOUT_SECONDS)
+
+
+async def _release_run_state(run: tuple[str, str]) -> None:
+    """Release *run*'s app-state slot on this worker.
+
+    Removes the slot, deletes the local files of the ``FileReference`` objects
+    it tracked (when cleanup is enabled, as for ``cleanup_files``), and closes
+    every value that has ``aclose()`` or ``close()`` — a cached client, a
+    connection pool. Called by the worker's run-state sweeper once Temporal
+    reports the run closed, and for every remaining run at worker shutdown.
+    Each failure is logged and skipped; the slot is gone either way.
+    """
+    from application_sdk.constants import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+        TRACKED_FILE_REFS_KEY,
+    )
+
+    with _app_state_lock:
+        slot = _app_state.pop(run, None)
+    if not slot:
+        return
+
+    tracked_refs = slot.get(TRACKED_FILE_REFS_KEY) or ()
+    if tracked_refs and env_bool("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", True):
+        for ref in tracked_refs:
+            local_path: str | None = getattr(ref, "local_path", None)
+            if not local_path:
+                continue
+            for path in (local_path, local_path + ".sha256"):
+                try:
+                    if os.path.isdir(path):
+                        await run_in_thread(shutil.rmtree, path)
+                    elif os.path.lexists(path):
+                        await run_in_thread(os.remove, path)
+                except OSError:
+                    _task_logger.warning(
+                        "Failed to delete a tracked local path of a closed run",
+                        exc_info=True,
+                    )
+
+    closed: set[int] = set()
+    for key, value in slot.items():
+        if key == TRACKED_FILE_REFS_KEY or value is None or id(value) in closed:
+            continue
+        closed.add(id(value))
+        try:
+            await _close_state_value(value)
+        # conformance: ignore[E004] releasing a closed run's state must outlive one bad value; logged, the rest are still closed
+        except Exception:
+            _task_logger.warning(
+                "Failed to close app state value %r of a closed run",
+                key,
+                exc_info=True,
+            )
+
+
+def _cleanup_ref_key(ref: FileReference) -> tuple[object, ...]:
+    """Identity of the stored object(s) a ref names, for cleanup dedup."""
+    return (ref.storage_path, ref.store, ref.tier, ref.manifest_path)
+
+
+def _merge_cleanup_refs(
+    tracked: Iterable[FileReference], carried: Iterable[FileReference]
+) -> list[FileReference]:
+    """Combine this worker's tracked refs with the workflow's carried ones.
+
+    Keeps one ref per stored object, so a key reaching ``cleanup_storage`` by
+    both routes is deleted and counted once. Tracked refs come first.
+    """
+    merged: dict[tuple[object, ...], FileReference] = {}
+    for ref in (*tracked, *carried):
+        merged.setdefault(_cleanup_ref_key(ref), ref)
+    return list(merged.values())
+
+
+class _RunStoredRefs:
+    """Stored refs a run's workflow read off its tasks' inputs and results.
+
+    Lives on the workflow side, one per run. Built only from task inputs and
+    results, which come from workflow history, so a replay on any worker
+    rebuilds the same set. ``cleanup_storage`` gets them through
+    ``StorageCleanupInput.file_refs``: the refs a task on another worker
+    tracked are otherwise invisible to the worker that runs the cleanup.
+    """
+
+    def __init__(self) -> None:
+        self._refs: dict[tuple[object, ...], FileReference] = {}
+
+    def record(self, refs: Iterable[FileReference]) -> None:
+        """Keep each ref that names a stored object, once per object.
+
+        The copy kept drops ``local_path`` (a path on the worker that made
+        it) and turns ``auto_materialize`` off, so ``cleanup_storage`` is
+        never handed a download.
+        """
+        for ref in refs:
+            if not ref.storage_path:
+                continue
+            key = _cleanup_ref_key(ref)
+            if key not in self._refs:
+                self._refs[key] = ref.model_copy(
+                    update={"local_path": None, "auto_materialize": False}
+                )
+
+    def for_cleanup(self) -> list[FileReference]:
+        """The refs to pass to ``cleanup_storage``, bounded for the payload.
+
+        Durable refs come first, so a cut never drops the ref that keeps a
+        ``TRANSIENT`` alias of its key from being deleted. A cut is logged.
+        """
+        from application_sdk.contracts.cleanup import (  # noqa: PLC0415 — cold path: once per run, at cleanup
+            STORAGE_CLEANUP_FILE_REFS_MAX,
+        )
+
+        refs = sorted(
+            self._refs.values(), key=lambda r: r.tier == StorageTier.TRANSIENT
+        )
+        if len(refs) > STORAGE_CLEANUP_FILE_REFS_MAX:
+            # _safe_log takes no format args; the counts go in the message.
+            _safe_log(
+                "warning",
+                f"Passing {STORAGE_CLEANUP_FILE_REFS_MAX} of the run's "
+                f"{len(refs)} stored refs to cleanup_storage; TRANSIENT objects "
+                "among those left out are deleted only where the worker that "
+                "tracked them runs the cleanup",
+            )
+            refs = refs[:STORAGE_CLEANUP_FILE_REFS_MAX]
+        return refs
+
+
 class TaskStateAccessor:
     """Accessor for app state from within a task (not a @task method on an App).
 
@@ -842,18 +1010,20 @@ class TaskStateAccessor:
     """
 
     def get(self, key: str) -> Any | None:
-        """Get in-memory state for the current app execution."""
-        workflow_id = _get_execution_id_from_task()
+        """Get in-memory state for the current run on this worker."""
+        run = _current_run_key()
         with _app_state_lock:
-            return _app_state.get(workflow_id, {}).get(key)
+            return _app_state.get(run, {}).get(key)
 
     def set(self, key: str, value: object) -> None:
-        """Set in-memory state for the current app execution."""
-        workflow_id = _get_execution_id_from_task()
+        """Set in-memory state for the current run on this worker.
+
+        A value with ``aclose()`` or ``close()`` is closed when the run's slot
+        is released, after the run has closed.
+        """
+        run = _current_run_key()
         with _app_state_lock:
-            if workflow_id not in _app_state:
-                _app_state[workflow_id] = {}
-            _app_state[workflow_id][key] = value
+            _app_state.setdefault(run, {})[key] = value
 
 
 class AppStateAccessor:
@@ -863,8 +1033,12 @@ class AppStateAccessor:
         self.app_state.get(key)
         self.app_state.set(key, value)
 
-    State persists across task calls within the same app execution but
-    is NOT persisted externally - if the worker restarts, state is lost.
+    State persists across task calls of the same run on the same worker. It
+    is NOT shared between workers and NOT persisted externally: a task that
+    runs on another worker, or after a restart, sees an empty slot. Once the
+    run has closed, each worker releases its slot and closes every value with
+    ``aclose()`` or ``close()`` (a cached client, say), so do not store an
+    object another run still uses.
     """
 
     def __init__(self, app: "App") -> None:
@@ -1268,6 +1442,9 @@ class App(ABC):
 
     # Set by the execution layer before run() is called
     _context: AppContext | None = None
+    # Set by the generated workflow for each run: the stored refs read off
+    # every task's input and result, for cleanup_storage. None outside one.
+    _run_stored_refs: "_RunStoredRefs | None" = None
     # BLDX-878: inter-app calls deactivated pending review.
     # _client: "WorkflowAppClient | None" = None
     _task_context: "TaskExecutionContext | None" = None
@@ -1631,9 +1808,9 @@ class App(ABC):
         Raises:
             AppContextError: If called outside a @task method.
         """
-        execution_id = self._get_current_execution_id()
+        run = _current_run_key()
         with _app_state_lock:
-            return _app_state.get(execution_id, {}).get(key)
+            return _app_state.get(run, {}).get(key)
 
     def set_app_state(self, key: str, value: object) -> None:
         """Set in-memory state for the current app execution.
@@ -1642,16 +1819,15 @@ class App(ABC):
 
         Args:
             key: State key to store.
-            value: Value to store (any Python object).
+            value: Value to store (any Python object). One with ``aclose()``
+                or ``close()`` is closed when the run's slot is released.
 
         Raises:
             AppContextError: If called outside a @task method.
         """
-        execution_id = self._get_current_execution_id()
+        run = _current_run_key()
         with _app_state_lock:
-            if execution_id not in _app_state:
-                _app_state[execution_id] = {}
-            _app_state[execution_id][key] = value
+            _app_state.setdefault(run, {})[key] = value
 
     def _get_current_execution_id(self) -> str:
         """Get the execution ID from current task context."""
@@ -2555,6 +2731,10 @@ class App(ABC):
 
         1. **Tracked ``TRANSIENT``-tier refs** (always): auto-persisted
            intermediary files (``StorageTier.TRANSIENT``, the default).
+           Tracked means the refs this worker's tasks took or returned, plus
+           ``input.file_refs`` — the stored refs the workflow read off every
+           task's input and result, whichever worker ran it. The default
+           ``on_complete`` fills it in.
            Each key and its ``.sha256`` sidecar are deleted, and a directory
            ref's manifest (``manifest_path``) with it.
            ``RETAINED`` and ``PERSISTENT`` tier refs are skipped, and so is
@@ -2616,8 +2796,13 @@ class App(ABC):
                     )
                     return False
 
-        # 1. Delete tracked transient objects.
-        tracked_refs = TaskStateAccessor().get(TRACKED_FILE_REFS_KEY) or ()
+        # 1. Delete tracked transient objects: the refs this worker tracked,
+        # plus the refs the workflow read off every task's input and result
+        # (``input.file_refs``), which cover the tasks that ran on other
+        # workers. One entry per stored object, this worker's copy first.
+        tracked_refs = _merge_cleanup_refs(
+            TaskStateAccessor().get(TRACKED_FILE_REFS_KEY) or (), input.file_refs
+        )
 
         # Keys a RETAINED/PERSISTENT ref in this run points at. A TRANSIENT ref
         # can alias one of them (an app that hand-builds a TRANSIENT ref on a key
@@ -2830,7 +3015,12 @@ class App(ABC):
 
             async def _storage_cleanup() -> None:
                 try:
-                    await self.cleanup_storage(StorageCleanupInput())
+                    stored = self._run_stored_refs
+                    await self.cleanup_storage(
+                        StorageCleanupInput(
+                            file_refs=stored.for_cleanup() if stored else []
+                        )
+                    )
                 except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
                     _safe_log(
                         "warning",
@@ -3977,6 +4167,7 @@ def generate_workflow_class(
             self._app_instance = app_instance
         app_instance._context = context
 
+        app_instance._run_stored_refs = _RunStoredRefs()
         context_data = {
             "run_id": run_id,
             "workflow_id": workflow_id,
@@ -4126,11 +4317,14 @@ def generate_workflow_class(
                 duration_ms=duration_ms,
             )
 
-            workflow_id = workflow.info().workflow_id
-            with _app_state_lock:
-                _app_state.pop(workflow_id, None)
-
+            # The run's app-state slots are not touched here. They live on
+            # the workers that ran its tasks, which release them (and close
+            # what they hold) once Temporal reports the run closed. This block
+            # can neither await a close nor tell a finished run from a cache
+            # eviction of a running one, where a task on this worker may
+            # still be using what the slot holds.
             app_instance._context = None
+            app_instance._run_stored_refs = None
             # BLDX-878: inter-app calls deactivated pending review.
             # app_instance._client = None
 
@@ -4246,6 +4440,7 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
                     schedule_to_close_seconds=task_meta.schedule_to_close_seconds,
                     progress_watchdog=task_meta.progress_watchdog,
                     max_no_progress_seconds=task_meta.max_no_progress_seconds,
+                    stored_refs=app_instance._run_stored_refs,
                 )
                 setattr(app_instance, attr_name, wrapper)
 
@@ -4267,6 +4462,7 @@ def _create_task_activity_wrapper(
     schedule_to_close_seconds: int | None = None,
     progress_watchdog: "ProgressWatchdogMode | None" = None,
     max_no_progress_seconds: float | None = None,
+    stored_refs: _RunStoredRefs | None = None,
 ) -> Any:
     """Create a wrapper that executes a task as a Temporal activity.
 
@@ -4304,6 +4500,9 @@ def _create_task_activity_wrapper(
         max_no_progress_seconds: The task's declared no-progress allowance in
             seconds, or ``None`` to inherit the fleet-wide one. Forwarded
             verbatim, for the same reason.
+        stored_refs: The run's sink for stored refs. When set, the refs in
+            each call's input and result are recorded in it, for
+            ``cleanup_storage``.
 
     Returns:
         Async function that executes the task as an activity.
@@ -4338,6 +4537,9 @@ def _create_task_activity_wrapper(
         )
         from application_sdk.execution._temporal.eviction_retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
             execute_activity_with_eviction_retry,
+        )
+        from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+            _find_file_refs,
         )
 
     # Build the Temporal RetryPolicy once (not per invocation)
@@ -4410,6 +4612,21 @@ def _create_task_activity_wrapper(
             ),
             **({"task_queue": pool_queue} if pool_queue else {}),
         )
+
+        if stored_refs is not None:
+            # Both come from history (the input this workflow sent, the result
+            # it decoded), so recording them is deterministic on replay. Never
+            # fails the task: a ref left out is only one cleanup misses.
+            try:
+                stored_refs.record(_find_file_refs(input_data))
+                stored_refs.record(_find_file_refs(result))
+            except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
+                _safe_log(
+                    "warning",
+                    f"Could not record the stored refs of task {task_name} for "
+                    "cleanup_storage",
+                    exc_info=True,
+                )
 
         return result
 

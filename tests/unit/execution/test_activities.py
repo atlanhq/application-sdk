@@ -407,16 +407,16 @@ class TestTrackFileRefs:
 
     def test_noop_when_no_refs(self) -> None:
         # No refs → does not import _app_state, does not raise.
-        _track_file_refs("wf-1")
+        _track_file_refs(("wf-1", "run-1"))
 
     def test_adds_refs_to_app_state(self) -> None:
         from application_sdk.app.base import _app_state
 
         ref = FileReference(local_path="/tmp/foo")
-        _track_file_refs("wf-test-track", ref)
+        _track_file_refs(("wf-test-track", "run-1"), ref)
         from application_sdk.constants import TRACKED_FILE_REFS_KEY
 
-        assert ref in _app_state["wf-test-track"][TRACKED_FILE_REFS_KEY]
+        assert ref in _app_state[("wf-test-track", "run-1")][TRACKED_FILE_REFS_KEY]
 
     def test_upload_refs_output_retained_refs_are_tracked_beside_transient_twin(
         self,
@@ -436,8 +436,8 @@ class TestTrackFileRefs:
         found = _find_file_refs(UploadRefsOutput(prefix="p", refs=[retained]))
         assert found == [retained]
 
-        _track_file_refs("wf-test-upload-refs", *found, transient)
-        tracked = _app_state["wf-test-upload-refs"][TRACKED_FILE_REFS_KEY]
+        _track_file_refs(("wf-test-upload-refs", "run-1"), *found, transient)
+        tracked = _app_state[("wf-test-upload-refs", "run-1")][TRACKED_FILE_REFS_KEY]
         assert {retained, transient} <= tracked
 
 

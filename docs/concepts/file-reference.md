@@ -197,7 +197,8 @@ The tier controls **where** the file is stored and **when it is cleaned up**.
 
 ```
 Prefix:  file_refs/{uuid}
-Cleanup: deleted by App.cleanup_storage() at the end of every run
+Cleanup: deleted by App.cleanup_storage() at the end of every run, whichever
+         worker uploaded it
 Use for: intermediate files between tasks that are no longer needed after
          the run completes
 ```
