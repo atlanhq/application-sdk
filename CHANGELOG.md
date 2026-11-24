@@ -1,5 +1,39 @@
 # Changelog
 
+## v3.59.0 (November 24, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.58.1...v3.59.0
+
+### Features
+
+- give apps a workflow-safe per-run scratch dir and flag tempfile in app code [FND-5364] (#5057) (by @cmgrote in [bbfd627](https://github.com/atlanhq/application-sdk/commit/bbfd627))
+- stamp workflow_type on the activity ExecutionContext [FND-5390] (#5066) (by @cmgrote in [63e68ab](https://github.com/atlanhq/application-sdk/commit/63e68ab))
+
+### Bug Fixes
+
+- a generated _input.py that fails to import surfaces its error instead of serving the thin contract [FND-4092] (#5008) (by @cmgrote in [8574323](https://github.com/atlanhq/application-sdk/commit/8574323))
+- bind daprd's HTTP and gRPC APIs to loopback only [FND-5211] (#5043) (by @cmgrote in [cb488ec](https://github.com/atlanhq/application-sdk/commit/cb488ec))
+- encode every SQL connection-URL field, validate host and port [FND-5212] (#5042) (by @cmgrote in [7a07a05](https://github.com/atlanhq/application-sdk/commit/7a07a05))
+- cap request bodies on the worker and the host, 413 over the cap [FND-5214] (#5044) (by @cmgrote in [749331a](https://github.com/atlanhq/application-sdk/commit/749331a))
+- reject a trailing backslash and run the regex-structure check on the raw-dict path [FND-5216] (#5041) (by @cmgrote in [c538cea](https://github.com/atlanhq/application-sdk/commit/c538cea))
+- validate the upload prefix on the worker too, refuse SDK-owned roots [FND-5213] (#5049) (by @cmgrote in [885bd80](https://github.com/atlanhq/application-sdk/commit/885bd80))
+- scope /stop, /result and /status to this app's task queue [FND-5215] (#5051) (by @cmgrote in [3487505](https://github.com/atlanhq/application-sdk/commit/3487505))
+- record one workflow metric sample per run across evictions and worker changes [FND-5217] (#5054) (by @cmgrote in [8c1a4ee](https://github.com/atlanhq/application-sdk/commit/8c1a4ee))
+- run handler mode on one event loop [FND-5222] (#5055) (by @cmgrote in [bfc8bfd](https://github.com/atlanhq/application-sdk/commit/bfc8bfd))
+- sandbox-check app and template workflow code [FND-5218] (#5056) (by @cmgrote in [ff22148](https://github.com/atlanhq/application-sdk/commit/ff22148))
+- clean other workers' TRANSIENT refs and release per-run app state on every worker [FND-5220] (#5072) (by @cmgrote in [d87828f](https://github.com/atlanhq/application-sdk/commit/d87828f))
+
+### Chores
+
+- sync daprd pin to 1.19.2 (#5018) (by @atlan-app-fleet[bot] in [132531b](https://github.com/atlanhq/application-sdk/commit/132531b))
+- update actions/create-github-app-token digest to f418cff (#5025) (by @renovate[bot] in [e944ce3](https://github.com/atlanhq/application-sdk/commit/e944ce3))
+- suppress L002 on check_migration's stdlib logger so main's Conformance run goes green (#5026) (by @vaibhavatlan in [471ffde](https://github.com/atlanhq/application-sdk/commit/471ffde))
+- update postgres:19.0 docker digest to 766ddae (#5052) (by @renovate[bot] in [db6141f](https://github.com/atlanhq/application-sdk/commit/db6141f))
+- update pre-commit hook pyyaml to v6.0.4 (#5059) (by @renovate[bot] in [490e365](https://github.com/atlanhq/application-sdk/commit/490e365))
+- update postgres:19.0 docker digest to e99b332 (#5058) (by @renovate[bot] in [1e560b4](https://github.com/atlanhq/application-sdk/commit/1e560b4))
+- update postgres:19.0 docker digest to 4ae330e (#5074) (by @renovate[bot] in [6494208](https://github.com/atlanhq/application-sdk/commit/6494208))
+
+
 ## v3.58.1 (November 22, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.58.0...v3.58.1
