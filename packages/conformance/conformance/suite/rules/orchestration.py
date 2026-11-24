@@ -46,7 +46,7 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         scope=RuleScope.APP,
         name="DirectTemporalImport",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         category="orchestration-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -57,7 +57,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "single seam lets the orchestration layer evolve (Temporal upgrades, "
             "engine swaps, interceptor changes) without breaking every app. A direct "
             "'temporalio' import couples the app to the engine and bypasses that seam "
-            "(BLDX-1417)."
+            "(BLDX-1417). "
+            "Customer impact: the SDK's own tests cannot see an app's direct engine "
+            "calls, so an SDK release that upgrades Temporal or tightens the workflow "
+            "sandbox passes CI and then breaks the app only at run time in the tenant: "
+            "the customer's workflows fail or stall mid-run after a routine SDK bump, "
+            "with nothing in their configuration to explain it."
         ),
         short_description="App imports 'temporalio' directly instead of the SDK orchestration seam",
         full_description=(
@@ -72,8 +77,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "BLDX-1417.  This rule scans test/harness files too: an integration\n"
             "conftest that connects to Temporal directly is exactly the case to catch.\n"
             "\n"
-            "Land as ``WARN``: a justified inline ``# conformance: ignore[P004]\n"
-            "<reason>`` records any unavoidable exception and stays visible in SARIF.\n"
+            "This rule is ``BLOCK`` (suppress-only): an unsuppressed import fails\n"
+            "the conformance gate.  Only the SDK may import ``temporalio``; an app\n"
+            "that hits a gap in the seam gets the seam extended in the SDK, not a\n"
+            "direct import.  The rare app that genuinely drives Temporal itself\n"
+            "records why with ``# conformance: ignore[P004] <reason>`` on each\n"
+            "import line, or the comment line directly above it.  The reason is\n"
+            "mandatory, there is no file-level form, and the suppressed finding\n"
+            "stays visible in SARIF.  On a pull request the gate counts only the\n"
+            "imports the change adds, so an existing backlog does not block\n"
+            "unrelated work.\n"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
