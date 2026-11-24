@@ -44,7 +44,10 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
     "checks.yml",
     "commits.yaml",
     "release-gate.yaml",
-    "connector-review-gate.yaml",
+    # The connector reviewer (FND-5317): an AI review of a pull request, run
+    # when someone comments `/review`. It replaces the mothership review gate,
+    # `connector-review-gate.yaml`, which is now in RETIRED_FILES.
+    "connector-reviewer.yaml",
     "release.yaml",
     "tag-and-publish.yaml",
     "vulnerability-scan.yml",
@@ -128,6 +131,15 @@ SARIF_UPLOAD_WORKFLOW = "conformance-upload-sarif.yaml"
 # no dependency updater. Dependabot *security* updates are a repository
 # setting, not this file, and are unaffected.
 #
+# ``connector-review-gate.yaml`` and ``.github/scripts/connector_review_gate.py``
+# (FND-5317): the mothership review gate. The workflow ran the script on every
+# pull request and review event to check that the mothership reviewer had
+# approved. The connector reviewer (``connector-reviewer.yaml``) replaces that
+# reviewer and posts its own ``connector-reviewer`` commit status, so the gate
+# has nothing left to read. The workflow was inline and called no
+# application-sdk reusable. The rest of the mothership kit lived outside
+# ``.github/`` and is retired through ``RETIRED_CONNECTOR_REVIEW_FILES`` below.
+#
 # Retirements are repo-root-relative so the same mechanism can remove a
 # previously-managed hook or script, or a config bootstrap supersedes, not
 # only a workflow.
@@ -137,6 +149,8 @@ RETIRED_FILES: tuple[str, ...] = (
     ".github/workflows/update-dashboard.yml",
     ".github/workflows/renovate-auto-approve.yml",
     ".github/workflows/porter-bundle-cnab.yaml",
+    ".github/workflows/connector-review-gate.yaml",
+    ".github/scripts/connector_review_gate.py",
     ".github/dependabot.yml",
     ".github/dependabot.yaml",
 )
@@ -145,6 +159,13 @@ RETIRED_WORKFLOWS: tuple[str, ...] = tuple(
     for path in RETIRED_FILES
     if path.startswith(".github/workflows/")
 )
+
+# Retired files that are not workflows and that C002 still reports while a
+# copy is on disk. Each one was a ``MANAGED_ACTION_FILES`` entry, so C002
+# reported it as absent while it was managed and reports it as retired now.
+# The Dependabot configs are in ``RETIRED_FILES`` but not here: bootstrap never
+# installed them, and C002 has never reported them.
+RETIRED_ACTION_FILES: tuple[str, ...] = (".github/scripts/connector_review_gate.py",)
 
 # Retiring a shim and retiring the application-sdk reusable it called are two
 # steps, in that order (FND-4654). Bootstrap deletes a retired shim only when a
@@ -177,6 +198,10 @@ RETIRED_SHIM_REUSABLES: dict[str, str] = {
 RETIRED_SHIMS_WITHOUT_REUSABLE: dict[str, str] = {
     "docstring-coverage.yaml": "its target reusable never existed",
     "porter-bundle-cnab.yaml": "never bootstrap-managed; called no SDK reusable",
+    "connector-review-gate.yaml": (
+        "an inline job that ran the vendored connector_review_gate.py; called"
+        " no SDK reusable"
+    ),
 }
 
 
@@ -243,31 +268,50 @@ MANAGED_ACTION_FILES: tuple[tuple[str, str], ...] = (
     ),
     (".github/scripts/build_conformance_args.py", "build_conformance_args.py"),
     (".github/scripts/probe_code_scanning.py", "probe_code_scanning.py"),
-    (".github/scripts/connector_review_gate.py", "connector_review_gate.py"),
     (".github/scripts/release_gate.py", "release_gate.py"),
 )
 
-# Local connector-review kit. These paths are owned by bootstrap once a repo
-# opts in, via ``bootstrap --connector-review-kit`` or the ``bootstrap
-# --resync`` that implies it.
-# (destination, template, must be executable)
-MANAGED_CONNECTOR_REVIEW_FILES: tuple[tuple[str, str, bool], ...] = (
-    ("scripts/fetch-review-rules.sh", "fetch-review-rules.sh", True),
-    (
-        ".claude/hooks/connector-review-reminder.sh",
-        "connector-review-reminder.sh",
-        True,
-    ),
-    (".claude/skills/connector-review/SKILL.md", "connector-review.md", False),
+# The connector review kit: what ``bootstrap --connector-review-kit``, or the
+# ``bootstrap --resync`` that implies it, keeps in a repo besides the workflow
+# shims. Since FND-5317 that is the connector reviewer's local side: the
+# managed review block in ``CLAUDE.md`` (and ``AGENTS.md`` where one exists),
+# and the repository's own principles folder. The kit also takes out what the
+# mothership reviewer left behind, which is the rest of this section.
+#
+# The principles folder's README, as (destination, template). Write-if-absent:
+# the folder belongs to the repository, so bootstrap creates the README once
+# and never rewrites it.
+CONNECTOR_REVIEWER_PRINCIPLES_README: tuple[str, str] = (
+    ".github/connector-reviewer/principles/README.md",
+    "connector-reviewer-principles-readme.md",
 )
 
-# Retire the marker and PreToolUse gate only when the opt-in kit is requested.
-# They were self-attestation: an agent could write PASS without proving review.
+# Files earlier kits installed, removed when the kit is requested. A bare run
+# leaves them alone, as it leaves all local Claude configuration alone.
+#
+# The first three were the marker and the PreToolUse gate. They were
+# self-attestation: an agent could write PASS without proving review.
+#
+# The rest are the mothership kit (FND-5317): the rule-fetch script, the
+# SessionStart reminder, the local review skill, and the file that opted the
+# repository into the mothership reviewer. The reminder's entry in
+# ``.claude/settings.json`` goes in the same run, so no hook is left pointing
+# at a deleted script.
 RETIRED_CONNECTOR_REVIEW_FILES: tuple[str, ...] = (
     "scripts/write-connector-review-marker.sh",
     ".claude/hooks/check-review-before-commit.sh",
     ".claude/hooks/review-rules-freshness.sh",
+    "scripts/fetch-review-rules.sh",
+    ".claude/hooks/connector-review-reminder.sh",
+    ".claude/skills/connector-review/SKILL.md",
+    ".mothership/reviewer.yaml",
 )
+
+# The review rules the repository kept for the mothership reviewer: a
+# ``MANIFEST.yaml`` and a ``rules/`` folder of Markdown files. Every repository
+# reviews against its own principles now, so the kit removes this whole folder,
+# real rules included, and nothing else under ``.mothership/``.
+LOCAL_REVIEW_RULES_DIR = ".mothership/review-rulesets/connector-app"
 
 
 def _load_template(name: str) -> str:
@@ -286,7 +330,8 @@ def _load_template(name: str) -> str:
 _STATIC_TEMPLATES: frozenset[str] = frozenset(
     [
         *(template_name for _, template_name in MANAGED_ACTION_FILES),
-        *(template_name for _, template_name, _ in MANAGED_CONNECTOR_REVIEW_FILES),
+        # Prose with ``<placeholder>`` text in it, and no substitution.
+        CONNECTOR_REVIEWER_PRINCIPLES_README[1],
     ]
 )
 

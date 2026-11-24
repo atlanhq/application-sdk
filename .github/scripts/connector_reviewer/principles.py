@@ -1,4 +1,4 @@
-"""Principles: what the reviewer judges by, matched to files by area.
+"""Principles: what the reviewer judges by, matched to files by area or path glob.
 
 This replaces lens's rule cards (`rules.toml` and `cards/`). A principle is one
 short Markdown file:
@@ -28,18 +28,37 @@ Two sources, one format:
   `--principles-dir` or the `CONNECTOR_REVIEWER_PRINCIPLES_DIR` environment
   variable (in CI, that directory of the application-sdk checkout);
 - **repo principles** (`RP01`…) are one repository's own. They are read from
-  `<root>/.github/connector-reviewer/principles/` on the base branch of the
-  repo under review, when that directory exists.
+  `.github/connector-reviewer/principles/` on the default branch of the repo
+  under review, when that directory exists: in CI a checkout of its own
+  (`--principles-root`), not the pull request's base checkout, so a pull
+  request or the branch it targets cannot rewrite them.
 
 The two paths end the same way on purpose. They are different directories of
 different repositories, and when they are the same directory (the reviewer is
 pointed at application-sdk itself) it is read once, as the fleet's.
 
 Only a file named `^[a-z]{2}\\d{2}-.+\\.md$` is a principle; a `README.md`
-beside them is not read. `applies-to` names areas, which are fixed and coarse
-(`area_of`); a principle without it applies to every file. A bundle gets the
-principles whose areas meet the areas of its files, fleet first and then repo,
-each in id order and each rendered once.
+beside them is not read.
+
+`applies-to` is an inline list of at most eight entries, each an area or a
+path glob:
+
+    applies-to: [contract, "app/workflow_health/**", "app/sq_enricher*/**"]
+
+- An unquoted entry is an area. The areas are fixed and coarse (`area_of`).
+  A quoted area name (`"app"`) is still that area, as it always was.
+- Any other quoted entry is a glob, matched against the file's path from the
+  repository root (`advisory.glob_match`): `**` crosses directories and `**/`
+  may match none, `*` and `?` stay within one segment, and every other
+  character is literal. A glob is relative: no leading `/`, no `.` or `..`
+  segment, no backslash, no empty segment, at most 200 characters. It cannot
+  hold a comma, which separates entries.
+
+A principle covers a file when one of its areas is the file's area or one of
+its globs matches the file's path; a principle without `applies-to` covers
+every file. A bundle gets the principles that cover at least one of its files,
+fleet first and then repo, each in id order and each rendered once with the
+files it covers.
 
 A file that does not follow the format never stops a review: it is skipped and
 a note says so in the summary. A fleet directory that is missing, or holds no
@@ -57,7 +76,12 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .advisory import glob_match
+
 AREAS = ("app", "generated", "tests", "contract", "ci")
+# `applies-to` scopes a principle; it is not a file list.
+MAX_APPLIES_TO = 8
+MAX_GLOB_CHARS = 200
 ENV_DIR = "CONNECTOR_REVIEWER_PRINCIPLES_DIR"
 REPO_DIR = ".github/connector-reviewer/principles"
 FILE_NAME = re.compile(r"^[a-z]{2}\d{2}-.+\.md$")
@@ -105,16 +129,29 @@ class PrinciplesError(Exception):
 class Principle:
     id: str
     title: str
-    applies_to: tuple[str, ...]  # areas; empty means every file
+    applies_to: tuple[str, ...]  # areas
     principle: str
     why: str
     ask: tuple[str, ...]
     dont_flag: str
     severity: str
     source: str  # "fleet" | "repo"
+    # Path globs from `applies-to`. With no areas and no globs, every file.
+    globs: tuple[str, ...] = ()
 
-    def applies(self, areas: set[str]) -> bool:
-        return not self.applies_to or bool(areas.intersection(self.applies_to))
+    @property
+    def everywhere(self) -> bool:
+        """No `applies-to`: the principle covers every file."""
+        return not self.applies_to and not self.globs
+
+    def covers(self, path: str) -> bool:
+        """Whether this principle governs the repo-relative `path`."""
+        if self.everywhere:
+            return True
+        path = path.removeprefix("./")
+        return area_of(path) in self.applies_to or any(
+            glob_match(path, g) for g in self.globs
+        )
 
     def render(self, files: list[str]) -> str:
         """The principle as the model sees it: its id and title, the bundle's
@@ -142,10 +179,14 @@ class PrincipleSet:
     notes: list[str] = field(default_factory=list)
 
     def for_paths(self, paths: list[str]) -> list[Principle]:
-        """The principles for a bundle: those whose areas meet the areas of its
-        files, and those that apply everywhere. Fleet first, then repo."""
-        areas = {a for a in map(area_of, paths) if a}
-        return [p for p in (*self.fleet, *self.repo) if p.applies(areas)]
+        """The principles for a bundle: those that cover at least one of its
+        files, by area or glob, and those that apply everywhere. Fleet first,
+        then repo."""
+        return [
+            p
+            for p in (*self.fleet, *self.repo)
+            if p.everywhere or any(p.covers(f) for f in paths)
+        ]
 
     def render_for(self, paths: list[str]) -> str:
         """Each applicable principle once, with the files it governs."""
@@ -157,7 +198,7 @@ class PrincipleSet:
                 blocks.append(
                     "The principles below (RP ids) are this repository's own."
                 )
-            files = [f for f in paths if not p.applies_to or area_of(f) in p.applies_to]
+            files = [f for f in paths if p.covers(f)]
             blocks.append(p.render(files))
         return "\n".join(blocks)
 
@@ -169,8 +210,10 @@ def _attr(value: str) -> str:
 
 
 def _shown(value: str, limit: int = 60) -> str:
-    """A value from a principle file, safe to show in the Markdown summary."""
-    return re.sub(r"[^A-Za-z0-9 ._,'\[\]-]", "?", value)[:limit]
+    """A value from a principle file, safe to show in the Markdown summary.
+    Every caller puts it in a code span, so `/` and `*` (a glob's) show as
+    typed; a backtick, a line break or anything else becomes `?`."""
+    return re.sub(r"[^A-Za-z0-9 ._,'\[\]/*-]", "?", value)[:limit]
 
 
 def _front_matter(lines: list[str]) -> tuple[dict[str, str], int]:
@@ -199,20 +242,60 @@ def _front_matter(lines: list[str]) -> tuple[dict[str, str], int]:
     return meta, end + 1
 
 
-def _areas(raw: str) -> tuple[str, ...]:
+def _check_glob(glob: str) -> None:
+    """Raise ValueError unless `glob` is a relative path glob."""
+    shown = f"`applies-to` glob `{_shown(glob)}`"
+    if len(glob) > MAX_GLOB_CHARS:
+        raise ValueError(f"{shown} is longer than {MAX_GLOB_CHARS} characters")
+    if "\\" in glob:
+        raise ValueError(f"{shown} has a backslash: separate folders with `/`")
+    if glob.startswith("/"):
+        raise ValueError(
+            f"{shown} starts with `/`: a glob is relative to the repository root"
+        )
+    segments = glob.split("/")
+    if any(s in (".", "..") for s in segments):
+        raise ValueError(f"{shown} has a `.` or `..` segment")
+    if not all(segments):
+        raise ValueError(f"{shown} has an empty segment")
+
+
+def _applies_to(raw: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The areas and the path globs of an `applies-to` value."""
     m = _INLINE_LIST.match(raw)
     if not m:
         raise ValueError("`applies-to` is not an inline list such as `[app, contract]`")
-    items = [x.strip().strip("'\"") for x in m.group(1).split(",")]
-    if not all(items):
+    if not m.group(1).strip():
         raise ValueError("`applies-to` is empty: leave it out to apply everywhere")
-    unknown = [x for x in items if x not in AREAS]
-    if unknown:
+    items = [x.strip() for x in m.group(1).split(",")]
+    if len(items) > MAX_APPLIES_TO:
         raise ValueError(
-            f"`applies-to` names an unknown area `{_shown(unknown[0])}` "
-            f"(the areas are {', '.join(AREAS)})"
+            f"`applies-to` has {len(items)} entries; at most {MAX_APPLIES_TO}"
         )
-    return tuple(dict.fromkeys(items))
+    areas: list[str] = []
+    globs: list[str] = []
+    for item in items:
+        quoted = len(item) >= 2 and item[0] == item[-1] and item[0] in "'\""
+        if not quoted and (item[:1] in ("'", '"') or item[-1:] in ("'", '"')):
+            raise ValueError(
+                f"`applies-to` entry `{_shown(item)}` is not quoted properly: "
+                "open and close it with the same quote, and keep commas out of it"
+            )
+        value = item[1:-1] if quoted else item
+        if not value:
+            raise ValueError("`applies-to` has an empty entry")
+        if value in AREAS:
+            areas.append(value)
+        elif quoted:
+            _check_glob(value)
+            globs.append(value)
+        else:
+            raise ValueError(
+                f"`applies-to` names an unknown area `{_shown(value)}` "
+                f"(the areas are {', '.join(AREAS)}; a path glob must be quoted, "
+                'such as "app/x/**")'
+            )
+    return tuple(dict.fromkeys(areas)), tuple(dict.fromkeys(globs))
 
 
 def _body(lines: list[str]) -> tuple[str, dict[str, list[str]]]:
@@ -262,7 +345,9 @@ def parse_principle(text: str, source: str) -> Principle:
             f"its `id` must be {prefix} and two digits for a {source} principle, "
             f"not `{_shown(pid)}`"
         )
-    applies_to = _areas(meta["applies-to"]) if "applies-to" in meta else ()
+    applies_to, globs = (
+        _applies_to(meta["applies-to"]) if "applies-to" in meta else ((), ())
+    )
     title, values = _body(lines[body_start:])
     for name in _FIELDS:
         if not values.get(name):
@@ -281,6 +366,7 @@ def parse_principle(text: str, source: str) -> Principle:
         dont_flag=" ".join(values["Don't flag"]),
         severity=" ".join(values["Severity"]),
         source=source,
+        globs=globs,
     )
 
 
@@ -331,7 +417,7 @@ def resolve_fleet_dir(arg: str | None) -> Path | None:
 
 def load_principles(fleet: Path | None, root: Path) -> PrincipleSet:
     """The fleet principles in `fleet`, and the repo principles of the
-    base-branch checkout at `root` when it has any.
+    default-branch checkout at `root` when it has any.
 
     Raises PrinciplesError when the fleet directory is not given, does not
     exist, or holds no principle file: the reviewer must not run without the

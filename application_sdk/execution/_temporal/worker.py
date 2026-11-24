@@ -37,7 +37,7 @@ from application_sdk.constants import (
 )
 from application_sdk.execution._temporal.activities import get_all_task_activities
 from application_sdk.execution._temporal.workflows import get_all_app_workflows
-from application_sdk.execution.sandbox import SandboxConfig
+from application_sdk.execution.sandbox import SandboxConfig, host_library_modules
 from application_sdk.execution.settings import (
     _derive_max_concurrent_activities,
     _explicit_max_concurrent_activities,
@@ -290,7 +290,11 @@ class AppWorker:
         self._credential_sweeper: asyncio.Task[None] | None = None
 
     def _start_credential_sweeper(self) -> None:
-        """Start removing this worker's credential directories of closed runs."""
+        """Start releasing this worker's state of closed runs.
+
+        Credential directories and ``_app_state`` slots (tracked files,
+        cached clients), on every worker that ran one of the run's tasks.
+        """
         from application_sdk.execution._temporal.credential_sweep import (  # noqa: PLC0415 — cold path: worker startup only
             run_sweeper,
         )
@@ -300,13 +304,15 @@ class AppWorker:
         )
 
     async def _stop_credential_sweeper(self) -> None:
-        """Stop the sweeper and remove every credential directory still tracked.
+        """Stop the sweeper and release every run's state still held.
 
-        Runs after the Temporal worker has stopped, so no task on this worker
-        can still need one. Best-effort: shutdown must not fail on it.
+        Removes every credential directory still tracked and releases every
+        ``_app_state`` slot, closing the clients in it. Runs after the
+        Temporal worker has stopped, so no task on this worker can still need
+        one. Best-effort: shutdown must not fail on it.
         """
         from application_sdk.execution._temporal.credential_sweep import (  # noqa: PLC0415 — cold path: shutdown only
-            remove_all_credential_dirs,
+            release_all_runs,
         )
 
         sweeper, self._credential_sweeper = self._credential_sweeper, None
@@ -315,12 +321,10 @@ class AppWorker:
             with contextlib.suppress(asyncio.CancelledError):
                 await sweeper
         try:
-            await remove_all_credential_dirs()
+            await release_all_runs()
         # conformance: ignore[E004] shutdown path; a failed removal is logged and must not block shutdown
         except Exception:
-            logger.warning(
-                "Removing credential directories at shutdown failed", exc_info=True
-            )
+            logger.warning("Releasing run state at shutdown failed", exc_info=True)
 
     async def _start_metrics_push(self) -> None:
         if not self._enable_pushgateway:
@@ -1124,13 +1128,17 @@ def create_worker(
     if app_modules:
         config = config.with_passthrough_modules(*app_modules)
 
-    # Pass through all app module paths to prevent re-registration in sandbox
-    app_module_paths: set[str] = set()
-    for app_meta in registered_apps:
-        if app_meta.module_path:
-            app_module_paths.add(app_meta.module_path)
-    if app_module_paths:
-        config = config.with_passthrough_modules(*app_module_paths)
+    # App packages are deliberately NOT passed through: the sandbox re-imports
+    # them for every run, so run() and the helpers it imports are checked for
+    # non-determinism. Registration is sandbox-aware (_apply_app_registration),
+    # so the re-import leaves the registries alone. Every library the host has
+    # already imported is passed through instead; see host_library_modules.
+    app_packages = {
+        app_meta.module_path.partition(".")[0]
+        for app_meta in registered_apps
+        if app_meta.module_path
+    }
+    config = config.with_passthrough_modules(*host_library_modules(app_packages))
 
     workflow_runner = SandboxedWorkflowRunner(
         restrictions=config.to_temporal_restrictions()

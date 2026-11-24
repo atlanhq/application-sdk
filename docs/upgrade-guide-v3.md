@@ -713,9 +713,11 @@ Passthrough modules are declared on the `App` class itself as a `ClassVar` (a `s
 
 ```python
 class MyConnector(App):
-    passthrough_modules = {"my_connector", "third_party_lib"}
+    passthrough_modules = {"third_party_lib"}
     ...
 ```
+
+Most apps need none. The worker passes through every library already imported when it starts, and re-imports only your app's own package in the sandbox, so Temporal checks your workflow code. Do not list your own package: that turns the check off. See [Workflow Sandbox and Passthrough Modules](concepts/apps.md#workflow-sandbox-and-passthrough-modules).
 
 ### Concurrency defaults follow the pod's limits
 

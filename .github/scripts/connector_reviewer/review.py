@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-from . import advisory, baseline, exempt, holistic, prompts, skeptic, trace
+from . import advisory, baseline, exempt, holistic, prompts, sdk_source, skeptic, trace
 from . import context as code_context
 from . import facts as code_facts
 from .agent import AgentLimits, BundleResult, review_bundle, suspect_paths
@@ -60,6 +60,7 @@ from .findings import (
     PRState,
     merge_new,
     quote_stored,
+    unique_ids,
 )
 from .github import GitHub, GitHubError, bot_login
 from .index import Index, Symbol, build_index, index_source
@@ -80,6 +81,7 @@ APPROACH_SHARE = 0.15
 SKEPTIC_SHARE = 0.10
 COMMENT_LIMIT = 64_000  # GitHub's cap is 65,536 characters; keep a margin
 MAX_HISTORY = 20  # rounds kept in the state and shown in the summary
+MECHANICAL_SHOWN = 20  # withheld files named per reason in the summary's box
 
 
 @dataclass
@@ -240,6 +242,48 @@ def only_pr_changes(
         elif fd.hunks:
             dropped.append(fd.path)
     return kept, dropped, demoted
+
+
+_SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def base_ref_output(gh: GitHub, number: int) -> tuple[str, str]:
+    """The `$GITHUB_OUTPUT` lines of `base-ref`, and a log line.
+
+    `base=` is the pull request's base commit (`base.sha`, the same `base`
+    `run` diffs against), which the workflow checks the app out at, so the
+    unchanged files, the index and the facts are the code this pull request
+    is judged against, not the default branch as it is today (a pull request
+    against another branch, or a replay of an old one). Written only when it
+    is 40 hex; empty otherwise, and the checkout then falls back to its
+    default ref, which `base_checkout_note` reports. Never raises."""
+    if number <= 0:
+        return "base=\n", "no pull request to read the base commit from"
+    try:
+        pr = gh.pr(number) or EMPTY
+        sha = str((pr.get("base") or EMPTY).get("sha") or "")
+    except Exception as e:  # noqa: BLE001 - a failed read is a reason, never a crash
+        return "base=\n", f"the pull request could not be read ({type(e).__name__})"
+    if not _SHA.fullmatch(sha):
+        return "base=\n", "the pull request names no base commit"
+    return f"base={sha}\n", f"base commit {sha[:9]}"
+
+
+def base_checkout_note(root: Path, base: str) -> str:
+    """The incomplete reason when the app checkout at `root` is a git checkout
+    whose commit is not the pull request's base `base`: `base-ref` failed and
+    the checkout fell back to its default ref, or the base moved between that
+    step and this review. "" when it is at `base`, or `root` is no checkout of
+    its own (a local run)."""
+    at = sdk_source.checkout_commit(root)
+    if not at or at == base:
+        return ""
+    return (
+        f"The app checkout is at {at[:9]}, not at this pull request's base "
+        f"{base[:9]}: unchanged files, the index and the facts were read from "
+        "other code, so this head is not taken as reviewed; comment `/review` "
+        "to run it again"
+    )
 
 
 def base_merged_in(gh: GitHub, base: str, reviewed_head: str, head: str) -> str:
@@ -507,6 +551,32 @@ def find_state(gh: GitHub, number: int) -> tuple[PRState | None, str]:
     return None, ""
 
 
+def sdk_pins_block(
+    ws: Workspace,
+    lock: sdk_source.HeadLock,
+    at_head: Callable[[str], str | None],
+) -> str:
+    """The `<other_sdk_packages>` block for the line review (FND-5316): the
+    Atlan SDK packages the head under review pins that `sdk:` cannot read;
+    "" when it pins none. Everything is read at that head, never from the
+    checkout, which is the pull request's base: the lock is `lock` (read at the
+    head; when it could not be read, nothing comes from a lock), and each
+    `pyproject.toml` path the workspace knows (at most
+    `sdk_source.MAX_PYPROJECTS`) is read with `at_head`, or taken from the
+    pull request's own text when it changed the file."""
+    paths = [p for p in ws.files() if sdk_source.is_pyproject(p)]
+    pyprojects: dict[str, str] = {}
+    for p in sorted(paths)[: sdk_source.MAX_PYPROJECTS]:
+        try:
+            text = ws.head_text[p] if p in ws.head_text else at_head(p)
+        except Exception:  # noqa: BLE001 - a failed read leaves the file out
+            text = None
+        if text:
+            pyprojects[p] = text
+    others = sdk_source.other_pins(lock.text, pyprojects)
+    return sdk_source.pins_block(others, ws.sdk.label if ws.sdk else None)
+
+
 def run(
     *,
     gh: GitHub,
@@ -522,12 +592,17 @@ def run(
     on_pending: Callable[[str], None] | None = None,
     sdk: SdkSource | None = None,
     sdk_note: str = "",
+    sdk_dir: str | None = None,
+    sdk_head: str = "",
 ) -> RunResult:
     """One review round. `on_pending(head)` is called right after the
     `pending` status is set on `head`, so the caller can record which head
-    `finalize` must check if this run never posts a verdict. `sdk` is the
-    pinned SDK source the tools can read; `sdk_note` says why it is missing
-    when one was asked for (FND-5331)."""
+    `finalize` must check if this run never posts a verdict. `sdk_dir` is the
+    SDK checkout the workflow made (FND-5331), opened here against the
+    `uv.lock` of the very head this round reviews, and only when the checkout
+    is at the ref that lock pins; `sdk_head` is the head the workflow chose the
+    checkout's ref from, named when the two differ (FND-5316). A caller that
+    built the source itself passes `sdk` and `sdk_note` instead."""
     t_start = time.monotonic()
     pr = gh.pr(number)
     head = pr["head"]["sha"]
@@ -729,6 +804,26 @@ def run(
     state.exempt = {}
     # A principle file that was skipped is said in the summary, never silently.
     res.notes.extend(principles.notes)
+    # The app checkout is the code this pull request is judged against: its
+    # base commit, not the default branch (FND-5316). When it is not, the
+    # review is incomplete and the head stays unreviewed, so the next
+    # `/review` redoes it, never a green verdict read against other code.
+    off_base = base_checkout_note(root, base)
+    if off_base:
+        trace.line(off_base)
+        res.incomplete.append(off_base)
+    # The head's own lock (FND-5316): the SDK source and the other-SDK block
+    # are bound to the head this round reviews, never to the base checkout.
+    lock = sdk_source.head_lock_at(gh, head)
+    if sdk_dir is not None:
+        sdk, sdk_note = SdkSource.open(
+            sdk_dir, lock.resolution(), reviewed_head=head, chosen_at=sdk_head
+        )
+        trace.line(
+            f"SDK source: application-sdk {sdk.label} at {sdk.root}"
+            if sdk
+            else sdk_note
+        )
     if sdk_note:
         res.notes.append(sdk_note)
     if post:
@@ -816,10 +911,18 @@ def run(
             )
         for path, why in sel.skipped:
             trace.line(f"skipped   {path}: {why}")
+        withheld = res.triage.withheld()
         for reason, paths in res.triage.mechanical.items():
-            trace.line(
-                f"mechanical ({reason}): {', '.join(paths[:10])}{' …' if len(paths) > 10 else ''}"
-            )
+            whole = withheld.get(reason, [])
+            part = [p for p in paths if p not in whole]
+            for label, ps in (
+                ("mechanical, not sent", whole),
+                ("mechanical hunks set aside, the rest reviewed", part),
+            ):
+                if ps:
+                    trace.line(
+                        f"{label} ({reason}): {', '.join(ps[:10])}{' …' if len(ps) > 10 else ''}"
+                    )
         for dup, rep_path in res.triage.duplicate_of.items():
             trace.line(f"duplicate {dup}: same change as {rep_path} (reviewed once)")
         if res.triage.renames:
@@ -846,6 +949,7 @@ def run(
         index=idx,
         sdk=sdk,
     )
+    ws.sdk_pins = sdk_pins_block(ws, lock, lambda p: gh.raw_file_at(p, head))
     round_cap = ledger.remaining * (cfg.first_round_share if round_no == 1 else 1.0)
     # The approach check runs alongside the line review, on a ledger of its own
     # carved out of the round's: whatever it spends, it can never take a
@@ -1057,8 +1161,12 @@ def run(
     left = round_ledger.remaining
     weights = {b.label: max(b.changed_lines, 20) for b in bundles}
     total_w = sum(weights.values()) or 1
+    # The code the app ships first, tests and everything else after (FND-5316):
+    # a code bundle that ends on an empty turn gets its retry (agent._retry_final)
+    # before any test bundle spends a cent, and test bundles share what is left.
+    code, rest = split_code_bundles(bundles)
 
-    def one(b: Bundle) -> BundleResult:
+    def one(b: Bundle, budget: float, is_code: bool) -> BundleResult:
         return review_bundle(
             client,
             ws,
@@ -1068,16 +1176,29 @@ def run(
             confirmed,
             cfg.limits,
             reflect=cfg.reflect,
-            budget_usd=left * weights[b.label] / total_w,
+            budget_usd=budget,
             added=added,
+            retry_empty=is_code,
         )
 
     with trace.group(f"6 · line review: {len(bundles)} bundle(s)"):
         trace.line(
-            f"up to {cfg.concurrency} bundles in parallel; lines are prefixed [bundle]"
+            f"up to {cfg.concurrency} bundles in parallel; lines are prefixed [bundle]; "
+            f"{len(code)} app-code bundle(s) first, then {len(rest)} other(s)"
         )
         with ThreadPoolExecutor(max_workers=max(1, cfg.concurrency)) as pool:
-            res.bundles = list(pool.map(one, bundles))
+
+            def first(b: Bundle) -> BundleResult:
+                return one(b, left * weights[b.label] / total_w, True)
+
+            res.bundles = list(pool.map(first, code))
+            after = round_ledger.remaining
+            rest_w = sum(weights[b.label] for b in rest) or 1
+
+            def then(b: Bundle) -> BundleResult:
+                return one(b, after * weights[b.label] / rest_w, False)
+
+            res.bundles += list(pool.map(then, rest))
     res.timings_ms["review"] = int((time.monotonic() - t_phase) * 1000)
     if approach_job is not None and approach_pool is not None:
         with trace.group("5 · approach check (once per PR, alongside the line review)"):
@@ -1116,6 +1237,9 @@ def run(
         # summary and the verdict; connector-reviewer opens no inline review threads.
         fresh.extend(br.findings)
         fresh.extend(br.unplaced)
+    # Each bundle's ids are unique already; two bundles can still meet on one
+    # file. Before the base check (keyed by id) and `merge_new` (FND-5316).
+    fresh = unique_ids(fresh)
     if round_no > 1:
         fresh = [
             f for f in fresh if _sev_at_least(f.severity, cfg.later_round_min_severity)
@@ -1150,7 +1274,7 @@ def run(
         sk_client: Client = client_factory(skeptic_ledger)
         skeptic_client = sk_client
         with trace.group(
-            f"6c · skeptic: {len(to_doubt)} new blocking finding(s), "
+            f"6c · skeptic: {len(to_doubt)} new blocking or retry-turn finding(s), "
             f"its own budget ${skeptic_cap:.4f}"
         ):
             res.skeptic = skeptic.run_all(
@@ -1160,16 +1284,20 @@ def run(
                 cfg.skeptic,
                 lambda f: _cited_principle(principles, f),
                 cfg.concurrency,
+                # A checkout that is not the base shows no base code: an
+                # unknown base never drops a finding.
+                base_for=None if off_base else (lambda f: skeptic_base(ws, f)),
             )
             tally = skeptic.counts(res.skeptic)
             trace.line(
                 "skeptic: " + ", ".join(f"{k} {v}" for k, v in tally.items() if v)
             )
+            _drop_by_skeptic(state, res)
         res.timings_ms["skeptic"] = int((time.monotonic() - t_sk) * 1000)
         res.calls = all_calls()
     elif to_doubt:
         trace.line(
-            f"skeptic: off in config; {len(to_doubt)} new blocking finding(s) not checked"
+            f"skeptic: off in config; {len(to_doubt)} new blocking or retry-turn finding(s) not checked"
         )
     res.unplaced = [f for f in res.new_findings if not f.line]
     res.spiral = spiral_paths(state, res.new_findings, round_no)
@@ -1216,6 +1344,13 @@ def run(
         elif b.stop in ("llm_error", "fatal", "budget"):
             res.incomplete.append(f"{b.label}: {b.stop} — {b.error[:200]}")
             failed_paths.extend(bundle_paths.get(b.label, []))
+        elif b.unanswered:
+            # No answer at all (FND-5316): its 0 findings are not a clean read,
+            # so the review is incomplete and the next `/review` retries it.
+            note = no_review_note(b, bundles)
+            trace.line(note)
+            res.incomplete.append(note)
+            failed_paths.extend(bundle_paths.get(b.label, []))
     res.retried = list(state.pending_files) if retry_only else []
     # Spend is always booked. But a round in which part of the review did not
     # happen must never be recorded as a review of this head: that would make
@@ -1225,6 +1360,8 @@ def run(
     # remembered as pending, and the next `/review` retries exactly those.
     if res.bundles and len(failed_paths) == sum(len(b.paths) for b in bundles):
         pass  # nothing was reviewed: leave the head unreviewed so the next run redoes it all
+    elif off_base:
+        pass  # reviewed against the wrong code: not a review of this head either
     else:
         state.reviewed_head, state.reviewed_base = head, base
         state.model, state.config_hash = cfg.model, cfg.raw_hash
@@ -1631,6 +1768,24 @@ def _check_new_against_base(
     return [f for f in fresh if f.id not in drop]
 
 
+def _drop_by_skeptic(state: PRState, res: RunResult) -> None:
+    """Remove the new findings a skeptic check dropped (`Outcome.dropped`).
+    The skeptic runs after `merge_new`, so each is in the state already. The
+    summary names each one and why, since it no longer has a row."""
+    gone = {o.finding_id: o.dropped for o in res.skeptic if o.dropped}
+    if not gone:
+        return
+    for f in res.new_findings:
+        if f.id in gone:
+            res.notes.append(
+                f"The skeptic dropped {f.id} ({f.severity}, "
+                f"{skeptic.clean(f.title, 120)}): {gone[f.id]}."
+            )
+            trace.line(f"dropped {f.id} {f.severity} {f.path}: {gone[f.id]}")
+    state.findings[:] = [f for f in state.findings if f.id not in gone]
+    res.new_findings = [f for f in res.new_findings if f.id not in gone]
+
+
 def _book(ledger: Ledger, spent: Ledger) -> None:
     """Add one run's spend to the PR's ledger."""
     ledger.spent_usd += spent.spent_usd
@@ -1716,24 +1871,39 @@ def recheck_evidence(
     text = ws.text(f.path) or ""
     lines = text.splitlines()
     at = locate_in_text(text, f.evidence)
-    sym = ws.index.enclosing(f.path, at) if at else None
+    if _new_copy_of_removed(ws, f, at):
+        at = 0
+    # Code the PR removes is absent at the head by design, as in verify: show
+    # where it was removed, and say so, so absence is not read as a fix.
+    removed_at = None if at else _removed_site(ws, f)
+    site = at or removed_at or 0
+    near = ws.index.enclosing(f.path, site) if site else None
     lo, hi = (
-        (sym.start, sym.end)
-        if sym and sym.end - sym.start < 120
-        else (max(at - 15, 1), at + 15)
+        (near.start, near.end)
+        if near and near.end - near.start < 120
+        else (max(site - 15, 1), site + 15)
     )
     code_now = (
         "\n".join(f"{i:>5} {lines[i - 1]}" for i in range(lo, min(hi, len(lines)) + 1))
-        if at
+        if site
         else _quote_gone(f)
     )
+    if removed_at is not None:
+        code_now = (
+            f"{REMOVED_NOTE}; the site it was removed from, as it is now:)\n{code_now}"
+            if site
+            else f"{REMOVED_NOTE}; the PR deletes the whole file)"
+        )
+    # The symbol around a removal site is a neighbour of the removed code, not
+    # its subject: it frames <code_now> only, and no merge-base or caller fact.
+    sym = near if removed_at is None else None
     fd = ws.diffs.get(f.path)
     base_path = fd.old_path if fd and fd.status == "renamed" and fd.old_path else f.path
     dotted = sym.qualname.split(":", 1)[1] if sym else ""
     facts: list[str] = []
     absent = False
     at_base = ""
-    why = added.added(f.path, sym)
+    why = "" if removed_at is not None else added.added(f.path, sym)
     if why:
         facts.append(why)
         absent = True
@@ -1742,6 +1912,16 @@ def recheck_evidence(
         base = None if secret_path(base_path) else merge_base_text(base_path)
         if base is None:
             facts.append(f"merge-base copy of {base_path} could not be read")
+        elif removed_at is not None:
+            # Never "absent": the PR's own diff removes this code.
+            facts.append(
+                f"present on merge base: the quoted code is in {base_path}, and "
+                "this PR removes it: its absence at the PR head is not a fix"
+                if snippet_in_text(base, f.evidence)
+                else f"the quoted code is code this PR removes, but it is not in "
+                f"the merge-base copy of {base_path}: its absence at the PR head "
+                "is not a fix"
+            )
         elif (names := baseline.dotted_names(base_path, base)) is None:
             # Unknown is not absent: a copy that does not parse proves nothing.
             facts.append(f"merge-base copy of {base_path} could not be parsed")
@@ -2149,14 +2329,61 @@ def _risk(b: Bundle) -> tuple[int, int]:
     return (rank, -b.changed_lines)
 
 
+# The tier tests rank in: below it is the code the app ships (app, contract,
+# build files, CI); from it on, tests and everything else.
+_TESTS_RANK = RISKY_PREFIXES.index(("tests/",))
+
+
+def split_code_bundles(bundles: list[Bundle]) -> tuple[list[Bundle], list[Bundle]]:
+    """(the bundles that hold code the app ships, the rest), each in its
+    given order. A bundle ranks as its riskiest file, so app code packed with
+    its tests is code. `review.run` reviews the first group to the end, a
+    retry of an empty final turn included, before the second starts."""
+    code = [b for b in bundles if _risk(b)[0] < _TESTS_RANK]
+    return code, [b for b in bundles if _risk(b)[0] >= _TESTS_RANK]
+
+
+NO_REVIEW_FILES_SHOWN = 5  # files named in a no-review note
+
+
+def no_review_note(result: BundleResult, bundles: list[Bundle]) -> str:
+    """The incomplete reason for a bundle that ended with no answer at all
+    (`BundleResult.unanswered`): its 0 findings mean it was not read to a
+    conclusion, not that it is clean, and its files are retried."""
+    paths = next((b.paths for b in bundles if b.label == result.label), [])
+    shown = ", ".join(f"`{p}`" for p in paths[:NO_REVIEW_FILES_SHOWN])
+    if len(paths) > NO_REVIEW_FILES_SHOWN:
+        shown += f" and {len(paths) - NO_REVIEW_FILES_SHOWN} more"
+    kind = "App-code bundle" if result.retried else "Bundle"
+    how = (
+        "its final turn and the retry both gave no answer"
+        if result.retried
+        else "its last turn gave no answer"
+    )
+    return (
+        f"{kind} `{result.label}` got no real review: {how}, so its 0 findings do "
+        f"not mean it is clean ({shown}); `/review` retries it"
+    )
+
+
+# Every skip reason past the cap starts with this (`UNREAD_REASONS`): a state
+# written by an earlier version says "bundle cap (lowest-risk code, …)".
+BUNDLE_CAP = "bundle cap"
+MAX_RANGES_SHOWN = 6  # line ranges named per partly reviewed file
+
+
 def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:
     """Bundles in review order — riskiest first — within `max_bundles`.
 
     Past the cap, bundles are first re-packed larger (up to half the context
-    ceiling) so every file still gets reviewed; only if that is not enough are
-    the lowest-risk bundles set aside, and each skipped file is named in the
-    summary. Ordering by risk means that whatever a short budget cuts is the
-    least important code, never the connector's own source."""
+    ceiling) so every file still gets reviewed. If that is still over the cap,
+    the code the app ships (app, then contract, build files and CI) and the
+    rest (tests, then anything else) are packed apart, in that order
+    (FND-5316): a test file no longer rides in the bundle of the source it
+    tests, where its tokens took the room that source's own code needed, so
+    whatever the cap cuts is tests and other files before any app code. Each
+    skipped file is named in the summary, with the lines left unread when only
+    part of it was cut."""
     bundles = group(files)
     if len(bundles) > cfg.max_bundles:
         total = sum(b.diff_tokens() for b in bundles)
@@ -2165,16 +2392,63 @@ def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:
             cfg.limits.context_limit_tokens // 2,
         )
         bundles = group(files, max_diff_tokens=bigger, max_files=12)
+        if len(bundles) > cfg.max_bundles:
+            diffs = cast("list[FileDiff]", files)
+            shipped = [f for f in diffs if risk_rank(f.path) < _TESTS_RANK]
+            rest = [f for f in diffs if risk_rank(f.path) >= _TESTS_RANK]
+            bundles = [
+                b
+                for pool in (shipped, rest)
+                for b in group(pool, max_diff_tokens=bigger, max_files=12)
+            ]
+    # The pools never share a bundle, so this keeps every shipped bundle first.
     bundles.sort(key=_risk)
-    # A file over the token cap is reviewed in parts (`bundle._parts`), and its
-    # parts can fall on both sides of the cap: named once, as not read.
-    skipped: list[str] = []
-    for b in bundles[cfg.max_bundles :]:
-        skipped.extend(p for p in b.paths if p not in skipped)
-    res.skipped_files.extend(
-        (p, "bundle cap (lowest-risk code, after re-packing)") for p in skipped
+    kept, cut = bundles[: cfg.max_bundles], bundles[cfg.max_bundles :]
+    res.skipped_files.extend(_cap_skips(kept, cut, cfg.max_bundles))
+    return kept
+
+
+def _cap_skips(
+    kept: list[Bundle], cut: list[Bundle], cap: int
+) -> list[tuple[str, str]]:
+    """Each file past the cap, once, with why: a file reviewed in parts
+    (`bundle._parts`) can have parts on both sides of the cap, and then the
+    lines left unread are named."""
+    read = {f.path for b in kept for f in b.files}
+    unread: dict[str, list[tuple[int, int]]] = {}
+    for b in cut:
+        for f in b.files:
+            unread.setdefault(f.path, []).extend(
+                (h.new_start, h.new_start + max(h.new_len, 1) - 1) for h in f.hunks
+            )
+    out: list[tuple[str, str]] = []
+    for path, spans in unread.items():
+        if path in read:
+            out.append(
+                (
+                    path,
+                    f"{BUNDLE_CAP}: {_line_ranges(spans)} not reviewed, the rest was",
+                )
+            )
+        else:
+            out.append((path, f"{BUNDLE_CAP}: not reviewed, past the {cap}-bundle cap"))
+    return out
+
+
+def _line_ranges(spans: list[tuple[int, int]]) -> str:
+    """`lines 120-480, 900-1250` from hunk spans (head side), merged and capped."""
+    merged: list[list[int]] = []
+    for a, b in sorted(spans):
+        if merged and a <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    shown = [f"{a}-{b}" if a != b else f"{a}" for a, b in merged[:MAX_RANGES_SHOWN]]
+    more = len(merged) - MAX_RANGES_SHOWN
+    word = "line" if len(merged) == 1 and merged[0][0] == merged[0][1] else "lines"
+    return f"{word} {', '.join(shown)}" + (
+        f" and {more} more range(s)" if more > 0 else ""
     )
-    return bundles[: cfg.max_bundles]
 
 
 ROUND_DIFF_CHARS = 12_000  # this round's changes shown to the verify call
@@ -2331,6 +2605,21 @@ def _removed_site(ws: Workspace, f: Finding) -> int | None:
     return span[0] if span else 0
 
 
+def _new_copy_of_removed(ws: Workspace, f: Finding, at: int) -> bool:
+    """Whether the head match at `at` is a copy the PR added of code it removes.
+
+    A short quote such as `return x` can survive in a newly added function
+    after the original is deleted. That copy is not the quoted code still
+    being there, so the removal stays the finding's subject."""
+    fd = ws.diffs.get(f.path)
+    return (
+        bool(at)
+        and fd is not None
+        and at in fd.added_lines
+        and in_removed_lines(fd, f.evidence)
+    )
+
+
 BASE_EXCERPT_LINES = 120  # a longer base symbol is shown as a window, like <code_now>
 
 
@@ -2374,6 +2663,26 @@ def at_base_branch(
     dotted = head_sym.qualname.split(":", 1)[1]
     got = base_symbol_excerpt(root, rel, text, f, head_sym, head_line)
     return f"{rel}: {dotted}\n{got}" if got else f"absent on base: {dotted} in {rel}"
+
+
+def skeptic_base(ws: Workspace, f: Finding) -> str:
+    """`f`'s enclosing function or quoted lines as they are on the base branch,
+    for the skeptic to compare against (FND-5316); "" when there is nothing to
+    compare. Code the PR removes (`REMOVED_NOTE`), a new file or symbol, and a
+    module-level quote the base lacks have no base counterpart, and a base
+    copy that cannot be read, may hold secrets or has no stored quote is
+    unknown: none of them can be "the same on the base". A line the PR adds
+    inside a function the base has gets that function as it is on the base:
+    whether the old function already failed the same way is the question. A
+    drop then needs the skeptic to quote the base line(s) where the failure
+    already happens, found in this copy (`skeptic.judge_base`)."""
+    text = ws.text(f.path) or ""
+    at = _current_line(ws, f, text)
+    if not at or _new_copy_of_removed(ws, f, at):
+        return ""  # removed code, or a quote that is gone: no counterpart
+    got = at_base_branch(ws, f, ws.index.enclosing(f.path, at), at)
+    # Every answer that is not an excerpt starts "absent on base" or "(".
+    return "" if got.startswith(("absent on base", "(")) else got
 
 
 def _numbered(text: str, lo: int, hi: int) -> str:
@@ -2849,8 +3158,9 @@ def _details(f: Finding, blob_base: str, chars: int | None = None) -> str:
     ]
     if f.contested:
         out.append(
-            "**⚖️ Contested:** raised as blocking; an independent check refuted it against the "
-            f"code, so it is medium and does not block. Its reason: {f.contested}\n"
+            "**⚖️ Contested:** raised as blocking; an independent check of its causal chain "
+            "against the code did not confirm every step, so it is medium and does not block. "
+            f"Its reason: {f.contested}\n"
         )
     out.append(cap(f.body.strip()))
     if f.scenario.strip():
@@ -2869,10 +3179,18 @@ def _details(f: Finding, blob_base: str, chars: int | None = None) -> str:
 
 
 UNREAD_HINT = (
-    "Part of the change could not be read (listed below: too large, or a deleted test with no "
-    "line to review), so a retry would not read it either: split it into smaller pull requests, "
-    "or, once a person has reviewed those files, comment `/review waive <reason>`."
+    "Part of the change could not be read (listed below: too large, past the bundle cap, or a "
+    "deleted test with no line to review), so a retry would not read it either: split it into "
+    "smaller pull requests, or, once a person has reviewed those files, comment "
+    "`/review waive <reason>`."
 )
+# Said once wherever a file past the bundle cap is listed (FND-5316).
+CAP_NOTE = (
+    "the bundle cap: a run line-reviews a set number of bundles of the diff, app code first, "
+    "then the contract, build files and CI, then tests and other files"
+)
+MAX_UNREAD_LISTED = 20  # unread files named in the incomplete reason
+MAX_SKIPPED_LISTED = 50  # skipped files named in the summary's list
 
 
 def incomplete_reasons(res: RunResult) -> list[str]:
@@ -2889,9 +3207,18 @@ def incomplete_reasons(res: RunResult) -> list[str]:
             "comment `/review` to retry them"
         )
     if st.unread:
-        listed = ", ".join(f"`{p}` ({why})" for p, why in list(st.unread.items())[:5])
-        more = f" (+{len(st.unread) - 5} more)" if len(st.unread) > 5 else ""
-        out.append(f"{len(st.unread)} file(s) not read: {listed}{more}")
+        items = list(st.unread.items())
+        listed = ", ".join(f"`{p}` ({why})" for p, why in items[:MAX_UNREAD_LISTED])
+        more = (
+            f' (+{len(items) - MAX_UNREAD_LISTED} more, under "file(s) not reviewed")'
+            if len(items) > MAX_UNREAD_LISTED
+            else ""
+        )
+        capped = any(why.startswith(BUNDLE_CAP) for _, why in items)
+        out.append(
+            f"{len(items)} file(s) not read: {listed}{more}"
+            + (f". Past {CAP_NOTE}" if capped else "")
+        )
     return out
 
 
@@ -2994,13 +3321,26 @@ def render_summary(res: RunResult) -> str:
     lines.extend(_resolved_section(st))
     lines.extend(_history_section(st))
     t = res.triage
-    mech_files = {p for ps in t.mechanical.values() for p in ps} | set(t.duplicate_of)
+    # Only files with nothing left to review: a file whose mechanical hunk was
+    # set aside and whose real change was reviewed was sent (FND-5316).
+    withheld = t.withheld()
+    mech_files = {p for ps in withheld.values() for p in ps} | set(t.duplicate_of)
     if mech_files:
         lines.append(
             f"\n<details><summary>{len(mech_files)} file(s) with mechanical changes — "
             "proven behaviour-neutral in code, not sent to the model</summary>\n"
         )
-        lines.extend(f"- {line}" for line in t.summary_lines())
+        for reason, paths in withheld.items():
+            shown = ", ".join(f"`{p}`" for p in paths[:MECHANICAL_SHOWN])
+            more = len(paths) - MECHANICAL_SHOWN
+            lines.append(
+                f"- {reason}: {shown}" + (f" and {more} more" if more > 0 else "")
+            )
+        if t.duplicate_of:
+            lines.append(
+                f"- same change repeated in other files (reviewed once): "
+                f"{len(t.duplicate_of)} file(s)"
+            )
         if t.renames:
             lines.append(
                 "- renames: " + ", ".join(f"`{a}` → `{b}`" for a, b in t.renames)
@@ -3022,7 +3362,13 @@ def render_summary(res: RunResult) -> str:
         lines.append(
             f"\n<details><summary>{len(res.skipped_files)} file(s) not reviewed</summary>\n"
         )
-        lines.extend(f"- `{p}` — {why}" for p, why in res.skipped_files[:50])
+        lines.extend(
+            f"- `{p}` — {why}" for p, why in res.skipped_files[:MAX_SKIPPED_LISTED]
+        )
+        if len(res.skipped_files) > MAX_SKIPPED_LISTED:
+            lines.append(f"- … and {len(res.skipped_files) - MAX_SKIPPED_LISTED} more")
+        if any(why.startswith(BUNDLE_CAP) for _, why in res.skipped_files):
+            lines.append(f"\nPast {CAP_NOTE}.")
         lines.append("\n</details>")
     led = st.ledger
     hit = (

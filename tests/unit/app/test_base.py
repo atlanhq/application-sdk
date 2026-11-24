@@ -977,6 +977,129 @@ class TestCreateTaskActivityWrapper:
         assert passed.maximum_attempts == 7
 
 
+class _RefIn(Input, allow_unbounded_fields=True):
+    ref: FileReference | None = None
+
+
+class _RefOut(Output, allow_unbounded_fields=True):
+    refs: list[FileReference] = []
+
+
+class TestRunStoredRefs:
+    """FND-5220: the workflow keeps the stored refs its tasks took and returned."""
+
+    def test_keeps_stored_refs_once_without_local_path_or_download(self) -> None:
+        from application_sdk.app.base import _RunStoredRefs
+
+        sink = _RunStoredRefs()
+        ref = FileReference(
+            local_path="/worker-a/out.json", storage_path="file_refs/a.json"
+        )
+        sink.record([ref, ref.model_copy(update={"local_path": "/worker-b/x"})])
+        sink.record([FileReference(local_path="/only/local.json")])
+
+        assert sink.for_cleanup() == [
+            FileReference(storage_path="file_refs/a.json", auto_materialize=False)
+        ]
+
+    def test_cut_keeps_durable_refs_first(self) -> None:
+        from application_sdk.app.base import _RunStoredRefs
+        from application_sdk.contracts.types import StorageTier
+
+        sink = _RunStoredRefs()
+        sink.record(FileReference(storage_path=f"file_refs/{i}") for i in range(3))
+        sink.record([FileReference(storage_path="kept", tier=StorageTier.RETAINED)])
+
+        with (
+            mock.patch(
+                "application_sdk.contracts.cleanup.STORAGE_CLEANUP_FILE_REFS_MAX", 2
+            ),
+            mock.patch("application_sdk.app.base._safe_log") as log,
+        ):
+            refs = sink.for_cleanup()
+
+        assert [r.storage_path for r in refs] == ["kept", "file_refs/0"]
+        assert "Passing 2 of the run's 4 stored refs" in log.call_args.args[1]
+
+    async def test_task_wrapper_records_input_and_result_refs(self) -> None:
+        from application_sdk.app.base import _RunStoredRefs
+
+        sink = _RunStoredRefs()
+        wrapper = _create_task_activity_wrapper(
+            app_name="a",
+            task_name="t",
+            timeout_seconds=10,
+            retry_max_attempts=1,
+            retry_max_interval_seconds=1,
+            output_type=_RefOut,
+            context_data={},
+            stored_refs=sink,
+        )
+        out = _RefOut(refs=[FileReference(storage_path="file_refs/out.json")])
+        with mock.patch(
+            "application_sdk.app.base.workflow.execute_activity",
+            new_callable=mock.AsyncMock,
+            return_value=out,
+        ):
+            result = await wrapper(
+                _RefIn(ref=FileReference(storage_path="file_refs/in.json"))
+            )
+
+        assert result is out
+        assert [r.storage_path for r in sink.for_cleanup()] == [
+            "file_refs/in.json",
+            "file_refs/out.json",
+        ]
+
+    async def test_task_wrapper_records_input_refs_when_the_activity_fails(
+        self,
+    ) -> None:
+        from application_sdk.app.base import _RunStoredRefs
+
+        sink = _RunStoredRefs()
+        wrapper = _create_task_activity_wrapper(
+            app_name="a",
+            task_name="t",
+            timeout_seconds=10,
+            retry_max_attempts=1,
+            retry_max_interval_seconds=1,
+            output_type=_RefOut,
+            context_data={},
+            stored_refs=sink,
+        )
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.execute_activity",
+                new_callable=mock.AsyncMock,
+                side_effect=RuntimeError("activity failed"),
+            ),
+            pytest.raises(RuntimeError),
+        ):
+            await wrapper(_RefIn(ref=FileReference(storage_path="file_refs/in.json")))
+
+        assert [r.storage_path for r in sink.for_cleanup()] == ["file_refs/in.json"]
+
+    def test_wrap_instance_tasks_hands_every_task_the_runs_sink(self) -> None:
+        from application_sdk.app.base import _RunStoredRefs
+
+        class _SinkApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        instance = _SinkApp()
+        instance._run_stored_refs = _RunStoredRefs()
+        with mock.patch(
+            "application_sdk.app.base._create_task_activity_wrapper"
+        ) as factory:
+            _wrap_instance_tasks(instance, {"run_id": "r", "correlation_id": "c"})
+
+        assert factory.call_count > 0
+        assert all(
+            call.kwargs["stored_refs"] is instance._run_stored_refs
+            for call in factory.call_args_list
+        )
+
+
 # =============================================================================
 # generate_workflow_class — exercises the whole _run lifecycle end to end
 # =============================================================================

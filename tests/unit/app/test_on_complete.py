@@ -55,6 +55,38 @@ class TestOnComplete:
 
         m_files.assert_called_once_with(CleanupInput())
 
+    async def test_default_passes_the_runs_stored_refs_to_cleanup_storage(
+        self,
+    ) -> None:
+        """FND-5220: refs the workflow read off its tasks reach cleanup_storage."""
+        from application_sdk.app.base import _RunStoredRefs
+        from application_sdk.contracts.types import FileReference
+
+        class _App(App):
+            async def run(self, input: _OCInput) -> _OCOutput:
+                return _OCOutput()
+
+        app = _App()
+        app._run_stored_refs = _RunStoredRefs()
+        app._run_stored_refs.record(
+            [FileReference(local_path="/a/x", storage_path="file_refs/x")]
+        )
+        with (
+            mock.patch.object(app, "cleanup_files", new_callable=mock.AsyncMock),
+            mock.patch.object(
+                app, "cleanup_storage", new_callable=mock.AsyncMock
+            ) as m_storage,
+        ):
+            await app.on_complete()
+
+        m_storage.assert_called_once_with(
+            StorageCleanupInput(
+                file_refs=[
+                    FileReference(storage_path="file_refs/x", auto_materialize=False)
+                ]
+            )
+        )
+
     async def test_default_calls_both_cleanups_concurrently(self) -> None:
         """on_complete() runs cleanup_files and cleanup_storage concurrently."""
         import asyncio

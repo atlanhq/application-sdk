@@ -14,7 +14,9 @@ from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.execution.retry import NO_RETRY
 
-# Module-level list shared between test thread and worker (via passthrough_modules).
+# Module-level list shared between test thread and workflow code. Workflow
+# code reaches this same list only because the tests that read it pass this
+# module through the sandbox; otherwise each run sees its own re-imported copy.
 _on_complete_log: list[str] = []
 
 # ---------------------------------------------------------------------------
@@ -96,7 +98,7 @@ async def test_on_complete_called_after_success(run_worker, executor, reregister
     """P4.1: on_complete() is invoked after a successful run()."""
     _on_complete_log.clear()
     reregister_app(SuccessLifecycleApp)
-    async with run_worker():
+    async with run_worker(passthrough_modules={__name__}):
         context = AppContext(
             app_name=SuccessLifecycleApp._app_name, app_version="1.0.0"
         )
@@ -115,7 +117,7 @@ async def test_on_complete_called_after_failure(run_worker, executor, reregister
     """P4.2: on_complete() is invoked even when run() raises an exception."""
     _on_complete_log.clear()
     reregister_app(FailLifecycleApp)
-    async with run_worker():
+    async with run_worker(passthrough_modules={__name__}):
         context = AppContext(app_name=FailLifecycleApp._app_name, app_version="1.0.0")
         with pytest.raises(Exception):
             await executor.execute(

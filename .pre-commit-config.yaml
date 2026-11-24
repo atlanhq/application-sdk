@@ -110,7 +110,7 @@ repos:
         name: check mkdocs extra_javascript hosts
         entry: python .github/scripts/check_mkdocs_script_hosts.py
         language: python
-        additional_dependencies: ["pyyaml==6.0.3"]
+        additional_dependencies: ["pyyaml==6.0.4"]
         files: ^(mkdocs\.yml|\.github/scripts/check_mkdocs_script_hosts\.py)$
         pass_filenames: false
       # The pyright hook above never sees .github/scripts ([tool.pyright]

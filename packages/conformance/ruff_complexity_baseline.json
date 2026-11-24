@@ -3,7 +3,7 @@
     "C901": 1
   },
   "conformance/bootstrap/command.py": {
-    "C901": 2,
+    "C901": 1,
     "PLR0915": 1
   },
   "conformance/bootstrap/extract.py": {

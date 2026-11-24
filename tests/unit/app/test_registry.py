@@ -351,3 +351,96 @@ class TestTaskRegistry:
 
         retrieved = registry.get("my-app", "my-task")
         assert retrieved.app_name == "my-app"  # type: ignore[union-attr]
+
+
+# =============================================================================
+# Sandbox re-import
+# =============================================================================
+
+
+class _SandboxInput(Input):
+    value: str = ""
+
+
+class _SandboxOutput(Output):
+    result: str = ""
+
+
+class TestSandboxReimport:
+    """Temporal's sandbox re-imports the app module for every workflow run.
+
+    That re-runs ``App.__init_subclass__`` on a fresh copy of each class. The
+    copy must not reach the host registries, and must carry its own generated
+    workflow classes, which the sandbox imports from the module by name.
+    """
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    @staticmethod
+    def _define_app() -> type:
+        from application_sdk.app.base import App
+
+        class SandboxReimportApp(App):
+            name = "sandbox-reimport-app"
+
+            @task
+            async def echo(self, input: _SandboxInput) -> _SandboxOutput:
+                return _SandboxOutput(result=input.value)
+
+            async def run(self, input: _SandboxInput) -> _SandboxOutput:
+                return await self.echo(input)
+
+        return SandboxReimportApp
+
+    @staticmethod
+    def _define_app_in_sandbox() -> type:
+        from temporalio import workflow
+
+        workflow.unsafe._set_in_sandbox(True)
+        try:
+            return TestSandboxReimport._define_app()
+        finally:
+            workflow.unsafe._set_in_sandbox(False)
+
+    def test_reimport_leaves_host_registries_alone(self) -> None:
+        host_cls = self._define_app()
+        tasks_before = TaskRegistry.get_instance().get_tasks_for_app(
+            "sandbox-reimport-app"
+        )
+
+        sandbox_cls = self._define_app_in_sandbox()
+
+        assert sandbox_cls is not host_cls
+        registered = AppRegistry.get_instance().get("sandbox-reimport-app")
+        assert registered.app_cls is host_cls
+        assert (
+            TaskRegistry.get_instance().get_tasks_for_app("sandbox-reimport-app")
+            == tasks_before
+        )
+        # The copy is stamped like a registered class, from metadata of its own.
+        assert sandbox_cls._app_metadata.app_cls is sandbox_cls
+        assert sandbox_cls._app_name == "sandbox-reimport-app"
+
+    def test_reimport_installs_workflow_classes_built_from_the_copy(self) -> None:
+        import sys
+
+        from application_sdk.app.base import _workflow_class_cache
+
+        self._define_app()
+        cache_before = dict(_workflow_class_cache)
+
+        sandbox_cls = self._define_app_in_sandbox()
+
+        wf_cls = getattr(sys.modules[__name__], "_Workflow_sandbox_reimport_app")
+        assert wf_cls.__module__ == __name__
+        # The generated __init__ builds the run's App instance from the copy,
+        # so run() executes as the sandbox's code, with restricted globals.
+        assert type(wf_cls()._app_instance) is sandbox_cls
+        # Host state keeps nothing from the run: an entry would pin the sandbox.
+        assert _workflow_class_cache == cache_before

@@ -81,6 +81,12 @@ match the rest of the surface.
   (`temporal.workflow.executions`, `temporal.workflow.duration`,
   `temporal.activity.executions`, `temporal.activity.duration`,
   `temporal.activity.errors`) via the global `MeterProvider`.
+  Workflow-level samples are per *run*, not per workflow-instance
+  lifetime: the interceptor instruments every lifetime (including one
+  that enters replaying after an eviction or worker change), emits only
+  when the run finishes live (`is_replaying()` false at exit, which
+  excludes eviction teardown), and measures duration on the run's
+  history clock (FND-5217).
 - `TraceInterceptor` — thin wrapper around
   `temporalio.contrib.opentelemetry.TracingInterceptor`, gated on
   `ATLAN_ENABLE_OTLP_TRACES` (default off, since production doesn't

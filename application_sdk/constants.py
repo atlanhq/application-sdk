@@ -252,7 +252,8 @@ CLEANUP_BASE_PATHS = [
     if path.strip()
 ]
 
-# Key used to store tracked FileReference objects in _app_state during a workflow run
+# Key used to store tracked FileReference objects in a run's _app_state slot
+# (keyed by (workflow_id, run_id)) on the worker that ran the task
 TRACKED_FILE_REFS_KEY = "_tracked_file_refs"
 
 # Object-store prefixes that must never be deleted by cleanup_storage.

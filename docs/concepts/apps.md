@@ -265,6 +265,43 @@ class MyConnector(App):
         await super().on_complete()  # preserves built-in file/storage cleanup
 ```
 
+### Run Scratch Directory (`self.run_scratch_dir`)
+
+`self.run_scratch_dir` is the run's local scratch directory, e.g.
+`./local/tmp/artifacts/apps/my-app/workflows/wf-123/run-456`
+(`{TEMPORARY_PATH}/artifacts/apps/{app}/workflows/{workflow_id}/{run_id}`). Use it
+for files a run writes locally, instead of `tempfile.gettempdir()`:
+
+- It is the **same string in `run()` and in every `@task` of the run**, so a path
+  the workflow builds and passes to a task is the one the task writes to.
+- `cleanup_files` **removes it** when the run ends (the default `on_complete`), so
+  nothing is left on the worker's disk. The system temp dir is never cleaned.
+- It is **safe in workflow code**: it is computed from the run's identity with
+  string-only `os.path` calls. `tempfile` is refused by the workflow sandbox.
+- It sits under `TEMPORARY_PATH`, so a file under it maps to an object-store key
+  like every other `./local/tmp/...` path.
+
+```python
+async def run(self, input: MyInput) -> MyOutput:
+    output_dir = os.path.join(self.run_scratch_dir, "extract")  # string only
+    return await self.extract(ExtractInput(output_dir=output_dir))
+
+@task(timeout_seconds=600)
+async def extract(self, input: ExtractInput) -> ExtractOutput:
+    os.makedirs(input.output_dir, exist_ok=True)  # create it in the task
+    # A fresh directory per attempt, still removed with the run:
+    attempt_dir = tempfile.mkdtemp(prefix="extract-", dir=input.output_dir)
+    ...
+```
+
+The directory is not created for you. Create it in a task; never in `run()`,
+because workflow code must not touch the filesystem. Reading the property outside
+`run()` or a task raises `AppContextError`. A workflow ID that would place the
+directory outside `TEMPORARY_PATH` (`..` segments) raises `RunTempDirEscapeError`.
+
+Conformance rule P067 flags `tempfile.gettempdir()`, and `tempfile.mkdtemp` /
+`mkstemp` with no `dir=`, in app code.
+
 ### Built-in Cleanup Tasks
 
 Two cleanup tasks and two transfer tasks are available on every `App`:
@@ -321,7 +358,7 @@ Both transfer tasks validate the bytes they move. An upload confirms the local f
 **Writer output is staged, then published at `close()`.** A `Writer` (parquet, JSON) never writes into its output directory directly — it writes into a private staging tree (a sibling directory, not inside the output) and publishes into the output directory in one step when `close()` returns. Files produced by that writer are therefore absent from the output directory until `close()` completes; a writer that is cancelled or fails before `close()` publishes nothing. This is what stops a cancelled attempt's orphaned writer from colliding with, or being adopted into, a retry's output. The published filenames and object-store keys are unchanged — only the timing of when files appear in the output directory moves to `close()`. Note that publishing only *adds*: content already sitting in a reused output directory is left in place, and a deferred writer's `FileReference` walks the whole directory, so it adopts that content too.
 
 - `cleanup_files()` — removes tracked `FileReference` local paths from task outputs, **then** convention-based temp directories (using `input.extra_paths` if provided, otherwise `ATLAN_CLEANUP_BASE_PATHS`, otherwise the default temp path).
-- `cleanup_storage()` — removes object store artifacts by tier:
+- `cleanup_storage()` — removes object store artifacts by tier. Its tracked refs are the ones the worker it runs on tracked, plus `StorageCleanupInput.file_refs`: the stored refs the workflow read off every task's input and result, which the default `on_complete()` fills in. A ref a task on another worker (another replica, a `pool=` queue) wrote is therefore cleaned up too, and a durable ref from another worker still protects its key. The workflow passes at most 2000 refs, durable ones first; in a run with more, a `TRANSIENT` ref left out is deleted only when the cleanup runs on the worker that tracked it.
   - `StorageTier.TRANSIENT` refs are always removed, except a key that a `RETAINED` or `PERSISTENT` ref in the same run also points at (the same file key, its `.sha256` sidecar, or a key under a durable directory ref). The durable tier wins: that key is counted in `skipped_count` and a WARNING names the clash.
   - `StorageTier.PERSISTENT` refs are always left untouched.
   - `StorageTier.RETAINED` refs under the run-scoped prefix are removed **only** when `input.include_prefix_cleanup=True` is set (opt-in); otherwise they are left untouched.
@@ -1215,17 +1252,28 @@ overrides the attribute at deploy time, and only the literal `hard` enforces. Se
 See [FileReference & App.upload()](file-reference.md) for what a `FileReference` is and how it moves,
 and the contract toolkit's `examples/artifact-schemas/` for a full worked contract.
 
-## Passthrough Modules
+## Workflow Sandbox and Passthrough Modules
 
-If your app imports third-party libraries that must be available inside the Temporal sandbox, declare them as a class-level attribute:
+Workflow code (`run()`, `@entrypoint` methods, `@signal` / `@query` / `@update` handlers, and the helpers in your app's package that they call) runs inside Temporal's workflow sandbox. For every workflow run the worker re-imports your app's own package in the sandbox, so Temporal checks that code for non-determinism. A call your code makes directly to a restricted standard-library function fails the **workflow task**: a wall-clock read (`datetime.now()`), a random UUID (`uuid.uuid4()`), `os.environ` / `os.getenv`, `tempfile`, `open()`, a filesystem probe such as `os.path.exists()`. Temporal retries a failed workflow task, so the run waits until a fixed build is deployed, then continues.
+
+The check covers your package's code, not the libraries it calls. Third-party libraries are passed through (see below) and run as ordinary host code, so a call into one is never checked: `httpx.get()` from `run()` makes the request instead of failing. Do not call a library from workflow code unless the call is deterministic; put network, file and database access in a `@task`.
+
+- Use the SDK's deterministic seam in workflow code: `self.now()`, `self.uuid()`, `from application_sdk.app import sleep`.
+- Read environment variables at module level. Import-time reads are allowed in the sandbox, and the value is fixed for the life of the process.
+- Do file and network I/O in a `@task`. Activities run outside the sandbox.
+- The string-only `os.path` functions (`join`, `dirname`, `basename`, `split`, `splitext`, `normpath`, `isabs`, ...) are allowed on every Python version. Functions that read the filesystem or working directory (`exists`, `isdir`, `getmtime`, `abspath`, `realpath`, ...) are not.
+
+Third-party libraries your app imports are passed through automatically: the worker passes through every library already imported when it starts, so they are not re-imported for each run. The SDK's own packages are passed through too, except `application_sdk.templates`, whose `run()` bodies are workflow code and are checked like yours.
+
+Declare `passthrough_modules` only for a library that workflow code imports lazily (inside a function) and that cannot be re-imported in the sandbox:
 
 ```python
 class MyConnector(App):
-    passthrough_modules = {"my_connector", "third_party_lib"}
+    passthrough_modules = {"third_party_lib"}
     ...
 ```
 
-The type is `ClassVar[set[str] | None]` — use a set literal, not a list. In v2, passthrough modules were passed to the `Worker` constructor. In v3, they live on the `App` subclass as a `ClassVar`. Do **not** pass `passthrough_modules` as a class-kwarg — it is not accepted by `App.__init_subclass__`.
+The type is `ClassVar[set[str] | None]` — use a set literal, not a list. In v2, passthrough modules were passed to the `Worker` constructor. In v3, they live on the `App` subclass as a `ClassVar`. Do **not** pass `passthrough_modules` as a class-kwarg — it is not accepted by `App.__init_subclass__`. Do **not** list your app's own package: a passed-through module is never checked, so that turns the sandbox off for your workflow code.
 
 ## Customizing SQL Queries
 
@@ -1308,7 +1356,9 @@ calls = controller.get_heartbeat_calls()
 
 ## App State
 
-`app_state` is in-memory state scoped to the current workflow execution. Use it to pass values between tasks without encoding them in task contracts.
+`app_state` is in-memory state scoped to the current run (`workflow_id`, `run_id`) **on the current worker**. Use it to cache values between tasks on the same worker without encoding them in task contracts: a client, a lookup table.
+
+It is process-local. A task that Temporal schedules on another worker (another replica, a `pool=` queue, a restarted pod) sees an empty slot, so never rely on it for data a later task *needs*; pass that in the task contracts. Once the run has closed, every worker that holds a slot for it releases the slot within about a minute, and closes each value that has `aclose()` or `close()`. A cached client is therefore closed for you; do not store an object another run still uses. Whatever is left is released when the worker shuts down.
 
 ```python
 class MyConnector(App):

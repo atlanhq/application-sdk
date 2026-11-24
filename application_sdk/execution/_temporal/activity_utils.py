@@ -172,12 +172,16 @@ def run_temp_dir() -> str:
     ``./local/tmp/artifacts/apps/appName/workflows/wf-123/run-456``. It is the
     directory ``cleanup_files`` removes by default, so anything the SDK writes
     under it on the run's behalf goes with the run. ``TEMPORARY_PATH`` is read
-    at call time so a redirect of the constant is honoured.
+    at call time so a redirect of the constant is honoured. It is the same
+    string ``App.run_scratch_dir`` returns for the run, in workflow code or in
+    a task: both are composed by ``application_sdk.app._run_scratch``.
 
     The workflow ID is caller-chosen (``/workflows/v1/start`` accepts it
     verbatim), so the result is checked to resolve strictly *inside*
     ``TEMPORARY_PATH``: not outside it via ``..`` segments, and not the root
-    itself, whose removal would take every other run's scratch with it.
+    itself, whose removal would take every other run's scratch with it. On
+    top of the lexical check the shared helper makes, this one resolves
+    symlinks, because its result is what ``cleanup_files`` deletes.
 
     Raises:
         WorkflowIdError: Outside an activity context.
@@ -185,11 +189,18 @@ def run_temp_dir() -> str:
         RunTempDirEscapeError: If the directory would not be strictly inside
             ``TEMPORARY_PATH``.
     """
+    from application_sdk.app._run_scratch import (  # noqa: PLC0415 — circular: app/__init__.py loads app.base, which imports execution
+        run_scratch_dir,
+    )
     from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
         RunTempDirEscapeError,
     )
 
-    path = os.path.join(constants.TEMPORARY_PATH, build_output_path())
+    path = run_scratch_dir(
+        AppRegistry.resolve_running_app_name(),
+        get_workflow_id(),
+        get_workflow_run_id(),
+    )
     root = os.path.realpath(constants.TEMPORARY_PATH)
     resolved = os.path.realpath(path)
     try:

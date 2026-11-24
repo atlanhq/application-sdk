@@ -78,6 +78,8 @@ class NRMultiApp(App):
 
 # --- on_complete lifecycle ---
 
+# Shared with workflow code (on_complete) only because the tests that read it
+# pass this module through the sandbox.
 _lifecycle_log: list[str] = []
 
 
@@ -232,7 +234,7 @@ async def test_on_complete_called_after_entrypoint_success(
     """M3.1: on_complete() fires after a successful @entrypoint execution."""
     _lifecycle_log.clear()
     reregister_app(LifecycleMultiApp)
-    async with run_worker():
+    async with run_worker(passthrough_modules={__name__}):
         context = AppContext(app_name=LifecycleMultiApp._app_name, app_version="1.0.0")
         await executor.execute(
             LifecycleMultiApp,
@@ -251,7 +253,7 @@ async def test_on_complete_called_after_entrypoint_failure(
     """M3.2: on_complete() fires even when a @entrypoint method raises."""
     _lifecycle_log.clear()
     reregister_app(LifecycleMultiApp)
-    async with run_worker():
+    async with run_worker(passthrough_modules={__name__}):
         context = AppContext(app_name=LifecycleMultiApp._app_name, app_version="1.0.0")
         with pytest.raises(Exception):
             await executor.execute(

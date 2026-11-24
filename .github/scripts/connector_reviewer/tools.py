@@ -13,7 +13,8 @@ comment, done), with two properties that matter for cost:
 Every result is bounded (lines, matches, bytes) so a tool reply can never be
 the thing that blows the context budget.
 
-When the app's application-sdk pin resolved (sdk_source.py), read_file,
+When the application-sdk pin in the pull request head's uv.lock resolved
+(sdk_source.py), read_file,
 search_code and find_symbol also reach that SDK source, read-only, for a path
 or name that starts with `sdk:` (`SdkSource`). The same path guard applies, and
 only `application_sdk/` is reachable.
@@ -33,7 +34,7 @@ from typing import Any
 
 from . import sdk_source
 from .diff import FileDiff
-from .findings import CATEGORIES, SEVERITIES
+from .findings import CATEGORIES, HARMS, SEVERITIES
 from .index import SKIP_DIRS, Index, index_source
 
 READ_MAX_LINES = 250
@@ -143,6 +144,8 @@ class SdkSource:
 
     root: Path
     label: str  # "v3.40.0", or "3.40.0 at commit abc123def456"
+    # Which in-repo package the lock pins (sdk_source.IN_REPO_PACKAGES).
+    package: str = sdk_source.PACKAGE
     _files: list[str] | None = field(default=None, repr=False)
     _index: Index | None = field(default=None, repr=False)
     index_partial: bool = False
@@ -152,11 +155,20 @@ class SdkSource:
     )
 
     @classmethod
-    def open(cls, checkout: str, app_root: Path) -> tuple[SdkSource | None, str]:
-        """The SDK source at `checkout`, labelled with the pin in the app's
-        uv.lock (the same `sdk_source.resolve_root` that chose the checkout's
-        ref), or None and the reason it is not available."""
-        res = sdk_source.resolve_root(app_root)
+    def open(
+        cls,
+        checkout: str,
+        res: sdk_source.Resolution,
+        *,
+        reviewed_head: str = "",
+        chosen_at: str = "",
+    ) -> tuple[SdkSource | None, str]:
+        """The SDK source at `checkout`, labelled with `res`: the pin in the
+        uv.lock of the head under review (`reviewed_head`). Used only when the
+        checkout is at the commit that pin names (`sdk_source.checkout_at`):
+        the workflow chose the checkout's ref from the head as it was a step
+        earlier (`chosen_at`), and a push in between can change the pin
+        (FND-5316). Or None and the reason it is not available."""
         if res.pin is None:
             return None, f"SDK source not available: {res.reason}"
         path = Path(checkout) if checkout.strip() else None
@@ -165,7 +177,20 @@ class SdkSource:
                 f"SDK source not available: no checkout of application-sdk at "
                 f"{res.pin.label} (the ref may not exist)"
             )
-        return cls(root=path.resolve(), label=res.pin.label), ""
+        if not sdk_source.checkout_at(path, res.pin.ref):
+            moved = (
+                f"; the pull request moved from {chosen_at[:9]} to {reviewed_head[:9]} "
+                "after the checkout's ref was chosen; `/review force` reviews with the right one"
+                if chosen_at and reviewed_head and chosen_at != reviewed_head
+                else ""
+            )
+            return None, (
+                f"SDK source not available: the checkout is not at {res.pin.label}, "
+                f"the version the head under review pins{moved}"
+            )
+        return cls(
+            root=path.resolve(), label=res.pin.label, package=res.pin.package
+        ), ""
 
     def _allowed(self, rel: str) -> str | None:
         rel = _safe_rel(rel) or ""
@@ -252,10 +277,11 @@ class SdkSource:
         message. The system prompt does not change, so a review without the SDK
         source sends the same prompt as before."""
         label = html.escape(self.label, quote=True)
+        package = html.escape(self.package, quote=True)
         return (
             f'<sdk_source version="{label}">\n'
-            f"The Atlan Application SDK source this app pins in uv.lock ({label}) is "
-            "readable, read-only, through the same tools with an `sdk:` prefix:\n"
+            f"The Atlan Application SDK source this pull request pins in its uv.lock ({package} "
+            f"{label}) is readable, read-only, through the same tools with an `sdk:` prefix:\n"
             '- read_file(file_path="sdk:application_sdk/<path>.py")\n'
             '- search_code(search_text=..., path_glob="sdk:application_sdk/**")\n'
             '- find_symbol(name="sdk:<Name>")\n'
@@ -263,7 +289,8 @@ class SdkSource:
             "workflows and tasks) and a finding depends on how that API behaves: its signature "
             "and defaults, what it raises, retries or writes, and what it expects of the caller. "
             "Check that in the source instead of assuming it. The SDK is reference, not under "
-            "review: comment only on files in <review_files>.\n"
+            "review: comment only on files in <review_files>. A causal_chain step may cite SDK "
+            "code you read, with its `sdk:` path.\n"
             "</sdk_source>"
         )
 
@@ -280,6 +307,9 @@ class Workspace:
     diffs: dict[str, FileDiff]  # every changed file, including ones not under review
     index: Index
     sdk: SdkSource | None = None
+    # The `<other_sdk_packages>` block: Atlan SDK packages the app pins that
+    # `sdk:` cannot read (sdk_source.pins_block); "" when there are none.
+    sdk_pins: str = ""
     _files: list[str] | None = field(default=None, repr=False)
 
     def _safe(self, rel: str) -> str | None:
@@ -498,10 +528,66 @@ COMMENT_ITEM = {
             "type": "string",
             "description": "The id of the <principle> this finding rests on (FP01, RP02, …), one that applies to this file. Omit only for a concrete bug or security defect; any other finding without a principle is dropped.",
         },
+        "severity_case": {
+            "type": "string",
+            "enum": ["high", "medium", "low"],
+            "description": "With `principle`: the case of that principle's Severity line this finding meets. high only when the scenario in `content` meets the line's High case; low only when the line names a Low case and the scenario meets it; otherwise medium. The finding is graded to that case, up or down.",
+        },
+        "severity_basis": {
+            "type": "string",
+            "description": "With severity_case high: the words of the principle's Severity line the scenario meets, and why it meets them, in one sentence.",
+        },
         "title": {"type": "string", "description": "One line, under 90 characters."},
         "content": {
             "type": "string",
             "description": "What is wrong and the concrete input/state under which it fails. 1-4 sentences.",
+        },
+        "causal_chain": {
+            "type": "object",
+            "description": "How the failure happens, traced through code you read: what starts it, each step of the code path with the code that does it, and the wrong outcome. Every step's code is checked against the repository; a finding whose chain is missing or quotes code that is not there is dropped.",
+            "properties": {
+                "trigger": {
+                    "type": "string",
+                    "description": "The concrete input, state or event that starts it, as it occurs in real runs.",
+                },
+                "steps": {
+                    "type": "array",
+                    "maxItems": 6,
+                    "description": "The code path from the trigger to the outcome, in order, at least one step. Only code you read: the diff, the context blocks, read_file or search_code results.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The file the code is in, as the tool that showed it named it.",
+                            },
+                            "code": {
+                                "type": "string",
+                                "description": "1-3 lines copied VERBATIM from that file (or removed by this PR), no line numbers.",
+                            },
+                            "effect": {
+                                "type": "string",
+                                "description": "What this code does with the value or state from the previous step, as the code shows it.",
+                            },
+                        },
+                        "required": ["path", "code", "effect"],
+                    },
+                },
+                "outcome": {
+                    "type": "string",
+                    "description": "The observable outcome: what the consumer of the last step's output (the publish step, the runtime, Atlan, a downstream app) does with it, and the wrong result the run, the customer or Atlan ends up with. Carry it past 'the payload holds X' to what is done with X. A consumer whose code is not in this repository goes here, not in a step; the principle that states its behaviour is the authority for that hop.",
+                },
+                "harm": {
+                    "type": "string",
+                    "enum": list(HARMS),
+                    "description": "What kind of harm the outcome is, judged at the observable outcome. test_gap when the only harm is a missing or weak test; silent_wrong_output when the run succeeds with a wrong or partial result; rejection when a consumer (the publish step, the runtime, Atlan) refuses the output.",
+                },
+                "normal_path": {
+                    "type": "boolean",
+                    "description": "true when the trigger occurs in ordinary production runs: the default config, a valid value of an input the connector accepts, a source shape real sources produce. false for a corner case, an invalid input, or a chain that needs several unlikely conditions at once.",
+                },
+            },
+            "required": ["trigger", "steps", "outcome", "harm", "normal_path"],
         },
         "suggestion_code": {
             "type": "string",
@@ -516,6 +602,7 @@ COMMENT_ITEM = {
         "compatibility",
         "title",
         "content",
+        "causal_chain",
     ],
 }
 
