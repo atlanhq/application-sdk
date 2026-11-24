@@ -3215,7 +3215,7 @@ async def _merge_fetch_failures(app_instance: "App") -> None:
             "error",
             "Failed to merge fetch-failure parts; the run has no "
             "fetch-failures artifact (parts remain under the run prefix)",
-            failure_count=failures,
+            fetch_failure_count=failures,
             exc_info=True,
         )
         lost = failures - unpersisted
