@@ -15653,9 +15653,23 @@ def test_the_gate_job_installs_exactly_the_pinned_version_in_isolation(
     head = _git_checkout(checkout, {"uv.lock": _conformance_lock()})
     runner = _Runner(_render_result())
     venv_dir = tmp_path / "work" / "venv"
+    fetched: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        fetched.append(url)
+        return json.dumps({"versions": ["0.59.0", "0.60.0", "0.61.0rc1"]}).encode()
+
     fact = gate_mod.make_fact(
-        checkout, venv_dir, python="py", run=runner, script=Path("/s/r.py")
+        checkout,
+        venv_dir,
+        python="py",
+        run=runner,
+        script=Path("/s/r.py"),
+        fetch=fetch,
     )
+    # The newest final release, from the index's version list: no install.
+    assert fact["latest"] == "0.60.0"
+    assert fetched == ["https://pypi.org/simple/atlan-application-sdk-conformance/"]
     assert fact["status"] == "ok" and fact["head"] == head
     assert fact["conformance"] == "0.60.0"
     assert fact["mismatches"] == {CONFORMANCE_WF: DRIFT}
@@ -16156,3 +16170,273 @@ def test_no_engine_module_imports_the_render_script():
         assert (
             "from .gate_render" not in text and "from . import gate_render" not in text
         )
+
+
+# ---- the fallback for a gate file the pinned version does not manage (FND-5325) ----
+
+SHIM_OLD = "name: Connector Reviewer\non: issue_comment\n"
+SHIM_NEW = "name: Connector Reviewer\non: [issue_comment, push]\n"
+UNMANAGED_FILES = [CONFORMANCE_WF, CHECKS_WF]  # a pinned version without the shim
+
+
+def _readers(base: dict[str, str | None], head: dict[str, str | None]) -> Any:
+    reads: list[tuple[str, str]] = []
+
+    def read_base(p: str) -> str | None:
+        reads.append(("base", p))
+        return base.get(p)
+
+    def read_head(p: str) -> str | None:
+        reads.append(("head", p))
+        return head.get(p)
+
+    return read_base, read_head, reads
+
+
+def _shim_eval(tmp_path: Path, diff: str, base: Any, head: Any, **fact: Any) -> Any:
+    read_base, read_head, reads = _readers(base, head)
+    ev = gate_mod.evaluate(
+        _write_fact(tmp_path, **fact),
+        parse_unified_diff(diff),
+        head=GATE_H1,
+        lock_text=_conformance_lock(),
+        read_base=read_base,
+        read_head=read_head,
+    )
+    return ev, reads
+
+
+def test_a_shim_the_pin_does_not_manage_is_compared_with_its_base(tmp_path: Path):
+    ev, _ = _shim_eval(
+        tmp_path,
+        _diff_of(SHIM_WF, SHIM_OLD, SHIM_NEW),
+        {SHIM_WF: SHIM_OLD},
+        {SHIM_WF: SHIM_NEW},
+        gate_files=UNMANAGED_FILES,
+    )
+    assert ev.notes == []
+    [f] = ev.findings
+    assert (f.path, f.severity, f.origin) == (SHIM_WF, "high", "gate")
+    assert f.title == f"`{SHIM_WF}` is managed by application-sdk and changed here"
+    assert "managed by application-sdk: change it there" in f.body
+    assert "run a resync" in f.body and "does not manage it yet" in f.body
+    assert "+on: [issue_comment, push]" in f.suggestion
+    # The same id the render path gives the file, so a later pin that manages
+    # it continues the same finding.
+    render_id = gate_mod.finding_for(SHIM_WF, gate_mod.Mismatch("drifted"), "x").id
+    assert f.id == render_id
+
+
+def test_an_unchanged_shim_raises_nothing(tmp_path: Path):
+    # Not in the diff at all: never read.
+    ev, reads = _shim_eval(
+        tmp_path,
+        DIFF,
+        {SHIM_WF: SHIM_OLD},
+        {SHIM_WF: SHIM_OLD},
+        gate_files=UNMANAGED_FILES,
+    )
+    assert ev.findings == [] and ev.notes == [] and reads == []
+    # In the diff, but its content is the base copy's (line endings aside).
+    mode_only = (
+        f"diff --git a/{SHIM_WF} b/{SHIM_WF}\nold mode 100644\nnew mode 100755\n"
+    )
+    ev, _ = _shim_eval(
+        tmp_path,
+        mode_only,
+        {SHIM_WF: SHIM_OLD},
+        {SHIM_WF: SHIM_OLD.replace("\n", "\r\n")},
+        gate_files=UNMANAGED_FILES,
+    )
+    assert ev.findings == [] and ev.notes == [] and ev.matching == [SHIM_WF]
+
+
+def test_a_deleted_shim_the_pin_does_not_manage_is_one_finding(tmp_path: Path):
+    deleted = (
+        f"diff --git a/{SHIM_WF} b/{SHIM_WF}\ndeleted file mode 100644\n"
+        f"--- a/{SHIM_WF}\n+++ /dev/null\n@@ -1,2 +0,0 @@\n"
+        "-name: Connector Reviewer\n-on: issue_comment\n"
+    )
+    ev, _ = _shim_eval(
+        tmp_path, deleted, {SHIM_WF: SHIM_OLD}, {}, gate_files=UNMANAGED_FILES
+    )
+    [f] = ev.findings
+    assert f.path == SHIM_WF and "this pull request deletes it" in f.body
+    assert f.suggestion == ""
+
+
+def test_a_shim_the_pin_manages_is_judged_by_the_render_alone(tmp_path: Path):
+    """No second finding, and the base is never read for it."""
+    ev, reads = _shim_eval(
+        tmp_path,
+        _diff_of(SHIM_WF, SHIM_OLD, SHIM_NEW),
+        {SHIM_WF: SHIM_OLD},
+        {SHIM_WF: SHIM_NEW},
+        mismatches={SHIM_WF: DRIFT},
+    )
+    [f] = ev.findings
+    assert f.title.endswith("differs from the render") and reads == []
+    # And a managed shim that matches the render raises nothing.
+    ev, reads = _shim_eval(
+        tmp_path,
+        _diff_of(SHIM_WF, SHIM_OLD, SHIM_NEW),
+        {SHIM_WF: SHIM_OLD},
+        {SHIM_WF: SHIM_NEW},
+    )
+    assert ev.findings == [] and ev.matching == [SHIM_WF] and reads == []
+
+
+def test_a_shim_whose_base_copy_cannot_be_read_is_a_note_not_a_finding(
+    tmp_path: Path,
+):
+    ev, _ = _shim_eval(
+        tmp_path,
+        _diff_of(SHIM_WF, SHIM_OLD, SHIM_NEW),
+        {SHIM_WF: None},
+        {SHIM_WF: SHIM_NEW},
+        gate_files=UNMANAGED_FILES,
+    )
+    assert ev.findings == [] and ev.unchecked == [SHIM_WF]
+    assert ev.notes == [
+        f"Gate-file check: `{SHIM_WF}` was not compared: its base copy could not "
+        "be read."
+    ]
+
+
+def test_a_review_compares_an_unmanaged_shim_with_the_base(repo: Path, tmp_path: Path):
+    """Through `run`: the base and head copies come from the GitHub reads."""
+    gh = _gate_pr(
+        GATE_H1,
+        _diff_of(SHIM_WF, SHIM_OLD, SHIM_NEW),
+        {(SHIM_WF, GATE_H1): SHIM_NEW},
+    )
+    gh.files[(SHIM_WF, "b0")] = SHIM_OLD
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(Script()),
+        gate_fact=_write_fact(tmp_path, gate_files=UNMANAGED_FILES),
+    )
+    [f] = [x for x in state_of(res).findings if x.origin == "gate"]
+    assert f.path == SHIM_WF and gh.statuses[-1]["state"] == "failure"
+
+
+def test_a_file_the_pull_request_adds_is_never_a_gate_finding(tmp_path: Path):
+    """Only a hand edit or deletion of a file on the base counts. A shim the
+    pull request adds is not flagged (not even read), and neither is a new
+    file that takes a name the pinned version manages: the render path skips
+    it too, since nothing bootstrap installed was edited."""
+    ev, reads = _shim_eval(
+        tmp_path,
+        _diff_of(SHIM_WF, None, SHIM_NEW),
+        {},
+        {SHIM_WF: SHIM_NEW},
+        gate_files=UNMANAGED_FILES,
+    )
+    assert ev.findings == [] and ev.notes == [] and reads == []
+    assert ev.added == [SHIM_WF]
+    ev, _ = _shim_eval(
+        tmp_path,
+        _diff_of(CHECKS_WF, None, "name: mine\n")
+        + _diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW, old_path=".github/workflows/x.yaml"),
+        {},
+        {},
+        mismatches={CHECKS_WF: DRIFT, CONFORMANCE_WF: DRIFT},
+    )
+    assert ev.findings == [] and ev.checked == []
+    assert sorted(ev.added) == [CHECKS_WF, CONFORMANCE_WF]
+
+
+def test_an_edited_existing_shim_is_flagged_and_an_own_workflow_never_is(
+    tmp_path: Path,
+):
+    """Only bootstrap's files are gate files: the pinned version's list and
+    the fixed shim allowlist. An app's own workflow, edited or deleted, is
+    never compared, though it sits under `.github/`."""
+    own = ".github/workflows/nightly.yaml"
+    deleted_own = (
+        f"diff --git a/{own}2 b/{own}2\ndeleted file mode 100644\n"
+        f"--- a/{own}2\n+++ /dev/null\n@@ -1 +0,0 @@\n-name: n\n"
+    )
+    ev, reads = _shim_eval(
+        tmp_path,
+        _diff_of(SHIM_WF, SHIM_OLD, SHIM_NEW)
+        + _diff_of(own, "name: n\n", "name: m\n")
+        + deleted_own,
+        {SHIM_WF: SHIM_OLD, own: "name: n\n"},
+        {SHIM_WF: SHIM_NEW, own: "name: m\n"},
+        gate_files=UNMANAGED_FILES,
+    )
+    assert [f.path for f in ev.findings] == [SHIM_WF]
+    assert {p for _, p in reads} == {SHIM_WF}
+    assert gate_mod.UNMANAGED_FALLBACK == (SHIM_WF,)
+
+
+@pytest.mark.parametrize(
+    ("latest", "note"),
+    [
+        ("0.61.0", True),
+        ("0.60.0", False),
+        ("", False),  # the lookup failed
+        ("0.59.0", False),
+        ("0.61.0rc1", False),  # not a final release: never suggested
+    ],
+)
+def test_a_pin_behind_the_latest_release_is_a_note_never_a_finding(
+    tmp_path: Path, latest: str, note: bool
+):
+    path = Path(_write_fact(tmp_path, mismatches={CONFORMANCE_WF: DRIFT}))
+    data = json.loads(path.read_text())
+    if latest:
+        data["latest"] = latest
+    path.write_text(json.dumps(data))
+    ev = gate_mod.evaluate(
+        str(path),
+        parse_unified_diff(_diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW)),
+        head=GATE_H1,
+        lock_text=_conformance_lock(),
+    )
+    bump = [n for n in ev.notes if "is behind" in n]
+    assert bump == (
+        [
+            "Pinned conformance 0.60.0 is behind 0.61.0; bump it with a resync to "
+            "pick up newer managed files."
+        ]
+        if note
+        else []
+    )
+    assert ev.findings is not None and len(ev.findings) == 1  # unchanged by it
+
+
+def test_the_latest_release_lookup_never_raises():
+    def failing(url: str) -> bytes | None:
+        return None
+
+    assert gate_mod.latest_release("https://pypi.org/simple", failing) == ""
+    for raw in (b"not json", b"[]", b'{"versions": "x"}', b'{"versions": []}'):
+        assert (
+            gate_mod.latest_release("https://pypi.org/simple", lambda u, r=raw: r) == ""
+        )
+
+
+def test_a_bump_note_never_changes_the_status(repo: Path, tmp_path: Path):
+    gh = _gate_pr(GATE_H1, DIFF, {("app/storage/fetch.py", GATE_H1): SRC_V2})
+    path = Path(_write_fact(tmp_path))
+    data = json.loads(path.read_text())
+    data["latest"] = "0.61.0"
+    path.write_text(json.dumps(data))
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(Script()),
+        gate_fact=str(path),
+    )
+    assert any("is behind 0.61.0" in n for n in res.notes)
+    assert gh.statuses[-1]["state"] == "success"
+    assert "is behind 0.61.0" in gh.comments[0]["body"]

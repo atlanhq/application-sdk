@@ -54,11 +54,14 @@ principle covers bootstrap-managed files, so it cites none.
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -85,12 +88,22 @@ _COMMIT = re.compile(r"[0-9a-f]{40}")
 # What a gate path may look like in the fact: plain repo-relative characters.
 _PATH = re.compile(r"[A-Za-z0-9._/-]{1,200}")
 KINDS = ("drifted", "absent", "retired")
+# Gate files application-sdk manages that a pinned conformance version may not
+# manage yet (FND-5325): the reviewer's own shim joined MANAGED_WORKFLOWS after
+# conformance 0.60.0. When the pinned version's list lacks one, a pull request
+# that changes or deletes it, compared with its base, is one finding all the
+# same (`_fallback`). Once the pinned version manages it, the render decides.
+# Fixed in code on purpose: nothing a pull request writes can add to it.
+UNMANAGED_FALLBACK: tuple[str, ...] = (".github/workflows/connector-reviewer.yaml",)
+UNMANAGED = "unmanaged"  # the kind of a fallback mismatch; never read from a fact
 MAX_FILES = 100  # gate paths read from a fact
 DIFF_KEEP = 2000  # characters of one file's diff read from a fact
 MAX_FACT_BYTES = 1_000_000
 VENV_SECONDS = 120
 PIP_SECONDS = 300
 RENDER_SECONDS = 120
+LATEST_SECONDS = 10.0  # the index's version list, read once per gate job
+LATEST_BYTES = 2_000_000
 
 TEMPLATES_DIR = "packages/conformance/conformance/bootstrap/templates/"
 BOOTSTRAP = "atlan-application-sdk-conformance bootstrap"
@@ -145,6 +158,59 @@ def conformance_pin(lock_text: str) -> Pin | str:
     return Pin(version, index)
 
 
+def _release_key(version: str) -> tuple[int, ...] | None:
+    """A final release's version as numbers, or None (a pre-release, or not
+    a version). Only final releases are suggested as a bump."""
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        return None
+    return tuple(int(x) for x in version.split("."))
+
+
+Fetch = Callable[[str], "bytes | None"]
+
+
+def _fetch(url: str) -> bytes | None:
+    """The index's JSON simple page for the package (PEP 691), or None."""
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.pypi.simple.v1+json",
+            "User-Agent": "connector-reviewer/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=LATEST_SECONDS) as r:
+            return r.read(LATEST_BYTES)
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def latest_release(index: str, fetch: Fetch = _fetch) -> str:
+    """The newest final release of the conformance package on `index` (one of
+    the known indexes, from `conformance_pin`), from the index's version list
+    alone: no install. "" when it cannot be read. Never raises."""
+    raw = fetch(f"{index}/{CONFORMANCE}/")
+    if raw is None:
+        return ""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return ""
+    versions = (
+        cast(dict[str, object], data).get("versions")
+        if isinstance(data, dict)
+        else None
+    )
+    if not isinstance(versions, list):
+        return ""
+    best: tuple[tuple[int, ...], str] | None = None
+    for v in cast(list[object], versions):
+        key = _release_key(v) if isinstance(v, str) else None
+        if key is not None and (best is None or key > best[0]):
+            best = (key, cast(str, v))
+    return best[1] if best else ""
+
+
 def _clean_env() -> dict[str, str]:
     """The environment for the venv, pip and the render: no token, no PYTHON*
     or PIP* variable from the job."""
@@ -196,6 +262,7 @@ def make_fact(
     python: str = sys.executable,
     run: Runner = subprocess.run,
     script: Path = RENDER_SCRIPT,
+    fetch: Fetch = _fetch,
 ) -> dict[str, Any]:
     """The fact for the pull request head checked out at `checkout`. Never
     raises: whatever goes wrong is `status: unavailable` with a reason."""
@@ -270,7 +337,11 @@ def make_fact(
         return _unavailable(
             "the installed conformance version is not the pinned one", head, pin.version
         )
-    return {**result, "schema": SCHEMA, "head": head, "conformance": pin.version}
+    out = {**result, "schema": SCHEMA, "head": head, "conformance": pin.version}
+    latest = latest_release(pin.index, fetch)
+    if latest:
+        out["latest"] = latest
+    return out
 
 
 # ---- the review job ----------------------------------------------------------
@@ -291,6 +362,8 @@ class Fact:
     conformance: str
     gate_files: frozenset[str]
     mismatches: dict[str, Mismatch] = field(default_factory=dict)
+    # The newest final release on the pin's index, "" when it was not read.
+    latest: str = ""
     unchecked: dict[str, str] = field(default_factory=dict)
 
 
@@ -352,7 +425,13 @@ def load_fact(path: str) -> tuple[Fact | None, str]:
     # render, so a fact that leaves them out must not be read as all clean.
     if not isinstance(found, dict) or not isinstance(unchecked, dict):
         return None, "the gate check's result has no mismatch or unchecked list"
-    fact = Fact(head=head, conformance=version, gate_files=frozenset(files))
+    latest = data.get("latest")
+    fact = Fact(
+        head=head,
+        conformance=version,
+        gate_files=frozenset(files),
+        latest=latest if isinstance(latest, str) and _release_key(latest) else "",
+    )
     if found:
         for k, v in list(cast(dict[object, object], found).items())[:MAX_FILES]:
             rel = _safe_path(k)
@@ -378,6 +457,16 @@ def load_fact(path: str) -> tuple[Fact | None, str]:
     return fact, ""
 
 
+def added_paths(files: list[FileDiff]) -> set[str]:
+    """The paths the pull request creates: new files, and a rename's new
+    path. Neither exists on the base."""
+    return {
+        fd.path
+        for fd in files
+        if fd.status == "added" or (fd.old_path is not None and fd.old_path != fd.path)
+    }
+
+
 def changed_paths(files: list[FileDiff]) -> list[str]:
     """Every path the pull request changes, a rename's old path included."""
     out: list[str] = []
@@ -401,6 +490,26 @@ def _body(m: Mismatch, version: str) -> str:
             f"Restore it with a resync (`{BOOTSTRAP}`), or retire it in application-sdk "
             "(`RETIRED_FILES` in `packages/conformance/conformance/bootstrap/render.py`)."
         )
+    elif m.kind == UNMANAGED:
+        what = (
+            "This file is managed by application-sdk, and this pull request "
+            + (
+                "deletes it."
+                if m.removed and not m.added and not m.diff
+                else f"changes it from its base copy (+{m.added} −{m.removed} line(s))."
+            )
+            + f" Conformance {version}, the version this pull request's `uv.lock` "
+            "pins, does not manage it yet, so it is compared with the base branch "
+            "instead of a render."
+        )
+        managed = (
+            "A local change to it is lost at the next resync that installs it, and it "
+            "changes a gate meant to be the same across the fleet."
+        )
+        fix = (
+            "It is managed by application-sdk: change it there "
+            f"(`{TEMPLATES_DIR}`), or run a resync (`{BOOTSTRAP}`)."
+        )
     elif m.kind == "retired":
         what = f"This pull request changes a file that {pinned} has retired: bootstrap removes it."
         fix = (
@@ -420,6 +529,8 @@ def _body(m: Mismatch, version: str) -> str:
 
 
 def _title(rel: str, kind: str) -> str:
+    if kind == UNMANAGED:
+        return f"`{rel}` is managed by application-sdk and changed here"
     if kind == "absent":
         return f"Bootstrap-managed `{rel}` is deleted"
     if kind == "retired":
@@ -436,7 +547,7 @@ def finding_for(
     a prompt may carry (`select.model_visible`'s rule: never a path that may
     hold secrets, never an excluded one)."""
     visible = not secret_path(rel) and not excluded(rel, exclude)
-    diff = m.diff if visible and m.kind == "drifted" else ""
+    diff = m.diff if visible and m.kind in ("drifted", UNMANAGED) else ""
     if diff and m.cut:
         diff += "\n…"
     return Finding(
@@ -464,6 +575,61 @@ class Evaluation:
     # Changed gate files the render did not compare (a symlink, an unreadable
     # or oversized file): an open gate finding on one is left as it is.
     unchecked: list[str] = field(default_factory=list)
+    # Gate-file names the pull request adds (absent on its base): not flagged.
+    added: list[str] = field(default_factory=list)
+
+
+Reader = Callable[[str], "str | None"]
+
+
+def _normal(text: str) -> str:
+    """Line endings normalised, as C002 reads a file (universal newlines)."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _fallback(
+    rel: str, files: list[FileDiff], read_base: Reader, read_head: Reader
+) -> tuple[Mismatch | None, str]:
+    """A file on `UNMANAGED_FALLBACK` the pinned version does not manage,
+    compared by content with its base copy (both read through the API, as
+    data): the mismatch, or None and a note when it cannot be compared."""
+    deleted = any(
+        (fd.path == rel and fd.status == "deleted")
+        or (fd.old_path == rel and fd.path != rel)
+        for fd in files
+    )
+    base = read_base(rel)
+    if base is None:
+        return None, (
+            f"Gate-file check: `{rel}` was not compared: its base copy could not "
+            "be read."
+        )
+    if deleted:
+        return Mismatch(UNMANAGED, 0, len(base.splitlines())), ""
+    now = read_head(rel)
+    if now is None:
+        return None, f"Gate-file check: `{rel}` could not be read at the head."
+    old, new = _normal(base).splitlines(), _normal(now).splitlines()
+    if old == new:
+        return None, ""
+    lines = list(
+        difflib.unified_diff(old, new, "base branch", "pull request", n=1, lineterm="")
+    )[2:]
+    shown: list[str] = []
+    for ln in lines[:24]:
+        if sum(len(x) + 1 for x in shown) + len(ln) + 1 > 1500:
+            break
+        shown.append(ln)
+    return (
+        Mismatch(
+            UNMANAGED,
+            added=sum(1 for ln in lines if ln.startswith("+")),
+            removed=sum(1 for ln in lines if ln.startswith("-")),
+            diff="\n".join(shown),
+            cut=len(shown) < len(lines),
+        ),
+        "",
+    )
 
 
 def evaluate(
@@ -473,10 +639,15 @@ def evaluate(
     head: str,
     lock_text: str | None,
     exclude: tuple[str, ...] = DEFAULT_EXCLUDE,
+    read_base: Reader | None = None,
+    read_head: Reader | None = None,
 ) -> Evaluation:
     """The gate findings of the pull request whose whole diff is `files`, at
     `head` (whose `uv.lock` text is `lock_text`), from the fact at `path`.
-    `path` None means the gate check is not configured (a local run): no note."""
+    `path` None means the gate check is not configured (a local run): no note.
+    `read_base` and `read_head` read a file's text at the base and the head;
+    with both, a file on `UNMANAGED_FALLBACK` that the pinned version does not
+    manage is compared with its base copy instead (`_fallback`)."""
     if path is None:
         return Evaluation(None)
     fact, why = load_fact(path)
@@ -499,9 +670,26 @@ def evaluate(
                 f"{fact.conformance}, which is not the version this head pins."
             ],
         )
-    changed = [p for p in changed_paths(files) if p in fact.gate_files]
+    # Only a hand edit or deletion of a file that exists on the base counts.
+    # A file the pull request adds (or renames onto a managed name) is never
+    # flagged: nothing bootstrap installed there was edited, and the next
+    # resync writes it anyway.
+    added = added_paths(files)
+    touched = changed_paths(files)
+    changed = [p for p in touched if p in fact.gate_files and p not in added]
     found: list[Finding] = []
     out = Evaluation(found, checked=changed)
+    out.added = [
+        p
+        for p in touched
+        if p in added and (p in fact.gate_files or p in UNMANAGED_FALLBACK)
+    ]
+    newest, pinned = _release_key(fact.latest), _release_key(fact.conformance)
+    if newest and pinned and newest > pinned:
+        out.notes.append(
+            f"Pinned conformance {fact.conformance} is behind {fact.latest}; bump it "
+            "with a resync to pick up newer managed files."
+        )
     for rel in changed:
         if rel in fact.unchecked:
             out.notes.append(
@@ -511,6 +699,20 @@ def evaluate(
             continue
         m = fact.mismatches.get(rel)
         if m is None:
+            out.matching.append(rel)
+        else:
+            found.append(finding_for(rel, m, fact.conformance, exclude))
+    if read_base is None or read_head is None:
+        return out
+    for rel in UNMANAGED_FALLBACK:
+        if rel in fact.gate_files or rel not in touched or rel in added:
+            continue  # the render decides, the PR leaves it alone, or adds it
+        out.checked.append(rel)
+        m, note = _fallback(rel, files, read_base, read_head)
+        if note:
+            out.notes.append(note)
+            out.unchecked.append(rel)
+        elif m is None:
             out.matching.append(rel)
         else:
             found.append(finding_for(rel, m, fact.conformance, exclude))

@@ -860,6 +860,10 @@ def run(
         head=head,
         lock_text=lock.text,
         exclude=exclude_patterns(cfg),
+        # The fallback for a gate file the pinned version does not manage yet:
+        # its base and head copies, read through the API as data.
+        read_base=lambda p: gh.file_at(p, base),
+        read_head=lambda p: gh.file_at(p, head),
     )
     res.gate = gate_eval
     res.notes.extend(gate_eval.notes)
