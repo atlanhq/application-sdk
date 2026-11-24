@@ -23,11 +23,12 @@ import secrets
 import sys
 from collections.abc import Mapping
 
-_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
+# fullmatch, not match with "$": "$" also matches before a trailing newline.
+_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 
 
 def _format(name: str, value: str) -> str:
-    if not _NAME.match(name):
+    if not _NAME.fullmatch(name):
         raise ValueError(f"invalid step output name: {name!r}")
     if "\n" not in value and "\r" not in value:
         return f"{name}={value}\n"

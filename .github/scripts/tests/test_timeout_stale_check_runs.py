@@ -7,6 +7,7 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 
 import _gh
+import pytest
 import timeout_stale_check_runs as mod
 
 REPO = "atlanhq/application-sdk"
@@ -175,3 +176,75 @@ def test_main_reports_timed_out_runs(monkeypatch, capsys):
     rc = mod.main(["--repo", REPO])
     assert rc == 0
     assert "Timed out 1 stuck check run" in capsys.readouterr().out
+
+
+def _fail(stderr: str) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=stderr)
+
+
+def test_sweep_fails_when_the_timeout_patch_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refused PATCH must fail the watchdog, not leave the check pending silently."""
+    prs = [{"number": 42, "head": {"sha": "sha1"}}]
+    stale = {
+        "id": 7,
+        "name": f"{PREFIX}atlan-openapi-app",
+        "status": "in_progress",
+        "started_at": _iso(NOW - timedelta(minutes=200)),
+    }
+    patches: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        if _is_open_prs_call(cmd):
+            return _pr_pages(prs)
+        if _is_check_runs_call(cmd):
+            return _check_run_pages([stale])
+        patches.append(cmd)
+        return _fail("gh: Resource not accessible by integration (HTTP 403)")
+
+    monkeypatch.setattr(_gh, "run", fake_run)
+    with pytest.raises(SystemExit, match="failed to time out check run 7"):
+        mod.sweep(REPO, PREFIX, 130, now=NOW)
+    assert len(patches) == 1  # a permission 403 is not retried
+
+
+def test_sweep_fails_after_the_timeout_patch_exhausts_its_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prs = [{"number": 42, "head": {"sha": "sha1"}}]
+    stale = {
+        "id": 7,
+        "name": f"{PREFIX}atlan-openapi-app",
+        "status": "in_progress",
+        "started_at": _iso(NOW - timedelta(minutes=200)),
+    }
+    patches: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        if _is_open_prs_call(cmd):
+            return _pr_pages(prs)
+        if _is_check_runs_call(cmd):
+            return _check_run_pages([stale])
+        patches.append(cmd)
+        return _fail("gh: Bad Gateway (HTTP 502)")
+
+    monkeypatch.setattr(_gh, "run", fake_run)
+    with pytest.raises(SystemExit, match="HTTP 502"):
+        mod.sweep(REPO, PREFIX, 130, now=NOW)
+    assert len(patches) == _gh.DEFAULT_RETRIES + 1
+
+
+def test_sweep_fails_when_listing_check_runs_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prs = [{"number": 42, "head": {"sha": "sha1"}}]
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        if _is_open_prs_call(cmd):
+            return _pr_pages(prs)
+        return _fail("gh: Not Found (HTTP 404)")
+
+    monkeypatch.setattr(_gh, "run", fake_run)
+    with pytest.raises(SystemExit, match="failed to list check runs for"):
+        mod.sweep(REPO, PREFIX, 130, now=NOW)

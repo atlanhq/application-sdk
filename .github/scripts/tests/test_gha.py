@@ -81,7 +81,7 @@ def test_a_carriage_return_is_treated_as_multi_line(output_file: Path) -> None:
     assert "v<<EOF_" in output_file.read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("name", ["", "a=b", "a<<b", "a\nb", "1abc", "a b"])
+@pytest.mark.parametrize("name", ["", "a=b", "a<<b", "a\nb", "result\n", "1abc", "a b"])
 def test_an_invalid_name_is_refused(output_file: Path, name: str) -> None:
     with pytest.raises(ValueError):
         _gha.set_output(name, "v")
