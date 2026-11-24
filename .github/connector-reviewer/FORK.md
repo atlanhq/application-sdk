@@ -526,7 +526,7 @@ above; "typing" means only the annotations described under Typing.
 | `config.py` | Docstring, `raw_hash`, typing; the `[access]`, `[exempt]`, `[facts]` and `[skeptic]` tables. |
 | `bundle.py` | `_module_key` and the module docstring. |
 | `llm.py` | Names (the gateway key variable, the User-Agent, log text), typing. |
-| `github.py` | Names, typing, four methods removed with the approval step; `can_push`, `safe_body`, `status_of`, `pr_commit_messages`, `recent_commits`, `commit_patches` and `raw_file_at` (FND-5316) added. |
+| `github.py` | Names, typing, four methods removed with the approval step; `can_push`, `safe_body`, `status_of`, `pr_commit_messages`, `recent_commits`, `commit_patches` and `raw_file_at` (FND-5316) added; `set_status` records each verdict in the job's temp directory (`record_verdict`, `recorded_verdicts`), which `finalize` trusts over a lagging combined status (FND-5316). |
 | `event.py` | Rewritten around who may ask (FND-5310); the command grammar is lens's plus `waive`. The unknown-word check is the same in both, under each copy's own names: `REVIEW_USAGE` and `REVIEW_OPTIONS` here, `LENS_USAGE` and `LENS_OPTIONS` in lens. Two differences (FND-5314): here the subcommand (`dismiss`, `recheck`, `waive`) is read from the first line only, so a note on a later line that starts with one of those words still reviews (ids and reason may continue below a first line that names the subcommand), where lens reads the comment's second word wherever it is; and `force` counts in either order with `verify-budget`, where lens forces only when `force` comes first. |
 | `holistic.py` | The prompt's opening and one concern; no `<public_api>` block; typing. |
 | `context.py` | No `_public` / `public_api`; `build` returns a string. |
