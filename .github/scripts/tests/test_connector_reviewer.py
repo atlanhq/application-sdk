@@ -313,9 +313,27 @@ def _is_skeptic(body: dict[str, Any]) -> bool:
     return _offers(body, "skeptic_verdict")
 
 
-UPHELD = response(
-    [tool_call("skeptic_verdict", {"verdict": "upheld", "reason": "The code does it."})]
-)
+def upheld(steps: int = 6) -> Any:
+    """A skeptic verdict that confirms steps 1..`steps` of the chain (FND-5316:
+    an upheld verdict counts only when it confirms every step)."""
+    return response(
+        [
+            tool_call(
+                "skeptic_verdict",
+                {
+                    "verdict": "upheld",
+                    "reason": "The code does it.",
+                    "steps": [
+                        {"step": n, "holds": True, "why": "the quoted line does it"}
+                        for n in range(1, steps + 1)
+                    ],
+                },
+            )
+        ]
+    )
+
+
+UPHELD = upheld()
 
 
 class Script:
@@ -380,7 +398,43 @@ COMMENT = {
     "title": "decode() on a None result",
     "content": "client.get returns None for a missing key, so data.decode() raises AttributeError.",
     "suggestion_code": "    return data.decode() if data is not None else None",
+    # FND-5316: every finding traces its mechanism through code it quotes.
+    "causal_chain": {
+        "trigger": "A key that is not in the store",
+        "steps": [
+            {
+                "path": "app/storage/fetch.py",
+                "code": "    data = client.get(key)",
+                "effect": "client.get returns None for the missing key",
+            },
+            {
+                "path": "app/storage/fetch.py",
+                "code": "    return data.decode()",
+                "effect": "decode() is called on None",
+            },
+        ],
+        "outcome": "AttributeError fails the fetch",
+    },
 }
+
+
+def chained(comment: dict[str, Any], code: str | None = None) -> dict[str, Any]:
+    """`comment` with a one-step causal chain through `code` (its own quoted
+    code by default) in its own file: the least a finding must now carry."""
+    return {
+        **comment,
+        "causal_chain": {
+            "trigger": "The input the finding names",
+            "steps": [
+                {
+                    "path": comment["path"],
+                    "code": code if code is not None else comment["existing_code"],
+                    "effect": "this code does what the finding says",
+                }
+            ],
+            "outcome": "The failure the finding names",
+        },
+    }
 
 
 class FakeGitHub:
@@ -1266,10 +1320,13 @@ def test_a_finding_that_meets_its_principles_high_case_is_graded_high(repo: Path
         # A High case with no words of the line it meets is not a match.
         ({"severity_basis": "  "}, "medium"),
         ({"severity_basis": None}, "medium"),
-        # Nothing is lowered: a high or critical finding keeps its grade.
-        ({"severity": "high", "severity_case": "medium"}, "high"),
-        ({"severity": "critical", "severity_case": "medium"}, "critical"),
+        # FND-5316: the Medium case lowers too, critical included; a critical
+        # finding that meets the High case keeps critical.
+        ({"severity": "high", "severity_case": "medium"}, "medium"),
+        ({"severity": "critical", "severity_case": "medium"}, "medium"),
         ({"severity": "critical"}, "critical"),
+        # A Low case on a line that names none is its lowest case, medium.
+        ({"severity": "high", "severity_case": "low"}, "medium"),
         # The case is about the principle the model named: when `cite` took
         # another one from the text, or none applies, nothing is raised.
         (
@@ -1286,14 +1343,15 @@ def test_a_finding_that_meets_its_principles_high_case_is_graded_high(repo: Path
         "no-case",
         "blank-basis",
         "no-basis",
-        "high-stays",
-        "critical-stays",
+        "high-to-medium-case",
+        "critical-to-medium-case",
         "critical-high-case",
+        "low-case-not-named",
         "other-principle",
         "no-principle",
     ],
 )
-def test_a_principle_case_never_lowers_and_raises_only_on_its_own_match(
+def test_a_principle_case_grades_both_ways_and_only_on_its_own_match(
     repo: Path, changes: dict[str, Any], severity: str
 ):
     assert _graded(repo, **changes).severity == severity
@@ -1350,8 +1408,138 @@ def test_a_review_publishes_a_principles_high_case_as_blocking(repo: Path):
     flat = " ".join(prompts_mod.REVIEW_SYSTEM.split())
     assert "graded by that principle's Severity line, not by the general scale" in flat
     item = cast(dict[str, Any], COMMENT_ITEM)
-    assert item["properties"]["severity_case"]["enum"] == ["high", "medium"]
+    assert item["properties"]["severity_case"]["enum"] == ["high", "medium", "low"]
     assert "severity_case" not in item["required"]
+
+
+def _fp01_with(severity_line: str, repo: Path) -> PrincipleSet:
+    """The fixture's principles, FP01's Severity line replaced."""
+    principles = principles_of(repo)
+    return PrincipleSet(
+        fleet=[
+            p
+            if p.id != "FP01"
+            else parse_principle(
+                FP01.replace(
+                    "Severity: High when a shortfall can be published as complete; otherwise medium.",
+                    severity_line,
+                ),
+                "fleet",
+            )
+            for p in principles.fleet
+        ]
+    )
+
+
+def test_a_principles_low_case_caps_a_finding_there(repo: Path):
+    """FND-5316: a principle's Severity line lowers as well as raises. A
+    finding that meets its Low case is low, whatever it was reported at."""
+    principles = _fp01_with(
+        "Severity: High when a shortfall can be published as complete. Medium when the "
+        "shortfall is declared. Low when only a fixture is missing.",
+        repo,
+    )
+    raw = {**FP01_COMMENT, "severity": "high", "severity_case": "low"}
+    ws, bundle = _ws(repo)
+    placed = agent_mod.place(ws, bundle, raw)
+    assert placed is not None
+    _, notes = agent_mod.grade_by_principle([placed], {placed.id: raw}, principles)
+    assert placed.severity == "low"
+    assert notes == [f"{placed.id}: high → low (FP01's Low case)"]
+
+
+def _graded_run(repo: Path, comment: dict[str, Any]) -> tuple[Finding, Any, Script]:
+    script = Script(
+        response(
+            [
+                tool_call("code_comment", {"comments": [comment]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    gh = fake_github()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    [f] = state_of(res).findings
+    return f, gh, script
+
+
+def _harm(comment: dict[str, Any], harm: str, normal_path: bool) -> dict[str, Any]:
+    chain = cast(dict[str, Any], COMMENT["causal_chain"])
+    return {
+        **comment,
+        "causal_chain": {**chain, "harm": harm, "normal_path": normal_path},
+    }
+
+
+def test_a_finding_whose_only_harm_is_a_test_gap_is_at_most_medium(repo: Path):
+    """FND-5316: a missing regression test, resting on a principle, was graded
+    high by the general scale and blocked a clean pull request. A finding
+    whose chain ends in a test gap is at most medium, unless its principle's
+    High case says otherwise. Read from the chain's `harm`, not the title."""
+    gap = {
+        **FP01_COMMENT,
+        "severity": "high",
+        "category": "test",
+        "title": "Decode failures are graded high",  # no keyword to match
+        "severity_case": None,
+        "severity_basis": None,
+    }
+    gap = {k: v for k, v in gap.items() if v is not None}
+    f, gh, script = _graded_run(repo, _harm(gap, "test_gap", True))
+    assert f.severity == "medium"
+    assert gh.statuses[-1]["state"] == "failure"
+    assert "Changes requested" not in gh.comments[0]["body"]
+    assert script.skeptic_requests == []  # no longer a blocker to check
+
+    # Its principle's High case says otherwise: it stays high.
+    f, _, _ = _graded_run(repo, _harm(dict(gap, **_HIGH_CASE_FIELDS), "test_gap", True))
+    assert f.severity == "high"
+
+
+_HIGH_CASE_FIELDS = {
+    "severity_case": "high",
+    "severity_basis": "a shortfall can be published as complete: the empty page is published",
+}
+
+
+def test_a_traced_crash_on_a_normal_path_is_at_least_high(repo: Path):
+    """FND-5316: a crash on any valid configured value was graded medium and
+    did not block. A traced crash, data loss or silent wrong output whose
+    trigger occurs on a normal path is at least high, and faces the skeptic."""
+    medium = dict(COMMENT, severity="medium", title="A valid value fails the fetch")
+    f, gh, script = _graded_run(repo, _harm(medium, "crash", True))
+    assert f.severity == "high"
+    assert "Changes requested" in gh.comments[0]["body"]
+    assert len(script.skeptic_requests) == 1
+
+    # The floor wins over a principle's Medium case: the chain is traced code.
+    fp01 = dict(FP01_COMMENT, category="bug", severity_case="medium")
+    f, _, _ = _graded_run(repo, _harm(fp01, "silent_wrong_output", True))
+    assert f.severity == "high"
+
+    # Not on a normal path, or not a floor harm: the grade stands.
+    f, _, _ = _graded_run(repo, _harm(medium, "crash", False))
+    assert f.severity == "medium"
+    f, _, _ = _graded_run(repo, _harm(medium, "performance", True))
+    assert f.severity == "medium"
+
+
+def test_the_prompt_and_schema_carry_the_harm_fields():
+    item = cast(dict[str, Any], COMMENT_ITEM)
+    chain = item["properties"]["causal_chain"]
+    assert chain["properties"]["harm"]["enum"] == list(findings_mod.HARMS)
+    assert "harm" in chain["required"] and "normal_path" in chain["required"]
+    flat = " ".join(prompts_mod.REVIEW_SYSTEM.split())
+    assert "a traced crash, data loss or silent wrong output on a normal path" in flat
+    assert "graded to that case in code, up or down" in flat
 
 
 def test_glob_semantics():
@@ -1683,6 +1871,171 @@ def test_fingerprint_is_stable_across_rewording_and_line_moves():
     assert a.id == b.id
     st = PRState(findings=[a])
     assert merge_new(st, [b], round_no=2) == [] and st.findings[0].line == 42
+
+
+def _same_quote_pair() -> list[dict[str, Any]]:
+    """Two different findings on the same quoted line of the same file, in the
+    same category: the replayed case where both got one id and one vanished.
+    The second rests on FP01 and meets its High case; the first is a plain bug."""
+    plain = dict(COMMENT, severity="medium", title="decode() on a None result")
+    graded = dict(
+        FP01_COMMENT,
+        category="bug",
+        title="A missing key is published as an empty page",
+    )
+    return [plain, graded]
+
+
+def _pair_script(*first: Any, comments: list[dict[str, Any]] | None = None) -> Script:
+    return Script(
+        *first,
+        response(
+            [
+                tool_call(
+                    "code_comment",
+                    {
+                        "comments": comments
+                        if comments is not None
+                        else _same_quote_pair()
+                    },
+                ),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+
+
+def test_two_findings_on_one_quote_keep_their_own_ids_and_grades(repo: Path):
+    """FND-5316: the id is `sha1(category, path, quote)`, so two different
+    findings on one quoted line got the same id, and `merge_new` dropped the
+    second as a restatement. Each now has its own id, both are stored and in
+    the summary, and each is graded from its own comment."""
+    gh = fake_github()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(_pair_script()),
+    )
+    st = state_of(res)
+    by_title = {f.title: f for f in st.findings}
+    plain = by_title["decode() on a None result"]
+    graded = by_title["A missing key is published as an empty page"]
+    assert plain.id != graded.id
+    # The finding that would have won the id keeps the plain fingerprint, so an
+    # open finding on a live pull request keeps matching its stored record.
+    assert plain.id == plain.fingerprint()
+    # Graded from its own comment: the FP01 High case raises only the second.
+    assert (plain.severity, graded.severity) == ("medium", "high")
+    body = gh.comments[0]["body"]
+    assert f"| {plain.id} |" in body and f"| {graded.id} |" in body
+
+    # Round 2 reports both again: neither is new, and both keep their ids.
+    ids = {plain.id, graded.id}
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = gh.diffs[("b0", "h1")]
+    gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
+    gh.files[("app/storage/fetch.py", "h2")] = SRC_V2_NEXT
+    again = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(
+            _pair_script(response([tool_call("verdicts", {"items": []})]))
+        ),
+    )
+    assert again.new_findings == []
+    assert {f.id for f in state_of(again).findings} == ids
+
+
+def test_ids_on_one_quote_do_not_depend_on_severity_or_order(repo: Path):
+    """The model's severity and the order it writes findings in change from
+    round to round. When the more severe finding kept the plain id, round 2
+    with the severities swapped gave each finding the other's id: one was
+    folded into the other's record and the other came back as new."""
+    gh = fake_github()
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(_pair_script()),
+    )
+    ids = {f.title: f.id for f in state_of(first).findings}
+    plain, graded = _same_quote_pair()
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = gh.diffs[("b0", "h1")]
+    gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
+    gh.files[("app/storage/fetch.py", "h2")] = SRC_V2_NEXT
+    swapped = [dict(graded, severity="critical"), dict(plain, severity="high")]
+    again = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(
+            _pair_script(
+                response([tool_call("verdicts", {"items": []})]), comments=swapped
+            )
+        ),
+    )
+    assert again.new_findings == []
+    assert {f.title: f.id for f in state_of(again).findings} == ids
+
+
+def test_a_literal_repeat_of_a_finding_is_one_finding():
+    """Only a repeat (same quote, principle and title) collapses: that is the
+    same finding reported twice, not two findings."""
+    a = Finding("p.py", 1, "high", "bug", "Decode on None", "x", "return d()")
+    b = Finding("p.py", 1, "high", "bug", "  decode on none ", "y", "return d()")
+    c = Finding("p.py", 1, "medium", "bug", "Another defect", "z", "return d()")
+    kept = findings_mod.unique_ids([a, b, c])
+    # Same principle (none): the title decides which keeps the plain id.
+    assert kept == [a, c] and a.id != c.id and c.id == c.fingerprint()
+
+
+def test_same_principle_findings_on_one_quote_keep_their_ids_across_rounds():
+    """lens F-871acd: two findings on one quote with the same principle and
+    different titles took the plain id by severity, so a round that swapped
+    their grades swapped their ids."""
+
+    def pair(sev_a: str, sev_b: str) -> list[Finding]:
+        return [
+            Finding(
+                "p.py", 1, sev_a, "bug", "Loses rows", "x", "ret()", rule_id="FP01"
+            ),
+            Finding(
+                "p.py", 1, sev_b, "bug", "Skips pages", "y", "ret()", rule_id="FP01"
+            ),
+        ]
+
+    first = {f.title: f.id for f in findings_mod.unique_ids(pair("high", "medium"))}
+    again = {f.title: f.id for f in findings_mod.unique_ids(pair("medium", "critical"))}
+    assert first == again and len(set(first.values())) == 2
+
+
+def test_a_second_pass_over_salted_findings_keeps_their_ids_and_sees_repeats():
+    """lens F-11333f: the round pass grouped by the current id, so a finding
+    one bundle had salted was not recognised when another bundle reported it
+    alone, and got a third id. Groups are formed by the plain fingerprint."""
+
+    def mk(rule: str, title: str) -> Finding:
+        return Finding("p.py", 1, "high", "bug", title, "b", "ret()", rule_id=rule)
+
+    one = findings_mod.unique_ids(
+        [mk("FP01", "Loses rows"), mk("FP02", "Logs a token")]
+    )
+    other = findings_mod.unique_ids([mk("FP02", "Logs a token")])
+    ids = {f.id for f in one}
+    merged = findings_mod.unique_ids(one + other)
+    assert len(merged) == 2 and {f.id for f in merged} == ids
 
 
 def test_state_round_trips_through_the_comment_marker():
@@ -3044,6 +3397,44 @@ def test_a_file_mixing_real_and_mechanical_hunks_keeps_only_the_real_ones():
     )
     [fd] = triage(parse_unified_diff(diff), {}, {}).reviewed
     assert len(fd.hunks) == 1 and "a / b" in fd.render()
+
+
+def test_the_mechanical_box_lists_only_files_the_model_never_saw(
+    repo: Path, tmp_path: Path
+):
+    """FND-5316: triage notes a reason per HUNK, and the summary's box ("not
+    sent to the model") counted every file with one mechanical hunk, so a file
+    whose import hunk was set aside and whose real change was reviewed, and
+    carried findings, was listed as never sent. Only a file with nothing left
+    to review is withheld; the run report and the approach check say the same."""
+    mixed = (
+        "diff --git a/app/mixed.py b/app/mixed.py\n--- a/app/mixed.py\n+++ b/app/mixed.py\n"
+        "@@ -1,1 +1,1 @@\n-import os\n+import os, sys\n"
+        "@@ -10,1 +10,1 @@\n-    return a\n+    return a / b\n"
+    )
+    imports = _file_diff("app/imports.py", ["import os"], ["import os, sys"])
+    gh = fake_github()
+    gh.diffs[("b0", "h1")] = mixed + imports
+    script = Script()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=PrincipleSet(),
+        client_factory=_factory(script),
+    )
+    # The mixed file's real hunk is sent to the model.
+    assert any("return a / b" in _sent(r) for r in script.requests)
+    body = gh.comments[0]["body"]
+    assert "<details><summary>1 file(s) with mechanical changes" in body
+    box = body.split("<details><summary>1 file(s) with mechanical changes")[1]
+    box = box.split("</details>")[0]
+    assert "`app/imports.py`" in box and "app/mixed.py" not in box
+    assert res.triage.summary_lines() == ["imports only: 1 file(s)"]
+    assert res.triage.withheld() == {"imports only": ["app/imports.py"]}
+    rep = report_mod.write(res, 1, str(tmp_path / "run.json"), None)
+    assert rep["triage"]["mechanical"] == {"imports only": 1}
 
 
 def test_a_hundred_file_mechanical_pr_costs_no_review_calls(repo: Path):
@@ -5176,14 +5567,16 @@ def test_the_run_is_linked_from_the_status_the_verdict_and_the_history(repo: Pat
 
 # ---- a finding off the diff is still a finding -----------------------------------------------------------------
 
-OFF_DIFF = {
-    "path": "app/storage/fetch.py",
-    "existing_code": "    return [fetch(client, k) for k in keys]",  # line 8: not in the diff
-    "severity": "low",
-    "category": "bug",
-    "title": "load_all has the same unguarded decode",
-    "content": "Every key goes through fetch, so one missing key fails the whole batch.",
-}
+OFF_DIFF = chained(
+    {
+        "path": "app/storage/fetch.py",
+        "existing_code": "    return [fetch(client, k) for k in keys]",  # line 8: not in the diff
+        "severity": "low",
+        "category": "bug",
+        "title": "load_all has the same unguarded decode",
+        "content": "Every key goes through fetch, so one missing key fails the whole batch.",
+    }
+)
 
 
 def test_a_finding_off_the_diff_is_counted_stored_and_can_block_readiness(repo: Path):
@@ -7157,15 +7550,17 @@ def _added_file_diff(path: str, text: str) -> str:
     )
 
 
-TUPLE_CONTRACT = {
-    "path": MARKER,
-    "existing_code": "    return Bracketed(lo, hi)",
-    "severity": "high",
-    "category": "bug",
-    "compatibility": True,
-    "title": "Keep the tuple return contract for hash_fingerprinted",
-    "content": "Callers unpack the released helper's tuple result; returning Bracketed breaks them.",
-}
+TUPLE_CONTRACT = chained(
+    {
+        "path": MARKER,
+        "existing_code": "    return Bracketed(lo, hi)",
+        "severity": "high",
+        "category": "bug",
+        "compatibility": True,
+        "title": "Keep the tuple return contract for hash_fingerprinted",
+        "content": "Callers unpack the released helper's tuple result; returning Bracketed breaks them.",
+    }
+)
 
 
 def _marker_pr(repo: Path) -> Any:
@@ -7239,12 +7634,14 @@ def test_the_review_and_verify_are_told_what_the_pr_added(repo: Path):
     first = _first_round(
         gh,
         repo,
-        {
-            **TUPLE_CONTRACT,
-            "existing_code": "    lo, hi = _bracket(path)",
-            "compatibility": False,
-            "title": "_bracket is unbounded",
-        },
+        chained(
+            {
+                **TUPLE_CONTRACT,
+                "existing_code": "    lo, hi = _bracket(path)",
+                "compatibility": False,
+                "title": "_bracket is unbounded",
+            }
+        ),
     )
     assert state_of(first).open_findings(), "round 1 must leave a finding to verify"
     gh.head = "h2"
@@ -7967,12 +8364,15 @@ RESTORE_PR_DIFF = (
     '     """Fetch one object."""\n-    return client.get(key)\n'
     "+    data = client.get(key)\n+    return data\n"
 )
-REGRESSION_CLAIM = dict(
-    COMMENT,
-    existing_code="    return data",
-    severity="high",
-    title="fetch now returns raw bytes instead of the decoded string",
-    content="Callers got a str from fetch before; keep the previous behaviour.",
+REGRESSION_CLAIM = chained(
+    dict(
+        COMMENT,
+        existing_code="    return data",
+        severity="high",
+        title="fetch now returns raw bytes instead of the decoded string",
+        content="Callers got a str from fetch before; keep the previous behaviour.",
+    ),
+    "    data = client.get(key)\n    return data",
 )
 
 
@@ -10755,6 +11155,10 @@ REMOVED_DISPOSE = (
 
 
 def _dispose_finding(evidence: str = REMOVED_DISPOSE) -> dict[str, Any]:
+    return chained(_dispose_comment(evidence))
+
+
+def _dispose_comment(evidence: str) -> dict[str, Any]:
     return {
         "path": "app/client.py",
         "existing_code": evidence,
@@ -11085,14 +11489,16 @@ def test_a_deleted_source_file_is_reviewed_and_its_finding_blocks(repo: Path):
     )
     gh = fake_github(diffs={("b0", "h1"): LEGACY_DIFF})
     script = _script_with(
-        {
-            "path": "app/auth/legacy.py",
-            "existing_code": "def legacy_token(user):",
-            "severity": "high",
-            "category": "bug",
-            "title": "legacy_token is deleted while app/auth/login.py still imports it",
-            "content": "Every login raises ImportError at import time.",
-        }
+        chained(
+            {
+                "path": "app/auth/legacy.py",
+                "existing_code": "def legacy_token(user):",
+                "severity": "high",
+                "category": "bug",
+                "title": "legacy_token is deleted while app/auth/login.py still imports it",
+                "content": "Every login raises ImportError at import time.",
+            }
+        )
     )
     res = run(
         gh=gh,
@@ -11234,14 +11640,16 @@ SRC_V2_DIFF = _diff_of("app/storage/fetch.py", SRC_V1, SRC_V2)
 SRC_NEXT_RANGE = _diff_of("app/storage/fetch.py", SRC_V2, SRC_V2_NEXT)
 SRC_NEXT_DIFF = _diff_of("app/storage/fetch.py", SRC_V1, SRC_V2_NEXT)
 
-COMMENT_NEXT = {
-    "path": "app/storage/fetch.py",
-    "existing_code": "    return {k: fetch(client, k) for k in keys}",
-    "severity": "high",
-    "category": "bug",
-    "title": "fetch_many raises on the first missing key",
-    "content": "fetch decodes None for a missing key, so one missing key fails the batch.",
-}
+COMMENT_NEXT = chained(
+    {
+        "path": "app/storage/fetch.py",
+        "existing_code": "    return {k: fetch(client, k) for k in keys}",
+        "severity": "high",
+        "category": "bug",
+        "title": "fetch_many raises on the first missing key",
+        "content": "fetch decodes None for a missing key, so one missing key fails the batch.",
+    }
+)
 
 
 class SecretRecorder:
@@ -12593,9 +13001,34 @@ def _no_verdict_turns(n: int) -> list[Any]:
             [response([tool_call("skeptic_verdict", {"verdict": "maybe"})])],
             "malformed",
         ),
+        (_no_verdict_turns(4), "malformed"),  # max_lookups + 1 turns, no verdict
+    ],
+    ids=["llm-error", "bad-verdict", "no-verdict"],
+)
+def test_a_skeptic_that_makes_no_check_keeps_the_severity(
+    repo: Path, replies: list[Any], outcome: str
+):
+    """A failed call or an answer that is no verdict at all is no check: a
+    provider error must not unblock a real defect."""
+    script = _review_script()
+    script.skeptic = list(replies)
+    res, gh = _skeptic_run(repo, script)
+
+    [f] = state_of(res).findings
+    assert f.severity == "high" and f.contested == ""
+    [o] = res.skeptic
+    assert o.outcome == outcome
+    body = gh.comments[0]["body"]
+    assert "Changes requested" in body and "contested" not in body
+    assert not res.incomplete  # a skeptic failure never makes the review incomplete
+
+
+@pytest.mark.parametrize(
+    "replies, error",
+    [
         (  # refuted, but the quote is not in the file
             [_refuted(quote="    if data is None:\n        return None")],
-            "malformed",
+            "refuted without a quote found in the repository",
         ),
         (  # refuted, with no evidence at all
             [
@@ -12608,36 +13041,42 @@ def _no_verdict_turns(n: int) -> list[Any]:
                     ]
                 )
             ],
-            "malformed",
+            "refuted without a quote found in the repository",
         ),
-        ([_refuted(path="../../etc/passwd")], "malformed"),  # not a repository file
-        ([_refuted(quote="return")], "malformed"),  # too short to prove anything
-        (_no_verdict_turns(4), "malformed"),  # max_lookups + 1 turns, no verdict
+        (  # not a repository file
+            [_refuted(path="../../etc/passwd")],
+            "refuted without a quote found in the repository",
+        ),
+        (  # too short to prove anything
+            [_refuted(quote="return")],
+            "refuted without a quote found in the repository",
+        ),
+        ([_refuted(reason="")], "refuted without a reason"),
+        ([_refuted(reason="   \n ")], "refuted without a reason"),
     ],
     ids=[
-        "llm-error",
-        "bad-verdict",
         "quote-not-in-file",
         "no-evidence",
         "outside-repo",
         "quote-too-short",
-        "no-verdict",
+        "empty-reason",
+        "blank-reason",
     ],
 )
-def test_a_skeptic_that_cannot_refute_keeps_the_severity(
-    repo: Path, replies: list[Any], outcome: str
+def test_a_refutation_without_proof_is_contested_not_upheld(
+    repo: Path, replies: list[Any], error: str
 ):
+    """FND-5316: a refutation the code does not prove used to keep the finding
+    blocking. The skeptic did not confirm the chain either, so it is contested."""
     script = _review_script()
     script.skeptic = list(replies)
     res, gh = _skeptic_run(repo, script)
 
     [f] = state_of(res).findings
-    assert f.severity == "high" and f.contested == ""
+    assert f.severity == "medium" and f.contested
     [o] = res.skeptic
-    assert o.outcome == outcome
-    body = gh.comments[0]["body"]
-    assert "Changes requested" in body and "contested" not in body
-    assert not res.incomplete  # a skeptic failure never makes the review incomplete
+    assert (o.outcome, o.error) == ("contested", error)
+    assert "Changes requested" not in gh.comments[0]["body"]
 
 
 def test_a_skeptic_that_cannot_reserve_its_call_keeps_the_severity(repo: Path):
@@ -12839,19 +13278,188 @@ def test_skeptic_stops_after_the_forced_turn_once_lookups_are_spent(repo: Path):
     assert state_of(res).findings[0].severity == "high"
 
 
-@pytest.mark.parametrize("reason", ["", "   \n "], ids=["empty", "blank"])
-def test_a_refutation_without_a_reason_keeps_the_severity(repo: Path, reason: str):
-    """F-3cdd62: the quote is valid and in the file, so only the missing reason
-    rejects the refutation."""
+def _skeptic_says(verdict: str, steps: list[tuple[int, bool]], reason: str = "") -> Any:
+    return response(
+        [
+            tool_call(
+                "skeptic_verdict",
+                {
+                    "verdict": verdict,
+                    "reason": reason,
+                    "steps": [
+                        {"step": n, "holds": ok, "why": f"step {n} checked"}
+                        for n, ok in steps
+                    ],
+                },
+            )
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "reply, why",
+    [
+        # The replayed shape: "I cannot refute it" was an upheld verdict.
+        (
+            response(
+                [
+                    tool_call(
+                        "skeptic_verdict",
+                        {"verdict": "upheld", "reason": "I cannot refute it."},
+                    )
+                ]
+            ),
+            "step 1 not confirmed: no check given",
+        ),
+        (_skeptic_says("upheld", [(1, True)]), "step 2 not confirmed: no check given"),
+        (
+            _skeptic_says("upheld", [(1, True), (2, False)]),
+            "step 2 not confirmed: step 2",
+        ),
+        (
+            _skeptic_says("contested", [(1, True), (2, False)], "decode() is guarded"),
+            "decode() is guarded",
+        ),
+    ],
+    ids=["no-steps", "a-step-left-out", "a-step-not-holding", "contested"],
+)
+def test_upheld_needs_every_step_of_the_chain_confirmed(
+    repo: Path, reply: Any, why: str
+):
+    """FND-5316: the skeptic upheld findings whose story the code did not
+    support, with "I cannot refute it". It now checks the causal chain step by
+    step, and upholds only when it confirms every step; anything less contests
+    the finding, which drops to medium and stops blocking."""
     script = _review_script()
-    script.skeptic = [_refuted(reason=reason)]
+    script.skeptic = [reply]
     res, gh = _skeptic_run(repo, script)
 
+    [req] = script.skeptic_requests
+    sent = _sent(req)
+    # The chain is what it checks: each step, where its quote was found.
+    assert "<causal_chain>" in sent and "A key that is not in the store" in sent
+    assert 'at=\\"app/storage/fetch.py:3\\"' in sent
+    assert 'at=\\"app/storage/fetch.py:4\\"' in sent
     [f] = state_of(res).findings
-    assert f.severity == "high" and f.contested == ""
+    assert (f.severity, f.contested.startswith(why)) == ("medium", True), f.contested
     [o] = res.skeptic
-    assert (o.outcome, o.error) == ("malformed", "refuted without a reason")
-    assert "Changes requested" in gh.comments[0]["body"]
+    assert o.outcome == "contested"
+    assert "Changes requested" not in gh.comments[0]["body"]
+
+
+# ---- the causal chain a finding must carry (FND-5316) ------------------------------------------------
+
+
+def _chain_run(repo: Path, *comments: dict[str, Any]) -> tuple[RunResult, Any]:
+    script = Script(
+        response(
+            [
+                tool_call("code_comment", {"comments": list(comments)}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    gh = fake_github()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    return res, gh
+
+
+def _with_steps(*steps: dict[str, str], **chain: Any) -> dict[str, Any]:
+    base = cast(dict[str, Any], COMMENT["causal_chain"])
+    return {**COMMENT, "causal_chain": {**base, "steps": list(steps), **chain}}
+
+
+def _step(code: str, path: str = "app/storage/fetch.py") -> dict[str, str]:
+    return {"path": path, "code": code, "effect": "it does what the step says"}
+
+
+@pytest.mark.parametrize(
+    "comment, why",
+    [
+        ({k: v for k, v in COMMENT.items() if k != "causal_chain"}, "no causal chain"),
+        (
+            # The mechanism runs through code that is not in the repository.
+            _with_steps(
+                _step("    data = client.get(key)"),
+                _step("    raise RetryStorm(attempts)", "app/storage/retry.py"),
+            ),
+            "step 2 quotes code that is not in app/storage/retry.py",
+        ),
+        (_with_steps(_step("    return")), "step 1 quotes too little code to check"),
+        (_with_steps(), "the causal chain has no step through the code"),
+        (_with_steps(_step("    data = client.get(key)"), trigger=" "), "no trigger"),
+        (_with_steps(_step("    data = client.get(key)"), outcome=""), "no outcome"),
+    ],
+    ids=[
+        "no-chain",
+        "untraced-step",
+        "tiny-quote",
+        "no-steps",
+        "no-trigger",
+        "no-outcome",
+    ],
+)
+def test_a_finding_whose_mechanism_is_not_traced_through_code_is_dropped(
+    repo: Path, tmp_path: Path, comment: dict[str, Any], why: str
+):
+    """FND-5316: findings pointed at the right change but told a stock failure
+    story the code did not support. A finding now carries its causal chain,
+    and each step's quote is checked in code; one that is not traced through
+    code found where it says is dropped before the fact-check."""
+    res, gh = _chain_run(repo, comment)
+    assert state_of(res).findings == []
+    [b] = res.bundles
+    [(dropped, reason)] = b.untraced
+    assert dropped.title == COMMENT["title"] and why in reason
+    rep = report_mod.write(res, 1, str(tmp_path / "run.json"), None)
+    assert why in rep["bundles"][0]["untraced_dropped"][0]
+    assert gh.statuses[-1]["state"] == "success"
+
+
+def test_a_traced_chain_is_kept_and_shown_where_each_step_was_found(repo: Path):
+    """A step may quote code the PR removes; each location is where the quote
+    was found, and the chain is the summary's "When it fails"."""
+    comment = _with_steps(
+        _step("    return client.get(key)"),  # removed by the PR
+        _step("    return data.decode()"),
+    )
+    res, gh = _chain_run(repo, comment)
+    [f] = state_of(res).findings
+    assert [s["at"] for s in f.chain["steps"]] == [
+        "app/storage/fetch.py (removed)",
+        "app/storage/fetch.py:4",
+    ]
+    body = gh.comments[0]["body"]
+    assert "**When it fails:** A key that is not in the store." in body
+    assert "(`app/storage/fetch.py:4`). Result: AttributeError fails the fetch." in body
+    # The chain is not stored: a later round never reads it.
+    assert decode_state(body).findings[0].chain == {}
+
+
+def test_the_review_prompt_and_schema_ask_for_a_traced_chain():
+    flat = " ".join(prompts_mod.REVIEW_SYSTEM.split())
+    assert "Every finding carries a causal_chain" in flat
+    assert "When you cannot trace the harm through the code, do not report it." in flat
+    item = cast(dict[str, Any], COMMENT_ITEM)
+    assert "causal_chain" in item["required"]
+    chain = item["properties"]["causal_chain"]
+    assert chain["required"][:3] == ["trigger", "steps", "outcome"]
+    step = chain["properties"]["steps"]["items"]
+    assert step["required"] == ["path", "code", "effect"]
+    from connector_reviewer import skeptic  # noqa: PLC0415 - module under test
+
+    assert "Default to upheld" not in skeptic.SYSTEM
+    assert "Not being able to refute the finding is not a reason to uphold it" in (
+        " ".join(skeptic.SYSTEM.split())
+    )
 
 
 def test_gate_and_closed_findings_are_not_skeptic_candidates():

@@ -34,7 +34,7 @@ from typing import Any
 
 from . import sdk_source
 from .diff import FileDiff
-from .findings import CATEGORIES, SEVERITIES
+from .findings import CATEGORIES, HARMS, SEVERITIES
 from .index import SKIP_DIRS, Index, index_source
 
 READ_MAX_LINES = 250
@@ -289,7 +289,8 @@ class SdkSource:
             "workflows and tasks) and a finding depends on how that API behaves: its signature "
             "and defaults, what it raises, retries or writes, and what it expects of the caller. "
             "Check that in the source instead of assuming it. The SDK is reference, not under "
-            "review: comment only on files in <review_files>.\n"
+            "review: comment only on files in <review_files>. A causal_chain step may cite SDK "
+            "code you read, with its `sdk:` path.\n"
             "</sdk_source>"
         )
 
@@ -529,8 +530,8 @@ COMMENT_ITEM = {
         },
         "severity_case": {
             "type": "string",
-            "enum": ["high", "medium"],
-            "description": "With `principle`: the case of that principle's Severity line this finding meets. high only when the scenario in `content` meets the line's High case; otherwise medium. A finding that meets the High case is graded high.",
+            "enum": ["high", "medium", "low"],
+            "description": "With `principle`: the case of that principle's Severity line this finding meets. high only when the scenario in `content` meets the line's High case; low only when the line names a Low case and the scenario meets it; otherwise medium. The finding is graded to that case, up or down.",
         },
         "severity_basis": {
             "type": "string",
@@ -540,6 +541,53 @@ COMMENT_ITEM = {
         "content": {
             "type": "string",
             "description": "What is wrong and the concrete input/state under which it fails. 1-4 sentences.",
+        },
+        "causal_chain": {
+            "type": "object",
+            "description": "How the failure happens, traced through code you read: what starts it, each step of the code path with the code that does it, and the wrong outcome. Every step's code is checked against the repository; a finding whose chain is missing or quotes code that is not there is dropped.",
+            "properties": {
+                "trigger": {
+                    "type": "string",
+                    "description": "The concrete input, state or event that starts it, as it occurs in real runs.",
+                },
+                "steps": {
+                    "type": "array",
+                    "maxItems": 6,
+                    "description": "The code path from the trigger to the outcome, in order, at least one step. Only code you read: the diff, the context blocks, read_file or search_code results.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The file the code is in, as the tool that showed it named it.",
+                            },
+                            "code": {
+                                "type": "string",
+                                "description": "1-3 lines copied VERBATIM from that file (or removed by this PR), no line numbers.",
+                            },
+                            "effect": {
+                                "type": "string",
+                                "description": "What this code does with the value or state from the previous step, as the code shows it.",
+                            },
+                        },
+                        "required": ["path", "code", "effect"],
+                    },
+                },
+                "outcome": {
+                    "type": "string",
+                    "description": "The wrong result the run, the customer or Atlan ends up with.",
+                },
+                "harm": {
+                    "type": "string",
+                    "enum": list(HARMS),
+                    "description": "What kind of harm the outcome is. test_gap when the only harm is a missing or weak test; silent_wrong_output when the run succeeds with a wrong or partial result.",
+                },
+                "normal_path": {
+                    "type": "boolean",
+                    "description": "true when the trigger occurs in ordinary production runs: the default config, a valid value of an input the connector accepts, a source shape real sources produce. false for a corner case, an invalid input, or a chain that needs several unlikely conditions at once.",
+                },
+            },
+            "required": ["trigger", "steps", "outcome", "harm", "normal_path"],
         },
         "suggestion_code": {
             "type": "string",
@@ -554,6 +602,7 @@ COMMENT_ITEM = {
         "compatibility",
         "title",
         "content",
+        "causal_chain",
     ],
 }
 

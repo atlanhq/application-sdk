@@ -60,6 +60,7 @@ from .findings import (
     PRState,
     merge_new,
     quote_stored,
+    unique_ids,
 )
 from .github import GitHub, GitHubError, bot_login
 from .index import Index, Symbol, build_index, index_source
@@ -80,6 +81,7 @@ APPROACH_SHARE = 0.15
 SKEPTIC_SHARE = 0.10
 COMMENT_LIMIT = 64_000  # GitHub's cap is 65,536 characters; keep a margin
 MAX_HISTORY = 20  # rounds kept in the state and shown in the summary
+MECHANICAL_SHOWN = 20  # withheld files named per reason in the summary's box
 
 
 @dataclass
@@ -859,10 +861,18 @@ def run(
             )
         for path, why in sel.skipped:
             trace.line(f"skipped   {path}: {why}")
+        withheld = res.triage.withheld()
         for reason, paths in res.triage.mechanical.items():
-            trace.line(
-                f"mechanical ({reason}): {', '.join(paths[:10])}{' …' if len(paths) > 10 else ''}"
-            )
+            whole = withheld.get(reason, [])
+            part = [p for p in paths if p not in whole]
+            for label, ps in (
+                ("mechanical, not sent", whole),
+                ("mechanical hunks set aside, the rest reviewed", part),
+            ):
+                if ps:
+                    trace.line(
+                        f"{label} ({reason}): {', '.join(ps[:10])}{' …' if len(ps) > 10 else ''}"
+                    )
         for dup, rep_path in res.triage.duplicate_of.items():
             trace.line(f"duplicate {dup}: same change as {rep_path} (reviewed once)")
         if res.triage.renames:
@@ -1160,6 +1170,9 @@ def run(
         # summary and the verdict; connector-reviewer opens no inline review threads.
         fresh.extend(br.findings)
         fresh.extend(br.unplaced)
+    # Each bundle's ids are unique already; two bundles can still meet on one
+    # file. Before the base check (keyed by id) and `merge_new` (FND-5316).
+    fresh = unique_ids(fresh)
     if round_no > 1:
         fresh = [
             f for f in fresh if _sev_at_least(f.severity, cfg.later_round_min_severity)
@@ -2993,8 +3006,9 @@ def _details(f: Finding, blob_base: str, chars: int | None = None) -> str:
     ]
     if f.contested:
         out.append(
-            "**⚖️ Contested:** raised as blocking; an independent check refuted it against the "
-            f"code, so it is medium and does not block. Its reason: {f.contested}\n"
+            "**⚖️ Contested:** raised as blocking; an independent check of its causal chain "
+            "against the code did not confirm every step, so it is medium and does not block. "
+            f"Its reason: {f.contested}\n"
         )
     out.append(cap(f.body.strip()))
     if f.scenario.strip():
@@ -3155,13 +3169,26 @@ def render_summary(res: RunResult) -> str:
     lines.extend(_resolved_section(st))
     lines.extend(_history_section(st))
     t = res.triage
-    mech_files = {p for ps in t.mechanical.values() for p in ps} | set(t.duplicate_of)
+    # Only files with nothing left to review: a file whose mechanical hunk was
+    # set aside and whose real change was reviewed was sent (FND-5316).
+    withheld = t.withheld()
+    mech_files = {p for ps in withheld.values() for p in ps} | set(t.duplicate_of)
     if mech_files:
         lines.append(
             f"\n<details><summary>{len(mech_files)} file(s) with mechanical changes — "
             "proven behaviour-neutral in code, not sent to the model</summary>\n"
         )
-        lines.extend(f"- {line}" for line in t.summary_lines())
+        for reason, paths in withheld.items():
+            shown = ", ".join(f"`{p}`" for p in paths[:MECHANICAL_SHOWN])
+            more = len(paths) - MECHANICAL_SHOWN
+            lines.append(
+                f"- {reason}: {shown}" + (f" and {more} more" if more > 0 else "")
+            )
+        if t.duplicate_of:
+            lines.append(
+                f"- same change repeated in other files (reviewed once): "
+                f"{len(t.duplicate_of)} file(s)"
+            )
         if t.renames:
             lines.append(
                 "- renames: " + ", ".join(f"`{a}` → `{b}`" for a, b in t.renames)

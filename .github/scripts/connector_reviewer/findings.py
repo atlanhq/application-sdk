@@ -5,6 +5,8 @@ not its line number, which moves with every push, and not its prose, which a
 model rewrites every time it is asked. Two rounds that see the same defect
 therefore agree on its id, which is what lets round 2 ask "is F-3a91 fixed?"
 instead of "review this again" — the question that never converges.
+Two different findings of one review on the same quote are told apart by
+`unique_ids`, so neither is lost.
 
 State rides in a hidden marker inside connector-reviewer's own sticky PR comment. Nothing
 else stores it, so there is no database to drift from what the PR shows.
@@ -17,6 +19,7 @@ import hashlib
 import json
 import re
 import zlib
+from collections import Counter
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
@@ -32,6 +35,25 @@ CATEGORIES = (
     "documentation",
     "other",
 )
+# What kind of harm a finding's causal chain ends in (`causal_chain.harm`).
+# Severity reads two groups in code (agent.bound_by_outcome): a traced
+# OUTCOME_FLOOR harm on a normal path is at least high, and a TEST_GAP finding
+# is at most medium unless its principle's High case says otherwise.
+HARMS = (
+    "crash",
+    "data_loss",
+    "silent_wrong_output",
+    "security",
+    "hang",
+    "leak",
+    "performance",
+    "compatibility",
+    "noise",
+    "test_gap",
+    "other",
+)
+OUTCOME_FLOOR = ("crash", "data_loss", "silent_wrong_output")
+TEST_GAP = "test_gap"
 STATE_MARKER = "connector-reviewer-state"
 BODY_KEEP = 600  # characters of an open finding's body kept in the state
 EVIDENCE_KEEP_RESOLVED = 160  # the part the fingerprint is built from
@@ -76,10 +98,20 @@ class Finding:
     # Why a skeptic check refuted this finding (skeptic.py), "" when it did not.
     # A contested finding was raised as blocking and now stands at medium.
     contested: str = ""
+    # What the finding claims happens, checked against the code when it was
+    # raised (agent.trace_chain): {"trigger", "steps": [{"at", "code",
+    # "effect"}], "outcome", "harm", "normal_path"}. Read by grading and the
+    # skeptic; not stored in the state.
+    chain: dict[str, Any] = field(default_factory=dict)
 
-    def fingerprint(self) -> str:
+    def fingerprint(self, salt: str | None = None) -> str:
+        """The finding's id. `salt` tells apart two different findings of one
+        review that share category, path and quote (`unique_ids`); without it
+        this is the id every finding had before."""
         ev = " ".join((self.evidence or "").split())[:160]
         key = f"{self.category}|{self.path}|{ev or self.title.lower()}"
+        if salt is not None:
+            key += f"|{salt}"
         return "F-" + hashlib.sha1(key.encode()).hexdigest()[:6]
 
     def __post_init__(self) -> None:
@@ -187,6 +219,7 @@ class PRState:
             if i in gone:
                 continue
             f["scenario"] = ""
+            f["chain"] = {}
             if f["status"] == "open":
                 f["body"] = f["body"][:body_keep]
                 f["suggestion"] = f["suggestion"][:body_keep]
@@ -246,6 +279,69 @@ def quote_stored(f: Finding) -> bool:
 def _known(cls: type, raw: dict[str, Any]) -> dict[str, Any]:
     names = {f.name for f in fields(cls)}
     return {k: v for k, v in raw.items() if k in names}
+
+
+def _title_key(title: str) -> str:
+    return " ".join((title or "").lower().split())
+
+
+_RANK = {s: n for n, s in enumerate(SEVERITIES)}
+
+
+def unique_ids(found: list[Finding]) -> list[Finding]:
+    """Give every finding of one review its own id, and return the findings.
+
+    The fingerprint leaves out the prose on purpose, so two DIFFERENT findings
+    on the same quoted line of a file, in the same category, got one id, and
+    `merge_new` dropped the second as a restatement of the first (FND-5316).
+    Groups are formed by the plain fingerprint, not the current id, so a
+    second pass over findings an earlier pass already salted (one bundle's,
+    then the round's) re-derives the same ids and still sees a repeat.
+    Within a group the finding first by principle (no principle sorts
+    first), then title, keeps the plain fingerprint, so an open finding on a
+    live pull request keeps matching its stored record. Each other one is
+    salted with its principle when no other finding of the group has that
+    principle, otherwise with its principle and title, and as a last resort
+    with a counter. Severity and the order the model writes findings in
+    change from round to round and decide nothing here, so a later round that
+    reports the same findings gets the same ids. Only a literal repeat (same
+    principle and title) is the same finding reported twice, and is kept
+    once."""
+    groups: dict[str, list[Finding]] = {}
+    for f in found:
+        groups.setdefault(f.fingerprint(), []).append(f)
+    used = set(groups)
+    repeats: set[int] = set()
+    for base, group in groups.items():
+        ordered = sorted(
+            group,
+            key=lambda f: (
+                f.rule_id,
+                _title_key(f.title),
+                _RANK.get(f.severity, len(SEVERITIES)),
+            ),
+        )
+        distinct: list[Finding] = []
+        seen: set[tuple[str, str]] = set()
+        for f in ordered:
+            ident = (f.rule_id, _title_key(f.title))
+            if ident in seen:
+                repeats.add(id(f))
+            else:
+                seen.add(ident)
+                distinct.append(f)
+        distinct[0].id = base
+        shared = Counter(f.rule_id for f in distinct)
+        for f in distinct[1:]:
+            salt = f.rule_id
+            if shared[f.rule_id] > 1:
+                salt = f"{f.rule_id}|{_title_key(f.title)}"
+            cand, n = f.fingerprint(salt), 2
+            while cand in used:
+                cand, n = f.fingerprint(f"{salt}#{n}"), n + 1
+            f.id = cand
+            used.add(cand)
+    return [f for f in found if id(f) not in repeats]
 
 
 def merge_new(state: PRState, fresh: list[Finding], *, round_no: int) -> list[Finding]:

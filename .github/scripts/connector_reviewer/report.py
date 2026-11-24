@@ -88,6 +88,9 @@ def build(res: RunResult) -> dict[str, Any]:
                 "seconds": b.seconds,
                 "forced": b.forced,
                 "uncited_dropped": len(b.uncited),
+                # Why each finding with no traced causal chain was dropped
+                # (FND-5316): the reason only, never the quoted code.
+                "untraced_dropped": [why for _, why in b.untraced],
                 "tools": b.tool_calls,
                 "stop": b.stop,
                 # whole: the run report is where an error is read in full
@@ -100,7 +103,9 @@ def build(res: RunResult) -> dict[str, Any]:
             for b in res.bundles
         ],
         "triage": {
-            "mechanical": {k: len(v) for k, v in res.triage.mechanical.items()},
+            # Files not sent to the model, per reason (FND-5316: not every file
+            # with a mechanical hunk, since the rest of such a file is reviewed).
+            "mechanical": {k: len(v) for k, v in res.triage.withheld().items()},
             "renames": [f"{a} -> {b}" for a, b in res.triage.renames],
             "duplicates": len(res.triage.duplicate_of),
             "hunks_dropped": res.triage.hunks_dropped,
@@ -208,8 +213,8 @@ def markdown(report: dict[str, Any], pr: int) -> str:
     if report["bundles"]:
         lines += [
             "### Bundles",
-            "| bundle | turns | plan | tools | stop | time | findings | fact-check removed | no principle, dropped |",
-            "|---|---|---|---|---|---|---|---|---|",
+            "| bundle | turns | plan | tools | stop | time | findings | fact-check removed | no principle, dropped | not traced, dropped |",
+            "|---|---|---|---|---|---|---|---|---|---|",
         ]
         for b in report["bundles"]:
             tools = ", ".join(f"{k}×{v}" for k, v in b["tools"].items()) or "-"
@@ -218,7 +223,7 @@ def markdown(report: dict[str, Any], pr: int) -> str:
                 f"| {b['label']} | {b['turns']}/{b['turn_budget']} | {'yes' if b['planned'] else '-'} | {tools} "
                 f"| {b['stop']}{forced}{(' — ' + b['error'][:80]) if b['error'] else ''} "
                 f"| {b.get('seconds', 0):.1f}s | {b['findings']} | {b['fact_check_removed']} "
-                f"| {b.get('uncited_dropped', 0)} |"
+                f"| {b.get('uncited_dropped', 0)} | {len(b.get('untraced_dropped') or [])} |"
             )
         lines.append("")
     lines.extend(_refusal_lines(report["bundles"]))
@@ -230,7 +235,7 @@ def markdown(report: dict[str, Any], pr: int) -> str:
             + " — "
             + ", ".join(
                 f"{c['id']} {c['outcome']}"
-                + (" → medium" if c["outcome"] == "refuted" else "")
+                + (" → medium" if c["outcome"] in ("refuted", "contested") else "")
                 for c in sk["checks"]
             )
         )

@@ -24,16 +24,23 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
 
 from . import context, prompts, trace
 from .baseline import PRAdditions
 from .bundle import Bundle
-from .diff import anchor, locate_in_text
+from .diff import anchor, in_removed_lines, locate_in_text
 from .facts import Facts
-from .findings import BLOCKING, Finding
+from .findings import (
+    BLOCKING,
+    HARMS,
+    OUTCOME_FLOOR,
+    TEST_GAP,
+    Finding,
+    unique_ids,
+)
 from .llm import (
     BudgetExhausted,
     Client,
@@ -45,8 +52,8 @@ from .llm import (
     prompt_view,
 )
 from .principles import PrincipleSet
-from .tools import TOOL_SCHEMAS, Workspace, parse_args, run_tool
-from .typed import EMPTY
+from .tools import SDK_PREFIX, TOOL_SCHEMAS, Workspace, parse_args, run_tool
+from .typed import EMPTY, objects
 
 # The whole description of a normal PR: a declared behaviour change is often past
 # the first paragraphs. It sits in the cached prefix, so each turn pays for it once.
@@ -61,6 +68,12 @@ _clock: Callable[[], float] = time.monotonic
 CONCRETE_CATEGORIES = ("bug", "security")
 ANSWER_KEEP = 400  # characters of a regression or history answer kept for the summary
 _PRINCIPLE_ID = re.compile(r"\b[FR]P\d{2}\b")
+# A causal chain (`trace_chain`): at most this many steps are read, each step's
+# quote is checked up to STEP_QUOTE_KEEP characters, and must carry at least
+# STEP_QUOTE_MIN non-space characters, as a skeptic's quote must.
+MAX_CHAIN_STEPS = 6
+STEP_QUOTE_KEEP = 400
+STEP_QUOTE_MIN = 12
 
 
 @dataclass
@@ -122,6 +135,9 @@ class BundleResult:
     # Findings dropped because they named no principle that applies to their
     # file and were not a concrete bug (see `cite`).
     uncited: list[Finding] = field(default_factory=list)
+    # Findings dropped because their causal chain was missing or not traced
+    # through code found where it says (see `traced`), with why.
+    untraced: list[tuple[Finding, str]] = field(default_factory=list)
     # The model's answers to the regression and history questions, from task_done.
     answers: dict[str, str] = field(default_factory=dict)
 
@@ -353,6 +369,104 @@ def place(ws: Workspace, bundle: Bundle, raw: dict[str, Any]) -> Finding | None:
     return f  # line 0: reported in the summary, not inline
 
 
+def locate_step(ws: Workspace, path: str, code: str) -> str:
+    """Where a causal-chain step's quoted code is, as `path:line`, or "" when
+    it is not there. The PR head first; then the code this PR removes (a
+    defect can live in what a change deletes), shown as `path (removed)`;
+    an `sdk:` path is looked up in the pinned SDK source. The line is where
+    the quote is found, never one the model claims."""
+    if path.startswith(SDK_PREFIX):
+        text = ws.sdk.text(path[len(SDK_PREFIX) :]) if ws.sdk else None
+        line = locate_in_text(text, code) if text else 0
+        return f"{path}:{line}" if line else ""
+    text = ws.text(path)
+    line = locate_in_text(text, code) if text else 0
+    if line:
+        return f"{path}:{line}"
+    fd = ws.diffs.get(path)
+    if fd is not None and in_removed_lines(fd, code):
+        return f"{path} (removed)"
+    return ""
+
+
+def trace_chain(ws: Workspace, raw: Any) -> tuple[dict[str, Any], str]:
+    """A comment's `causal_chain` checked against the code: (chain, "") when
+    every step quotes code that is where it says, or ({}, why not).
+
+    The chain is what a finding claims happens: the trigger, each step of the
+    code path as code the model read, and the wrong outcome. A step's code
+    must be at least `STEP_QUOTE_MIN` non-space characters (a bare `return`
+    is in every file) and must be found in the file it names
+    (`locate_step`). A mechanism that is not traced through code the model
+    can quote is a story, not a finding (FND-5316)."""
+    chain: Mapping[str, Any] = (
+        cast("dict[str, Any]", raw) if isinstance(raw, dict) else EMPTY
+    )
+    if not chain:
+        return {}, "no causal chain"
+    trigger = " ".join(str(chain.get("trigger") or "").split())
+    outcome = " ".join(str(chain.get("outcome") or "").split())
+    if not trigger:
+        return {}, "the causal chain names no trigger"
+    if not outcome:
+        return {}, "the causal chain names no outcome"
+    steps: list[dict[str, str]] = []
+    for n, step in enumerate(objects(chain.get("steps")), 1):
+        if n > MAX_CHAIN_STEPS:
+            break
+        path = str(step.get("path") or "").strip()[:200]
+        code = str(step.get("code") or "")[:STEP_QUOTE_KEEP]
+        effect = " ".join(str(step.get("effect") or "").split())
+        if len("".join(code.split())) < STEP_QUOTE_MIN:
+            return {}, f"step {n} quotes too little code to check"
+        at = locate_step(ws, path, code) if path else ""
+        if not at:
+            return {}, f"step {n} quotes code that is not in {path or 'any file'}"
+        if not effect:
+            return {}, f"step {n} does not say what its code does"
+        steps.append({"at": at, "code": code, "effect": effect})
+    if not steps:
+        return {}, "the causal chain has no step through the code"
+    harm = str(chain.get("harm") or "").strip().lower()
+    return {
+        "trigger": trigger,
+        "steps": steps,
+        "outcome": outcome,
+        # What severity reads (`bound_by_outcome`); "" when not one of HARMS.
+        "harm": harm if harm in HARMS else "",
+        "normal_path": chain.get("normal_path") is True,
+    }, ""
+
+
+def render_chain(chain: dict[str, Any]) -> str:
+    """The chain as one paragraph for the summary's "When it fails"."""
+    steps = cast(list[dict[str, str]], chain.get("steps") or [])
+    parts = [str(chain.get("trigger") or "").rstrip(".") + "."]
+    parts += [f"{s['effect'].rstrip('.')} (`{s['at']}`)." for s in steps]
+    parts.append(f"Result: {str(chain.get('outcome') or '').rstrip('.')}.")
+    return " ".join(parts)
+
+
+def traced(
+    ws: Workspace, found: list[Finding], raw_of: dict[str, dict[str, Any]]
+) -> tuple[list[Finding], list[tuple[Finding, str]]]:
+    """Keep the findings whose causal chain is traced through quoted code
+    (`trace_chain`), with the checked chain on `Finding.chain` and rendered as
+    its `scenario`; drop the rest, here in code. Returns (kept, [(dropped,
+    why)])."""
+    kept: list[Finding] = []
+    dropped: list[tuple[Finding, str]] = []
+    for f in found:
+        chain, why = trace_chain(ws, (raw_of.get(f.id) or EMPTY).get("causal_chain"))
+        if why:
+            dropped.append((f, why))
+            continue
+        f.chain = chain
+        f.scenario = render_chain(chain)
+        kept.append(f)
+    return kept, dropped
+
+
 def cite(
     found: list[Finding], principles: PrincipleSet
 ) -> tuple[list[Finding], list[Finding]]:
@@ -380,8 +494,39 @@ def cite(
     return kept, dropped
 
 
-# A principle's Severity line names a High case ("High when …", "High only when …").
-_HIGH_CASE = re.compile(r"\bhigh\b", re.I)
+# The cases a principle's Severity line names ("High when …", "Medium for …",
+# "Low when …"). Every line has a medium case: the format is "what makes a
+# violation high; otherwise medium" (principles/README.md).
+_CASE_WORD = {c: re.compile(rf"\b{c}\b", re.I) for c in ("high", "low")}
+_RANK = {s: n for n, s in enumerate(("critical", "high", "medium", "low"))}
+
+
+def principle_case(f: Finding, raw: Mapping[str, Any], principles: PrincipleSet) -> str:
+    """The case of its principle's Severity line that `f` meets, as the model
+    said (`severity_case`) and as checked here: "high", "medium", "low", or
+    "" for no usable match.
+
+    The match counts only when the comment's `principle` is the one the
+    finding still cites after `cite`, and the case is one the line names. A
+    High case also needs the words it meets (`severity_basis`). A Low case on
+    a line that names none is the line's lowest case, medium."""
+    if not f.rule_id:
+        return ""
+    if str(raw.get("principle") or "").strip().upper() != f.rule_id:
+        return ""
+    line = next(
+        (p.severity for p in principles.for_paths([f.path]) if p.id == f.rule_id),
+        "",
+    )
+    if not line:
+        return ""
+    case = str(raw.get("severity_case") or "").strip().lower()
+    if case == "high":
+        basis = " ".join(str(raw.get("severity_basis") or "").split())
+        return "high" if basis and _CASE_WORD["high"].search(line) else ""
+    if case == "low":
+        return "low" if _CASE_WORD["low"].search(line) else "medium"
+    return "medium" if case == "medium" else ""
 
 
 def grade_by_principle(
@@ -393,36 +538,70 @@ def grade_by_principle(
     principle's Severity line, not from the general scale (FND-5316).
 
     The model says which case of the line its finding meets (`severity_case`,
-    with the words it meets in `severity_basis`); the grade is set here, in
-    code, so a finding that meets a High case is never published as medium.
-    Only the model's own match raises a finding: it must name the principle
-    the finding still cites after `cite`, the principle's Severity line must
-    have a High case, and the basis must not be empty. Nothing is lowered
-    here, and critical stays critical. Runs before `calibrate`, whose caps
-    (unchanged code, a compatibility claim on code this PR adds) still win,
-    and a finding raised to high faces the skeptic like any new blocker.
-    Returns the findings and a note per change made."""
+    with the words it meets in `severity_basis`; checked by
+    `principle_case`); the grade is set here, in code. A finding that meets
+    the High case is raised to high, never published as medium. One that
+    meets only the Medium or Low case is capped there, whatever it was
+    reported at, critical included: a missing test graded high by the general
+    scale is medium when its principle says so. A finding at critical that
+    meets the High case keeps critical. Runs before `bound_by_outcome` and
+    `calibrate`, whose floor and caps then apply, and a finding raised to high
+    faces the skeptic like any new blocker. Returns the findings and a note
+    per change made."""
     notes: list[str] = []
     for f in found:
         raw = raw_of.get(f.id) or EMPTY
-        if not f.rule_id or f.severity not in ("medium", "low"):
-            continue
-        if str(raw.get("principle") or "").strip().upper() != f.rule_id:
-            continue
-        case = str(raw.get("severity_case") or "").strip().lower()
-        basis = " ".join(str(raw.get("severity_basis") or "").split())
-        if case != "high" or not basis:
-            continue
-        line = next(
-            (p.severity for p in principles.for_paths([f.path]) if p.id == f.rule_id),
-            "",
-        )
-        if not _HIGH_CASE.search(line):
-            continue
-        notes.append(
-            f"{f.id}: {f.severity} → high ({f.rule_id}'s High case: {basis[:120]})"
-        )
-        f.severity = "high"
+        case = principle_case(f, raw, principles)
+        if case == "high" and f.severity in ("medium", "low"):
+            basis = " ".join(str(raw.get("severity_basis") or "").split())
+            notes.append(
+                f"{f.id}: {f.severity} → high ({f.rule_id}'s High case: {basis[:120]})"
+            )
+            f.severity = "high"
+        elif case in ("medium", "low") and _RANK[f.severity] < _RANK[case]:
+            notes.append(
+                f"{f.id}: {f.severity} → {case} ({f.rule_id}'s {case.capitalize()} case)"
+            )
+            f.severity = case
+    return found, notes
+
+
+def bound_by_outcome(
+    found: list[Finding],
+    raw_of: dict[str, dict[str, Any]],
+    principles: PrincipleSet,
+) -> tuple[list[Finding], list[str]]:
+    """A floor and a cap from the harm the finding's own causal chain ends in
+    (`Finding.chain`, fields the model fills in, checked by `trace_chain`),
+    never from words in its title (FND-5316).
+
+    - Its only harm is a missing or weak test (`harm` test_gap, or no harm
+      given and category test): at most medium, unless the principle it cites
+      says otherwise by its High case (`principle_case`).
+    - A traced crash, data loss or silent wrong output (OUTCOME_FLOOR) whose
+      trigger occurs on a normal path (`normal_path`): at least high. This
+      wins over a principle's Medium case: the chain is traced through code
+      the model quoted, the case is the model's reading of a sentence.
+    Runs after `grade_by_principle` and before `calibrate`, whose caps
+    (unchanged code, a test file, a compatibility claim on code this PR adds)
+    still win. Returns the findings and a note per change made."""
+    notes: list[str] = []
+    for f in found:
+        harm = str(f.chain.get("harm") or "")
+        gap = harm == TEST_GAP or (not harm and f.category == "test")
+        if gap and f.severity in BLOCKING:
+            if principle_case(f, raw_of.get(f.id) or EMPTY, principles) != "high":
+                notes.append(f"{f.id}: {f.severity} → medium (only a test gap)")
+                f.severity = "medium"
+        elif (
+            harm in OUTCOME_FLOOR
+            and f.chain.get("normal_path") is True
+            and f.severity in ("medium", "low")
+        ):
+            notes.append(
+                f"{f.id}: {f.severity} → high ({harm.replace('_', ' ')} on a normal path)"
+            )
+            f.severity = "high"
     return found, notes
 
 
@@ -568,11 +747,14 @@ def review_bundle(
 
     raw = raw_comments[: limits.max_comments]
     pairs = [(place(ws, bundle, c), c) for c in raw]
-    placed = [f for f, _ in pairs if f]
+    # Ids first: two findings on one quote shared an id, and the second was
+    # graded from the first's comment and then dropped (FND-5316).
+    placed = unique_ids([f for f, _ in pairs if f])
     # Each finding's own comment, for what only grading reads (`severity_case`).
     raw_of: dict[str, dict[str, Any]] = {}
+    kept_ids = {id(f) for f in placed}
     for f, c in pairs:
-        if f:
+        if f and id(f) in kept_ids:
             raw_of.setdefault(f.id, c)
     trace.line(
         f"[{bundle.label}] placement: {len(raw)} raw comment(s) → {sum(1 for f in placed if f.line)} anchored inline, "
@@ -584,6 +766,12 @@ def review_bundle(
         )
     )
     # Before the fact-check, so a finding that is dropped anyway costs no tokens there.
+    placed, res.untraced = traced(ws, placed, raw_of)
+    for f, why in res.untraced:
+        trace.line(
+            f"[{bundle.label}] dropped {f.id} ({f.category}): {why} — "
+            f"{trace.short(f.title, 80)!r}"
+        )
     placed, res.uncited = cite(placed, principles)
     for f in res.uncited:
         trace.line(
@@ -607,6 +795,9 @@ def review_bundle(
     placed, grading = grade_by_principle(placed, raw_of, principles)
     for note in grading:
         trace.line(f"[{bundle.label}] severity from principle: {note}")
+    placed, bounding = bound_by_outcome(placed, raw_of, principles)
+    for note in bounding:
+        trace.line(f"[{bundle.label}] severity from outcome: {note}")
     placed, calibration = calibrate(placed, limits, ws, added)
     for note in calibration:
         trace.line(f"[{bundle.label}] severity rule: {note}")
