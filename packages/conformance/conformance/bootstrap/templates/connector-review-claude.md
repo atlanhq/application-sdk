@@ -6,7 +6,9 @@
 PR CI runs the conformance suite and grades a pull request on what it changes:
 it fails on a blocking finding the change adds and not on one `main` already
 carries. Run the same check locally and get it green before you open or
-update a pull request, so CI is never where you learn of it:
+update a pull request, so CI is never where you learn of it. Fix every finding
+your change introduces before you open the pull request, blocking and warning
+alike:
 
 ```bash
 git fetch origin main
@@ -14,10 +16,20 @@ CONFORMANCE_SINCE=origin/main uv run atlan-application-sdk-conformance detect \
   --repo . --output /tmp/conformance.sarif
 ```
 
-- Exit 0: nothing blocking was introduced. Open the pull request.
+- Exit 0: nothing blocking was introduced. Check for introduced warnings
+  (below), then open the pull request.
 - Exit 1 with `[INTRODUCED]` lines: each is a blocking finding your change
   added. Fix the code and re-run until it exits 0. The rule's guidance is in
   the output and in `/tmp/conformance.sarif`.
+- Warnings never fail the run, and only blocking findings are compared with
+  the base: no output line or SARIF field marks a warning as introduced. Each
+  warning is printed as `[<rule>] [WARN] <file>:<line>:<column>`. To find the
+  ones your change introduced, run the same `detect` without
+  `CONFORMANCE_SINCE` on a checkout of `origin/main` (for example
+  `git worktree add /tmp/conformance-base origin/main`, then
+  `--repo /tmp/conformance-base`) and compare the `[WARN]` lines. A rule and
+  file with more warnings on your branch than on `origin/main` is one your
+  change introduced. Fix those too.
 - Exit 1 with `falling back to the whole-repository verdict` and no
   `[INTRODUCED]` line: the base could not be compared, so the run graded the
   whole repository. Do not start fixing findings you did not add. Fix the
@@ -29,9 +41,10 @@ CONFORMANCE_SINCE=origin/main uv run atlan-application-sdk-conformance detect \
 - Do not silence a finding with `# conformance: ignore[...]`, an exclude
   path, or a test or threshold change. If you believe the rule is wrong for
   this code, stop and say so in the pull request instead of suppressing it.
-- Findings reported as inherited from the base, and warnings, do not fail
-  the run. Leave them alone unless the task is to fix them: the scheduled
-  conformance run and its remediation lane own that backlog.
+- Blocking findings reported as inherited from the base, and warnings your
+  change did not introduce, do not fail the run. Leave them alone unless the
+  task is to fix them: the scheduled conformance run and its remediation lane
+  own that backlog.
 - An older conformance package ignores `CONFORMANCE_SINCE` and grades the
   whole repository. That verdict is stricter, never laxer; if it fails only
   on findings you did not add, say so in the pull request.
@@ -51,14 +64,11 @@ the same way it will:
 For each principle whose `applies-to` covers a file you changed, answer its
 `Ask:` questions against your diff (`git diff origin/main...HEAD`), skip what
 its `Don't flag:` excludes, and judge severity by its `Severity:` line. Fix
-every finding before you open the pull request. If you believe a principle is
-wrong for this change, leave the code as it is and say so in the pull request,
-naming the principle.
+the findings you judge valid, and leave the rest; the reviewer judges them
+again once the pull request is open.
 
-Do not suppress a finding. Do not weaken, delete or reword a principle so that
-your change passes. Do not shape a change to fall into an exempt category. Do
-not plan to dismiss or waive the finding after opening. A change to a principle
-is its own pull request, and the reviewer reviews it.
+Do not weaken, delete or reword a principle so that your change passes. A
+change to a principle is its own pull request, and the reviewer reviews it.
 
 This local review does not replace `/review`. Comment `/review` once the pull
 request is open.

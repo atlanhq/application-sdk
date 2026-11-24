@@ -410,10 +410,35 @@ def test_block_asks_for_a_principles_review_before_the_pull_request() -> None:
         "answer its `Ask:` questions against your diff (`git diff origin/main...HEAD`)",
         "skip what its `Don't flag:` excludes",
         "judge severity by its `Severity:` line",
-        "Fix every finding before you open the pull request.",
+        # Lenient: the agent fixes what it judges valid; the reviewer has the
+        # final word once the pull request is open.
+        "Fix the findings you judge valid, and leave the rest; the reviewer"
+        " judges them again once the pull request is open.",
         "Do not weaken, delete or reword a principle so that your change passes.",
-        "Do not plan to dismiss or waive the finding after opening.",
+        "A change to a principle is its own pull request,",
         "This local review does not replace `/review`.",
+    ):
+        assert phrase in flat, phrase
+    assert "Fix every finding before you open the pull request." not in flat
+
+
+def test_block_asks_for_introduced_warnings_to_be_fixed_too() -> None:
+    """runner.py compares only blocking findings with the base (`[INTRODUCED]`);
+    a warning prints as `[WARN]` with no introduced/inherited mark, so the
+    block says how to tell an introduced warning apart without inventing one."""
+    flat = _flat(_BLOCK)
+    for phrase in (
+        "Fix every finding your change introduces before you open the pull"
+        " request, blocking and warning alike",
+        "no output line or SARIF field marks a warning as introduced.",
+        "`[<rule>] [WARN] <file>:<line>:<column>`",
+        "run the same `detect` without `CONFORMANCE_SINCE` on a checkout of"
+        " `origin/main`",
+        "A rule and file with more warnings on your branch than on `origin/main`"
+        " is one your change introduced.",
+        # The backlog stays the remediation lane's.
+        "warnings your change did not introduce, do not fail the run. Leave them"
+        " alone unless the task is to fix them",
     ):
         assert phrase in flat, phrase
 
