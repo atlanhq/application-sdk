@@ -46,10 +46,13 @@ async def test_workflow_and_task_share_the_dir_and_cleanup_removes_it(
             timeout=_DEADLINE_SECONDS,
         )
 
-    prefix = os.path.join(tmp_root, "artifacts", "apps", RunScratchDirApp._app_name)
-    assert result.workflow_dir.startswith(prefix + os.sep), result.workflow_dir
+    expected = os.path.normpath(
+        os.path.join(tmp_root, "artifacts", "apps", RunScratchDirApp._app_name)
+    )
+    workflow_dir = os.path.normpath(result.workflow_dir)
+    assert workflow_dir.startswith(expected + os.sep), result.workflow_dir
     assert result.workflow_dir == result.task_dir
-    assert result.wrote.startswith(result.workflow_dir + os.sep)
+    assert os.path.normpath(result.wrote).startswith(workflow_dir + os.sep)
     # cleanup_files (on_complete) removed the directory the workflow named.
     assert not os.path.exists(result.wrote)
     assert not os.path.exists(result.workflow_dir)

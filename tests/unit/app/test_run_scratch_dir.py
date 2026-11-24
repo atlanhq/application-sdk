@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from unittest import mock
 
@@ -54,8 +55,8 @@ def _tmp_root(monkeypatch: pytest.MonkeyPatch, tmp_path) -> Iterator[str]:
 
 def test_property_is_the_run_prefix_under_temporary_path(_tmp_root: str) -> None:
     app = _app_with("wf-123", "run-456")
-    assert app.run_scratch_dir == (
-        f"{_tmp_root}/artifacts/apps/scratch-dir-app/workflows/wf-123/run-456"
+    assert app.run_scratch_dir == os.path.join(
+        _tmp_root, "artifacts/apps/scratch-dir-app/workflows/wf-123/run-456"
     )
 
 
@@ -111,15 +112,28 @@ def test_the_root_itself_is_refused() -> None:
         run_scratch_dir("app", "../../../..", ".")
 
 
-def test_no_filesystem_access(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Workflow-safe: computing the path reads neither the filesystem nor cwd."""
-    import os
+def test_uses_only_string_os_path_members(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Workflow-safe: only the string-only ``os.path`` members are reached.
 
-    def _refuse(*_a: object, **_k: object) -> None:
-        raise AssertionError("filesystem access")
+    The helper's ``os`` is swapped for a stand-in carrying just the members
+    the workflow sandbox allows on every Python version, so a call to
+    anything that reads the filesystem, the cwd or the environment
+    (``realpath``, ``abspath``, ``exists``, ``getcwd``...) fails here.
+    """
+    from types import SimpleNamespace
 
-    for name in ("stat", "lstat", "getcwd", "listdir", "scandir"):
-        monkeypatch.setattr(os, name, _refuse)
+    from application_sdk.app import _run_scratch
+
+    pure = ("join", "normpath", "isabs", "commonpath", "basename", "dirname", "split")
+    restricted_os = SimpleNamespace(
+        path=SimpleNamespace(**{n: getattr(os.path, n) for n in pure}),
+        curdir=os.curdir,
+        pardir=os.pardir,
+        sep=os.sep,
+    )
+    monkeypatch.setattr(_run_scratch, "os", restricted_os)
     assert run_scratch_dir("app", "wf", "run").endswith(
         "artifacts/apps/app/workflows/wf/run"
     )
+    with pytest.raises(RunTempDirEscapeError):
+        run_scratch_dir("app", "../../../../../x", "run")
