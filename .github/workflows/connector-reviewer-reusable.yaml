@@ -24,7 +24,8 @@ name: Connector reviewer (reusable)
 #     one place a pull request's head is checked out, and the one place
 #     third-party code runs: it checks out the head sparse (the CI directories
 #     and `renovate.json`, read as data and never imported or run) and the
-#     default branch's `uv.lock` alone, installs the
+#     `uv.lock` alone of the base it merges into (the first parent of its test
+#     merge, `refs/pull/<n>/merge`), installs the
 #     atlan-application-sdk-conformance version the BASE branch's uv.lock pins
 #     from the index the lock names (PyPI or its mirror only, wheels only: no
 #     build step) into a fresh venv, and runs that version's C002 drift check
@@ -154,15 +155,41 @@ jobs:
           path: gate-head
           persist-credentials: false
 
-      # The base branch's uv.lock alone: the conformance version it pins is
-      # the one rendered (the head's pin is never read). The default branch,
-      # by name, as the principles checkout reads it; the review uses the fact
-      # only when the pull request's own base pins the same version.
-      - name: Check out the base branch's uv.lock (read as data)
+      # The base the pull request merges into: the first parent of GitHub's
+      # test merge (`refs/pull/<n>/merge`). Commit objects only are needed
+      # (the sparse checkout holds just `uv.lock`, and depth 2 brings the
+      # parents); tested Python reads the parent and writes `base=` as 40 hex
+      # (connector_reviewer/gate.py, `base_of_merge`). A pull request with
+      # conflicts has no merge ref: no base, and the fact says so.
+      - name: Check out the pull request's test merge (read as data)
+        if: steps.gate-ref.outputs.merge != ''
         continue-on-error: true
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ steps.gate-ref.outputs.merge }}
+          fetch-depth: 2
+          sparse-checkout: |
+            /uv.lock
+          sparse-checkout-cone-mode: false
+          path: gate-merge
+          persist-credentials: false
+
+      - name: Resolve the pull request's base commit
+        id: gate-base
+        working-directory: sdk/.github/scripts
+        run: >-
+          python -m connector_reviewer gate-base
+          --merge-checkout "$GITHUB_WORKSPACE/gate-merge"
+
+      # The base's uv.lock alone: the conformance version it pins is the one
+      # rendered (the head's pin is never read). The review uses the fact only
+      # when the pull request's base, as the API reports it, pins the same.
+      - name: Check out the base's uv.lock (read as data)
+        if: steps.gate-base.outputs.base != ''
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.gate-base.outputs.base }}
           sparse-checkout: |
             /uv.lock
           sparse-checkout-cone-mode: false

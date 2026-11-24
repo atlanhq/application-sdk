@@ -15519,20 +15519,20 @@ def test_gate_ref_names_the_pull_requests_head_ref_and_nothing_else():
     event can name a pull request number and nothing more."""
     comment = {"issue": {"number": 12, "pull_request": {}}}
     assert gate_mod.head_ref_output("issue_comment", comment) == (
-        "ref=refs/pull/12/head\n"
+        "ref=refs/pull/12/head\nmerge=refs/pull/12/merge\n"
     )
     dispatch = {"inputs": {"pr": "#34"}}
     assert gate_mod.head_ref_output("workflow_dispatch", dispatch) == (
-        "ref=refs/pull/34/head\n"
+        "ref=refs/pull/34/head\nmerge=refs/pull/34/merge\n"
     )
     for bad in ("34; rm -rf /", "main", "", "-3", "refs/heads/x"):
         out = gate_mod.head_ref_output("workflow_dispatch", {"inputs": {"pr": bad}})
-        assert out == "ref=\n", bad
+        assert out == "ref=\nmerge=\n", bad
     # An issue that is not a pull request has no head.
     issue = {"issue": {"number": 3}}
-    assert gate_mod.head_ref_output("issue_comment", issue) == "ref=\n"
+    assert gate_mod.head_ref_output("issue_comment", issue) == "ref=\nmerge=\n"
     assert gate_mod.head_ref_output("issue_comment", {}, pr=7) == (
-        "ref=refs/pull/7/head\n"
+        "ref=refs/pull/7/head\nmerge=refs/pull/7/merge\n"
     )
 
 
@@ -16493,3 +16493,56 @@ def test_the_base_branchs_pin_renders_and_the_heads_is_ignored(
         base_lock_text=None,
     )
     assert no_base_lock.findings is None and len(no_base_lock.notes) == 1
+
+
+def test_the_base_is_the_first_parent_of_the_test_merge(tmp_path: Path):
+    """lens F-9faf14: the version rendered is the one the pull request's own
+    base pins, not the default branch's. The gate job reads that base as the
+    first parent of GitHub's test merge; anything that is not a merge commit
+    gives no base."""
+    import subprocess  # noqa: PLC0415
+
+    repo_dir = tmp_path / "merge"
+    base = _git_checkout(repo_dir, {"uv.lock": _conformance_lock()})
+    vcs = [
+        "git",
+        "-C",
+        str(repo_dir),
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@e",
+        "-c",
+        "commit.gpgsign=false",
+    ]
+    # Not a merge commit yet: no base.
+    assert gate_mod.base_of_merge(repo_dir) == ""
+    assert gate_mod.base_ref_output(repo_dir) == "base=\n"
+    subprocess.run([*vcs, "checkout", "-q", "-b", "feature"], check=True)
+    (repo_dir / "x.txt").write_text("x")
+    subprocess.run([*vcs, "add", "-A"], check=True)
+    subprocess.run([*vcs, "commit", "-q", "-m", "head"], check=True)
+    subprocess.run([*vcs, "checkout", "-q", "-"], check=True)
+    (repo_dir / "y.txt").write_text("y")
+    subprocess.run([*vcs, "add", "-A"], check=True)
+    subprocess.run([*vcs, "commit", "-q", "-m", "base moves"], check=True)
+    tip = subprocess.run(
+        [*vcs, "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    subprocess.run(
+        [*vcs, "merge", "-q", "--no-ff", "-m", "merge", "feature"], check=True
+    )
+    assert gate_mod.base_of_merge(repo_dir) == tip != base
+    assert gate_mod.base_ref_output(repo_dir) == f"base={tip}\n"
+    assert gate_mod.base_of_merge(tmp_path / "absent") == ""
+
+
+def test_a_truncated_index_reply_is_no_note_not_a_failed_job():
+    """lens F-c632d5: `IncompleteRead` is not an OSError; a lookup that raises
+    anything is "" (no note), never an exception out of the gate job."""
+    import http.client  # noqa: PLC0415
+
+    def truncated(url: str) -> bytes | None:
+        raise http.client.IncompleteRead(b"partial")
+
+    assert gate_mod.latest_release("https://pypi.org/simple", truncated) == ""

@@ -69,6 +69,7 @@ principle covers bootstrap-managed files, so it cites none.
 from __future__ import annotations
 
 import difflib
+import http.client
 import json
 import os
 import re
@@ -127,12 +128,66 @@ BOOTSTRAP = "atlan-application-sdk-conformance bootstrap"
 
 
 def head_ref_output(event_name: str, event: dict[str, Any], pr: int = 0) -> str:
-    """The `$GITHUB_OUTPUT` line naming the pull request's head ref for the
-    gate job's checkout: `ref=refs/pull/<n>/head`, or `ref=` when there is no
-    pull request. The number is an int by construction, so nothing else can
-    reach the checkout's `ref`."""
+    """The `$GITHUB_OUTPUT` lines naming the pull request's refs for the gate
+    job's checkouts: `ref=refs/pull/<n>/head` (the files) and
+    `merge=refs/pull/<n>/merge` (GitHub's test merge, whose first parent is
+    the base the pull request merges into, `base_of_merge`), both empty when
+    there is no pull request. The number is an int by construction, so
+    nothing else can reach a checkout's `ref`."""
     number = pr if pr > 0 else pr_number(event_name, event)
-    return f"ref=refs/pull/{number}/head\n" if number > 0 else "ref=\n"
+    if number <= 0:
+        return "ref=\nmerge=\n"
+    return f"ref=refs/pull/{number}/head\nmerge=refs/pull/{number}/merge\n"
+
+
+GIT_SECONDS = 10.0
+
+
+def base_of_merge(path: Path) -> str:
+    """The base commit the pull request merges into: the first parent of the
+    test-merge commit checked out at `path` (40 hex), or "" when `path` holds
+    no merge commit (GitHub has no merge ref for a pull request that
+    conflicts). Reads commit objects only, which the checkout fetched (no
+    blob, so no credentials are needed). Never raises."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+    }
+    try:
+        if not (path / ".git").exists():
+            return ""
+        env["GIT_CEILING_DIRECTORIES"] = str(path.resolve().parent)
+        out: list[str] = []
+        for spec in ("HEAD^1", "HEAD^2"):
+            done = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(path),
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    f"{spec}^{{commit}}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=GIT_SECONDS,
+                env=env,
+                check=False,
+            )
+            out.append(done.stdout.strip() if done.returncode == 0 else "")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return ""
+    first, second = out
+    # Two parents, or it is not a merge commit and its parent is not the base.
+    return first if _COMMIT.fullmatch(first) and _COMMIT.fullmatch(second) else ""
+
+
+def base_ref_output(path: Path) -> str:
+    """`base=<40 hex>` for the base checkout, or `base=` (the checkout is
+    then skipped and the fact says the base was not checked out)."""
+    return f"base={base_of_merge(path)}\n"
 
 
 @dataclass(frozen=True)
@@ -195,7 +250,7 @@ def _fetch(url: str) -> bytes | None:
     try:
         with urllib.request.urlopen(req, timeout=LATEST_SECONDS) as r:
             return r.read(LATEST_BYTES)
-    except (urllib.error.URLError, OSError, ValueError):
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError):
         return None
 
 
@@ -203,7 +258,10 @@ def latest_release(index: str, fetch: Fetch = _fetch) -> str:
     """The newest final release of the conformance package on `index` (one of
     the known indexes, from `conformance_pin`), from the index's version list
     alone: no install. "" when it cannot be read. Never raises."""
-    raw = fetch(f"{index}/{CONFORMANCE}/")
+    try:
+        raw = fetch(f"{index}/{CONFORMANCE}/")
+    except Exception:  # noqa: BLE001 - a failed lookup is no note, never a failed job
+        return ""
     if raw is None:
         return ""
     try:

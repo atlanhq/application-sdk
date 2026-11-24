@@ -207,6 +207,12 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--pr", type=int)
     g.add_argument("--event-name")
     g.add_argument("--event-path")
+    gb = sub.add_parser(
+        "gate-base",
+        help="write the base commit the pull request merges into (the first parent "
+        "of its test merge) to $GITHUB_OUTPUT, for the gate job's base checkout",
+    )
+    gb.add_argument("--merge-checkout", required=True)
     gf = sub.add_parser(
         "gate-fact",
         help="compare the head's bootstrap-managed gate files with the render of the "
@@ -227,6 +233,8 @@ def main(argv: list[str] | None = None) -> int:
         return _gate_ref(args)
     if args.cmd == "gate-fact":
         return _gate_fact(args)
+    if args.cmd == "gate-base":
+        return _gate_base(args)
     if args.cmd == "finalize":
         return _finalize(args)
     if args.cmd == "sdk-ref":
@@ -640,6 +648,15 @@ def _gate_ref(args: argparse.Namespace) -> int:
     out."""
     out = gate.head_ref_output(args.event_name or "", _read_event(args), args.pr or 0)
     print(f"connector-reviewer: gate-file check reads {out.strip() or 'no ref'}")
+    _write_output(out)
+    return 0
+
+
+def _gate_base(args: argparse.Namespace) -> int:
+    """`gate-base`: always exit 0. No base is an empty output: the base
+    checkout is skipped, and the fact says the base was not checked out."""
+    out = gate.base_ref_output(Path(args.merge_checkout))
+    print(f"connector-reviewer: gate-file check base: {out.strip() or 'none'}")
     _write_output(out)
     return 0
 

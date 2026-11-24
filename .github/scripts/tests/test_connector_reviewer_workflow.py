@@ -337,17 +337,26 @@ def test_the_gate_job_checks_out_the_head_sparse_from_a_tested_ref(
     ]
     assert sdk["with"]["repository"] == "atlanhq/application-sdk"
     assert sdk["with"]["ref"] == "${{ job.workflow_sha }}"
-    # The base branch's uv.lock alone: its pin is the version rendered.
-    [base] = [
-        c
-        for c in _uses(gate_job, "actions/checkout")
-        if c["with"].get("path") == "gate-base"
-    ]
-    assert base["with"]["ref"] == "${{ github.event.repository.default_branch }}"
+    # The base the pull request merges into, not the default branch: the
+    # first parent of its test merge, read by tested Python, then that
+    # commit's uv.lock alone (its pin is the version rendered).
+    by_path = {c["with"].get("path"): c for c in _uses(gate_job, "actions/checkout")}
+    merge, base = by_path["gate-merge"], by_path["gate-base"]
+    assert merge["if"] == "steps.gate-ref.outputs.merge != ''"
+    assert merge["with"]["ref"] == "${{ steps.gate-ref.outputs.merge }}"
+    assert merge["with"]["fetch-depth"] == 2
+    assert merge["with"]["sparse-checkout"].split() == ["/uv.lock"]
+    [resolve_base] = [s for s in steps if s.get("id") == "gate-base"]
+    assert "python -m connector_reviewer gate-base" in resolve_base["run"]
+    assert not re.search(r"\b(if|case|for|while)\b", resolve_base["run"])
+    assert base["if"] == "steps.gate-base.outputs.base != ''"
+    assert base["with"]["ref"] == "${{ steps.gate-base.outputs.base }}"
     assert base["with"]["sparse-checkout"].split() == ["/uv.lock"]
-    assert "repository" not in base["with"]
-    assert base.get("continue-on-error") is True
-    assert len(_uses(gate_job, "actions/checkout")) == 3
+    for c in (merge, base):
+        assert "repository" not in c["with"]
+        assert c.get("continue-on-error") is True
+    assert steps.index(merge) < steps.index(resolve_base) < steps.index(base)
+    assert len(_uses(gate_job, "actions/checkout")) == 4
 
 
 def test_the_gate_fact_reaches_the_review_and_never_blocks_it(
