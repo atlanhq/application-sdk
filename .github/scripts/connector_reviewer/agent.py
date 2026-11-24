@@ -267,6 +267,10 @@ def build_context(
     # The pinned SDK source, when the workflow checked it out (FND-5331).
     if ws.sdk is not None:
         parts.append(ws.sdk.prompt_block())
+    # Atlan SDK packages the app pins that `sdk:` cannot read (FND-5316), with
+    # or without the SDK source.
+    if ws.sdk_pins:
+        parts.append(ws.sdk_pins)
     # Callers (followed through thin wrappers), ranked tests, each changed
     # function in full, and repo code the change or the PR names.
     ctx_block = context.build(

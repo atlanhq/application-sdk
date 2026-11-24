@@ -93,7 +93,7 @@ class GitHub:
         status, text = self._transport(method, path, body, accept)
         if status >= 300:
             raise GitHubError(f"{method} {path}: HTTP {status}: {text[:300]}")
-        if accept.endswith("diff"):
+        if accept.endswith(("diff", ".raw")):
             return text
         return json.loads(text) if text else None
 
@@ -143,6 +143,23 @@ class GitHub:
         if blob.get("encoding") == "base64":
             return base64.b64decode(blob["content"]).decode("utf-8", "replace")
         return None
+
+    def raw_file_at(self, path: str, ref: str) -> str | None:
+        """A file's text at `ref` as raw bytes, or None when it is absent or
+        cannot be read. Unlike `file_at` this reads a file over 1 MB too: the
+        JSON contents reply leaves `content` empty past 1 MB, and an app's
+        `uv.lock` gets that large (FND-5316)."""
+        q = urllib.parse.quote(path)
+        r = urllib.parse.quote(ref, safe="")
+        try:
+            text = self._call(
+                "GET",
+                f"/repos/{self.repo}/contents/{q}?ref={r}",
+                accept="application/vnd.github.raw",
+            )
+        except GitHubError:
+            return None
+        return text if isinstance(text, str) else None
 
     def pr_commit_authors(self, number: int) -> list[str]:
         """The GitHub login of each commit's author, in order; "" for a commit

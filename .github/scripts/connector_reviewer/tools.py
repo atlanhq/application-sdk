@@ -13,7 +13,8 @@ comment, done), with two properties that matter for cost:
 Every result is bounded (lines, matches, bytes) so a tool reply can never be
 the thing that blows the context budget.
 
-When the app's application-sdk pin resolved (sdk_source.py), read_file,
+When the application-sdk pin in the pull request head's uv.lock resolved
+(sdk_source.py), read_file,
 search_code and find_symbol also reach that SDK source, read-only, for a path
 or name that starts with `sdk:` (`SdkSource`). The same path guard applies, and
 only `application_sdk/` is reachable.
@@ -143,6 +144,8 @@ class SdkSource:
 
     root: Path
     label: str  # "v3.40.0", or "3.40.0 at commit abc123def456"
+    # Which in-repo package the lock pins (sdk_source.IN_REPO_PACKAGES).
+    package: str = sdk_source.PACKAGE
     _files: list[str] | None = field(default=None, repr=False)
     _index: Index | None = field(default=None, repr=False)
     index_partial: bool = False
@@ -152,11 +155,13 @@ class SdkSource:
     )
 
     @classmethod
-    def open(cls, checkout: str, app_root: Path) -> tuple[SdkSource | None, str]:
-        """The SDK source at `checkout`, labelled with the pin in the app's
-        uv.lock (the same `sdk_source.resolve_root` that chose the checkout's
-        ref), or None and the reason it is not available."""
-        res = sdk_source.resolve_root(app_root)
+    def open(
+        cls, checkout: str, res: sdk_source.Resolution
+    ) -> tuple[SdkSource | None, str]:
+        """The SDK source at `checkout`, labelled with `res`: the pin in the
+        pull request head's uv.lock, resolved the same way as for the step that
+        chose the checkout's ref (`sdk_source.head_lock`). Or None and the
+        reason it is not available."""
         if res.pin is None:
             return None, f"SDK source not available: {res.reason}"
         path = Path(checkout) if checkout.strip() else None
@@ -165,7 +170,9 @@ class SdkSource:
                 f"SDK source not available: no checkout of application-sdk at "
                 f"{res.pin.label} (the ref may not exist)"
             )
-        return cls(root=path.resolve(), label=res.pin.label), ""
+        return cls(
+            root=path.resolve(), label=res.pin.label, package=res.pin.package
+        ), ""
 
     def _allowed(self, rel: str) -> str | None:
         rel = _safe_rel(rel) or ""
@@ -252,10 +259,11 @@ class SdkSource:
         message. The system prompt does not change, so a review without the SDK
         source sends the same prompt as before."""
         label = html.escape(self.label, quote=True)
+        package = html.escape(self.package, quote=True)
         return (
             f'<sdk_source version="{label}">\n'
-            f"The Atlan Application SDK source this app pins in uv.lock ({label}) is "
-            "readable, read-only, through the same tools with an `sdk:` prefix:\n"
+            f"The Atlan Application SDK source this pull request pins in its uv.lock ({package} "
+            f"{label}) is readable, read-only, through the same tools with an `sdk:` prefix:\n"
             '- read_file(file_path="sdk:application_sdk/<path>.py")\n'
             '- search_code(search_text=..., path_glob="sdk:application_sdk/**")\n'
             '- find_symbol(name="sdk:<Name>")\n'
@@ -280,6 +288,9 @@ class Workspace:
     diffs: dict[str, FileDiff]  # every changed file, including ones not under review
     index: Index
     sdk: SdkSource | None = None
+    # The `<other_sdk_packages>` block: Atlan SDK packages the app pins that
+    # `sdk:` cannot read (sdk_source.pins_block); "" when there are none.
+    sdk_pins: str = ""
     _files: list[str] | None = field(default=None, repr=False)
 
     def _safe(self, rel: str) -> str | None:

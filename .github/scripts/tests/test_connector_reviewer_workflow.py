@@ -8,8 +8,9 @@ few structural facts about the file, not on anyone remembering them:
   event in this repository;
 * it never checks out pull-request code: one checkout of the caller's default
   branch, one of this repository at the workflow's own commit, and one of this
-  repository's `application_sdk/` at the ref the caller's uv.lock pins
-  (FND-5331), skipped when none resolves and never fatal;
+  repository's `application_sdk/` at the ref the pull request head's uv.lock
+  pins (FND-5331, FND-5316: read through the API as data, never checked out),
+  skipped when none resolves and never fatal;
 * it has no `concurrency:` block, because the reviewer has its own lock and a
   block would queue or cancel reviews;
 * its job timeout equals the lock's idea of how long a review can run;
@@ -123,7 +124,6 @@ def test_the_sdk_source_is_checked_out_at_the_resolved_pin(
     steps = _steps(job)
     [resolve] = [s for s in steps if s.get("id") == "sdk-ref"]
     assert "python -m connector_reviewer sdk-ref" in resolve["run"]
-    assert '--root "$GITHUB_WORKSPACE/repo"' in resolve["run"]
     assert resolve["working-directory"] == "sdk/.github/scripts"
     assert resolve.get("continue-on-error") is True
     # Straight-line: no shell branching in the step (docs/standards/ci.md).
@@ -143,6 +143,34 @@ def test_the_sdk_source_is_checked_out_at_the_resolved_pin(
     assert review["env"]["CONNECTOR_REVIEWER_SDK_SOURCE"] == (
         "${{ github.workspace }}/sdk-src"
     )
+
+
+def test_the_sdk_pin_is_read_from_the_pull_request_head_not_the_default_branch(
+    job: dict[str, Any],
+) -> None:
+    """FND-5316: the resolve step reads the pull request head's uv.lock through
+    the API (the pull request from the event), not the default-branch checkout,
+    whose lock named the wrong SDK for a pull request that pins another one.
+    Reading the pull request needs the App token, so the step comes after the
+    mint; the SDK checkout itself keeps the job's own read-only token."""
+    steps = _steps(job)
+    [resolve] = [s for s in steps if s.get("id") == "sdk-ref"]
+    [mint] = _uses(job, "actions/create-github-app-token")
+    assert steps.index(mint) < steps.index(resolve)
+    assert "--root" not in resolve["run"]
+    for arg in (
+        '--repo "$REPO"',
+        '--event-name "$EVENT_NAME"',
+        '--event-path "$EVENT_PATH"',
+    ):
+        assert arg in resolve["run"]
+    assert resolve["env"] == {
+        "GITHUB_TOKEN": "${{ steps.app.outputs.token }}",
+        "REPO": "${{ github.repository }}",
+        "EVENT_NAME": "${{ github.event_name }}",
+        "EVENT_PATH": "${{ github.event_path }}",
+    }
+    assert "token" not in _checkout(job, "sdk-src")["with"]
 
 
 def test_no_step_mentions_a_pull_request_head(text: str) -> None:

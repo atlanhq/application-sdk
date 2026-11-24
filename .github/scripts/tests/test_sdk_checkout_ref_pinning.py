@@ -157,7 +157,9 @@ def test_only_the_reviewed_checkouts_are_exempt() -> None:
     exempt = sorted((c.file, c.job) for c in CHECKOUTS if c.exempt_reason is not None)
     assert exempt == [
         # The connector reviewer's copy of the SDK source at the version the
-        # calling app pins in uv.lock (FND-5331). It is not a pinning knob for
+        # pull request head's uv.lock pins (FND-5331, FND-5316: the lock is read
+        # through the API as data, so the ref is the pull request author's
+        # choice, bounded by the checks below). It is not a pinning knob for
         # code that runs: the reviewer's own scripts come from the separate
         # checkout at `job.workflow_sha`, and this tree is only read as text by
         # its read-only tools. The ref is validated to a release tag or a 40-hex

@@ -401,8 +401,21 @@ reviews a connector app, and many connector bugs are a misuse of the SDK
 source at the exact version the app pins, read-only, beside the app. lens has no
 equivalent.
 
-- **Which version.** `sdk_source.py` reads the app's `uv.lock` from the trusted
-  base checkout (never the pull request's) with `tomllib`. A registry pin of
+- **Which version.** `sdk_source.py` reads the pull request head's `uv.lock`
+  (FND-5316) with `tomllib`. It was the trusted base checkout's, which is the
+  caller's default branch as it is today: a replay of a historical pull request
+  that pinned an older SDK resolved today's SDK instead, and the review reasoned
+  from the wrong source. The head's lock is read through the REST API as data
+  (`sdk_source.head_lock`, `GitHub.raw_file_at`: the raw media type, because the
+  JSON contents reply carries no content past 1 MB and an app's lock gets near
+  that), never checked out. When the head has no lock or it cannot be read
+  there is no ref and the reason is said; there is no fallback to the default
+  branch's lock. The ref is therefore the pull request author's choice, bounded
+  by the checks below to a release tag or a locked commit of
+  atlanhq/application-sdk, read as text and never run.
+  `atlan-application-sdk-api` (packages/api) ships from this repository at the
+  SDK's own tag, so a lock that has only it resolves the same way
+  (`SdkPin.package` names which). A registry pin of
   `X.Y.Z` or `X.Y.ZrcN` is the release tag `vX.Y.Z` (the scheme of every
   application-sdk release tag). A git pin of `github.com/atlanhq/application-sdk`
   is the locked commit uv writes after `#`. Anything else is no ref, with a
@@ -414,8 +427,26 @@ equivalent.
   version characters: a TOML string can hold a newline (a second line in
   `$GITHUB_OUTPUT`) or a quote (out of the prompt's attribute). The prompt
   escapes the label as well.
-- **Workflow.** `python -m connector_reviewer sdk-ref --root repo` writes `ref`
-  and `label` to `$GITHUB_OUTPUT` and always exits 0. A third checkout, of
+- **Other Atlan SDK packages (FND-5316).** An app can pin an Atlan SDK package
+  that does not ship from this repository: on the replay above, a `server/`
+  package pinned `atlan-server-sdk` by a direct git reference to its own
+  private repository, in `server/pyproject.toml` and in no lock. The workflow's
+  tokens cannot read that repository, so `sdk:` cannot cover it.
+  `sdk_source.other_pins` finds every `atlan-…sdk…` package other than the SDK,
+  its api package and the conformance tool, in the head's lock and in each
+  `pyproject.toml` of the workspace (at most 20), and `pins_block` puts an
+  `<other_sdk_packages>` block in the line review's context, with or without
+  the SDK source: `sdk:` covers only application-sdk (which version), the
+  package and how it is pinned, and not to judge its calls from application-sdk
+  source. What is shown of a pin is plain text by pattern, and escaped.
+- **Workflow.** `python -m connector_reviewer sdk-ref --repo … --event-name …
+  --event-path …` runs after the App token is minted (reading the pull request
+  needs `pull-requests` scope, which the job's own token lacks), takes the pull
+  request from the event, writes `ref` and `label` to `$GITHUB_OUTPUT` and
+  always exits 0. `--root <dir>` alone still reads a local checkout's lock. The
+  review step resolves the label from the same head lock (`SdkSource.open`
+  takes the resolution, not the app root) and hands the lock text to
+  `review.run(head_lock=…)`. A third checkout, of
   `atlanhq/application-sdk` at that ref, runs only when `ref` is not empty
   (`if:` on the step output). It is sparse (`/application_sdk/`), into `sdk-src/`,
   with `persist-credentials: false` and the job's read-only token. Both steps
@@ -472,21 +503,21 @@ above; "typing" means only the annotations described under Typing.
 | `report.py` | Names; bundle time, forced final turn and dropped uncited findings; the incomplete list from `incomplete_reasons`; the skeptic counts and checks (FND-5332). |
 | `findings.py` | Names; `PRState.waiver`, `exempt`, `unread`, `facts`; `Finding.contested`. |
 | `triage.py` | Typing (one annotation). |
-| `tools.py` | Two description strings (`compatibility`, `search_code`), the comment's optional `principle` field, and `task_done`'s optional `regression` and `history`; `SdkSource`, `Workspace.sdk` and the `sdk:` prefix in `read_file`, `search_code` and `find_symbol`, with the path checks factored into `_safe_rel` and `_read_inside` (FND-5331). |
+| `tools.py` | Two description strings (`compatibility`, `search_code`), the comment's optional `principle` field, and `task_done`'s optional `regression` and `history`; `SdkSource`, `Workspace.sdk` and the `sdk:` prefix in `read_file`, `search_code` and `find_symbol`, with the path checks factored into `_safe_rel` and `_read_inside` (FND-5331); `Workspace.sdk_pins` and `SdkSource.package` (FND-5316). |
 | `trace.py` | Names, typing. |
 | `select.py` | `DEFAULT_EXCLUDE`, and `excluded` (the pattern match, public for `review.changed_tests`). |
 | `config.py` | Docstring, `raw_hash`, typing; the `[access]`, `[exempt]`, `[facts]` and `[skeptic]` tables. |
 | `bundle.py` | `_module_key` and the module docstring. |
 | `llm.py` | Names (the gateway key variable, the User-Agent, log text), typing. |
-| `github.py` | Names, typing, four methods removed with the approval step; `can_push`, `safe_body`, `status_of`, `pr_commit_messages`, `recent_commits` and `commit_patches` added. |
+| `github.py` | Names, typing, four methods removed with the approval step; `can_push`, `safe_body`, `status_of`, `pr_commit_messages`, `recent_commits`, `commit_patches` and `raw_file_at` (FND-5316) added. |
 | `event.py` | Rewritten around who may ask (FND-5310); the command grammar is lens's plus `waive`. |
 | `holistic.py` | The prompt's opening and one concern; no `<public_api>` block; typing. |
 | `context.py` | No `_public` / `public_api`; `build` returns a string. |
 | `advisory.py` | Rewritten as the empty extension point; holds `glob_match`. |
-| `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313); the facts blocks and the `task_done` answers (FND-5312); the `<sdk_source>` block (FND-5331). |
+| `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313); the facts blocks and the `task_done` answers (FND-5312); the `<sdk_source>` block (FND-5331) and the `<other_sdk_packages>` block (FND-5316). |
 | `prompts.py` | The review prompt's opening, "Repository layout", "Principles" and "Facts" sections; the removals; typing. |
-| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312), with `_whole_files` joining a file reviewed in parts back into one diff before its facts are computed; the skeptic pass, `SKEPTIC_SHARE` and the contested mark (FND-5332); `run`'s `sdk` and `sdk_note` (FND-5331). |
-| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it; the `sdk-ref` sub-command and `--sdk-source` (FND-5331). |
+| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312), with `_whole_files` joining a file reviewed in parts back into one diff before its facts are computed; the skeptic pass, `SKEPTIC_SHARE` and the contested mark (FND-5332); `run`'s `sdk` and `sdk_note` (FND-5331); `run`'s `head_lock` and `sdk_pins_block` (FND-5316). |
+| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it; the `sdk-ref` sub-command and `--sdk-source` (FND-5331), `sdk-ref` reading the pull request head's lock (FND-5316). |
 | `__init__.py` | Docstring. |
 | `principles.py`, `typed.py`, `exempt.py`, `finalize.py`, `facts.py`, `skeptic.py`, `sdk_source.py` | New here. |
 | `approve.py`, `surface.py`, `rules.py` | Not here. |

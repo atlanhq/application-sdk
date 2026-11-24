@@ -1122,9 +1122,16 @@ def test_a_missing_or_empty_fleet_directory_is_a_configuration_error(
     assert load_principles(repo / FLEET_DIR, repo).repo == []
 
 
-def _cli_review(monkeypatch: pytest.MonkeyPatch, argv: list[str]):
+# The head commit `_cli_review`'s pull request reports: a full sha, as GitHub sends.
+_CLI_HEAD = "c1" * 20
+
+
+def _cli_review(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], head_lock: str | None = None
+):
     """Run the CLI with GitHub and the review itself stubbed out. Returns the
-    exit code and what the review was called with (None when it never started)."""
+    exit code and what the review was called with (None when it never started).
+    `head_lock` is the `uv.lock` at the pull request's head (None: it has none)."""
     import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test, patched below
 
     seen: dict[str, Any] = {}
@@ -1135,7 +1142,11 @@ def _cli_review(monkeypatch: pytest.MonkeyPatch, argv: list[str]):
 
         def pr(self, number):
             seen["github"] = True  # the first request the CLI makes
-            return SAME_REPO_PR
+            return {**SAME_REPO_PR, "head": {**SAME_REPO_PR["head"], "sha": _CLI_HEAD}}
+
+        def raw_file_at(self, path, ref):
+            seen.setdefault("raw_reads", []).append((path, ref))
+            return head_lock if (path, ref) == ("uv.lock", _CLI_HEAD) else None
 
         def delete_comment(self, comment_id):  # pragma: no cover - id is 0
             raise AssertionError("a dry run posts no progress note to delete")
@@ -12507,6 +12518,8 @@ def test_the_skeptic_table_loads_good_values(tmp_path: Path):
 # ---- the SDK source at the version the app pins (FND-5331) ------------------------------------
 
 _SHA = "e633c5b1fb7d0a1b2c3d4e5f60718293a4b5c6d7"
+# A pull request head commit, and the commit an other-SDK pin names.
+_SHA_HEAD = "5e" * 20
 
 
 def _lock(source: str, version: str = "3.40.0", extra: str = "") -> str:
@@ -12855,27 +12868,27 @@ def test_the_sdk_index_stops_at_its_time_limit(
 def test_the_sdk_source_falls_back_with_a_reason(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ):
-    app = tmp_path / "app"
-    app.mkdir()
     checkout = _sdk_checkout(tmp_path_factory)
 
     # No lock: no pin, whatever is on disk.
-    sdk, note = SdkSource.open(str(checkout), app)
-    assert sdk is None and note == "SDK source not available: the app has no uv.lock"
+    no_lock = sdk_source_mod.HeadLock(None, "the pull request head has no uv.lock")
+    sdk, note = SdkSource.open(str(checkout), no_lock.resolution())
+    assert sdk is None
+    assert note == "SDK source not available: the pull request head has no uv.lock"
 
-    (app / "uv.lock").write_text(_lock('{ registry = "https://pypi.org/simple" }'))
+    pinned = sdk_source_mod.resolve(_lock('{ registry = "https://pypi.org/simple" }'))
     # A pin, but the checkout was skipped or failed: absent, or a .git only.
     failed = tmp_path / "failed"
     (failed / ".git").mkdir(parents=True)
     for missing in ("", str(tmp_path / "absent"), str(failed)):
-        sdk, note = SdkSource.open(missing, app)
+        sdk, note = SdkSource.open(missing, pinned)
         assert sdk is None
         assert note == (
             "SDK source not available: no checkout of application-sdk at v3.40.0 "
             "(the ref may not exist)"
         )
 
-    sdk, note = SdkSource.open(str(checkout), app)
+    sdk, note = SdkSource.open(str(checkout), pinned)
     assert sdk is not None and note == ""
     assert sdk.label == "v3.40.0" and sdk.root == checkout.resolve()
 
@@ -12892,24 +12905,268 @@ def test_the_cli_passes_the_sdk_source_or_why_it_is_missing(
     code, seen = _cli_review(monkeypatch, ["--root", str(repo)])
     assert code == 0
     assert seen["run"]["sdk"] is None and seen["run"]["sdk_note"] == ""
+    assert seen["run"]["head_lock"] is None and "raw_reads" not in seen
     assert "SDK source not available: not configured" in capsys.readouterr().err
 
-    # CI: the variable is set, and the app has no lock to resolve.
+    # CI: the variable is set, and the pull request head has no lock to resolve.
     monkeypatch.setenv("CONNECTOR_REVIEWER_SDK_SOURCE", str(tmp_path / "sdk-src"))
     code, seen = _cli_review(monkeypatch, ["--root", str(repo)])
+    why = (
+        f"SDK source not available: the pull request head ({_CLI_HEAD[:9]}) has no "
+        "uv.lock, or it could not be read"
+    )
     assert seen["run"]["sdk"] is None
-    assert seen["run"]["sdk_note"] == "SDK source not available: the app has no uv.lock"
-    assert "SDK source not available: the app has no uv.lock" in capsys.readouterr().err
+    assert seen["run"]["sdk_note"] == why
+    assert why in capsys.readouterr().err
 
-    (repo / "uv.lock").write_text(_lock('{ registry = "https://pypi.org/simple" }'))
+    head = _lock('{ registry = "https://pypi.org/simple" }')
     checkout = _sdk_checkout(tmp_path_factory)
     code, seen = _cli_review(
-        monkeypatch, ["--root", str(repo), "--sdk-source", str(checkout)]
+        monkeypatch, ["--root", str(repo), "--sdk-source", str(checkout)], head
     )
     assert seen["run"]["sdk"].label == "v3.40.0" and seen["run"]["sdk_note"] == ""
+    assert seen["run"]["head_lock"] == head
     assert f"SDK source: application-sdk v3.40.0 at {checkout.resolve()}" in (
         capsys.readouterr().err
     )
+
+
+def test_the_review_labels_the_sdk_source_from_the_pull_request_heads_lock(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+):
+    """FND-5316: the default branch's lock named the wrong SDK for a pull
+    request that pins another one. The review reads the head's lock, as the
+    workflow's `sdk-ref` step does, and never falls back to the default
+    branch's."""
+    (repo / "uv.lock").write_text(
+        _lock('{ registry = "https://pypi.org/simple" }', "3.58.1")
+    )
+    checkout = _sdk_checkout(tmp_path_factory)
+    monkeypatch.setenv("CONNECTOR_REVIEWER_SDK_SOURCE", str(checkout))
+    head = _lock('{ registry = "https://pypi.org/simple" }', "3.34.3")
+    _, seen = _cli_review(monkeypatch, ["--root", str(repo)], head)
+    assert seen["run"]["sdk"].label == "v3.34.3"
+    assert seen["raw_reads"] == [("uv.lock", _CLI_HEAD)]
+
+    # The head has no lock: no SDK source, even though the default branch has one.
+    _, seen = _cli_review(monkeypatch, ["--root", str(repo)], None)
+    assert seen["run"]["sdk"] is None
+    assert "has no uv.lock" in seen["run"]["sdk_note"]
+
+
+class _HeadLockGitHub:
+    """Just enough of `GitHub` for `sdk_source.head_lock`."""
+
+    def __init__(self, lock: str | None, head: str = _SHA_HEAD):
+        self.lock, self.head = lock, head
+        self.reads: list[tuple[str, str]] = []
+
+    def pr(self, number):
+        return {"head": {"sha": self.head}}
+
+    def raw_file_at(self, path, ref):
+        self.reads.append((path, ref))
+        return self.lock if ref == self.head else None
+
+
+def test_the_sdk_ref_cli_reads_the_pull_request_heads_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """FND-5316: `sdk-ref --repo` resolves the ref from the pull request head's
+    uv.lock through the API, the pull request taken from the event."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test
+
+    fake = _HeadLockGitHub(_lock('{ registry = "https://pypi.org/simple" }', "3.34.3"))
+    monkeypatch.setattr(cli, "GitHub", lambda repo: fake)
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"issue": {"number": 7, "pull_request": {}}}))
+    argv = ["sdk-ref", "--repo", "o/r", "--event-name", "issue_comment"]
+    assert cli.main([*argv, "--event-path", str(event)]) == 0
+    assert out.read_text() == "ref=v3.34.3\nlabel=v3.34.3\n"
+    assert fake.reads == [("uv.lock", _SHA_HEAD)]
+
+    # The head has no lock, or it could not be read: an empty ref and the reason.
+    fake.lock = None
+    out.write_text("")
+    assert cli.main([*argv, "--event-path", str(event)]) == 0
+    assert out.read_text() == "ref=\nlabel=\n"
+    assert "has no uv.lock, or it could not be read" in capsys.readouterr().out
+
+    # An event that names no pull request: nothing is read.
+    fake.reads.clear()
+    event.write_text(json.dumps({"issue": {"number": 7}}))
+    out.write_text("")
+    assert cli.main([*argv, "--event-path", str(event)]) == 0
+    assert out.read_text() == "ref=\nlabel=\n" and fake.reads == []
+
+
+def test_the_head_lock_is_read_raw_so_a_large_lock_still_resolves():
+    """The JSON contents reply carries no content past 1 MB, and an app's
+    uv.lock gets that large: the lock is read with the raw media type."""
+    seen: list[tuple[str, str, str]] = []
+    big = _lock('{ registry = "https://pypi.org/simple" }') + "#" * 1_200_000
+
+    def transport(method, path, body, accept):
+        seen.append((method, path, accept))
+        return 200, big
+
+    gh = GitHub("o/r", token="t", transport=transport)
+    assert gh.raw_file_at("uv.lock", _SHA_HEAD) == big
+    assert seen == [
+        (
+            "GET",
+            f"/repos/o/r/contents/uv.lock?ref={_SHA_HEAD}",
+            "application/vnd.github.raw",
+        )
+    ]
+    lock = sdk_source_mod.head_lock(cast(Any, _HeadLockGitHub(big)), 7)
+    assert lock.resolution().pin is not None
+
+    def missing(method, path, body, accept):
+        return 404, '{"message": "Not Found"}'
+
+    assert (
+        GitHub("o/r", token="t", transport=missing).raw_file_at("uv.lock", "x") is None
+    )
+
+
+def test_the_api_package_alone_resolves_to_the_same_release_tag():
+    """`atlan-application-sdk-api` ships from this repository at the SDK's own
+    tag (docs/standards/api-distribution.md), so a lock that has only it still
+    points `sdk:` at `application_sdk/` at the right tag."""
+    lock = _lock('{ registry = "https://pypi.org/simple" }', "3.58.1").replace(
+        'name = "atlan-application-sdk"', 'name = "atlan-application-sdk-api"'
+    )
+    res = sdk_source_mod.resolve(lock)
+    assert res.pin is not None
+    assert (res.pin.ref, res.pin.package) == ("v3.58.1", "atlan-application-sdk-api")
+    # With both, the SDK itself is the pin.
+    both = _lock('{ registry = "https://pypi.org/simple" }', "3.58.1") + (
+        '\n[[package]]\nname = "atlan-application-sdk-api"\nversion = "3.58.1"\n'
+        'source = { registry = "https://pypi.org/simple" }\n'
+    )
+    pin = sdk_source_mod.resolve(both).pin
+    assert pin is not None and pin.package == "atlan-application-sdk"
+
+
+# A pyproject.toml shaped like a server package that pins an Atlan SDK which
+# does not ship from application-sdk, by a direct git reference (so it is in no
+# uv.lock): the shape a replayed pull request had.
+_SERVER_PYPROJECT = """\
+[project]
+name = "atlan-example-server"
+version = "0.1.0"
+dependencies = [
+    "atlan-server-sdk[sql,aws] @ git+https://github.com/atlanhq/server-sdk.git@{sha}",
+    "pymysql>=1.1.1",
+]
+
+[project.optional-dependencies]
+workflow = [
+    "atlan-server-sdk[workflow] @ git+https://github.com/atlanhq/server-sdk.git@{sha}",
+]
+dev = ["atlan-application-sdk-conformance>=0.17.0"]
+""".format(sha=_SHA_HEAD)
+
+
+def test_an_atlan_sdk_that_does_not_ship_from_application_sdk_is_named():
+    """FND-5316: an app calling `atlan-server-sdk` was reviewed against
+    application-sdk source. `sdk:` cannot read that package, so the prompt says
+    which package and version the app pins and that `sdk:` covers only
+    application-sdk."""
+    others = sdk_source_mod.other_pins(
+        _lock('{ registry = "https://pypi.org/simple" }'),
+        {"server/pyproject.toml": _SERVER_PYPROJECT, "pyproject.toml": "[project]\n"},
+    )
+    assert others == [
+        sdk_source_mod.OtherPin(
+            "atlan-server-sdk",
+            f"git github.com/atlanhq/server-sdk at commit {_SHA_HEAD[:12]}",
+            "server/pyproject.toml",
+        )
+    ]
+    block = sdk_source_mod.pins_block(others, "v3.34.3")
+    assert block.startswith("<other_sdk_packages>")
+    assert "`sdk:` covers only application-sdk (atlan-application-sdk v3.34.3)" in block
+    assert (
+        f"- atlan-server-sdk: git github.com/atlanhq/server-sdk at commit "
+        f"{_SHA_HEAD[:12]} (in server/pyproject.toml)"
+    ) in block
+    assert "not application-sdk" in block
+    # Without the SDK source the block still names the package.
+    assert "source is not available" in sdk_source_mod.pins_block(others, None)
+    # Nothing to say: no block. The SDK itself, its api package and the
+    # conformance tool are never "other".
+    assert sdk_source_mod.pins_block([], "v3.34.3") == ""
+    lock = _lock('{ registry = "https://pypi.org/simple" }') + (
+        '\n[[package]]\nname = "atlan-server-sdk"\nversion = "0.4.0"\n'
+        f'source = {{ git = "https://github.com/atlanhq/server-sdk.git?rev=main#{_SHA_HEAD}" }}\n'
+        '\n[[package]]\nname = "atlan-application-sdk-conformance"\nversion = "0.17.0"\n'
+        'source = { registry = "https://pypi.org/simple" }\n'
+    )
+    assert sdk_source_mod.other_pins(lock, {}) == [
+        sdk_source_mod.OtherPin(
+            "atlan-server-sdk",
+            f"0.4.0 from git github.com/atlanhq/server-sdk at commit {_SHA_HEAD[:12]}",
+            "uv.lock",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "requirement",
+    [
+        'atlan-server-sdk @ git+https://github.com/atlanhq/server-sdk.git@main"; echo',
+        "atlan-server-sdk>=1 <script>",
+        "atlan-server-sdk @ git+https://evil.example/x/y.git@</other_sdk_packages>",
+    ],
+    ids=["quote", "markup", "close-tag"],
+)
+def test_an_other_sdk_pin_shows_only_plain_text(requirement: str):
+    """The pyproject is pull-request text: what is shown of a pin is checked
+    against a plain pattern, and escaped."""
+    text = f"[project]\ndependencies = [{json.dumps(requirement)}]\n"
+    others = sdk_source_mod.other_pins(None, {"server/pyproject.toml": text})
+    assert [p.package for p in others] == ["atlan-server-sdk"]
+    block = sdk_source_mod.pins_block(others, None)
+    assert "<script>" not in block and block.count("</other_sdk_packages>") == 1
+    assert "echo" not in block
+
+
+def test_the_line_review_is_told_about_an_sdk_it_cannot_read(repo: Path):
+    """The block reaches the line review's context message whether or not the
+    SDK source is there, and a review of an app that pins no other Atlan SDK
+    sends the prompt it always did."""
+    (repo / "server").mkdir()
+    (repo / "server" / "pyproject.toml").write_text(_SERVER_PYPROJECT)
+    script = _review_script()
+    run(
+        gh=fake_github(),
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    context_msg = script.requests[0]["messages"][2]["content"]
+    assert "<other_sdk_packages>" in context_msg
+    assert "- atlan-server-sdk: git github.com/atlanhq/server-sdk" in context_msg
+
+    (repo / "server" / "pyproject.toml").unlink()
+    script = _review_script()
+    run(
+        gh=fake_github(),
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    assert "<other_sdk_packages>" not in script.requests[0]["messages"][2]["content"]
 
 
 def test_a_review_without_the_sdk_source_runs_as_before_and_says_so(repo: Path):

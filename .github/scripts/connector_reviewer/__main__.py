@@ -3,6 +3,7 @@
     python -m connector_reviewer review --repo atlanhq/atlan-example-app --pr 1234 --root <app checkout> [--force] [--verify-budget] [--dry-run]
     python -m connector_reviewer review --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
     python -m connector_reviewer finalize --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
+    python -m connector_reviewer sdk-ref --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
     python -m connector_reviewer sdk-ref --root <app checkout>
 
 `finalize` runs after the review step whatever its outcome (`if: always()`): a
@@ -12,13 +13,16 @@ run that crashed, was cancelled or timed out leaves its `pending` status as
 Sub-commands of the `/review` comment (`/review force`, `/review verify-budget`,
 `/review dismiss`, `/review recheck`) are parsed and documented in connector_reviewer/event.py.
 
-`sdk-ref` reads the app's `uv.lock` and writes the application-sdk ref it pins
-(`ref=` and `label=`) to `$GITHUB_OUTPUT`, empty when there is none
-(connector_reviewer/sdk_source.py); the workflow checks the SDK source out at
-that ref and passes it to `review --sdk-source` (or `CONNECTOR_REVIEWER_SDK_SOURCE`).
-The review's tools then read it under `sdk:`. When it was asked for and is not
-there, the review runs without it and its summary says so; without the flag or
-the variable (a local run) nothing changes.
+`sdk-ref` reads the pull request head's `uv.lock` through the REST API (with
+`--repo` and a pull request: `--pr`, or the event) and writes the
+application-sdk ref it pins (`ref=` and `label=`) to `$GITHUB_OUTPUT`, empty when
+there is none (connector_reviewer/sdk_source.py); `--root` alone reads a local
+checkout's lock instead. The workflow checks the SDK source out at that ref and
+passes it to `review --sdk-source` (or `CONNECTOR_REVIEWER_SDK_SOURCE`), and the
+review labels it from the same head lock. The review's tools then read it under
+`sdk:`. When it was asked for and is not there, the review runs without it and
+its summary says so; without the flag or the variable (a local run) nothing
+changes.
 
 Run from `.github/scripts` of an application-sdk checkout (where this package
 lives), against a checkout of the BASE branch of the connector app under review
@@ -74,7 +78,7 @@ from .review import (
     to_json,
     waive,
 )
-from .sdk_source import resolve_root, step_output
+from .sdk_source import Resolution, head_lock, resolve_root, step_output
 from .tools import SdkSource
 
 # The config that ships with this package: `.github/connector-reviewer/` of the
@@ -130,9 +134,17 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument("--event-path")
     s = sub.add_parser(
         "sdk-ref",
-        help="write the application-sdk ref the app's uv.lock pins to $GITHUB_OUTPUT",
+        help="write the application-sdk ref the pull request head's uv.lock pins "
+        "to $GITHUB_OUTPUT",
     )
-    s.add_argument("--root", required=True, help="checkout of the app (trusted base)")
+    s.add_argument("--repo", help="owner/name: read the pull request head's uv.lock")
+    s.add_argument("--pr", type=int)
+    s.add_argument("--event-name")
+    s.add_argument("--event-path")
+    s.add_argument(
+        "--root",
+        help="without --repo: a local checkout of the app whose uv.lock is read",
+    )
     args = ap.parse_args(argv)
     if args.cmd == "finalize":
         return _finalize(args)
@@ -312,8 +324,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.sdk_source is not None
         else os.environ.get("CONNECTOR_REVIEWER_SDK_SOURCE")
     )
+    # The pull request head's lock, the one the workflow's checkout was chosen
+    # from (FND-5316), never the default branch's.
+    lock_text: str | None = None
     if sdk_dir is not None:
-        sdk, sdk_note = SdkSource.open(sdk_dir, root)
+        lock = head_lock(gh, args.pr)
+        lock_text = lock.text
+        sdk, sdk_note = SdkSource.open(sdk_dir, lock.resolution())
     trace.line(
         f"SDK source: application-sdk {sdk.label} at {sdk.root}"
         if sdk
@@ -345,6 +362,7 @@ def main(argv: list[str] | None = None) -> int:
             on_pending=record_head,
             sdk=sdk,
             sdk_note=sdk_note,
+            head_lock=lock_text,
         )
     except Exception:
         # The pending status this run set must not outlive it. The workflow's
@@ -437,7 +455,21 @@ def _finalize(args: argparse.Namespace) -> int:
 def _sdk_ref(args: argparse.Namespace) -> int:
     """`sdk-ref`: always exit 0. No ref is an empty output, and the review then
     runs without the SDK source; it is never a reason to fail the job."""
-    res = resolve_root(Path(args.root))
+    if args.repo:
+        number = args.pr or 0
+        if not number and args.event_name and args.event_path:
+            try:
+                event = json.loads(Path(args.event_path).read_text())
+            except (OSError, ValueError):
+                event = {}
+            number = pr_number(args.event_name, event) if isinstance(event, dict) else 0
+        res = head_lock(GitHub(args.repo), number).resolution()
+    elif args.root:
+        res = resolve_root(Path(args.root))
+    else:
+        res = Resolution(
+            None, "no pull request (--repo) or app checkout (--root) given"
+        )
     out = step_output(res)
     print(
         f"connector-reviewer: application-sdk pin: {res.pin.label}"

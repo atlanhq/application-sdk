@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-from . import advisory, baseline, exempt, holistic, prompts, skeptic, trace
+from . import advisory, baseline, exempt, holistic, prompts, sdk_source, skeptic, trace
 from . import context as code_context
 from . import facts as code_facts
 from .agent import AgentLimits, BundleResult, review_bundle, suspect_paths
@@ -507,6 +507,20 @@ def find_state(gh: GitHub, number: int) -> tuple[PRState | None, str]:
     return None, ""
 
 
+def sdk_pins_block(ws: Workspace, head_lock: str | None) -> str:
+    """The `<other_sdk_packages>` block for the line review (FND-5316): the
+    Atlan SDK packages the head pins that `sdk:` cannot read, from its lock and
+    its `pyproject.toml` files; "" when it pins none."""
+    lock = head_lock if head_lock is not None else ws.text(sdk_source.LOCK)
+    pyprojects = {
+        p: text
+        for p in ws.files()
+        if sdk_source.is_pyproject(p) and (text := ws.text(p))
+    }
+    others = sdk_source.other_pins(lock, pyprojects)
+    return sdk_source.pins_block(others, ws.sdk.label if ws.sdk else None)
+
+
 def run(
     *,
     gh: GitHub,
@@ -522,12 +536,15 @@ def run(
     on_pending: Callable[[str], None] | None = None,
     sdk: SdkSource | None = None,
     sdk_note: str = "",
+    head_lock: str | None = None,
 ) -> RunResult:
     """One review round. `on_pending(head)` is called right after the
     `pending` status is set on `head`, so the caller can record which head
     `finalize` must check if this run never posts a verdict. `sdk` is the
     pinned SDK source the tools can read; `sdk_note` says why it is missing
-    when one was asked for (FND-5331)."""
+    when one was asked for (FND-5331). `head_lock` is the pull request head's
+    `uv.lock` when the caller read it (`sdk_source.head_lock`); without it the
+    workspace's own is used (FND-5316)."""
     t_start = time.monotonic()
     pr = gh.pr(number)
     head = pr["head"]["sha"]
@@ -846,6 +863,7 @@ def run(
         index=idx,
         sdk=sdk,
     )
+    ws.sdk_pins = sdk_pins_block(ws, head_lock)
     round_cap = ledger.remaining * (cfg.first_round_share if round_no == 1 else 1.0)
     # The approach check runs alongside the line review, on a ledger of its own
     # carved out of the round's: whatever it spends, it can never take a
