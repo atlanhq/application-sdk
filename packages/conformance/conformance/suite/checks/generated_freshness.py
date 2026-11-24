@@ -58,15 +58,13 @@ from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     TOOL_VERSION,
+    _make_pkl_finding_suppressed,
+    _parse_pkl_directives,
     make_cli_main,
     yaml_comment_start,
 )
 from conformance.suite.checks._toolkit_baseline import ToolkitBaseline, load_baseline
 from conformance.suite.checks._version import parse_version, version_reached
-from conformance.suite.checks.legacy_contract._directives_pkl import (
-    _make_pkl_finding_suppressed,
-    _parse_pkl_directives,
-)
 from conformance.suite.schema.findings import Finding
 
 SERIES = "K"

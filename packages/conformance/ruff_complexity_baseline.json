@@ -58,9 +58,6 @@
   "conformance/suite/checks/client_seam/_raw_http_to_atlan.py": {
     "C901": 1
   },
-  "conformance/suite/checks/dapr_objectstore.py": {
-    "C901": 1
-  },
   "conformance/suite/checks/dependency_conformance/__init__.py": {
     "C901": 1,
     "PLR0915": 1

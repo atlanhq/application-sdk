@@ -23,18 +23,16 @@ import sys
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
-    make_cli_main,
-    make_toml_finding,
-    parse_toml_suppressions,
-    safe_read_text,
-    strip_yaml_comment,
-)
-from conformance.suite.checks.dapr_objectstore import (
-    _YAML_KV_RE,
+    YAML_KV_RE,
     _make_pkl_finding_suppressed,
     _parse_pkl_directives,
     contract_files,
+    make_cli_main,
+    make_toml_finding,
+    parse_toml_suppressions,
     pkl_code_lines,
+    safe_read_text,
+    strip_yaml_comment,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -97,7 +95,7 @@ def _pinned_lines(text: str) -> list[int]:
     for lineno, raw in enumerate(text.splitlines(), start=1):
         if not raw.strip() or raw.lstrip().startswith("#"):
             continue
-        m = _YAML_KV_RE.match(raw)
+        m = YAML_KV_RE.match(raw)
         if m is None:
             continue
         indent = len(m.group("indent"))

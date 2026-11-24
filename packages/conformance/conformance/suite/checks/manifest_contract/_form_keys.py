@@ -37,7 +37,7 @@ from conformance.suite.checks.entrypoint_alignment._contract_entrypoints import 
 )
 from conformance.suite.schema.findings import Finding
 
-from ..legacy_contract._directives_pkl import (
+from .._ast_common import (
     _make_pkl_finding_suppressed,
     _parse_pkl_directives,
 )

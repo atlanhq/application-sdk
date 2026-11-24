@@ -2253,7 +2253,7 @@ RULES: tuple[RuleDefinition, ...] = (
         name="PinnedWorkerTaskQueue",
         tier=EnforcementTier.WARN,
         category="contract-toolkit",
-        autofixable=True,
+        autofixable=False,
         since="0.62.0",
         rationale=(
             "The SDK derives the worker's Temporal task queue as "
@@ -2309,7 +2309,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "never correct: the pinned queue breaks on-demand retries.\n"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
         ),
     ),

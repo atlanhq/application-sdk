@@ -59,9 +59,11 @@ description: >
   explicit false or setting secretstore = true and regenerating, verified by the
   pkl-eval gate.
   K031 (ATLAN_TASK_QUEUE is pinned in the deploy env, so the on-demand worker polls
-  the base queue and retries hang) is fixed by deleting the line from the contract
-  (or from atlan.yaml when the app has no contract) and regenerating, but only when the
-  pin equals the derived queue; a legacy queue name is left for a human.
+  the base queue and retries hang) is a migration rule (autofixable = false): the
+  lane applies nothing and hands a brief to a human, who deletes the line from the
+  contract (or from atlan.yaml when the app has no contract) and regenerates when
+  the pin equals the derived queue, and migrates the queue first when it is a
+  legacy name.
   K009, K011, K012, and K015 are
   BLOCK-tier (they fail the gate in default mode); the rest of the K-series is WARN.
 ---
@@ -1139,6 +1141,11 @@ If `pkl` is unavailable, route to residue with a regenerate-locally note.
 and retries the activity rerouter moves to the `-od` queue are never picked up;
 the run hangs until its timeout. `classification = "judgment"`.
 
+K031 is a **migration** rule (`autofixable = false`): apply nothing, and return
+the `migration_brief` that `remediate-finding` describes. The one known fleet
+finding pins a legacy queue name, and its fix is a queue migration, not a
+deletion. The procedure below is for the human who picks up the brief.
+
 The finding anchors on the `["ATLAN_TASK_QUEUE"] =` line in `contract/**/*.pkl`
 when there is one, and otherwise on the key in `atlan.yaml`. An app with only
 `atlan.yaml` (no `contract/`) is still checked.
@@ -1150,8 +1157,9 @@ when there is one, and otherwise on the key in `atlan.yaml`. An app with only
    `atlan-<contract name>-<deployment>`** (or its `{deployment_name}`-token
    form), i.e. the queue the SDK derives anyway. Otherwise it is a legacy queue
    name that the manifest (`taskQueuePrefix`, node `taskQueue`) and the KEDA
-   trigger still use: do NOT edit, and leave the finding for a human (queue
-   migration, or suppress with a reason).
+   trigger still use: do not delete it. First move the manifest's task queue
+   and the scaling trigger to the derived name (a queue migration), or
+   suppress with a reason.
 2. Regenerate with the repo's generate task (`uv run poe generate`, or
    `pkl eval -m . contract/app.pkl`) and stage the result; confirm `atlan.yaml`
    no longer carries `ATLAN_TASK_QUEUE`. **Never hand-edit a generated
@@ -1160,7 +1168,7 @@ when there is one, and otherwise on the key in `atlan.yaml`. An app with only
 3. Suppression is almost never correct — the pinned queue breaks on-demand
    retries. If one is justified, `// conformance: ignore[K031] <reason>` on the
    contract line (or `# conformance: ignore[K031] <reason>` on the `atlan.yaml`
-   line) and route to residue.
+   line).
 
 ---
 

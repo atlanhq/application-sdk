@@ -19,6 +19,7 @@ from ._bindings import (
 )
 from ._cli import TOOL_VERSION, make_cli_main
 from ._directives import _IgnoreDirective, _parse_directives, parse_ignore_directive
+from ._directives_pkl import _make_pkl_finding_suppressed, _parse_pkl_directives
 from ._discovery import (
     EXCLUDE_DIRS,
     discover,
@@ -41,6 +42,7 @@ from ._imports import (
 from ._io import safe_read_json, safe_read_text
 from ._names import base_names, leaf_name, pascal_to_kebab
 from ._parse import ParseFailure, parse_failure, runtime_python
+from ._pkl import contract_files, pkl_code_lines
 from ._pytest_collection import (
     is_collectable_test_file,
     is_test_class,
@@ -71,7 +73,7 @@ from ._toml_suppress import (
     parse_toml_suppressions,
 )
 from ._values import iter_strings
-from ._yaml import strip_yaml_comment, yaml_comment_start
+from ._yaml import YAML_KV_RE, strip_yaml_comment, yaml_comment_start
 
 __all__ = [
     "UNTRUSTED",
@@ -83,6 +85,9 @@ __all__ = [
     "pascal_to_kebab",
     "scope_bindings",
     "scoped_calls",
+    "YAML_KV_RE",
+    "contract_files",
+    "pkl_code_lines",
     "strip_yaml_comment",
     "yaml_comment_start",
     "merge_alias_targets",
@@ -100,7 +105,9 @@ __all__ = [
     "SuppressionsMap",
     "_IgnoreDirective",
     "_is_suppressed",
+    "_make_pkl_finding_suppressed",
     "_parse_directives",
+    "_parse_pkl_directives",
     "collect_import_origins",
     "collect_module_alias_targets",
     "detect_scope",
