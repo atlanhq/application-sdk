@@ -16,21 +16,31 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from datetime import timedelta
+from unittest import mock
 from uuid import uuid4
 
 import pytest
+from temporalio import workflow
 from temporalio.client import WorkflowQueryFailedError, WorkflowUpdateFailedError
 from temporalio.service import RPCError
-from temporalio.worker import Worker
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
+from temporalio.workflow import NondeterminismError
 
 from application_sdk.app import query, signal, update, wait_condition
-from application_sdk.app.base import App, generate_workflow_class
+from application_sdk.app.base import (
+    _EARLY_RUN_BINDING_PATCH,
+    App,
+    generate_workflow_class,
+)
 from application_sdk.app.entrypoint import EntryPointMetadata
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
+from application_sdk.execution._temporal.worker import build_interceptors
 from application_sdk.execution.sandbox import SandboxConfig
+from application_sdk.execution.settings import InterceptorSettings
 
 pytestmark = pytest.mark.integration
 
@@ -328,7 +338,100 @@ async def test_signal_with_start_handler_runs_task_as_activity(
             async for event in handle.fetch_history_events()
             if event.HasField("activity_task_scheduled_event_attributes")
         ]
+        history = await handle.fetch_history()
+
+    # The run's own history, marker included, replays on the same code
+    # through the interceptor chain create_worker registered (it records the
+    # run-flags marker, so the replayer needs it too).
+    ((_, ep),) = _SignalWithStartTaskApp._app_metadata.workflow_types.items()
+    await Replayer(
+        workflows=[generate_workflow_class(_SignalWithStartTaskApp, ep, workflow_type)],
+        interceptors=build_interceptors(InterceptorSettings()),
+        data_converter=temporal_client.data_converter,
+        workflow_runner=_SANDBOX_RUNNER,
+    ).replay_workflow(history)
 
     assert result.task_in_activity is True
     assert result.task_in_workflow is False
     assert len(scheduled) == 1
+
+
+def _patched_without_early_binding(real_patched: Callable[[str], bool]):
+    """``workflow.patched`` as code before FND-5219 saw it: the early-binding
+    marker does not exist, so it is never recorded and always reads False."""
+
+    def _patched(patch_id: str) -> bool:
+        if patch_id == _EARLY_RUN_BINDING_PATCH:
+            return False
+        return real_patched(patch_id)
+
+    return _patched
+
+
+def _patched_forcing_early_binding(real_patched: Callable[[str], bool]):
+    """``workflow.patched`` with the early-binding guard removed: it always
+    reads True, as unguarded early binding would behave on replay."""
+
+    def _patched(patch_id: str) -> bool:
+        if patch_id == _EARLY_RUN_BINDING_PATCH:
+            return True
+        return real_patched(patch_id)
+
+    return _patched
+
+
+async def test_pre_change_signal_with_start_history_still_replays(
+    temporal_client, task_queue, reregister_app
+) -> None:
+    """A run written before early binding (its first-activation handler ran
+    the task inline, recording no activity) replays on the current code.
+
+    The history is produced with the marker suppressed, which is the command
+    sequence older SDK versions emitted. Replaying it with the current code
+    must succeed; replaying it with the guard removed must not, which shows
+    the guard is what keeps it replayable.
+    """
+    reregister_app(_SignalWithStartTaskApp)
+    ((workflow_type, ep),) = (
+        _SignalWithStartTaskApp._app_metadata.workflow_types.items()
+    )
+    wf_cls = generate_workflow_class(_SignalWithStartTaskApp, ep, workflow_type)
+    real_patched = workflow.patched
+
+    with mock.patch.object(
+        workflow, "patched", _patched_without_early_binding(real_patched)
+    ):
+        async with Worker(
+            temporal_client,
+            task_queue=task_queue,
+            workflows=[wf_cls],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await temporal_client.start_workflow(
+                workflow_type,
+                _ProbeInput(),
+                id=f"interaction-relay-pre-change-{uuid4().hex[:8]}",
+                task_queue=task_queue,
+                start_signal="kick",
+                result_type=_ProbeOutput,
+            )
+            result = await asyncio.wait_for(handle.result(), timeout=60)
+    # The pre-change shape: the task body ran inline in workflow code.
+    assert result.task_in_workflow is True
+    history = await handle.fetch_history()
+
+    await Replayer(
+        workflows=[wf_cls],
+        data_converter=temporal_client.data_converter,
+        workflow_runner=_SANDBOX_RUNNER,
+    ).replay_workflow(history)
+
+    with mock.patch.object(
+        workflow, "patched", _patched_forcing_early_binding(real_patched)
+    ):
+        unguarded = await Replayer(
+            workflows=[wf_cls],
+            data_converter=temporal_client.data_converter,
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ).replay_workflow(history, raise_on_replay_failure=False)
+    assert isinstance(unguarded.replay_failure, NondeterminismError)

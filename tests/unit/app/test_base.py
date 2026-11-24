@@ -2245,12 +2245,16 @@ class TestWorkflowInteractionRelay:
                 "application_sdk.app.base.workflow.info", return_value=info_mock
             ),
             mock.patch(
+                "application_sdk.app.base.workflow.patched", return_value=True
+            ) as patched,
+            mock.patch(
                 "application_sdk.app.base._safe_now",
                 return_value=datetime(2025, 1, 1, tzinfo=UTC),
             ),
         ):
             wf_inst = wf_cls()
 
+        patched.assert_called_once_with("atlan-sdk/early-run-binding")
         app_instance = wf_inst._app_instance
         # The instance attribute shadows the class's plain coroutine.
         assert "do_work" in vars(app_instance)
@@ -2262,6 +2266,37 @@ class TestWorkflowInteractionRelay:
             "workflow_id": "wfid",
             "correlation_id": "rid",
         }
+
+    def test_wf_init_replaying_pre_marker_history_leaves_binding_to_run(
+        self,
+    ) -> None:
+        """Replaying a history written before the early-binding marker existed
+        (``patched`` is False), wf_cls() binds nothing, so _run binds as it
+        did when that history was written and a first-activation handler
+        replays the same commands."""
+
+        class _TaskApp(App):
+            @task
+            async def do_work(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="x")  # pragma: no cover
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")  # pragma: no cover
+
+        wf_cls = generate_workflow_class(
+            _TaskApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.in_workflow", return_value=True
+            ),
+            mock.patch("application_sdk.app.base.workflow.patched", return_value=False),
+        ):
+            wf_inst = wf_cls()
+
+        assert "do_work" not in vars(wf_inst._app_instance)
+        assert wf_inst._app_instance._context is None
+        assert not hasattr(wf_inst, "_run_context_data")
 
     def test_wf_init_outside_workflow_leaves_binding_to_run(self) -> None:
         """Outside a workflow there is no run: wf_cls() only builds the instance."""

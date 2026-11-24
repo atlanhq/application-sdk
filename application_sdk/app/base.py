@@ -3131,6 +3131,11 @@ class App(ABC):
 # workflow twice.
 _workflow_class_cache: dict[tuple[type, str, str], type] = {}
 
+_EARLY_RUN_BINDING_PATCH = "atlan-sdk/early-run-binding"
+"""``workflow.patched`` marker recorded by every run whose generated
+``__init__`` binds the App instance to the run (FND-5219). A history without it
+was written before that change and binds in ``_run``, as it did then."""
+
 
 def _validate_interaction_signature(
     fn: Callable[..., Any],
@@ -4460,7 +4465,14 @@ def generate_workflow_class(
         self._app_instance = app_cls()
         # Outside a workflow (unit tests constructing wf_cls directly) there
         # is no run to bind to; _run binds on its fallback path instead.
-        if workflow.in_workflow():
+        #
+        # The patch marker keeps runs started before this change replaying
+        # their own history: there a first-activation handler ran its task
+        # inline and recorded no activity, so binding here would schedule one
+        # on replay and fail the run with a nondeterminism error. Live,
+        # ``patched`` is True and records the marker; on replay it is True only
+        # when the history has it, so such runs keep binding in _run.
+        if workflow.in_workflow() and workflow.patched(_EARLY_RUN_BINDING_PATCH):
             self._run_context_data = _bind_app_instance_to_run(
                 self._app_instance, _safe_now()
             )
