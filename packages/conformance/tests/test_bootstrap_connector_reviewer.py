@@ -747,6 +747,94 @@ def test_principles_readme_is_added_beside_existing_principles(
     assert (repo / _README_REL).exists()
 
 
+# A principle written in the README's format. Invented for this test; it stands
+# for the principles app repositories have written for themselves.
+_RP01 = (
+    "---\n"
+    "id: RP01\n"
+    "applies-to: [app]\n"
+    "---\n"
+    "# Widget pages are fetched to the end\n"
+    "\n"
+    "Principle: The page loop stops only on an empty page.\n"
+    "Why: Stopping on a short page silently drops the rest of the catalog.\n"
+    "Ask:\n"
+    "- Does a changed loop still stop only on an empty page?\n"
+    "Don't flag: Retry and timeout settings.\n"
+    "Severity: High when a page can be skipped; otherwise medium.\n"
+)
+
+
+def test_resync_leaves_the_repositorys_principles_byte_for_byte(
+    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Bootstrap writes into the principles folder (the README is absent) and
+    retires the old placeholder rules in the same pass, and still every other
+    file in the folder is left exactly as it was and is reported nowhere."""
+    principles = ".github/connector-reviewer/principles"
+    own = {
+        f"{principles}/rp01-widget-paging.md": _RP01,
+        f"{principles}/rp02-draft.md": "not in the format yet\n",
+        f"{principles}/notes.txt": "kept by hand\n",
+    }
+    for rel, text in own.items():
+        _write(repo, rel, text)
+    _seed_local_rules(repo, {"widget.md": _placeholder()})
+
+    assert _cmd_bootstrap(["--resync", "--json"]) == 0
+
+    manifest = _manifest(capsys)
+    for rel, text in own.items():
+        assert (repo / rel).read_bytes() == text.encode(), rel
+        assert rel not in manifest["touched"], rel
+        assert rel not in manifest["unchanged"], rel
+    assert (repo / _README_REL).read_text() == render(_README_TEMPLATE)
+    assert _README_REL in manifest["touched"]
+    # The placeholder rules did go, so the retire path ran in this pass.
+    assert not (repo / LOCAL_REVIEW_RULES_DIR).exists()
+    # Nothing else appeared in the folder.
+    assert sorted(
+        p.relative_to(repo).as_posix() for p in (repo / principles).iterdir()
+    ) == sorted([*own, _README_REL])
+
+
+def test_nothing_bootstrap_manages_or_retires_is_a_principle(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Bootstrap's only path in the principles folder is the README: no list it
+    writes, retires or drift-checks names anything else there."""
+    principles = ".github/connector-reviewer/principles/"
+    paths = [
+        *(f".github/workflows/{name}" for name in MANAGED_WORKFLOWS),
+        *(dest for dest, _ in MANAGED_ACTION_FILES),
+        *RETIRED_FILES,
+        *RETIRED_ACTION_FILES,
+        *RETIRED_CONNECTOR_REVIEW_FILES,
+        *(path.relative_to(tmp_path).as_posix() for path in discover(tmp_path)),
+    ]
+    assert not [p for p in paths if p.startswith(principles)]
+    assert _README_REL.startswith(principles)
+    assert LOCAL_REVIEW_RULES_DIR.split("/")[0] == ".mothership"
+
+
+def test_resync_is_a_no_op_for_the_shim_already_in_a_repository(
+    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Some repositories got the shim by hand, before bootstrap shipped it. A
+    resync there must not rewrite it, and C002 must not report it."""
+    shim = f".github/workflows/{_WORKFLOW}"
+    text = render(_WORKFLOW)
+    _write(repo, shim, text)
+
+    assert _cmd_bootstrap(["--resync", "--json"]) == 0
+
+    manifest = _manifest(capsys)
+    assert shim in manifest["unchanged"]
+    assert shim not in manifest["touched"]
+    assert (repo / shim).read_text() == text
+    assert not [m for m in _c002(repo) if _WORKFLOW in m]
+
+
 def test_principles_readme_says_what_goes_in_the_folder() -> None:
     readme = render(_README_TEMPLATE)
     for phrase in (
