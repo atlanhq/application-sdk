@@ -9607,6 +9607,44 @@ def _progress_comment(url: str, cid: int = 7, login: str = "atlan-app-fleet[bot]
     }
 
 
+@pytest.fixture(autouse=True)
+def _own_runner_temp(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+):
+    """Each test gets its own job temp directory, so no test sees a verdict
+    another test (or the CI job running the suite) recorded."""
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path_factory.mktemp("runner")))
+
+
+def test_finalize_trusts_a_verdict_this_job_posted_over_a_lagging_status():
+    """The combined status can still show `pending` seconds after the verdict
+    replaced it. A head this job posted a verdict on is never turned into
+    `error`, and the progress note the review removed is not rewritten."""
+    github_mod.record_verdict("h1")
+    gh = _FinalizeGitHub(
+        {"state": "pending", "target_url": RUN_URL}, [_progress_comment(RUN_URL)]
+    )
+    done = finalize_mod.finalize(cast(Any, gh), 1, RUN_URL)
+    assert not done.status_set and gh.set == []
+    assert done.notes_fixed == [] and gh.edited == {}
+
+
+def test_only_a_verdict_is_recorded_for_finalize(monkeypatch: pytest.MonkeyPatch):
+    gh = github_mod.GitHub("o/r")
+    monkeypatch.setattr(gh, "_call", lambda *a, **k: {})
+    gh.set_status("h1", "pending", "reviewing", RUN_URL)
+    assert github_mod.recorded_verdicts() == set()
+    gh.set_status("h1", "success", "ready to merge", RUN_URL)
+    gh.set_status("h2", "failure", "changes requested", RUN_URL)
+    assert github_mod.recorded_verdicts() == {"h1", "h2"}
+
+
+def test_no_verdict_is_recorded_outside_actions(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("RUNNER_TEMP", raising=False)
+    github_mod.record_verdict("h1")
+    assert github_mod.recorded_verdicts() == set()
+
+
 def test_finalize_turns_this_runs_pending_status_into_error():
     gh = _FinalizeGitHub(
         {"state": "pending", "target_url": RUN_URL}, [_progress_comment(RUN_URL)]

@@ -23,6 +23,42 @@ DEFAULT_BOT_LOGIN = "atlan-app-fleet[bot]"
 COMMIT_MESSAGE_PAGES = 3
 # Pages of a commit's combined status read before giving up on a context.
 STATUS_PAGES = 10
+# The heads this job has posted a verdict on, one sha per line, in the job's
+# own temp directory. `finalize` runs as a later step of the same job and
+# trusts this over GitHub's combined status, which can still show the
+# `pending` a verdict replaced seconds earlier.
+VERDICTS_FILE = "connector-reviewer-verdicts"
+
+
+def _verdicts_path() -> str:
+    """Where this job records its verdicts, or "" outside Actions."""
+    tmp = os.environ.get("RUNNER_TEMP", "")
+    return os.path.join(tmp, VERDICTS_FILE) if tmp else ""
+
+
+def record_verdict(sha: str) -> None:
+    """Note that this job posted a verdict on `sha`. Best-effort: a failed
+    write only means `finalize` falls back to what GitHub shows."""
+    path = _verdicts_path()
+    if not path or not sha:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(sha + "\n")
+    except OSError:
+        pass
+
+
+def recorded_verdicts() -> set[str]:
+    """The heads this job posted a verdict on."""
+    path = _verdicts_path()
+    if not path:
+        return set()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return {line.strip() for line in fh if line.strip()}
+    except OSError:
+        return set()
 
 
 def bot_login() -> str:
@@ -315,6 +351,8 @@ class GitHub:
         if target_url:
             body["target_url"] = target_url
         self._call("POST", f"/repos/{self.repo}/statuses/{sha}", body)
+        if state != "pending":
+            record_verdict(sha)
 
     def react(self, comment_id: int, content: str) -> None:
         """A reaction on the `/review` comment: 👀 started, 🚀 posted, 😕 failed/dropped.

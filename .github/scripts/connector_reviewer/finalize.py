@@ -32,7 +32,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from .github import STATUS_CONTEXT, GitHub, bot_login
+from .github import STATUS_CONTEXT, GitHub, bot_login, recorded_verdicts
 from .typed import EMPTY
 
 PROGRESS_NOTE = (
@@ -102,12 +102,21 @@ def finalize(gh: GitHub, number: int, run_url: str) -> Finalized:
         and run_url in str(c.get("body") or "")
     ]
     recorded = [m for c in notes for m in _HEAD.findall(str(c.get("body") or ""))]
+    # A head this job already posted a verdict on is done, whatever the
+    # combined status still shows: it can lag the verdict by seconds.
+    posted = recorded_verdicts()
     for sha in dict.fromkeys(h for h in [out.head, *recorded] if h):
+        if sha in posted:
+            continue
         st = gh.status_of(sha, STATUS_CONTEXT) or EMPTY
         if st.get("state") == "pending" and st.get("target_url") == run_url:
             gh.set_status(sha, "error", INCOMPLETE, run_url)
             out.errored.append(sha)
     out.status_set = bool(out.errored)
+    if posted:
+        # The run reached a verdict and removes its own progress note; a
+        # comment list read seconds later can still show it.
+        return out
     for c in notes:
         gh.edit_comment(int(c["id"]), FAILED_NOTE.format(url=run_url))
         out.notes_fixed.append(int(c["id"]))
