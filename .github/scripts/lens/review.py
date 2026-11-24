@@ -1154,6 +1154,161 @@ class RecheckEvidence:
     absent_on_merge_base: bool
     code_now: str
     at_merge_base: str
+    # Code the author's reason cites, read by lens: shared by every finding in the call.
+    cited: list[Cited] = field(default_factory=list)
+
+
+# ---- the code an author's recheck reason cites ---------------------------------
+
+MAX_CITED = 4  # excerpts per recheck
+CITED_CONTEXT = 10  # lines shown either side of a cited line or range
+CITED_MAX_LINES = 120  # every excerpt together, head and merge-base copies counted
+# `path:N` or `path:N-M`; the path needs an extension, so prose such as `step:2`
+# or a time is never a reference. A bare `:N` after a reference reuses its path
+# ("logger_adaptor.py:576 and :1218"). The lookbehind keeps an absolute path, a
+# URL port and a mid-word colon out.
+_CITE = re.compile(
+    r"(?<![\w./:-])((?:[\w.-]+/)*[\w.-]+\.[A-Za-z0-9]+)?:(\d{1,6})(?:-(\d{1,6}))?(?![\w-])"
+)
+
+
+@dataclass(frozen=True)
+class CitedRef:
+    path: str
+    lo: int
+    hi: int
+
+    @property
+    def label(self) -> str:
+        return f"{self.path}:{self.lo}" + (f"-{self.hi}" if self.hi != self.lo else "")
+
+
+@dataclass
+class Cited:
+    """One cited window. `head` is the text at the PR head ("" when the PR
+    deletes the file or its head text was not fetched); `base` is the same
+    lines at the merge base, kept only when the PR changed them ("" when the
+    merge base has no such file)."""
+
+    path: str
+    lo: int
+    hi: int
+    changed_by_this_pr: bool
+    head: str
+    base: str
+
+    @property
+    def fact(self) -> str:
+        return (
+            f"cited in the reason, read by lens: {self.path}:{self.lo}-{self.hi} "
+            + (
+                "(changed by this PR: weigh it like the PR's own code)"
+                if self.changed_by_this_pr
+                else "(unchanged by this PR: as the base branch has it)"
+            )
+        )
+
+
+def cited_refs(reason: str) -> list[CitedRef]:
+    """Every `path:line` / `path:start-end` the reason names, in order, once each."""
+    out: list[CitedRef] = []
+    last: str | None = None
+    for m in _CITE.finditer(reason):
+        path = m.group(1) or last
+        if path is None:
+            continue
+        last = path
+        lo = int(m.group(2))
+        hi = int(m.group(3) or lo)
+        ref = CitedRef(path.removeprefix("./"), lo, hi)
+        if 1 <= lo <= hi and ref not in out:
+            out.append(ref)
+    return out
+
+
+def cited_excerpts(
+    ws: Workspace, reason: str, merge_base_text: Callable[[str], str | None]
+) -> tuple[list[Cited], list[str]]:
+    """The windows the reason cites, read by lens itself, and why each skipped
+    one was skipped (for the trace).
+
+    A file the PR does not touch is read at the merge base: that IS its PR-head
+    copy, and the base-branch checkout may have moved past it. Lines the PR
+    changes, a file it adds, deletes, or whose head text was not fetched, are
+    `changed_by_this_pr`: the author controls them, so their merge-base copy is
+    shown too, and an author cannot plant the proof in the same PR."""
+    got: list[Cited] = []
+    skipped: list[str] = []
+    budget = CITED_MAX_LINES
+    for ref in cited_refs(reason):
+        if len(got) == MAX_CITED:
+            skipped.append(f"{ref.label}: over the {MAX_CITED}-excerpt cap")
+            continue
+        rel = ws._safe(ref.path)
+        fd = ws.diffs.get(rel) if rel else None
+        if rel is None or (fd is not None and secret_diff(fd)):
+            skipped.append(f"{ref.label}: path refused")
+            continue
+        base_path = (
+            fd.old_path if fd and fd.status == "renamed" and fd.old_path else rel
+        )
+        base = (
+            None
+            if fd is not None and fd.status == "added"
+            else merge_base_text(base_path)
+        )
+        if fd is None:
+            head = base
+        else:
+            head = ws.head_text.get(rel) or None
+        text = head or base
+        if text is None:
+            skipped.append(f"{ref.label}: not found at the PR head or the merge base")
+            continue
+        size = len(text.splitlines())
+        if ref.lo > size:
+            skipped.append(f"{ref.label}: past the end of {rel} ({size} lines)")
+            continue
+        lo = max(ref.lo - CITED_CONTEXT, 1)
+        hi = min(ref.hi + CITED_CONTEXT, size)
+        changed = fd is not None and (
+            head is None or bool(fd.changed_lines & set(range(lo, hi + 1)))
+        )
+        copies = 2 if changed and head and base else 1
+        hi = min(hi, lo + budget // copies - 1)
+        if hi < lo or hi < ref.lo:
+            skipped.append(f"{ref.label}: the {CITED_MAX_LINES}-line budget is spent")
+            continue
+        budget -= (hi - lo + 1) * copies
+        got.append(
+            Cited(
+                rel,
+                lo,
+                hi,
+                changed,
+                _numbered(head, lo, hi) if head else "",
+                _numbered(base, lo, hi) if changed and base else "",
+            )
+        )
+    return got, skipped
+
+
+def _cited_block(c: Cited) -> str:
+    path = _inert(c.path).replace('"', "'")
+    if not c.changed_by_this_pr:
+        body = c.head
+    else:
+        body = (
+            "at the PR head:\n"
+            + (c.head or "(not in the PR head, or not fetched)")
+            + "\nat the merge base:\n"
+            + (c.base or "(absent: the file is not on the merge base)")
+        )
+    flag = "true" if c.changed_by_this_pr else "false"
+    return (
+        f'<cited path="{path}" lines="{c.lo}-{c.hi}" changed_by_this_pr="{flag}">\n'
+        f"{_inert(body)}\n</cited>"
+    )
 
 
 def _private(parts: list[str]) -> bool:
@@ -1373,7 +1528,7 @@ def checkout_target_facts(
 # The tags a recheck request is built from. PR-derived text (code, quotes,
 # finding prose, paths) must not be able to open or close one of them.
 _RECHECK_TAGS = re.compile(
-    r"<(/?)(finding|quoted_when_raised|code_now|at_merge_base|evidence|author_claim)\b",
+    r"<(/?)(finding|quoted_when_raised|code_now|at_merge_base|evidence|author_claim|cited)\b",
     re.IGNORECASE,
 )
 
@@ -1410,6 +1565,7 @@ def _recheck_call(
             f"<at_merge_base>\n{_inert(ev.at_merge_base)}\n</at_merge_base>\n"
             "<evidence>\n"
             + "\n".join(f"- {_inert(x)}" for x in ev.facts)
+            + "".join(f"\n{_cited_block(c)}" for c in ev.cited)
             + "\n</evidence>\n</finding>"
         )
     messages = [
@@ -1550,6 +1706,14 @@ def recheck(
         capabilities = caps.read_text(encoding="utf-8") if caps.is_file() else ""
         ask: list[tuple[Finding, RecheckEvidence]] = []
         seen_visibility: dict[str, str | None] = {}
+        cited, cite_skipped = cited_excerpts(ws, reason, read_base)
+        if cited or cite_skipped:
+            trace.line(
+                "recheck cited: read "
+                + (", ".join(f"{c.path}:{c.lo}-{c.hi}" for c in cited) or "none")
+                + "; skipped "
+                + ("; ".join(cite_skipped) or "none")
+            )
 
         def visibility(name: str) -> str | None:
             if name not in seen_visibility:
@@ -1561,6 +1725,8 @@ def recheck(
             ev.facts += checkout_target_facts(
                 f.path, [f.evidence, ev.code_now], visibility
             )
+            ev.cited = cited
+            ev.facts += [c.fact for c in cited]
             trace.line(f"recheck {f.id}: " + "; ".join(ev.facts))
             if f.compatibility and ev.absent_on_merge_base:
                 resolved.append(
