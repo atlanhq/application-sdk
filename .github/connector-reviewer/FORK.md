@@ -232,7 +232,7 @@ connector profile. From here on the engine behaves differently, each on purpose.
 |---|---|---|
 | Who may comment a command | `author_association` is OWNER, MEMBER or COLLABORATOR | The commenter's live role on the repository is Write, Maintain or Admin, read from `GET /repos/{repo}/collaborators/{login}/permission` (`GitHub.can_push`, passed to `event.decide` as `can_push`). A member with only Read is refused. A failed lookup is a refusal with a reply: an HTTP error, a network error (DNS, a reset or a timeout, which urlopen raises as `OSError`), a reply cut short or one that is not JSON. `.github/scripts/pr_test_command.py` does the same. |
 | Bots | Every bot is refused | A bot is honoured when it is a trusted App: `performed_via_github_app.slug` is on `[access] trusted_apps` in `config.toml` and the author is `<slug>[bot]` (`event.trusted_app`). It has the rights of a person with Write. Every other bot is refused with no reply. |
-| A refusal | Silent, except a usage error | `Decision.reply` says whether to answer: yes for a usage error and for a person without the role, no for a bot. |
+| A refusal | Silent, except a usage error (the CLI answers a reason in `event.USAGE_ERRORS`) | `Decision.reply` says whether to answer: yes for a usage error and for a person without the role, no for a bot. Both answer an unknown word on the command's line with a usage reply (see "Fixed in both copies (FND-5314)"). |
 | A fork | Not checked | `event.is_fork`: the CLI refuses a pull request whose head is in another repository, with a short reply, whatever the command. |
 | Waive | No such command | `/review waive <reason>` (`review.waive`): no model call; `PRState.waiver` records who, why and the head sha; a history row; status `success` "waived by @login: reason" on that head; the summary says it was waived and that open findings were not resolved. Any real review clears it (`run`), so `/review force` on the same head puts the verdict back. `verdict_status` is green only for the head the waive names. The pull request's author may waive. |
 | Dismiss | The author cannot dismiss a critical or high finding | The same rule, and it holds for a trusted App that authored the pull request. |
@@ -479,7 +479,7 @@ above; "typing" means only the annotations described under Typing.
 | `bundle.py` | `_module_key` and the module docstring. |
 | `llm.py` | Names (the gateway key variable, the User-Agent, log text), typing. |
 | `github.py` | Names, typing, four methods removed with the approval step; `can_push`, `safe_body`, `status_of`, `pr_commit_messages`, `recent_commits` and `commit_patches` added. |
-| `event.py` | Rewritten around who may ask (FND-5310); the command grammar is lens's plus `waive`. |
+| `event.py` | Rewritten around who may ask (FND-5310); the command grammar is lens's plus `waive`. The unknown-word check is the same in both, under each copy's own names: `REVIEW_USAGE` and `REVIEW_OPTIONS` here, `LENS_USAGE` and `LENS_OPTIONS` in lens. Two differences (FND-5314): here the subcommand (`dismiss`, `recheck`, `waive`) is read from the first line only, so a note on a later line that starts with one of those words still reviews (ids and reason may continue below a first line that names the subcommand), where lens reads the comment's second word wherever it is; and `force` counts in either order with `verify-budget`, where lens forces only when `force` comes first. |
 | `holistic.py` | The prompt's opening and one concern; no `<public_api>` block; typing. |
 | `context.py` | No `_public` / `public_api`; `build` returns a string. |
 | `advisory.py` | Rewritten as the empty extension point; holds `glob_match`. |
@@ -519,6 +519,26 @@ and a later lens fix to the same code ports as usual.
   under different context (`triage.py`).
 
 Every finding of that review was judged a real defect; none was set aside.
+
+## Fixed in both copies (FND-5314)
+
+Neither of these is a difference: each copy has the same behaviour, under its own
+names.
+
+- A finding on code the PR removes. Its quote is absent at the head by design, so
+  verify and `recheck` both show where it was removed, prefixed with
+  `review.REMOVED_NOTE` ("its absence is not a fix"), or say the PR deletes the whole
+  file (`review._removed_site`). In `recheck_evidence` the merge-base fact says
+  the code is on the merge base and this PR removes it, and it is never "absent".
+  The symbol around the removal site frames `<code_now>` only: it gives no
+  merge-base, caller, privacy or capability fact (the last two in lens only). So a
+  compatibility claim about the removal cannot resolve with no model call because
+  that neighbour is new. In `recheck_evidence`, a head match that sits on a line
+  the PR added, of a quote the PR also removes (`review._new_copy_of_removed`), is
+  a new copy rather than the quote surviving, so the removal stays the subject.
+- An unknown word on the command's line (`/review frobnicate`, `/lens forse`) gets a
+  usage reply and starts nothing. Options come from the first line only, so a note
+  on the lines below a bare `/review` or `/lens` still reviews.
 
 ## Not changed, and worth knowing before the next change
 
