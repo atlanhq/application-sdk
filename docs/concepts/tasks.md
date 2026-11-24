@@ -25,6 +25,8 @@ class MyConnector(App):
 
 Under the hood, `@task` applies the Temporal `@activity.defn` decorator, registers the method in the `TaskRegistry`, and wires heartbeating. You never import from `temporalio` directly.
 
+When a run is created, the SDK replaces each `@task` method on that run's `App` instance with a dispatcher that schedules the task as an activity. This happens before `run()` and before any `@signal` or `@update` handler, so a task awaited from either always runs as an activity, never inline in workflow code.
+
 ## Typed Input/Output Contracts
 
 Every task boundary is a typed contract. The SDK validates contract fields at class definition time -- forbidden types raise `PayloadSafetyError` before your app starts.

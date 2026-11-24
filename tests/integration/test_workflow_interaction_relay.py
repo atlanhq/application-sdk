@@ -28,6 +28,7 @@ from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 from application_sdk.app import query, signal, update, wait_condition
 from application_sdk.app.base import App, generate_workflow_class
 from application_sdk.app.entrypoint import EntryPointMetadata
+from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.execution.sandbox import SandboxConfig
 
@@ -247,3 +248,87 @@ async def test_validator_rejects_invalid_update(temporal_client, task_queue) -> 
         await handle.execute_update("stop", _StopInput(reason="after-rejection"))
         result = await handle.result()
     assert result.final_state == "stopped:after-rejection"
+
+
+# ---------------------------------------------------------------------------
+# First-activation delivery (signal-with-start)
+# ---------------------------------------------------------------------------
+
+
+class _ProbeInput(Input):
+    pass
+
+
+class _ProbeTaskOutput(Output):
+    in_activity: bool = False
+    in_workflow: bool = False
+
+
+class _ProbeOutput(Output):
+    task_in_activity: bool = False
+    task_in_workflow: bool = False
+
+
+class _SignalWithStartTaskApp(App):
+    """App whose ``@signal`` awaits a ``@task``. Started with signal-with-start,
+    so the handler runs in the run's first activation, before ``run``."""
+
+    def __init__(self) -> None:
+        self.probe: _ProbeTaskOutput | None = None
+
+    @task(timeout_seconds=30)
+    async def probe_task(self, input: _ProbeInput) -> _ProbeTaskOutput:
+        # Where the body executes: as an activity (correct) or inline on the
+        # workflow thread (the task was not wrapped yet).
+        from temporalio import activity as _activity
+        from temporalio import workflow as _workflow
+
+        return _ProbeTaskOutput(
+            in_activity=_activity.in_activity(), in_workflow=_workflow.in_workflow()
+        )
+
+    async def run(self, input: _ProbeInput) -> _ProbeOutput:
+        await wait_condition(
+            lambda: self.probe is not None, timeout=timedelta(seconds=30)
+        )
+        assert self.probe is not None
+        return _ProbeOutput(
+            task_in_activity=self.probe.in_activity,
+            task_in_workflow=self.probe.in_workflow,
+        )
+
+    @signal
+    async def kick(self) -> None:
+        self.probe = await self.probe_task(_ProbeInput())
+
+
+async def test_signal_with_start_handler_runs_task_as_activity(
+    temporal_client, task_queue, run_worker, reregister_app
+) -> None:
+    """A @signal delivered with the start (first activation) that awaits a
+    @task schedules it as an activity, not run inline in workflow code.
+
+    Temporal applies the signal before the run coroutine starts, so the
+    @task methods must already be wrapped when the workflow object is built.
+    """
+    reregister_app(_SignalWithStartTaskApp)
+    (workflow_type,) = _SignalWithStartTaskApp._app_metadata.workflow_types
+    async with run_worker():
+        handle = await temporal_client.start_workflow(
+            workflow_type,
+            _ProbeInput(),
+            id=f"interaction-relay-signal-with-start-{uuid4().hex[:8]}",
+            task_queue=task_queue,
+            start_signal="kick",
+            result_type=_ProbeOutput,
+        )
+        result = await asyncio.wait_for(handle.result(), timeout=60)
+        scheduled = [
+            event
+            async for event in handle.fetch_history_events()
+            if event.HasField("activity_task_scheduled_event_attributes")
+        ]
+
+    assert result.task_in_activity is True
+    assert result.task_in_workflow is False
+    assert len(scheduled) == 1

@@ -1380,6 +1380,51 @@ class TestGenerateWorkflowClass:
         assert isinstance(exc.value.__cause__, ValueError)
         assert getattr(exc.value, "non_retryable", None) is True
 
+    async def test_run_reuses_binding_from_wf_init(self) -> None:
+        """When __init__ already bound the instance to the run, _run does not
+        wrap the tasks again: it sets the resolved correlation id on the same
+        context dict the task wrappers hold and on the instance's context."""
+        seen: dict[str, str] = {}
+
+        class CorrApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                seen["correlation_id"] = self.context.correlation_id
+                return _BLDXOutput(result="ok")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(CorrApp, ep)
+
+        context_data = {"run_id": "r", "workflow_id": "w", "correlation_id": "r"}
+        wf_self = mock.MagicMock()
+        wf_self._app_instance = CorrApp()
+        wf_self._run_context_data = context_data
+        info_mock = mock.MagicMock(run_id="r", workflow_id="w")
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=mock.MagicMock(correlation_id="corr"),
+            ),
+        ):
+            from application_sdk.app import base as _base
+
+            await wf_cls.run(wf_self, _BLDXInput())
+            wrap_mock = _base._wrap_instance_tasks
+            assert isinstance(wrap_mock, mock.MagicMock)
+            wrap_mock.assert_not_called()
+
+        assert context_data["correlation_id"] == "corr"
+        assert seen["correlation_id"] == "corr"
+
     async def test_run_lets_failure_error_propagate_unchanged(self) -> None:
         from temporalio.exceptions import FailureError
 
@@ -2172,6 +2217,70 @@ class TestWorkflowInteractionRelay:
         inst_a = wf_cls()
         inst_b = wf_cls()
         assert inst_a._app_instance is not inst_b._app_instance
+
+    def test_wf_init_binds_app_instance_to_run_in_workflow(self) -> None:
+        """Inside a workflow, wf_cls() wraps @task methods and sets the run's
+        context before any handler runs. Temporal applies signal/update jobs
+        of the first activation (signal-with-start) after __init__ but before
+        the run coroutine; an unwrapped task would run inline in workflow code.
+        """
+
+        class _TaskApp(App):
+            @task
+            async def do_work(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="x")  # pragma: no cover
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")  # pragma: no cover
+
+        wf_cls = generate_workflow_class(
+            _TaskApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        info_mock = mock.MagicMock(run_id="rid", workflow_id="wfid")
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.in_workflow", return_value=True
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.info", return_value=info_mock
+            ),
+            mock.patch(
+                "application_sdk.app.base._safe_now",
+                return_value=datetime(2025, 1, 1, tzinfo=UTC),
+            ),
+        ):
+            wf_inst = wf_cls()
+
+        app_instance = wf_inst._app_instance
+        # The instance attribute shadows the class's plain coroutine.
+        assert "do_work" in vars(app_instance)
+        assert app_instance._context is not None
+        assert app_instance._context.run_id == "rid"
+        assert app_instance._run_stored_refs is not None
+        assert wf_inst._run_context_data == {
+            "run_id": "rid",
+            "workflow_id": "wfid",
+            "correlation_id": "rid",
+        }
+
+    def test_wf_init_outside_workflow_leaves_binding_to_run(self) -> None:
+        """Outside a workflow there is no run: wf_cls() only builds the instance."""
+
+        class _TaskApp(App):
+            @task
+            async def do_work(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="x")  # pragma: no cover
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")  # pragma: no cover
+
+        wf_cls = generate_workflow_class(
+            _TaskApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        wf_inst = wf_cls()
+        assert "do_work" not in vars(wf_inst._app_instance)
+        assert wf_inst._app_instance._context is None
+        assert not hasattr(wf_inst, "_run_context_data")
 
 
 # =============================================================================
