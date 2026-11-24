@@ -19,9 +19,13 @@ trigger, the code path, the outcome; agent.trace_chain) against the code.
 - **Refuted** (with a quote that is checked in code to be in the file it
   names): the same, recorded as a refutation. Neither is deleted: a person
   can still act on it.
-- A failed call, a spent budget share, an answer that is not a verdict at
-  all, or a check past the cap changes nothing: no check was made, and a
-  provider error must not unblock a real defect.
+- **Malformed** (the skeptic answered, but with no verdict: an unknown
+  verdict, or none after its last turn): contested too. The check ran and
+  did not confirm the chain, and anything short of a confirmed chain is
+  contested.
+- A failed call (a provider error), a spent budget share, or a check past
+  the cap changes nothing: no check was made, and a provider error must not
+  unblock a real defect.
 
 Bounded like the approach check (holistic.py): new critical and high findings
 only, at most `max_findings` per round, each check at most `max_lookups`
@@ -56,7 +60,9 @@ QUOTE_MIN = 12
 CONTEXT_LINES = 40  # head lines shown around the finding's line
 DIFF_LINES = 200  # lines of the finding's file diff shown
 
-# Every outcome a check can have. "refuted" and "contested" change the finding.
+# Every outcome a check can have. "refuted", "contested" and "malformed" change
+# the finding: each is a check that ran and did not confirm the chain. "error",
+# "budget" and "skipped" are no check at all, and change nothing.
 OUTCOMES = (
     "upheld",
     "contested",
@@ -66,7 +72,9 @@ OUTCOMES = (
     "budget",
     "skipped",
 )
-CHANGES = ("refuted", "contested")
+CHANGES = ("refuted", "contested", "malformed")
+# The contested note of a check that gave no verdict.
+NO_VERDICT = "the skeptic gave no verdict, so the chain is not confirmed"
 STEP_WHY_KEEP = 160  # characters of the skeptic's note on one step kept in a reason
 
 
@@ -314,11 +322,13 @@ def _parse_verdict(
       model claims). A refutation that falls short of that is contested: the
       skeptic did not confirm the chain either.
     - contested is taken as it is.
-    An answer that is not one of the three is malformed and changes nothing."""
+    An answer that is not one of the three is malformed: no verdict, so the
+    chain is not confirmed, and the finding is contested (`apply`)."""
     verdict = args.get("verdict")
     reason = clean(str(args.get("reason") or ""))
     if verdict not in ("upheld", "contested", "refuted"):
         out.outcome, out.error = "malformed", f"verdict {verdict!r}"
+        out.reason = NO_VERDICT
         return
     if verdict == "refuted":
         _parse_refutation(ws, out, args, reason)
@@ -401,8 +411,9 @@ def check(
     principle: str = "",
 ) -> Outcome:
     """One skeptic call on one finding. Never raises for a model failure: the
-    outcome says what happened, and only "refuted" or "contested" changes
-    anything."""
+    outcome says what happened, and only "refuted", "contested" or
+    "malformed" (the model answered with no verdict) changes anything. A
+    failed call or a spent budget is no check and changes nothing."""
     out = Outcome(finding_id=f.id, severity=f.severity)
     t0 = time.monotonic()
     messages: list[dict[str, Any]] = [
@@ -465,6 +476,7 @@ def check(
             if last:
                 break
         out.outcome, out.error = "malformed", "no verdict returned"
+        out.reason = NO_VERDICT
     except BudgetExhausted as e:
         out.outcome, out.error = "budget", str(e)[:200]
     except LLMError as e:
@@ -474,12 +486,13 @@ def check(
 
 
 def apply(f: Finding, out: Outcome) -> bool:
-    """A refuted or contested finding drops to medium and is marked contested;
-    any other outcome leaves it as it is. Returns whether the finding changed."""
+    """A refuted, contested or malformed finding drops to medium and is marked
+    contested (never with an empty note); any other outcome leaves it as it
+    is. Returns whether the finding changed."""
     if out.outcome not in CHANGES:
         return False
     f.severity = CONTESTED_SEVERITY
-    f.contested = out.reason
+    f.contested = out.reason or NO_VERDICT
     return True
 
 

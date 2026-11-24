@@ -235,7 +235,7 @@ def markdown(report: dict[str, Any], pr: int) -> str:
             + " — "
             + ", ".join(
                 f"{c['id']} {c['outcome']}"
-                + (" → medium" if c["outcome"] in ("refuted", "contested") else "")
+                + (" → medium" if c["outcome"] in skeptic.CHANGES else "")
                 for c in sk["checks"]
             )
         )

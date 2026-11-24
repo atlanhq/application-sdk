@@ -13029,34 +13029,55 @@ def _no_verdict_turns(n: int) -> list[Any]:
     return [response(content="thinking") for _ in range(n)]
 
 
-@pytest.mark.parametrize(
-    "replies, outcome",
-    [
-        ([(400, {}, "bad request")], "error"),  # the call failed
-        (
-            [response([tool_call("skeptic_verdict", {"verdict": "maybe"})])],
-            "malformed",
-        ),
-        (_no_verdict_turns(4), "malformed"),  # max_lookups + 1 turns, no verdict
-    ],
-    ids=["llm-error", "bad-verdict", "no-verdict"],
-)
-def test_a_skeptic_that_makes_no_check_keeps_the_severity(
-    repo: Path, replies: list[Any], outcome: str
-):
-    """A failed call or an answer that is no verdict at all is no check: a
-    provider error must not unblock a real defect."""
+def test_a_skeptic_whose_call_fails_keeps_the_severity(repo: Path):
+    """A failed call is no check: a provider error must not unblock a real
+    defect."""
     script = _review_script()
-    script.skeptic = list(replies)
+    script.skeptic = [(400, {}, "bad request")]
     res, gh = _skeptic_run(repo, script)
 
     [f] = state_of(res).findings
     assert f.severity == "high" and f.contested == ""
     [o] = res.skeptic
-    assert o.outcome == outcome
+    assert o.outcome == "error"
     body = gh.comments[0]["body"]
     assert "Changes requested" in body and "contested" not in body
     assert not res.incomplete  # a skeptic failure never makes the review incomplete
+
+
+@pytest.mark.parametrize(
+    "replies, error",
+    [
+        (
+            [response([tool_call("skeptic_verdict", {"verdict": "maybe"})])],
+            "verdict 'maybe'",
+        ),
+        (_no_verdict_turns(4), "no verdict returned"),  # max_lookups + 1 turns
+    ],
+    ids=["bad-verdict", "no-verdict"],
+)
+def test_a_skeptic_that_answers_with_no_verdict_contests_the_finding(
+    repo: Path, tmp_path: Path, replies: list[Any], error: str
+):
+    """A skeptic that ran and returned no verdict kept a finding high and
+    blocking. Anything short of a confirmed chain is contested, and a check
+    that ran and confirmed nothing is short of it. Only a failed call or a
+    spent budget, where no check was made, keeps the severity."""
+    script = _review_script()
+    script.skeptic = list(replies)
+    res, gh = _skeptic_run(repo, script)
+
+    [f] = state_of(res).findings
+    assert f.severity == "medium"
+    assert f.contested == "the skeptic gave no verdict, so the chain is not confirmed"
+    [o] = res.skeptic
+    assert (o.outcome, o.error) == ("malformed", error)
+    body = gh.comments[0]["body"]
+    assert "Changes requested" not in body
+    assert f"⚖️ contested — {f.contested}" in body
+    assert not res.incomplete
+    rep = report_mod.write(res, 1, str(tmp_path / "run.json"), None)
+    assert rep["skeptic"]["counts"]["malformed"] == 1
 
 
 @pytest.mark.parametrize(
@@ -13298,7 +13319,7 @@ def test_skeptic_lookups_are_capped_per_call_not_per_turn(repo: Path):
 def test_skeptic_stops_after_the_forced_turn_once_lookups_are_spent(repo: Path):
     """Two lookups per response under max_lookups=3: two run, then one (and one
     is refused), then the final turn. A skeptic that still gives no verdict is
-    not asked again, and the finding keeps its severity."""
+    not asked again, and the finding is contested: no verdict confirms nothing."""
     cfg = cfg_for(repo)
     cfg.skeptic.max_lookups = 3
     script = _review_script()
@@ -13311,7 +13332,7 @@ def test_skeptic_stops_after_the_forced_turn_once_lookups_are_spent(repo: Path):
     assert len(script.skeptic_requests) == 3
     msgs = cast(list[dict[str, Any]], script.skeptic_requests[-1]["messages"])
     assert msgs[-1]["content"] == "Lookups are exhausted: call skeptic_verdict now."
-    assert state_of(res).findings[0].severity == "high"
+    assert state_of(res).findings[0].severity == "medium"
 
 
 def _skeptic_says(verdict: str, steps: list[tuple[int, bool]], reason: str = "") -> Any:
