@@ -15766,6 +15766,9 @@ def test_the_fact_is_read_as_untrusted_data(tmp_path: Path):
             {"status": "unavailable", "reason": "pip failed <script>"},
             "pip failed script",
         ),
+        # A fact that leaves out either list must not read as "all clean".
+        ({"mismatches": None}, "no mismatch or unchecked list"),
+        ({"unchecked": []}, "no mismatch or unchecked list"),
     ):
         p = Path(_write_fact(tmp_path, name="bad.json"))
         data = json.loads(p.read_text())
@@ -15891,6 +15894,11 @@ def test_reconcile_closes_reopens_and_never_undoes_a_dismissal():
     f1.status, f1.fixed_by = "wontfix", "dismissed"
     assert gate_mod.reconcile(st, [fresh()], 6) == ([], [])
     assert f1.status == "wontfix"
+    # A path the render did not compare (a symlink, an unreadable file) keeps
+    # its open finding: no comparison is not a match.
+    f1.status, f1.fixed_by = "open", ""
+    assert gate_mod.reconcile(st, [], 7, unchecked=[CONFORMANCE_WF]) == ([], [])
+    assert f1.status == "open"
     # A model finding is never touched.
     llm = Finding(
         path="app/x.py",
@@ -15902,8 +15910,23 @@ def test_reconcile_closes_reopens_and_never_undoes_a_dismissal():
         evidence="e",
     )
     st.findings.append(llm)
-    gate_mod.reconcile(st, [], 7)
+    gate_mod.reconcile(st, [], 8)
     assert llm.status == "open"
+
+
+def test_an_unchecked_gate_file_is_not_read_as_matching(tmp_path: Path):
+    files = parse_unified_diff(_diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW))
+    path = Path(_write_fact(tmp_path))
+    data = json.loads(path.read_text())
+    data["unchecked"] = {CONFORMANCE_WF: "a symlink: not read"}
+    path.write_text(json.dumps(data))
+    ev = gate_mod.evaluate(
+        str(path), files, head=GATE_H1, lock_text=_conformance_lock()
+    )
+    assert ev.findings == [] and ev.matching == [] and ev.unchecked == [CONFORMANCE_WF]
+    assert ev.notes == [
+        f"Gate-file check: `{CONFORMANCE_WF}` was not compared (a symlink: not read)."
+    ]
 
 
 def _gate_pr(head: str, diff: str, files: dict[tuple[str, str], str]) -> Any:
@@ -16059,7 +16082,10 @@ def test_gate_render_is_the_installed_c002_check(tmp_path: Path):
     count; a symlinked gate file is not read."""
     import subprocess  # noqa: PLC0415
 
-    render_mod = pytest.importorskip("conformance.bootstrap.render")
+    render_mod = pytest.importorskip(
+        "conformance.bootstrap.render",
+        reason="the render test runs this repository's conformance package",
+    )
     root = tmp_path / "app"
     for name in render_mod.MANAGED_WORKFLOWS:
         p = root / ".github" / "workflows" / name

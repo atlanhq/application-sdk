@@ -1352,7 +1352,9 @@ def run(
     res.spiral = spiral_paths(state, res.new_findings, round_no)
     # Gate findings after the model's (FND-5325): computed in code, so no
     # later-round floor, base-branch check, skeptic or verify applies to them.
-    gate_new, res.resolved_gate = gate.reconcile(state, gate_eval.findings, round_no)
+    gate_new, res.resolved_gate = gate.reconcile(
+        state, gate_eval.findings, round_no, gate_eval.unchecked
+    )
     res.new_findings.extend(gate_new)
     if res.resolved_gate:
         trace.line(

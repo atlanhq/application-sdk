@@ -347,9 +347,13 @@ def load_fact(path: str) -> tuple[Fact | None, str]:
         for s in (_safe_path(x) for x in cast(list[object], files_raw)[:MAX_FILES])
         if s
     }
+    found, unchecked = data.get("mismatches"), data.get("unchecked")
+    # Both are required: a file with no entry in either reads as matching the
+    # render, so a fact that leaves them out must not be read as all clean.
+    if not isinstance(found, dict) or not isinstance(unchecked, dict):
+        return None, "the gate check's result has no mismatch or unchecked list"
     fact = Fact(head=head, conformance=version, gate_files=frozenset(files))
-    found = data.get("mismatches")
-    if isinstance(found, dict):
+    if found:
         for k, v in list(cast(dict[object, object], found).items())[:MAX_FILES]:
             rel = _safe_path(k)
             if rel is None or rel not in files or not isinstance(v, dict):
@@ -366,8 +370,7 @@ def load_fact(path: str) -> tuple[Fact | None, str]:
                 diff=diff[:DIFF_KEEP] if isinstance(diff, str) else "",
                 cut=m.get("cut") is True,
             )
-    unchecked = data.get("unchecked")
-    if isinstance(unchecked, dict):
+    if unchecked:
         for k, v in list(cast(dict[object, object], unchecked).items())[:MAX_FILES]:
             rel = _safe_path(k)
             if rel is not None and rel in files:
@@ -458,6 +461,9 @@ class Evaluation:
     notes: list[str] = field(default_factory=list)
     checked: list[str] = field(default_factory=list)  # changed gate files compared
     matching: list[str] = field(default_factory=list)  # of those, the ones that match
+    # Changed gate files the render did not compare (a symlink, an unreadable
+    # or oversized file): an open gate finding on one is left as it is.
+    unchecked: list[str] = field(default_factory=list)
 
 
 def evaluate(
@@ -501,6 +507,7 @@ def evaluate(
             out.notes.append(
                 f"Gate-file check: `{rel}` was not compared ({fact.unchecked[rel]})."
             )
+            out.unchecked.append(rel)
             continue
         m = fact.mismatches.get(rel)
         if m is None:
@@ -511,12 +518,16 @@ def evaluate(
 
 
 def reconcile(
-    state: PRState, fresh: list[Finding] | None, round_no: int
+    state: PRState,
+    fresh: list[Finding] | None,
+    round_no: int,
+    unchecked: list[str] | tuple[str, ...] = (),
 ) -> tuple[list[Finding], list[str]]:
     """Fold a round's gate findings into the state: the new ones (a reopened
     one included) and the ids closed because their file now matches the render
-    or is no longer changed. `fresh` None (no usable fact) changes nothing. A
-    dismissed gate finding stays dismissed."""
+    or is no longer changed. `fresh` None (no usable fact) changes nothing, and
+    an open finding on an `unchecked` path (one the render did not compare) is
+    left open. A dismissed gate finding stays dismissed."""
     if fresh is None:
         return [], []
     by_id = {f.id: f for f in fresh}
@@ -527,7 +538,7 @@ def reconcile(
             continue
         now = by_id.pop(old.id, None)
         if now is None:
-            if old.status == "open":
+            if old.status == "open" and old.path not in unchecked:
                 old.status, old.fixed_round, old.fixed_by = "fixed", round_no, FIXED_BY
                 resolved.append(old.id)
             continue
