@@ -33,14 +33,27 @@ Don't flag: <what CI already enforces, or what is out of scope>
 Severity: <what makes it high; otherwise medium>
 ```
 
-`applies-to` is optional. It names the areas of the repository the principle
-covers. Leave it out and the principle applies everywhere. The areas are:
+`applies-to` is optional. It names the parts of the repository the principle
+covers. Leave it out and the principle applies everywhere. It lists up to eight
+entries, each an area or a quoted path glob. The areas are:
 
 - `app`: `app/`, except generated code
 - `generated`: `app/generated/`
 - `tests`: the tests
 - `contract`: the contract
 - `ci`: `.github/`
+
+To cover only part of an area, quote a path glob. Areas and globs can be
+mixed:
+
+```markdown
+applies-to: [contract, "app/workflow_health/**", "app/sq_enricher*/**"]
+```
+
+A glob is matched against each file's path from the repository root. `**`
+matches across folders, while `*` and `?` match within one folder name or file
+name. A glob has no leading `/`, no `.` or `..` segment, no backslash and no
+empty segment. An unquoted entry must be one of the areas above.
 
 The full description of the format is kept with the fleet principles, at the
 link above.

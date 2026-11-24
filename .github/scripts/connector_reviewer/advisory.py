@@ -18,7 +18,7 @@ match one of its globs carries its note.
 
 from __future__ import annotations
 
-import fnmatch
+import functools
 import re
 from dataclasses import dataclass
 
@@ -43,6 +43,7 @@ class Advisory:
 ADVISORIES: tuple[Advisory, ...] = ()
 
 
+@functools.lru_cache(maxsize=256)
 def _glob_to_re(glob: str) -> re.Pattern[str]:
     """`**` crosses directories, `*` does not; `**/` may match zero dirs."""
     out, i = "", 0
@@ -50,6 +51,9 @@ def _glob_to_re(glob: str) -> re.Pattern[str]:
         if glob.startswith("**/", i):
             out += "(?:.*/)?"
             i += 3
+            # `**/**/` means `**/`; repeating the group only adds backtracking.
+            while glob.startswith("**/", i):
+                i += 3
         elif glob.startswith("**", i):
             out += ".*"
             i += 2
@@ -66,11 +70,14 @@ def _glob_to_re(glob: str) -> re.Pattern[str]:
 
 
 def glob_match(path: str, glob: str) -> bool:
-    return (
-        bool(_glob_to_re(glob).match(path))
-        or fnmatch.fnmatch(path, glob)
-        and "/" not in glob
-    )
+    """Whether the repo-relative `path` matches `glob`, anchored at the root.
+
+    `**` crosses directories and `**/` may match none; `*` and `?` stay within
+    one segment; every other character is literal (no `[...]` classes). The
+    one matcher for advisories, `exempt` and principle `applies-to` globs.
+    lens also falls back to fnmatch for a glob without a slash, where `*`
+    crosses directories; this fork does not, so `*.py` is a root file only."""
+    return _glob_to_re(glob).fullmatch(path) is not None
 
 
 def changed_paths(files: list[FileDiff]) -> list[str]:
