@@ -34,8 +34,36 @@ import pytest
 _SDK_ROOT = Path(__file__).resolve().parents[2] / "application_sdk"
 
 
-def _is_wall_clock_call(node: ast.AST, bare_time: bool) -> bool:
-    """``time.time()``, or a bare ``time()`` where ``from time import time``."""
+@dataclass(frozen=True)
+class _Aliases:
+    """How a module spells the wall clock.
+
+    ``modules``: names bound to the ``time`` module (``import time``,
+    ``import time as clock``). ``functions``: names bound to ``time.time``
+    itself (``from time import time``, ``from time import time as wall``).
+    """
+
+    modules: frozenset[str]
+    functions: frozenset[str]
+
+    @classmethod
+    def of(cls, nodes: list[ast.AST]) -> _Aliases:
+        modules: set[str] = set()
+        functions: set[str] = set()
+        for node in nodes:
+            if isinstance(node, ast.Import):
+                modules.update(
+                    a.asname or a.name for a in node.names if a.name == "time"
+                )
+            elif isinstance(node, ast.ImportFrom) and node.module == "time":
+                functions.update(
+                    a.asname or a.name for a in node.names if a.name == "time"
+                )
+        return cls(frozenset(modules), frozenset(functions))
+
+
+def _is_wall_clock_call(node: ast.AST, aliases: _Aliases) -> bool:
+    """A no-argument call of ``time.time``, however this module imported it."""
     if not isinstance(node, ast.Call) or node.args or node.keywords:
         return False
     func = node.func
@@ -43,9 +71,9 @@ def _is_wall_clock_call(node: ast.AST, bare_time: bool) -> bool:
         return (
             func.attr == "time"
             and isinstance(func.value, ast.Name)
-            and func.value.id == "time"
+            and func.value.id in aliases.modules
         )
-    return bare_time and isinstance(func, ast.Name) and func.id == "time"
+    return isinstance(func, ast.Name) and func.id in aliases.functions
 
 
 def _target_key(node: ast.AST) -> str | None:
@@ -57,16 +85,7 @@ def _target_key(node: ast.AST) -> str | None:
     return None
 
 
-def _imports_bare_time(tree: ast.Module) -> bool:
-    return any(
-        isinstance(node, ast.ImportFrom)
-        and node.module == "time"
-        and any(alias.name == "time" and alias.asname is None for alias in node.names)
-        for node in ast.walk(tree)
-    )
-
-
-def _wall_clock_names(nodes: list[ast.AST], bare_time: bool) -> set[str]:
+def _wall_clock_names(nodes: list[ast.AST], aliases: _Aliases) -> set[str]:
     """Names (and ``obj.attr`` targets) assigned straight from a wall-clock read."""
     found: set[str] = set()
     for node in nodes:
@@ -76,7 +95,7 @@ def _wall_clock_names(nodes: list[ast.AST], bare_time: bool) -> set[str]:
             targets, value = [node.target], node.value
         else:
             continue
-        if _is_wall_clock_call(value, bare_time) or _target_key(value) in found:
+        if _is_wall_clock_call(value, aliases) or _target_key(value) in found:
             found.update(k for t in targets if (k := _target_key(t)) is not None)
     return found
 
@@ -96,15 +115,15 @@ def _scan(path: Path, root: Path) -> list[_Finding]:
     if "time" not in source:
         return []
     tree = ast.parse(source, filename=str(path))
-    bare_time = _imports_bare_time(tree)
     nodes = list(ast.walk(tree))
-    names = _wall_clock_names(nodes, bare_time)
+    aliases = _Aliases.of(nodes)
+    names = _wall_clock_names(nodes, aliases)
 
     def is_elapsed(node: ast.BinOp) -> bool:
         right = _target_key(node.right)
         if right is None:
             return False
-        if _is_wall_clock_call(node.left, bare_time):
+        if _is_wall_clock_call(node.left, aliases):
             return True
         return _target_key(node.left) in names and right in names
 
@@ -144,6 +163,9 @@ def test_no_elapsed_time_measured_with_the_wall_clock() -> None:
         "    def b(self):\n        now = time()\n        return now - self._last",
         "import time\nt: float = time.time()\nd = time.time() - t",
         "import time\nbegin = time.time()\nstart = begin\nd = time.time() - start",
+        # Aliased imports.
+        "import time as clock\nstart = clock.time()\nd = clock.time() - start",
+        "from time import time as wall\nstart = wall()\nd = wall() - start",
         # The start reading arrives as a parameter (observability_decorator).
         "import time\ndef f(start_time):\n    return (time.time() - start_time) * 1000",
     ],
@@ -170,6 +192,8 @@ def test_the_scan_catches_each_shape(tmp_path: Path, snippet: str) -> None:
         "import time\nnow = time.time()\nlast_push = float(ts)\nage = now - last_push",
         # A different module's ``time`` attribute (``workflow.time()``).
         "start = workflow.time()\nd = workflow.time() - start",
+        # ``x.time()`` where ``x`` is not the ``time`` module.
+        "import time as clock\nstart = time.time()\nd = time.time() - start",
         # ``time()`` without ``from time import time`` is some other function.
         "start = time()\nd = time() - start",
     ],
