@@ -78,6 +78,10 @@ class Finding:
     # Why a skeptic check refuted this finding (skeptic.py), "" when it did not.
     # A contested finding was raised as blocking and now stands at medium.
     contested: str = ""
+    # What the finding claims happens, checked against the code when it was
+    # raised (agent.trace_chain): {"trigger", "steps": [{"at", "code",
+    # "effect"}], "outcome"}. Read by the skeptic; not stored in the state.
+    chain: dict[str, Any] = field(default_factory=dict)
 
     def fingerprint(self, salt: str | None = None) -> str:
         """The finding's id. `salt` tells apart two different findings of one
@@ -194,6 +198,7 @@ class PRState:
             if i in gone:
                 continue
             f["scenario"] = ""
+            f["chain"] = {}
             if f["status"] == "open":
                 f["body"] = f["body"][:body_keep]
                 f["suggestion"] = f["suggestion"][:body_keep]

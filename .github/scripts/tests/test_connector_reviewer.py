@@ -313,9 +313,27 @@ def _is_skeptic(body: dict[str, Any]) -> bool:
     return _offers(body, "skeptic_verdict")
 
 
-UPHELD = response(
-    [tool_call("skeptic_verdict", {"verdict": "upheld", "reason": "The code does it."})]
-)
+def upheld(steps: int = 6) -> Any:
+    """A skeptic verdict that confirms steps 1..`steps` of the chain (FND-5316:
+    an upheld verdict counts only when it confirms every step)."""
+    return response(
+        [
+            tool_call(
+                "skeptic_verdict",
+                {
+                    "verdict": "upheld",
+                    "reason": "The code does it.",
+                    "steps": [
+                        {"step": n, "holds": True, "why": "the quoted line does it"}
+                        for n in range(1, steps + 1)
+                    ],
+                },
+            )
+        ]
+    )
+
+
+UPHELD = upheld()
 
 
 class Script:
@@ -380,7 +398,43 @@ COMMENT = {
     "title": "decode() on a None result",
     "content": "client.get returns None for a missing key, so data.decode() raises AttributeError.",
     "suggestion_code": "    return data.decode() if data is not None else None",
+    # FND-5316: every finding traces its mechanism through code it quotes.
+    "causal_chain": {
+        "trigger": "A key that is not in the store",
+        "steps": [
+            {
+                "path": "app/storage/fetch.py",
+                "code": "    data = client.get(key)",
+                "effect": "client.get returns None for the missing key",
+            },
+            {
+                "path": "app/storage/fetch.py",
+                "code": "    return data.decode()",
+                "effect": "decode() is called on None",
+            },
+        ],
+        "outcome": "AttributeError fails the fetch",
+    },
 }
+
+
+def chained(comment: dict[str, Any], code: str | None = None) -> dict[str, Any]:
+    """`comment` with a one-step causal chain through `code` (its own quoted
+    code by default) in its own file: the least a finding must now carry."""
+    return {
+        **comment,
+        "causal_chain": {
+            "trigger": "The input the finding names",
+            "steps": [
+                {
+                    "path": comment["path"],
+                    "code": code if code is not None else comment["existing_code"],
+                    "effect": "this code does what the finding says",
+                }
+            ],
+            "outcome": "The failure the finding names",
+        },
+    }
 
 
 class FakeGitHub:
@@ -5297,14 +5351,16 @@ def test_the_run_is_linked_from_the_status_the_verdict_and_the_history(repo: Pat
 
 # ---- a finding off the diff is still a finding -----------------------------------------------------------------
 
-OFF_DIFF = {
-    "path": "app/storage/fetch.py",
-    "existing_code": "    return [fetch(client, k) for k in keys]",  # line 8: not in the diff
-    "severity": "low",
-    "category": "bug",
-    "title": "load_all has the same unguarded decode",
-    "content": "Every key goes through fetch, so one missing key fails the whole batch.",
-}
+OFF_DIFF = chained(
+    {
+        "path": "app/storage/fetch.py",
+        "existing_code": "    return [fetch(client, k) for k in keys]",  # line 8: not in the diff
+        "severity": "low",
+        "category": "bug",
+        "title": "load_all has the same unguarded decode",
+        "content": "Every key goes through fetch, so one missing key fails the whole batch.",
+    }
+)
 
 
 def test_a_finding_off_the_diff_is_counted_stored_and_can_block_readiness(repo: Path):
@@ -7278,15 +7334,17 @@ def _added_file_diff(path: str, text: str) -> str:
     )
 
 
-TUPLE_CONTRACT = {
-    "path": MARKER,
-    "existing_code": "    return Bracketed(lo, hi)",
-    "severity": "high",
-    "category": "bug",
-    "compatibility": True,
-    "title": "Keep the tuple return contract for hash_fingerprinted",
-    "content": "Callers unpack the released helper's tuple result; returning Bracketed breaks them.",
-}
+TUPLE_CONTRACT = chained(
+    {
+        "path": MARKER,
+        "existing_code": "    return Bracketed(lo, hi)",
+        "severity": "high",
+        "category": "bug",
+        "compatibility": True,
+        "title": "Keep the tuple return contract for hash_fingerprinted",
+        "content": "Callers unpack the released helper's tuple result; returning Bracketed breaks them.",
+    }
+)
 
 
 def _marker_pr(repo: Path) -> Any:
@@ -7360,12 +7418,14 @@ def test_the_review_and_verify_are_told_what_the_pr_added(repo: Path):
     first = _first_round(
         gh,
         repo,
-        {
-            **TUPLE_CONTRACT,
-            "existing_code": "    lo, hi = _bracket(path)",
-            "compatibility": False,
-            "title": "_bracket is unbounded",
-        },
+        chained(
+            {
+                **TUPLE_CONTRACT,
+                "existing_code": "    lo, hi = _bracket(path)",
+                "compatibility": False,
+                "title": "_bracket is unbounded",
+            }
+        ),
     )
     assert state_of(first).open_findings(), "round 1 must leave a finding to verify"
     gh.head = "h2"
@@ -8088,12 +8148,15 @@ RESTORE_PR_DIFF = (
     '     """Fetch one object."""\n-    return client.get(key)\n'
     "+    data = client.get(key)\n+    return data\n"
 )
-REGRESSION_CLAIM = dict(
-    COMMENT,
-    existing_code="    return data",
-    severity="high",
-    title="fetch now returns raw bytes instead of the decoded string",
-    content="Callers got a str from fetch before; keep the previous behaviour.",
+REGRESSION_CLAIM = chained(
+    dict(
+        COMMENT,
+        existing_code="    return data",
+        severity="high",
+        title="fetch now returns raw bytes instead of the decoded string",
+        content="Callers got a str from fetch before; keep the previous behaviour.",
+    ),
+    "    data = client.get(key)\n    return data",
 )
 
 
@@ -10838,6 +10901,10 @@ REMOVED_DISPOSE = (
 
 
 def _dispose_finding(evidence: str = REMOVED_DISPOSE) -> dict[str, Any]:
+    return chained(_dispose_comment(evidence))
+
+
+def _dispose_comment(evidence: str) -> dict[str, Any]:
     return {
         "path": "app/client.py",
         "existing_code": evidence,
@@ -11168,14 +11235,16 @@ def test_a_deleted_source_file_is_reviewed_and_its_finding_blocks(repo: Path):
     )
     gh = fake_github(diffs={("b0", "h1"): LEGACY_DIFF})
     script = _script_with(
-        {
-            "path": "app/auth/legacy.py",
-            "existing_code": "def legacy_token(user):",
-            "severity": "high",
-            "category": "bug",
-            "title": "legacy_token is deleted while app/auth/login.py still imports it",
-            "content": "Every login raises ImportError at import time.",
-        }
+        chained(
+            {
+                "path": "app/auth/legacy.py",
+                "existing_code": "def legacy_token(user):",
+                "severity": "high",
+                "category": "bug",
+                "title": "legacy_token is deleted while app/auth/login.py still imports it",
+                "content": "Every login raises ImportError at import time.",
+            }
+        )
     )
     res = run(
         gh=gh,
@@ -11317,14 +11386,16 @@ SRC_V2_DIFF = _diff_of("app/storage/fetch.py", SRC_V1, SRC_V2)
 SRC_NEXT_RANGE = _diff_of("app/storage/fetch.py", SRC_V2, SRC_V2_NEXT)
 SRC_NEXT_DIFF = _diff_of("app/storage/fetch.py", SRC_V1, SRC_V2_NEXT)
 
-COMMENT_NEXT = {
-    "path": "app/storage/fetch.py",
-    "existing_code": "    return {k: fetch(client, k) for k in keys}",
-    "severity": "high",
-    "category": "bug",
-    "title": "fetch_many raises on the first missing key",
-    "content": "fetch decodes None for a missing key, so one missing key fails the batch.",
-}
+COMMENT_NEXT = chained(
+    {
+        "path": "app/storage/fetch.py",
+        "existing_code": "    return {k: fetch(client, k) for k in keys}",
+        "severity": "high",
+        "category": "bug",
+        "title": "fetch_many raises on the first missing key",
+        "content": "fetch decodes None for a missing key, so one missing key fails the batch.",
+    }
+)
 
 
 class SecretRecorder:
@@ -12676,9 +12747,34 @@ def _no_verdict_turns(n: int) -> list[Any]:
             [response([tool_call("skeptic_verdict", {"verdict": "maybe"})])],
             "malformed",
         ),
+        (_no_verdict_turns(4), "malformed"),  # max_lookups + 1 turns, no verdict
+    ],
+    ids=["llm-error", "bad-verdict", "no-verdict"],
+)
+def test_a_skeptic_that_makes_no_check_keeps_the_severity(
+    repo: Path, replies: list[Any], outcome: str
+):
+    """A failed call or an answer that is no verdict at all is no check: a
+    provider error must not unblock a real defect."""
+    script = _review_script()
+    script.skeptic = list(replies)
+    res, gh = _skeptic_run(repo, script)
+
+    [f] = state_of(res).findings
+    assert f.severity == "high" and f.contested == ""
+    [o] = res.skeptic
+    assert o.outcome == outcome
+    body = gh.comments[0]["body"]
+    assert "Changes requested" in body and "contested" not in body
+    assert not res.incomplete  # a skeptic failure never makes the review incomplete
+
+
+@pytest.mark.parametrize(
+    "replies, error",
+    [
         (  # refuted, but the quote is not in the file
             [_refuted(quote="    if data is None:\n        return None")],
-            "malformed",
+            "refuted without a quote found in the repository",
         ),
         (  # refuted, with no evidence at all
             [
@@ -12691,36 +12787,42 @@ def _no_verdict_turns(n: int) -> list[Any]:
                     ]
                 )
             ],
-            "malformed",
+            "refuted without a quote found in the repository",
         ),
-        ([_refuted(path="../../etc/passwd")], "malformed"),  # not a repository file
-        ([_refuted(quote="return")], "malformed"),  # too short to prove anything
-        (_no_verdict_turns(4), "malformed"),  # max_lookups + 1 turns, no verdict
+        (  # not a repository file
+            [_refuted(path="../../etc/passwd")],
+            "refuted without a quote found in the repository",
+        ),
+        (  # too short to prove anything
+            [_refuted(quote="return")],
+            "refuted without a quote found in the repository",
+        ),
+        ([_refuted(reason="")], "refuted without a reason"),
+        ([_refuted(reason="   \n ")], "refuted without a reason"),
     ],
     ids=[
-        "llm-error",
-        "bad-verdict",
         "quote-not-in-file",
         "no-evidence",
         "outside-repo",
         "quote-too-short",
-        "no-verdict",
+        "empty-reason",
+        "blank-reason",
     ],
 )
-def test_a_skeptic_that_cannot_refute_keeps_the_severity(
-    repo: Path, replies: list[Any], outcome: str
+def test_a_refutation_without_proof_is_contested_not_upheld(
+    repo: Path, replies: list[Any], error: str
 ):
+    """FND-5316: a refutation the code does not prove used to keep the finding
+    blocking. The skeptic did not confirm the chain either, so it is contested."""
     script = _review_script()
     script.skeptic = list(replies)
     res, gh = _skeptic_run(repo, script)
 
     [f] = state_of(res).findings
-    assert f.severity == "high" and f.contested == ""
+    assert f.severity == "medium" and f.contested
     [o] = res.skeptic
-    assert o.outcome == outcome
-    body = gh.comments[0]["body"]
-    assert "Changes requested" in body and "contested" not in body
-    assert not res.incomplete  # a skeptic failure never makes the review incomplete
+    assert (o.outcome, o.error) == ("contested", error)
+    assert "Changes requested" not in gh.comments[0]["body"]
 
 
 def test_a_skeptic_that_cannot_reserve_its_call_keeps_the_severity(repo: Path):
@@ -12922,19 +13024,200 @@ def test_skeptic_stops_after_the_forced_turn_once_lookups_are_spent(repo: Path):
     assert state_of(res).findings[0].severity == "high"
 
 
-@pytest.mark.parametrize("reason", ["", "   \n "], ids=["empty", "blank"])
-def test_a_refutation_without_a_reason_keeps_the_severity(repo: Path, reason: str):
-    """F-3cdd62: the quote is valid and in the file, so only the missing reason
-    rejects the refutation."""
+def _skeptic_says(verdict: str, steps: list[tuple[int, bool]], reason: str = "") -> Any:
+    return response(
+        [
+            tool_call(
+                "skeptic_verdict",
+                {
+                    "verdict": verdict,
+                    "reason": reason,
+                    "steps": [
+                        {"step": n, "holds": ok, "why": f"step {n} checked"}
+                        for n, ok in steps
+                    ],
+                },
+            )
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "reply, why",
+    [
+        # The replayed shape: "I cannot refute it" was an upheld verdict.
+        (
+            response(
+                [
+                    tool_call(
+                        "skeptic_verdict",
+                        {"verdict": "upheld", "reason": "I cannot refute it."},
+                    )
+                ]
+            ),
+            "step 1 not confirmed: no check given",
+        ),
+        (_skeptic_says("upheld", [(1, True)]), "step 2 not confirmed: no check given"),
+        (
+            _skeptic_says("upheld", [(1, True), (2, False)]),
+            "step 2 not confirmed: step 2",
+        ),
+        (
+            _skeptic_says("contested", [(1, True), (2, False)], "decode() is guarded"),
+            "decode() is guarded",
+        ),
+    ],
+    ids=["no-steps", "a-step-left-out", "a-step-not-holding", "contested"],
+)
+def test_upheld_needs_every_step_of_the_chain_confirmed(
+    repo: Path, reply: Any, why: str
+):
+    """FND-5316: the skeptic upheld findings whose story the code did not
+    support, with "I cannot refute it". It now checks the causal chain step by
+    step, and upholds only when it confirms every step; anything less contests
+    the finding, which drops to medium and stops blocking."""
     script = _review_script()
-    script.skeptic = [_refuted(reason=reason)]
+    script.skeptic = [reply]
     res, gh = _skeptic_run(repo, script)
 
+    [req] = script.skeptic_requests
+    sent = _sent(req)
+    # The chain is what it checks: each step, where its quote was found.
+    assert "<causal_chain>" in sent and "A key that is not in the store" in sent
+    assert 'at=\\"app/storage/fetch.py:3\\"' in sent
+    assert 'at=\\"app/storage/fetch.py:4\\"' in sent
+    [f] = state_of(res).findings
+    assert (f.severity, f.contested.startswith(why)) == ("medium", True), f.contested
+    [o] = res.skeptic
+    assert o.outcome == "contested"
+    assert "Changes requested" not in gh.comments[0]["body"]
+
+
+def test_upheld_with_every_step_confirmed_still_blocks(repo: Path):
+    script = _review_script()
+    script.skeptic = [
+        _skeptic_says("upheld", [(2, True), (1, True)], "Both lines do it.")
+    ]
+    res, gh = _skeptic_run(repo, script)
     [f] = state_of(res).findings
     assert f.severity == "high" and f.contested == ""
-    [o] = res.skeptic
-    assert (o.outcome, o.error) == ("malformed", "refuted without a reason")
+    assert [o.outcome for o in res.skeptic] == ["upheld"]
     assert "Changes requested" in gh.comments[0]["body"]
+
+
+# ---- the causal chain a finding must carry (FND-5316) ------------------------------------------------
+
+
+def _chain_run(repo: Path, *comments: dict[str, Any]) -> tuple[RunResult, Any]:
+    script = Script(
+        response(
+            [
+                tool_call("code_comment", {"comments": list(comments)}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    gh = fake_github()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    return res, gh
+
+
+def _with_steps(*steps: dict[str, str], **chain: Any) -> dict[str, Any]:
+    base = cast(dict[str, Any], COMMENT["causal_chain"])
+    return {**COMMENT, "causal_chain": {**base, "steps": list(steps), **chain}}
+
+
+def _step(code: str, path: str = "app/storage/fetch.py") -> dict[str, str]:
+    return {"path": path, "code": code, "effect": "it does what the step says"}
+
+
+@pytest.mark.parametrize(
+    "comment, why",
+    [
+        ({k: v for k, v in COMMENT.items() if k != "causal_chain"}, "no causal chain"),
+        (
+            # The mechanism runs through code that is not in the repository.
+            _with_steps(
+                _step("    data = client.get(key)"),
+                _step("    raise RetryStorm(attempts)", "app/storage/retry.py"),
+            ),
+            "step 2 quotes code that is not in app/storage/retry.py",
+        ),
+        (_with_steps(_step("    return")), "step 1 quotes too little code to check"),
+        (_with_steps(), "the causal chain has no step through the code"),
+        (_with_steps(_step("    data = client.get(key)"), trigger=" "), "no trigger"),
+        (_with_steps(_step("    data = client.get(key)"), outcome=""), "no outcome"),
+    ],
+    ids=[
+        "no-chain",
+        "untraced-step",
+        "tiny-quote",
+        "no-steps",
+        "no-trigger",
+        "no-outcome",
+    ],
+)
+def test_a_finding_whose_mechanism_is_not_traced_through_code_is_dropped(
+    repo: Path, tmp_path: Path, comment: dict[str, Any], why: str
+):
+    """FND-5316: findings pointed at the right change but told a stock failure
+    story the code did not support. A finding now carries its causal chain,
+    and each step's quote is checked in code; one that is not traced through
+    code found where it says is dropped before the fact-check."""
+    res, gh = _chain_run(repo, comment)
+    assert state_of(res).findings == []
+    [b] = res.bundles
+    [(dropped, reason)] = b.untraced
+    assert dropped.title == COMMENT["title"] and why in reason
+    rep = report_mod.write(res, 1, str(tmp_path / "run.json"), None)
+    assert why in rep["bundles"][0]["untraced_dropped"][0]
+    assert gh.statuses[-1]["state"] == "success"
+
+
+def test_a_traced_chain_is_kept_and_shown_where_each_step_was_found(repo: Path):
+    """A step may quote code the PR removes; each location is where the quote
+    was found, and the chain is the summary's "When it fails"."""
+    comment = _with_steps(
+        _step("    return client.get(key)"),  # removed by the PR
+        _step("    return data.decode()"),
+    )
+    res, gh = _chain_run(repo, comment)
+    [f] = state_of(res).findings
+    assert [s["at"] for s in f.chain["steps"]] == [
+        "app/storage/fetch.py (removed)",
+        "app/storage/fetch.py:4",
+    ]
+    body = gh.comments[0]["body"]
+    assert "**When it fails:** A key that is not in the store." in body
+    assert "(`app/storage/fetch.py:4`). Result: AttributeError fails the fetch." in body
+    # The chain is not stored: a later round never reads it.
+    assert decode_state(body).findings[0].chain == {}
+
+
+def test_the_review_prompt_and_schema_ask_for_a_traced_chain():
+    flat = " ".join(prompts_mod.REVIEW_SYSTEM.split())
+    assert "Every finding carries a causal_chain" in flat
+    assert "When you cannot trace the harm through the code, do not report it." in flat
+    item = cast(dict[str, Any], COMMENT_ITEM)
+    assert "causal_chain" in item["required"]
+    chain = item["properties"]["causal_chain"]
+    assert chain["required"] == ["trigger", "steps", "outcome"]
+    step = chain["properties"]["steps"]["items"]
+    assert step["required"] == ["path", "code", "effect"]
+    from connector_reviewer import skeptic  # noqa: PLC0415 - module under test
+
+    assert "Default to upheld" not in skeptic.SYSTEM
+    assert "Not being able to refute the finding is not a reason to uphold it" in (
+        " ".join(skeptic.SYSTEM.split())
+    )
 
 
 def test_gate_and_closed_findings_are_not_skeptic_candidates():

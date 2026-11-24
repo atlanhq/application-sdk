@@ -24,14 +24,14 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
 
 from . import context, prompts, trace
 from .baseline import PRAdditions
 from .bundle import Bundle
-from .diff import anchor, locate_in_text
+from .diff import anchor, in_removed_lines, locate_in_text
 from .facts import Facts
 from .findings import BLOCKING, Finding, unique_ids
 from .llm import (
@@ -45,8 +45,8 @@ from .llm import (
     prompt_view,
 )
 from .principles import PrincipleSet
-from .tools import TOOL_SCHEMAS, Workspace, parse_args, run_tool
-from .typed import EMPTY
+from .tools import SDK_PREFIX, TOOL_SCHEMAS, Workspace, parse_args, run_tool
+from .typed import EMPTY, objects
 
 # The whole description of a normal PR: a declared behaviour change is often past
 # the first paragraphs. It sits in the cached prefix, so each turn pays for it once.
@@ -61,6 +61,12 @@ _clock: Callable[[], float] = time.monotonic
 CONCRETE_CATEGORIES = ("bug", "security")
 ANSWER_KEEP = 400  # characters of a regression or history answer kept for the summary
 _PRINCIPLE_ID = re.compile(r"\b[FR]P\d{2}\b")
+# A causal chain (`trace_chain`): at most this many steps are read, each step's
+# quote is checked up to STEP_QUOTE_KEEP characters, and must carry at least
+# STEP_QUOTE_MIN non-space characters, as a skeptic's quote must.
+MAX_CHAIN_STEPS = 6
+STEP_QUOTE_KEEP = 400
+STEP_QUOTE_MIN = 12
 
 
 @dataclass
@@ -122,6 +128,9 @@ class BundleResult:
     # Findings dropped because they named no principle that applies to their
     # file and were not a concrete bug (see `cite`).
     uncited: list[Finding] = field(default_factory=list)
+    # Findings dropped because their causal chain was missing or not traced
+    # through code found where it says (see `traced`), with why.
+    untraced: list[tuple[Finding, str]] = field(default_factory=list)
     # The model's answers to the regression and history questions, from task_done.
     answers: dict[str, str] = field(default_factory=dict)
 
@@ -351,6 +360,96 @@ def place(ws: Workspace, bundle: Bundle, raw: dict[str, Any]) -> Finding | None:
         f.scope = "unchanged"
     f.id = f.fingerprint()
     return f  # line 0: reported in the summary, not inline
+
+
+def locate_step(ws: Workspace, path: str, code: str) -> str:
+    """Where a causal-chain step's quoted code is, as `path:line`, or "" when
+    it is not there. The PR head first; then the code this PR removes (a
+    defect can live in what a change deletes), shown as `path (removed)`;
+    an `sdk:` path is looked up in the pinned SDK source. The line is where
+    the quote is found, never one the model claims."""
+    if path.startswith(SDK_PREFIX):
+        text = ws.sdk.text(path[len(SDK_PREFIX) :]) if ws.sdk else None
+        line = locate_in_text(text, code) if text else 0
+        return f"{path}:{line}" if line else ""
+    text = ws.text(path)
+    line = locate_in_text(text, code) if text else 0
+    if line:
+        return f"{path}:{line}"
+    fd = ws.diffs.get(path)
+    if fd is not None and in_removed_lines(fd, code):
+        return f"{path} (removed)"
+    return ""
+
+
+def trace_chain(ws: Workspace, raw: Any) -> tuple[dict[str, Any], str]:
+    """A comment's `causal_chain` checked against the code: (chain, "") when
+    every step quotes code that is where it says, or ({}, why not).
+
+    The chain is what a finding claims happens: the trigger, each step of the
+    code path as code the model read, and the wrong outcome. A step's code
+    must be at least `STEP_QUOTE_MIN` non-space characters (a bare `return`
+    is in every file) and must be found in the file it names
+    (`locate_step`). A mechanism that is not traced through code the model
+    can quote is a story, not a finding (FND-5316)."""
+    chain: Mapping[str, Any] = (
+        cast("dict[str, Any]", raw) if isinstance(raw, dict) else EMPTY
+    )
+    if not chain:
+        return {}, "no causal chain"
+    trigger = " ".join(str(chain.get("trigger") or "").split())
+    outcome = " ".join(str(chain.get("outcome") or "").split())
+    if not trigger:
+        return {}, "the causal chain names no trigger"
+    if not outcome:
+        return {}, "the causal chain names no outcome"
+    steps: list[dict[str, str]] = []
+    for n, step in enumerate(objects(chain.get("steps")), 1):
+        if n > MAX_CHAIN_STEPS:
+            break
+        path = str(step.get("path") or "").strip()[:200]
+        code = str(step.get("code") or "")[:STEP_QUOTE_KEEP]
+        effect = " ".join(str(step.get("effect") or "").split())
+        if len("".join(code.split())) < STEP_QUOTE_MIN:
+            return {}, f"step {n} quotes too little code to check"
+        at = locate_step(ws, path, code) if path else ""
+        if not at:
+            return {}, f"step {n} quotes code that is not in {path or 'any file'}"
+        if not effect:
+            return {}, f"step {n} does not say what its code does"
+        steps.append({"at": at, "code": code, "effect": effect})
+    if not steps:
+        return {}, "the causal chain has no step through the code"
+    return {"trigger": trigger, "steps": steps, "outcome": outcome}, ""
+
+
+def render_chain(chain: dict[str, Any]) -> str:
+    """The chain as one paragraph for the summary's "When it fails"."""
+    steps = cast(list[dict[str, str]], chain.get("steps") or [])
+    parts = [str(chain.get("trigger") or "").rstrip(".") + "."]
+    parts += [f"{s['effect'].rstrip('.')} (`{s['at']}`)." for s in steps]
+    parts.append(f"Result: {str(chain.get('outcome') or '').rstrip('.')}.")
+    return " ".join(parts)
+
+
+def traced(
+    ws: Workspace, found: list[Finding], raw_of: dict[str, dict[str, Any]]
+) -> tuple[list[Finding], list[tuple[Finding, str]]]:
+    """Keep the findings whose causal chain is traced through quoted code
+    (`trace_chain`), with the checked chain on `Finding.chain` and rendered as
+    its `scenario`; drop the rest, here in code. Returns (kept, [(dropped,
+    why)])."""
+    kept: list[Finding] = []
+    dropped: list[tuple[Finding, str]] = []
+    for f in found:
+        chain, why = trace_chain(ws, (raw_of.get(f.id) or EMPTY).get("causal_chain"))
+        if why:
+            dropped.append((f, why))
+            continue
+        f.chain = chain
+        f.scenario = render_chain(chain)
+        kept.append(f)
+    return kept, dropped
 
 
 def cite(
@@ -587,6 +686,12 @@ def review_bundle(
         )
     )
     # Before the fact-check, so a finding that is dropped anyway costs no tokens there.
+    placed, res.untraced = traced(ws, placed, raw_of)
+    for f, why in res.untraced:
+        trace.line(
+            f"[{bundle.label}] dropped {f.id} ({f.category}): {why} — "
+            f"{trace.short(f.title, 80)!r}"
+        )
     placed, res.uncited = cite(placed, principles)
     for f in res.uncited:
         trace.line(

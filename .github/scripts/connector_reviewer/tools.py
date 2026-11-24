@@ -289,7 +289,8 @@ class SdkSource:
             "workflows and tasks) and a finding depends on how that API behaves: its signature "
             "and defaults, what it raises, retries or writes, and what it expects of the caller. "
             "Check that in the source instead of assuming it. The SDK is reference, not under "
-            "review: comment only on files in <review_files>.\n"
+            "review: comment only on files in <review_files>. A causal_chain step may cite SDK "
+            "code you read, with its `sdk:` path.\n"
             "</sdk_source>"
         )
 
@@ -541,6 +542,44 @@ COMMENT_ITEM = {
             "type": "string",
             "description": "What is wrong and the concrete input/state under which it fails. 1-4 sentences.",
         },
+        "causal_chain": {
+            "type": "object",
+            "description": "How the failure happens, traced through code you read: what starts it, each step of the code path with the code that does it, and the wrong outcome. Every step's code is checked against the repository; a finding whose chain is missing or quotes code that is not there is dropped.",
+            "properties": {
+                "trigger": {
+                    "type": "string",
+                    "description": "The concrete input, state or event that starts it, as it occurs in real runs.",
+                },
+                "steps": {
+                    "type": "array",
+                    "maxItems": 6,
+                    "description": "The code path from the trigger to the outcome, in order, at least one step. Only code you read: the diff, the context blocks, read_file or search_code results.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The file the code is in, as the tool that showed it named it.",
+                            },
+                            "code": {
+                                "type": "string",
+                                "description": "1-3 lines copied VERBATIM from that file (or removed by this PR), no line numbers.",
+                            },
+                            "effect": {
+                                "type": "string",
+                                "description": "What this code does with the value or state from the previous step, as the code shows it.",
+                            },
+                        },
+                        "required": ["path", "code", "effect"],
+                    },
+                },
+                "outcome": {
+                    "type": "string",
+                    "description": "The wrong result the run, the customer or Atlan ends up with.",
+                },
+            },
+            "required": ["trigger", "steps", "outcome"],
+        },
         "suggestion_code": {
             "type": "string",
             "description": "Optional. Replacement for existing_code, complete and drop-in (same indentation). Omit if the fix is not a local edit.",
@@ -554,6 +593,7 @@ COMMENT_ITEM = {
         "compatibility",
         "title",
         "content",
+        "causal_chain",
     ],
 }
 

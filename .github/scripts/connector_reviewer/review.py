@@ -3006,8 +3006,9 @@ def _details(f: Finding, blob_base: str, chars: int | None = None) -> str:
     ]
     if f.contested:
         out.append(
-            "**⚖️ Contested:** raised as blocking; an independent check refuted it against the "
-            f"code, so it is medium and does not block. Its reason: {f.contested}\n"
+            "**⚖️ Contested:** raised as blocking; an independent check of its causal chain "
+            "against the code did not confirm every step, so it is medium and does not block. "
+            f"Its reason: {f.contested}\n"
         )
     out.append(cap(f.body.strip()))
     if f.scenario.strip():

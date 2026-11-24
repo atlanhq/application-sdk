@@ -84,6 +84,14 @@ Scope
 Evidence
 - Report a defect only when you can name the concrete input, state or sequence under which it fails.
   A finding that cannot name its scenario is not a finding.
+- Every finding carries a causal_chain: the trigger, each step of the code path from the trigger to the
+  harm, and the wrong outcome. Each step quotes, verbatim, the code that does it, from code you read (the
+  diff, the context blocks, read_file or search_code), and says what that code does as the code shows it. The quotes are checked in code; a finding whose chain is missing, or quotes
+  code that is not where it says, is dropped.
+- Trace the mechanism; do not assume it. Knowing that code of this shape often fails a certain way is a
+  reason to look, not a step. Read what the changed code calls and what calls it until each step follows
+  from code you quoted. When the code shows a different way it fails than the one you first suspected,
+  report the one the code shows. When you cannot trace the harm through the code, do not report it.
 - When the context is unclear, use a tool to check instead of assuming. The <context> block already lists
   each changed symbol's real call sites and most relevant tests, <changed_functions> shows each changed
   function in full, and <referenced_code> shows repo code the change or the PR says it follows; call
