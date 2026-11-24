@@ -293,14 +293,16 @@ def unique_ids(found: list[Finding]) -> list[Finding]:
     The fingerprint leaves out the prose on purpose, so two DIFFERENT findings
     on the same quoted line of a file, in the same category, got one id, and
     `merge_new` dropped the second as a restatement of the first (FND-5316).
-    Within such a group the most severe finding (then by principle and
-    title, so the order the model wrote them in does not matter) keeps the
-    plain fingerprint, so an open finding on a live pull request keeps
-    matching its stored record. Each other one is salted with its principle,
-    or with its principle and title when that is taken too, and as a last
-    resort with a counter. A later round that reports the same findings gets
-    the same ids. Only a literal repeat (same principle and title) is the
-    same finding reported twice, and is kept once."""
+    Within such a group the finding first by principle (no principle sorts
+    first), then severity, then title keeps the plain fingerprint, so an
+    open finding on a live pull request keeps matching its stored record.
+    Each other one is salted with its principle, or with its principle and
+    title when that is taken too, and as a last resort with a counter. The
+    principle leads because the model's severity and the order it writes
+    findings in change from round to round; with distinct principles the ids
+    depend on nothing else, so a later round that reports the same findings
+    gets the same ids. Only a literal repeat (same principle and title) is
+    the same finding reported twice, and is kept once."""
     used = {f.id for f in found}
     groups: dict[str, list[Finding]] = {}
     for f in found:
@@ -312,8 +314,8 @@ def unique_ids(found: list[Finding]) -> list[Finding]:
         ordered = sorted(
             group,
             key=lambda f: (
-                _RANK.get(f.severity, len(SEVERITIES)),
                 f.rule_id,
+                _RANK.get(f.severity, len(SEVERITIES)),
                 _title_key(f.title),
             ),
         )

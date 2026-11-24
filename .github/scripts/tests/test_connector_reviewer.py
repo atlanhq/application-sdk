@@ -1886,12 +1886,19 @@ def _same_quote_pair() -> list[dict[str, Any]]:
     return [plain, graded]
 
 
-def _pair_script(*first: Any) -> Script:
+def _pair_script(*first: Any, comments: list[dict[str, Any]] | None = None) -> Script:
     return Script(
         *first,
         response(
             [
-                tool_call("code_comment", {"comments": _same_quote_pair()}),
+                tool_call(
+                    "code_comment",
+                    {
+                        "comments": comments
+                        if comments is not None
+                        else _same_quote_pair()
+                    },
+                ),
                 tool_call("task_done", {"state": "DONE"}, 1),
             ]
         ),
@@ -1944,6 +1951,43 @@ def test_two_findings_on_one_quote_keep_their_own_ids_and_grades(repo: Path):
     )
     assert again.new_findings == []
     assert {f.id for f in state_of(again).findings} == ids
+
+
+def test_ids_on_one_quote_do_not_depend_on_severity_or_order(repo: Path):
+    """The model's severity and the order it writes findings in change from
+    round to round. When the more severe finding kept the plain id, round 2
+    with the severities swapped gave each finding the other's id: one was
+    folded into the other's record and the other came back as new."""
+    gh = fake_github()
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(_pair_script()),
+    )
+    ids = {f.title: f.id for f in state_of(first).findings}
+    plain, graded = _same_quote_pair()
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = gh.diffs[("b0", "h1")]
+    gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
+    gh.files[("app/storage/fetch.py", "h2")] = SRC_V2_NEXT
+    swapped = [dict(graded, severity="critical"), dict(plain, severity="high")]
+    again = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(
+            _pair_script(
+                response([tool_call("verdicts", {"items": []})]), comments=swapped
+            )
+        ),
+    )
+    assert again.new_findings == []
+    assert {f.title: f.id for f in state_of(again).findings} == ids
 
 
 def test_a_literal_repeat_of_a_finding_is_one_finding():
