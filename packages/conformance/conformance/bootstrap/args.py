@@ -434,8 +434,9 @@ options:
                                   review-rulesets/ and .mothership/ if that
                                   leaves them empty. Nothing else under
                                   .mothership/ is touched. A folder reached
-                                  through a symlink to outside the repository
-                                  stops the kit the way an unmarked block does.
+                                  through a symlink to outside the repository,
+                                  or through a symlinked parent directory, stops
+                                  the kit the way an unmarked block does.
                               Implied by --resync; pass it alone to do this without
                               resyncing tests.yaml/renovate.json. Otherwise opt-in, so
                               a bare bootstrap run never changes local Claude

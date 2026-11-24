@@ -1498,6 +1498,55 @@ def test_connector_review_kit_refuses_a_folder_linked_outside_the_repo(
     assert not (repo / ".github").exists()
 
 
+@pytest.mark.parametrize("link_rel", [".mothership/review-rulesets", ".mothership"])
+def test_resync_skips_the_kit_when_a_parent_links_inside_the_repo(
+    repo: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    link_rel: str,
+) -> None:
+    """Walking through a linked parent would delete some other directory of
+    the repository, so the kit is skipped as for a link outside it."""
+    target = repo / "docs" / "elsewhere"
+    below = LOCAL_REVIEW_RULES_DIR[len(link_rel) :].lstrip("/")
+    _write(target / below, "rules/x.md", "the repo's docs\n")
+    before = _tree(target)
+    link = repo / link_rel
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(target, target_is_directory=True)
+
+    assert _cmd_bootstrap(["--resync"]) == 0
+
+    skipped = [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("skipped:")
+    ]
+    assert len(skipped) == 1
+    assert "symlinked parent directory" in skipped[0]
+    assert "connector review kit was left untouched" in skipped[0]
+    assert link.is_symlink()
+    assert _tree(target) == before
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="root reads a directory whatever its mode",
+)
+def test_unreadable_subdirectory_skips_the_kit_rather_than_leave_part_behind(
+    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    folder = _seed_local_rules(repo, {"widget-paging-001.md": _REAL_RULE})
+    locked = folder / "rules" / "locked"
+    _write(locked, "x.md", "x\n")
+    locked.chmod(0)
+    try:
+        assert _cmd_bootstrap(["--connector-review-kit"]) == 2
+        assert "cannot be read" in capsys.readouterr().err
+        assert (folder / "MANIFEST.yaml").exists()
+    finally:
+        locked.chmod(0o755)
+
+
 def test_no_local_rules_folder_is_silent(
     repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

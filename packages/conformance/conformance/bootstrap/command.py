@@ -597,26 +597,43 @@ def _plan_local_review_rules(root: pathlib.Path) -> tuple[pathlib.Path, ...]:
     write phase only has to unlink files and links and ``rmdir`` directories
     in this order. The rest of ``.mothership/`` is never listed.
 
-    No symlink is followed out of the repository. A folder reached through a
-    link that resolves outside it raises ``ConnectorReviewMergeError``, as an
-    ``AGENTS.md`` linked outside the repository does. A folder that is itself
-    a link inside the repository is removed as the link alone. A link inside
-    the folder is removed as a link: the walk never descends into it, so what
-    it points at stays as it was.
+    No symlink is followed. A folder reached through a link that resolves
+    outside the repository raises ``ConnectorReviewMergeError``, as an
+    ``AGENTS.md`` linked outside the repository does, and so does a folder
+    whose ``.mothership/`` or ``review-rulesets/`` is a link to anywhere: what
+    the walk would delete is then some other directory. A folder that is
+    itself a link inside the repository is removed as the link alone. A link
+    inside the folder is removed as a link: the walk never descends into it,
+    so what it points at stays as it was. A subdirectory that cannot be read
+    raises too, rather than leave part of the folder behind unreported.
     """
     folder = root / LOCAL_REVIEW_RULES_DIR
     if not folder.is_symlink() and not folder.exists():
         return ()
-    if not folder.resolve().is_relative_to(root.resolve()):
+    real_root = root.resolve()
+    if not folder.resolve().is_relative_to(real_root):
         raise ConnectorReviewMergeError(
             folder, "it is reached through a symlink to outside the repository"
         )
+    if (
+        folder.parent.resolve()
+        != real_root / pathlib.Path(LOCAL_REVIEW_RULES_DIR).parent
+    ):
+        raise ConnectorReviewMergeError(
+            folder, "it is reached through a symlinked parent directory"
+        )
     if folder.is_symlink() or not folder.is_dir():
         return (folder,)
+
+    def _unreadable(error: OSError) -> None:
+        raise ConnectorReviewMergeError(folder, f"part of it cannot be read: {error}")
+
     paths: list[pathlib.Path] = []
     # Bottom-up and without following links: a link to a directory is listed
     # under dirnames but never walked into.
-    for dirpath, dirnames, filenames in os.walk(folder, topdown=False):
+    for dirpath, dirnames, filenames in os.walk(
+        folder, topdown=False, onerror=_unreadable
+    ):
         here = pathlib.Path(dirpath)
         paths.extend(here / name for name in sorted(filenames))
         paths.extend(
