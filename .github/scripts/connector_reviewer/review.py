@@ -270,17 +270,19 @@ def base_ref_output(gh: GitHub, number: int) -> tuple[str, str]:
 
 
 def base_checkout_note(root: Path, base: str) -> str:
-    """A note when the app checkout at `root` is a git checkout whose commit
-    is not the pull request's base `base`: `base-ref` failed and the checkout
-    fell back to its default ref, or the base moved between that step and
-    this review. "" when it is at `base`, or `root` is no checkout of its own
-    (a local run)."""
+    """The incomplete reason when the app checkout at `root` is a git checkout
+    whose commit is not the pull request's base `base`: `base-ref` failed and
+    the checkout fell back to its default ref, or the base moved between that
+    step and this review. "" when it is at `base`, or `root` is no checkout of
+    its own (a local run)."""
     at = sdk_source.checkout_commit(root)
     if not at or at == base:
         return ""
     return (
         f"The app checkout is at {at[:9]}, not at this pull request's base "
-        f"{base[:9]}: unchanged files, the index and the facts were read from it."
+        f"{base[:9]}: unchanged files, the index and the facts were read from "
+        "other code, so this head is not taken as reviewed; comment `/review` "
+        "to run it again"
     )
 
 
@@ -803,11 +805,13 @@ def run(
     # A principle file that was skipped is said in the summary, never silently.
     res.notes.extend(principles.notes)
     # The app checkout is the code this pull request is judged against: its
-    # base commit, not the default branch (FND-5316). Said when it is not.
+    # base commit, not the default branch (FND-5316). When it is not, the
+    # review is incomplete and the head stays unreviewed, so the next
+    # `/review` redoes it, never a green verdict read against other code.
     off_base = base_checkout_note(root, base)
     if off_base:
         trace.line(off_base)
-        res.notes.append(off_base)
+        res.incomplete.append(off_base)
     # The head's own lock (FND-5316): the SDK source and the other-SDK block
     # are bound to the head this round reviews, never to the base checkout.
     lock = sdk_source.head_lock_at(gh, head)
@@ -1195,11 +1199,6 @@ def run(
                 return one(b, after * weights[b.label] / rest_w, False)
 
             res.bundles += list(pool.map(then, rest))
-    for br in res.bundles:
-        if br.unanswered:
-            note = no_review_note(br, bundles)
-            trace.line(note)
-            res.notes.append(note)
     res.timings_ms["review"] = int((time.monotonic() - t_phase) * 1000)
     if approach_job is not None and approach_pool is not None:
         with trace.group("5 · approach check (once per PR, alongside the line review)"):
@@ -1341,6 +1340,13 @@ def run(
         elif b.stop in ("llm_error", "fatal", "budget"):
             res.incomplete.append(f"{b.label}: {b.stop} — {b.error[:200]}")
             failed_paths.extend(bundle_paths.get(b.label, []))
+        elif b.unanswered:
+            # No answer at all (FND-5316): its 0 findings are not a clean read,
+            # so the review is incomplete and the next `/review` retries it.
+            note = no_review_note(b, bundles)
+            trace.line(note)
+            res.incomplete.append(note)
+            failed_paths.extend(bundle_paths.get(b.label, []))
     res.retried = list(state.pending_files) if retry_only else []
     # Spend is always booked. But a round in which part of the review did not
     # happen must never be recorded as a review of this head: that would make
@@ -1350,6 +1356,8 @@ def run(
     # remembered as pending, and the next `/review` retries exactly those.
     if res.bundles and len(failed_paths) == sum(len(b.paths) for b in bundles):
         pass  # nothing was reviewed: leave the head unreviewed so the next run redoes it all
+    elif off_base:
+        pass  # reviewed against the wrong code: not a review of this head either
     else:
         state.reviewed_head, state.reviewed_base = head, base
         state.model, state.config_hash = cfg.model, cfg.raw_hash
@@ -2317,22 +2325,22 @@ NO_REVIEW_FILES_SHOWN = 5  # files named in a no-review note
 
 
 def no_review_note(result: BundleResult, bundles: list[Bundle]) -> str:
-    """The summary note for a bundle that ended with no answer at all
+    """The incomplete reason for a bundle that ended with no answer at all
     (`BundleResult.unanswered`): its 0 findings mean it was not read to a
-    conclusion, not that it is clean."""
+    conclusion, not that it is clean, and its files are retried."""
     paths = next((b.paths for b in bundles if b.label == result.label), [])
     shown = ", ".join(f"`{p}`" for p in paths[:NO_REVIEW_FILES_SHOWN])
     if len(paths) > NO_REVIEW_FILES_SHOWN:
         shown += f" and {len(paths) - NO_REVIEW_FILES_SHOWN} more"
     kind = "App-code bundle" if result.retried else "Bundle"
     how = (
-        "its final turn and the retry both came back with no tool call"
+        "its final turn and the retry both gave no answer"
         if result.retried
-        else "its last turn came back with no tool call"
+        else "its last turn gave no answer"
     )
     return (
         f"{kind} `{result.label}` got no real review: {how}, so its 0 findings do "
-        f"not mean it is clean ({shown})."
+        f"not mean it is clean ({shown}); `/review` retries it"
     )
 
 

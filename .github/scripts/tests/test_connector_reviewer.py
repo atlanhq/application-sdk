@@ -10092,6 +10092,44 @@ def test_an_empty_retry_or_a_test_bundle_ends_unanswered(repo: Path):
         assert len(script.requests) == calls
 
 
+@pytest.mark.parametrize(
+    "final, retry, unanswered",
+    [
+        # The forced final turn asks for a lookup it cannot have; the retry
+        # asks for another: no answer either time.
+        (
+            response([tool_call("find_symbol", {"name": "fetch"})]),
+            response([tool_call("read_file", {"file_path": "app/storage/fetch.py"})]),
+            True,
+        ),
+        # "Nothing found" is an answer: code_comment with no comments.
+        (
+            response([tool_call("code_comment", {"comments": []})]),
+            None,
+            False,
+        ),
+    ],
+    ids=["lookups-only", "nothing-found"],
+)
+def test_an_answer_is_a_code_comment_or_task_done_on_any_turn(
+    repo: Path, final: Any, retry: Any, unanswered: bool
+):
+    """A forced final turn (or a retry) that only asks for a lookup ended as
+    `final_round` and was not marked unanswered, so the review read it as
+    clean. A bundle has answered only when it called code_comment (with or
+    without comments) or task_done."""
+    ws, bundle = _ws(repo)
+    replies = [response([tool_call("find_symbol", {"name": "fetch"})]), final]
+    script = Script(*replies, *([retry] if retry else []))
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    res = agent_mod.review_bundle(
+        client, ws, bundle, PrincipleSet(), {}, [], _one_turn_limits(), retry_empty=True
+    )
+    assert res.stop == "final_round"
+    assert (res.retried, res.unanswered) == (unanswered, unanswered)
+    assert len(script.requests) == (3 if retry else 2)
+
+
 _TEST_FILE = "tests/unit/other/test_wide.py"
 
 
@@ -10148,6 +10186,10 @@ def test_app_code_bundles_finish_before_any_test_bundle_starts(repo: Path):
     assert order.count("code") == 3  # two empty turns, then the retry
     body = gh.comments[0]["body"]
     assert "got no real review" in body and "`app/storage/fetch.py`" in body
+    # Its 0 findings are not a clean read: the review is incomplete, never
+    # green, and the next `/review` retries its files.
+    assert gh.statuses[-1]["state"] == "error"
+    assert state_of(res).pending_files == ["app/storage/fetch.py"]
 
 
 # ---- finalize: a crashed, cancelled or timed-out run never leaves a stale or green status ----------
@@ -14529,31 +14571,39 @@ def test_the_base_ref_cli_writes_the_pull_requests_base_commit(
 def test_the_review_says_when_the_app_checkout_is_not_at_the_base(repo: Path):
     """The review checks that the checkout it indexes is the pull request's
     base: a failed resolve falls back to the default ref, and the base can move
-    between the resolve step and the review. Off the base, the summary says
-    so; at the base, or with no git checkout (a local run), nothing is said."""
+    between the resolve step and the review. Off the base, the review is
+    incomplete and the head is not taken as reviewed, so no verdict read
+    against other code can be green and the next `/review` redoes it. At the
+    base, or with no git checkout (a local run), nothing changes."""
     _git(repo, "init", "-q")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "base")
     at = _git(repo, "rev-parse", "HEAD")
 
-    def summary(base: str) -> str:
+    def review(base: str) -> tuple[RunResult, Any]:
         gh = fake_github(base=base, diffs={(base, "h1"): DIFF})
-        run(
+        res = run(
             gh=gh,
             number=1,
             root=repo,
             cfg=cfg_for(repo),
             principles=principles_of(repo),
-            client_factory=_factory(_review_script()),
+            # No finding: off the base this would otherwise be green.
+            client_factory=_factory(Script()),
         )
-        return gh.comments[0]["body"]
+        return res, gh
 
-    off = summary(_SHA_BASE)
+    res, gh = review(_SHA_BASE)
     assert (
         f"The app checkout is at {at[:9]}, not at this pull request's base "
-        f"{_SHA_BASE[:9]}" in off
+        f"{_SHA_BASE[:9]}" in gh.comments[0]["body"]
     )
-    assert "not at this pull request's base" not in summary(at)
+    assert gh.statuses[-1]["state"] == "error"
+    assert state_of(res).reviewed_head == ""
+    res, gh = review(at)
+    assert "not at this pull request's base" not in gh.comments[0]["body"]
+    assert gh.statuses[-1]["state"] == "success"
+    assert state_of(res).reviewed_head == "h1"
 
 
 def test_the_apps_principles_are_read_from_their_own_root(

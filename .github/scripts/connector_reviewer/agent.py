@@ -149,13 +149,25 @@ class BundleResult:
     untraced: list[tuple[Finding, str]] = field(default_factory=list)
     # The model's answers to the regression and history questions, from task_done.
     answers: dict[str, str] = field(default_factory=dict)
-    # An app-code bundle whose loop ended empty got one more final turn
-    # (`_retry_final`).
+    # An app-code bundle whose loop ended with no answer got one more final
+    # turn (`_retry_final`).
     retried: bool = False
-    # The bundle ended with no answer at all: no code_comment ever, and the
-    # last turn (the retry's, when there was one) made no tool call. Its 0
-    # findings mean it was not read to a conclusion, not that it is clean.
+    # The bundle ended with no answer at all (`no_answer`): it never called
+    # code_comment (not even with no comments) and never called task_done.
+    # Its 0 findings mean it was not read to a conclusion, not that it is
+    # clean; review.run makes the review incomplete and retries its files.
     unanswered: bool = False
+
+
+def no_answer(res: BundleResult) -> bool:
+    """Whether a bundle's loop ended without an answer: on empty turns or a
+    forced final turn (the retry's included), with no code_comment call at
+    any turn (one with no comments is an answer: "nothing found") and no
+    task_done. A failed bundle (budget, error, refusal) is not this: its
+    stop already makes the review incomplete."""
+    return res.stop in ("empty_turns", "final_round") and not res.tool_calls.get(
+        "code_comment"
+    )
 
 
 # ---- prompt manifest -----------------------------------------------------------
@@ -737,8 +749,8 @@ def review_bundle(
     retry_empty: bool = False,
 ) -> BundleResult:
     """Review one bundle. `retry_empty` (review.run sets it for a bundle that
-    holds the code the app ships) gives a loop that ended on an empty turn,
-    with nothing reported, one more final turn (`_retry_final`)."""
+    holds the code the app ships) gives a loop that ended without an answer
+    (`no_answer`) one more final turn (`_retry_final`)."""
     res = BundleResult(label=bundle.label)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": prompts.REVIEW_SYSTEM},
@@ -774,7 +786,7 @@ def review_bundle(
             budget_usd,
             deadline,
         )
-        if retry_empty and res.stop == "empty_turns" and not raw_comments:
+        if retry_empty and no_answer(res):
             _retry_final(client, ws, bundle, messages, raw_comments, res, limits)
         if (
             limits.second_pass
@@ -812,7 +824,7 @@ def review_bundle(
     except LLMError as e:
         res.stop, res.error = "llm_error", str(e)
 
-    res.unanswered = res.stop == "empty_turns" and not raw_comments
+    res.unanswered = no_answer(res)
     raw = raw_comments[: limits.max_comments]
     pairs = [(place(ws, bundle, c), c) for c in raw]
     # Ids first: two findings on one quote shared an id, and the second was
@@ -1064,10 +1076,12 @@ def _retry_final(
     res: BundleResult,
     limits: AgentLimits,
 ) -> None:
-    """One more final turn for a code bundle whose loop ended on a turn with
-    no tool call and nothing reported (`stop == "empty_turns"`). The usual
-    cause is a forced final turn whose whole output budget went to
-    reasoning, so this turn gets a message that asks for the answer, not more
+    """One more final turn for a code bundle whose loop ended without an
+    answer (`no_answer`: empty turns, or a forced final turn with no
+    code_comment or task_done). The cause seen in replays is a forced final
+    turn whose whole output budget went to reasoning; two plain turns with no
+    tool call end the same way. This turn gets a message that asks for the
+    answer, not more
     analysis, and `final_retry_max_tokens` (at least `review_max_tokens`).
     Not bounded by the bundle's
     budget share or its time limit: an app-code bundle with no answer is
@@ -1077,7 +1091,7 @@ def _retry_final(
     ends as it would have without the retry."""
     res.retried = True
     trace.line(
-        f"[{bundle.label}] code bundle ended on an empty turn with nothing reported: "
+        f"[{bundle.label}] code bundle ended without an answer: "
         "one retry of the final turn"
     )
     messages.append({"role": "user", "content": prompts.RETRY_FINAL})
