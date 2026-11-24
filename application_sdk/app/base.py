@@ -3131,6 +3131,11 @@ class App(ABC):
 # workflow twice.
 _workflow_class_cache: dict[tuple[type, str, str], type] = {}
 
+_EARLY_RUN_BINDING_PATCH = "atlan-sdk/early-run-binding"
+"""``workflow.patched`` marker recorded by every run whose generated
+``__init__`` binds the App instance to the run (FND-5219). A history without it
+was written before that change and binds in ``_run``, as it did then."""
+
 
 def _validate_interaction_signature(
     fn: Callable[..., Any],
@@ -4215,6 +4220,23 @@ def generate_workflow_class(
             )
             correlation_id = run_id
 
+        # wf_cls.__init__ builds the App instance and binds it to the run
+        # (context, stored refs, @task wrapping) before Temporal applies any
+        # @signal / @update delivered in the run's first activation, which
+        # runs before this coroutine starts. See _bind_app_instance_to_run.
+        # The correlation id needs the start input, so __init__ binds a
+        # provisional one; set the resolved one here, in the same dict the
+        # task wrappers hold. Fall back to binding here when ``self`` is a
+        # stand-in (e.g. MagicMock from unit tests) where ``__init__`` didn't run.
+        existing = getattr(self, "_app_instance", None)
+        context_data = getattr(self, "_run_context_data", None)
+        if isinstance(existing, app_cls) and isinstance(context_data, dict):
+            app_instance = existing
+        else:
+            app_instance = existing if isinstance(existing, app_cls) else app_cls()
+            self._app_instance = app_instance
+            context_data = _bind_app_instance_to_run(app_instance, start_time)
+        context_data["correlation_id"] = correlation_id
         context = AppContext(
             app_name=app_name,
             app_version=app_version,
@@ -4224,29 +4246,7 @@ def generate_workflow_class(
             correlation_id=correlation_id,
             started_at=start_time,
         )
-        # The wf_cls.__init__ constructs the App instance up-front so that any
-        # @signal / @query / @update runtime interactions
-        # (which may fire as early as immediately after workflow start, before
-        # _run's first await) can delegate to the same instance _run uses.
-        # Fall back to constructing one here when ``self`` is a stand-in (e.g.
-        # MagicMock from unit tests) where ``__init__`` didn't run.
-        existing = getattr(self, "_app_instance", None)
-        if isinstance(existing, app_cls):
-            app_instance = existing
-        else:
-            app_instance = app_cls()
-            self._app_instance = app_instance
         app_instance._context = context
-
-        app_instance._run_stored_refs = _RunStoredRefs()
-        context_data = {
-            "run_id": run_id,
-            "workflow_id": workflow_id,
-            "correlation_id": context.correlation_id,
-        }
-        # BLDX-878: inter-app calls deactivated pending review.
-        # app_instance._client = WorkflowAppClient(context_data)
-        _wrap_instance_tasks(app_instance, context_data)
 
         _safe_log(
             "info",
@@ -4424,12 +4424,58 @@ def generate_workflow_class(
     # — sharing state with _run.
     interaction_relays = _collect_interaction_relays(app_cls, cls_name)
 
+    def _bind_app_instance_to_run(
+        app_instance: "App", started_at: datetime
+    ) -> dict[str, Any]:
+        """Give ``app_instance`` this run's context, stored refs and task wrappers.
+
+        Returns the context dict the task wrappers hold. Its ``correlation_id``
+        starts as the run id; ``_run`` sets the resolved one, which needs the
+        start input.
+        """
+        info = workflow.info()
+        context_data: dict[str, Any] = {
+            "run_id": info.run_id,
+            "workflow_id": info.workflow_id,
+            "correlation_id": info.run_id,
+        }
+        app_instance._context = AppContext(
+            app_name=app_name,
+            app_version=app_version,
+            build_id=app_build_id,
+            run_id=info.run_id,
+            workflow_id=info.workflow_id,
+            correlation_id=info.run_id,
+            started_at=started_at,
+        )
+        app_instance._run_stored_refs = _RunStoredRefs()
+        # BLDX-878: inter-app calls deactivated pending review.
+        # app_instance._client = WorkflowAppClient(context_data)
+        _wrap_instance_tasks(app_instance, context_data)
+        return context_data
+
     def _wf_init(self: Any) -> None:
-        # Construct the per-run App instance eagerly so interactions that fire
-        # before _run's first await still hit a live instance. _run later
-        # finishes context setup (correlation id, _wrap_instance_tasks, etc.)
-        # on this same instance.
+        # Build the per-run App instance and bind it to the run here, not in
+        # _run. Temporal applies the @signal / @update jobs of the run's first
+        # activation (signal-with-start, update-with-start) after __init__ but
+        # before the run coroutine starts, so a handler there must already see
+        # @task methods wrapped as activities. Unwrapped, the task body would
+        # run inline on the workflow thread: no retries, no timeouts, and
+        # re-run on every replay.
         self._app_instance = app_cls()
+        # Outside a workflow (unit tests constructing wf_cls directly) there
+        # is no run to bind to; _run binds on its fallback path instead.
+        #
+        # The patch marker keeps runs started before this change replaying
+        # their own history: there a first-activation handler ran its task
+        # inline and recorded no activity, so binding here would schedule one
+        # on replay and fail the run with a nondeterminism error. Live,
+        # ``patched`` is True and records the marker; on replay it is True only
+        # when the history has it, so such runs keep binding in _run.
+        if workflow.in_workflow() and workflow.patched(_EARLY_RUN_BINDING_PATCH):
+            self._run_context_data = _bind_app_instance_to_run(
+                self._app_instance, _safe_now()
+            )
 
     _wf_init.__name__ = "__init__"
     _wf_init.__qualname__ = f"{cls_name}.__init__"
