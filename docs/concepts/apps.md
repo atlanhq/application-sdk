@@ -33,7 +33,7 @@ class MyConnector(App):
 
 ### Configuration settings are checked at class definition
 
-Each configuration `ClassVar` an App declares is checked when the class is defined, and a bad value warns (a `DeprecationWarning` plus a logged WARNING naming the class, attribute and value). The readers still coerce it as before, so a run is never aborted by a typo, but the typo is no longer silent. In v4.0.0 each warning becomes an `EntryPointDeclarationError`.
+The configuration settings in the table below are checked when the class is defined, and a bad value warns (a `DeprecationWarning` plus a logged WARNING naming the class, attribute and value). The readers still coerce it as before, so a run is never aborted by a typo, but the typo is no longer silent. In v4.0.0 each warning becomes an `EntryPointDeclarationError`.
 
 | Setting | Accepted |
 |---|---|
@@ -48,7 +48,7 @@ Each configuration `ClassVar` an App declares is checked when the class is defin
 | `tags` | `dict[str, str]` or `None` |
 | `passthrough_modules` | a set of module names, never a bare `str` (`"pandas"` would read as five letters) |
 
-Only a class's own declarations are checked, so an inherited bad value is reported once, at the class that wrote it. A concrete `SqlApp` subclass also warns when `sql_client_class` is unset or not a `BaseSQLClient` subclass, unless it overrides client construction.
+Other settings, such as `asset_validation_rules` and `preflight_warmup_mode`, are not checked. Only a class's own declarations are checked, so an inherited bad value is reported once, at the class that wrote it. A concrete `SqlApp` subclass also warns when `sql_client_class` is unset or not a `BaseSQLClient` subclass, unless it overrides client construction.
 
 ### Multiple Entry Points
 

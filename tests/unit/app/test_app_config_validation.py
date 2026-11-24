@@ -203,7 +203,7 @@ class TestOwnDeclarationsOnly:
 class TestSandboxReimport:
     def test_skipped_inside_the_workflow_sandbox(self) -> None:
         with mock.patch(
-            "application_sdk.app._app_config_validation.workflow.unsafe.in_sandbox",
+            "application_sdk.app.base.workflow.unsafe.in_sandbox",
             return_value=True,
         ):
             assert _define_and_collect(preflight_gate_mode="hrad") == []

@@ -21,8 +21,6 @@ import re
 import warnings
 from collections.abc import Callable, Mapping
 
-from temporalio import workflow
-
 from application_sdk.handler.contracts import PreflightGateMode
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -201,10 +199,9 @@ def warn_config_problem(cls: type, attr: str, value: object, problem: str) -> No
 def validate_app_config(cls: type) -> None:
     """Warn about each configuration ``ClassVar`` ``cls`` declares with a bad value.
 
-    Never raises. Skipped inside the workflow sandbox, which re-imports app
-    modules on every run: the worker already reported it at boot.
+    Never raises. The caller skips it inside the workflow sandbox, which
+    re-imports app modules on every run (the worker already reported it at
+    boot); the check lives there so this module stays free of Temporal.
     """
-    if workflow.unsafe.in_sandbox():
-        return
     for attr, value, problem in config_problems(cls):
         warn_config_problem(cls, attr, value, problem)

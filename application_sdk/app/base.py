@@ -1532,8 +1532,10 @@ class App(ABC):
         super().__init_subclass__(**kwargs)
 
         # Before the registered-skip: a template or abstract base reports its
-        # own bad declarations too. Warn-only until v4.0.0.
-        validate_app_config(cls)
+        # own bad declarations too. Warn-only until v4.0.0. Not in the
+        # workflow sandbox, which re-imports app modules on every run.
+        if not workflow.unsafe.in_sandbox():
+            validate_app_config(cls)
 
         # Skip if already registered (check own __dict__ only, not inherited)
         if cls.__dict__.get("_app_registered", False):
