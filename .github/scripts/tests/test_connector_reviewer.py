@@ -10019,8 +10019,8 @@ def _one_turn_limits() -> Any:
 def test_a_code_bundle_whose_final_turn_comes_back_empty_gets_one_retry(repo: Path):
     """App-code bundles ended on a forced final turn whose whole output budget
     went to reasoning: no tool call, 0 findings, and the review read as clean.
-    Such a bundle now gets one more final turn with a larger output budget and
-    a message that asks for the answer, and what it reports is kept."""
+    Such a bundle now gets one more final turn, with a message that asks for
+    the answer and `final_retry_max_tokens`, and what it reports is kept."""
     ws, bundle = _ws(repo)
     script = Script(
         response([tool_call("find_symbol", {"name": "fetch"})]),
@@ -10035,6 +10035,7 @@ def test_a_code_bundle_whose_final_turn_comes_back_empty_gets_one_retry(repo: Pa
     )
     client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
     lim = _one_turn_limits()
+    lim.final_retry_max_tokens = 30_000  # a raised budget is what the retry sends
     res = agent_mod.review_bundle(
         client, ws, bundle, PrincipleSet(), {}, [], lim, retry_empty=True
     )
@@ -10043,8 +10044,20 @@ def test_a_code_bundle_whose_final_turn_comes_back_empty_gets_one_retry(repo: Pa
     assert [f.title for f in res.findings] == [COMMENT["title"]]
     retry = script.requests[2]
     assert retry["tool_choice"] == "required"
-    assert retry["max_tokens"] == lim.final_retry_max_tokens > lim.review_max_tokens
+    assert retry["max_tokens"] == 30_000
     assert retry["messages"][-1]["content"] == prompts_mod.RETRY_FINAL
+
+
+def test_the_retry_never_sends_less_than_a_review_turn_and_ships_a_proven_budget():
+    """A 400 opens the client's run-wide breaker, so a retry budget the
+    gateway rejects would fail every test bundle after it: the shipped value
+    is the one the review turns already send, and the retry never sends less
+    than a review turn."""
+    cfg = load_config(Path(__file__).resolve().parents[2] / "connector-reviewer")
+    assert cfg.limits.final_retry_max_tokens == cfg.limits.review_max_tokens
+    assert agent_mod.AgentLimits().final_retry_max_tokens >= (
+        agent_mod.AgentLimits().review_max_tokens
+    )
 
 
 def test_an_empty_retry_or_a_test_bundle_ends_unanswered(repo: Path):

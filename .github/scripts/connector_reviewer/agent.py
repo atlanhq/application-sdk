@@ -106,8 +106,11 @@ class AgentLimits:
     bundle_time_limit_s: int = 120
     # The output budget of the one retry an app-code bundle gets when its loop
     # ends on a turn with no tool call and nothing reported: such a final turn
-    # had spent all of `review_max_tokens` on reasoning (`_retry_final`).
-    final_retry_max_tokens: int = 48_000
+    # had spent all of `review_max_tokens` on reasoning (`_retry_final`). Never
+    # below `review_max_tokens`. Raise it only once the gateway route is known
+    # to accept the value: a 400 is fatal and opens the run-wide breaker, so
+    # every later bundle (all test bundles) would fail with it.
+    final_retry_max_tokens: int = 24_000
 
     def turn_budget(self, n_files: int, changed_lines: int) -> int:
         extra = self.turns_per_extra_file * max(n_files - 1, 0) + changed_lines // max(
@@ -1064,8 +1067,9 @@ def _retry_final(
     """One more final turn for a code bundle whose loop ended on a turn with
     no tool call and nothing reported (`stop == "empty_turns"`). The usual
     cause is a forced final turn whose whole output budget went to
-    reasoning, so this turn gets `final_retry_max_tokens` and a message that
-    asks for the answer, not more analysis. Not bounded by the bundle's
+    reasoning, so this turn gets a message that asks for the answer, not more
+    analysis, and `final_retry_max_tokens` (at least `review_max_tokens`).
+    Not bounded by the bundle's
     budget share or its time limit: an app-code bundle with no answer is
     worth more than its share, and it runs before any test bundle starts
     (review.run). Leaves `stop` as it is when the retry is empty too, or

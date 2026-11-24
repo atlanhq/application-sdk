@@ -2331,8 +2331,8 @@ def no_review_note(result: BundleResult, bundles: list[Bundle]) -> str:
         else "its last turn came back with no tool call"
     )
     return (
-        f"{kind} `{result.label}` got no real review: {how}, so no finding from it "
-        f"does not mean it is clean ({shown})."
+        f"{kind} `{result.label}` got no real review: {how}, so its 0 findings do "
+        f"not mean it is clean ({shown})."
     )
 
 
