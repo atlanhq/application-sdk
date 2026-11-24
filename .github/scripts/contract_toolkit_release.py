@@ -21,7 +21,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import date
+from datetime import UTC, datetime
 
 import release_guard
 
@@ -192,7 +192,7 @@ def categorize(commits):
 
 
 def format_block(new_version, cats):
-    today = date.today().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     lines = [f"## [{new_version}] - {today}", ""]
     for heading, key in [
         ("### Breaking changes", "breaking"),

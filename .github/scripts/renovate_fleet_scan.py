@@ -36,7 +36,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -520,7 +520,7 @@ def merged_date_windows(
     a clock skew of a few hours cannot produce an empty scan.
     """
     start = date.fromisoformat(since)
-    end = date.fromisoformat(until) if until else date.today()
+    end = date.fromisoformat(until) if until else datetime.now(UTC).date()
     if end < start:
         end = start
     step = timedelta(days=max(1, window_days))

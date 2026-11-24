@@ -6,7 +6,7 @@ then re-imports this module inside the sandbox for every workflow run, the
 way it re-imports a consumer app's module in production.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from application_sdk.app.base import App
 from application_sdk.app.task import task
@@ -30,7 +30,7 @@ class SandboxCleanApp(App):
     @task
     async def add_one(self, input: CanaryInput) -> CanaryOutput:
         # Activity code is not sandboxed: a clock read here is allowed.
-        return CanaryOutput(result=input.value + 1, note=datetime.now().isoformat())
+        return CanaryOutput(result=input.value + 1, note=datetime.now(UTC).isoformat())
 
     async def run(self, input: CanaryInput) -> CanaryOutput:
         return await self.add_one(input)
@@ -44,4 +44,4 @@ class SandboxCanaryApp(App):
     async def run(self, input: CanaryInput) -> CanaryOutput:
         # A wall-clock read in workflow code. Replay of this run on another
         # worker would see a different value, so the sandbox must refuse it.
-        return CanaryOutput(result=input.value, note=datetime.now().isoformat())
+        return CanaryOutput(result=input.value, note=datetime.now(UTC).isoformat())
