@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 import shlex
-import sys
 import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import unit_test_command as utc
+import yaml
 
 
 def _build(

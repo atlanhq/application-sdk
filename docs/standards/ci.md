@@ -119,6 +119,20 @@ uv run --frozen --extra workflows python -m pytest .github/scripts/tests -q
 If you add a new script, add its test in the same PR — the workflow will pick
 it up automatically.
 
+The suite has its own `.github/scripts/pytest.ini`, which pytest uses instead of
+the root `pyproject.toml` whenever its arguments sit under `.github/scripts`.
+Its `pythonpath` puts `.github/scripts` and `.github/scripts/tests` on
+`sys.path`, so a test imports its script with a plain `import do_the_thing` and
+a shared helper with `from _workflows import …`. Do not add a
+`sys.path.insert` for either directory; `test_pytest_ini.py` fails on one. A
+script kept elsewhere (`.github/actions/*/`, `build_and_publish/`) still needs
+its own insert.
+
+A test that asserts on workflow or composite-action YAML reads it through
+`.github/scripts/tests/_workflows.py` (`load_workflow`, `job`, `steps`,
+`step_named`, `triggers`) rather than declaring its own `_load` / `_job` /
+`_step`.
+
 The trigger is deliberately **not** path-filtered. Part of this suite consists of
 cross-file guards that read YAML outside `.github/scripts/` — the mask-before-write
 call-site check below is one — and any `paths:` list would have to enumerate every

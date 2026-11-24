@@ -19,14 +19,12 @@ from __future__ import annotations
 
 import base64
 import json
-import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import dataforge_source_lifecycle as dfl  # noqa: E402
 from _gh_refs import RefListError  # noqa: E402

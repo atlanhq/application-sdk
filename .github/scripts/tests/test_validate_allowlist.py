@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 import json
-import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import validate_allowlist
-from _frozen_clock import freeze_clock  # noqa: E402
+from _frozen_clock import freeze_clock
 
 # The validator's clock, frozen for every test (see _frozen_clock). Expiries are
 # derived from this same instant, so no test reads the clock twice: the old

@@ -12,17 +12,13 @@ import json
 import re
 import shutil
 import subprocess
-import sys
 import tomllib
 from pathlib import Path
 from typing import Sequence
 
+import check_pyright_baseline as cpb
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import check_pyright_baseline as cpb  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 

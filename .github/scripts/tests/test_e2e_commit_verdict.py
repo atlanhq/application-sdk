@@ -19,34 +19,22 @@ scenarios still apply to callers that predate the resync.
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 from typing import Any
 
+import e2e_commit_verdict
 import pytest
-import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import e2e_commit_verdict  # noqa: E402
-from e2e_commit_verdict import (  # noqa: E402
+from _gha_expr import evaluate, evaluate_operand
+from _workflows import job, load_workflow, step_named
+from e2e_commit_verdict import (
     StatusUnreadable,
     decide,
     main,
     read_e2e_state,
 )
-from rerun_deferred_gate import DEFER_STEP_NAME  # noqa: E402
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _gha_expr import evaluate, evaluate_operand  # noqa: E402
+from rerun_deferred_gate import DEFER_STEP_NAME
 
 REPO = "atlanhq/atlan-example-app"
 SHA = "a96a27b0000000000000000000000000000000aa"
-
-_REUSABLE = (
-    Path(__file__).resolve().parents[3] / ".github/workflows/tests-reusable.yaml"
-)
 
 
 _RUN = 38060382427
@@ -312,16 +300,12 @@ def test_main_emits_outputs_on_stdout_and_annotations_on_stderr(
 
 @pytest.fixture(scope="module")
 def workflow() -> dict[str, Any]:
-    return yaml.safe_load(_REUSABLE.read_text(encoding="utf-8"))
+    return load_workflow("tests-reusable.yaml")
 
 
 @pytest.fixture(scope="module")
 def gate_job(workflow: dict[str, Any]) -> dict[str, Any]:
-    return workflow["jobs"]["tests-passed"]
-
-
-def _step(job: dict[str, Any], name: str) -> dict[str, Any]:
-    return next(s for s in job["steps"] if s.get("name") == name)
+    return job(workflow, "tests-passed")
 
 
 def _hold(gate_job: dict[str, Any]) -> dict[str, Any]:
@@ -358,7 +342,7 @@ def _discover_runs(
     workflow: dict[str, Any], github: dict, inputs: dict[str, Any] = _LEGACY_INPUTS
 ) -> bool:
     return evaluate(
-        workflow["jobs"]["discover-e2e"]["if"], {"github": github, "inputs": inputs}
+        job(workflow, "discover-e2e")["if"], {"github": github, "inputs": inputs}
     )
 
 
@@ -502,7 +486,7 @@ def test_the_hold_fits_inside_the_job_timeout(gate_job: dict[str, Any]) -> None:
 def test_the_enforce_step_fails_closed(
     gate_job: dict[str, Any], conclusion: str, passed: str, enforced: bool
 ) -> None:
-    step = _step(gate_job, DEFER_STEP_NAME)
+    step = step_named(gate_job, DEFER_STEP_NAME)
     contexts = {
         "steps": {
             "e2e-verdict": {"conclusion": conclusion, "outputs": {"passed": passed}}
@@ -520,7 +504,7 @@ def test_the_driver_is_checked_out_before_the_hold(gate_job: dict[str, Any]) -> 
 
 
 def test_the_summary_reflects_the_held_verdict(gate_job: dict[str, Any]) -> None:
-    message = _step(gate_job, "Post unified test-summary comment on PR")["with"][
+    message = step_named(gate_job, "Post unified test-summary comment on PR")["with"][
         "message"
     ]
     assert "steps.e2e-verdict.outputs.e2e-status" in message
@@ -530,7 +514,7 @@ def test_the_summary_reflects_the_held_verdict(gate_job: dict[str, Any]) -> None
 def test_the_acting_run_marks_the_verdict_pending_first(
     workflow: dict[str, Any],
 ) -> None:
-    steps = workflow["jobs"]["discover-e2e"]["steps"]
+    steps = job(workflow, "discover-e2e")["steps"]
     names = [s.get("name") for s in steps]
     index = names.index("Mark the e2e verdict pending on the head commit")
     # Ahead of the first step that costs time, so a sibling sees it in seconds.
@@ -558,7 +542,7 @@ def test_the_pending_mark_is_written_by_every_run_that_owns_the_verdict(
 ) -> None:
     """The same owners as the step that later records the verdict, so no
     `pending` is ever left without a run that replaces it."""
-    steps = workflow["jobs"]["discover-e2e"]["steps"]
+    steps = job(workflow, "discover-e2e")["steps"]
     step = next(
         s
         for s in steps
@@ -593,7 +577,7 @@ def test_the_pending_mark_targets_the_tested_head(
     workflow: dict[str, Any], github: dict[str, Any], sha: str
 ) -> None:
     """`github.sha` is the merge ref on a PR run, but the tip on a dispatch."""
-    steps = workflow["jobs"]["discover-e2e"]["steps"]
+    steps = job(workflow, "discover-e2e")["steps"]
     step = next(
         s
         for s in steps

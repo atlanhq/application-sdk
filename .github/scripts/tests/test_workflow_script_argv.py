@@ -15,14 +15,12 @@ import argparse
 import importlib
 import re
 import shlex
-import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(SCRIPTS_DIR))
 
 REPO_ROOT = SCRIPTS_DIR.parents[1]
 WORKFLOWS = REPO_ROOT / ".github/workflows"

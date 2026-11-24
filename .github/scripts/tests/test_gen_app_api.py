@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 import ast
-import sys
 import tomllib
 from pathlib import Path
 
+import check_api_surface as surface  # noqa: E402 — the SDK's walker, for parity
+import gen_app_api as gen
 import pytest
 from packaging.requirements import Requirement
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import check_api_surface as surface  # noqa: E402 — the SDK's walker, for parity
-import gen_app_api as gen  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

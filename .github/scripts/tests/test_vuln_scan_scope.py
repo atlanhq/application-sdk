@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import vuln_scan_scope as scope  # noqa: E402
+import vuln_scan_scope as scope
 
 RELEASE_YAML = """\
 jobs:

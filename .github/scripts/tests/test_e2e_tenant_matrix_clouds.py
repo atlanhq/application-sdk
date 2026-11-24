@@ -9,14 +9,9 @@ failing the run out from under the resolver's precise per-leg diagnosis.
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from e2e_tenant_matrix_clouds import MatrixCloudsError, cloud_keys, main  # noqa: E402
+from e2e_tenant_matrix_clouds import MatrixCloudsError, cloud_keys, main
 
 _SECRET = "s3cr3t-client-secret"
 _MATRIX = {

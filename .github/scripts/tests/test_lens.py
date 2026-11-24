@@ -11,47 +11,43 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from lens import (
-    advisory,  # noqa: E402
-    holistic,  # noqa: E402
+    advisory,
+    holistic,
 )
-from lens import agent as agent_mod  # noqa: E402
-from lens import context as lens_context  # noqa: E402
-from lens import findings as findings_mod  # noqa: E402
-from lens import prompts as prompts_mod  # noqa: E402
-from lens import review as review_mod  # noqa: E402
-from lens.agent import BundleResult  # noqa: E402
-from lens.bundle import group  # noqa: E402
-from lens.config import Config, load_config, validate  # noqa: E402
-from lens.diff import (  # noqa: E402
+from lens import agent as agent_mod
+from lens import context as lens_context
+from lens import findings as findings_mod
+from lens import prompts as prompts_mod
+from lens import review as review_mod
+from lens.agent import BundleResult
+from lens.bundle import group
+from lens.config import Config, load_config, validate
+from lens.diff import (
     FileDiff,
     anchor,
     in_removed_lines,
     parse_unified_diff,
     snippet_in_text,
 )
-from lens.event import (  # noqa: E402
+from lens.event import (
     DISMISS_USAGE,
     LENS_USAGE,
     RECHECK_USAGE,
     USAGE_ERRORS,
     decide,
 )
-from lens.findings import Finding, PRState, merge_new  # noqa: E402
-from lens.github import GitHub, GitHubError  # noqa: E402
-from lens.holistic import build_input  # noqa: E402
-from lens.index import build_index  # noqa: E402
-from lens.llm import (  # noqa: E402
+from lens.findings import Finding, PRState, merge_new
+from lens.github import GitHub, GitHubError
+from lens.holistic import build_input
+from lens.index import build_index
+from lens.llm import (
     BUDGET_PATH,
     BudgetExhausted,
     Client,
@@ -62,8 +58,8 @@ from lens.llm import (  # noqa: E402
     gateway_cost,
     read_stream,
 )
-from lens.lock import BUSY_NOTE, JOB_TIMEOUT, older_active_run, run_name  # noqa: E402
-from lens.review import (  # noqa: E402
+from lens.lock import BUSY_NOTE, JOB_TIMEOUT, older_active_run, run_name
+from lens.review import (
     SUMMARY_MARKER,
     RunResult,
     plan_bundles,
@@ -71,10 +67,10 @@ from lens.review import (  # noqa: E402
     run,
     verdict_status,
 )
-from lens.rules import RuleSet, glob_match, load_rules  # noqa: E402
-from lens.select import select_files  # noqa: E402
-from lens.tools import Workspace, find_symbol, read_file, search_code  # noqa: E402
-from lens.triage import ast_identical, triage  # noqa: E402
+from lens.rules import RuleSet, glob_match, load_rules
+from lens.select import select_files
+from lens.tools import Workspace, find_symbol, read_file, search_code
+from lens.triage import ast_identical, triage
 
 PRICE = Price(1.0, 0.1, 4.0)
 

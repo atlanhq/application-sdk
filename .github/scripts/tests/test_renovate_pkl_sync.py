@@ -20,14 +20,10 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import sys
 import types
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import renovate_pkl_sync as mod
 
 STALE_MANIFEST = '{"app_name": "{app_name}"}\n'

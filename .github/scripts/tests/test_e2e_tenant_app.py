@@ -13,18 +13,14 @@ import argparse
 import builtins
 import importlib.util
 import json
-import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import e2e_tenant_app as app
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import e2e_tenant_app as app  # noqa: E402
-import stamp_build_identity  # noqa: E402
-from e2e_tenant_api import Response, TenantApiError, TenantClient  # noqa: E402
+import stamp_build_identity
+from e2e_tenant_api import Response, TenantApiError, TenantClient
 
 _TENANT = "https://example-tenant.atlan.test"
 _APP_ID = "019d1f6b-6fea-7db3-96d8-e61e159d0351"

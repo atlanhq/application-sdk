@@ -16,16 +16,12 @@ pass every one through to real git.
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 from typing import Callable, Sequence
 
+import check_pyright_baseline as cpb
+import check_uv_lock
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import check_pyright_baseline as cpb  # noqa: E402
-import check_uv_lock  # noqa: E402
 
 BASELINE_REL = ".github/scripts/pyright_baseline.json"
 

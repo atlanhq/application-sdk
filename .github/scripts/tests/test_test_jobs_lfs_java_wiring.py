@@ -10,15 +10,10 @@ run without a runner.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-ACTIONS = REPO_ROOT / ".github" / "actions"
-REUSABLE = REPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"
+from _workflows import ACTIONS, job, load_workflow, step_named, steps, triggers
 
 JAVA_STEP_NAME = "Set up Java (java-version)"
 # job -> the composite it runs the tests through
@@ -28,17 +23,13 @@ TEST_JOBS = {
 }
 
 
-def _load(path: Path) -> dict[Any, Any]:
-    return yaml.safe_load(path.read_text())
-
-
 @pytest.fixture(scope="module")
 def workflow() -> dict[Any, Any]:
-    return _load(REUSABLE)
+    return load_workflow("tests-reusable.yaml")
 
 
 def test_inputs_are_declared_and_off_by_default(workflow: dict[Any, Any]) -> None:
-    inputs = workflow[True]["workflow_call"]["inputs"]  # `on` parses as True
+    inputs = triggers(workflow)["workflow_call"]["inputs"]
     assert inputs["test-lfs"]["type"] == "boolean"
     assert inputs["test-lfs"]["default"] is False
     assert inputs["java-version"]["type"] == "string"
@@ -57,7 +48,7 @@ def test_test_jobs_forward_test_lfs_not_lfs(
     job_name: str,
     action: str,
 ) -> None:
-    step = _composite_step(workflow["jobs"][job_name], action)
+    step = _composite_step(job(workflow, job_name), action)
     assert step["with"]["lfs"] == "${{ inputs.test-lfs }}", (
         f"{job_name}: the test checkout must follow test-lfs; `lfs` is the e2e "
         "image build's and existing callers already set it"
@@ -70,10 +61,8 @@ def test_java_is_set_up_only_on_opt_in_and_before_the_tests(
     job_name: str,
     action: str,
 ) -> None:
-    job = workflow["jobs"][job_name]
-    java = [s for s in job["steps"] if s.get("name") == JAVA_STEP_NAME]
-    assert len(java) == 1, f"{job_name}: missing '{JAVA_STEP_NAME}'"
-    step = java[0]
+    test_job = job(workflow, job_name)
+    step = step_named(test_job, JAVA_STEP_NAME)
     assert step["if"] == "inputs.java-version != ''"
     assert step["uses"].startswith("actions/setup-java@")
     sha = step["uses"].split("@", 1)[1]
@@ -82,29 +71,25 @@ def test_java_is_set_up_only_on_opt_in_and_before_the_tests(
         "distribution": "temurin",
         "java-version": "${{ inputs.java-version }}",
     }
-    assert job["steps"].index(step) < job["steps"].index(
-        _composite_step(job, action)
+    assert test_job["steps"].index(step) < test_job["steps"].index(
+        _composite_step(test_job, action)
     ), f"{job_name}: Java must be on PATH before the tests run"
 
 
 @pytest.mark.parametrize("action", TEST_JOBS.values())
 def test_composites_pass_lfs_to_setup_deps_default_off(action: str) -> None:
-    meta = _load(ACTIONS / action / "action.yaml")
+    meta = load_workflow(ACTIONS / action / "action.yaml")
     assert meta["inputs"]["lfs"]["default"] == "false"
-    deps = [
-        s for s in meta["runs"]["steps"] if "/actions/setup-deps@" in s.get("uses", "")
-    ]
+    deps = [s for s in steps(meta) if "/actions/setup-deps@" in s.get("uses", "")]
     assert len(deps) == 1
     assert deps[0]["with"]["lfs"] == "${{ inputs.lfs }}"
 
 
 def test_setup_deps_checks_out_lfs_only_on_opt_in() -> None:
-    meta = _load(ACTIONS / "setup-deps" / "action.yaml")
+    meta = load_workflow(ACTIONS / "setup-deps" / "action.yaml")
     assert meta["inputs"]["lfs"]["default"] == "false"
     checkouts = [
-        s
-        for s in meta["runs"]["steps"]
-        if str(s.get("uses", "")).startswith("actions/checkout@")
+        s for s in steps(meta) if str(s.get("uses", "")).startswith("actions/checkout@")
     ]
     by_if = {s["if"]: s for s in checkouts}
     # `checkout: "false"` (FND-4900) skips only the plain checkout; the LFS one
@@ -139,10 +124,9 @@ def test_setup_deps_materialises_lfs_files_after_the_opt_in_checkout() -> None:
     # An earlier checkout of the same commit with the smudge skipped (the
     # private-git-deps "Checkout app" step) leaves pointers that the opt-in
     # checkout does not rewrite; `git lfs checkout` writes the real files.
-    steps = _load(ACTIONS / "setup-deps" / "action.yaml")["runs"]["steps"]
-    named = [s for s in steps if s.get("name") == MATERIALISE_STEP_NAME]
-    assert len(named) == 1, f"missing '{MATERIALISE_STEP_NAME}'"
-    step = named[0]
+    setup_deps = load_workflow(ACTIONS / "setup-deps" / "action.yaml")
+    setup_steps = steps(setup_deps)
+    step = step_named(setup_deps, MATERIALISE_STEP_NAME)
     assert step["if"] == "inputs.lfs == 'true'", "default path must not run it"
     assert step["shell"] == "bash"
     # `git lfs checkout` exits 0 when an object is missing; fsck fails closed.
@@ -155,13 +139,13 @@ def test_setup_deps_materialises_lfs_files_after_the_opt_in_checkout() -> None:
 
     opt_in = next(
         s
-        for s in steps
+        for s in setup_steps
         if str(s.get("uses", "")).startswith("actions/checkout@")
         and s.get("if") == "inputs.lfs == 'true'"
     )
-    assert steps.index(step) == steps.index(opt_in) + 1, (
+    assert setup_steps.index(step) == setup_steps.index(opt_in) + 1, (
         "must run right after the opt-in checkout, before anything reads the tree"
     )
     # No other step is gated on the opt-in.
-    lfs_guarded = [s for s in steps if s.get("if") == "inputs.lfs == 'true'"]
+    lfs_guarded = [s for s in setup_steps if s.get("if") == "inputs.lfs == 'true'"]
     assert lfs_guarded == [opt_in, step]

@@ -8,14 +8,10 @@ cases that matter most are the ones that must NOT advance those aliases.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
+import harbor_release_tags as mod
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import harbor_release_tags as mod  # noqa: E402
 
 GHCR = "ghcr.io/atlanhq/app-runtime-base"
 

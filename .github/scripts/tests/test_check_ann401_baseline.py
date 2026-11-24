@@ -12,17 +12,13 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-import sys
 import tomllib
 from pathlib import Path
 from typing import Callable, Sequence
 
+import check_ann401_baseline as cab
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import check_ann401_baseline as cab
 from check_pyright_baseline import BaseRevisionError
 
 REPO_ROOT = Path(__file__).resolve().parents[3]

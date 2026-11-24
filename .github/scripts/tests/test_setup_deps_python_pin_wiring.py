@@ -24,12 +24,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
+from _workflows import ACTIONS, REPO_ROOT, WORKFLOWS, load_workflow, steps, triggers
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-ACTIONS = REPO_ROOT / ".github" / "actions"
 SETUP_DEPS = ACTIONS / "setup-deps" / "action.yaml"
-TESTS_REUSABLE = REPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"
+TESTS_REUSABLE = WORKFLOWS / "tests-reusable.yaml"
 SCRIPT = REPO_ROOT / ".github" / "scripts" / "container_python_version.py"
 
 RESOLVE_ID = "image-python"
@@ -37,14 +35,6 @@ EXPORT_ID = "python-version"
 CONNECTOR_ACTIONS = ["connector-unit-tests", "connector-integration-tests"]
 
 Step = dict[str, Any]
-
-
-def _load(path: Path) -> dict[str, Any]:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
-
-
-def _steps(path: Path) -> list[Step]:
-    return _load(path)["runs"]["steps"]
 
 
 def _index(steps: list[Step], step_id: str) -> int:
@@ -91,11 +81,12 @@ def _sdk_copy(tmp_path: Path, dockerfile: str | None = None) -> Path:
 
 
 def test_setup_deps_has_no_literal_default() -> None:
-    assert _load(SETUP_DEPS)["inputs"]["python-version"]["default"] == ""
+    assert load_workflow(SETUP_DEPS)["inputs"]["python-version"]["default"] == ""
 
 
 def test_resolve_reads_the_sdk_dockerfile_only_when_no_version_is_named() -> None:
-    step = _steps(SETUP_DEPS)[_index(_steps(SETUP_DEPS), RESOLVE_ID)]
+    setup_steps = steps(load_workflow(SETUP_DEPS))
+    step = setup_steps[_index(setup_steps, RESOLVE_ID)]
     assert step["if"] == "inputs.python-version == ''"
     # The SDK's own Dockerfile, beside the action: never the caller's tree.
     assert step["env"]["SDK_ROOT"] == "${{ github.action_path }}/../../.."
@@ -104,19 +95,20 @@ def test_resolve_reads_the_sdk_dockerfile_only_when_no_version_is_named() -> Non
 
 
 def test_export_falls_back_to_the_resolved_version() -> None:
-    step = _steps(SETUP_DEPS)[_index(_steps(SETUP_DEPS), EXPORT_ID)]
+    setup_steps = steps(load_workflow(SETUP_DEPS))
+    step = setup_steps[_index(setup_steps, EXPORT_ID)]
     assert step["env"]["VERSION"] == (
         f"${{{{ inputs.python-version || steps.{RESOLVE_ID}.outputs.version }}}}"
     )
 
 
 def test_pin_precedes_setup_python_and_every_uv_step() -> None:
-    steps = _steps(SETUP_DEPS)
-    export = _index(steps, EXPORT_ID)
-    assert _index(steps, RESOLVE_ID) < export
+    setup_steps = steps(load_workflow(SETUP_DEPS))
+    export = _index(setup_steps, EXPORT_ID)
+    assert _index(setup_steps, RESOLVE_ID) < export
     early = [
         step.get("name") or step.get("uses")
-        for step in steps[:export]
+        for step in setup_steps[:export]
         if "uv " in step.get("run", "")
         or str(step.get("uses", "")).startswith(
             ("actions/setup-python@", "astral-sh/setup-uv@")
@@ -129,7 +121,7 @@ def test_everything_downstream_reads_the_exported_version() -> None:
     text = SETUP_DEPS.read_text(encoding="utf-8")
     setup_python = next(
         s
-        for s in _steps(SETUP_DEPS)
+        for s in steps(load_workflow(SETUP_DEPS))
         if str(s.get("uses", "")).startswith("actions/setup-python@")
     )
     assert setup_python["with"]["python-version"] == (
@@ -147,7 +139,8 @@ def test_resolve_prints_the_golden_version(tmp_path: Path) -> None:
     sdk = _sdk_copy(tmp_path)
     out = tmp_path / "github_output"
     out.write_text("", encoding="utf-8")
-    step = _steps(SETUP_DEPS)[_index(_steps(SETUP_DEPS), RESOLVE_ID)]
+    setup_steps = steps(load_workflow(SETUP_DEPS))
+    step = setup_steps[_index(setup_steps, RESOLVE_ID)]
 
     proc = _run(
         step["run"], tmp_path, {"SDK_ROOT": str(sdk), "GITHUB_OUTPUT": str(out)}
@@ -163,7 +156,8 @@ def test_resolve_fails_closed_without_a_golden_tag(tmp_path: Path) -> None:
     sdk = _sdk_copy(tmp_path, dockerfile="FROM python:3.14\n")
     out = tmp_path / "github_output"
     out.write_text("", encoding="utf-8")
-    step = _steps(SETUP_DEPS)[_index(_steps(SETUP_DEPS), RESOLVE_ID)]
+    setup_steps = steps(load_workflow(SETUP_DEPS))
+    step = setup_steps[_index(setup_steps, RESOLVE_ID)]
 
     proc = _run(
         step["run"], tmp_path, {"SDK_ROOT": str(sdk), "GITHUB_OUTPUT": str(out)}
@@ -177,7 +171,8 @@ def test_export_writes_uv_python(tmp_path: Path) -> None:
     out, env_file = tmp_path / "github_output", tmp_path / "github_env"
     out.write_text("", encoding="utf-8")
     env_file.write_text("", encoding="utf-8")
-    step = _steps(SETUP_DEPS)[_index(_steps(SETUP_DEPS), EXPORT_ID)]
+    setup_steps = steps(load_workflow(SETUP_DEPS))
+    step = setup_steps[_index(setup_steps, EXPORT_ID)]
 
     proc = _run(
         step["run"],
@@ -195,7 +190,8 @@ def test_export_fails_closed_on_an_empty_version(tmp_path: Path) -> None:
     out, env_file = tmp_path / "github_output", tmp_path / "github_env"
     out.write_text("", encoding="utf-8")
     env_file.write_text("", encoding="utf-8")
-    step = _steps(SETUP_DEPS)[_index(_steps(SETUP_DEPS), EXPORT_ID)]
+    setup_steps = steps(load_workflow(SETUP_DEPS))
+    step = setup_steps[_index(setup_steps, EXPORT_ID)]
 
     proc = _run(
         step["run"],
@@ -227,7 +223,8 @@ def test_export_rejects_anything_but_one_major_minor(
     out, env_file = tmp_path / "github_output", tmp_path / "github_env"
     out.write_text("", encoding="utf-8")
     env_file.write_text("", encoding="utf-8")
-    step = _steps(SETUP_DEPS)[_index(_steps(SETUP_DEPS), EXPORT_ID)]
+    setup_steps = steps(load_workflow(SETUP_DEPS))
+    step = setup_steps[_index(setup_steps, EXPORT_ID)]
 
     proc = _run(
         step["run"],
@@ -246,10 +243,10 @@ def test_export_rejects_anything_but_one_major_minor(
 @pytest.mark.parametrize("action", CONNECTOR_ACTIONS)
 def test_connector_action_forwards_an_empty_default(action: str) -> None:
     path = ACTIONS / action / "action.yaml"
-    assert _load(path)["inputs"]["python-version"]["default"] == ""
+    assert load_workflow(path)["inputs"]["python-version"]["default"] == ""
     setup = [
         s
-        for s in _steps(path)
+        for s in steps(load_workflow(path))
         if "/.github/actions/setup-deps" in str(s.get("uses", ""))
     ]
     assert len(setup) == 1
@@ -263,7 +260,7 @@ def test_sdr_e2e_pins_its_host_harness_through_setup_deps() -> None:
     path = ACTIONS / "sdr-e2e" / "action.yaml"
     setup = [
         s
-        for s in _steps(path)
+        for s in steps(load_workflow(path))
         if "/.github/actions/setup-deps" in str(s.get("uses", ""))
     ]
     assert len(setup) == 1
@@ -273,12 +270,10 @@ def test_sdr_e2e_pins_its_host_harness_through_setup_deps() -> None:
 def test_tests_reusable_never_overrides_the_python() -> None:
     """No tier of tests-reusable may name a Python: each one must fall through
     to the image's version. A caller-facing input would let an app opt out."""
-    # PyYAML (YAML 1.1) reads a bare `on:` key as the boolean True.
-    workflow: dict[object, Any] = yaml.safe_load(
-        TESTS_REUSABLE.read_text(encoding="utf-8")
-    )
-    on: dict[str, Any] = workflow.get("on") or workflow[True]
-    assert not [n for n in on["workflow_call"]["inputs"] if "python" in n]
+    workflow = load_workflow(TESTS_REUSABLE)
+    assert not [
+        n for n in triggers(workflow)["workflow_call"]["inputs"] if "python" in n
+    ]
     overrides = [
         f"{job}: {step.get('uses')}"
         for job, body in workflow["jobs"].items()

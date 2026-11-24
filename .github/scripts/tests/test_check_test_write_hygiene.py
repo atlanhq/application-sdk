@@ -9,14 +9,10 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
+import check_test_write_hygiene as hygiene
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import check_test_write_hygiene as hygiene  # noqa: E402
 
 needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 

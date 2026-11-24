@@ -23,8 +23,8 @@ from typing import Any
 
 import pytest
 import yaml
+from _workflows import REPO_ROOT, load_workflow
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 GITHUB = REPO_ROOT / ".github"
 
 FILES = sorted(
@@ -105,7 +105,7 @@ def test_no_org_pat_fallback_for_a_minted_token(path: Path) -> None:
 
 @pytest.mark.parametrize("path", FILES, ids=lambda p: p.name)
 def test_app_token_mint_is_not_continue_on_error(path: Path) -> None:
-    found = soft_mints(path.name, yaml.safe_load(path.read_text()))
+    found = soft_mints(path.name, load_workflow(path))
     assert not found, (
         f"{path.name}: App-token mint(s) {found} are continue-on-error, so a "
         "broken App credential is invisible. Drop continue-on-error (FND-4652)."
