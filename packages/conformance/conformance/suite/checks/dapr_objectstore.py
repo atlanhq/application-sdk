@@ -145,13 +145,22 @@ def contract_files(root: Path) -> list[Path]:
 
 
 def contract_false_findings(
-    root: Path, *, rule_id: str, pattern: re.Pattern[str], message: str
+    root: Path,
+    *,
+    rule_id: str,
+    pattern: re.Pattern[str],
+    message: str,
+    raw_pattern: re.Pattern[str] | None = None,
 ) -> list[Finding]:
     """One *rule_id* finding per contract line whose code matches *pattern*.
 
-    Shared with K030 (``secretstore``): both rules flag a ``deploy.dapr``
-    toggle set to ``false`` at its source in ``contract/*.pkl``, honouring the
-    Pkl suppression directives.
+    Shared with K030 (``secretstore``) and K031: each flags a setting at its
+    source in ``contract/*.pkl``, honouring the Pkl suppression directives.
+
+    *pattern* runs on the masked code, where strings are blanked. A setting
+    whose identifying text is itself a string (a mapping key such as
+    ``["ATLAN_TASK_QUEUE"]``) passes *raw_pattern* too: the raw text under each
+    masked match must also match it in full.
     """
     findings: list[Finding] = []
     for path in contract_files(root):
@@ -160,8 +169,13 @@ def contract_false_findings(
             continue
         directives = _parse_pkl_directives(text)
         rel = path.relative_to(root).as_posix()
+        raw_lines = text.splitlines()
         for lineno, code in enumerate(pkl_code_lines(text), start=1):
-            if not pattern.search(code):
+            if not any(
+                raw_pattern is None
+                or raw_pattern.fullmatch(raw_lines[lineno - 1][m.start() : m.end()])
+                for m in pattern.finditer(code)
+            ):
                 continue
             suppressed, justification = _make_pkl_finding_suppressed(
                 rule_id=rule_id, line=lineno, directives=directives

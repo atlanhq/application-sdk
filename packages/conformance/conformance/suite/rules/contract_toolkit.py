@@ -2233,4 +2233,84 @@ RULES: tuple[RuleDefinition, ...] = (
             target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
+    RuleDefinition(
+        id="K031",
+        canonical_reference=(
+            "atlan-mysql-app contract/app.pkl — its `deploy` block's `pools` env "
+            "sets only `ATLAN_TENANT_ID` and never `ATLAN_TASK_QUEUE`, so the "
+            "worker derives its queue from the application and deployment names "
+            "and the on-demand variant polls its own."
+        ),
+        rule_interactions=(
+            "For a contract app atlan.yaml is generated: a hand-edit is erased by "
+            "the next regeneration and trips the freshness gate (K005). Fix "
+            "contract/app.pkl (or bump the toolkit) and run the repo's own "
+            "generate task. O005 shares the same helper, "
+            "application_sdk.common.task_queue, for task queues an app builds by "
+            "hand."
+        ),
+        scope=RuleScope.APP,
+        name="PinnedWorkerTaskQueue",
+        tier=EnforcementTier.WARN,
+        category="contract-toolkit",
+        autofixable=True,
+        since="0.62.0",
+        rationale=(
+            "The SDK derives the worker's Temporal task queue as "
+            "atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}, and the chart "
+            "suffixes the deployment name with -od for the on-demand variant, so "
+            "each variant polls its own queue. An explicit ATLAN_TASK_QUEUE in "
+            "atlan.yaml (or the contract that generates it) overrides the "
+            "derivation, so the -od worker polls the base queue too. When a worker "
+            "pod is lost the temporal-activity-rerouter moves the retry to "
+            "atlan-<app>-<deployment>-od; KEDA starts the od worker, nothing polls "
+            "that queue, and the run hangs. WARN while the fleet's existing "
+            "findings are fixed; one known app still pins it, to a legacy queue "
+            "name that differs from its app name, so its fix is a queue "
+            "migration, not a deletion. "
+            "Customer impact: a run whose worker pod is lost hangs until the "
+            "workflow timeout (hours) instead of retrying in minutes."
+        ),
+        short_description=(
+            "ATLAN_TASK_QUEUE is pinned in the deploy env — the on-demand worker "
+            "polls the wrong queue and retries hang"
+        ),
+        full_description=(
+            "The contract's deploy env (``contract/**/*.pkl``) or the ``deploy.env`` "
+            "or ``pools.<name>.env`` of ``atlan.yaml`` sets ``ATLAN_TASK_QUEUE``. "
+            "That overrides the SDK's per-deployment queue "
+            "``atlan-{app}-{deployment}``, so the on-demand (``-od``) worker polls "
+            "the base queue and the retries the activity rerouter moves to the "
+            "``-od`` queue are never picked up. The run hangs until its timeout.\n"
+            "\n"
+            'The finding anchors on the ``["ATLAN_TASK_QUEUE"] =`` line in the '
+            "contract when there is one, and otherwise on the key in "
+            "``atlan.yaml``. An app with no ``contract/`` is still checked.\n"
+            "\n"
+            "**Fix:** if the pinned value is the queue the SDK derives anyway "
+            "(``atlan-<app name>-<deployment>``), delete the line, then regenerate "
+            "with the repo's generate task and commit the updated ``atlan.yaml`` "
+            "(an app with no contract deletes the line from ``atlan.yaml`` "
+            "directly):\n"
+            "\n"
+            "    env {\n"
+            "      // no ATLAN_TASK_QUEUE: the SDK derives the queue\n"
+            "    }\n"
+            "\n"
+            "If it pins a different, legacy queue name, deleting it moves the "
+            "worker off the queue the manifest dispatches to (``taskQueuePrefix`` "
+            "or a node ``taskQueue``) and the scaling trigger follows. First move "
+            "both to the derived name, or suppress with a reason.\n"
+            "\n"
+            "**Suppress** with ``// conformance: ignore[K031] <reason>`` on the "
+            "``ATLAN_TASK_QUEUE`` line of the contract (or the comment-only line "
+            "above it), or ``# conformance: ignore[K031] <reason>`` on the "
+            "``ATLAN_TASK_QUEUE:`` line of ``atlan.yaml``. A suppression is almost "
+            "never correct: the pinned queue breaks on-demand retries.\n"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
+    ),
 )

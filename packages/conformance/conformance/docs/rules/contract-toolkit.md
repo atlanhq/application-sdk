@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**24 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
+**25 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -39,6 +39,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [K027](#k027) | `EntrypointContractClassNameCollision` | `warn` | `app` | `contract-toolkit` | yes | 0.43.0 |
 | [K029](#k029) | `DeploymentObjectStoreDisabled` | `warn` | `app` | `contract-toolkit` | yes | 0.56.0 |
 | [K030](#k030) | `CredentialSecretStoreDisabled` | `warn` | `app` | `contract-toolkit` | yes | 0.57.0 |
+| [K031](#k031) | `PinnedWorkerTaskQueue` | `warn` | `app` | `contract-toolkit` | yes | 0.62.0 |
 
 ---
 
@@ -1579,5 +1580,62 @@ commit the updated `atlan.yaml`:
 line of the contract (or the comment-only line above it), or `# conformance:
 ignore[K030] <reason>` on the `secretstore:` line of `atlan.yaml`. A suppression is
 almost never correct: an app with credentials cannot resolve them without the store.
+
+---
+
+## K031 — `PinnedWorkerTaskQueue` {#k031}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.62.0
+
+> ATLAN_TASK_QUEUE is pinned in the deploy env — the on-demand worker polls the wrong queue and retries hang
+
+**Rationale:** The SDK derives the worker's Temporal task queue as
+atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}, and the chart suffixes the
+deployment name with -od for the on-demand variant, so each variant polls its own queue.
+An explicit ATLAN_TASK_QUEUE in atlan.yaml (or the contract that generates it) overrides
+the derivation, so the -od worker polls the base queue too. When a worker pod is lost
+the temporal-activity-rerouter moves the retry to atlan-<app>-<deployment>-od; KEDA
+starts the od worker, nothing polls that queue, and the run hangs. WARN while the
+fleet's existing findings are fixed; one known app still pins it, to a legacy queue name
+that differs from its app name, so its fix is a queue migration, not a deletion.
+Customer impact: a run whose worker pod is lost hangs until the workflow timeout (hours)
+instead of retrying in minutes.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app contract/app.pkl — its `deploy` block's `pools` env sets only
+  `ATLAN_TENANT_ID` and never `ATLAN_TASK_QUEUE`, so the worker derives its queue from
+  the application and deployment names and the on-demand variant polls its own.
+- **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
+- **Interacts with:** For a contract app atlan.yaml is generated: a hand-edit is erased by the next
+  regeneration and trips the freshness gate (K005). Fix contract/app.pkl (or bump the
+  toolkit) and run the repo's own generate task. O005 shares the same helper,
+  application_sdk.common.task_queue, for task queues an app builds by hand.
+
+The contract's deploy env (`contract/**/*.pkl`) or the `deploy.env` or
+`pools.<name>.env` of `atlan.yaml` sets `ATLAN_TASK_QUEUE`. That overrides the SDK's
+per-deployment queue `atlan-{app}-{deployment}`, so the on-demand (`-od`) worker polls
+the base queue and the retries the activity rerouter moves to the `-od` queue are never
+picked up. The run hangs until its timeout.
+
+The finding anchors on the `["ATLAN_TASK_QUEUE"] =` line in the contract when there is
+one, and otherwise on the key in `atlan.yaml`. An app with no `contract/` is still
+checked.
+
+**Fix:** if the pinned value is the queue the SDK derives anyway (`atlan-<app
+name>-<deployment>`), delete the line, then regenerate with the repo's generate task and
+commit the updated `atlan.yaml` (an app with no contract deletes the line from
+`atlan.yaml` directly):
+
+    env {       // no ATLAN_TASK_QUEUE: the SDK derives the queue     }
+
+If it pins a different, legacy queue name, deleting it moves the worker off the queue
+the manifest dispatches to (`taskQueuePrefix` or a node `taskQueue`) and the scaling
+trigger follows. First move both to the derived name, or suppress with a reason.
+
+**Suppress** with `// conformance: ignore[K031] <reason>` on the `ATLAN_TASK_QUEUE` line
+of the contract (or the comment-only line above it), or `# conformance: ignore[K031]
+<reason>` on the `ATLAN_TASK_QUEUE:` line of `atlan.yaml`. A suppression is almost never
+correct: the pinned queue breaks on-demand retries.
 
 ---
