@@ -2668,10 +2668,12 @@ def at_base_branch(
 def skeptic_base(ws: Workspace, f: Finding) -> str:
     """`f`'s enclosing function or quoted lines as they are on the base branch,
     for the skeptic to compare against (FND-5316); "" when there is nothing to
-    compare. Code the PR removes (`REMOVED_NOTE`) and a new file, symbol or
-    line have no base counterpart, and a base copy that cannot be read, may
-    hold secrets or has no stored quote is unknown: none of them can be "the
-    same on the base"."""
+    compare. Code the PR removes (`REMOVED_NOTE`), a new file or symbol, and a
+    module-level quote the base lacks have no base counterpart, and a base
+    copy that cannot be read, may hold secrets or has no stored quote is
+    unknown: none of them can be "the same on the base". A line the PR adds
+    inside a function the base has gets that function as it is on the base:
+    whether the old function already failed the same way is the question."""
     text = ws.text(f.path) or ""
     at = _current_line(ws, f, text)
     if not at or _new_copy_of_removed(ws, f, at):

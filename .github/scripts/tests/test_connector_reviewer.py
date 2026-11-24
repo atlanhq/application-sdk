@@ -14078,7 +14078,12 @@ def test_code_with_no_base_counterpart_shows_the_skeptic_no_base(
 
 
 def test_the_skeptic_base_is_the_enclosing_function_on_the_base(repo: Path):
+    """The quote is a line the PR adds inside a function the base has. It gets
+    that function as it is on the base, on purpose: whether the old function
+    already failed the same way is the question, and most findings quote an
+    added line."""
     ws = _base_ws(repo, "app/storage/fetch.py", SRC_V1, SRC_V2)
+    assert 4 in ws.diffs["app/storage/fetch.py"].added_lines  # the quoted line
     got = review_mod.skeptic_base(
         ws, _at("app/storage/fetch.py", "    return data.decode()")
     )
