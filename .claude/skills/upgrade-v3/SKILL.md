@@ -1647,9 +1647,9 @@ When you `from application_sdk.templates import SqlApp`, Python imports all temp
 
 ### os.environ is blocked inside Temporal workflow sandbox
 
-`os.environ.get()` cannot be called from `run()` — Temporal's sandbox blocks it as non-deterministic. Read env vars at module level:
+`os.environ.get()` / `os.getenv()` cannot be called from `run()`, an `@entrypoint`, or any helper they call. Temporal's sandbox refuses it as non-deterministic, and the workflow task fails until a fixed build is deployed. The same applies to `tempfile`, `shutil`, `open()`, `os.listdir`, `datetime.now()` and `uuid.uuid4()` (use `self.now()` / `self.uuid()`; move I/O into a `@task`). String-only `os.path` calls (`join`, `dirname`, `basename`, ...) are allowed; `os.path.exists` and other filesystem reads are not. Read env vars at module level:
 ```python
-# Module level — runs at import time, before sandbox
+# Module level: the sandbox allows reads at import time
 _MY_CONFIG = os.environ.get("MY_CONFIG", "default")
 
 class MyApp(App):

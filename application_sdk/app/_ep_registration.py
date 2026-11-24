@@ -10,6 +10,8 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, get_type_hints
 
+from temporalio import workflow
+
 from application_sdk.app._artifact_schema_guard import warn_undeclared_artifact_schemas
 from application_sdk.app.entrypoint import (
     EntryPointContractError,  # noqa: F401 — deprecated name kept importable from this module (shipped surface); removed with the class in v4.0
@@ -18,7 +20,7 @@ from application_sdk.app.entrypoint import (
     get_entrypoint_metadata,
     is_entrypoint,
 )
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import AppMetadata, AppRegistry, TaskRegistry
 from application_sdk.app.task import get_task_metadata, is_task
 from application_sdk.common.build_identity import build_identity
 from application_sdk.contracts.base import Input, Output
@@ -298,6 +300,32 @@ def _apply_app_registration(
     cls._app_build_id = build_identity()
     cls._input_type = input_type
     cls._output_type = output_type
+
+    if workflow.unsafe.in_sandbox():
+        # Temporal's sandbox re-imports the app module for every workflow run,
+        # which runs this hook again on a fresh copy of the class. That copy
+        # exists only for the run: registering it would overwrite the host's
+        # registry entry with a class whose module dies with the sandbox, and
+        # would re-register its tasks. Stamp the copy with unregistered
+        # metadata so its generated workflow classes can be rebuilt from it
+        # (see App.__init_subclass__), and leave the host registries alone.
+        cls._app_metadata = AppMetadata(
+            name=name,
+            version=version,
+            app_cls=cls,
+            input_type=input_type,
+            output_type=output_type,
+            module_path=cls.__module__,
+            class_name=cls.__name__,
+            description=description,
+            tags=tags or {},
+            passthrough_modules=frozenset(passthrough_modules or set()),
+            entry_points=entry_points or {},
+            legacy_workflow_types=(
+                legacy_workflow_types if legacy_workflow_types is not None else {}
+            ),
+        )
+        return
 
     registry = AppRegistry.get_instance()
     metadata = registry.register(

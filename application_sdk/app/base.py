@@ -1333,6 +1333,8 @@ class App(ABC):
             # contract and must not propagate to subclasses through the MRO.
             legacy_workflow_types=cls.__dict__.get("legacy_workflow_types", {}),
         )
+        if workflow.unsafe.in_sandbox():
+            _install_workflow_classes(cls)
 
     @property
     def context(self) -> AppContext:
@@ -3879,7 +3881,13 @@ def generate_workflow_class(
 
     canonical_type = canonical_workflow_type(app_name, ep)
     alias_of_canonical = None if workflow_name == canonical_type else canonical_type
-    if alias_of_canonical is None and not input_type_supports_gate(input_type):
+    # Boot-time advice, said once by the host. The sandbox rebuilds this class
+    # for every run (see _install_workflow_classes) and must not repeat it.
+    if (
+        alias_of_canonical is None
+        and not workflow.unsafe.in_sandbox()
+        and not input_type_supports_gate(input_type)
+    ):
         _task_logger.warning(
             "Preflight gate will not run for entrypoint '%s' (%s): input type %s does "
             "not declare the credential-routing fields (extraction_method, "
@@ -4023,6 +4031,13 @@ def generate_workflow_class(
 
         # conformance: ignore[E004] top-level entrypoint handler; logged via _safe_log with exc_info=True and re-raised as typed ApplicationError
         except Exception as e:
+            # Non-determinism (a sandbox RestrictedWorkflowAccessError, e.g. a
+            # datetime.now() in run()) is a fault in the code, not in the run:
+            # let it fail the workflow TASK, which Temporal retries, so a fixed
+            # deployment resumes the run. Wrapping it below would fail the run
+            # for good and lose it.
+            if isinstance(e, workflow.NondeterminismError):
+                raise
             with workflow.unsafe.imports_passed_through():
                 from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
                     is_preflight_block,
@@ -4172,8 +4187,29 @@ def generate_workflow_class(
     if _src_module is not None:
         setattr(_src_module, cls_name, wf_cls)
 
-    _workflow_class_cache[cache_key] = wf_cls
+    # Inside the sandbox, app_cls is the run's own re-imported copy, and so is
+    # the module above (sys.modules is the sandbox's while it imports). The
+    # cache is host state: an entry would keep every run's sandbox alive.
+    if not workflow.unsafe.in_sandbox():
+        _workflow_class_cache[cache_key] = wf_cls
     return wf_cls
+
+
+def _install_workflow_classes(app_cls: "type[App]") -> None:
+    """Rebuild an app's generated workflow classes on its sandbox copy.
+
+    Temporal's sandbox runs a workflow by re-importing the module named by the
+    workflow class's ``__module__`` (the app's module) and reading the class
+    from it by name. The host built those classes after import and attached
+    them to the host module, so the fresh copy does not have them. Building
+    them again from the re-imported App class, during that import, puts them
+    where the sandbox looks, and makes ``run()`` and every helper it calls
+    sandboxed code that Temporal checks for non-determinism.
+
+    Called only inside the sandbox, from ``App.__init_subclass__``.
+    """
+    for workflow_type, ep in app_cls._app_metadata.workflow_types.items():
+        generate_workflow_class(app_cls, ep, workflow_type)
 
 
 def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> None:

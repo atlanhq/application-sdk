@@ -37,7 +37,7 @@ from application_sdk.constants import (
 )
 from application_sdk.execution._temporal.activities import get_all_task_activities
 from application_sdk.execution._temporal.workflows import get_all_app_workflows
-from application_sdk.execution.sandbox import SandboxConfig
+from application_sdk.execution.sandbox import SandboxConfig, host_library_modules
 from application_sdk.execution.settings import (
     _derive_max_concurrent_activities,
     _explicit_max_concurrent_activities,
@@ -1124,13 +1124,17 @@ def create_worker(
     if app_modules:
         config = config.with_passthrough_modules(*app_modules)
 
-    # Pass through all app module paths to prevent re-registration in sandbox
-    app_module_paths: set[str] = set()
-    for app_meta in registered_apps:
-        if app_meta.module_path:
-            app_module_paths.add(app_meta.module_path)
-    if app_module_paths:
-        config = config.with_passthrough_modules(*app_module_paths)
+    # App packages are deliberately NOT passed through: the sandbox re-imports
+    # them for every run, so run() and the helpers it imports are checked for
+    # non-determinism. Registration is sandbox-aware (_apply_app_registration),
+    # so the re-import leaves the registries alone. Every library the host has
+    # already imported is passed through instead; see host_library_modules.
+    app_packages = {
+        app_meta.module_path.partition(".")[0]
+        for app_meta in registered_apps
+        if app_meta.module_path
+    }
+    config = config.with_passthrough_modules(*host_library_modules(app_packages))
 
     workflow_runner = SandboxedWorkflowRunner(
         restrictions=config.to_temporal_restrictions()

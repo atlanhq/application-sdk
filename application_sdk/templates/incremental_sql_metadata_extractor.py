@@ -107,6 +107,11 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# Read at import, not in run(): run() is workflow code, where the sandbox
+# refuses os.environ at runtime. Import-time reads are allowed, and the value
+# is fixed for the life of the process.
+_ATLAN_APPLICATION_NAME: str = os.getenv("ATLAN_APPLICATION_NAME", "")
+
 # Maximum number of column batch tasks to fan-out in parallel.
 # Matches v2 behaviour exactly (default Temporal fan-out limit).
 MAX_CONCURRENT_COLUMN_BATCHES: int = 10
@@ -1017,7 +1022,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         workflow_id = input.workflow_id
         run_id = workflow.info().run_id
         conn_qn = input.connection.attributes.qualified_name
-        application_name = os.getenv("ATLAN_APPLICATION_NAME", "")
+        application_name = _ATLAN_APPLICATION_NAME
 
         # Prefer a prebuilt credential_ref; otherwise build the GUID ref from
         # credential_guid (the direct-mode route).
