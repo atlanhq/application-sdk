@@ -328,7 +328,11 @@ def upheld(steps: int = 6, trigger_normal: Any = True) -> Any:
     }
     if trigger_normal is not None:
         verdict["trigger_normal"] = trigger_normal
-        verdict["trigger_why"] = "only an unusual source shape produces this input"
+        verdict["trigger_why"] = (
+            "the default config produces this input"
+            if trigger_normal
+            else "only an unusual source shape produces this input"
+        )
     return response([tool_call("skeptic_verdict", verdict)])
 
 
