@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import sys
 import textwrap
 from pathlib import Path
 
+import probe_app_api_member as probe
 import pytest
 
 import application_sdk.handler.asgi as asgi
 from application_sdk.handler import Handler
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import probe_app_api_member as probe  # noqa: E402
 
 _HANDLER = """
 from application_sdk.handler import Handler

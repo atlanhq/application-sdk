@@ -8,14 +8,10 @@ exact source digest.
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import mirror_minio_image as mod
+import pytest
 
 DIGEST = "sha256:" + "a" * 64
 OTHER = "sha256:" + "b" * 64

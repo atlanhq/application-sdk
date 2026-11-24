@@ -6,11 +6,6 @@ The rest of the script is git/gh plumbing exercised by the workflow itself.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import contract_toolkit_release
 
 # ---------------------------------------------------------------------------

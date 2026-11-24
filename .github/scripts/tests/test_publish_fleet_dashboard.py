@@ -10,15 +10,11 @@ before ever writing a history line, leaving a dashboard with data and no trend.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
+import publish_fleet_dashboard as pfd
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import publish_fleet_dashboard as pfd  # noqa: E402
-from publish_fleet_dashboard import (  # noqa: E402
+from publish_fleet_dashboard import (
     BUCKET,
     merge_history,
     orphans,

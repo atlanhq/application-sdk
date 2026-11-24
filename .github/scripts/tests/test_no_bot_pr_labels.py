@@ -37,15 +37,11 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from conformance.bootstrap import render as bootstrap_render  # noqa: E402
+from conformance.bootstrap import render as bootstrap_render
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _TEMPLATE_DIR = "packages/conformance/conformance/bootstrap/templates"

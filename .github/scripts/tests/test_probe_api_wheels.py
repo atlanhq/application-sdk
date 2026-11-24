@@ -7,11 +7,8 @@ import sys
 import zipfile
 from pathlib import Path
 
+import probe_api_wheels as probe
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import probe_api_wheels as probe  # noqa: E402
 
 
 def _wheel(path: Path, files: dict[str, bytes]) -> Path:

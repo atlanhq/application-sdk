@@ -14,15 +14,10 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
-import sys
-from pathlib import Path
 
+import conformance_resync as lane
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import conformance_resync as lane  # noqa: E402
-import resync_approval_conditions as gate  # noqa: E402
+import resync_approval_conditions as gate
 
 REPO = "atlanhq/atlan-example-app"
 AT = "2026-09-28T12:00:00Z"

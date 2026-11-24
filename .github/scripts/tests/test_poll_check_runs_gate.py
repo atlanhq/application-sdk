@@ -4,16 +4,12 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 
+import _gh_refs
+import poll_check_runs_gate as mod
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import _gh_refs  # noqa: E402
-import poll_check_runs_gate as mod  # noqa: E402
 
 REPO = "atlanhq/application-sdk"
 SHA = "abc123"

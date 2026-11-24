@@ -8,13 +8,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
+import warm_embedded_runtimes as warm
 from temporalio.testing import WorkflowEnvironment
 
 from application_sdk.dev import _embedded
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import warm_embedded_runtimes as warm
 
 _REPO = Path(__file__).resolve().parents[3]
 _CACHE_ACTION = "./.github/actions/embedded-runtimes-cache"

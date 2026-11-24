@@ -17,11 +17,8 @@ import sys
 import venv
 from pathlib import Path
 
+import import_smoke
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import import_smoke  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="console-script shims need a POSIX shebang"

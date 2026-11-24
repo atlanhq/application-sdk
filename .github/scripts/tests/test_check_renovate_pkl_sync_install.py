@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import check_renovate_pkl_sync_install as guard
 
 DRIVER_WITH_SIBLING = "from pkl_contract_layout import x, y\n"

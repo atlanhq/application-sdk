@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
+import check_mkdocs_script_hosts as check
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import check_mkdocs_script_hosts as check  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 

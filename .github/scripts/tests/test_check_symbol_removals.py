@@ -22,14 +22,10 @@ from __future__ import annotations
 import ast
 import json
 import subprocess
-import sys
 from pathlib import Path
 
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import check_symbol_removals as mod
+import pytest
 import release as release_mod  # the real parser, to pin the two predicates together
 
 # ---------------------------------------------------------------------------

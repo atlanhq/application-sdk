@@ -10,14 +10,9 @@ artifact names from the hive run that exposed it.
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
-
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import fetch_conformance_sarif as fcs
+import pytest
 
 # The 10 series a real Conformance run published on 2026-08-10 (hive). The old
 # loop knew only: ci, error-handling, prescriptions, optimizations, dependency,

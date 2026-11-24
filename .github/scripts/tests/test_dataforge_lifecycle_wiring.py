@@ -11,27 +11,18 @@ runner, so these are deliberately YAML-shape assertions.
 from __future__ import annotations
 
 import re
-import sys
-from pathlib import Path
 
 import pytest
-import yaml
+from _bump_skip import without_bump_skip
+from _workflows import ACTIONS, WORKFLOWS, load_workflow, triggers
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _bump_skip import without_bump_skip  # noqa: E402
-
-_WORKFLOW = (
-    Path(__file__).resolve().parents[3] / ".github/workflows/tests-reusable.yaml"
-)
-_TWINGATE_ACTION = (
-    Path(__file__).resolve().parents[3] / ".github/actions/twingate-connect/action.yml"
-)
+_WORKFLOW = WORKFLOWS / "tests-reusable.yaml"
+_TWINGATE_ACTION = ACTIONS / "twingate-connect" / "action.yml"
 
 
 @pytest.fixture(scope="module")
 def workflow() -> dict:
-    return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
+    return load_workflow(_WORKFLOW)
 
 
 @pytest.fixture(scope="module")
@@ -41,9 +32,7 @@ def jobs(workflow: dict) -> dict:
 
 @pytest.fixture(scope="module")
 def inputs(workflow: dict) -> dict:
-    # `on:` round-trips as the YAML 1.1 boolean True under PyYAML.
-    on = workflow.get("on") or workflow.get(True)
-    return on["workflow_call"]["inputs"]
+    return triggers(workflow)["workflow_call"]["inputs"]
 
 
 def test_both_jobs_exist(jobs: dict) -> None:
@@ -316,7 +305,7 @@ def test_both_jobs_try_twingate_before_globalprotect(
 
 
 def test_twingate_inner_limits_fit_the_step_limit(jobs: dict) -> None:
-    action = yaml.safe_load(_TWINGATE_ACTION.read_text(encoding="utf-8"))
+    action = load_workflow(_TWINGATE_ACTION)
     script = action["runs"]["steps"][0]["run"]
     bounded = sum(
         int(n) + int(k or 0)

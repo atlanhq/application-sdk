@@ -4,19 +4,15 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 import tempfile
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import vuln_triage.__main__ as cli  # noqa: E402
-from vuln_triage import allowlist, bump, classify, report, scan, selftest  # noqa: E402
-from vuln_triage.effects import newest_successful_run, parse_open_pr  # noqa: E402
-from vuln_triage.run import (  # noqa: E402
+import vuln_triage.__main__ as cli
+from vuln_triage import allowlist, bump, classify, report, scan, selftest
+from vuln_triage.effects import newest_successful_run, parse_open_pr
+from vuln_triage.run import (
     CONFORMANCE_LOCK,
     Context,
     Deps,

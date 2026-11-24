@@ -4,11 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import timeout_stale_check_runs as mod
 

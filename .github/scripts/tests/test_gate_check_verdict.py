@@ -23,18 +23,13 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
+import gate_check_verdict as gcv
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import gate_check_verdict as gcv  # noqa: E402
-import test_command_comment as tcc  # noqa: E402
-from pr_test_command import GitHub, GitHubError  # noqa: E402
+import test_command_comment as tcc
+from pr_test_command import GitHub, GitHubError
 
 REPO = "atlanhq/atlan-example-app"
 SHA = "a96a27b0000000000000000000000000000000aa"

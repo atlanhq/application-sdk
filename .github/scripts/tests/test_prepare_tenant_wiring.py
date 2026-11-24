@@ -12,30 +12,23 @@ grouping) and cannot be exercised without a runner.
 from __future__ import annotations
 
 import re
-import sys
 from dataclasses import fields
-from pathlib import Path
 from typing import cast
 
+import e2e_tenant_app as app
 import pytest
-import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-sys.path.insert(0, str(Path(__file__).parent))
-
-import e2e_tenant_app as app  # noqa: E402
-from _bump_skip import without_bump_skip  # noqa: E402
-from _gha_expr import evaluate, evaluate_operand  # noqa: E402
+from _bump_skip import without_bump_skip
+from _gha_expr import evaluate, evaluate_operand
+from _workflows import ACTIONS, WORKFLOWS, job, load_workflow, triggers
 
 # The lease knobs used to live on a composite action's `inputs:`; the driver's own
 # defaults are the single source now that the action is gone (FND-2674), so the
 # sizing assertions below read them from there.
-from e2e_tenant_lease import DEFAULT_TTL_SECONDS, DEFAULT_WAIT_SECONDS  # noqa: E402
-from marketplace_publish_body import PublishRequest  # noqa: E402
+from e2e_tenant_lease import DEFAULT_TTL_SECONDS, DEFAULT_WAIT_SECONDS
+from marketplace_publish_body import PublishRequest
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_WORKFLOW = _REPO_ROOT / ".github/workflows/tests-reusable.yaml"
-_SDR_ACTION = _REPO_ROOT / ".github/actions/sdr-e2e/action.yaml"
+_WORKFLOW = WORKFLOWS / "tests-reusable.yaml"
+_SDR_ACTION = ACTIONS / "sdr-e2e" / "action.yaml"
 
 #: How much job budget the script's own two waits may account for. At 1/2, both
 #: waits can run to completion and the rest of the job still has as long again —
@@ -47,7 +40,7 @@ _MAX_WAIT_SHARE = 0.5
 
 @pytest.fixture(scope="module")
 def workflow() -> dict:
-    return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
+    return load_workflow(_WORKFLOW)
 
 
 @pytest.fixture(scope="module")
@@ -71,12 +64,7 @@ def test_install_is_on_by_default(workflow: dict) -> None:
     # Kept as an assertion rather than deleted, pointing the other way: a silent
     # revert to opt-in would restore three-clouds-of-wrong-version green, which
     # no other test in this file would notice.
-    #
-    # `workflow[True]`: YAML 1.1 resolves the bare key `on` to the boolean true,
-    # so safe_load never yields the string "on". Both spellings are accepted here
-    # so the guard survives a future quoted `"on":`.
-    triggers = workflow.get("on", workflow.get(True))
-    spec = triggers["workflow_call"]["inputs"]["install-app-to-tenant"]
+    spec = triggers(workflow)["workflow_call"]["inputs"]["install-app-to-tenant"]
     assert spec["default"] is True
     assert spec["type"] == "boolean"
 
@@ -143,13 +131,13 @@ def test_e2e_tolerates_skipped_but_not_failed_prepare(jobs: dict) -> None:
     #    single-arch image against a tenant prepare-tenant never updated, with
     #    `expected-app-version` empty so the version check self-skips. Every job in
     #    the chain has to be named, not just the last one.
-    for job in ("prepare-tenant", "build-e2e-image", "merge-e2e-image"):
+    for needed in ("prepare-tenant", "build-e2e-image", "merge-e2e-image"):
         for result in ("success", "skipped"):
-            expected = f"needs.{job}.result == '{result}'"
+            expected = f"needs.{needed}.result == '{result}'"
             assert expected in condition, (
                 f"missing `{expected}`. With a status-check override present, "
                 "these gates are the only thing stopping the legs from running "
-                f"after a FAILED {job}."
+                f"after a FAILED {needed}."
             )
 
 
@@ -174,9 +162,9 @@ def test_the_legs_read_the_image_from_the_non_matrix_job(jobs: dict, key: str) -
     """
     value = _sdr_step(jobs)["with"][key]
     assert "needs.merge-e2e-image.outputs." in value
-    for job in _MATRIX_JOBS:
-        assert job not in value, (
-            f"{key} reads {job}, a matrix job whose outputs are "
+    for matrix_job in _MATRIX_JOBS:
+        assert matrix_job not in value, (
+            f"{key} reads {matrix_job}, a matrix job whose outputs are "
             "last-writer-wins with different values per leg"
         )
 
@@ -418,9 +406,9 @@ def test_prepare_tenant_names_every_need_it_requires(jobs: dict) -> None:
     have succeeded has to be named — otherwise widening the lease gate silently
     also stopped requiring discovery and the image."""
     condition = " ".join(jobs["prepare-tenant"]["if"].split())
-    for job in ("discover-e2e", "merge-e2e-image"):
-        assert f"needs.{job}.result == 'success'" in condition, (
-            f"missing `needs.{job}.result == 'success'`. With always() present, "
+    for needed in ("discover-e2e", "merge-e2e-image"):
+        assert f"needs.{needed}.result == 'success'" in condition, (
+            f"missing `needs.{needed}.result == 'success'`. With always() present, "
             "this is the only thing still requiring it."
         )
 
@@ -442,7 +430,7 @@ def test_install_runs_whenever_the_lease_job_ran(
     """Note the limit of this test, which is why the two above it exist: the
     evaluator models the `if:` expression only, not GitHub's needs-level skip. It
     passed on a gate that could never actually run."""
-    expression = _load_gate("prepare-tenant")
+    expression = job(load_workflow(_WORKFLOW), "prepare-tenant")["if"]
     contexts = {
         "inputs": {"install-app-to-tenant": True},
         "needs": {
@@ -457,7 +445,7 @@ def test_install_runs_whenever_the_lease_job_ran(
 @pytest.mark.parametrize("blocker", ["discover-e2e", "merge-e2e-image"])
 def test_install_does_not_run_without_its_upstreams(blocker: str) -> None:
     # always() would otherwise let the install proceed with no image to install.
-    expression = _load_gate("prepare-tenant")
+    expression = job(load_workflow(_WORKFLOW), "prepare-tenant")["if"]
     contexts = {
         "inputs": {"install-app-to-tenant": True},
         "needs": {
@@ -513,7 +501,7 @@ def test_release_runs_whenever_any_lease_leg_may_hold_a_tenant(
     GitHub expressions, so a gate that merely *mentions* the right terms can
     still be wrong. Widening this is only safe because the release driver checks
     ownership before deleting, so a leg that never acquired no-ops."""
-    expression = _load_gate("release-tenant")
+    expression = job(load_workflow(_WORKFLOW), "release-tenant")["if"]
     assert (
         evaluate(
             without_bump_skip(expression),
@@ -521,10 +509,6 @@ def test_release_runs_whenever_any_lease_leg_may_hold_a_tenant(
         )
         is should_release
     )
-
-
-def _load_gate(job: str) -> str:
-    return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))["jobs"][job]["if"]
 
 
 def test_the_lease_wait_fits_inside_the_job_timeout(jobs: dict) -> None:
@@ -595,9 +579,7 @@ def test_the_lease_set_and_the_install_matrix_come_from_one_discovery(
     discovery STEP instead — `discover-clouds`, the clouds-only call — because
     that removes the possibility of disagreement rather than testing for it.
     """
-    outputs = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))["jobs"][
-        "discover-e2e"
-    ]["outputs"]
+    outputs = job(load_workflow(_WORKFLOW), "discover-e2e")["outputs"]
     assert outputs["cloud-list"] == "${{ steps.discover-clouds.outputs.clouds }}"
     assert outputs["cloud-matrix"] == "${{ steps.discover-clouds.outputs.matrix }}"
 
@@ -619,7 +601,7 @@ def test_a_failed_lease_fails_the_install_rather_than_skipping_it(jobs: dict) ->
     """
     assert (
         evaluate(
-            _load_gate("prepare-tenant"),
+            job(load_workflow(_WORKFLOW), "prepare-tenant")["if"],
             {
                 "inputs": {"install-app-to-tenant": True},
                 "needs": {
@@ -1027,7 +1009,7 @@ def test_verify_step_self_skips_when_no_version_expected() -> None:
     deliberately left alone for now, so the verify must be inert for them
     rather than reding their e2e.
     """
-    action = yaml.safe_load(_SDR_ACTION.read_text(encoding="utf-8"))
+    action = load_workflow(_SDR_ACTION)
     assert action["inputs"]["expected-app-version"]["default"] == ""
 
     steps = action["runs"]["steps"]

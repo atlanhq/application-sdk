@@ -4,10 +4,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import create_check_run as mod
 

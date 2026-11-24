@@ -19,14 +19,10 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import bump_pr_opt_in
+import pytest
 
 
 class FakeGh:

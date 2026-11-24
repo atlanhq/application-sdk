@@ -12,17 +12,13 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
-import sys
 import tomllib
 from pathlib import Path
 
-import pytest
-import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import bound_lock_branch as orchestrator
+import pytest
 import renovate_approval_conditions as approval
+import yaml
 
 WORKFLOW = (
     Path(__file__).parent.parent.parent / "workflows" / "renovate-lock-cooldown.yaml"

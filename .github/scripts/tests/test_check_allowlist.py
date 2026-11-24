@@ -3,19 +3,15 @@
 from __future__ import annotations
 
 import json
-import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import check_allowlist
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import check_allowlist
-from _frozen_clock import freeze_clock  # noqa: E402
+from _frozen_clock import freeze_clock
 
 # ---------------------------------------------------------------------------
 # Helpers

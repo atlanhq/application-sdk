@@ -9,15 +9,10 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
-from pathlib import Path
 from typing import Any
 
+import e2e_branch_recheck as recheck
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import e2e_branch_recheck as recheck  # noqa: E402
 
 REPO = "atlanhq/atlan-example-app"
 TESTED = "a" * 40

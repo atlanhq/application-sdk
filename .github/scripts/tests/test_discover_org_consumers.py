@@ -9,15 +9,10 @@ from __future__ import annotations
 
 import inspect
 import json
-import sys
-from pathlib import Path
 from typing import Optional
 
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import discover_org_consumers as doc
+import pytest
 
 MARKER = doc.PRESET_MARKER
 

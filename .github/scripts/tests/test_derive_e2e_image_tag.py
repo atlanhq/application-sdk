@@ -14,14 +14,8 @@ so the fix costs the fleet nothing.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from derive_e2e_image_tag import (  # noqa: E402
+from derive_e2e_image_tag import (
     TAG_PREFIX,
     build_digest,
     derive_tag,

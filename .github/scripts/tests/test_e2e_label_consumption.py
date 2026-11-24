@@ -33,34 +33,18 @@ textual check proves presence but not precedence.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _gha_expr import evaluate, evaluate_operand  # noqa: E402
-
-_WORKFLOWS = Path(__file__).resolve().parents[3] / ".github/workflows"
-
-
-def _load(name: str) -> dict[str, Any]:
-    return yaml.safe_load((_WORKFLOWS / name).read_text(encoding="utf-8"))
-
-
-def _step(job: dict[str, Any], name: str) -> dict[str, Any]:
-    return next(s for s in job["steps"] if s.get("name") == name)
-
+from _gha_expr import evaluate, evaluate_operand
+from _workflows import job, load_workflow, step_named
 
 # ── Consumer Tests Gate (tests-reusable.yaml) ─────────────────────────────────
 
 
 @pytest.fixture(scope="module")
 def gate_job() -> dict[str, Any]:
-    return _load("tests-reusable.yaml")["jobs"]["tests-passed"]
+    return job(load_workflow("tests-reusable.yaml"), "tests-passed")
 
 
 def _needs(discover: str, e2e: str) -> dict[str, Any]:
@@ -99,7 +83,7 @@ def test_verdict_is_recorded_whenever_this_run_acted_on_a_request(
     e2e: str,
     expected: bool,
 ) -> None:
-    step = _step(gate_job, "Record the e2e verdict on the head commit")
+    step = step_named(gate_job, "Record the e2e verdict on the head commit")
     contexts = {
         "github": {"event_name": event_name},
         "inputs": {"application-sdk-ref": sdk_ref},
@@ -121,7 +105,7 @@ def test_verdict_is_recorded_whenever_this_run_acted_on_a_request(
 def test_only_a_real_verdict_is_recorded_as_one(
     gate_job: dict[str, Any], e2e: str, state: str
 ) -> None:
-    env = _step(gate_job, "Record the e2e verdict on the head commit")["env"]
+    env = step_named(gate_job, "Record the e2e verdict on the head commit")["env"]
     contexts = {"needs": _needs("success", e2e)}
     assert evaluate_operand(env["STATE"], contexts) == state
     description = evaluate_operand(env["DESCRIPTION"], contexts)
@@ -149,7 +133,7 @@ def test_a_legacy_caller_removes_the_label_whenever_this_run_consumed_it(
     expected: bool,
 ) -> None:
     """Callers that predate FND-3839 still request e2e with the label."""
-    step = _step(gate_job, "Remove the e2e label")
+    step = step_named(gate_job, "Remove the e2e label")
     contexts = {
         "github": {"event_name": event_name},
         "inputs": {"e2e-label-trigger": True},
@@ -164,7 +148,7 @@ def test_the_resynced_scaffold_never_touches_labels(
 ) -> None:
     """With `e2e-label-trigger: false` a label requested nothing, so removing
     one would strip a label someone added for another reason."""
-    step = _step(gate_job, "Remove the e2e label")
+    step = step_named(gate_job, "Remove the e2e label")
     contexts = {
         "github": {"event_name": "pull_request"},
         "inputs": {"e2e-label-trigger": False},
@@ -206,7 +190,7 @@ def test_verdict_lands_before_the_label_goes(gate_job: dict[str, Any]) -> None:
 def test_verdict_targets_the_tested_head(
     gate_job: dict[str, Any], github: dict[str, Any], sha: str
 ) -> None:
-    step = _step(gate_job, "Record the e2e verdict on the head commit")
+    step = step_named(gate_job, "Record the e2e verdict on the head commit")
     assert evaluate_operand(step["env"]["HEAD_SHA"], {"github": github}) == sha
     assert "record_e2e_verdict.py" in step["run"]
 
@@ -222,7 +206,7 @@ def test_gate_job_can_write_the_status(gate_job: dict[str, Any]) -> None:
 def test_gate_steps_use_github_token_and_fail_open(
     gate_job: dict[str, Any], name: str
 ) -> None:
-    step = _step(gate_job, name)
+    step = step_named(gate_job, name)
     assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
     assert step["continue-on-error"] is True
 
@@ -244,7 +228,7 @@ def test_sdk_pr_checks_reads_no_labels_so_has_nothing_to_consume() -> None:
     label, a stale label is inert — and a returning label read would bring
     back that re-fire with nothing left to stop it.
     """
-    workflow = _load("pull_request.yaml")
+    workflow = load_workflow("pull_request.yaml")
     assert "consume-e2e-label" not in workflow["jobs"]
     readers = [
         job_id
